@@ -1,0 +1,13 @@
+## macOS
+.DS_Store
+._*
+
+## Swift / Xcode
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/
+*.dSYM
+
+## Project policy
+# Keep Package.resolved tracked for reproducible dependency resolution.
