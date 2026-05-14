@@ -6,7 +6,7 @@ Plans describe what we might build. Guides describe what Donkey currently suppor
 
 ## Product Guides
 
-- [Pointer Prompt Overlay](guides/pointer-prompt-overlay.md): command-click agent pointer and ChatGPT-style `Make this so` composer that follows the mouse and stays on screen.
+- [Pointer Prompt Overlay](guides/pointer-prompt-overlay.md): command-click agent pointer and ChatGPT-style `Make this so` composer that follows the mouse at a fixed offset.
 
 ## Engineering Guides
 

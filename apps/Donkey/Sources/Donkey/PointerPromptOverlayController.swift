@@ -7,20 +7,12 @@ final class PointerPromptOverlayController {
     static let contentSize = PointerPromptLayout.contentSize
 
     private let model: PointerPromptOverlayModel
-    private let screenPadding: CGFloat = 8
-    private let routeStepInterval: TimeInterval = 0.15
-    private let followSmoothing: CGFloat = 0.34
-    private let flipSmoothing: CGFloat = 0.22
+    private let fixedPlacement: PointerPromptPlacement = .bottomRight
 
     private var panel: NSPanel?
     private var timer: Timer?
     private var globalCommandClickMonitor: Any?
     private var localCommandClickMonitor: Any?
-    private var currentFrame: CGRect?
-    private var displayPlacement: PointerPromptPlacement = .bottomRight
-    private var finalPlacement: PointerPromptPlacement = .bottomRight
-    private var pendingPlacements: [PointerPromptPlacement] = []
-    private var lastRouteStepAt = Date.distantPast
 
     init(model: PointerPromptOverlayModel) {
         self.model = model
@@ -112,10 +104,6 @@ final class PointerPromptOverlayController {
     }
 
     private func positionAtCurrentMouseLocation() {
-        currentFrame = nil
-        displayPlacement = .bottomRight
-        finalPlacement = .bottomRight
-        pendingPlacements = []
         tick(mouseLocation: NSEvent.mouseLocation)
     }
 
@@ -123,10 +111,6 @@ final class PointerPromptOverlayController {
         guard let panel else { return }
 
         model.activate()
-        currentFrame = nil
-        displayPlacement = .bottomRight
-        finalPlacement = .bottomRight
-        pendingPlacements = []
         tick(mouseLocation: mouseLocation)
 
         NSApp.activate(ignoringOtherApps: true)
@@ -149,122 +133,16 @@ final class PointerPromptOverlayController {
 
         updateMouseEventPassthrough(for: panel)
         if model.promptState.isActive, explicitMouseLocation == nil {
-            currentFrame = panel.frame
             return
         }
 
         let mouseLocation = explicitMouseLocation ?? NSEvent.mouseLocation
-        guard let screen = screen(containing: mouseLocation) else { return }
-
-        let now = Date()
-        let targetPlacement = preferredPlacement(
-            for: mouseLocation,
-            visibleFrame: screen.visibleFrame
-        )
-        if explicitMouseLocation == nil {
-            updateRoute(to: targetPlacement, now: now)
-            advanceRoute(now: now)
-        } else {
-            displayPlacement = targetPlacement
-            finalPlacement = targetPlacement
-            pendingPlacements = []
-        }
-
-        let targetFrame = clampedFrame(
-            frame(for: displayPlacement, mouseLocation: mouseLocation),
-            placement: displayPlacement,
-            in: screen.visibleFrame
-        )
-        let nextFrame = smoothedFrame(
-            toward: targetFrame,
-            placement: displayPlacement,
-            in: screen.visibleFrame
-        )
-        currentFrame = nextFrame
-        panel.setFrame(nextFrame, display: true)
+        let targetFrame = frame(for: fixedPlacement, mouseLocation: mouseLocation)
+        panel.setFrame(targetFrame, display: true)
         updateMouseEventPassthrough(for: panel)
 
-        if model.placement != displayPlacement {
-            model.placement = displayPlacement
-        }
-    }
-
-    private func updateRoute(to targetPlacement: PointerPromptPlacement, now: Date) {
-        guard targetPlacement != finalPlacement else { return }
-
-        finalPlacement = targetPlacement
-        pendingPlacements = route(from: displayPlacement, to: targetPlacement)
-        lastRouteStepAt = now.addingTimeInterval(-routeStepInterval)
-    }
-
-    private func advanceRoute(now: Date) {
-        guard !pendingPlacements.isEmpty else { return }
-        guard now.timeIntervalSince(lastRouteStepAt) >= routeStepInterval else { return }
-
-        displayPlacement = pendingPlacements.removeFirst()
-        lastRouteStepAt = now
-    }
-
-    private func route(
-        from currentPlacement: PointerPromptPlacement,
-        to targetPlacement: PointerPromptPlacement
-    ) -> [PointerPromptPlacement] {
-        guard currentPlacement != targetPlacement else { return [] }
-
-        if currentPlacement.placesContentOnLeft != targetPlacement.placesContentOnLeft,
-           currentPlacement.placesContentAbovePointer != targetPlacement.placesContentAbovePointer {
-            let horizontalFirst = placement(
-                left: targetPlacement.placesContentOnLeft,
-                above: currentPlacement.placesContentAbovePointer
-            )
-            return [horizontalFirst, targetPlacement]
-        }
-
-        return [targetPlacement]
-    }
-
-    private func preferredPlacement(
-        for mouseLocation: CGPoint,
-        visibleFrame: CGRect
-    ) -> PointerPromptPlacement {
-        let preferredFrame = frame(for: .bottomRight, mouseLocation: mouseLocation)
-        let preferredContentFrame = screenContentFrame(
-            for: preferredFrame,
-            placement: .bottomRight
-        )
-        let overflowsRight = preferredContentFrame.maxX > visibleFrame.maxX - screenPadding
-        let overflowsBottom = preferredContentFrame.minY < visibleFrame.minY + screenPadding
-
-        let preferredPlacement = placement(left: overflowsRight, above: overflowsBottom)
-        let candidates = [
-            preferredPlacement,
-            PointerPromptPlacement.bottomRight,
-            .bottomLeft,
-            .topRight,
-            .topLeft
-        ]
-
-        for candidate in candidates where fits(
-            frame(for: candidate, mouseLocation: mouseLocation),
-            placement: candidate,
-            in: visibleFrame
-        ) {
-            return candidate
-        }
-
-        return preferredPlacement
-    }
-
-    private func placement(left: Bool, above: Bool) -> PointerPromptPlacement {
-        switch (left, above) {
-        case (false, false):
-            .bottomRight
-        case (true, false):
-            .bottomLeft
-        case (true, true):
-            .topLeft
-        case (false, true):
-            .topRight
+        if model.placement != fixedPlacement {
+            model.placement = fixedPlacement
         }
     }
 
@@ -326,28 +204,6 @@ final class PointerPromptOverlayController {
             PointerPromptLayout.pointerSlotSize.width - PointerPromptLayout.pointerVisualSize.width
     }
 
-    private func pointerVisualFrame(for placement: PointerPromptPlacement) -> CGRect {
-        let pointerSlotX: CGFloat
-        if placement.placesContentOnLeft {
-            pointerSlotX = stageHorizontalInset +
-                PointerPromptLayout.stageHorizontalPadding +
-                PointerPromptLayout.composerSize.width +
-                PointerPromptLayout.pointerComposerSpacing
-        } else {
-            pointerSlotX = stageHorizontalInset + PointerPromptLayout.stageHorizontalPadding
-        }
-
-        return CGRect(
-            x: pointerSlotX + pointerVisualInsetX(for: placement),
-            y: Self.contentSize.height - pointerVisualTopFromPanelTop - PointerPromptLayout.pointerVisualSize.height,
-            width: PointerPromptLayout.pointerVisualSize.width,
-            height: PointerPromptLayout.pointerVisualSize.height
-        ).insetBy(
-            dx: -PointerPromptLayout.pointerStrokeWidth,
-            dy: -PointerPromptLayout.pointerStrokeWidth
-        )
-    }
-
     private var stageHorizontalInset: CGFloat {
         (Self.contentSize.width - stageContentWidth) / 2
     }
@@ -368,27 +224,20 @@ final class PointerPromptOverlayController {
             PointerPromptLayout.composerSize.height
     }
 
-    private var pointerCenterYFromTop: CGFloat {
-        stageVerticalInset +
-            PointerPromptLayout.stageVerticalPadding +
-            PointerPromptLayout.composerSize.height / 2
-    }
-
     private var pointerTipYFromTop: CGFloat {
-        pointerCenterYFromTop -
-            PointerPromptLayout.pointerVisualSize.height / 2 +
+        pointerVisualTopFromPanelTop +
             PointerPromptLayout.pointerVisualSize.height *
             PointerPromptLayout.pointerTipUnitPoint.y
     }
 
     private var pointerVisualTopFromPanelTop: CGFloat {
-        pointerCenterYFromTop - PointerPromptLayout.pointerVisualSize.height / 2
+        composerTopFromPanelTop
     }
 
     private func composerDragRegions() -> [CGRect] {
         guard model.promptState.isActive else { return [] }
 
-        let composerFrame = composerFrame(for: displayPlacement)
+        let composerFrame = composerFrame(for: fixedPlacement)
         let dragThickness = PointerPromptLayout.composerDragBorderThickness
         let closeButtonClearance = PointerPromptLayout.closeButtonInset * 2 +
             PointerPromptLayout.closeButtonSize
@@ -444,25 +293,6 @@ final class PointerPromptOverlayController {
         stageVerticalInset + PointerPromptLayout.stageVerticalPadding
     }
 
-    private func visibleContentBounds(for placement: PointerPromptPlacement) -> CGRect {
-        let pointerFrame = pointerVisualFrame(for: placement)
-        guard model.promptState.isActive else {
-            return pointerFrame
-        }
-
-        return pointerFrame.union(composerFrame(for: placement))
-    }
-
-    private func screenContentFrame(
-        for panelFrame: CGRect,
-        placement: PointerPromptPlacement
-    ) -> CGRect {
-        visibleContentBounds(for: placement).offsetBy(
-            dx: panelFrame.minX,
-            dy: panelFrame.minY
-        )
-    }
-
     private func updateMouseEventPassthrough(for panel: NSPanel) {
         guard model.promptState.isActive else {
             panel.ignoresMouseEvents = true
@@ -470,73 +300,7 @@ final class PointerPromptOverlayController {
         }
 
         let mouseLocationInPanel = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
-        panel.ignoresMouseEvents = !composerFrame(for: displayPlacement).contains(mouseLocationInPanel)
-    }
-
-    private func fits(
-        _ frame: CGRect,
-        placement: PointerPromptPlacement,
-        in visibleFrame: CGRect
-    ) -> Bool {
-        let contentFrame = screenContentFrame(for: frame, placement: placement)
-        return contentFrame.minX >= visibleFrame.minX + screenPadding &&
-            contentFrame.maxX <= visibleFrame.maxX - screenPadding &&
-            contentFrame.minY >= visibleFrame.minY + screenPadding &&
-            contentFrame.maxY <= visibleFrame.maxY - screenPadding
-    }
-
-    private func clampedFrame(
-        _ frame: CGRect,
-        placement: PointerPromptPlacement,
-        in visibleFrame: CGRect
-    ) -> CGRect {
-        var origin = frame.origin
-        let size = frame.size
-        let contentBounds = visibleContentBounds(for: placement)
-
-        let minX = visibleFrame.minX + screenPadding - contentBounds.minX
-        let maxX = visibleFrame.maxX - screenPadding - contentBounds.maxX
-        let minY = visibleFrame.minY + screenPadding - contentBounds.minY
-        let maxY = visibleFrame.maxY - screenPadding - contentBounds.maxY
-
-        if minX <= maxX {
-            origin.x = min(max(origin.x, minX), maxX)
-        } else {
-            origin.x = visibleFrame.midX - contentBounds.midX
-        }
-
-        if minY <= maxY {
-            origin.y = min(max(origin.y, minY), maxY)
-        } else {
-            origin.y = visibleFrame.midY - contentBounds.midY
-        }
-
-        return CGRect(origin: origin, size: size)
-    }
-
-    private func smoothedFrame(
-        toward targetFrame: CGRect,
-        placement: PointerPromptPlacement,
-        in visibleFrame: CGRect
-    ) -> CGRect {
-        guard let currentFrame else { return targetFrame }
-
-        let smoothing = pendingPlacements.isEmpty ? followSmoothing : flipSmoothing
-        let origin = CGPoint(
-            x: currentFrame.origin.x + (targetFrame.origin.x - currentFrame.origin.x) * smoothing,
-            y: currentFrame.origin.y + (targetFrame.origin.y - currentFrame.origin.y) * smoothing
-        )
-        return clampedFrame(
-            CGRect(origin: origin, size: targetFrame.size),
-            placement: placement,
-            in: visibleFrame
-        )
-    }
-
-    private func screen(containing point: CGPoint) -> NSScreen? {
-        NSScreen.screens.first { screen in
-            screen.frame.contains(point)
-        } ?? NSScreen.main ?? NSScreen.screens.first
+        panel.ignoresMouseEvents = !composerFrame(for: fixedPlacement).contains(mouseLocationInPanel)
     }
 }
 

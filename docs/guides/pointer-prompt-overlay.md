@@ -12,10 +12,8 @@ Donkey supports a floating macOS pointer prompt overlay:
 - closes the active composer with a top-left close button and returns to the inactive following pointer
 - supports dragging the active composer by its border areas
 - lets normal clicks pass through the inactive pointer-only overlay and transparent active overlay space
-- follows the user mouse at a 45-degree bottom-right diagonal by default
-- stays fully inside the current screen visible frame
-- flips to the left, top, or top-left side when the default position would leave the screen
-- animates side changes along an invisible box around the user pointer
+- follows the user mouse at a fixed 45-degree bottom-right diagonal
+- keeps that fixed offset at screen edges instead of flipping or clamping to the visible screen bounds
 - renders a shadow underneath the agent pointer when active
 - supports user-accessible theme customization through `apps/Donkey/Sources/Donkey/Resources/theme.json`
 - keeps runtime and AI harness behavior behind explicit integration boundaries
@@ -31,10 +29,10 @@ This is a visual UI capability. It does not capture the screen, send input, call
 - Composer controls should emit typed `PointerPromptIntent` values instead of reaching into runtime, AI, or controller code.
 - Pointer colors load from JSON into `PointerPromptTheme`; views must not hard-code product colors.
 - The active composer should use a normal system-window corner radius, expose a top-left close control, and keep controls/content areas interactive while only border regions drag the window. Transparent active overlay space must pass clicks through to windows underneath.
+- The active composer top edge should align with the highest visible point of the agent pointer.
 - The agent pointer should remain close to native cursor size, use the mirrored SVG cursor silhouette from the Noun Project pointer asset, point in the same up-left direction as the native macOS cursor, and keep its tip 48px from the real pointer on an equal x/y diagonal.
-- Placement is one of `bottomRight`, `bottomLeft`, `topLeft`, or `topRight`.
-- The controller must clamp visible pointer/composer bounds to `NSScreen.visibleFrame` before applying the panel frame, because inactive mode uses a larger transparent panel than its visible pointer.
-- Diagonal placement changes should route through a side placement first, so bottom-right overflow can animate to left and then top-left.
+- Runtime placement is fixed to `bottomRight`; alternate `PointerPromptPlacement` values are only rendering variants.
+- The controller must not clamp visible pointer/composer bounds to `NSScreen.visibleFrame`; cursor positioning is a direct fixed-offset calculation.
 - Launch positioning and command-click focus handling belong in `PointerPromptOverlayController`, not the SwiftUI view.
 - Keep the overlay non-invasive: no capture loop, input execution, Accessibility prompt, or LLM call in this feature.
 
@@ -47,7 +45,7 @@ swift build
 swift run Donkey
 ```
 
-Launch Donkey and confirm only the small agent pointer appears and follows the main pointer. Command-click anywhere to show the composer with keyboard focus, then move the mouse and confirm the active pointer and composer stay pinned. Click through transparent overlay space into another desktop window, drag the composer from border areas, close it with the top-left close button, and confirm the inactive pointer resumes following the main pointer. Type a message, confirm the send control enables, and activate near the bottom-right screen edge to confirm the prompt chooses a non-clipping placement.
+Launch Donkey and confirm only the small agent pointer appears and follows the main pointer at a fixed bottom-right diagonal offset. Command-click anywhere to show the composer with keyboard focus, then move the mouse and confirm the active pointer and composer stay pinned. Click through transparent overlay space into another desktop window, drag the composer from border areas, close it with the top-left close button, and confirm the inactive pointer resumes following the main pointer. Type a message, confirm the send control enables, and activate near the bottom-right screen edge to confirm the prompt keeps the same fixed offset instead of flipping or clamping.
 
 To verify color customization, edit `apps/Donkey/Sources/Donkey/Resources/theme.json`, rebuild, and run Donkey.
 

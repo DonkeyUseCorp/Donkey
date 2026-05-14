@@ -30,12 +30,12 @@ public struct PointerPromptStageView: View {
     @ViewBuilder
     private var promptContent: some View {
         if placement.placesContentOnLeft {
-            HStack(alignment: .center, spacing: PointerPromptLayout.pointerComposerSpacing) {
+            HStack(alignment: .top, spacing: PointerPromptLayout.pointerComposerSpacing) {
                 activeComposer
                 pointer
             }
         } else {
-            HStack(alignment: .center, spacing: PointerPromptLayout.pointerComposerSpacing) {
+            HStack(alignment: .top, spacing: PointerPromptLayout.pointerComposerSpacing) {
                 pointer
                 activeComposer
             }
@@ -180,23 +180,16 @@ private struct ComposerCloseButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: "xmark")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(Color.white)
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: PointerPromptLayout.closeButtonSize, weight: .regular))
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(Color.white, Color.red)
                 .frame(
                     width: PointerPromptLayout.closeButtonSize,
                     height: PointerPromptLayout.closeButtonSize
                 )
-                .background {
-                    Circle()
-                        .fill(Color.red)
-                }
-                .overlay {
-                    Circle()
-                        .stroke(Color.black.opacity(0.16), lineWidth: 0.5)
-                }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.borderless)
         .accessibilityLabel("Close prompt")
     }
 }
@@ -224,7 +217,7 @@ private struct ComposerIconButton: View {
                         .stroke(borderColor, lineWidth: isProminent ? 0 : 1.4)
                 }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.borderless)
         .disabled(isDisabled)
         .opacity(isDisabled ? 0.38 : 1)
         .accessibilityLabel(label)
@@ -267,7 +260,7 @@ private struct ComposerSignalButton: View {
                     .stroke(Color(promptColor: theme.accent).opacity(0.28), lineWidth: 1.4)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.borderless)
         .accessibilityLabel("Voice input")
     }
 
@@ -327,7 +320,10 @@ private struct AgentPointerView: View {
     }
 
     private var shapeAlignment: Alignment {
-        placement.placesContentOnLeft ? .leading : .trailing
+        Alignment(
+            horizontal: placement.placesContentOnLeft ? .leading : .trailing,
+            vertical: .top
+        )
     }
 }
 
