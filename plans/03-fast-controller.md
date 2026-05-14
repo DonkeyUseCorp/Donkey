@@ -39,6 +39,17 @@ World State
   -> Action Command
 ```
 
+The off-the-shelf perception path uses the same contract:
+
+```text
+Detector / Segmenter / OCR / Template
+  -> Game State
+  -> Rule / State Machine
+  -> Action Command
+```
+
+See [20-off-the-shelf-run-loop.md](20-off-the-shelf-run-loop.md) for the off-the-shelf runtime plan.
+
 The policy selector chooses a small controller:
 
 - `combat_policy`
@@ -59,8 +70,10 @@ Use the simplest viable method first:
 | dodging | vector away from hazard |
 | movement | waypoint or potential-field controller |
 | repeated loops | finite-state machine |
-| game-specific skill | small trained model or behavior clone |
+| game-specific skill | target-specific rule set over detector/OCR/SAM outputs |
 | uncertainty | safe default plus slow-planner request |
+
+For aiming, movement, dodging, recoil control, and tap/swipe timing, do not use an LLM. Use deterministic logic over current perception state.
 
 ## Timing
 
@@ -96,10 +109,12 @@ The fast controller should treat planner output as configuration, not a blocking
 3. Add policy-selection logic.
 4. Add confidence-aware fallback behavior.
 5. Record every chosen action with the state snapshot id.
+6. Add detector/OCR/template-derived state inputs.
+7. Replay recorded state traces before live input.
 
 ## Acceptance Criteria
 
 - p95 decision time is under 20ms.
 - Controller can keep acting while planner is unavailable.
 - Actions are reproducible from recorded world-state traces.
-
+- Perception output cannot bypass action projection or safety guards.

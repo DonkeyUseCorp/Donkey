@@ -154,8 +154,6 @@ Expand into:
 - frame recording format
 - world-state recording format
 - action trace format
-- labeling workflow
-- dataset splits
 - retention policy
 - privacy filtering
 - trace compression
@@ -163,7 +161,7 @@ Expand into:
 
 Deliverable:
 
-- `data-and-replay.md` with file formats and commands for record, replay, label, and compare
+- `data-and-replay.md` with file formats and commands for record, replay, inspect, and compare
 
 Why it matters:
 
@@ -219,6 +217,8 @@ This is how the project avoids hardcoding one demo while still staying latency-f
 
 The screenshot-model plan needs a way to choose and improve models.
 
+See [19-ai-harness.md](19-ai-harness.md) for the slow-path model registry, provider connection layer, role-based model routing, and model update workflow. See [20-off-the-shelf-run-loop.md](20-off-the-shelf-run-loop.md) for the hot-path off-the-shelf perception and deterministic control plan.
+
 Expand into:
 
 - candidate model list
@@ -229,7 +229,7 @@ Expand into:
 - versioning
 - rollback
 - quality gates
-- training/fine-tuning path, if needed
+- runtime compatibility checks
 
 Deliverable:
 
@@ -242,6 +242,8 @@ Do not pick a model from general benchmark numbers. Pick it from target traces.
 ## Priority 3: Planner Memory And Policy Updates
 
 The slow planner needs boundaries for what it can change.
+
+See [19-ai-harness.md](19-ai-harness.md) for memory layers, memory write rules, planner hint validation, and model-backed policy update boundaries.
 
 Expand into:
 
@@ -332,4 +334,3 @@ The target profile should force concrete answers for:
 - success metric
 - safety constraints
 - first replay traces
-

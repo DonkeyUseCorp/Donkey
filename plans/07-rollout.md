@@ -58,6 +58,26 @@ Success:
 - p95 reflex latency remains under 100ms
 - failures are diagnosable from traces
 
+## Phase 2.5: Off-The-Shelf Vision Upgrade
+
+Add stronger off-the-shelf perception only after the deterministic loop exposes a real gap.
+
+Deliverables:
+
+- fixed game-state schema
+- YOLO-family detector candidate
+- SAM/MobileSAM/FastSAM fallback candidate, if masks are needed
+- OCR or template matcher for UI/text signals
+- runtime benchmark through the target execution provider
+- replay state/action report
+- live input-disabled canary
+
+Success:
+
+- off-the-shelf perception improves one target metric against the simpler baseline
+- detector/segmenter/OCR p95 stays inside the reflex budget
+- all perception outputs pass through state validation and safety guards
+
 ## Phase 3: Slow Planner
 
 Add high-level strategy without touching the reflex latency path.
@@ -101,7 +121,7 @@ Success:
 - macOS capture backend.
 - macOS synthetic input backend.
 - First iPhone Mirroring calibration method.
-- Whether the first controller is heuristic, trained, or hybrid.
+- Whether the first controller is pure rules or rules plus off-the-shelf perception.
 
 ## Suggested Default Path
 
@@ -113,4 +133,5 @@ For fastest learning:
 4. Move to Subway Surfers once swipe calibration is reliable.
 5. Start with heuristic perception and control.
 6. Add a tiny model only when heuristics hit a real wall.
-7. Add the slow planner after the reflex loop already works.
+7. Add SAM/OCR/LLM slow-path recovery only where simple perception fails.
+8. Add the slow planner after the reflex loop already works.

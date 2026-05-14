@@ -24,8 +24,8 @@ That means:
 
 ```text
 Screen Capture
-  -> Perception
-  -> World State
+  -> Off-The-Shelf Vision
+  -> Game State Tensor / World State
   -> Fast Controller
   -> Action Engine
   -> Keyboard / Mouse / Controller
@@ -72,6 +72,8 @@ Every frame should use local, bounded-cost logic:
 - [16-iphone-gameplay-roadmap.md](16-iphone-gameplay-roadmap.md): iPhone Mirroring gameplay roadmap
 - [17-ios-control-prompt.md](17-ios-control-prompt.md): iOS control prompt and PhoneAgent reference
 - [18-macos-accessibility.md](18-macos-accessibility.md): macOS Accessibility tree/action backend
+- [19-ai-harness.md](19-ai-harness.md): slow-path memory, LLM/VLM connection, model routing, and update plan
+- [20-off-the-shelf-run-loop.md](20-off-the-shelf-run-loop.md): off-the-shelf perception, deterministic control, and low-latency runtime stack
 
 ## System Priorities
 
@@ -83,6 +85,7 @@ Every frame should use local, bounded-cost logic:
 6. Measurement before optimization claims.
 7. Small vision models over large VLMs inside the reflex loop.
 8. DOM signals over vision when the target is web-based and the DOM is available.
+9. Off-the-shelf components before custom model work.
 
 ## First Target Demo
 

@@ -18,10 +18,10 @@ Large VLMs can still be useful for slow planner snapshots, debugging, labeling, 
 Screen Region
   -> Raw Pixel Buffer
   -> Crop / Resize / Normalize
-  -> Low-Latency Vision Model
-  -> Detections / Labels / Embeddings
-  -> World State
-  -> Fast Controller
+  -> Vision Encoder
+  -> Detections / Labels / Embeddings / State Tensor
+  -> World State or Game State Tensor
+  -> Fast Controller / Reflex Policy
 ```
 
 Keep screenshots as raw pixel buffers for the hot path. Encoding to PNG or JPEG is usually a slow-path/debug operation.
@@ -36,7 +36,7 @@ Use a model only for perception questions that justify it:
 - minimap interpretation
 - inventory/menu recognition
 - OCR-like recognition when native OCR is too slow or brittle
-- learned affordance detection, such as "clickable target" or "danger zone"
+- off-the-shelf affordance detection, such as "clickable target" or "danger zone"
 
 Avoid asking the model broad questions like "what should I do?" in the reflex loop. That belongs to the planner.
 
@@ -62,7 +62,25 @@ Pick the runtime based on measured latency in the target environment:
 - WebGPU/WebNN for browser-contained demos when practical
 - CPU inference only when the model is tiny and predictable
 
+Local LLM runners such as Ollama are useful for slow-path reasoning, planning, dialogue, UI understanding, and trace analysis. They should not be assumed suitable for the gameplay hot path just because they run locally. For per-frame control, prefer off-the-shelf detectors, segmenters, OCR, templates, classical CV, and deterministic policies that are benchmarked under the target p95 latency budget.
+
 The plan should keep the model interface abstract so runtimes can be swapped after benchmarking.
+
+## Candidate Vision Models
+
+Use candidates based on the target task:
+
+| Candidate | Best Use | Hot-Path Risk |
+| --- | --- | --- |
+| YOLO-family nano/small model | enemies, obstacles, UI elements, minimap markers, health bars | postprocessing and capture copies can dominate if careless |
+| SAM / SAM2 | high-quality masks and image/video segmentation | usually too expensive for every frame |
+| MobileSAM / FastSAM | lighter masks, irregular affordances, scene segmentation | still measure carefully before hot-path use |
+| OCR | labels, scores, menus, countdowns | full-frame OCR is usually too slow |
+| templates/classical CV | stable buttons, icons, bars, lanes, motion | brittle if art/theme changes |
+
+Use current Ultralytics YOLO-family nano/small models as first detector candidates because they have mature export paths and published runtime benchmarks, but every latency claim must be remeasured on target traces and target hardware.
+
+Segmentation and OCR belong outside the per-frame loop until proven otherwise.
 
 ## Hot-Path Rules
 
@@ -71,6 +89,8 @@ The plan should keep the model interface abstract so runtimes can be swapped aft
 - Avoid cross-process image copies.
 - Avoid image compression in the reflex loop.
 - Use quantized or smaller models when accuracy allows.
+- Prefer fp16 first, int8 only after calibration preserves action quality.
+- Prefer fixed input shapes when using TensorRT/CUDA graphs.
 - Drop stale frames instead of queuing inference.
 - Emit confidence with every model result.
 - Keep the controller dependent on structured outputs, not raw model tensors.
@@ -141,12 +161,12 @@ For games, benchmark on recorded traces first, then live runs.
 Large VLMs can still help outside the reflex loop:
 
 - identify what a new screen means
-- label training data
+- explain unfamiliar UI
 - explain failure traces
 - suggest new regions of interest
 - recover when the fast model is confused
 
-Slow-path outputs should become hints, labels, or updated configuration. They should not block immediate control.
+Slow-path outputs should become hints or updated configuration. They should not block immediate control.
 
 ## First Milestones
 
