@@ -59,7 +59,7 @@ Pick the runtime based on measured latency in the target environment:
 - platform-native acceleration when available
 - ONNX Runtime for portable local inference
 - TensorRT/Core ML/DirectML/OpenVINO where they reduce p95 latency
-- WebGPU/WebNN for browser-contained demos when practical
+- WebGPU/WebNN for browser-contained targets when practical
 - CPU inference only when the model is tiny and predictable
 
 Local LLM runners such as Ollama are useful for slow-path reasoning, planning, dialogue, UI understanding, and trace analysis. They should not be assumed suitable for the gameplay hot path just because they run locally. For per-frame control, prefer off-the-shelf detectors, segmenters, OCR, templates, classical CV, and deterministic policies that are benchmarked under the target p95 latency budget.
@@ -172,7 +172,7 @@ Slow-path outputs should become hints or updated configuration. They should not 
 
 1. Build raw screenshot capture into a fixed-size tensor.
 2. Measure crop, resize, normalize, and copy costs separately.
-3. Add a tiny placeholder model or model stub with identical input/output shape.
+3. Add a tiny compatibility model with identical input/output shape.
 4. Add one real low-latency model for the first visual task.
 5. Emit model results into the common world-state schema.
 6. Add latency and quality reports for recorded frames.
@@ -180,7 +180,7 @@ Slow-path outputs should become hints or updated configuration. They should not 
 
 ## Acceptance Criteria
 
-- Screenshot-to-model p95 latency is under the perception budget for the first demo.
+- Screenshot-to-model p95 latency is under the perception budget for the first supported target.
 - No PNG/JPEG encode/decode occurs in the reflex loop.
 - Model cold-start/warmup is measured separately from steady-state latency.
 - The controller receives structured world-state updates, not raw screenshots or tensors.

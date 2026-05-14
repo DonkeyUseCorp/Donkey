@@ -1,8 +1,8 @@
 # Rollout Plan
 
-## Phase 0: Prototype Target
+## Phase 0: First Supported Target
 
-Pick the first iPhone Mirroring target and define the minimum viable agent behavior.
+Pick the first iPhone Mirroring target and define the initial supported agent behavior.
 
 Deliverables:
 
@@ -39,7 +39,7 @@ Success:
 - input can be stopped safely
 - taps/swipes are blocked when the wrong window has focus
 
-## Phase 2: Competent iPhone Game Demo
+## Phase 2: Competent iPhone Game Target
 
 Expand from one reaction to a short playable loop.
 
@@ -111,12 +111,12 @@ Deliverables:
 
 Success:
 
-- a second demo can reuse the same loop
+- a second target can reuse the same loop
 - only perception and policy adapters need major changes
 
 ## Open Decisions
 
-- First iPhone demo game.
+- First supported iPhone game.
 - Primary implementation language.
 - macOS capture backend.
 - macOS synthetic input backend.

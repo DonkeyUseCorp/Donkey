@@ -4,7 +4,7 @@
 
 Use Subway Surfers as a high-pressure iPhone Mirroring target for low-latency screenshot perception and swipe control.
 
-This is a strong demo candidate, but not the first prototype. The game is fast, visual, and swipe-driven, so it should come after the agent can reliably capture, calibrate, and input into the iPhone Mirroring window.
+This is a strong production-readiness target, but not the first supported target. The game is fast, visual, and swipe-driven, so it should come after the agent can reliably capture, calibrate, and input into the iPhone Mirroring window.
 
 ## Why Subway Surfers
 

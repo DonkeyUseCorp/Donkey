@@ -247,7 +247,7 @@ Do not use LLMs for:
 
 LLM output must become validated hints, not direct actions.
 
-## First Demo Recommendation
+## First Supported Target Recommendation
 
 Pick one game and one task.
 

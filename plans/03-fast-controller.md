@@ -105,7 +105,7 @@ The fast controller should treat planner output as configuration, not a blocking
 ## First Milestones
 
 1. Define the world-state schema the controller consumes.
-2. Implement deterministic policies for the first demo game.
+2. Implement deterministic policies for the first supported game.
 3. Add policy-selection logic.
 4. Add confidence-aware fallback behavior.
 5. Record every chosen action with the state snapshot id.

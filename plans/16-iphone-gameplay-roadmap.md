@@ -78,7 +78,7 @@ Target:
 
 Purpose:
 
-- flagship latency and perception demo
+- flagship latency and perception target
 - lane tracking
 - obstacle detection
 - left/right/up/down swipe control
@@ -134,7 +134,7 @@ Measure both latency and game competence:
 
 ## Immediate Build Order
 
-1. Finish the macOS synthetic controller prototype.
+1. Finish the macOS synthetic controller foundation.
 2. Add iPhone Mirroring window/content detection.
 3. Add a calibration command for tap and four swipe directions.
 4. Add screenshot capture of the calibrated content rectangle.

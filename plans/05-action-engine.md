@@ -80,7 +80,7 @@ Movement keys should be represented as desired direction first, then converted t
 3. Add input tracing.
 4. Add focus guard.
 5. Add emergency release.
-6. Calibrate mouse movement for first demo.
+6. Calibrate mouse movement for the first supported target.
 
 ## Acceptance Criteria
 

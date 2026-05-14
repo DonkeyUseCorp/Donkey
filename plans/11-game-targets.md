@@ -187,7 +187,7 @@ Why:
 
 - it proves the system can handle fast visual mobile gameplay
 - it stresses swipes, timing, perception, and latency
-- it gives a compelling demo
+- it gives a compelling production proving ground
 
 ## Decision Matrix
 
@@ -196,7 +196,7 @@ Why:
 | iPhone Safari harness | high | high | low | low | start here |
 | iPhone tap game | medium | high | low-medium | low-medium | second |
 | iPhone swipe puzzle/game | medium-high | high | medium | medium | second |
-| Subway Surfers via iPhone Mirroring | high | high | high | medium-high | flagship demo |
+| Subway Surfers via iPhone Mirroring | high | high | high | medium-high | flagship target |
 | Controller-supported iPhone game | high | high | medium | high | later backend |
 | Local browser game | high | low-medium | low | low | support harness |
 | Atari/Gymnasium | high | low | medium | medium | policy harness |
@@ -233,4 +233,3 @@ Then run the same agent architecture against:
 3. Subway Surfers through iPhone Mirroring
 4. controller-supported iPhone games once the controller backend is solved
 5. browser/emulator targets only as supporting harnesses
-

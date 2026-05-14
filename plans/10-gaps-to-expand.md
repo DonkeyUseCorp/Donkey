@@ -12,7 +12,7 @@ The architecture needs one concrete game or app to force decisions.
 
 Open questions:
 
-- Which exact first game or browser demo?
+- Which exact first game or browser target?
 - What is the minimum behavior that counts as success?
 - What frame rate and reflex latency does that target require?
 - Does the target expose DOM, pixels only, or both?
@@ -35,7 +35,7 @@ Expand into:
 - macOS capture backend
 - Windows capture backend
 - Linux capture backend, if needed
-- browser-only capture path, if using a web demo
+- browser-only capture path, if using a web target
 - input backend per OS
 - permission setup and failure handling
 
@@ -211,7 +211,7 @@ Deliverable:
 
 Why it matters:
 
-This is how the project avoids hardcoding one demo while still staying latency-first.
+This is how the project avoids hardcoding one target while still staying latency-first.
 
 ## Priority 3: Model Lifecycle
 
@@ -291,7 +291,7 @@ The project needs commands that make latency work pleasant.
 
 Expand into:
 
-- run live demo
+- run live validation
 - record trace
 - replay trace
 - print latency report

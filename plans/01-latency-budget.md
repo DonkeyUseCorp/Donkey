@@ -72,6 +72,6 @@ Do not preserve every frame if the system falls behind. A real-time agent should
 ## Acceptance Criteria
 
 - Every action trace includes capture timestamp, perception timestamp, decision timestamp, and input timestamp.
-- p50 reflex latency is under 60ms for the first demo.
-- p95 reflex latency is under 100ms for the first demo.
+- p50 reflex latency is under 60ms for the first supported target.
+- p95 reflex latency is under 100ms for the first supported target.
 - Stale-frame actions are counted and visible in metrics.

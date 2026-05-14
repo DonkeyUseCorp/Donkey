@@ -79,7 +79,7 @@ This is the time from captured frame to input command execution inside the agent
 capture_end -> perception_end -> controller_end -> input_execute
 ```
 
-This is the easiest latency to measure and should be present from the first prototype.
+This is the easiest latency to measure and should be present from the first supported build.
 
 ### Reflex Latency
 
@@ -237,7 +237,7 @@ Alerts should include the stage that regressed, the previous baseline, and the w
 
 ## Regression Gates
 
-For the first demo:
+For the first supported target:
 
 - capture p95 under 15ms
 - perception p95 under 50ms
@@ -269,7 +269,7 @@ Replay should support:
 
 ## Baselines
 
-Keep explicit baselines for each demo target and machine class.
+Keep explicit baselines for each supported target and machine class.
 
 Example:
 
@@ -314,6 +314,6 @@ Do not compare runs across different machines without labeling them. Hardware di
 
 - A single command can print the latest latency report.
 - Trace files can explain why an action happened.
-- Performance regressions are visible before demo time.
+- Performance regressions are visible before release time.
 - Latency trends can be compared across runs from different days.
 - The system can identify whether capture, perception, controller, or input caused a regression.

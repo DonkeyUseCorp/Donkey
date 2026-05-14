@@ -85,14 +85,14 @@ For web targets, slow-path snapshots may include compact DOM summaries alongside
 1. Capture a selected window at stable frame rate.
 2. Measure capture latency and copy cost.
 3. Build a region cropper.
-4. Add simple object detection for the first demo game.
+4. Add simple object detection for the first supported game.
 5. Emit a world-state JSON event each frame.
 6. Record traces for replay.
 7. Benchmark screenshot-to-model inference on cropped regions.
 
 ## Acceptance Criteria
 
-- Capture can run at 30 FPS minimum for the first demo.
+- Capture can run at 30 FPS minimum for the first supported target.
 - Perception p95 stays under 50ms.
 - The controller never reads raw screenshots directly.
 - Full-resolution snapshots are outside the reflex loop.

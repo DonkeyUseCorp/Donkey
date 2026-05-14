@@ -60,7 +60,7 @@ Every frame should use local, bounded-cost logic:
 - [04-slow-planner.md](04-slow-planner.md): slow strategy, recovery, and goal-setting layer
 - [05-action-engine.md](05-action-engine.md): low-latency keyboard, mouse, and controller output
 - [06-benchmarking.md](06-benchmarking.md): latency measurement, monitoring, traces, and regression gates
-- [07-rollout.md](07-rollout.md): phased delivery path from prototype to demo
+- [07-rollout.md](07-rollout.md): phased delivery path from first supported target to production readiness
 - [08-dom-parsing.md](08-dom-parsing.md): DOM-driven perception for browser games and web apps
 - [09-screenshot-model-inference.md](09-screenshot-model-inference.md): screenshot capture into low-latency vision models
 - [10-gaps-to-expand.md](10-gaps-to-expand.md): remaining gaps needed to make the system real
@@ -87,7 +87,7 @@ Every frame should use local, bounded-cost logic:
 8. DOM signals over vision when the target is web-based and the DOM is available.
 9. Off-the-shelf components before custom model work.
 
-## First Target Demo
+## First Supported Target
 
 Start with iPhone Mirroring targets that have:
 
@@ -105,7 +105,7 @@ Good first candidates:
 - Subway Surfers after swipe calibration works
 - local iPhone Safari test pages as measurement harnesses
 
-Avoid for the first demo:
+Avoid for the first supported target:
 
 - competitive multiplayer games
 - games with anti-cheat
