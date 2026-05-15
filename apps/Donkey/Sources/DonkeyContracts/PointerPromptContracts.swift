@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 public struct PointerPromptState: Equatable, Sendable {
@@ -188,6 +189,7 @@ public enum PointerPromptIntent: Equatable, Sendable {
     case voiceInputRequested
     case primaryActionRequested(promptText: String)
     case messageSubmitted(text: String)
+    case inputTextHeightChanged(CGFloat)
     case dismissed
 }
 

@@ -1,3 +1,4 @@
+import DonkeyContracts
 import DonkeyUI
 import SwiftUI
 
@@ -8,12 +9,13 @@ struct PointerPromptOverlayRootView: View {
         PointerPromptStageView(
             state: model.promptState,
             messageText: $model.messageText,
+            inputTextHeight: model.inputTextHeight,
             placement: model.placement,
             intentSink: model
         )
         .frame(
-            width: PointerPromptOverlayController.contentSize.width,
-            height: PointerPromptOverlayController.contentSize.height
+            width: PointerPromptLayout.contentSize(inputTextHeight: model.inputTextHeight).width,
+            height: PointerPromptLayout.contentSize(inputTextHeight: model.inputTextHeight).height
         )
     }
 }

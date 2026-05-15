@@ -6,7 +6,7 @@ Plans describe what we might build. Guides describe what Donkey currently suppor
 
 ## Product Guides
 
-- [Pointer Prompt Overlay](guides/pointer-prompt-overlay.md): command-click agent pointer and standard macOS-style `Make this so` composer that follows the mouse at a fixed offset.
+- [Pointer Prompt Overlay](guides/pointer-prompt-overlay.md): double-Command agent pointer and standard macOS-style `Make this so` composer that follows the mouse at a fixed offset.
 
 ## Engineering Guides
 

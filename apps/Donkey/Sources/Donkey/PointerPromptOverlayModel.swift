@@ -9,6 +9,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
     @Published private(set) var promptState: PointerPromptState
     @Published var messageText = ""
     @Published var placement: PointerPromptPlacement = .bottomRight
+    @Published var inputTextHeight = PointerPromptLayout.composerInputTextMinimumHeight
 
     private let runtimeProvider: any RuntimeStatusProviding
     private let aiProvider: any AIHarnessSnapshotProviding
@@ -51,6 +52,10 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
 
             messageText = ""
             promptState.leadingSignalLevel = .thinking
+        case .inputTextHeightChanged(let height):
+            let clampedHeight = max(PointerPromptLayout.composerInputTextMinimumHeight, height)
+            guard abs(inputTextHeight - clampedHeight) > 0.5 else { return }
+            inputTextHeight = clampedHeight
         case .dismissed:
             promptState.isPrimaryActionEnabled = false
             promptState.isActive = false

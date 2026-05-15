@@ -5,17 +5,20 @@ import SwiftUI
 public struct PointerPromptStageView: View {
     private let state: PointerPromptState
     @Binding private var messageText: String
+    private let inputTextHeight: CGFloat
     private let placement: PointerPromptPlacement
     private weak var intentSink: (any PointerPromptIntentSink)?
 
     public init(
         state: PointerPromptState,
         messageText: Binding<String>,
+        inputTextHeight: CGFloat = PointerPromptLayout.composerInputTextMinimumHeight,
         placement: PointerPromptPlacement = .bottomRight,
         intentSink: any PointerPromptIntentSink
     ) {
         self.state = state
         self._messageText = messageText
+        self.inputTextHeight = inputTextHeight
         self.placement = placement
         self.intentSink = intentSink
     }
@@ -59,9 +62,7 @@ public struct PointerPromptStageView: View {
         PointerPromptComposer(
             state: state,
             messageText: $messageText,
-            addContext: {
-                intentSink?.handle(.addContextRequested)
-            },
+            inputTextHeight: inputTextHeight,
             voiceInput: {
                 intentSink?.handle(.voiceInputRequested)
             },
@@ -70,11 +71,14 @@ public struct PointerPromptStageView: View {
             },
             submit: {
                 intentSink?.handle(.messageSubmitted(text: messageText))
+            },
+            inputTextHeightChanged: { height in
+                intentSink?.handle(.inputTextHeightChanged(height))
             }
         )
         .frame(
-            width: PointerPromptLayout.composerSize.width,
-            height: PointerPromptLayout.composerSize.height
+            width: PointerPromptLayout.composerWidth,
+            height: PointerPromptLayout.composerHeight(inputTextHeight: inputTextHeight)
         )
     }
 
@@ -89,65 +93,56 @@ public struct PointerPromptStageView: View {
 private struct PointerPromptComposer: View {
     let state: PointerPromptState
     @Binding var messageText: String
-    let addContext: @MainActor () -> Void
+    let inputTextHeight: CGFloat
     let voiceInput: @MainActor () -> Void
     let dismiss: @MainActor () -> Void
     let submit: @MainActor () -> Void
-    @FocusState private var isFocused: Bool
+    let inputTextHeightChanged: @MainActor (CGFloat) -> Void
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            VStack(alignment: .leading, spacing: 12) {
-                TextField(state.promptText, text: $messageText)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 13))
-                    .lineLimit(1)
-                    .focused($isFocused)
-                    .onSubmit(submit)
-                    .accessibilityLabel("Message for Donkey")
+            HStack(spacing: 12) {
+                ComposerMultilineTextInput(
+                    text: $messageText,
+                    placeholder: state.promptText,
+                    isActive: state.isActive,
+                    textHeightChanged: inputTextHeightChanged,
+                    submit: submit
+                )
                     .frame(maxWidth: .infinity)
-                    .padding(.leading, closeButtonContentClearance)
+                    .frame(height: inputTextHeight)
 
-                Divider()
-
-                HStack(spacing: 10) {
-                    ComposerToolbarButton(
-                        systemName: "plus",
-                        title: "Add",
-                        action: addContext
-                    )
-
-                    ComposerToolbarButton(
-                        systemName: "waveform",
-                        title: "Voice",
-                        action: voiceInput
-                    )
-
-                    Spacer(minLength: 12)
-
-                    ComposerToolbarButton(
-                        systemName: "arrow.up",
-                        title: "Send",
-                        isProminent: true,
-                        isDisabled: isSubmitDisabled,
-                        action: submit
-                    )
-                }
+                ComposerVoiceButton(action: voiceInput)
             }
-            .padding(16)
+            .frame(height: PointerPromptLayout.composerInputHeight(inputTextHeight: inputTextHeight))
+            .padding(.leading, PointerPromptLayout.composerInputLeadingContentPadding)
+            .padding(.trailing, PointerPromptLayout.composerInputTrailingContentPadding)
+            .background {
+                Capsule(style: .continuous)
+                    .fill(Color(red: 0.13, green: 0.13, blue: 0.13))
+                    .overlay {
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(0.07), lineWidth: 1)
+                    }
+            }
+            .padding(.horizontal, PointerPromptLayout.composerInputHorizontalPadding)
+            .padding(.top, PointerPromptLayout.composerTitlebarHeight)
+            .padding(.bottom, PointerPromptLayout.composerBottomPadding)
 
-            ComposerCloseButton(action: dismiss)
-                .padding(.leading, PointerPromptLayout.closeButtonInset)
-                .padding(.top, PointerPromptLayout.closeButtonInset)
+            ComposerCloseControl(close: dismiss)
+                .offset(
+                    x: PointerPromptLayout.closeButtonInset,
+                    y: PointerPromptLayout.closeButtonInset
+                )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
             RoundedRectangle(cornerRadius: PointerPromptLayout.composerCornerRadius, style: .continuous)
-                .fill(Color(nsColor: .windowBackgroundColor))
+                .fill(Color(red: 0.08, green: 0.085, blue: 0.085))
         }
         .overlay {
             RoundedRectangle(cornerRadius: PointerPromptLayout.composerCornerRadius, style: .continuous)
-                .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                .stroke(Color.white.opacity(0.09), lineWidth: 1)
         }
         .shadow(
             color: Color.black.opacity(state.isActive ? 0.16 : 0.08),
@@ -156,75 +151,281 @@ private struct PointerPromptComposer: View {
             y: state.isActive ? 6 : 3
         )
         .controlSize(.regular)
-        .onAppear(perform: syncFocusWithActiveState)
-        .onChange(of: state.isActive) { _, _ in
-            syncFocusWithActiveState()
+    }
+}
+
+private struct ComposerMultilineTextInput: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    let isActive: Bool
+    let textHeightChanged: @MainActor (CGFloat) -> Void
+    let submit: @MainActor () -> Void
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+
+        let textView = ComposerTextView()
+        textView.delegate = context.coordinator
+        textView.shouldFocusWhenAttached = isActive
+        textView.placeholder = placeholder
+        textView.submit = {
+            Task { @MainActor in
+                submit()
+            }
+        }
+        textView.string = text
+        textView.font = .systemFont(ofSize: 16)
+        textView.textColor = .white
+        textView.insertionPointColor = .white
+        textView.backgroundColor = .clear
+        textView.drawsBackground = false
+        textView.isRichText = false
+        textView.importsGraphics = false
+        textView.allowsUndo = true
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.minSize = CGSize(
+            width: 0,
+            height: PointerPromptLayout.composerInputTextMinimumHeight
+        )
+        textView.maxSize = CGSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.autoresizingMask = [.width]
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.heightTracksTextView = false
+        textView.textContainer?.containerSize = CGSize(
+            width: scrollView.contentSize.width,
+            height: .greatestFiniteMagnitude
+        )
+        scrollView.documentView = textView
+
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.parent = self
+        guard let textView = scrollView.documentView as? ComposerTextView else { return }
+
+        textView.shouldFocusWhenAttached = isActive
+        textView.placeholder = placeholder
+        textView.submit = {
+            Task { @MainActor in
+                submit()
+            }
+        }
+
+        if textView.string != text {
+            textView.string = text
+            textView.needsDisplay = true
+        }
+
+        DispatchQueue.main.async {
+            context.coordinator.updateTextContainerWidth(for: textView, in: scrollView)
+            context.coordinator.reportTextHeight(for: textView)
+
+            if isActive, textView.window?.firstResponder !== textView {
+                textView.focusIfNeeded()
+            }
         }
     }
 
-    private var isSubmitDisabled: Bool {
-        !state.isPrimaryActionEnabled ||
-            messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
     }
 
-    private var closeButtonContentClearance: CGFloat {
-        PointerPromptLayout.closeButtonInset +
-            PointerPromptLayout.closeButtonSize
-    }
+    @MainActor
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: ComposerMultilineTextInput
 
-    private func syncFocusWithActiveState() {
-        guard state.isActive else {
-            isFocused = false
-            return
+        init(parent: ComposerMultilineTextInput) {
+            self.parent = parent
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            isFocused = true
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? ComposerTextView else { return }
+
+            parent.text = textView.string
+            textView.needsDisplay = true
+            reportTextHeight(for: textView)
+        }
+
+        func updateTextContainerWidth(
+            for textView: NSTextView,
+            in scrollView: NSScrollView
+        ) {
+            let width = max(1, scrollView.contentView.bounds.width)
+            let height = max(
+                PointerPromptLayout.composerInputTextMinimumHeight,
+                scrollView.contentView.bounds.height
+            )
+            textView.textContainer?.containerSize = CGSize(
+                width: width,
+                height: .greatestFiniteMagnitude
+            )
+            textView.frame = CGRect(
+                x: 0,
+                y: 0,
+                width: width,
+                height: height
+            )
+        }
+
+        func reportTextHeight(for textView: NSTextView) {
+            guard let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer else {
+                return
+            }
+
+            layoutManager.ensureLayout(for: textContainer)
+            let usedRect = layoutManager.usedRect(for: textContainer)
+            let measuredHeight = ceil(max(
+                PointerPromptLayout.composerInputTextMinimumHeight,
+                usedRect.height
+            ))
+            parent.textHeightChanged(measuredHeight)
         }
     }
 }
 
-private struct ComposerCloseButton: View {
-    let action: @MainActor () -> Void
+private final class ComposerTextView: NSTextView {
+    var placeholder = ""
+    var submit: (() -> Void)?
+    var shouldFocusWhenAttached = false
+
+    override var acceptsFirstResponder: Bool {
+        true
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        focusIfNeeded()
+    }
+
+    func focusIfNeeded() {
+        guard shouldFocusWhenAttached else { return }
+
+        window?.makeFirstResponder(self)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        let isReturn = event.keyCode == 36 || event.keyCode == 76
+        let shouldInsertNewline = event.modifierFlags.contains(.shift)
+
+        if isReturn, !shouldInsertNewline {
+            submit?()
+            return
+        }
+
+        super.keyDown(with: event)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+
+        guard string.isEmpty, !placeholder.isEmpty else { return }
+
+        let attributes: [NSAttributedString.Key: Any] = [
+            .foregroundColor: NSColor.white.withAlphaComponent(0.58),
+            .font: font ?? NSFont.systemFont(ofSize: 16)
+        ]
+        (placeholder as NSString).draw(at: .zero, withAttributes: attributes)
+    }
+}
+
+private struct ComposerCloseControl: View {
+    let close: @MainActor () -> Void
 
     var body: some View {
-        Button(action: action) {
-            ZStack {
-                Circle()
-                    .fill(Color(nsColor: .systemRed))
-                    .overlay {
-                        Circle()
-                            .stroke(Color.black.opacity(0.18), lineWidth: 0.5)
-                    }
+        ComposerTrafficLight(
+            color: Color.white.opacity(0.34),
+            hoverColor: Color(nsColor: .systemRed),
+            accessibilityLabel: "Close prompt",
+            action: close
+        )
+    }
+}
 
-                Image(systemName: "xmark")
-                    .font(.system(size: 6, weight: .bold))
-                    .foregroundStyle(Color.black.opacity(0.58))
+private struct ComposerTrafficLight: View {
+    let color: Color
+    var hoverColor: Color?
+    var accessibilityLabel: String?
+    var action: (@MainActor () -> Void)?
+    @State private var isHovered = false
+
+    @ViewBuilder
+    var body: some View {
+        if let action {
+            Button(action: action) {
+                trafficLight
             }
+            .buttonStyle(.plain)
             .frame(
                 width: PointerPromptLayout.closeButtonSize,
                 height: PointerPromptLayout.closeButtonSize
             )
+            .contentShape(Circle())
+            .onHover { isHovered = $0 }
+            .accessibilityLabel(accessibilityLabel ?? "Window control")
+        } else {
+            trafficLight
+                .accessibilityHidden(true)
         }
-        .buttonStyle(.plain)
-        .contentShape(Circle())
-        .accessibilityLabel("Close prompt")
+    }
+
+    private var trafficLight: some View {
+        ZStack {
+            Circle()
+                .fill(isHovered ? hoverColor ?? color : color)
+                .overlay {
+                    Circle()
+                        .stroke(Color.black.opacity(0.18), lineWidth: 0.5)
+                }
+
+            if action != nil {
+                Image(systemName: "xmark")
+                    .font(.system(size: 6, weight: .bold))
+                    .foregroundStyle(Color.black.opacity(0.58))
+                    .opacity(isHovered ? 1 : 0)
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: isHovered)
+        .frame(
+            width: PointerPromptLayout.closeButtonSize,
+            height: PointerPromptLayout.closeButtonSize
+        )
     }
 }
 
-private struct ComposerToolbarButton: View {
-    let systemName: String
-    let title: String
-    var isProminent = false
-    var isDisabled = false
+private struct ComposerVoiceButton: View {
     let action: @MainActor () -> Void
 
     var body: some View {
         Button(action: action) {
-            Label(title, systemImage: systemName)
+            Image(systemName: "waveform")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.black)
+                .frame(
+                    width: PointerPromptLayout.composerInputVoiceButtonSize,
+                    height: PointerPromptLayout.composerInputVoiceButtonSize
+                )
+                .background {
+                    Circle()
+                        .fill(Color.white)
+                }
         }
-        .disabled(isDisabled)
-        .accessibilityLabel(title)
+        .buttonStyle(.plain)
+        .accessibilityLabel("Voice input")
     }
 }
 
