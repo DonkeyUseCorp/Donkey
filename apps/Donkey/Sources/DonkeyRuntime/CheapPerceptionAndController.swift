@@ -157,10 +157,10 @@ public struct DeterministicControllerPolicy: DryRunControllerPolicy {
                     target: affordance.targetBounds,
                     confidence: affordance.confidence,
                     rationale: "Selected highest-confidence tap target affordance",
-                    metadata: [
+                    metadata: affordance.metadata.merging([
                         "fallback": "false",
                         "sourceSignalID": affordance.sourceSignalID
-                    ]
+                    ]) { current, _ in current }
                 )
             }
 
@@ -169,12 +169,12 @@ public struct DeterministicControllerPolicy: DryRunControllerPolicy {
                 kind: .wait,
                 confidence: affordance.confidence,
                 rationale: "Best affordance confidence is below action threshold",
-                metadata: [
+                metadata: affordance.metadata.merging([
                     "fallback": "true",
                     "fallbackReason": "lowConfidence",
                     "sourceSignalID": affordance.sourceSignalID,
                     "minimumActionConfidence": String(minimumActionConfidence)
-                ]
+                ]) { current, _ in current }
             )
         }
 

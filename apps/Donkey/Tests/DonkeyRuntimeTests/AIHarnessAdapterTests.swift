@@ -1,5 +1,6 @@
 import DonkeyAI
 import DonkeyContracts
+import DonkeyRuntime
 import Foundation
 import Testing
 
@@ -44,6 +45,27 @@ struct AIHarnessAdapterTests {
                 )
             )
         }
+    }
+
+    @Test
+    func privacySensitivePlannerRoutePrefersLocalProviderWhenAvailable() throws {
+        let registry = AIModelRegistry(
+            entries: [
+                entry(id: "online", provider: .openAI, modelID: "gpt-5.2", evalStatus: .candidate),
+                entry(id: "local", provider: .ollama, modelID: "qwen3:8b", evalStatus: .candidate)
+            ]
+        )
+        let router = AIModelRouter(registry: registry)
+
+        let selected = try router.route(
+            AIModelRouteRequest(
+                jobType: .plannerHint,
+                privacyMode: .privacySensitive
+            )
+        )
+
+        #expect(selected.id == "local")
+        #expect(selected.provider == .ollama)
     }
 
     @Test
@@ -112,6 +134,97 @@ struct AIHarnessAdapterTests {
         #expect(invalidOutput.trace.status == .invalidOutput)
     }
 
+    @Test
+    func ollamaAdapterBuildsLocalGenerateRequestAndDecodesStructuredHint() async throws {
+        let httpClient = FakeAIHTTPClient(
+            data: ollamaResponseData(
+                response: """
+                {"id":"local-hint-1","goal":"recover locally","policyName":"local-planner-policy","priorities":["observe menu"],"preferredActions":["observe"],"avoidActions":["tapTarget"],"confidence":0.74,"expiryMilliseconds":3000}
+                """
+            ),
+            statusCode: 200
+        )
+        let adapter = OllamaPlannerHintAdapter(
+            router: AIModelRouter(
+                registry: AIModelRegistry(
+                    entries: [
+                        entry(
+                            id: "local-planner",
+                            provider: .ollama,
+                            modelID: "qwen3:8b",
+                            endpoint: URL(string: "http://127.0.0.1:11434/api/generate")!
+                        )
+                    ]
+                )
+            ),
+            httpClient: httpClient
+        )
+
+        let result = await adapter.generatePlannerHint(adapterRequest())
+
+        #expect(result.hint?.id == "local-hint-1")
+        #expect(result.hint?.preferredActions == [.observe])
+        #expect(result.trace.status == .completed)
+        #expect(result.trace.provider == .ollama)
+        #expect(result.trace.metadata["local.provider"] == "ollama")
+
+        let request = try #require(httpClient.requests.first)
+        #expect(request.url?.absoluteString == "http://127.0.0.1:11434/api/generate")
+        let body = try #require(request.httpBodyJSONObject)
+        #expect(body["model"] as? String == "qwen3:8b")
+        #expect(body["stream"] as? Bool == false)
+        #expect(body["format"] as? [String: Any] != nil)
+        #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+    }
+
+    @Test
+    func providerBackedSlowPlannerFallsBackFromLocalToOnlineProvider() async {
+        let localAdapter = OllamaPlannerHintAdapter(
+            router: AIModelRouter(
+                registry: AIModelRegistry(
+                    entries: [
+                        entry(
+                            id: "local-planner",
+                            provider: .ollama,
+                            modelID: "qwen3:8b",
+                            endpoint: URL(string: "http://127.0.0.1:11434/api/generate")!
+                        )
+                    ]
+                )
+            ),
+            httpClient: FakeAIHTTPClient(data: Data("{}".utf8), statusCode: 500)
+        )
+        let onlineAdapter = OpenAIPlannerHintAdapter(
+            router: AIModelRouter(
+                registry: AIModelRegistry(
+                    entries: [entry(id: "online-planner", provider: .openAI, modelID: "gpt-5.2")]
+                )
+            ),
+            httpClient: FakeAIHTTPClient(
+                data: responseData(
+                    outputText: """
+                    {"id":"online-hint-1","goal":"fallback online","policyName":"online-planner-policy","priorities":["recover"],"preferredActions":["wait"],"avoidActions":[],"confidence":0.81,"expiryMilliseconds":4000}
+                    """
+                ),
+                statusCode: 200
+            ),
+            environment: ["OPENAI_API_KEY": "test-key"]
+        )
+        let planner = ProviderBackedSlowPlannerHintGenerator(
+            localAdapter: localAdapter,
+            onlineAdapter: onlineAdapter,
+            providerOrder: [.ollama, .openAI]
+        )
+
+        let result = await planner.generatePlannerHint(snapshot: slowPlannerSnapshot())
+
+        #expect(result.hint?.id == "online-hint-1")
+        #expect(result.metadata["ollama.status"] == "providerOutage")
+        #expect(result.metadata["openAI.status"] == "completed")
+        #expect(result.metadata["selectedProvider"] == "openAI")
+        #expect(result.metadata["selectedModelID"] == "gpt-5.2")
+    }
+
     private func adapterRequest() -> PlannerHintAdapterRequest {
         PlannerHintAdapterRequest(
             context: RunContextPackage(
@@ -135,21 +248,25 @@ struct AIHarnessAdapterTests {
 
     private func entry(
         id: String,
+        provider: AIModelProvider = .openAI,
         modelID: String,
+        endpoint: URL = URL(string: "https://api.openai.com/v1/responses")!,
         evalStatus: AIModelEvalStatus = .candidate,
         timeoutMS: Int = 8_000
     ) -> AIModelRegistryEntry {
         AIModelRegistryEntry(
             id: id,
             role: .plannerHint,
-            provider: .openAI,
+            provider: provider,
             modelID: modelID,
-            endpoint: URL(string: "https://api.openai.com/v1/responses")!,
+            endpoint: endpoint,
             capabilities: [.textInput, .structuredOutputs],
             timeoutMS: timeoutMS,
             promptVersion: "planner-hint-v1",
             evalStatus: evalStatus,
-            docsURL: URL(string: "https://platform.openai.com/docs/api-reference/responses/create")!
+            docsURL: provider == .openAI
+                ? URL(string: "https://platform.openai.com/docs/api-reference/responses/create")!
+                : URL(string: "https://docs.ollama.com/api")!
         )
     }
 
@@ -159,6 +276,59 @@ struct AIHarnessAdapterTests {
             .replacingOccurrences(of: "\"", with: "\\\"")
             .replacingOccurrences(of: "\n", with: "\\n")
         return Data("{\"id\":\"resp-1\",\"output_text\":\"\(escaped)\"}".utf8)
+    }
+
+    private func ollamaResponseData(response: String) -> Data {
+        let escaped = response
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+        return Data("{\"model\":\"qwen3:8b\",\"response\":\"\(escaped)\",\"done\":true}".utf8)
+    }
+
+    private func slowPlannerSnapshot() -> SlowPlannerSnapshot {
+        let observedAt = timestamp(10)
+        let context = RunContextPackage(
+            sessionID: "session-1",
+            userGoal: "avoid hazards",
+            targetID: "target-1",
+            runtimeProfile: "dry-run",
+            latestWorldState: RunWorldStateSummary(
+                stateID: "state-1",
+                summary: "player centered",
+                confidence: 0.9
+            ),
+            transcriptSummary: ""
+        )
+        let worldState = HotLoopWorldState(
+            id: "state-1",
+            traceID: "trace-1",
+            frameID: "frame-1",
+            targetID: "target-1",
+            observedAt: observedAt,
+            signalSummaries: [],
+            actionAffordances: [],
+            confidence: 0.9
+        )
+        let action = HotLoopControllerAction(
+            id: "action-1",
+            traceID: "trace-1",
+            frameID: "frame-1",
+            stateID: "state-1",
+            kind: .wait,
+            target: nil,
+            policyName: "test-policy",
+            confidence: 0.9,
+            rationale: "test"
+        )
+        return SlowPlannerSnapshot(
+            id: "snapshot-1",
+            triggerReasons: [.sceneChanged],
+            context: context,
+            latestWorldState: worldState,
+            latestAction: action,
+            traceSummaries: []
+        )
     }
 
     private func timestamp(_ milliseconds: UInt64) -> RunTraceTimestamp {

@@ -1,12 +1,16 @@
 # Capture And Perception
 
-> Active status: not complete. Current capture/perception support includes target-window frames and metadata perception, but not measured local model/OCR/segmentation perception for a concrete target.
+> Active status: not complete. Current capture/perception support includes target-window frames and metadata perception, but not the live observation needed to verify the first fast-navigation benchmark.
 
 ## Goal
 
-Convert screen pixels into a compact world state quickly enough for real-time control.
+Convert app, window, Accessibility, and screen observations into compact state quickly enough for local task control.
 
 The perception layer should answer only the questions the controller needs right now.
+
+For the first Weather task, the controller needs app/task facts more than pixels: whether Weather is running and frontmost, whether the search field or search results are available, what location is visible, and whether the requested city is verified.
+
+For Mac apps, Accessibility is the preferred observation channel when trusted and available. Prefer direct app/UI structure over pixel inference when it is available, stable, and fast enough.
 
 For browser games and web apps, DOM parsing can be an additional perception channel. Prefer direct DOM signals over pixel inference when they are available, stable, and fast enough. See [08-dom-parsing.md](08-dom-parsing.md).
 
@@ -14,15 +18,16 @@ For visual targets that cannot be parsed through the DOM, screenshots can feed a
 
 ## Capture Plan
 
-Start with window or region capture, not whole-desktop capture.
+Start with app/window metadata and Accessibility snapshots. Use window or region capture only when structured app observation is insufficient.
 
 Priority order:
 
-1. Capture only the game window.
-2. Crop to the gameplay area.
-3. Crop further to regions of interest when possible.
-4. Lower resolution for controller signals.
-5. Keep occasional high-resolution snapshots for the slow planner.
+1. Resolve the target app/window.
+2. Read Accessibility state for controls and labels.
+3. Capture only the target window when Accessibility cannot answer the question.
+4. Crop to the relevant app region or control.
+5. Lower resolution for controller signals.
+6. Keep occasional high-resolution snapshots for the slow planner.
 
 ## Perception Modes
 
@@ -30,6 +35,9 @@ Use the cheapest technique that works:
 
 | Need | Preferred Method |
 | --- | --- |
+| Mac app focus/running state | window metadata, NSWorkspace/Accessibility |
+| Mac app controls and labels | Accessibility snapshot/action metadata |
+| Weather visible location | Accessibility label/value first, cropped OCR fallback |
 | browser UI/web app state | live DOM query, DOM snapshot, or parsed HTML |
 | UI/menu state | template matching, OCR only where needed |
 | visually complex state | cropped screenshot into a small vision model |
@@ -45,13 +53,13 @@ Keep world state small and typed:
 
 ```text
 timestamp
+intent_id
 scene_id
-player_position
-player_velocity
-targets
-hazards
-resources
-active_menu
+app_id
+task_type
+visible_location
+search_field_state
+result_state
 confidence
 raw_signals
 ```
@@ -62,10 +70,10 @@ The controller should consume this state without needing raw pixels.
 
 Per frame:
 
-1. Read latest captured frame.
-2. Apply crop and downscale.
-3. Run cheap detectors.
-4. Update tracks from previous state.
+1. Read latest app/window/Accessibility state.
+2. Capture and crop only if structured state is missing.
+3. Run cheap OCR/template fallback only on the crop.
+4. Update task state from previous state.
 5. Emit latest world state.
 
 When using a model, the fast path should pass preprocessed tensors or raw pixel buffers directly to inference. Avoid PNG/JPEG encoding in the reflex loop.
@@ -84,18 +92,21 @@ For web targets, slow-path snapshots may include compact DOM summaries alongside
 
 ## First Milestones
 
-1. Capture a selected window at stable frame rate.
-2. Measure capture latency and copy cost.
-3. Build a region cropper.
-4. Add simple object detection for the first supported game.
-5. Emit a world-state JSON event each frame.
-6. Record traces for replay.
-7. Benchmark screenshot-to-model inference on cropped regions.
+1. Resolve and observe the Weather app window.
+2. Measure app/window/Accessibility observation latency.
+3. Extract search/result/location state for Weather.
+4. Build a region cropper for Weather screenshot fallback.
+5. Add cropped OCR fallback only if Accessibility cannot verify location.
+6. Emit a world-state JSON event for each task step.
+7. Record traces for replay.
+8. Benchmark screenshot-to-model inference on cropped regions as a later visual-target path.
 
 ## Acceptance Criteria
 
-- Capture can run at 30 FPS minimum for the first supported target.
-- Perception p95 stays under 50ms.
+- App observation p95 stays under the target budget for Weather lookup.
+- Capture can run at 30 FPS minimum for later visual targets.
+- Perception p95 stays under 50ms when screenshot/OCR fallback is used.
 - The controller never reads raw screenshots directly.
 - Full-resolution snapshots are outside the reflex loop.
 - Model input dimensions and preprocessing cost are included in perception latency.
+- Weather result verification is traceable to Accessibility or cropped OCR evidence.

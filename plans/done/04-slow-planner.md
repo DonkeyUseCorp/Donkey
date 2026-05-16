@@ -1,6 +1,6 @@
 # Slow Planner
 
-> Active status: not complete. Current slow-planner support includes snapshots, validation, and hint bus scaffolding, but not a provider-backed local/online LLM planner loop.
+> Completed status: the slow planner has trigger rules, compact snapshots, validated hint publication, provider-backed local/online planner hint generation, and tests showing planner latency does not affect reflex p95.
 
 ## Goal
 
@@ -94,3 +94,11 @@ If the planner is slow, unavailable, or wrong:
 - Planner latency does not affect p95 reflex latency.
 - Controller can run for at least 30 seconds without planner output.
 - Planner output is validated before it reaches the controller.
+
+## Completion Notes
+
+- `DryRunSlowPlannerSidecar` triggers beside the dry-run reflex loop and builds compact snapshots from world state, action, trace summaries, screenshots, and memory.
+- `ProviderBackedSlowPlannerHintGenerator` can try a local Ollama-compatible provider and fall back to OpenAI through the same structured planner-hint schema.
+- `ValidatedPlannerHintBus` rejects invalid or unsafe hints before controller publication.
+- `PlannerHintAwareControllerPolicy` exposes the latest validated hint as metadata, not direct input.
+- Tests cover snapshot construction, invalid-hint rejection, hint-aware controller metadata, 30 simulated seconds without planner output, provider fallback, and reflex p95 isolation from planner latency.

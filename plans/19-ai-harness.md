@@ -1,25 +1,25 @@
 # AI Harness
 
-> Active status: not complete. The current repo has OpenAI adapter scaffolding, model routing, memory scaffolding, and an optional slow-planner sidecar, but it does not yet provide a complete slow loop that can use both local and online LLM providers.
+> Active status: not complete. The current repo now has OpenAI and Ollama-compatible planner adapters, model routing, memory scaffolding, and a provider-backed slow-planner generator, but semantic retrieval, redaction, aggregate model observability, and provider-decoded memory write proposals still remain.
 
 ## Goal
 
-Build the slow-path AI harness that connects the agent to LLMs/VLMs, manages memory, routes model calls, validates structured planner output, and keeps model choices updateable without touching the low-latency reflex loop.
+Build the slow-path AI harness that connects the agent to LLMs/VLMs, manages memory, routes model calls, validates structured intent/planner output, and keeps model choices updateable without touching the low-latency local task loop.
 
-The harness is the agent's reasoning and memory layer. It supports planning, recovery, trace explanation, model-assisted perception setup, and long-running improvement. It does not drive frame-by-frame gameplay.
+The harness is the agent's reasoning and memory layer. It supports ambiguous command parsing, planning, recovery, trace explanation, model-assisted perception setup, and long-running improvement. It does not drive app navigation, typing, clicking, or frame-by-frame gameplay.
 
 ## Core Rule
 
-The AI harness must never block the reflex loop.
+The AI harness must never block the local task loop.
 
 Remote LLM/VLM calls can help the agent think, remember, and recover, but the fast controller must keep running from local world state and the latest valid planner hints.
 
 ```text
-Capture / Perception / Controller / Action
+Intent / Observation / Controller / Action
   -> local, bounded, latest-frame-wins
 
 AI Harness
-  -> async, slow-path, memory-backed, validated output
+  -> async, slow-path, memory-backed, validated intent/hint output
 ```
 
 If the harness is slow, offline, rate-limited, or wrong, the controller continues with local policy, stale hint expiry, and safe fallback behavior.
@@ -28,11 +28,13 @@ If the harness is slow, offline, rate-limited, or wrong, the controller continue
 
 - connect to model providers
 - choose the right model for each slow-path job
+- parse ambiguous natural commands into validated task intents when deterministic parsing is insufficient
 - build compact model inputs from world state, traces, screenshots, DOM summaries, and user goals
 - retrieve useful memory before a planner call
 - validate structured model outputs
 - write approved memory updates
 - produce planner hints for the fast controller
+- produce recovery suggestions when local app navigation cannot verify progress
 - summarize failure traces
 - review screenshots or traces for evaluation
 - track model latency, cost, output quality, and schema validity
@@ -42,6 +44,7 @@ If the harness is slow, offline, rate-limited, or wrong, the controller continue
 
 - per-frame action decisions
 - direct OS input
+- direct app launching, typing, clicking, or Accessibility actions
 - direct mutation of controller state without validation
 - raw screenshot logging without redaction rules
 - choosing local fast-vision models without trace benchmarks
@@ -56,6 +59,7 @@ User Goal
 Target Adapter
 Screenshots / DOM Summary
   -> Snapshot Builder
+  -> Intent Parser / Intent Validator
   -> Memory Retriever
   -> Model Router
   -> Provider Adapter
@@ -65,7 +69,39 @@ Screenshots / DOM Summary
   -> Trace / Metrics Sink
 ```
 
-The harness should be a sidecar service or worker owned by the agent runtime. It reads snapshots and emits typed outputs. It should not own capture, input, or the controller tick.
+The harness should be a sidecar service or worker owned by the agent runtime. It reads snapshots and emits typed outputs. It should not own capture, input, app activation, or the controller tick.
+
+## Intent Parsing Role
+
+Common commands should use deterministic parsing first. The first target command is:
+
+```text
+"show me the weather for SF"
+  -> weather_lookup(city: "San Francisco", app: "Weather")
+```
+
+Use the AI harness only when deterministic parsing cannot confidently resolve the task, target app, or entities. AI output must become a validated `TaskIntent`, not direct input.
+
+The intent parser output should include:
+
+```text
+intent_id
+task_type
+target_app
+entities
+normalized_entities
+confidence
+parser_source
+needs_confirmation
+source_model_call_id
+```
+
+Validation rules:
+
+- unsupported task types are rejected
+- low-confidence entity normalization asks for clarification or falls back to dry-run only
+- dangerous apps or sensitive targets are rejected before app launch
+- model-proposed actions are ignored unless they fit the task adapter's allowed action space
 
 ## Memory Layers
 
@@ -311,13 +347,14 @@ Do not hardcode one model everywhere. Assign models by role.
 
 | Role | Default Candidate | Use |
 | --- | --- | --- |
+| `intent_local` | deterministic parser, then small local model if needed | common command-to-intent parsing before local app execution |
 | `planner_default` | `gpt-5.4-mini` | routine slow planning, recovery hints, target reasoning |
 | `planner_strong` | `gpt-5.5` | hard recovery, unfamiliar screens, complex strategy, plan generation |
 | `planner_deep_eval` | `gpt-5.5-pro` | offline trace critique or high-value evaluation only |
 | `planner_cheap` | `gpt-5.4-nano` | simple classification, short summaries, routing decisions |
-| `planner_local` | Qwen3 8B, Phi-family, or Gemma 3 through Ollama/vLLM/llama.cpp | local reasoning/dialogue/UI understanding outside the reflex loop |
-| `vision_local_slow` | Gemma 3 or PaliGemma candidate | local multimodal UI understanding outside the reflex loop |
-| `vision_snapshot` | `gpt-5.4-mini` or `gpt-5.5` | occasional screenshot understanding outside the reflex loop |
+| `planner_local` | Qwen3 8B, Phi-family, or Gemma 3 through Ollama/vLLM/llama.cpp | local reasoning/dialogue/UI understanding outside the task loop |
+| `vision_local_slow` | Gemma 3 or PaliGemma candidate | local multimodal UI understanding outside the task loop |
+| `vision_snapshot` | `gpt-5.4-mini` or `gpt-5.5` | occasional screenshot understanding outside the task loop |
 | `memory_embed_default` | `text-embedding-3-small` | default semantic memory retrieval |
 | `memory_embed_high_quality` | `text-embedding-3-large` | offline reindexing or higher-quality retrieval experiments |
 | `local_fast_vision` | target-specific local model | hot-path perception, selected only from target traces |
@@ -329,6 +366,12 @@ Current OpenAI docs list GPT-5.5 as the flagship model for complex coding/profes
 Route by job type, risk, latency tolerance, and failure history.
 
 ```text
+if deterministic intent parser can resolve the command:
+  skip model call
+
+if job is common app intent disambiguation and local model is available:
+  prefer intent_local or planner_local with a strict timeout
+
 if job is hot_path:
   reject remote model call
   reject general chat LLM call unless a measured specialized local model meets the budget
@@ -365,7 +408,22 @@ prompt_version
 
 ## Structured Planner Output
 
-The harness should emit controller hints, not prose.
+The harness should emit validated intents and controller hints, not prose.
+
+For app tasks, structured intent is the first output:
+
+```text
+intent_id
+task_type
+target_app
+entities
+normalized_entities
+confidence
+needs_confirmation
+allowed_action_space
+```
+
+For longer-running recovery, planner hints remain advisory:
 
 ```text
 hint_id
@@ -573,23 +631,28 @@ The harness should degrade quietly and visibly.
 
 ## First Milestones
 
-1. Define model registry schema and role names.
-2. Build the OpenAI Responses provider adapter.
-3. Add one structured planner hint schema.
-4. Build short-term run memory and target memory as JSONL files.
-5. Add text embedding support for semantic memory.
-6. Add snapshot builder with screenshot/DOM redaction hooks.
-7. Add model router with default, cheap, strong, and fallback roles.
-8. Add optional Ollama provider support for local slow-path planning.
-9. Add memory write proposals with deterministic approval.
-10. Add trace events for model calls and memory operations.
-11. Add a replay/eval command for model and prompt changes.
-12. Add a model update checklist that writes `last_verified_at` and docs URLs.
+1. Define `TaskIntent` and validation for `weather_lookup`.
+2. Add deterministic parsing for the Weather command and aliases such as `SF`.
+3. Route ambiguous intent parsing through local-first model selection with strict timeout.
+4. Define model registry schema and role names.
+5. Build the OpenAI Responses provider adapter.
+6. Add one structured planner hint schema.
+7. Build short-term run memory and target memory as JSONL files.
+8. Add text embedding support for semantic memory.
+9. Add snapshot builder with screenshot/DOM redaction hooks.
+10. Add model router with intent, default, cheap, strong, local, and fallback roles.
+11. Add optional Ollama provider support for local slow-path planning.
+12. Add memory write proposals with deterministic approval.
+13. Add trace events for model calls, intent parsing, and memory operations.
+14. Add a replay/eval command for model and prompt changes.
+15. Add a model update checklist that writes `last_verified_at` and docs URLs.
 
 ## Acceptance Criteria
 
-- No remote model call appears in the reflex-loop trace.
+- No remote model call appears in the local task/reflex trace.
+- The Weather command can parse and execute through the deterministic path without a remote model call.
 - The controller can continue for a full run with the harness disabled.
+- Model-generated intents are schema-validated before task-adapter selection.
 - Planner hints are schema-validated and expire automatically.
 - Memory writes are source-linked, scoped, and deleteable.
 - The model registry is the only place default model ids are assigned.
@@ -604,19 +667,20 @@ The AI harness foundation now supports the optional slow-path sidecar pieces nee
 - structured planner hints with validation, expiry, latest-valid selection, and trace/state/model-call source links
 - a model registry and router boundary so default provider model ids live in registry entries instead of controller logic
 - a provider-neutral OpenAI Responses structured-output adapter with `store: false`, traceable failure results, and strict planner-hint decoding
+- an Ollama-compatible local planner adapter using the same strict planner-hint schema
+- `ProviderBackedSlowPlannerHintGenerator`, which can try local slow planning first and fall back to the online OpenAI adapter without changing the hint bus or controller contract
 - short-term run memory, scoped target JSONL memory, deterministic memory-write approval, listing, and deletion
 - planner replay/eval scaffolding and model update checklist records
 - `DryRunSlowPlannerSidecar` snapshots from compact world state, action, trace summaries, optional screenshot artifact references, and memory
 - `ValidatedPlannerHintBus` and `PlannerHintAwareControllerPolicy`, which allow validated hints to advise controller metadata without becoming direct input
 - tests proving planner latency does not move reflex p95 when the harness runs beside the dry-run loop
 
-This is not complete slow-loop AI. The current `AIModelProvider` supports only OpenAI, and the sidecar consumes an injected `SlowPlannerHintGenerating` implementation instead of owning a provider-backed local/online planner loop.
+This is not complete AI harness work. Local/online planner hint generation is now supported, but semantic memory retrieval, redaction hooks, aggregate model observability, and provider-decoded memory proposals still need to be built before this plan can move to `plans/done/`.
 
 ## Required Before This Plan Is Done
 
 - Add embedding-backed semantic memory retrieval and explicit retrieval budgets.
-- Add local/Ollama slow-planner providers behind the same hint-generation boundary.
-- Wire the slow planner loop so it can route to local and online providers, apply timeout/failure policy, and publish only validated hints.
+- Add `weather_lookup` intent parsing and validation with deterministic coverage for "show me the weather for SF".
 - Add redaction hooks before any screenshot or DOM summary is sent to a remote provider.
 - Add aggregate model-call observability reports for latency, schema validity, hint acceptance, cost, and recovery success.
 - Add memory write proposal decoding directly from provider outputs, then route proposals through the deterministic approver.

@@ -4,7 +4,7 @@ This folder is the product and engineering source of truth for capabilities that
 
 Plans describe what we might build. Guides describe what Donkey currently supports and how to maintain it.
 
-There is an active milestone plan in `plans/master-plan.md`. It tracks the unfinished work needed before the run-loop and AI-harness roadmap can be considered complete, especially fast local navigation from local model/perception output and a slow planner loop that can use both local and online LLM providers.
+There is an active milestone plan in `plans/master-plan.md`. It tracks the unfinished work needed before the fast local navigation and AI-harness roadmap can be considered complete, especially the first Weather lookup benchmark from natural command to local navigation, guarded input, result verification, latency reporting, and optional slow planner recovery.
 
 ## Product Guides
 

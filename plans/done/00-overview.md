@@ -67,7 +67,7 @@ Every frame should use local, bounded-cost logic:
 - [../01-latency-budget.md](../01-latency-budget.md): hard timing budget and optimization priorities
 - [../02-capture-and-perception.md](../02-capture-and-perception.md): screen capture, visual parsing, and world-state updates
 - [../03-fast-controller.md](../03-fast-controller.md): real-time controller design
-- [../04-slow-planner.md](../04-slow-planner.md): slow strategy, recovery, and goal-setting layer
+- [04-slow-planner.md](04-slow-planner.md): completed slow strategy, recovery, and goal-setting layer
 - [../05-action-engine.md](../05-action-engine.md): low-latency keyboard, mouse, and controller output
 - [../06-benchmarking.md](../06-benchmarking.md): latency measurement, monitoring, traces, and regression gates
 - [07-rollout.md](07-rollout.md): phased delivery path from first supported target to production readiness

@@ -27,7 +27,10 @@ let package = Package(
         ),
         .target(
             name: "DonkeyAI",
-            dependencies: ["DonkeyContracts"]
+            dependencies: [
+                "DonkeyContracts",
+                "DonkeyRuntime"
+            ]
         ),
         .target(
             name: "DonkeyUI",

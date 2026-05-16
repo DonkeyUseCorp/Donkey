@@ -3,6 +3,7 @@ import Foundation
 
 public enum AIModelProvider: String, Codable, Equatable, Sendable {
     case openAI
+    case ollama
 }
 
 public enum AIModelRole: String, Codable, Equatable, Sendable {
@@ -95,6 +96,45 @@ public struct AIModelRegistry: Codable, Equatable, Sendable {
             )
         ]
     )
+
+    public static let defaultHybridPlanner = AIModelRegistry(
+        entries: [
+            AIModelRegistryEntry(
+                id: "ollama-planner-hint-local",
+                role: .plannerHint,
+                provider: .ollama,
+                modelID: "qwen3:8b",
+                endpoint: URL(string: "http://127.0.0.1:11434/api/generate")!,
+                capabilities: [.textInput, .structuredOutputs],
+                timeoutMS: 8_000,
+                promptVersion: "planner-hint-v1",
+                evalStatus: .candidate,
+                docsURL: URL(string: "https://docs.ollama.com/api")!,
+                rollbackID: nil,
+                metadata: [
+                    "local": "true",
+                    "docsSource": "official Ollama API docs"
+                ]
+            ),
+            AIModelRegistryEntry(
+                id: "openai-planner-hint-default",
+                role: .plannerHint,
+                provider: .openAI,
+                modelID: "gpt-5.2",
+                endpoint: URL(string: "https://api.openai.com/v1/responses")!,
+                capabilities: [.textInput, .structuredOutputs],
+                timeoutMS: 8_000,
+                promptVersion: "planner-hint-v1",
+                evalStatus: .candidate,
+                docsURL: URL(string: "https://platform.openai.com/docs/api-reference/responses/create")!,
+                rollbackID: nil,
+                metadata: [
+                    "lastVerifiedAt": "2026-05-16",
+                    "docsSource": "official OpenAI Responses API and models docs"
+                ]
+            )
+        ]
+    )
 }
 
 public enum AIModelJobType: String, Codable, Equatable, Sendable {
@@ -126,6 +166,7 @@ public struct AIModelRouteRequest: Codable, Equatable, Sendable {
     public var latencyTolerance: AIModelLatencyTolerance
     public var failedModelEntryIDs: Set<String>
     public var requiredCapabilities: Set<AIModelCapability>
+    public var allowedProviders: Set<AIModelProvider>?
 
     public init(
         jobType: AIModelJobType,
@@ -133,7 +174,8 @@ public struct AIModelRouteRequest: Codable, Equatable, Sendable {
         privacyMode: AIModelPrivacyMode = .privacySensitive,
         latencyTolerance: AIModelLatencyTolerance = .interactive,
         failedModelEntryIDs: Set<String> = [],
-        requiredCapabilities: Set<AIModelCapability> = [.structuredOutputs]
+        requiredCapabilities: Set<AIModelCapability> = [.structuredOutputs],
+        allowedProviders: Set<AIModelProvider>? = nil
     ) {
         self.jobType = jobType
         self.risk = risk
@@ -141,6 +183,19 @@ public struct AIModelRouteRequest: Codable, Equatable, Sendable {
         self.latencyTolerance = latencyTolerance
         self.failedModelEntryIDs = failedModelEntryIDs
         self.requiredCapabilities = requiredCapabilities
+        self.allowedProviders = allowedProviders
+    }
+
+    public func limitingProviders(_ providers: Set<AIModelProvider>) -> AIModelRouteRequest {
+        AIModelRouteRequest(
+            jobType: jobType,
+            risk: risk,
+            privacyMode: privacyMode,
+            latencyTolerance: latencyTolerance,
+            failedModelEntryIDs: failedModelEntryIDs,
+            requiredCapabilities: requiredCapabilities,
+            allowedProviders: allowedProviders.map { $0.intersection(providers) } ?? providers
+        )
     }
 }
 
@@ -165,6 +220,7 @@ public struct AIModelRouter: Sendable {
                     && entry.evalStatus != .disabled
                     && !request.failedModelEntryIDs.contains(entry.id)
                     && request.requiredCapabilities.isSubset(of: entry.capabilities)
+                    && (request.allowedProviders?.contains(entry.provider) ?? true)
                     && allowsRisk(request.risk, entry: entry)
             }
             .sorted { lhs, rhs in
@@ -204,9 +260,13 @@ public struct AIModelRouter: Sendable {
         var value = 0
         if entry.evalStatus == .passing { value += 10 }
         if request.latencyTolerance == .interactive { value -= entry.timeoutMS / 1_000 }
-        if request.privacyMode == .privacySensitive,
-           entry.provider == .openAI {
-            value += 1
+        if request.privacyMode == .privacySensitive {
+            switch entry.provider {
+            case .ollama:
+                value += 4
+            case .openAI:
+                value -= 1
+            }
         }
         return value
     }

@@ -137,7 +137,7 @@ public struct OpenAIPlannerHintAdapter: Sendable {
     ) async -> PlannerHintAdapterResult {
         let entry: AIModelRegistryEntry
         do {
-            entry = try router.route(request.routeRequest)
+            entry = try router.route(request.routeRequest.limitingProviders([.openAI]))
         } catch {
             return result(
                 entry: nil,
@@ -305,21 +305,7 @@ public struct OpenAIPlannerHintAdapter: Sendable {
     }
 
     private func plannerHintJSONSchema() -> [String: Any] {
-        [
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["id", "goal", "policyName", "priorities", "preferredActions", "avoidActions", "confidence", "expiryMilliseconds"],
-            "properties": [
-                "id": ["type": "string"],
-                "goal": ["type": "string"],
-                "policyName": ["type": "string"],
-                "priorities": ["type": "array", "items": ["type": "string"]],
-                "preferredActions": ["type": "array", "items": ["type": "string", "enum": HotLoopActionKind.allCases.map(\.rawValue)]],
-                "avoidActions": ["type": "array", "items": ["type": "string", "enum": HotLoopActionKind.allCases.map(\.rawValue)]],
-                "confidence": ["type": "number"],
-                "expiryMilliseconds": ["type": "integer"]
-            ]
-        ]
+        PlannerHintWireCodec.jsonSchema()
     }
 
     private func result(
@@ -354,7 +340,7 @@ public struct OpenAIPlannerHintAdapter: Sendable {
         AIModelCallTrace(
             id: "model-call-\(request.sourceTraceID)",
             role: entry?.role ?? .plannerHint,
-            provider: entry?.provider ?? .openAI,
+            provider: entry?.provider ?? request.routeRequest.allowedProviders?.first ?? .openAI,
             modelID: entry?.modelID ?? "unrouted",
             promptVersion: entry?.promptVersion ?? "unrouted",
             schemaID: Self.schemaID,
@@ -390,7 +376,7 @@ private struct OpenAIResponseContent: Decodable {
     var text: String?
 }
 
-private struct PlannerHintWireOutput: Decodable {
+struct PlannerHintWireOutput: Decodable {
     var id: String
     var goal: String
     var policyName: String
@@ -401,17 +387,23 @@ private struct PlannerHintWireOutput: Decodable {
     var expiryMilliseconds: UInt64
 }
 
-private extension OpenAIPlannerHintAdapter {
-    static func outputText(from data: Data) throws -> String? {
-        let envelope = try JSONDecoder().decode(OpenAIResponseEnvelope.self, from: data)
-        if let outputText = envelope.outputText {
-            return outputText
-        }
-
-        return envelope.output?
-            .flatMap { $0.content ?? [] }
-            .first { $0.type == "output_text" }?
-            .text
+enum PlannerHintWireCodec {
+    static func jsonSchema() -> [String: Any] {
+        [
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "goal", "policyName", "priorities", "preferredActions", "avoidActions", "confidence", "expiryMilliseconds"],
+            "properties": [
+                "id": ["type": "string"],
+                "goal": ["type": "string"],
+                "policyName": ["type": "string"],
+                "priorities": ["type": "array", "items": ["type": "string"]],
+                "preferredActions": ["type": "array", "items": ["type": "string", "enum": HotLoopActionKind.allCases.map(\.rawValue)]],
+                "avoidActions": ["type": "array", "items": ["type": "string", "enum": HotLoopActionKind.allCases.map(\.rawValue)]],
+                "confidence": ["type": "number"],
+                "expiryMilliseconds": ["type": "integer"]
+            ]
+        ]
     }
 
     static func decodeHint(
@@ -447,7 +439,7 @@ private extension OpenAIPlannerHintAdapter {
         )
     }
 
-    static func actions(from rawValues: [String]) -> [HotLoopActionKind]? {
+    private static func actions(from rawValues: [String]) -> [HotLoopActionKind]? {
         var actions: [HotLoopActionKind] = []
         for rawValue in rawValues {
             guard let action = HotLoopActionKind(rawValue: rawValue) else {
@@ -456,6 +448,38 @@ private extension OpenAIPlannerHintAdapter {
             actions.append(action)
         }
         return actions
+    }
+}
+
+private extension OpenAIPlannerHintAdapter {
+    static func outputText(from data: Data) throws -> String? {
+        let envelope = try JSONDecoder().decode(OpenAIResponseEnvelope.self, from: data)
+        if let outputText = envelope.outputText {
+            return outputText
+        }
+
+        return envelope.output?
+            .flatMap { $0.content ?? [] }
+            .first { $0.type == "output_text" }?
+            .text
+    }
+
+    static func decodeHint(
+        _ text: String,
+        sourceTraceID: String,
+        sourceFrameID: String?,
+        sourceStateID: String?,
+        modelCallID: String,
+        now: RunTraceTimestamp
+    ) throws -> StructuredPlannerHint? {
+        try PlannerHintWireCodec.decodeHint(
+            text,
+            sourceTraceID: sourceTraceID,
+            sourceFrameID: sourceFrameID,
+            sourceStateID: sourceStateID,
+            modelCallID: modelCallID,
+            now: now
+        )
     }
 }
 

@@ -149,6 +149,29 @@ struct SlowPlannerSidecarTests {
     }
 
     @Test
+    func controllerRunsThirtySecondsWithoutPlannerOutput() async {
+        let frames = (0...30).map { index in
+            frame(id: "frame-\(index + 1)", milliseconds: UInt64(index * 1_000))
+        }
+        let coordinator = RunCoordinator()
+        let loop = DryRunReflexLoop(
+            coordinator: coordinator,
+            frameSource: SyntheticFrameSource(frames: frames)
+        )
+
+        let result = await loop.run(session: session())
+        let report = await ReflexLatencyReportBuilder.build(
+            from: coordinator.reflexTraces(),
+            droppedFrameCount: result.droppedFrameCount
+        )
+
+        #expect(result.processedFrameCount == 31)
+        #expect(result.latestAction != nil)
+        #expect(report.traceCount == 31)
+        #expect(report.softwareLoopMS.p95 != nil)
+    }
+
+    @Test
     func slowPlannerLatencyDoesNotMoveReflexLatencyReport() async {
         let frames = (0..<4).map { index in
             frame(id: "frame-\(index + 1)", milliseconds: UInt64(index * 16))

@@ -1,12 +1,21 @@
 # Benchmarking And Monitoring
 
-> Active status: not complete. Current benchmark support can summarize dry-run traces, but not persistent cross-run trends or concrete local-model target baselines.
+> Active status: not complete. Current benchmark support can summarize dry-run traces, but not persistent cross-run trends or a concrete fast-navigation command-to-result baseline.
 
 ## Goal
 
 Make latency visible, measurable, and hard to accidentally regress.
 
 No latency claim counts unless it is measured.
+
+The first benchmark target is the user-facing Weather navigation task:
+
+```text
+"show me the weather for SF"
+  -> Weather app visible with San Francisco verified
+```
+
+This must be compared against a manual baseline on the same machine so the product claim is honest: local navigation should be faster than doing the navigation by hand, or the report should show which stage prevents that.
 
 The project needs two observability loops:
 
@@ -17,6 +26,12 @@ The project needs two observability loops:
 
 Per loop:
 
+- intent parse start timestamp
+- intent parse end timestamp
+- app launch/focus start timestamp
+- app launch/focus end timestamp
+- app observation start timestamp
+- app observation end timestamp
 - capture start timestamp
 - capture end timestamp
 - perception start timestamp
@@ -30,6 +45,9 @@ Per loop:
 - controller end timestamp
 - input command timestamp
 - input execution timestamp
+- verification start timestamp
+- verification end timestamp
+- command-to-result timestamp
 - frame age when perception begins
 - state age when controller begins
 - action age when input executes
@@ -43,6 +61,11 @@ Aggregate:
 - stale actions
 - planner calls
 - planner latency
+- app launch/focus latency
+- app observation latency
+- result verification latency
+- command-to-result latency
+- manual baseline latency
 - controller fallback count
 - capture FPS
 - perception FPS
@@ -72,6 +95,16 @@ Every trace event should include:
 ## Measuring End-To-End Latency
 
 There are three levels of latency to measure.
+
+### Command-To-Result Latency
+
+This is the product-feel number for local app tasks.
+
+```text
+user command accepted -> intent parsed -> app focused -> input executed -> result verified
+```
+
+For Weather lookup, report both cold-start and warm-app numbers. Compare against a manual run where the operator opens Weather, searches for San Francisco, and confirms the result.
 
 ### Internal Software Latency
 
@@ -110,6 +143,12 @@ Add tiny timestamp spans around every hot-path boundary:
 ```text
 capture.start
 capture.end
+intent_parse.start
+intent_parse.end
+app_focus.start
+app_focus.end
+app_observation.start
+app_observation.end
 preprocess.start
 preprocess.end
 model.start
@@ -121,6 +160,8 @@ controller.start
 controller.end
 action.enqueue
 input.execute
+verification.start
+verification.end
 ```
 
 Each span should be cheap enough to leave on all the time. Avoid synchronous disk writes in the frame loop. Buffer trace events in memory and flush from a background worker.
@@ -131,12 +172,17 @@ Reports should show both total latency and stage latency:
 
 | Metric | Definition |
 | --- | --- |
+| intent_parse_ms | `intent_parse.end - intent_parse.start` |
+| app_focus_ms | `app_focus.end - app_focus.start` |
+| app_observation_ms | `app_observation.end - app_observation.start` |
 | capture_ms | `capture.end - capture.start` |
 | preprocess_ms | `preprocess.end - preprocess.start` |
 | model_inference_ms | `model.end - model.start` |
 | perception_ms | `perception.end - perception.start` |
 | decision_ms | `controller.end - controller.start` |
 | input_ms | `input.execute - action.enqueue` |
+| verification_ms | `verification.end - verification.start` |
+| command_to_result_ms | `verification.end - command.accepted` |
 | software_loop_ms | `input.execute - capture.end` |
 | frame_age_ms | `controller.start - capture.end` |
 | state_age_ms | `input.execute - state.publish` |
@@ -149,6 +195,7 @@ Every reflex action should be traceable:
 
 ```text
 trace_id
+intent_id
 frame_id
 state_id
 action_id
@@ -170,6 +217,7 @@ build_id
 5. End-to-end live run with input enabled.
 6. Synthetic reflex test with a controlled visual stimulus.
 7. Long soak test for drift, throttling, and memory growth.
+8. Weather command-to-result benchmark, with cold-start, warm-app, and manual-baseline modes.
 
 ## Monitoring Over Time
 
@@ -225,6 +273,7 @@ Later, add a lightweight local dashboard with:
 Alert on symptoms that matter to feel:
 
 - p95 end-to-end latency over 100ms
+- Weather command-to-result latency slower than manual baseline by more than the configured tolerance
 - p99 end-to-end latency over 150ms
 - stale action rate over 2%
 - dropped frame rate over 5%
@@ -241,12 +290,19 @@ Alerts should include the stage that regressed, the previous baseline, and the w
 
 For the first supported target:
 
+- intent parse p95 under the Weather budget
+- app observation p95 under the Weather budget
+- verification p95 under the Weather budget
+- controller p95 under 20ms
+- action execution p95 under 5ms
+- command-to-result p95 faster than the manual Weather baseline or explicitly flagged
+
+For later visual targets:
+
 - capture p95 under 15ms
 - perception p95 under 50ms
 - screenshot preprocessing plus model inference p95 under 50ms
-- controller p95 under 20ms
-- action execution p95 under 5ms
-- end-to-end p95 under 100ms
+- end-to-end visual reflex p95 under 100ms
 
 Use both absolute and comparative gates:
 
