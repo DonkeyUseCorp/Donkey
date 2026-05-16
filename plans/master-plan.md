@@ -112,20 +112,21 @@ Current boundaries:
 
 ### Accessibility Tree Snapshot
 
-- Add an Accessibility adapter that can:
-  - check trust status
-  - get frontmost/focused app and window
-  - resolve a selected target window by pid/title/window metadata when possible
-  - read a shallow AX tree with bounded depth and child count
-  - serialize role, title/label, value summary, frame, enabled/focused state, and action names
-- Store AX snapshots under the prepared run folder:
+Supported as the fourth vertical slice. `MacAccessibilitySnapshotCaptureService` creates one read-only Accessibility snapshot artifact after a run folder has been prepared. It resolves a target from explicit `windowID` or focused/frontmost fallback, refuses blocked or review-required safety surfaces, checks Accessibility trust without prompting, captures a bounded AX tree when trusted, writes JSON through the local artifact store, records target/snapshot metadata, and appends a partial-run tool event when trust is missing.
+
+AX snapshots are stored under the prepared run folder:
 
 ```text
 <run-folder>/accessibility/<artifact-id>.json
 ```
 
-- Keep the tree bounded. Do not dump arbitrarily large app trees.
-- Redact long text values by default and store summaries instead of full sensitive text.
+Current boundaries:
+
+- The snapshot path is read-only. It records available AX action names but never performs Accessibility actions.
+- Missing Accessibility trust creates an `events.jsonl` partial-run event and no artifact; the service does not open System Settings or request trust.
+- AX window matching is best effort by pid, title, focus, and frame metadata. Selection remains durable by `windowID` at the resolver/capture boundary.
+- Trees are bounded by depth, children per node, total nodes, and text length. Long text values are summarized with redaction markers.
+- The service does not publish ordered `RunCoordinator` events yet.
 
 ### Trace Artifact Store
 
@@ -185,12 +186,10 @@ accessibility/
 
 ## What Should Be Done Next
 
-Continue the read-only vertical slice from the completed local artifact writer, window resolver, candidate-list API, and screenshot artifact service:
+Continue the read-only vertical slice from the completed local artifact writer, window resolver, candidate-list API, screenshot artifact service, and Accessibility snapshot service:
 
-1. Add shallow Accessibility tree capture behind permission checks.
-   - Serialize a bounded AX snapshot when trusted and record a clear partial-run event when not trusted.
-2. Wire the manual capture flow through `RunCoordinator` events.
+1. Wire the manual capture flow through `RunCoordinator` events.
    - Emit ordered lifecycle/tool events for target resolution, screenshot capture, AX snapshot, artifact persistence, completion, and failure paths.
-3. Add integration tests and manual verification.
+2. Add integration tests and manual verification.
    - Cover artifact metadata, bounded AX serialization, policy denial for input, and partial summaries.
    - Manually verify against iPhone Mirroring and at least one other visible Mac app window, including an overlapped-window scenario.

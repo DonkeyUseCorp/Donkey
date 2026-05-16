@@ -51,6 +51,24 @@ Do not rely on macOS Accessibility for:
 - latency-critical dodge/jump/shoot loops
 - apps that expose incomplete or stale accessibility trees
 
+## Supported Read-Only Snapshot Boundary
+
+Donkey now supports bounded, read-only Accessibility snapshots for the manual target context capture milestone.
+
+Supported behavior:
+
+- check process Accessibility trust without prompting
+- resolve a selected target window by pid, title, focus, and frame metadata when possible
+- serialize a shallow tree with role, title/label, value summary, frame, enabled/focused state, and available action names
+- cap depth, children per node, total nodes, and text length
+- write trusted snapshots to the run artifact store under `accessibility/`
+- append a clear partial-run event when Accessibility trust is missing
+
+Current boundary:
+
+- The snapshot service records action names but does not perform actions.
+- Full app navigation, menu selection, value setting, focus changes, and setup/recovery flows remain future work.
+
 ## Operating Loop
 
 Use the same inspect-act-verify pattern as PhoneAgent:
@@ -143,12 +161,18 @@ Accessibility APIs can block or return stale/incomplete data if the target app i
 
 ## First Milestones
 
-1. Check Accessibility trust status from the Mac synthetic controller.
-2. Find the focused window and dump basic AX attributes.
-3. Find the iPhone Mirroring window and read its bounds.
-4. Detect focus loss before sending synthetic input.
-5. Add an accessibility-backed window guard to the iPhone gameplay loop.
-6. Add tree/action/verify support for native Mac setup dialogs.
+Completed for the manual capture milestone:
+
+1. Check Accessibility trust status from the runtime capture path.
+2. Resolve a target app/window and dump bounded read-only AX attributes.
+3. Store shallow AX snapshots as local run artifacts.
+
+Remaining future milestones:
+
+1. Find the iPhone Mirroring window and read its bounds for calibration.
+2. Detect focus loss before sending synthetic input.
+3. Add an accessibility-backed window guard to the iPhone gameplay loop.
+4. Add tree/action/verify support for native Mac setup dialogs.
 
 ## Acceptance Criteria
 
@@ -157,4 +181,3 @@ Accessibility APIs can block or return stale/incomplete data if the target app i
 - The system can read iPhone Mirroring window bounds for calibration.
 - Accessibility calls are timed and never block the gameplay hot path.
 - Native Mac dialogs can be detected as safety stops.
-
