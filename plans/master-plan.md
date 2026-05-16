@@ -56,6 +56,8 @@ The hot path must continue to work with the AI harness disabled.
 - Bounded target-window frame capture exists for the dry-run hot-loop boundary with selected-window safety checks, optional crop metadata, monotonic capture/copy timing, and no PNG/JPEG artifact encoding.
 - A cheap deterministic perception adapter exists for fixture or recorded-frame metadata, with compact world-state projection and raw pixels kept behind the perception boundary.
 - A deterministic controller policy exists for the first supported dry-run behavior: tap a fresh high-confidence target affordance, otherwise fall back to traceable wait/observe actions.
+- An action-engine guardrail boundary exists for typed commands, input permission checks, focus guard checks, rate limits, maximum hold durations, held-input release, and replayable command traces. Live OS input is still disabled.
+- Reflex latency reports and synthetic replay benchmark modes exist for p50/p95/p99 latency, frame/controller rates, dropped frames, stale actions, and worst traces.
 
 ## Non-Negotiable Rules
 
@@ -78,20 +80,10 @@ The hot path must continue to work with the AI harness disabled.
 - [x] Add bounded target-window capture as a dry-run frame source without screenshot artifact writes.
 - [x] Add the first cheap perception adapter and compact world-state projector for deterministic metadata/fixture signals.
 - [x] Add deterministic controller policy and dry-run action projection with confidence-aware fallback and trace metadata.
+- [x] Add action-engine guardrails and replayable command traces before live input.
+- [x] Add latency reports and synthetic replay benchmark modes for reflex traces.
 
 ## Remaining Tasks
-
-6. Add action-engine guardrails before live input.
-   - Define command interface for tap, swipe, key, mouse, controller, and `release_all`.
-   - Add focus guard, permission policy check, held-input release, rate limits, and maximum hold durations.
-   - Keep live input disabled by default until dry-run traces and guard behavior pass.
-   - Add replayable command traces.
-
-7. Add latency reports and replay benchmark mode.
-   - Produce a CLI latency report from reflex traces.
-   - Report p50/p95/p99, capture FPS, perception FPS, controller tick rate, dropped frames, stale actions, and worst traces.
-   - Add capture-only, controller-only, and end-to-end dry-run benchmark modes.
-   - Add baseline files per target and machine class when a real target is selected.
 
 8. Add slow-path planner hint contracts.
    - Define structured planner hint schema with goal, policy, priorities, regions of interest, avoid actions, confidence, expiry, and source ids.
@@ -146,9 +138,9 @@ The hot path must continue to work with the AI harness disabled.
 
 ## What Should Be Done Next
 
-Start with task 6: add action-engine guardrails before live input.
+Start with task 8: add slow-path planner hint contracts.
 
-This is the right next slice because the current runtime now has lifecycle, event, artifact, manual capture, reflex trace, shared hot-loop contracts, a synthetic/recorded-frame dry-run skeleton, bounded selected-window frame capture, cheap deterministic perception, and a dry-run controller policy. It still needs an action-engine command boundary and guardrails before any live input can be considered.
+This is the right next slice because the current runtime now has lifecycle, event, artifact, manual capture, reflex trace, shared hot-loop contracts, a synthetic/recorded-frame dry-run skeleton, bounded selected-window frame capture, cheap deterministic perception, a dry-run controller policy, action-engine guardrails, and latency reports. It still needs validated, expiring slow-path planner hints before the AI harness can safely influence controller behavior.
 
 ## Closeout Criteria
 

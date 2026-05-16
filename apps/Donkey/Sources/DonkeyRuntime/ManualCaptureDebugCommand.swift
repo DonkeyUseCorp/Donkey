@@ -4,6 +4,7 @@ import Foundation
 public enum ManualCaptureDebugCommand: Equatable, Sendable {
     case listWindowCandidates
     case manualCapture(ManualCaptureDebugCaptureOptions)
+    case dryRunLatencyReport(DryRunLatencyReportDebugOptions)
 }
 
 public struct ManualCaptureDebugCaptureOptions: Equatable, Sendable {
@@ -22,11 +23,26 @@ public struct ManualCaptureDebugCaptureOptions: Equatable, Sendable {
     }
 }
 
+public struct DryRunLatencyReportDebugOptions: Equatable, Sendable {
+    public var frameCount: Int
+    public var mode: ReflexReplayBenchmarkMode
+
+    public init(
+        frameCount: Int = 30,
+        mode: ReflexReplayBenchmarkMode = .endToEndDryRun
+    ) {
+        self.frameCount = frameCount
+        self.mode = mode
+    }
+}
+
 public enum ManualCaptureDebugCommandParseError: Error, Equatable, Sendable, CustomStringConvertible {
     case conflictingCommands
     case missingCommand
     case missingValue(String)
     case invalidWindowID(String)
+    case invalidFrameCount(String)
+    case invalidBenchmarkMode(String)
     case invalidIdentifier(option: String, value: String)
     case unsupportedOption(String)
 
@@ -40,6 +56,10 @@ public enum ManualCaptureDebugCommandParseError: Error, Equatable, Sendable, Cus
             return "Missing value for \(option)."
         case .invalidWindowID(let value):
             return "Invalid --window-id value: \(value)."
+        case .invalidFrameCount(let value):
+            return "Invalid --frame-count value: \(value)."
+        case .invalidBenchmarkMode(let value):
+            return "Invalid --benchmark-mode value: \(value)."
         case .invalidIdentifier(let option, let value):
             return "Invalid \(option) value: \(value). Use letters, numbers, '.', '_', or '-'."
         case .unsupportedOption(let option):
@@ -53,9 +73,12 @@ public enum ManualCaptureDebugCommandParser {
         normalizedArguments(arguments).contains { argument in
             argument == "--list-window-candidates"
                 || argument == "--manual-capture"
+                || argument == "--dry-run-latency-report"
                 || argument == "--window-id"
                 || argument == "--run-id"
                 || argument == "--trace-id"
+                || argument == "--frame-count"
+                || argument == "--benchmark-mode"
         }
     }
 
@@ -71,6 +94,8 @@ public enum ManualCaptureDebugCommandParser {
         var windowID: UInt32?
         var runID: String?
         var traceID: String?
+        var frameCount = 30
+        var benchmarkMode = ReflexReplayBenchmarkMode.endToEndDryRun
         var index = 0
 
         while index < arguments.count {
@@ -81,6 +106,9 @@ public enum ManualCaptureDebugCommandParser {
                 index += 1
             case "--manual-capture":
                 try setMode(.manualCapture, current: &mode)
+                index += 1
+            case "--dry-run-latency-report":
+                try setMode(.dryRunLatencyReport, current: &mode)
                 index += 1
             case "--window-id":
                 let value = try value(after: argument, in: arguments, at: index)
@@ -99,6 +127,20 @@ public enum ManualCaptureDebugCommandParser {
                 try validateIdentifier(value, option: argument)
                 traceID = value
                 index += 2
+            case "--frame-count":
+                let value = try value(after: argument, in: arguments, at: index)
+                guard let parsed = Int(value), parsed > 0 else {
+                    throw ManualCaptureDebugCommandParseError.invalidFrameCount(value)
+                }
+                frameCount = parsed
+                index += 2
+            case "--benchmark-mode":
+                let value = try value(after: argument, in: arguments, at: index)
+                guard let parsed = ReflexReplayBenchmarkMode(rawValue: value) else {
+                    throw ManualCaptureDebugCommandParseError.invalidBenchmarkMode(value)
+                }
+                benchmarkMode = parsed
+                index += 2
             default:
                 throw ManualCaptureDebugCommandParseError.unsupportedOption(argument)
             }
@@ -110,18 +152,35 @@ public enum ManualCaptureDebugCommandParser {
 
         switch mode {
         case .listWindowCandidates:
-            guard windowID == nil, runID == nil, traceID == nil else {
+            guard windowID == nil, runID == nil, traceID == nil, frameCount == 30, benchmarkMode == .endToEndDryRun else {
                 throw ManualCaptureDebugCommandParseError.unsupportedOption(
-                    "capture options require --manual-capture"
+                    "options are not supported with --list-window-candidates"
                 )
             }
             return .listWindowCandidates
         case .manualCapture:
+            guard frameCount == 30, benchmarkMode == .endToEndDryRun else {
+                throw ManualCaptureDebugCommandParseError.unsupportedOption(
+                    "benchmark options require --dry-run-latency-report"
+                )
+            }
             return .manualCapture(
                 ManualCaptureDebugCaptureOptions(
                     selection: MacWindowSelectionRequest(windowID: windowID),
                     runID: runID,
                     traceID: traceID
+                )
+            )
+        case .dryRunLatencyReport:
+            guard windowID == nil, runID == nil, traceID == nil else {
+                throw ManualCaptureDebugCommandParseError.unsupportedOption(
+                    "capture options require --manual-capture"
+                )
+            }
+            return .dryRunLatencyReport(
+                DryRunLatencyReportDebugOptions(
+                    frameCount: frameCount,
+                    mode: benchmarkMode
                 )
             )
         }
@@ -263,4 +322,5 @@ public enum ManualCaptureDebugCommandFormatter {
 private enum ManualCaptureDebugCommandMode {
     case listWindowCandidates
     case manualCapture
+    case dryRunLatencyReport
 }

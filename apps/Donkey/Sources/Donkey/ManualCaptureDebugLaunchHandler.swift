@@ -46,6 +46,14 @@ struct ManualCaptureDebugLaunchHandler {
                     )
                 )
                 return 0
+            case .dryRunLatencyReport(let options):
+                let report = await ReflexReplayBenchmark(
+                    mode: options.mode,
+                    frameCount: options.frameCount
+                )
+                .run()
+                printLines(ReflexLatencyReportFormatter.lines(for: report))
+                return 0
             }
         } catch {
             printError(ManualCaptureDebugCommandFormatter.errorLine(for: error))
