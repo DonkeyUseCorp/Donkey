@@ -13,9 +13,11 @@ public struct RunContextAssembler: Equatable, Sendable {
         latestWorldState: RunWorldStateSummary? = nil,
         transcriptSummary: String = "",
         activeHints: [RunPlannerHint] = [],
-        recentFailures: [RunFailureSummary] = []
+        recentFailures: [RunFailureSummary] = [],
+        memorySnapshot: RunMemorySnapshot? = nil
     ) -> RunContextPackage {
         let boundedTranscript = bounded(transcriptSummary)
+        let validHints = activeHints.filter(\.isValid)
 
         return RunContextPackage(
             sessionID: session.id,
@@ -25,8 +27,9 @@ public struct RunContextAssembler: Equatable, Sendable {
             latestWorldState: latestWorldState,
             transcriptSummary: boundedTranscript.text,
             droppedTranscriptCharacterCount: boundedTranscript.droppedCount,
-            activeHints: activeHints.filter(\.isValid),
-            recentFailures: recentFailures
+            activeHints: validHints,
+            recentFailures: recentFailures,
+            memorySnapshot: boundedMemorySnapshot(memorySnapshot, fallbackHints: validHints, fallbackFailures: recentFailures)
         )
     }
 
@@ -37,5 +40,29 @@ public struct RunContextAssembler: Equatable, Sendable {
 
         let suffix = String(text.suffix(maxTranscriptCharacters))
         return (suffix, text.count - suffix.count)
+    }
+
+    private func boundedMemorySnapshot(
+        _ snapshot: RunMemorySnapshot?,
+        fallbackHints: [RunPlannerHint],
+        fallbackFailures: [RunFailureSummary]
+    ) -> RunMemorySnapshot? {
+        guard var snapshot else { return nil }
+
+        snapshot.activeHints = snapshot.activeHints.filter(\.isValid)
+        if snapshot.activeHints.isEmpty {
+            snapshot.activeHints = fallbackHints
+        }
+        if snapshot.recentFailures.isEmpty {
+            snapshot.recentFailures = fallbackFailures
+        }
+
+        snapshot.recentStates = Array(snapshot.recentStates.suffix(5))
+        snapshot.recentFailures = Array(snapshot.recentFailures.suffix(5))
+        snapshot.userInstructions = Array(snapshot.userInstructions.suffix(5))
+        snapshot.safetyStops = Array(snapshot.safetyStops.suffix(5))
+        snapshot.targetRecords = Array(snapshot.targetRecords.suffix(10))
+
+        return snapshot
     }
 }

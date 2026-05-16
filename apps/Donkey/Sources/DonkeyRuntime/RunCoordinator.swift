@@ -185,7 +185,8 @@ public actor RunCoordinator {
         latestWorldState: RunWorldStateSummary? = nil,
         transcriptSummary: String = "",
         activeHints: [RunPlannerHint] = [],
-        recentFailures: [RunFailureSummary] = []
+        recentFailures: [RunFailureSummary] = [],
+        memorySnapshot: RunMemorySnapshot? = nil
     ) -> RunContextPackage? {
         guard let currentSession else { return nil }
 
@@ -194,7 +195,8 @@ public actor RunCoordinator {
             latestWorldState: latestWorldState,
             transcriptSummary: transcriptSummary,
             activeHints: activeHints,
-            recentFailures: recentFailures
+            recentFailures: recentFailures,
+            memorySnapshot: memorySnapshot
         )
     }
 

@@ -278,9 +278,30 @@ public struct OpenAIPlannerHintAdapter: Sendable {
             "latest_state: \(request.context.latestWorldState?.summary ?? "none")",
             "source_state_id: \(request.sourceStateID ?? "none")",
             "valid_hints: \(request.context.activeHints.map(\.summary).joined(separator: " | "))",
-            "recent_failures: \(request.context.recentFailures.map(\.summary).joined(separator: " | "))"
+            "recent_failures: \(request.context.recentFailures.map(\.summary).joined(separator: " | "))",
+            "memory: \(memoryText(for: request.context.memorySnapshot))"
         ]
         .joined(separator: "\n")
+    }
+
+    private func memoryText(for snapshot: RunMemorySnapshot?) -> String {
+        guard let snapshot else { return "none" }
+
+        let parts = [
+            snapshot.currentGoal.map { "goal=\($0)" },
+            snapshot.recentStates.last.map { "latestMemoryState=\($0.summary)" },
+            nonEmpty("instructions", snapshot.userInstructions.map(\.value)),
+            nonEmpty("safetyStops", snapshot.safetyStops.map(\.value)),
+            nonEmpty("target", snapshot.targetRecords.map(\.value))
+        ]
+        .compactMap { $0 }
+
+        return parts.isEmpty ? "none" : parts.joined(separator: " | ")
+    }
+
+    private func nonEmpty(_ label: String, _ values: [String]) -> String? {
+        guard !values.isEmpty else { return nil }
+        return "\(label)=\(values.joined(separator: "; "))"
     }
 
     private func plannerHintJSONSchema() -> [String: Any] {

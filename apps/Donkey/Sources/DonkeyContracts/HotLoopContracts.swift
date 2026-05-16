@@ -487,6 +487,10 @@ public enum HotLoopActionKind: String, CaseIterable, Codable, Equatable, Hashabl
     case observe
     case wait
     case tapTarget
+    case focusWindow
+    case switchTab
+    case openAppSwitcher
+    case activateCandidate
 }
 
 public struct HotLoopControllerAction: Codable, Equatable, Sendable {

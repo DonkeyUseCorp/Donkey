@@ -26,14 +26,14 @@ When a supporting plan has no remaining active work, either move it to `plans/do
 
 ## Milestone Goal
 
-Build the first product-shaped loop where Donkey can run a target-window session with local, bounded reflex behavior and an optional slow AI sidecar:
+Build the first product-shaped loop where Donkey can run a local navigation session with bounded reflex behavior and an optional slow AI sidecar:
 
 ```text
-target window capture
-  -> crop / normalize
-  -> local perception or cheap template signal
+local desktop/window/browser context
+  -> focused capture / Accessibility / browser-tab metadata
+  -> local perception or cheap metadata/template signal
   -> compact world state
-  -> deterministic controller
+  -> deterministic navigation controller
   -> dry-run action trace first, guarded live action later
   -> latency report and replayable trace
 
@@ -50,9 +50,9 @@ The hot path must continue to work with the AI harness disabled.
 ## Supported Boundary
 
 - Runtime shell: minimal run coordination, ordered events, bounded context assembly, local run artifacts, manual target context capture, in-memory reflex trace retention, and latency reports are supported.
-- Reflex hot path: typed frame/world-state/action contracts, deterministic dry-run loop, bounded target-window frame source, cheap metadata perception, deterministic controller, and dry-run action projection are supported. Live OS input is not supported.
+- Reflex hot path: typed frame/world-state/action contracts, deterministic dry-run loop, bounded target-window frame source, cheap metadata perception, deterministic controller, metadata-only local-navigation dry-run action selection, and dry-run action projection are supported. Live OS input is not supported.
 - Safety boundary: action-engine command contracts, permission/focus/rate/hold/release guardrails, and replayable command traces are supported before live input.
-- Slow AI boundary: structured planner hints, validation/expiry/latest-valid selection, model registry/router, and an OpenAI Responses structured-output adapter are supported as optional sidecar pieces. The hot loop still runs without AI output.
+- Slow AI boundary: structured planner hints, validation/expiry/latest-valid selection, model registry/router, an OpenAI Responses structured-output adapter, source-linked memory, and replay/eval scaffolding are supported as optional sidecar pieces. The hot loop still runs without AI output.
 - Source of truth: detailed supported behavior lives in `docs/guides/minimal-run-coordinator.md`; historical implementation details should be found with search in `docs/`, `plans/`, and git history, not duplicated here.
 
 ## Non-Negotiable Rules
@@ -68,32 +68,27 @@ The hot path must continue to work with the AI harness disabled.
 
 ## Active Queue
 
-1. Add short-term and target memory.
-   - Build short-term run memory in process for current goal, active hints, recent states, failures, user instructions, and safety stops.
-   - Add target memory as scoped, source-linked JSONL records.
-   - Require TTL or deliberate durable target scope.
-   - Add deterministic approval for model-proposed memory writes.
-   - Make memory records inspectable and deleteable by target, run, and user scope.
+1. Finish fast local navigation dry-run closeout.
+   - Wire local-navigation metadata projection into the dry-run reflex loop instead of testing it only as a standalone projector/controller.
+   - Add browser-tab metadata where available and keep window metadata as the no-remote-model fallback.
+   - Add a swappable local perception adapter for fast inference experiments, but keep navigation working without remote models or chat LLMs.
+   - Measure metadata read, crop/resize/normalize if used, inference if used, world-state update, controller decision, and action projection separately with p50/p95/p99 latency.
+   - Keep the reflex queue latest-frame/latest-state-wins with queue depth 1, stale-result dropping, and no PNG/JPEG encode/decode in the hot path.
 
-2. Add replay/eval for model and prompt changes.
-   - Evaluate planner hints against recorded traces before promotion.
-   - Track schema validity, hint acceptance, memory write acceptance, latency, cost, fallback count, and recovery success.
-   - Add a model update checklist that records `last_verified_at`, docs URLs, eval suite id, and rollback model id.
-
-3. Integrate slow planner beside the dry-run loop.
+2. Integrate slow planner beside the dry-run loop.
    - Trigger planner calls on scene change, low confidence, repeated failure, goal completion, or user instruction.
    - Build compact snapshots from world state, trace summaries, optional screenshots, and memory.
    - Publish only validated hints to the controller.
    - Prove planner latency does not move p95 reflex latency.
 
-4. Enable guarded live-action smoke only after dry-run closeout.
-   - Pick one target and one behavior.
+3. Enable guarded live-action smoke only after dry-run closeout.
+   - Use fast local navigation as the first target behavior.
    - Run end-to-end dry-run with input disabled and latency report passing.
    - Enable live input only with explicit policy allowance and focus guard.
    - Verify abort and timeout release held input.
    - Record trace evidence for every action.
 
-5. Close out the primary plans.
+4. Close out the primary plans.
    - Update supported behavior guides in `docs/guides/`.
    - Move `plans/20-off-the-shelf-run-loop.md` to `plans/done/` when the reflex loop acceptance criteria are supported.
    - Move `plans/19-ai-harness.md` to `plans/done/` when the AI harness acceptance criteria are supported.
@@ -102,16 +97,16 @@ The hot path must continue to work with the AI harness disabled.
 
 ## What Should Be Done Next
 
-Start with active task 1: add short-term and target memory.
+Start with active task 1: finish fast local navigation dry-run closeout.
 
-This is the right next slice because the current boundary has a dry-run reflex path, guardrails, latency reporting, validated planner hints, model routing, and the first slow-path adapter. It still needs scoped short-term and target memory before planner hints and future memory writes can be source-linked, inspectable, and deleteable.
+This is the right next slice because the first metadata-only local-navigation projector and controller can now choose traceable dry-run focus actions with the AI harness disabled. It still needs loop integration, browser-tab metadata where available, and measured local-navigation latency before guarded live input is considered.
 
 ## Closeout Criteria
 
 This master plan is complete when:
 
-- The off-the-shelf run loop can run a selected target in dry-run mode end to end.
-- A selected first behavior can be exercised with guarded live input after dry-run success.
+- The off-the-shelf run loop can run fast local navigation in dry-run mode end to end.
+- The first local-navigation behavior can be exercised with guarded live input after dry-run success.
 - Capture, perception, controller, action, and input stages are measured with monotonic timestamps.
 - p50 and p95 reflex latency are reported for the first supported target.
 - The hot loop still works with the AI harness disabled.
