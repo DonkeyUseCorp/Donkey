@@ -26,7 +26,9 @@ Supported behavior and engineering guidance belong in `docs/guides/minimal-run-c
 
 1. Complete the remaining live verification cases.
    - Run `swift run Donkey -- --manual-capture --window-id <id>` against iPhone Mirroring when available.
+     - Blocked on May 16, 2026: no iPhone Mirroring window appeared in the candidate list.
    - Verify an Accessibility-trust-missing scenario completes partially with one screenshot artifact and one coordinator permission event.
+     - Blocked on May 16, 2026: the current process is Accessibility-trusted; do not reset or revoke macOS privacy permissions without explicit user approval.
 
 2. Close out the milestone.
    - Update `docs/guides/minimal-run-coordinator.md` with any findings from live verification.

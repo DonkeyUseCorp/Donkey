@@ -74,6 +74,8 @@ Manual verification on May 16, 2026 confirmed that the list command enumerates c
 
 Manual verification also confirmed an overlapped-window case: a Code window overlapped by the higher z-order Codex window was captured by durable `windowID`, used `screenCaptureKitDesktopIndependentWindow`, recorded `overlapStatus=notRequired`, and produced 9 ordered coordinator events with screenshot and Accessibility artifacts.
 
+Remaining live verification is environment-dependent. On May 16, 2026, iPhone Mirroring was not present in the visible-window candidate list, and the current process was already Accessibility-trusted, so the missing-trust partial path was not live-verified to avoid changing macOS privacy permissions.
+
 ## Source Entry Points
 
 - Runtime contracts live in `apps/Donkey/Sources/DonkeyContracts/RunLoopContracts.swift`.
