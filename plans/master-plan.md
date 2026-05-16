@@ -18,16 +18,15 @@ Supported behavior and engineering guidance belong in `docs/guides/minimal-run-c
   - `--run-id <safe-id>`
   - `--trace-id <safe-id>`
 - [x] Update the supported behavior guide for the completed runtime, capture, Accessibility, and debug-entrypoint slices.
+- [x] Manually verify `--list-window-candidates` against current visible Mac windows.
+- [x] Manually verify `--manual-capture --window-id <id>` against one normal Mac app window.
 
 ## Remaining Tasks
 
-1. Manually verify the debug entrypoint against real windows.
-   - Run `swift run Donkey -- --list-window-candidates`.
-   - Run `swift run Donkey -- --manual-capture --window-id <id>` against one normal Mac app window.
-   - Run the same flow against iPhone Mirroring when available.
-   - Verify an overlapped-window scenario does not produce misleading capture behavior.
+1. Complete the remaining live verification cases.
+   - Run `swift run Donkey -- --manual-capture --window-id <id>` against iPhone Mirroring when available.
+   - Verify an explicitly overlapped-window scenario does not produce misleading capture behavior.
    - Verify an Accessibility-trust-missing scenario completes partially with one screenshot artifact and one coordinator permission event.
-   - Confirm the run folder contains ordered coordinator events, one screenshot artifact, and an Accessibility artifact only when permission is available.
 
 2. Close out the milestone.
    - Update `docs/guides/minimal-run-coordinator.md` with any findings from live verification.
@@ -40,4 +39,4 @@ Supported behavior and engineering guidance belong in `docs/guides/minimal-run-c
 
 ## Next Item
 
-Manual verification against real windows.
+Complete the remaining live verification cases.

@@ -70,6 +70,8 @@ swift run Donkey -- --list-window-candidates
 swift run Donkey -- --manual-capture --window-id <id>
 ```
 
+Manual verification on May 16, 2026 confirmed that the list command enumerates current visible Mac windows and that manual capture against a normal Mac app window creates a run folder with 9 ordered coordinator events, one screenshot artifact, and one Accessibility artifact. The verified run targeted a non-frontmost, non-focused Fork window by durable `windowID`.
+
 ## Source Entry Points
 
 - Runtime contracts live in `apps/Donkey/Sources/DonkeyContracts/RunLoopContracts.swift`.
