@@ -1,5 +1,7 @@
 # AI Harness
 
+> Archived status: historical context only. This file is not an active implementation queue. Supported behavior lives in `docs/`; future work from this idea needs a fresh active plan created deliberately.
+
 ## Goal
 
 Build the slow-path AI harness that connects the agent to LLMs/VLMs, manages memory, routes model calls, validates structured planner output, and keeps model choices updateable without touching the low-latency reflex loop.

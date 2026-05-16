@@ -1,5 +1,7 @@
 # Gamepad Controller
 
+> Archived status: historical context only. This file is not an active implementation queue. Supported behavior lives in `docs/`; future work from this idea needs a fresh active plan created deliberately.
+
 ## Goal
 
 Build a generic controller/gamepad abstraction that can drive any supported game with controller input, without hardcoding a single game.

@@ -1,5 +1,7 @@
 # SwiftUI Pointer UI
 
+> Archived status: historical context only. This file is not an active implementation queue. Supported behavior lives in `docs/`; future work from this idea needs a fresh active plan created deliberately.
+
 ## Goal
 
 Add the production macOS SwiftUI pointer prompt UI while keeping the future real-time run loop and AI harness decoupled behind explicit integration boundaries.
@@ -12,8 +14,8 @@ Add the production macOS SwiftUI pointer prompt UI while keeping the future real
 - The prompt follows the mouse at bottom right by default, flips to the opposite side near screen edges, and stays clamped inside the visible screen.
 - The active pointer renders with a shadow and supports theme-color customization.
 - Contracts, UI, runtime boundary, AI boundary, and app entrypoint are separate Swift targets.
-- Runtime boundary references `plans/20-off-the-shelf-run-loop.md`.
-- AI boundary references `plans/19-ai-harness.md`.
+- Runtime boundary references `plans/done/20-off-the-shelf-run-loop.md`.
+- AI boundary references `plans/done/19-ai-harness.md`.
 - No Screen Recording, Accessibility, model calls, capture loop, or input execution is included in this slice.
 
 ## Acceptance

@@ -1,5 +1,7 @@
 # Latency Budget
 
+> Archived status: historical context only. This file is not an active implementation queue. Supported behavior lives in `docs/`; future work from this idea needs a fresh active plan created deliberately.
+
 ## Target
 
 The reflex loop should complete in under 100ms end to end.

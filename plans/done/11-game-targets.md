@@ -1,5 +1,7 @@
 # Game Targets
 
+> Archived status: historical context only. This file is not an active implementation queue. Supported behavior lives in `docs/`; future work from this idea needs a fresh active plan created deliberately.
+
 ## Goal
 
 Choose iPhone games that expose latency problems quickly, avoid anti-cheat risk, and let the agent become good at mobile gameplay through iPhone Mirroring.

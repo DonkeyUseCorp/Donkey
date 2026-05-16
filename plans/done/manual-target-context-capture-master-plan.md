@@ -1,5 +1,7 @@
 # Manual Target Context Capture Master Plan
 
+> Archived status: historical context only. This file is not an active implementation queue. Supported behavior lives in `docs/`; future work from this idea needs a fresh active plan created deliberately.
+
 This file records the completed manual target context capture milestone.
 Supported behavior and engineering guidance belong in `docs/guides/minimal-run-coordinator.md`.
 

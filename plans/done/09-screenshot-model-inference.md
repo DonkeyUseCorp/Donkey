@@ -1,5 +1,7 @@
 # Screenshot Model Inference
 
+> Archived status: historical context only. This file is not an active implementation queue. Supported behavior lives in `docs/`; future work from this idea needs a fresh active plan created deliberately.
+
 ## Goal
 
 Capture screenshots or screen regions and feed them into a low-latency vision model that emits compact perception signals for the controller.

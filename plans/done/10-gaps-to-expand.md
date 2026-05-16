@@ -1,5 +1,7 @@
 # Gaps To Expand
 
+> Archived status: historical context only. This file is not an active implementation queue. Supported behavior lives in `docs/`; future work from this idea needs a fresh active plan created deliberately.
+
 ## Goal
 
 Identify the missing plans needed to turn the low-latency agent architecture into a working product.

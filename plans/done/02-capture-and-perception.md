@@ -1,5 +1,7 @@
 # Capture And Perception
 
+> Archived status: historical context only. This file is not an active implementation queue. Supported behavior lives in `docs/`; future work from this idea needs a fresh active plan created deliberately.
+
 ## Goal
 
 Convert screen pixels into a compact world state quickly enough for real-time control.

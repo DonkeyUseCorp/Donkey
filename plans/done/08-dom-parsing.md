@@ -1,5 +1,7 @@
 # DOM Parsing
 
+> Archived status: historical context only. This file is not an active implementation queue. Supported behavior lives in `docs/`; future work from this idea needs a fresh active plan created deliberately.
+
 ## Goal
 
 Use DOM state as a low-latency perception channel for browser games, web apps, and desktop software built on web views.

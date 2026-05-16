@@ -207,7 +207,6 @@ public actor RunCoordinator {
         return RuntimeStatusSnapshot(
             isReady: lifecycleState == .running,
             summary: summary(for: lifecycleState),
-            sourcePlan: "plans/20-off-the-shelf-run-loop.md",
             lifecycleState: lifecycleState,
             latestEventSummary: latestEvent?.summary,
             eventCount: eventCount,

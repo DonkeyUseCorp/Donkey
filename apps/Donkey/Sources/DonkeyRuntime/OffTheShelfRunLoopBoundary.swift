@@ -12,7 +12,6 @@ public struct OffTheShelfRunLoopBoundary: RuntimeStatusProviding {
         RuntimeStatusSnapshot(
             isReady: false,
             summary: "Run coordinator ready to create sessions",
-            sourcePlan: "plans/20-off-the-shelf-run-loop.md",
             lifecycleState: .idle
         )
     }

@@ -1,5 +1,7 @@
 # Action Engine
 
+> Archived status: historical context only. This file is not an active implementation queue. Supported behavior lives in `docs/`; future work from this idea needs a fresh active plan created deliberately.
+
 ## Goal
 
 Execute keyboard, mouse, and controller actions with low latency and predictable timing.

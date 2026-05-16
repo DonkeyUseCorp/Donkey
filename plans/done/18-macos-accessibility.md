@@ -1,5 +1,7 @@
 # macOS Accessibility
 
+> Archived status: historical context only. This file is not an active implementation queue. Supported behavior lives in `docs/`; future work from this idea needs a fresh active plan created deliberately.
+
 ## Goal
 
 Use macOS Accessibility as a PhoneAgent-like tree/action backend for Mac apps, window management, setup flows, and non-frame-critical UI control.

@@ -1,16 +1,18 @@
 # Super Low-Latency Agent Plan
 
+> Archived status: historical context only. This file is not an active implementation queue. Supported behavior lives in `docs/`; future work from this idea needs a fresh active plan created deliberately.
+
 ## Objective
 
 Build a desktop AI agent that can play iPhone games through Apple's iPhone Mirroring app with low latency, while keeping the architecture general enough to later control normal desktop software.
 
 iPhone games are the first product focus. Gaming is the latency proof. The larger platform is real-time desktop and mobile-app control from the Mac.
 
-## Current Master Plan
+## Archived Plan Status
 
-Start with [master-plan.md](master-plan.md).
+There is no active master plan in `plans/` right now. Start with `docs/README.md` and the supported behavior guides before changing code.
 
-That plan coordinates the next sequence of edits across the off-the-shelf run loop and AI harness, with latency, capture/perception, controller, planner, action-engine, and benchmarking plans as supporting constraints. The manual target context capture milestone is complete in [done/manual-target-context-capture-master-plan.md](done/manual-target-context-capture-master-plan.md).
+This overview and the related roadmap plans are archived background. They mix completed boundaries with ideas that require a fresh target/product decision, so they should not drive implementation directly.
 
 ## Near-Term Focus
 

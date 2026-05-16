@@ -11,8 +11,7 @@ public struct AIHarnessBoundary: AIHarnessSnapshotProviding {
     public func snapshot() -> AIHarnessSnapshot {
         AIHarnessSnapshot(
             isPlannerAvailable: false,
-            suggestedPromptText: "Make this so",
-            sourcePlan: "plans/19-ai-harness.md"
+            suggestedPromptText: "Make this so"
         )
     }
 }

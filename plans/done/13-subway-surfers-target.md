@@ -1,5 +1,7 @@
 # Subway Surfers Target Profile
 
+> Archived status: historical context only. This file is not an active implementation queue. Supported behavior lives in `docs/`; future work from this idea needs a fresh active plan created deliberately.
+
 ## Goal
 
 Use Subway Surfers as a high-pressure iPhone Mirroring target for low-latency screenshot perception and swipe control.
