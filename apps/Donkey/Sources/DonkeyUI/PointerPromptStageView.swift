@@ -3,6 +3,8 @@ import DonkeyContracts
 import SwiftUI
 
 public struct PointerPromptStageView: View {
+    private static let rendersAgentPointer = false
+
     private let state: PointerPromptState
     @Binding private var messageText: String
     private let inputTextHeight: CGFloat
@@ -36,14 +38,32 @@ public struct PointerPromptStageView: View {
         if placement.placesContentOnLeft {
             HStack(alignment: .top, spacing: PointerPromptLayout.pointerComposerSpacing) {
                 activeComposer
-                pointer
+                pointerSlot
             }
         } else {
             HStack(alignment: .top, spacing: PointerPromptLayout.pointerComposerSpacing) {
-                pointer
+                pointerSlot
                 activeComposer
             }
         }
+    }
+
+    @ViewBuilder
+    private var pointerSlot: some View {
+        if Self.rendersAgentPointer {
+            pointer
+        } else {
+            hiddenPointerSlot
+        }
+    }
+
+    private var hiddenPointerSlot: some View {
+        Color.clear
+            .frame(
+                width: PointerPromptLayout.pointerSlotSize.width,
+                height: PointerPromptLayout.pointerSlotSize.height
+            )
+            .accessibilityHidden(true)
     }
 
     private var pointer: some View {
@@ -88,6 +108,8 @@ public struct PointerPromptStageView: View {
 }
 
 private struct PointerPromptComposer: View {
+    private static let rendersToolbarControls = false
+
     let state: PointerPromptState
     @Binding var messageText: String
     let inputTextHeight: CGFloat
@@ -196,6 +218,24 @@ private struct PointerPromptComposer: View {
 
     private var promptToolbar: some View {
         HStack {
+            if Self.rendersToolbarControls {
+                toolbarControls
+            }
+
+            Spacer(minLength: 0)
+
+            VoiceWaveformView(levels: state.voiceWaveformLevels)
+                .frame(width: 54, height: 28)
+        }
+        .padding(.horizontal, PointerPromptLayout.composerExpandedTextHorizontalPadding)
+        .frame(
+            width: PointerPromptLayout.composerInputSurfaceWidth,
+            height: PointerPromptLayout.composerExpandedToolbarHeight
+        )
+    }
+
+    private var toolbarControls: some View {
+        HStack(spacing: 12) {
             toolbarIcon(systemName: "plus")
 
             HStack(spacing: 8) {
@@ -209,21 +249,6 @@ private struct PointerPromptComposer: View {
                     .font(.system(size: 11, weight: .semibold))
             }
             .foregroundStyle(Color.white.opacity(0.6))
-
-            Spacer(minLength: 0)
-
-            VoiceWaveformView(levels: state.voiceWaveformLevels)
-                .frame(width: 54, height: 28)
-        }
-        .padding(.horizontal, PointerPromptLayout.composerExpandedTextHorizontalPadding)
-        .frame(
-            width: PointerPromptLayout.composerInputSurfaceWidth,
-            height: PointerPromptLayout.composerExpandedToolbarHeight
-        )
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(Color.white.opacity(0.08))
-                .frame(height: 1)
         }
     }
 
@@ -349,9 +374,8 @@ private struct ComposerMultilineTextInput: NSViewRepresentable {
             }
         }
         textView.string = text
-        textView.font = .systemFont(ofSize: 16)
-        textView.textColor = .white
         textView.insertionPointColor = .white
+        ComposerTextStyle.apply(to: textView)
         textView.backgroundColor = .clear
         textView.drawsBackground = false
         textView.isRichText = false
@@ -394,9 +418,11 @@ private struct ComposerMultilineTextInput: NSViewRepresentable {
                 submit()
             }
         }
+        ComposerTextStyle.apply(to: textView)
 
         if textView.string != text {
             textView.string = text
+            ComposerTextStyle.apply(to: textView)
             textView.needsDisplay = true
         }
 
@@ -507,9 +533,40 @@ private final class ComposerTextView: NSTextView {
 
         let attributes: [NSAttributedString.Key: Any] = [
             .foregroundColor: NSColor.white.withAlphaComponent(0.58),
-            .font: font ?? NSFont.systemFont(ofSize: 16)
+            .font: font ?? ComposerTextStyle.font,
+            .ligature: 0
         ]
         (placeholder as NSString).draw(at: .zero, withAttributes: attributes)
+    }
+}
+
+@MainActor
+private enum ComposerTextStyle {
+    static var font: NSFont {
+        NSFont.systemFont(ofSize: 16, weight: .light)
+    }
+
+    static func apply(to textView: NSTextView) {
+        let textAttributes = attributes(color: .white, font: font)
+        textView.font = font
+        textView.textColor = .white
+        textView.typingAttributes = textAttributes
+
+        let textRange = NSRange(location: 0, length: textView.string.utf16.count)
+        guard textRange.length > 0 else { return }
+
+        textView.textStorage?.setAttributes(textAttributes, range: textRange)
+    }
+
+    static func attributes(
+        color: NSColor,
+        font: NSFont
+    ) -> [NSAttributedString.Key: Any] {
+        [
+            .foregroundColor: color,
+            .font: font,
+            .ligature: 0
+        ]
     }
 }
 
