@@ -33,7 +33,9 @@ Donkey can also create a shallow read-only Accessibility snapshot artifact after
 
 Donkey supports a runtime-level manual target context capture service that wires one read-only capture run through `RunCoordinator`. The service prepares the run folder, starts the session, resolves the target once, passes explicit durable `windowID` selection to screenshot and Accessibility capture services, records coordinator-assigned lifecycle and tool events, persists those events to `events.jsonl`, and completes the run after screenshot success. Missing Accessibility trust is a partial completion: the coordinator records one permission-denied tool event, the screenshot artifact remains, and no Accessibility artifact is created.
 
-This is a coordination, trace, target-metadata, single-screenshot artifact, read-only Accessibility snapshot, and manual capture orchestration foundation only. It does not run perception models, call LLMs, execute OS input, perform Accessibility actions, provide a manual capture UI, or perform manual verification against live apps yet.
+The installed executable also supports a developer-only launch-argument entrypoint for manual verification. `--list-window-candidates` prints the current candidate-list labels and durable `windowID` values. `--manual-capture` runs one manual capture, optionally with `--window-id <id>`, `--run-id <safe-id>`, and `--trace-id <safe-id>`, then prints the run folder and artifact paths. These commands are non-interactive and exit before showing the pointer prompt overlay.
+
+This is a coordination, trace, target-metadata, single-screenshot artifact, read-only Accessibility snapshot, and manual capture orchestration foundation only. It does not run perception models, call LLMs, execute OS input, perform Accessibility actions, provide a manual capture UI, or complete live verification against the full target matrix yet.
 
 ## Technical Guidelines
 
@@ -45,6 +47,7 @@ This is a coordination, trace, target-metadata, single-screenshot artifact, read
 - Treat target-window screenshot capture as a one-shot artifact write, not a continuous capture loop. ScreenCaptureKit desktop-independent window capture is preferred because overlapping windows do not contaminate the selected target artifact.
 - Treat Accessibility snapshot capture as read-only inspection. Keep trees bounded, redact long text values, avoid permission prompts in the capture service, and never perform AX actions from this path.
 - Treat manual target context capture as orchestration. `RunCoordinator` owns event order and policy decisions, while screenshot, Accessibility, and artifact-store services remain capture/persistence workers.
+- Treat the launch-argument debug entrypoint as developer tooling. It should stay plain text, non-interactive, and should never accept ephemeral labels as capture input.
 - Keep mutable installed-app run artifacts in Application Support, not inside the `.app` bundle and not relative to process working directory.
 - Keep input actions denied unless a caller provides a policy that explicitly allows them.
 - Preserve latest-request-wins behavior for live-control sessions so stale work cannot build up behind the reflex loop.
@@ -58,7 +61,14 @@ From `apps/Donkey/`:
 swift test
 ```
 
-The runtime tests should cover lifecycle ordering, abort and timeout safety, latest-session queue drops, tool permission denial, event-store ordering, context compaction, artifact path validation, trace folder layout, JSONL event persistence, summary updates, deterministic window resolver behavior through fixture providers, candidate-list label snapshots, screenshot artifact metadata, bounded Accessibility serialization, missing Accessibility trust partial events, unsafe target refusal, overlap-sensitive capture refusal, and manual capture event ordering through persisted coordinator events.
+The runtime tests should cover lifecycle ordering, abort and timeout safety, latest-session queue drops, tool permission denial, event-store ordering, context compaction, artifact path validation, trace folder layout, JSONL event persistence, summary updates, deterministic window resolver behavior through fixture providers, candidate-list label snapshots, screenshot artifact metadata, bounded Accessibility serialization, missing Accessibility trust partial events, unsafe target refusal, overlap-sensitive capture refusal, manual capture event ordering through persisted coordinator events, and debug launch-argument parsing/formatting.
+
+Manual smoke commands:
+
+```sh
+swift run Donkey -- --list-window-candidates
+swift run Donkey -- --manual-capture --window-id <id>
+```
 
 ## Source Entry Points
 
@@ -70,5 +80,6 @@ The runtime tests should cover lifecycle ordering, abort and timeout safety, lat
 - Accessibility snapshot contracts live in `apps/Donkey/Sources/DonkeyContracts/AccessibilitySnapshotContracts.swift`.
 - Read-only Accessibility snapshot capture lives in `apps/Donkey/Sources/DonkeyRuntime/MacAccessibilitySnapshotCaptureService.swift`.
 - Manual target context capture orchestration lives in `apps/Donkey/Sources/DonkeyRuntime/ManualTargetContextCaptureService.swift`.
+- Manual capture debug command parsing lives in `apps/Donkey/Sources/DonkeyRuntime/ManualCaptureDebugCommand.swift`.
 - Local artifact persistence lives in `apps/Donkey/Sources/DonkeyRuntime/LocalRunArtifactStore.swift`.
 - The manual capture source plan remains active in `plans/master-plan.md`.

@@ -38,6 +38,7 @@ let package = Package(
             dependencies: [
                 "DonkeyAI",
                 "DonkeyContracts",
+                "DonkeyRuntime",
                 "DonkeyUI"
             ],
             resources: [
