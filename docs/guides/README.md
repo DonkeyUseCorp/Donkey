@@ -9,3 +9,4 @@ Guides explain what Donkey supports and how to maintain it. They should stay rea
 ## Technical Guidelines
 
 - [Swift MVC Guide](swift-mvc.md)
+- [Minimal Run Coordinator](minimal-run-coordinator.md)

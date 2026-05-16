@@ -81,6 +81,113 @@ Runtime rules:
 - cap queue sizes at 1 in the reflex path
 - benchmark each component separately and together
 
+## Product-Grade Run Loop
+
+Wrap the low-latency loop in an OpenClaw-inspired runtime shell, but do not make Donkey depend on OpenClaw, Pi, or a generic agent framework in the hot path.
+
+The product loop should look like:
+
+```text
+intake
+  -> session queue
+  -> context assembly
+  -> local perception / model inference
+  -> deterministic controller
+  -> tool / action execution
+  -> streaming events
+  -> transcript / trace persistence
+  -> compaction / recovery
+```
+
+The runtime shell owns coordination. It loads target adapters and skills, resolves model/auth/runtime profiles, subscribes to model/tool/reflex events, enforces queue sizes and deadlines, applies tool permission policy, and bridges events back to UI or client streams.
+
+The runtime shell does not own per-frame perception logic, controller policy internals, or direct OS input. Those stay behind explicit capture, perception, controller, and action-engine interfaces.
+
+### Event Bridge
+
+Publish a small set of typed event streams:
+
+- `assistant`: user-visible reasoning, recovery notes, explanations, summaries
+- `tool`: capture, perception, controller, action, Accessibility, model, and persistence calls
+- `lifecycle`: run started, paused, resumed, aborted, timed out, completed
+- `reflex`: frame, state, and action trace events, sampled or summarized to avoid hot-path overhead
+
+All event envelopes should include trace ids where possible. Reflex events must be cheap to emit and safe to drop or sample when the loop is under pressure.
+
+### Run Coordination Responsibilities
+
+The coordinator should provide the product-grade parts around the loop:
+
+- session queue with latest-request-wins behavior for live control
+- run lifecycle state: idle, starting, running, paused, stopping, completed, failed
+- tool permission policy for capture, Accessibility, model calls, and input actions
+- transcript and trace persistence with a single writer or explicit append lock
+- context compaction before slow planner calls
+- streaming event publication for UI/client observers
+- abort and timeout handling that releases held input and closes streams
+- sandbox/focus guard for risky tools and OS input
+- bounded queues, deadlines, and stale-frame drops
+
+### Conceptual Runtime Shape
+
+This pseudocode is conceptual. It describes coordination boundaries, not the exact Swift API.
+
+```swift
+while run.isActive {
+    let ticket = await sessionQueue.nextLatest()
+
+    let context = await contextAssembler.build(
+        session: ticket.session,
+        latestWorldState: stateStore.latest(),
+        transcriptSummary: transcript.compactedSummary(),
+        activeHints: hintStore.validHints()
+    )
+
+    let plannerResult = await planner.maybeGenerate(
+        context: context,
+        timeout: policy.plannerTimeout
+    )
+
+    await hintStore.publishValidated(plannerResult.hints)
+    await stream.publish(plannerResult.events)
+
+    while let frame = await frameBuffer.latestIfFresh() {
+        let state = await perception.update(frame)
+        let action = controller.decide(state, hintStore.validHints())
+
+        guard await permissionPolicy.allows(action),
+              await focusGuard.targetIsSafe()
+        else {
+            await lifecycle.pause(reason: .unsafeActionSurface)
+            break
+        }
+
+        let result = await actionEngine.execute(action)
+        await traceStore.append(frame, state, action, result)
+        await stream.publishReflexSample(frame, state, action, result)
+    }
+}
+```
+
+Separate the loops in implementation:
+
+- reflex loop: latest-frame-wins capture, local perception, deterministic controller, bounded action execution
+- planner loop: context assembly, model call, validated planner hints, memory updates
+- tool/action loop: permission checks, sandbox/focus guard, execution, trace persistence
+
+Remote LLM and chat-style local LLM work belongs in the planner loop. It must never be required for reflex ticks or direct input.
+
+### Interfaces To Define
+
+Define these contracts before the first production coordinator implementation:
+
+- `RunSession`: user goal, target id, runtime profile, permission scope, lifecycle state
+- `RunEvent`: assistant/tool/lifecycle/reflex event envelope with trace ids
+- `ToolCallPolicy`: allow, deny, or ask rules for capture, Accessibility, model, and input actions
+- `TranscriptStore` / `TraceStore`: append-only persistence with a single writer or explicit lock
+- `ContextAssembler`: compact planner context from world state, traces, memory, screenshots, and user goal
+- `RunCoordinator`: queueing, cancellation, timeouts, event bridging, and lifecycle ownership
+
 ## Platform Defaults
 
 ### Windows
@@ -281,10 +388,14 @@ Runtime: native core where the hot path needs it
 4. Add one off-the-shelf detector or template signal.
 5. Add one deterministic rule that emits a safe semantic action.
 6. Add action calibration and focus guard.
-7. Add trace logging and latency report.
-8. Add optional segmentation only if detection/templates fail.
-9. Add OCR only for text-dependent screens.
-10. Add slow LLM recovery after the reflex loop works.
+7. Add a minimal Swift runtime coordinator around `DonkeyRuntime`.
+8. Use `OffTheShelfRunLoopBoundary` as the first status/event boundary.
+9. Add session queue, lifecycle state, permission policy, and abort handling.
+10. Add trace logging and latency report.
+11. Add optional segmentation only if detection/templates fail.
+12. Add OCR only for text-dependent screens.
+13. Add slow LLM recovery after the reflex loop works.
+14. Add transcript compaction and memory writes only after planner hints are useful.
 
 ## Acceptance Criteria
 
@@ -295,6 +406,12 @@ Runtime: native core where the hot path needs it
 - p95 reflex latency stays under the target budget.
 - LLM output is validated before it changes controller configuration.
 - Segmentation and OCR are cropped and measured before live use.
+- The runtime coordinator can start, pause, abort, timeout, and complete a run.
+- Abort releases held input and publishes a terminal lifecycle event.
+- Session queue drops stale live-control work instead of building backlog.
+- Permission policy can deny unsafe input before action execution.
+- Transcript and trace writes stay ordered under concurrent model/tool/reflex events.
+- Context compaction keeps planner input bounded while preserving the latest goal, state, failures, and valid hints.
 
 ## Where To Look
 

@@ -44,6 +44,35 @@ let package = Package(
             resources: [
                 .copy("Resources/theme.json")
             ]
+        ),
+        .testTarget(
+            name: "DonkeyRuntimeTests",
+            dependencies: [
+                "DonkeyContracts",
+                "DonkeyRuntime"
+            ],
+            swiftSettings: [
+                .unsafeFlags([
+                    "-F",
+                    "/Library/Developer/CommandLineTools/Library/Developer/Frameworks"
+                ])
+            ],
+            linkerSettings: [
+                .unsafeFlags([
+                    "-F",
+                    "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+                    "-L",
+                    "/Library/Developer/CommandLineTools/Library/Developer/usr/lib",
+                    "-Xlinker",
+                    "-rpath",
+                    "-Xlinker",
+                    "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+                    "-Xlinker",
+                    "-rpath",
+                    "-Xlinker",
+                    "/Library/Developer/CommandLineTools/Library/Developer/usr/lib"
+                ])
+            ]
         )
     ]
 )

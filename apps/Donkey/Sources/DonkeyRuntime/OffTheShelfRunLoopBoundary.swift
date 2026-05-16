@@ -11,8 +11,15 @@ public struct OffTheShelfRunLoopBoundary: RuntimeStatusProviding {
     public func snapshot() -> RuntimeStatusSnapshot {
         RuntimeStatusSnapshot(
             isReady: false,
-            summary: "Real-time run loop integration boundary",
-            sourcePlan: "plans/20-off-the-shelf-run-loop.md"
+            summary: "Run coordinator ready to create sessions",
+            sourcePlan: "plans/20-off-the-shelf-run-loop.md",
+            lifecycleState: .idle
         )
+    }
+
+    public func makeCoordinator(
+        contextAssembler: RunContextAssembler = RunContextAssembler()
+    ) -> RunCoordinator {
+        RunCoordinator(contextAssembler: contextAssembler)
     }
 }
