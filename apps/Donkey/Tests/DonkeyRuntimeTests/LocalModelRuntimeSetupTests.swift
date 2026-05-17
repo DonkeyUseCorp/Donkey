@@ -121,6 +121,137 @@ struct LocalModelRuntimeSetupTests {
         #expect(result.metadata["sidecar.executablePath"] == executableURL.path)
     }
 
+    @Test
+    func manifestDownloadVerifiesSignatureMetadataChecksumsAndCachesPackage() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executableData = Data("#!/bin/sh\necho ok\n".utf8)
+        let modelData = Data("fake-model".utf8)
+        let manifest = LocalModelRuntimePackageManifest(
+            runtimeID: .uiUnderstander,
+            runtimeVersion: "1.0.0",
+            modelID: "local-ui-understander",
+            executableRelativePath: "bin/donkey-ui-understander",
+            files: [
+                LocalModelRuntimePackageFile(
+                    relativePath: "bin/donkey-ui-understander",
+                    downloadURL: URL(string: "https://example.test/ui/bin")!,
+                    sha256: LocalModelRuntimeSetupManager.sha256Hex(executableData),
+                    isExecutable: true
+                ),
+                LocalModelRuntimePackageFile(
+                    relativePath: "models/ui-understander.bin",
+                    downloadURL: URL(string: "https://example.test/ui/model")!,
+                    sha256: LocalModelRuntimeSetupManager.sha256Hex(modelData)
+                )
+            ],
+            signature: "signed-for-test",
+            signingKeyID: "test-key"
+        )
+        let manager = try LocalModelRuntimeSetupManager(baseDirectory: root)
+
+        let result = try await manager.downloadAndInstall(
+            manifest: manifest,
+            downloader: FakeRuntimeDownloader(files: [
+                URL(string: "https://example.test/ui/bin")!: executableData,
+                URL(string: "https://example.test/ui/model")!: modelData
+            ])
+        )
+        let status = try manager.status(for: .uiUnderstander)
+
+        #expect(result.state == .installed)
+        #expect(status.state == .installed)
+        #expect(status.installation?.runtimeVersion == "1.0.0")
+        #expect(status.installation?.modelID == "local-ui-understander")
+        #expect(status.installation?.downloadedDirectoryPath.contains("/Packages/ui-understander/1.0.0") == true)
+        #expect(FileManager.default.fileExists(atPath: status.installation?.executablePath ?? "") == true)
+    }
+
+    @Test
+    func manifestDownloadRejectsMissingSignatureAndBadChecksums() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let data = Data("#!/bin/sh\necho ok\n".utf8)
+        let manager = try LocalModelRuntimeSetupManager(baseDirectory: root)
+        let unsigned = LocalModelRuntimePackageManifest(
+            runtimeID: .yoloSegmenter,
+            runtimeVersion: "1.0.0",
+            modelID: "ultralytics/yolo26n-seg",
+            executableRelativePath: "bin/donkey-yolo-segmenter",
+            files: [
+                LocalModelRuntimePackageFile(
+                    relativePath: "bin/donkey-yolo-segmenter",
+                    downloadURL: URL(string: "https://example.test/yolo/bin")!,
+                    sha256: LocalModelRuntimeSetupManager.sha256Hex(data),
+                    isExecutable: true
+                )
+            ]
+        )
+
+        await #expect(throws: LocalModelRuntimeSetupError.manifestMissingSignature) {
+            _ = try await manager.downloadAndInstall(
+                manifest: unsigned,
+                downloader: FakeRuntimeDownloader(files: [URL(string: "https://example.test/yolo/bin")!: data])
+            )
+        }
+
+        let signedWithBadHash = LocalModelRuntimePackageManifest(
+            runtimeID: .yoloSegmenter,
+            runtimeVersion: "1.0.0",
+            modelID: "ultralytics/yolo26n-seg",
+            executableRelativePath: "bin/donkey-yolo-segmenter",
+            files: [
+                LocalModelRuntimePackageFile(
+                    relativePath: "bin/donkey-yolo-segmenter",
+                    downloadURL: URL(string: "https://example.test/yolo/bin")!,
+                    sha256: "bad",
+                    isExecutable: true
+                )
+            ],
+            signature: "signed",
+            signingKeyID: "test-key"
+        )
+
+        await #expect(throws: LocalModelRuntimeSetupError.manifestFileHashMismatch(relativePath: "bin/donkey-yolo-segmenter")) {
+            _ = try await manager.downloadAndInstall(
+                manifest: signedWithBadHash,
+                downloader: FakeRuntimeDownloader(files: [URL(string: "https://example.test/yolo/bin")!: data])
+            )
+        }
+    }
+
+    @Test
+    func recheckHealthRunsSidecarHealthProtocol() async throws {
+        let root = temporaryDirectory()
+        let download = temporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: download)
+        }
+        let healthExecutable = try makeHealthExecutable(
+            root: download,
+            relativePath: "bin/donkey-parakeet-transcriber",
+            runtimeID: "parakeet-transcriber",
+            runtimeVersion: "1.2.3",
+            modelID: "nvidia/parakeet-tdt-0.6b-v3"
+        )
+        let manager = try LocalModelRuntimeSetupManager(baseDirectory: root)
+        try manager.registerExecutable(
+            runtimeID: .parakeetTranscriber,
+            executableURL: healthExecutable,
+            downloadedDirectory: download,
+            runtimeVersion: "1.2.3",
+            modelID: "nvidia/parakeet-tdt-0.6b-v3",
+            sidecarProtocolVersion: "v1"
+        )
+
+        let report = try await manager.recheckHealth(runtimeID: .parakeetTranscriber)
+
+        #expect(report.state == .healthy)
+        #expect(report.runtimeVersion == "1.2.3")
+        #expect(report.modelID == "nvidia/parakeet-tdt-0.6b-v3")
+    }
+
     private func makeExecutable(
         root: URL,
         relativePath: String
@@ -150,8 +281,45 @@ struct LocalModelRuntimeSetupTests {
         return url
     }
 
+    private func makeHealthExecutable(
+        root: URL,
+        relativePath: String,
+        runtimeID: String,
+        runtimeVersion: String,
+        modelID: String
+    ) throws -> URL {
+        let script = """
+        #!/bin/sh
+        cat >/dev/null
+        printf '{"status":"ok","runtimeID":"\(runtimeID)","runtimeVersion":"\(runtimeVersion)","modelID":"\(modelID)","protocolVersion":"v1","metadata":{"health":"ok"}}'
+        """
+        let url = relativePath
+            .split(separator: "/")
+            .reduce(root) { partialURL, component in
+                partialURL.appendingPathComponent(String(component), isDirectory: false)
+            }
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data(script.utf8).write(to: url)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: url.path
+        )
+        return url
+    }
+
     private func temporaryDirectory() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("donkey-runtime-setup-tests-\(UUID().uuidString)", isDirectory: true)
+    }
+}
+
+private struct FakeRuntimeDownloader: LocalModelRuntimePackageDownloading {
+    var files: [URL: Data]
+
+    func download(from url: URL) async throws -> Data {
+        try #require(files[url])
     }
 }
