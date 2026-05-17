@@ -17,7 +17,7 @@ struct LocalAppTaskTests {
         #expect(intent.confidence == 0.96)
         #expect(intent.parserSource == .deterministic)
         #expect(intent.needsConfirmation == false)
-        #expect(intent.metadata["catalogEntry"] == "fixture-weather-lookup")
+        #expect(intent.metadata["catalogEntry"] == "built-in-weather-lookup")
         #expect(intent.metadata["entityAliasExpanded"] == "true")
     }
 
@@ -72,6 +72,8 @@ struct LocalAppTaskTests {
         ])
         #expect(plan.steps.last?.status == .blocked)
         #expect(plan.metadata["defaultOSInputBackendAvailable"] == "false")
+        #expect(plan.metadata["visualFallback"] == "localModel")
+        #expect(plan.metadata["ocrFallbackDefault"] == "false")
 
         let commands = localAdapter.guardedKeyboardCommandTemplates(
             for: intent,
@@ -106,83 +108,49 @@ struct LocalAppTaskTests {
         #expect(localAdapter.verifiesVisibleText("New York", matches: intent) == false)
     }
 
+    @Test
+    func catalogResolvesCommandAgainstAvailableInstalledAppDefinition() throws {
+        let catalog = LocalAppTaskCatalog(
+            taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
+            availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.weather"])
+        )
+
+        let resolution = catalog.resolve(command: "show me the weather for SF")
+
+        #expect(resolution.status == .resolved)
+        #expect(resolution.intent?.normalizedEntities["city"] == "San Francisco")
+        #expect(resolution.definition?.taskType == "weather_lookup")
+        #expect(resolution.definition?.observationStrategies == [.accessibility, .windowMetadata, .screenshotForLocalModel])
+        #expect(resolution.availability?.isInstalled == true)
+
+        let definition = try #require(resolution.definition)
+        let intent = try #require(resolution.intent)
+        let plan = catalog.adapter(for: definition).dryRunPlan(for: intent)
+        #expect(plan.steps.map(\.role).contains(.verifyResult))
+    }
+
+    @Test
+    func catalogSeparatesUnsupportedMissingEntityAndUnavailableApp() {
+        let availableCatalog = LocalAppTaskCatalog(
+            taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
+            availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.weather"])
+        )
+        #expect(availableCatalog.resolve(command: "open my calendar").status == .unsupportedCommand)
+        #expect(availableCatalog.resolve(command: "show me the weather").status == .needsConfirmation)
+
+        let unavailableCatalog = LocalAppTaskCatalog(
+            taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
+            availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: [])
+        )
+        #expect(unavailableCatalog.resolve(command: "show me the weather for SF").status == .appUnavailable)
+    }
+
     private func parser() -> LocalAppTaskIntentParser {
-        LocalAppTaskIntentParser(taskDefinitions: [fixtureWeatherLookupDefinition()])
+        LocalAppTaskIntentParser(taskDefinitions: [BuiltInLocalAppTaskDefinitions.weatherLookup])
     }
 
     private func adapter() -> LocalAppTaskAdapter {
-        LocalAppTaskAdapter(definition: fixtureWeatherLookupDefinition())
-    }
-
-    private func fixtureWeatherLookupDefinition() -> LocalAppTaskDefinition {
-        LocalAppTaskDefinition(
-            taskType: "weather_lookup",
-            targetApp: LocalAppTarget(
-                appName: "Weather",
-                bundleIdentifier: "com.apple.weather",
-                titleContains: "Weather"
-            ),
-            triggerTerms: ["weather", "forecast", "temperature", "temp"],
-            entityRules: [
-                LocalAppTaskEntityRule(
-                    name: "city",
-                    markers: ["for", "in", "at", "near"],
-                    aliases: [
-                        "sf": "San Francisco",
-                        "san fran": "San Francisco",
-                        "san francisco": "San Francisco"
-                    ]
-                )
-            ],
-            workflowSteps: [
-                LocalAppTaskWorkflowStepDefinition(
-                    id: "parse-intent",
-                    role: .parseIntent,
-                    summary: "Parse the local app task intent"
-                ),
-                LocalAppTaskWorkflowStepDefinition(
-                    id: "launch-or-focus",
-                    role: .launchOrFocusApp,
-                    summary: "Launch or focus the target app"
-                ),
-                LocalAppTaskWorkflowStepDefinition(
-                    id: "observe-app",
-                    role: .observeApp,
-                    summary: "Observe the target app state"
-                ),
-                LocalAppTaskWorkflowStepDefinition(
-                    id: "focus-search",
-                    role: .focusControl,
-                    summary: "Focus the task control",
-                    metadata: [
-                        "controlID": "search",
-                        "key": "Command+F"
-                    ]
-                ),
-                LocalAppTaskWorkflowStepDefinition(
-                    id: "enter-city",
-                    role: .enterText,
-                    summary: "Enter the normalized entity",
-                    metadata: ["entityName": "city"]
-                ),
-                LocalAppTaskWorkflowStepDefinition(
-                    id: "submit-search",
-                    role: .submit,
-                    summary: "Submit the task",
-                    metadata: ["key": "Return"]
-                ),
-                LocalAppTaskWorkflowStepDefinition(
-                    id: "verify-city",
-                    role: .verifyResult,
-                    summary: "Verify the visible result"
-                )
-            ],
-            verificationEntityName: "city",
-            metadata: [
-                "catalogEntry": "fixture-weather-lookup",
-                "verificationTextKey": "city"
-            ]
-        )
+        LocalAppTaskAdapter(definition: BuiltInLocalAppTaskDefinitions.weatherLookup)
     }
 
     private func timestamp(_ milliseconds: UInt64) -> RunTraceTimestamp {

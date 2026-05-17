@@ -114,12 +114,20 @@ public struct LocalAppTaskWorkflowStepDefinition: Codable, Equatable, Sendable {
     }
 }
 
+public enum LocalAppObservationStrategy: String, Codable, Equatable, Sendable {
+    case accessibility
+    case windowMetadata
+    case screenshotForLocalModel = "screenshot_for_local_model"
+    case screenshotOCR = "screenshot_ocr"
+}
+
 public struct LocalAppTaskDefinition: Codable, Equatable, Sendable {
     public var taskType: String
     public var targetApp: LocalAppTarget
     public var triggerTerms: [String]
     public var entityRules: [LocalAppTaskEntityRule]
     public var workflowSteps: [LocalAppTaskWorkflowStepDefinition]
+    public var observationStrategies: [LocalAppObservationStrategy]
     public var verificationEntityName: String?
     public var metadata: [String: String]
 
@@ -129,6 +137,7 @@ public struct LocalAppTaskDefinition: Codable, Equatable, Sendable {
         triggerTerms: [String],
         entityRules: [LocalAppTaskEntityRule] = [],
         workflowSteps: [LocalAppTaskWorkflowStepDefinition] = [],
+        observationStrategies: [LocalAppObservationStrategy] = [.accessibility, .windowMetadata, .screenshotForLocalModel],
         verificationEntityName: String? = nil,
         metadata: [String: String] = [:]
     ) {
@@ -137,6 +146,7 @@ public struct LocalAppTaskDefinition: Codable, Equatable, Sendable {
         self.triggerTerms = triggerTerms
         self.entityRules = entityRules
         self.workflowSteps = workflowSteps
+        self.observationStrategies = observationStrategies
         self.verificationEntityName = verificationEntityName
         self.metadata = metadata
     }

@@ -1,6 +1,6 @@
 # Off-The-Shelf Run Loop
 
-> Active status: not complete. The current repo supports metadata-only local-navigation dry-run scaffolding, generic local-app task parsing/adaptation, and guarded live-action smoke, but not a live fast-navigation agent for a concrete command such as "show me the weather for SF".
+> Active status: not complete. The current repo supports metadata-only local-navigation dry-run scaffolding, generic local-app task catalog parsing/adaptation, target-app availability checks, and guarded live-action smoke, but not a live fast-navigation agent for a concrete command such as "show me the weather for SF".
 
 ## Goal
 
@@ -8,7 +8,7 @@ Build the first fast local navigation agent from existing system components inst
 
 The first product proof is a local Weather lookup navigation benchmark expressed through a generic local-app task system. Donkey should interpret a natural command, resolve the installed app and task definition, use local macOS navigation to open or focus the target app, perform the defined expert-user workflow, verify the app is showing the requested result, and leave the result visible. It should feel faster than manual app navigation or a chat assistant because most work is local and deterministic.
 
-Fast navigation is the focus across apps and games. Use Accessibility, app/window metadata, LaunchServices, keyboard input, screenshot/OCR fallback, open-vocabulary detectors, segmentation, templates, and classical CV as swappable navigation signals. Start with the cheapest local signal that can reliably move the target toward the requested state.
+Fast navigation is the focus across apps and games. Use Accessibility, app/window metadata, LaunchServices, keyboard input, bounded screenshot/crop context for local model UI understanding, open-vocabulary detectors, segmentation, templates, OCR when specifically measured as useful, and classical CV as swappable navigation signals. Start with the cheapest local signal that can reliably move the target toward the requested state.
 
 ## Target Shape
 
@@ -39,7 +39,7 @@ The first version should prove:
 - command-to-intent parsing is reliable for common tasks
 - macOS app launch/focus is reliable
 - Accessibility/window metadata can extract useful app state
-- screenshot/OCR fallback is available only when needed
+- local visual fallback is available only when Accessibility and metadata are insufficient
 - state is compact and timestamped
 - controller rules can act on that state
 - guarded live input can type/search safely
@@ -58,10 +58,11 @@ Use existing, swappable components:
 - LaunchServices or Workspace app launch/focus
 - Accessibility snapshots/actions for app UI state and controls
 - keyboard/mouse input behind guardrails
-- template matching or OCR for UI fallback
+- local model UI understanding for bounded screenshot/crop fallback
+- template matching or OCR only when measured as better for a narrow UI fallback
 - YOLO-family detector for boxes, UI elements, enemies, objects, and markers
 - SAM / SAM2 / MobileSAM / FastSAM for masks when boxes are not enough
-- OCR for text, labels, and menus when Accessibility is insufficient
+- OCR for text, labels, and menus only when a task-specific benchmark shows it is better than local model UI understanding
 - color/edge/motion heuristics for simple fast signals
 - deterministic state machines for action decisions
 - LLM planner only for slow hints and recovery
@@ -88,7 +89,7 @@ Preferred inference paths:
 - CUDA graphs for fixed-shape repeated inference when launch overhead matters
 - DirectML or WinML as a broad Windows fallback
 - Core ML / Metal on Apple hardware
-- CPU only for tiny templates, OCR snippets, or very small models
+- CPU only for tiny templates, OCR snippets, or very small local models
 
 Runtime rules:
 
@@ -142,7 +143,7 @@ The first local-app task adapter should stay generic and support:
 - deterministic alias expansion for common city shorthand such as `SF`
 - dry-run trace output before live input
 - app launch/focus through a narrow macOS app-control boundary based on resolved target app metadata
-- observation through Accessibility first, window metadata second, screenshot/OCR fallback last
+- observation through Accessibility first, window metadata second, local model UI understanding over bounded screenshots/crops third, OCR only as an optional measured adapter
 - guarded text entry into the resolved task control
 - verification that visible app output matches the normalized requested entity
 - terminal result states: completed, needs-user-review, failed-safe, timed-out
@@ -259,7 +260,7 @@ Natural command
   -> NSWorkspace/LaunchServices app activation
   -> Accessibility tree/action when trusted
   -> guarded keyboard/mouse fallback
-  -> ScreenCaptureKit/OCR only for missing UI facts
+  -> ScreenCaptureKit/local model UI understanding only for missing UI facts
 ```
 
 Use Accessibility for window bounds, focus checks, controls, dialogs, and setup flows. Use screenshot perception only when the app does not expose the needed state through Accessibility.
@@ -301,9 +302,9 @@ Use segmentation sparingly in the hot loop. It is often better as:
 - setup/calibration helper
 - fallback when detection is ambiguous
 
-### OCR And UI Parsing
+### Local Model UI Understanding And OCR
 
-Use OCR for:
+Use local model UI understanding over bounded screenshot or crop context for:
 
 - menus
 - labels
@@ -312,7 +313,9 @@ Use OCR for:
 - quest text
 - countdowns
 
-OCR should usually run on cropped regions, not the full frame.
+OCR remains a useful narrow adapter, but it should not be the default visual fallback. Prefer local model UI understanding when the question is semantic, layout-dependent, or app-specific. Use OCR when the needed signal is plain text, the crop is small, and measured p95/cost/reliability beats the local model path.
+
+Local model or OCR work should usually run on cropped regions, not the full frame.
 
 ### Templates And Classical CV
 
@@ -406,7 +409,7 @@ Use LLMs for:
 - interpreting unfamiliar screens
 - choosing objectives
 - explaining failures
-- deciding which detector/OCR/template signals matter
+- deciding which detector/local-model/OCR/template signals matter
 - suggesting recovery steps
 - summarizing memory
 - reading slow-path screenshots or UI snapshots
@@ -450,7 +453,7 @@ Suggested first stack:
 ```text
 Intent: deterministic parser with local-model fallback for ambiguity
 App control: NSWorkspace/LaunchServices activation
-Observation: Accessibility snapshot first, screenshot/OCR fallback
+Observation: Accessibility snapshot first, local model UI understanding over bounded screenshot/crop fallback
 Rules: deterministic local-app task state machine
 Input: guarded keyboard/mouse or Accessibility action backend
 Reasoning: local/online planner only for recovery or ambiguity
@@ -467,7 +470,7 @@ Runtime: native Swift coordinator and trace pipeline
 6. Add app launch/focus action commands and guardrails.
 7. Add guarded text-entry and submit/select commands.
 8. Add Accessibility observation for resolved controls and visible result text.
-9. Add screenshot/OCR fallback only where Accessibility is insufficient.
+9. Add local model UI-understanding fallback only where Accessibility and metadata are insufficient; keep OCR optional and measured.
 10. Add result verification for normalized requested entities.
 11. Add command-to-result latency report and manual baseline comparison.
 12. Add optional slow planner recovery only after deterministic execution works.
@@ -483,7 +486,7 @@ Runtime: native Swift coordinator and trace pipeline
 - p95 local navigation/action latency stays under the target budget.
 - command-to-result latency is measured against a manual baseline.
 - LLM output is validated before it changes controller configuration.
-- Segmentation and OCR are cropped and measured before live use.
+- Local model UI understanding, segmentation, and OCR are cropped and measured before live use.
 - The runtime coordinator can start, pause, abort, timeout, and complete a run.
 - Abort releases held input and publishes a terminal lifecycle event.
 - Session queue drops stale live-control work instead of building backlog.
@@ -504,20 +507,20 @@ The runtime foundation now supports a product-shaped local-navigation slice of t
 - p50/p95/p99 latency reports across capture, preprocess, model, perception, state update, controller decision, action projection, and input stages
 - action-engine permission, focus, rate, hold-duration, release, and backend-execution guardrails
 - guarded live-action smoke through an injected backend only after dry-run latency evidence, explicit input policy allowance, and focus guard success
-- generic local-app task intent contracts, data-driven task definitions, deterministic parsing, dry-run workflow-step projection, guarded keyboard command templates, and visible-text verification
+- generic local-app task catalog, intent contracts, built-in benchmark definition, deterministic parsing, dry-run workflow-step projection, guarded keyboard command templates, and visible-text verification
 - optional slow-planner sidecar that publishes only validated hints without blocking reflex latency
 
-This is still not the full off-the-shelf vision stack and must not be treated as completion. It can replay and trace compact local vision evidence, but it does not ship live local detector/OCR/segmentation/model adapters over captured pixels, continuous streaming capture, a default OS input backend, high-volume persisted replay traces, or target-specific visual calibration.
+This is still not the full off-the-shelf vision stack and must not be treated as completion. It can replay and trace compact local vision evidence, but it does not ship live local detector/local-model/OCR/segmentation adapters over captured pixels, continuous streaming capture, a default OS input backend, high-volume persisted replay traces, or target-specific visual calibration.
 
 ## Required Before This Plan Is Done
 
-- Add an app-knowledge layer and measured first local-app task benchmark for the concrete command "show me the weather for SF".
+- Add measured guarded-live execution for the first local-app task benchmark command "show me the weather for SF".
 - Prove fast local navigation from parsed intent, local app observation, deterministic controller state, and guarded live input, not remote planning.
 - Add a default narrow macOS app-control backend for launch/focus/type/select/verify with focus guard and emergency release.
-- Add result verification through Accessibility or screenshot/OCR fallback.
+- Add result verification through Accessibility or local model UI-understanding fallback, with OCR only if a narrow benchmark justifies it.
 - Add continuous streaming capture once queue-depth, stale-result, and trace sinks are ready for longer sessions.
 - Add durable high-volume replay trace persistence and target-specific benchmark baselines.
-- Keep segmentation/OCR optional and introduce them only with cropped, measured, target-specific evidence.
+- Keep local model UI understanding, segmentation, and OCR optional in the live path until each has cropped, measured, target-specific evidence.
 
 ## Where To Look
 
