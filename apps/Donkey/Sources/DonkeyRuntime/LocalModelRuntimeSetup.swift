@@ -41,6 +41,13 @@ public enum LocalModelRuntimeHealthState: String, Codable, Equatable, Sendable {
     case invalidOutput
 }
 
+public enum LocalModelRuntimeModelPreparationState: String, Codable, Equatable, Sendable {
+    case prepared
+    case unavailable
+    case failed
+    case invalidOutput
+}
+
 public struct LocalModelRuntimeSpec: Codable, Equatable, Sendable {
     public var id: LocalModelRuntimeID
     public var displayName: String
@@ -245,6 +252,31 @@ public struct LocalModelRuntimeDownloadResult: Codable, Equatable, Sendable {
         self.runtimeID = runtimeID
         self.state = state
         self.installation = installation
+        self.metadata = metadata
+    }
+}
+
+public struct LocalModelRuntimeModelPreparationReport: Codable, Equatable, Sendable {
+    public var runtimeID: LocalModelRuntimeID
+    public var state: LocalModelRuntimeModelPreparationState
+    public var cacheDirectory: String?
+    public var modelID: String?
+    public var latencyMS: Double?
+    public var metadata: [String: String]
+
+    public init(
+        runtimeID: LocalModelRuntimeID,
+        state: LocalModelRuntimeModelPreparationState,
+        cacheDirectory: String? = nil,
+        modelID: String? = nil,
+        latencyMS: Double? = nil,
+        metadata: [String: String] = [:]
+    ) {
+        self.runtimeID = runtimeID
+        self.state = state
+        self.cacheDirectory = cacheDirectory
+        self.modelID = modelID
+        self.latencyMS = latencyMS
         self.metadata = metadata
     }
 }
@@ -670,6 +702,87 @@ public struct LocalModelRuntimeSetupManager: Sendable {
         )
     }
 
+    public func prepareModelWeights(
+        runtimeID: LocalModelRuntimeID,
+        timeoutMS: Int = 600_000
+    ) async throws -> LocalModelRuntimeModelPreparationReport {
+        let status = try status(for: runtimeID)
+        guard status.state == .installed,
+              let installation = status.installation
+        else {
+            return LocalModelRuntimeModelPreparationReport(
+                runtimeID: runtimeID,
+                state: .unavailable,
+                metadata: status.metadata
+            )
+        }
+
+        let cacheDirectory = modelCacheDirectory(for: installation)
+        try FileManager.default.createDirectory(
+            at: cacheDirectory,
+            withIntermediateDirectories: true
+        )
+        let requestData = try Self.encoder().encode(
+            LocalModelRuntimeModelPreparationRequest(
+                operation: "prepareModelWeights",
+                protocolVersion: installation.sidecarProtocolVersion ?? "v1",
+                runtimeID: runtimeID.rawValue,
+                runtimeVersion: installation.runtimeVersion,
+                modelID: installation.modelID ?? status.spec.modelName,
+                cacheDirectory: cacheDirectory.path,
+                metadata: status.spec.metadata
+                    .merging(installation.metadata) { _, new in new }
+            )
+        )
+        let runner = ProcessBackedLocalJSONSidecarRunner(
+            environment: [status.spec.environmentVariableName: installation.executablePath],
+            executableResolver: { environmentVariableName, environment in
+                environment[environmentVariableName]
+            }
+        )
+        let result = await runner.run(
+            LocalJSONSidecarRequest(
+                environmentVariableName: status.spec.environmentVariableName,
+                inputData: requestData,
+                timeoutMS: timeoutMS,
+                metadata: ["operation": "prepareModelWeights"]
+            )
+        )
+
+        guard result.status == .completed else {
+            return LocalModelRuntimeModelPreparationReport(
+                runtimeID: runtimeID,
+                state: result.status == .unavailable ? .unavailable : .failed,
+                cacheDirectory: cacheDirectory.path,
+                modelID: installation.modelID ?? status.spec.modelName,
+                latencyMS: result.latencyMS,
+                metadata: result.metadata.merging([
+                    "sidecar.stderr": result.stderrText
+                ]) { current, _ in current }
+            )
+        }
+
+        guard let response = try? Self.decoder().decode(LocalModelRuntimeModelPreparationResponse.self, from: result.outputData) else {
+            return LocalModelRuntimeModelPreparationReport(
+                runtimeID: runtimeID,
+                state: .invalidOutput,
+                cacheDirectory: cacheDirectory.path,
+                modelID: installation.modelID ?? status.spec.modelName,
+                latencyMS: result.latencyMS,
+                metadata: result.metadata
+            )
+        }
+
+        return LocalModelRuntimeModelPreparationReport(
+            runtimeID: runtimeID,
+            state: response.status == "ok" ? .prepared : .failed,
+            cacheDirectory: response.cacheDirectory ?? cacheDirectory.path,
+            modelID: response.modelID ?? installation.modelID ?? status.spec.modelName,
+            latencyMS: result.latencyMS,
+            metadata: result.metadata.merging(response.metadata) { current, _ in current }
+        )
+    }
+
     @discardableResult
     public func registerDownloadedRuntime(
         runtimeID: LocalModelRuntimeID,
@@ -791,6 +904,16 @@ public struct LocalModelRuntimeSetupManager: Sendable {
             .appendingPathComponent(manifest.runtimeVersion, isDirectory: true)
     }
 
+    private func modelCacheDirectory(for installation: LocalModelRuntimeInstallation) -> URL {
+        let modelID = (installation.modelID ?? installation.runtimeID.rawValue)
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        return baseDirectory
+            .appendingPathComponent("ModelWeights", isDirectory: true)
+            .appendingPathComponent(installation.runtimeID.rawValue, isDirectory: true)
+            .appendingPathComponent(modelID, isDirectory: true)
+    }
+
     private static func encoder() -> JSONEncoder {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -822,6 +945,24 @@ private struct LocalModelRuntimeHealthResponse: Codable, Equatable, Sendable {
     var runtimeVersion: String?
     var modelID: String?
     var protocolVersion: String
+    var metadata: [String: String]
+}
+
+private struct LocalModelRuntimeModelPreparationRequest: Codable, Equatable, Sendable {
+    var operation: String
+    var protocolVersion: String
+    var runtimeID: String
+    var runtimeVersion: String?
+    var modelID: String
+    var cacheDirectory: String
+    var metadata: [String: String]
+}
+
+private struct LocalModelRuntimeModelPreparationResponse: Codable, Equatable, Sendable {
+    var status: String
+    var runtimeID: String
+    var modelID: String?
+    var cacheDirectory: String?
     var metadata: [String: String]
 }
 

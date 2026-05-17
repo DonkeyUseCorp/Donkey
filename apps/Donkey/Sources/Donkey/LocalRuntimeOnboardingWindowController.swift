@@ -123,6 +123,15 @@ final class LocalRuntimeOnboardingModel: ObservableObject {
                 }
             }
 
+            let modelPreparationFailures = try await prepareInstalledRuntimeModels()
+            if !modelPreparationFailures.isEmpty {
+                retryRuntimeIDs = modelPreparationFailures
+                state = .needsAttention
+                summary = "Setup needs attention."
+                detail = "A runtime could not download or cache its model weights. Retry setup to continue from that runtime."
+                return
+            }
+
             let healthFailures = try await recheckInstalledRuntimes()
             if healthFailures.isEmpty {
                 retryRuntimeIDs.removeAll()
@@ -151,6 +160,18 @@ final class LocalRuntimeOnboardingModel: ObservableObject {
         for instruction in manager.instructions() {
             let report = try await manager.recheckHealth(runtimeID: instruction.spec.id)
             guard report.state == .healthy else {
+                failedRuntimeIDs.append(instruction.spec.id)
+                continue
+            }
+        }
+        return failedRuntimeIDs
+    }
+
+    private func prepareInstalledRuntimeModels() async throws -> [LocalModelRuntimeID] {
+        var failedRuntimeIDs: [LocalModelRuntimeID] = []
+        for instruction in manager.instructions() {
+            let report = try await manager.prepareModelWeights(runtimeID: instruction.spec.id)
+            guard report.state == .prepared else {
                 failedRuntimeIDs.append(instruction.spec.id)
                 continue
             }
