@@ -73,7 +73,11 @@ public struct LocalAppTaskIntentParser: Sendable {
         var usedAlias = false
 
         for rule in definition.entityRules {
-            guard let candidate = entityCandidate(from: command, rule: rule) else { continue }
+            guard let candidate = entityCandidate(
+                from: command,
+                rule: rule,
+                definition: definition
+            ) else { continue }
             raw[rule.name] = candidate.raw
             normalized[rule.name] = candidate.normalized
             usedAlias = usedAlias || candidate.usedAlias
@@ -84,7 +88,8 @@ public struct LocalAppTaskIntentParser: Sendable {
 
     private func entityCandidate(
         from command: String,
-        rule: LocalAppTaskEntityRule
+        rule: LocalAppTaskEntityRule,
+        definition: LocalAppTaskDefinition
     ) -> (raw: String, normalized: String, usedAlias: Bool)? {
         let aliases = rule.aliases.reduce(into: [:]) { result, item in
             result[Self.normalizedPhrase(item.key)] = item.value
@@ -105,6 +110,32 @@ public struct LocalAppTaskIntentParser: Sendable {
                 let normalized = aliases[Self.normalizedPhrase(cleaned)] ?? titleCased(cleaned)
                 return (cleaned, normalized, normalized != titleCased(cleaned))
             }
+        }
+
+        if rule.metadata["capture"] == "afterTrigger",
+           let candidate = captureAfterTrigger(from: command, definition: definition) {
+            let normalized = aliases[Self.normalizedPhrase(candidate)] ?? titleCased(candidate)
+            return (candidate, normalized, normalized != titleCased(candidate))
+        }
+
+        return nil
+    }
+
+    private func captureAfterTrigger(from command: String, definition: LocalAppTaskDefinition) -> String? {
+        let normalizedCommand = Self.normalizedPhrase(command)
+        let triggers = definition.triggerTerms
+            .map(Self.normalizedPhrase)
+            .sorted { $0.count > $1.count }
+
+        for trigger in triggers {
+            guard normalizedCommand == trigger || normalizedCommand.hasPrefix("\(trigger) ") else {
+                continue
+            }
+
+            let candidate = String(normalizedCommand.dropFirst(trigger.count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !candidate.isEmpty else { continue }
+            return cleanEntityCandidate(candidate)
         }
 
         return nil

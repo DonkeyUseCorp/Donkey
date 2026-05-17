@@ -178,6 +178,27 @@ public struct LocalAppTaskCatalog: Sendable {
 }
 
 public enum BuiltInLocalAppTaskDefinitions {
+    private static var commonWorkflowPrefix: [LocalAppTaskWorkflowStepDefinition] {
+        [
+            LocalAppTaskWorkflowStepDefinition(
+                id: "parse-intent",
+                role: .parseIntent,
+                summary: "Parse the local app task intent"
+            ),
+            LocalAppTaskWorkflowStepDefinition(
+                id: "launch-or-focus",
+                role: .launchOrFocusApp,
+                summary: "Launch or focus the target app"
+            ),
+            LocalAppTaskWorkflowStepDefinition(
+                id: "observe-app",
+                role: .observeApp,
+                summary: "Observe the target app state",
+                metadata: ["strategyOrder": "accessibility,windowMetadata,screenshotForLocalModel"]
+            )
+        ]
+    }
+
     public static var weatherLookup: LocalAppTaskDefinition {
         LocalAppTaskDefinition(
             taskType: "weather_lookup",
@@ -202,23 +223,7 @@ public enum BuiltInLocalAppTaskDefinitions {
                     ]
                 )
             ],
-            workflowSteps: [
-                LocalAppTaskWorkflowStepDefinition(
-                    id: "parse-intent",
-                    role: .parseIntent,
-                    summary: "Parse the local app task intent"
-                ),
-                LocalAppTaskWorkflowStepDefinition(
-                    id: "launch-or-focus",
-                    role: .launchOrFocusApp,
-                    summary: "Launch or focus the target app"
-                ),
-                LocalAppTaskWorkflowStepDefinition(
-                    id: "observe-app",
-                    role: .observeApp,
-                    summary: "Observe the target app state",
-                    metadata: ["strategyOrder": "accessibility,windowMetadata,screenshotForLocalModel"]
-                ),
+            workflowSteps: commonWorkflowPrefix + [
                 LocalAppTaskWorkflowStepDefinition(
                     id: "focus-search",
                     role: .focusControl,
@@ -257,7 +262,141 @@ public enum BuiltInLocalAppTaskDefinitions {
         )
     }
 
+    public static var mediaPlayback: LocalAppTaskDefinition {
+        LocalAppTaskDefinition(
+            taskType: "media_playback",
+            targetApp: LocalAppTarget(
+                appName: "Music",
+                bundleIdentifier: "com.apple.Music",
+                titleContains: "Music"
+            ),
+            triggerTerms: ["play", "listen to", "put on"],
+            entityRules: [
+                LocalAppTaskEntityRule(
+                    name: "query",
+                    markers: ["play", "listen to", "put on"],
+                    aliases: [
+                        "cold play": "Coldplay",
+                        "coldplay": "Coldplay"
+                    ],
+                    metadata: ["capture": "afterTrigger"]
+                )
+            ],
+            workflowSteps: commonWorkflowPrefix + [
+                LocalAppTaskWorkflowStepDefinition(
+                    id: "focus-search",
+                    role: .focusControl,
+                    summary: "Focus the app search control",
+                    metadata: [
+                        "controlID": "search",
+                        "key": "Command+F"
+                    ]
+                ),
+                LocalAppTaskWorkflowStepDefinition(
+                    id: "enter-media-query",
+                    role: .enterText,
+                    summary: "Enter the requested media query",
+                    metadata: ["entityName": "query"]
+                ),
+                LocalAppTaskWorkflowStepDefinition(
+                    id: "submit-media-search",
+                    role: .submit,
+                    summary: "Submit the media search or playback command",
+                    metadata: ["key": "Return"]
+                ),
+                LocalAppTaskWorkflowStepDefinition(
+                    id: "verify-media-query",
+                    role: .verifyResult,
+                    summary: "Verify the requested media is visible or selected"
+                )
+            ],
+            observationStrategies: [.accessibility, .windowMetadata, .screenshotForLocalModel],
+            verificationEntityName: "query",
+            metadata: [
+                "catalogEntry": "built-in-media-playback",
+                "verificationTextKey": "query",
+                "domain": "media",
+                "visualFallback": "localModel",
+                "ocrFallbackDefault": "false"
+            ]
+        )
+    }
+
+    public static var documentFormFill: LocalAppTaskDefinition {
+        LocalAppTaskDefinition(
+            taskType: "document_form_fill",
+            targetApp: LocalAppTarget(
+                appName: "Preview",
+                bundleIdentifier: "com.apple.Preview",
+                titleContains: nil
+            ),
+            triggerTerms: ["fill pdf", "fill out pdf", "complete pdf", "fill form", "fill out this pdf"],
+            entityRules: [
+                LocalAppTaskEntityRule(
+                    name: "document",
+                    markers: ["fill", "complete"],
+                    aliases: [
+                        "this pdf": "current PDF",
+                        "the pdf": "current PDF",
+                        "this form": "current form"
+                    ],
+                    metadata: ["contextRole": "documentTarget"]
+                ),
+                LocalAppTaskEntityRule(
+                    name: "dataSource",
+                    markers: ["using", "with", "from"],
+                    aliases: [
+                        "this data": "provided data",
+                        "the data": "provided data",
+                        "these details": "provided data"
+                    ],
+                    metadata: ["contextRole": "structuredInputData"]
+                )
+            ],
+            workflowSteps: commonWorkflowPrefix + [
+                LocalAppTaskWorkflowStepDefinition(
+                    id: "observe-form-fields",
+                    role: .custom,
+                    summary: "Discover fillable fields from Accessibility or bounded local UI understanding",
+                    metadata: [
+                        "requiresStructuredDataMapping": "true",
+                        "preferredObservation": "accessibility,localModel"
+                    ]
+                ),
+                LocalAppTaskWorkflowStepDefinition(
+                    id: "map-data-to-fields",
+                    role: .custom,
+                    summary: "Map provided data to detected document fields",
+                    metadata: [
+                        "requiresUserData": "true",
+                        "outputMustBeReviewed": "true"
+                    ]
+                ),
+                LocalAppTaskWorkflowStepDefinition(
+                    id: "verify-filled-document",
+                    role: .verifyResult,
+                    summary: "Verify all required fields have a proposed value"
+                )
+            ],
+            observationStrategies: [.accessibility, .screenshotForLocalModel],
+            verificationEntityName: "document",
+            metadata: [
+                "catalogEntry": "built-in-document-form-fill",
+                "domain": "document",
+                "requiresDocumentContext": "true",
+                "requiresStructuredData": "true",
+                "guardedLiveDefault": "reviewOnly",
+                "visualFallback": "localModel",
+                "ocrFallbackDefault": "false"
+            ]
+        )
+    }
+
     public static var defaults: [LocalAppTaskDefinition] {
-        [weatherLookup]
+        [
+            weatherLookup,
+            mediaPlayback,
+            documentFormFill
+        ]
     }
 }

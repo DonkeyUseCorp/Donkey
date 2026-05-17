@@ -60,7 +60,8 @@ public struct LocalAppTaskAdapter: Sendable {
             targetApp: definition.targetApp,
             steps: steps,
             terminalState: verification.terminalState,
-            canAttemptGuardedLive: verification.terminalState != .failedSafe,
+            canAttemptGuardedLive: definition.metadata["guardedLiveDefault"] != "reviewOnly"
+                && verification.terminalState != .failedSafe,
             verificationConfidence: verification.confidence,
             metadata: planMetadata
         )
@@ -132,7 +133,7 @@ public struct LocalAppTaskAdapter: Sendable {
         return Self.normalizedText(visibleText).contains(Self.normalizedText(expected))
     }
 
-    private var targetID: String {
+    public var targetID: String {
         "local-app-task-\(slug(definition.taskType))"
     }
 
@@ -143,7 +144,8 @@ public struct LocalAppTaskAdapter: Sendable {
             "appName": definition.targetApp.appName,
             "bundleIdentifier": definition.targetApp.bundleIdentifier ?? "",
             "guardedLiveRequiresInputPolicy": "true",
-            "defaultOSInputBackendAvailable": "false"
+            "defaultOSInputBackendAvailable": "true",
+            "defaultOSInputBackend": "mac-keyboard"
         ].merging(definition.metadata) { current, _ in current }
     }
 

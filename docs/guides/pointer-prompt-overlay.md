@@ -17,9 +17,9 @@ Donkey supports a floating macOS pointer prompt overlay:
 - lets normal clicks pass through the inactive overlay and transparent active overlay space
 - opens near the user mouse at a fixed 45-degree bottom-right diagonal
 - keeps that fixed offset at screen edges instead of flipping or clamping to the visible screen bounds
-- keeps runtime and AI harness behavior behind explicit integration boundaries
+- submits typed prompt text through the local-app command pipeline while keeping model parsing, task validation, and live input outside the SwiftUI rendering path
 
-This is a visual and microphone-level UI capability. It does not capture the screen, send input, call models, transcribe speech, or require Accessibility permission. It does request microphone permission so the waveform can reflect live local audio levels. The AI harness now has a local voice-transcription model route, but the overlay has not yet wired microphone buffers into a speech-to-text adapter.
+This is a visual, typed-command, and microphone-level UI capability. Typed submissions go to the local-app command handler, which prefers local-model task-intent parsing, validates the intent against the app-task catalog, and then runs the guarded local-app live runner. The overlay itself does not capture the screen, synthesize input, transcribe speech, or require Accessibility permission. It does request microphone permission so the waveform can reflect live local audio levels. The AI harness has a local voice-transcription model route, but the overlay has not yet wired microphone buffers into a speech-to-text adapter.
 
 ## Technical Guidelines
 
@@ -42,7 +42,7 @@ This is a visual and microphone-level UI capability. It does not capture the scr
 - Double-Command is the only active shortcut today. Its default lives in `PointerPromptActivationShortcut.doubleCommand` so a future settings layer can supply a different shortcut without rewriting controller event handling.
 - Double-Command prompt activation should require two clean Command down/up taps within 450ms. Any intervening key press, mouse press, extra modifier, or overlong Command hold should reset the sequence so normal shortcuts do not summon the modal.
 - Holding the second clean Command press for the shortcut's configured hold duration should activate the prompt modal and start microphone level capture instead of waiting for the second release.
-- Keep the overlay non-invasive: no screen capture loop, input execution, Accessibility prompt, or LLM call in this feature.
+- Keep the overlay non-invasive: no screen capture loop, input execution, Accessibility prompt, or direct model call in SwiftUI rendering. Submit text to a command handler boundary instead.
 - Keep voice capture separate from transcription. The overlay may publish bounded local audio buffers to a future transcription adapter, but model execution and command parsing should remain outside the SwiftUI view/controller rendering path.
 
 ## Verification

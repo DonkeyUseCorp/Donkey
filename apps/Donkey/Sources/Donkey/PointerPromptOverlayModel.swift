@@ -11,10 +11,14 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
     @Published var inputTextHeight = PointerPromptLayout.composerInputTextMinimumHeight
     @Published var isInputExpanded = false
 
+    private let commandHandler: any PointerPromptCommandHandling
+
     init(
         aiProvider: any AIHarnessSnapshotProviding = AIHarnessBoundary(),
+        commandHandler: any PointerPromptCommandHandling = LocalAppPointerPromptCommandHandler(),
         theme: PointerPromptTheme = PointerPromptOverlayModel.bundledTheme()
     ) {
+        self.commandHandler = commandHandler
         let aiSnapshot = aiProvider.snapshot()
         promptState = PointerPromptState(
             promptText: aiSnapshot.suggestedPromptText,
@@ -54,6 +58,15 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
             inputTextHeight = PointerPromptLayout.composerInputTextMinimumHeight
             isInputExpanded = false
             promptState.leadingSignalLevel = .thinking
+            promptState.promptText = "Working..."
+            Task { [weak self, commandHandler] in
+                let result = await commandHandler.handleSubmittedCommand(trimmedText)
+                await MainActor.run {
+                    guard let self else { return }
+                    self.promptState.leadingSignalLevel = result.status == .completed ? .ready : .idle
+                    self.promptState.promptText = result.summary
+                }
+            }
         case .inputTextHeightChanged(let height):
             let clampedHeight = PointerPromptLayout.clampedComposerInputTextHeight(height)
             guard abs(inputTextHeight - clampedHeight) > 0.5 else { return }

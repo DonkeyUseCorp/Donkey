@@ -1,6 +1,6 @@
 # Off-The-Shelf Run Loop
 
-> Active status: not complete. The current repo supports metadata-only local-navigation dry-run scaffolding, generic local-app task catalog parsing/adaptation, local-model command parsing, local voice-transcription model selection, target-app availability checks, and guarded live-action smoke, but not a live fast-navigation agent for a concrete command such as "show me the weather for SF".
+> Active status: not complete. The current repo supports metadata-only local-navigation dry-run scaffolding, generic local-app task catalog parsing/adaptation, local-model command parsing, pointer-prompt typed command submission, macOS app launch/focus, guarded macOS keyboard input, local voice-transcription model selection, target-app availability checks, Accessibility visible-text observation when trusted, built-in task definitions across weather/media/document domains, and guarded live-action smoke. It still needs real-session verification and richer control discovery before any benchmark should be treated as done.
 
 ## Goal
 
@@ -510,18 +510,18 @@ The runtime foundation now supports a product-shaped local-navigation slice of t
 - p50/p95/p99 latency reports across capture, preprocess, model, perception, state update, controller decision, action projection, and input stages
 - action-engine permission, focus, rate, hold-duration, release, and backend-execution guardrails
 - guarded live-action smoke through an injected backend only after dry-run latency evidence, explicit input policy allowance, and focus guard success
-- generic local-app task catalog, intent contracts, built-in benchmark definition, local-model command parsing, deterministic fallback parsing, dry-run workflow-step projection, guarded keyboard command templates, and visible-text verification
+- generic local-app task catalog, intent contracts, built-in benchmark definitions across Weather lookup, Music playback, and PDF/document form-fill, local-model command parsing, deterministic fallback parsing, pointer-prompt typed command submission, dry-run workflow-step projection, guarded keyboard command templates, macOS launch/focus, guarded macOS keyboard input, Accessibility visible-text observation when trusted, and visible-text verification
 - screenshot segmentation model-candidate metadata for Ultralytics YOLO26 nano segmentation (`yolo26n-seg.pt`)
 - optional slow-planner sidecar that publishes only validated hints without blocking reflex latency
 
-This is still not the full off-the-shelf vision stack and must not be treated as completion. It can replay and trace compact local vision evidence and name a current YOLO segmentation candidate, but it does not ship live local detector/local-model/OCR/segmentation adapters over captured pixels, continuous streaming capture, a default OS input backend, high-volume persisted replay traces, or target-specific visual calibration.
+This is still not the full off-the-shelf vision stack and must not be treated as completion. It can replay and trace compact local vision evidence, name a current YOLO segmentation candidate, and run a guarded keyboard-based local-app task path, but it does not ship live local detector/local-model/OCR/segmentation adapters over captured pixels, continuous streaming capture, Accessibility action execution, robust UI control discovery, high-volume persisted replay traces, or target-specific visual calibration.
 
 ## Required Before This Plan Is Done
 
-- Add measured guarded-live execution for the first local-app task benchmark command "show me the weather for SF".
+- Manually verify measured guarded-live execution for the first local-app task benchmark command "show me the weather for SF".
 - Prove fast local navigation from parsed intent, local app observation, deterministic controller state, and guarded live input, not remote planning.
-- Add a default narrow macOS app-control backend for launch/focus/type/select/verify with focus guard and emergency release.
-- Add result verification through Accessibility or local model UI-understanding fallback, with OCR only if a narrow benchmark justifies it.
+- Extend the narrow macOS app-control backend from keyboard-only workflows to Accessibility action/control discovery where available.
+- Add result verification through Accessibility plus local model UI-understanding fallback, with OCR only if a narrow benchmark justifies it.
 - Add measured YOLO26 screenshot/crop segmentation inference for visual fallback, including export/runtime choice, crop size, mask quality, and p95 latency.
 - Add continuous streaming capture once queue-depth, stale-result, and trace sinks are ready for longer sessions.
 - Add durable high-volume replay trace persistence and target-specific benchmark baselines.

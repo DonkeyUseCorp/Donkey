@@ -22,6 +22,35 @@ struct LocalAppTaskTests {
     }
 
     @Test
+    func deterministicParserBuildsMediaPlaybackIntentWithoutWeatherSpecificCode() throws {
+        let intent = try #require(parser().parse("play cold play"))
+
+        #expect(intent.taskType == "media_playback")
+        #expect(intent.targetApp.appName == "Music")
+        #expect(intent.targetApp.bundleIdentifier == "com.apple.Music")
+        #expect(intent.entities["query"] == "cold play")
+        #expect(intent.normalizedEntities["query"] == "Coldplay")
+        #expect(intent.metadata["catalogEntry"] == "built-in-media-playback")
+    }
+
+    @Test
+    func deterministicParserBuildsDocumentFormFillIntentAsReviewOnlyTask() throws {
+        let intent = try #require(parser().parse("fill out this PDF using this data"))
+
+        #expect(intent.taskType == "document_form_fill")
+        #expect(intent.targetApp.appName == "Preview")
+        #expect(intent.normalizedEntities["document"] == "current PDF")
+        #expect(intent.normalizedEntities["dataSource"] == "provided data")
+        #expect(intent.metadata["requiresDocumentContext"] == "true")
+
+        let plan = LocalAppTaskAdapter(definition: BuiltInLocalAppTaskDefinitions.documentFormFill)
+            .dryRunPlan(for: intent)
+        #expect(plan.canAttemptGuardedLive == false)
+        #expect(plan.metadata["guardedLiveDefault"] == "reviewOnly")
+        #expect(plan.steps.map(\.role).contains(.custom))
+    }
+
+    @Test
     func deterministicParserRequestsConfirmationForMissingRequiredEntity() throws {
         let intent = try #require(parser().parse("show me the weather"))
 
@@ -71,7 +100,8 @@ struct LocalAppTaskTests {
             .verifyResult
         ])
         #expect(plan.steps.last?.status == .blocked)
-        #expect(plan.metadata["defaultOSInputBackendAvailable"] == "false")
+        #expect(plan.metadata["defaultOSInputBackendAvailable"] == "true")
+        #expect(plan.metadata["defaultOSInputBackend"] == "mac-keyboard")
         #expect(plan.metadata["visualFallback"] == "localModel")
         #expect(plan.metadata["ocrFallbackDefault"] == "false")
 
@@ -112,7 +142,11 @@ struct LocalAppTaskTests {
     func catalogResolvesCommandAgainstAvailableInstalledAppDefinition() throws {
         let catalog = LocalAppTaskCatalog(
             taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
-            availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.weather"])
+            availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: [
+                "com.apple.weather",
+                "com.apple.Music",
+                "com.apple.Preview"
+            ])
         )
 
         let resolution = catalog.resolve(command: "show me the weather for SF")
@@ -127,6 +161,14 @@ struct LocalAppTaskTests {
         let intent = try #require(resolution.intent)
         let plan = catalog.adapter(for: definition).dryRunPlan(for: intent)
         #expect(plan.steps.map(\.role).contains(.verifyResult))
+
+        let mediaResolution = catalog.resolve(command: "play Coldplay")
+        #expect(mediaResolution.status == .resolved)
+        #expect(mediaResolution.definition?.taskType == "media_playback")
+
+        let documentResolution = catalog.resolve(command: "fill out this PDF using this data")
+        #expect(documentResolution.status == .resolved)
+        #expect(documentResolution.definition?.taskType == "document_form_fill")
     }
 
     @Test
@@ -145,8 +187,53 @@ struct LocalAppTaskTests {
         #expect(unavailableCatalog.resolve(command: "show me the weather for SF").status == .appUnavailable)
     }
 
+    @Test @MainActor
+    func liveRunnerLaunchesFocusesExecutesGuardedCommandsAndVerifies() async throws {
+        let backend = RecordingLocalAppTaskInputBackend()
+        let controller = FakeLocalAppTaskAppController(
+            launchObservation: LocalAppTaskObservation(
+                appIsRunning: true,
+                appIsFocused: true,
+                availableControls: ["search": true],
+                confidence: 0.5
+            ),
+            finalObservation: LocalAppTaskObservation(
+                appIsRunning: true,
+                appIsFocused: true,
+                availableControls: ["search": true],
+                visibleText: ["city": "San Francisco, CA"],
+                confidence: 0.92
+            )
+        )
+        let catalog = LocalAppTaskCatalog(
+            taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
+            availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.weather"])
+        )
+        let runner = LocalAppTaskLiveRunner(
+            catalog: catalog,
+            appController: controller,
+            actionEngineFactory: { _ in
+                ActionEngineGuardrail(
+                    configuration: ActionEngineConfiguration(liveInputEnabled: true),
+                    inputBackend: backend
+                )
+            },
+            permissionPolicy: ToolCallPolicy(deniedCapabilities: [])
+        )
+
+        let result = await runner.run(command: "show me the weather for SF", traceID: "trace-live-task")
+
+        #expect(result.status == .completed)
+        #expect(result.finalPlan?.terminalState == .completed)
+        #expect(result.actionTraces.count == 3)
+        #expect(result.actionTraces.allSatisfy { $0.executed })
+        #expect(await backend.executedKeys() == ["Command+F", "San Francisco", "Return"])
+        #expect(controller.launchCount == 1)
+        #expect(controller.observeCount == 1)
+    }
+
     private func parser() -> LocalAppTaskIntentParser {
-        LocalAppTaskIntentParser(taskDefinitions: [BuiltInLocalAppTaskDefinitions.weatherLookup])
+        LocalAppTaskIntentParser(taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults)
     }
 
     private func adapter() -> LocalAppTaskAdapter {
@@ -158,5 +245,51 @@ struct LocalAppTaskTests {
             wallClock: Date(timeIntervalSince1970: Double(milliseconds) / 1_000),
             monotonicUptimeNanoseconds: milliseconds * 1_000_000
         )
+    }
+}
+
+@MainActor
+private final class FakeLocalAppTaskAppController: LocalAppTaskAppControlling {
+    private let launchObservation: LocalAppTaskObservation
+    private let finalObservation: LocalAppTaskObservation
+    private(set) var launchCount = 0
+    private(set) var observeCount = 0
+
+    init(
+        launchObservation: LocalAppTaskObservation,
+        finalObservation: LocalAppTaskObservation
+    ) {
+        self.launchObservation = launchObservation
+        self.finalObservation = finalObservation
+    }
+
+    func launchOrFocus(
+        definition: LocalAppTaskDefinition,
+        availability: LocalAppAvailability
+    ) async -> LocalAppTaskObservation {
+        launchCount += 1
+        return launchObservation
+    }
+
+    func observe(definition: LocalAppTaskDefinition) async -> LocalAppTaskObservation {
+        observeCount += 1
+        return finalObservation
+    }
+}
+
+private actor RecordingLocalAppTaskInputBackend: ActionEngineInputBackend {
+    private var keys: [String] = []
+
+    func execute(_ command: ActionEngineCommand) async -> ActionEngineInputBackendResult {
+        keys.append(command.key ?? "")
+        return ActionEngineInputBackendResult(
+            executed: true,
+            completedAt: command.issuedAt,
+            metadata: ["liveInputBackend": "recording-local-app-task"]
+        )
+    }
+
+    func executedKeys() -> [String] {
+        keys
     }
 }
