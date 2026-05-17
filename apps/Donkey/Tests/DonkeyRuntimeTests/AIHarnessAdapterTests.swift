@@ -85,6 +85,49 @@ struct AIHarnessAdapterTests {
     }
 
     @Test
+    func voiceTranscriptionRouteSelectsLocalParakeetModel() throws {
+        let router = AIModelRouter(registry: .defaultHybridPlanner)
+
+        let selected = try router.route(
+            AIModelRouteRequest(
+                jobType: .voiceTranscription,
+                privacyMode: .privacySensitive,
+                requiredCapabilities: [.audioInput]
+            )
+        )
+
+        #expect(selected.id == "local-voice-transcription-parakeet-tdt-0.6b-v3")
+        #expect(selected.role == .voiceTranscription)
+        #expect(selected.provider == .localRuntime)
+        #expect(selected.modelID == "nvidia/parakeet-tdt-0.6b-v3")
+        #expect(selected.endpoint.absoluteString == "local://nvidia/parakeet-tdt-0.6b-v3")
+        #expect(selected.docsURL.absoluteString == "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3")
+        #expect(selected.capabilities == [.audioInput])
+        #expect(selected.rollbackID == "local-voice-transcription-whisper-large-v3-turbo")
+        #expect(selected.metadata["runtime"] == "nvidia-nemo")
+        #expect(selected.metadata["local"] == "true")
+        #expect(selected.metadata["fallbackModelID"] == "openai/whisper-large-v3-turbo")
+    }
+
+    @Test
+    func voiceTranscriptionRouteFallsBackToWhisperWhenParakeetFailed() throws {
+        let router = AIModelRouter(registry: .defaultHybridPlanner)
+
+        let selected = try router.route(
+            AIModelRouteRequest(
+                jobType: .voiceTranscription,
+                privacyMode: .privacySensitive,
+                failedModelEntryIDs: ["local-voice-transcription-parakeet-tdt-0.6b-v3"],
+                requiredCapabilities: [.audioInput]
+            )
+        )
+
+        #expect(selected.id == "local-voice-transcription-whisper-large-v3-turbo")
+        #expect(selected.provider == .localRuntime)
+        #expect(selected.modelID == "openai/whisper-large-v3-turbo")
+    }
+
+    @Test
     func ollamaTaskIntentAdapterBuildsLocalRequestAndDecodesValidatedIntent() async throws {
         let httpClient = FakeAIHTTPClient(
             data: ollamaResponseData(
@@ -381,10 +424,19 @@ struct AIHarnessAdapterTests {
             timeoutMS: timeoutMS,
             promptVersion: promptVersion,
             evalStatus: evalStatus,
-            docsURL: provider == .openAI
-                ? URL(string: "https://platform.openai.com/docs/api-reference/responses/create")!
-                : URL(string: "https://docs.ollama.com/api")!
+            docsURL: docsURL(for: provider)
         )
+    }
+
+    private func docsURL(for provider: AIModelProvider) -> URL {
+        switch provider {
+        case .openAI:
+            return URL(string: "https://platform.openai.com/docs/api-reference/responses/create")!
+        case .ollama:
+            return URL(string: "https://docs.ollama.com/api")!
+        case .localRuntime:
+            return URL(string: "local://test-model")!
+        }
     }
 
     private func responseData(outputText: String) -> Data {

@@ -1,6 +1,6 @@
 # AI Harness
 
-> Active status: not complete. The current repo now has OpenAI and Ollama-compatible planner adapters, model routing, memory scaffolding, and a provider-backed slow-planner generator, but semantic retrieval, redaction, aggregate model observability, and provider-decoded memory write proposals still remain.
+> Active status: not complete. The current repo now has OpenAI and Ollama-compatible planner adapters, model routing, local task-intent parsing, local voice-transcription model selection, memory scaffolding, and a provider-backed slow-planner generator, but live transcription, semantic retrieval, redaction, aggregate model observability, and provider-decoded memory write proposals still remain.
 
 ## Goal
 
@@ -28,6 +28,7 @@ If the harness is slow, offline, rate-limited, or wrong, the controller continue
 
 - connect to model providers
 - choose the right model for each slow-path job
+- route local voice transcription before command parsing
 - parse ambiguous natural commands into validated task intents when deterministic parsing is insufficient
 - build compact model inputs from world state, traces, screenshots, DOM summaries, and user goals
 - retrieve useful memory before a planner call
@@ -258,6 +259,7 @@ generate_text(request)
 generate_structured(request, schema)
 analyze_image(request, schema)
 embed_text(request)
+transcribe_audio(request)
 stream_events(request)
 cancel(request_id)
 ```
@@ -341,6 +343,14 @@ Local reasoning models are candidates for the AI harness, not the reflex policy.
 
 These models can support objectives, coaching, memory, strategy adaptation, and trace review. They should never emit direct input. Their outputs must still become validated planner hints.
 
+## Local Voice Transcription Candidate
+
+Voice input should become plain transcript text before it enters command parsing. Treat transcription as a local runtime job, not as an Ollama chat task and not as direct action authority.
+
+The current default candidate is NVIDIA Parakeet TDT 0.6B v3 through a local NeMo-style runtime. It is selected because the official model card describes a current 600M-parameter ASR model with automatic language detection across 25 languages, punctuation/capitalization, word and segment timestamps, 16kHz mono `.wav`/`.flac` input, and a permissive CC BY 4.0 license. Whisper large-v3-turbo remains the local rollback candidate because it is widely supported in Transformers and local speech stacks.
+
+The next implementation slice should add an adapter that accepts bounded local microphone buffers, normalizes the audio format, invokes the selected local runtime model, emits transcript text plus timing/confidence metadata, and then passes the transcript to the same validated `TaskIntent` path used by typed commands.
+
 ## Model Roles
 
 Do not hardcode one model everywhere. Assign models by role.
@@ -348,6 +358,7 @@ Do not hardcode one model everywhere. Assign models by role.
 | Role | Default Candidate | Use |
 | --- | --- | --- |
 | `intent_local` | small local structured-output model, with deterministic parser as fallback/validator | common command-to-intent parsing before local app execution |
+| `voice_transcription_local` | `nvidia/parakeet-tdt-0.6b-v3`, rollback `openai/whisper-large-v3-turbo` | local speech-to-text before command parsing; never direct input |
 | `planner_default` | `gpt-5.4-mini` | routine slow planning, recovery hints, target reasoning |
 | `planner_strong` | `gpt-5.5` | hard recovery, unfamiliar screens, complex strategy, plan generation |
 | `planner_deep_eval` | `gpt-5.5-pro` | offline trace critique or high-value evaluation only |
@@ -368,6 +379,9 @@ Route by job type, risk, latency tolerance, and failure history.
 ```text
 if job is common app command parsing:
   prefer intent_local with a strict timeout and validate output against app-task definitions
+
+if job is voice transcription:
+  prefer voice_transcription_local through a local runtime and route the transcript through normal intent validation
 
 if intent_local is unavailable or invalid:
   use deterministic parser only as fallback for known commands

@@ -216,6 +216,11 @@ public struct ProviderBackedSlowPlannerHintGenerator: SlowPlannerHintGenerating 
         for provider in providerOrder {
             let result: PlannerHintAdapterResult
             switch provider {
+            case .localRuntime:
+                metadata["\(provider.rawValue).status"] = "unsupportedForPlanner"
+                metadata["\(provider.rawValue).validationStatus"] = "notAttempted"
+                metadata["lastProvider"] = provider.rawValue
+                continue
             case .ollama:
                 result = await localAdapter.generatePlannerHint(request)
             case .openAI:

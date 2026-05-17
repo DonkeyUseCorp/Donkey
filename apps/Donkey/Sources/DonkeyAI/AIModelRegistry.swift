@@ -4,10 +4,12 @@ import Foundation
 public enum AIModelProvider: String, Codable, Equatable, Sendable {
     case openAI
     case ollama
+    case localRuntime
 }
 
 public enum AIModelRole: String, Codable, Equatable, Sendable {
     case taskIntent
+    case voiceTranscription
     case plannerHint
     case traceSummary
     case recovery
@@ -15,6 +17,7 @@ public enum AIModelRole: String, Codable, Equatable, Sendable {
 
 public enum AIModelCapability: String, Codable, Equatable, Hashable, Sendable {
     case textInput
+    case audioInput
     case structuredOutputs
     case imageInput
 }
@@ -118,6 +121,53 @@ public struct AIModelRegistry: Codable, Equatable, Sendable {
                 ]
             ),
             AIModelRegistryEntry(
+                id: "local-voice-transcription-parakeet-tdt-0.6b-v3",
+                role: .voiceTranscription,
+                provider: .localRuntime,
+                modelID: "nvidia/parakeet-tdt-0.6b-v3",
+                endpoint: URL(string: "local://nvidia/parakeet-tdt-0.6b-v3")!,
+                capabilities: [.audioInput],
+                timeoutMS: 2_000,
+                promptVersion: "voice-transcription-v1",
+                evalStatus: .candidate,
+                docsURL: URL(string: "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3")!,
+                rollbackID: "local-voice-transcription-whisper-large-v3-turbo",
+                metadata: [
+                    "local": "true",
+                    "runtime": "nvidia-nemo",
+                    "language": "25 languages with automatic detection",
+                    "inputFormat": "16kHz mono wav or flac",
+                    "parameters": "600M",
+                    "features": "punctuation,capitalization,wordTimestamps,segmentTimestamps",
+                    "license": "CC-BY-4.0",
+                    "selectedReason": "current Parakeet TDT 0.6B default for local ASR with punctuation, timestamps, and multilingual support",
+                    "lastVerifiedAt": "2026-05-17",
+                    "docsSource": "official NVIDIA Hugging Face model card",
+                    "fallbackModelID": "openai/whisper-large-v3-turbo"
+                ]
+            ),
+            AIModelRegistryEntry(
+                id: "local-voice-transcription-whisper-large-v3-turbo",
+                role: .voiceTranscription,
+                provider: .localRuntime,
+                modelID: "openai/whisper-large-v3-turbo",
+                endpoint: URL(string: "local://openai/whisper-large-v3-turbo")!,
+                capabilities: [.audioInput],
+                timeoutMS: 4_000,
+                promptVersion: "voice-transcription-v1",
+                evalStatus: .candidate,
+                docsURL: URL(string: "https://huggingface.co/openai/whisper-large-v3-turbo")!,
+                rollbackID: nil,
+                metadata: [
+                    "local": "true",
+                    "runtime": "transformers-or-whispercpp",
+                    "language": "multilingual",
+                    "selectedReason": "fallback local ASR when Parakeet runtime is unavailable or non-supported language quality wins",
+                    "lastVerifiedAt": "2026-05-17",
+                    "docsSource": "official OpenAI Hugging Face model card"
+                ]
+            ),
+            AIModelRegistryEntry(
                 id: "ollama-planner-hint-local",
                 role: .plannerHint,
                 provider: .ollama,
@@ -157,6 +207,7 @@ public struct AIModelRegistry: Codable, Equatable, Sendable {
 
 public enum AIModelJobType: String, Codable, Equatable, Sendable {
     case taskIntent
+    case voiceTranscription
     case plannerHint
     case traceSummary
     case recovery
@@ -257,6 +308,8 @@ public struct AIModelRouter: Sendable {
         switch jobType {
         case .taskIntent:
             return .taskIntent
+        case .voiceTranscription:
+            return .voiceTranscription
         case .plannerHint:
             return .plannerHint
         case .traceSummary:
@@ -283,6 +336,8 @@ public struct AIModelRouter: Sendable {
         if request.latencyTolerance == .interactive { value -= entry.timeoutMS / 1_000 }
         if request.privacyMode == .privacySensitive {
             switch entry.provider {
+            case .localRuntime:
+                value += 4
             case .ollama:
                 value += 4
             case .openAI:

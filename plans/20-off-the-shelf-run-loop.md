@@ -1,6 +1,6 @@
 # Off-The-Shelf Run Loop
 
-> Active status: not complete. The current repo supports metadata-only local-navigation dry-run scaffolding, generic local-app task catalog parsing/adaptation, local-model command parsing, target-app availability checks, and guarded live-action smoke, but not a live fast-navigation agent for a concrete command such as "show me the weather for SF".
+> Active status: not complete. The current repo supports metadata-only local-navigation dry-run scaffolding, generic local-app task catalog parsing/adaptation, local-model command parsing, local voice-transcription model selection, target-app availability checks, and guarded live-action smoke, but not a live fast-navigation agent for a concrete command such as "show me the weather for SF".
 
 ## Goal
 
@@ -28,7 +28,7 @@ Reasoning LLM
   <-> Ambiguous Intent / UI Understanding / Memory / Recovery
 ```
 
-The hot path is local and bounded. A small model can help interpret unusual phrasing, but app navigation and action timing come from deterministic logic over structured state.
+The hot path is local and bounded. A small model can help interpret unusual phrasing, but app navigation and action timing come from deterministic logic over structured state. Voice commands should enter this same path as transcript text. The selected local ASR model belongs in the model registry; the run loop should only consume validated transcript text and should never let an audio model emit actions directly.
 
 ## Core Rule
 
@@ -37,6 +37,7 @@ Do not build a custom model pipeline for the first version.
 The first version should prove:
 
 - local-model command-to-intent parsing is reliable for common tasks and validated against known app-task definitions
+- local voice transcription, when wired, produces transcript text before the same command-to-intent validation path
 - macOS app launch/focus is reliable
 - Accessibility/window metadata can extract useful app state
 - local visual fallback is available only when Accessibility and metadata are insufficient
@@ -52,6 +53,7 @@ The first version should prove:
 Use existing, swappable components:
 
 - local-model command parser for common local commands using app-task definitions
+- local voice transcription adapter for microphone commands before command parsing
 - deterministic parser only as fallback, validator, and test scaffold
 - installed-app and task-knowledge lookup for target app identity, workflows, controls, and verification rules
 - small local model or planner hint only for ambiguous command parsing

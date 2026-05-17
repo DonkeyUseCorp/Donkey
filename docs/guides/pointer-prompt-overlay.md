@@ -19,7 +19,7 @@ Donkey supports a floating macOS pointer prompt overlay:
 - keeps that fixed offset at screen edges instead of flipping or clamping to the visible screen bounds
 - keeps runtime and AI harness behavior behind explicit integration boundaries
 
-This is a visual and microphone-level UI capability. It does not capture the screen, send input, call models, or require Accessibility permission. It does request microphone permission so the waveform can reflect live local audio levels.
+This is a visual and microphone-level UI capability. It does not capture the screen, send input, call models, transcribe speech, or require Accessibility permission. It does request microphone permission so the waveform can reflect live local audio levels. The AI harness now has a local voice-transcription model route, but the overlay has not yet wired microphone buffers into a speech-to-text adapter.
 
 ## Technical Guidelines
 
@@ -43,6 +43,7 @@ This is a visual and microphone-level UI capability. It does not capture the scr
 - Double-Command prompt activation should require two clean Command down/up taps within 450ms. Any intervening key press, mouse press, extra modifier, or overlong Command hold should reset the sequence so normal shortcuts do not summon the modal.
 - Holding the second clean Command press for the shortcut's configured hold duration should activate the prompt modal and start microphone level capture instead of waiting for the second release.
 - Keep the overlay non-invasive: no screen capture loop, input execution, Accessibility prompt, or LLM call in this feature.
+- Keep voice capture separate from transcription. The overlay may publish bounded local audio buffers to a future transcription adapter, but model execution and command parsing should remain outside the SwiftUI view/controller rendering path.
 
 ## Verification
 
