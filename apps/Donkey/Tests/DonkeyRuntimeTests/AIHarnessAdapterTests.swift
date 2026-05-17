@@ -103,28 +103,27 @@ struct AIHarnessAdapterTests {
         #expect(selected.endpoint.absoluteString == "local://nvidia/parakeet-tdt-0.6b-v3")
         #expect(selected.docsURL.absoluteString == "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3")
         #expect(selected.capabilities == [.audioInput])
-        #expect(selected.rollbackID == "local-voice-transcription-whisper-large-v3-turbo")
+        #expect(selected.rollbackID == nil)
         #expect(selected.metadata["runtime"] == "nvidia-nemo")
         #expect(selected.metadata["local"] == "true")
-        #expect(selected.metadata["fallbackModelID"] == "openai/whisper-large-v3-turbo")
+        #expect(selected.metadata["fallbackPolicy"] == "none")
+        #expect(selected.metadata["fallbackModelID"] == nil)
     }
 
     @Test
-    func voiceTranscriptionRouteFallsBackToWhisperWhenParakeetFailed() throws {
+    func voiceTranscriptionRouteHasNoWhisperFallbackWhenParakeetFailed() throws {
         let router = AIModelRouter(registry: .defaultHybridPlanner)
 
-        let selected = try router.route(
-            AIModelRouteRequest(
-                jobType: .voiceTranscription,
-                privacyMode: .privacySensitive,
-                failedModelEntryIDs: ["local-voice-transcription-parakeet-tdt-0.6b-v3"],
-                requiredCapabilities: [.audioInput]
+        #expect(throws: AIModelRouteError.noMatchingModel) {
+            _ = try router.route(
+                AIModelRouteRequest(
+                    jobType: .voiceTranscription,
+                    privacyMode: .privacySensitive,
+                    failedModelEntryIDs: ["local-voice-transcription-parakeet-tdt-0.6b-v3"],
+                    requiredCapabilities: [.audioInput]
+                )
             )
-        )
-
-        #expect(selected.id == "local-voice-transcription-whisper-large-v3-turbo")
-        #expect(selected.provider == .localRuntime)
-        #expect(selected.modelID == "openai/whisper-large-v3-turbo")
+        }
     }
 
     @Test
@@ -158,6 +157,91 @@ struct AIHarnessAdapterTests {
         #expect(result.trace.validationStatus == "transcriptDecoded")
         #expect(result.trace.metadata["transcriptFeedsCommandParser"] == "true")
         #expect(result.trace.metadata["localOnly"] == "true")
+    }
+
+    @Test
+    func processBackedParakeetRuntimeDecodesSidecarTranscript() async throws {
+        let runtime = ProcessBackedParakeetTranscriptionRuntime(
+            sidecarRunner: FakeSidecarRunner(
+                result: LocalJSONSidecarResult(
+                    status: .completed,
+                    outputData: Data("""
+                    {"text":"play Coldplay","language":"en","confidence":0.94,"segments":["play Coldplay"],"metadata":{"decoder":"fake-parakeet"}}
+                    """.utf8),
+                    metadata: ["sidecar.reason": "completed"]
+                )
+            )
+        )
+        let transcript = try await runtime.transcribe(
+            audio: LocalVoiceAudioBuffer(
+                id: "audio-sidecar",
+                durationMS: 800,
+                data: Data([1, 2, 3])
+            ),
+            model: try AIModelRouter(registry: .defaultHybridPlanner).route(
+                AIModelRouteRequest(
+                    jobType: .voiceTranscription,
+                    requiredCapabilities: [.audioInput],
+                    allowedProviders: [.localRuntime]
+                )
+            )
+        )
+
+        #expect(transcript.text == "play Coldplay")
+        #expect(transcript.language == "en")
+        #expect(transcript.metadata["decoder"] == "fake-parakeet")
+    }
+
+    @Test
+    func processBackedParakeetRuntimeFailsClearlyWhenUnavailable() async throws {
+        let runtime = ProcessBackedParakeetTranscriptionRuntime(
+            sidecarRunner: FakeSidecarRunner(
+                result: LocalJSONSidecarResult(
+                    status: .unavailable,
+                    metadata: ["sidecar.reason": "missingEnvironmentVariable"]
+                )
+            )
+        )
+
+        await #expect(throws: LocalVoiceTranscriptionRuntimeError.runtimeUnavailable("missingEnvironmentVariable")) {
+            _ = try await runtime.transcribe(
+                audio: LocalVoiceAudioBuffer(id: "audio-missing", durationMS: 10, data: Data()),
+                model: try AIModelRouter(registry: .defaultHybridPlanner).route(
+                    AIModelRouteRequest(
+                        jobType: .voiceTranscription,
+                        requiredCapabilities: [.audioInput],
+                        allowedProviders: [.localRuntime]
+                    )
+                )
+            )
+        }
+    }
+
+    @Test
+    func localJSONSidecarRunnerReportsMissingEnvAndNonzeroExit() async {
+        let missing = await ProcessBackedLocalJSONSidecarRunner(environment: [:]).run(
+            LocalJSONSidecarRequest(
+                environmentVariableName: "DONKEY_PARAKEET_TRANSCRIBER",
+                inputData: Data("{}".utf8),
+                timeoutMS: 100
+            )
+        )
+        #expect(missing.status == .unavailable)
+        #expect(missing.metadata["sidecar.reason"] == "missingEnvironmentVariable")
+
+        let failed = await ProcessBackedLocalJSONSidecarRunner(
+            environment: ["DONKEY_TEST_SIDECAR": "/bin/false"]
+        )
+        .run(
+            LocalJSONSidecarRequest(
+                environmentVariableName: "DONKEY_TEST_SIDECAR",
+                inputData: Data("{}".utf8),
+                timeoutMS: 100
+            )
+        )
+        #expect(failed.status == .failed)
+        #expect(failed.exitCode != 0)
+        #expect(failed.metadata["sidecar.reason"] == "nonZeroExit")
     }
 
     @Test
@@ -416,6 +500,75 @@ struct AIHarnessAdapterTests {
         #expect(result.metadata["selectedModelID"] == "gpt-5.2")
     }
 
+    @Test
+    func semanticMemoryRetrievalUsesBudgetsAndTargetScope() async {
+        let records = [
+            memoryRecord(id: "weather", value: "Weather app search field accepts city names.", targetID: "weather-app"),
+            memoryRecord(id: "music", value: "Music app can play Coldplay from the search field.", targetID: "music-app")
+        ]
+        let retriever = SemanticRunMemoryRetriever()
+
+        let results = await retriever.retrieve(
+            query: RunMemorySemanticQuery(
+                text: "play music",
+                targetID: "music-app",
+                budget: RunMemoryRetrievalBudget(maxRecords: 1, maxPromptCharacters: 80, minRelevance: 0.1)
+            ),
+            records: records
+        )
+
+        #expect(results.map(\.record.id) == ["music"])
+        #expect(results.first?.embeddingModelID == "local-semantic-memory-embedding-contract-v1")
+    }
+
+    @Test
+    func redactorCoversRemoteBoundModelContext() {
+        let result = AIHarnessRedactor().redact(
+            "email david@example.com password: hunter2",
+            surface: .modelContext
+        )
+
+        #expect(result.redactedText.contains("[redacted-email]"))
+        #expect(result.redactedText.contains("[redacted-secret]"))
+        #expect(result.redactionCount == 2)
+    }
+
+    @Test
+    func modelObservabilityAggregatesLatencyValidityCostAndRecovery() {
+        let report = AIModelObservabilityReportBuilder.build(from: [
+            modelTrace(id: "call-1", status: .completed, validationStatus: "schemaDecoded", latencyMS: 20, metadata: ["cost.estimatedUSD": "0.01"]),
+            modelTrace(id: "call-2", status: .invalidOutput, validationStatus: "invalid", latencyMS: 40, metadata: ["recovery.success": "true"])
+        ])
+
+        #expect(report.callCount == 2)
+        #expect(report.statusCounts["completed"] == 1)
+        #expect(report.validationStatusCounts["invalid"] == 1)
+        #expect(report.acceptedCount == 1)
+        #expect(report.recoverySuccessCount == 1)
+        #expect(report.totalEstimatedCostUSD == 0.01)
+        #expect(report.latencyMS.p95 == 20)
+    }
+
+    @Test
+    func providerDecodedMemoryProposalsUseDeterministicApprover() throws {
+        let proposal = RunMemoryWriteProposal(
+            id: "proposal-1",
+            proposedBy: .model,
+            record: memoryRecord(id: "record-1", value: "Music app search works for artist names.", targetID: "music-app"),
+            rationale: "provider decoded"
+        )
+        let data = try JSONEncoder().encode([proposal])
+
+        let decisions = try ProviderDecodedMemoryProposalHandler.decisions(
+            from: data,
+            decidedAt: timestamp(20)
+        )
+
+        #expect(decisions.first?.approval.approved == true)
+        #expect(decisions.first?.storedRecord?.id == "record-1")
+        #expect(decisions.first?.approval.approver == "deterministic-memory-approver-v1")
+    }
+
     private func adapterRequest() -> PlannerHintAdapterRequest {
         PlannerHintAdapterRequest(
             context: RunContextPackage(
@@ -546,6 +699,47 @@ struct AIHarnessAdapterTests {
             clock.next()
         }
     }
+
+    private func memoryRecord(
+        id: String,
+        value: String,
+        targetID: String
+    ) -> RunMemoryRecord {
+        RunMemoryRecord(
+            id: id,
+            scope: .target,
+            kind: .targetFact,
+            targetID: targetID,
+            value: value,
+            createdAt: timestamp(10),
+            expiresAt: timestamp(1_000),
+            durable: false,
+            source: RunMemorySource(traceID: "trace-\(id)", summary: "test source")
+        )
+    }
+
+    private func modelTrace(
+        id: String,
+        status: AIModelCallStatus,
+        validationStatus: String,
+        latencyMS: Double,
+        metadata: [String: String] = [:]
+    ) -> AIModelCallTrace {
+        AIModelCallTrace(
+            id: id,
+            role: .plannerHint,
+            provider: .openAI,
+            modelID: "gpt-5.2",
+            promptVersion: "planner-hint-v1",
+            schemaID: "planner-hint-v1",
+            latencyMS: latencyMS,
+            timeoutMS: 8_000,
+            status: status,
+            validationStatus: validationStatus,
+            sourceTraceID: "trace-\(id)",
+            metadata: metadata
+        )
+    }
 }
 
 private final class FixedTraceClock: @unchecked Sendable {
@@ -574,6 +768,14 @@ private struct FakeVoiceRuntime: LocalVoiceTranscriptionRuntime {
         model: AIModelRegistryEntry
     ) async throws -> LocalVoiceTranscript {
         transcript
+    }
+}
+
+private struct FakeSidecarRunner: LocalJSONSidecarRunning {
+    var result: LocalJSONSidecarResult
+
+    func run(_ request: LocalJSONSidecarRequest) async -> LocalJSONSidecarResult {
+        result
     }
 }
 

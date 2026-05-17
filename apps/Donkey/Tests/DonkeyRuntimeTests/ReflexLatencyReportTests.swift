@@ -45,7 +45,24 @@ struct ReflexLatencyReportTests {
     @Test
     func reportFormatterPrintsCliFriendlyLines() {
         let report = ReflexLatencyReportBuilder.build(
-            from: [trace(index: 1, softwareLoopMS: 10, fallbackReason: nil)],
+            from: [
+                trace(
+                    index: 1,
+                    softwareLoopMS: 10,
+                    fallbackReason: nil,
+                    metadata: [
+                        "latency.commandParseMS": "4",
+                        "latency.launchFocusMS": "11",
+                        "latency.observationMS": "7",
+                        "latency.accessibilityActionMS": "5",
+                        "latency.keyboardActionMS": "6",
+                        "latency.verificationMS": "9",
+                        "latency.yoloSegmentationMS": "21",
+                        "latency.uiUnderstandingMS": "16",
+                        "latency.parakeetTranscriptionMS": "31"
+                    ]
+                )
+            ],
             mode: .captureOnly,
             droppedFrameCount: 1
         )
@@ -57,6 +74,9 @@ struct ReflexLatencyReportTests {
         #expect(lines.contains("traceCount=1"))
         #expect(lines.contains("droppedFrameCount=1"))
         #expect(lines.contains("softwareLoopMS=p50=10.00,p95=10.00,p99=10.00"))
+        #expect(lines.contains("componentLatency.commandParseMS=p50=4.00,p95=4.00,p99=4.00"))
+        #expect(lines.contains("componentLatency.yoloSegmentationMS=p50=21.00,p95=21.00,p99=21.00"))
+        #expect(lines.contains("componentLatency.parakeetTranscriptionMS=p50=31.00,p95=31.00,p99=31.00"))
     }
 
     @Test
@@ -98,10 +118,11 @@ struct ReflexLatencyReportTests {
     private func trace(
         index: Int,
         softwareLoopMS: UInt64,
-        fallbackReason: String?
+        fallbackReason: String?,
+        metadata extraMetadata: [String: String] = [:]
     ) -> ReflexTraceRecord {
         let baseMS = UInt64(index * 10)
-        var metadata: [String: String] = [:]
+        var metadata = extraMetadata
         if let fallbackReason {
             metadata["action.fallback"] = "true"
             metadata["fallbackReason"] = fallbackReason

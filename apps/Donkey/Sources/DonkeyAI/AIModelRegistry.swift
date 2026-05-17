@@ -131,7 +131,7 @@ public struct AIModelRegistry: Codable, Equatable, Sendable {
                 promptVersion: "voice-transcription-v1",
                 evalStatus: .candidate,
                 docsURL: URL(string: "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3")!,
-                rollbackID: "local-voice-transcription-whisper-large-v3-turbo",
+                rollbackID: nil,
                 metadata: [
                     "local": "true",
                     "runtime": "nvidia-nemo",
@@ -143,28 +143,7 @@ public struct AIModelRegistry: Codable, Equatable, Sendable {
                     "selectedReason": "current Parakeet TDT 0.6B default for local ASR with punctuation, timestamps, and multilingual support",
                     "lastVerifiedAt": "2026-05-17",
                     "docsSource": "official NVIDIA Hugging Face model card",
-                    "fallbackModelID": "openai/whisper-large-v3-turbo"
-                ]
-            ),
-            AIModelRegistryEntry(
-                id: "local-voice-transcription-whisper-large-v3-turbo",
-                role: .voiceTranscription,
-                provider: .localRuntime,
-                modelID: "openai/whisper-large-v3-turbo",
-                endpoint: URL(string: "local://openai/whisper-large-v3-turbo")!,
-                capabilities: [.audioInput],
-                timeoutMS: 4_000,
-                promptVersion: "voice-transcription-v1",
-                evalStatus: .candidate,
-                docsURL: URL(string: "https://huggingface.co/openai/whisper-large-v3-turbo")!,
-                rollbackID: nil,
-                metadata: [
-                    "local": "true",
-                    "runtime": "transformers-or-whispercpp",
-                    "language": "multilingual",
-                    "selectedReason": "fallback local ASR when Parakeet runtime is unavailable or non-supported language quality wins",
-                    "lastVerifiedAt": "2026-05-17",
-                    "docsSource": "official OpenAI Hugging Face model card"
+                    "fallbackPolicy": "none"
                 ]
             ),
             AIModelRegistryEntry(

@@ -59,6 +59,49 @@ struct ManualCaptureDebugCommandTests {
     }
 
     @Test
+    func localRuntimeInstallCommandsParseStatusInstructionsAndInstall() throws {
+        #expect(try ManualCaptureDebugCommandParser.parse(
+            arguments: ["Donkey", "--local-runtime-status"]
+        ) == .localRuntimeStatus)
+        #expect(try ManualCaptureDebugCommandParser.parse(
+            arguments: ["Donkey", "--local-runtime-instructions"]
+        ) == .localRuntimeInstructions)
+
+        let command = try ManualCaptureDebugCommandParser.parse(
+            arguments: [
+                "Donkey",
+                "--install-local-runtime",
+                "--runtime-id",
+                "yolo-segmenter",
+                "--runtime-source",
+                "/tmp/yolo-runtime"
+            ]
+        )
+
+        #expect(command == .installLocalRuntime(
+            LocalRuntimeInstallDebugOptions(
+                runtimeID: .yoloSegmenter,
+                sourceDirectory: URL(fileURLWithPath: "/tmp/yolo-runtime")
+            )
+        ))
+    }
+
+    @Test
+    func invalidLocalRuntimeIDReturnsCommandError() throws {
+        #expect(throws: ManualCaptureDebugCommandParseError.invalidRuntimeID("weather")) {
+            _ = try ManualCaptureDebugCommandParser.parse(
+                arguments: [
+                    "--install-local-runtime",
+                    "--runtime-id",
+                    "weather",
+                    "--runtime-source",
+                    "/tmp/runtime"
+                ]
+            )
+        }
+    }
+
+    @Test
     func missingWindowIDValueReturnsCommandError() throws {
         #expect(throws: ManualCaptureDebugCommandParseError.missingValue("--window-id")) {
             _ = try ManualCaptureDebugCommandParser.parse(
@@ -122,6 +165,23 @@ struct ManualCaptureDebugCommandTests {
             "window 1 | windowID=11 | app=Terminal | title=Shell | safety=allowed | iPhoneMirroring=false",
             "window 2 | windowID=22 | app=Safari | title=Docs | safety=allowed | iPhoneMirroring=false"
         ])
+    }
+
+    @Test
+    func runtimeSetupFormattersPrintInstructionsAndStatus() throws {
+        let manager = try LocalModelRuntimeSetupManager(baseDirectory: temporaryDirectory())
+        let instructionLines = ManualCaptureDebugCommandFormatter.lines(
+            for: manager.instructions()
+        )
+        let statusLines = ManualCaptureDebugCommandFormatter.lines(
+            for: try manager.statuses()
+        )
+
+        #expect(instructionLines.contains("local runtime setup instructions"))
+        #expect(instructionLines.contains("runtime=parakeet-transcriber"))
+        #expect(instructionLines.contains("expectedExecutable=bin/donkey-parakeet-transcriber"))
+        #expect(statusLines.contains("local runtime status"))
+        #expect(statusLines.contains("runtime=yolo-segmenter | state=notInstalled | env=DONKEY_YOLO_SEGMENTER | executable=- | reason=noRegisteredRuntime"))
     }
 
     @Test

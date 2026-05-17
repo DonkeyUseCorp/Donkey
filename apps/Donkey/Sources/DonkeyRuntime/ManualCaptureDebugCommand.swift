@@ -5,6 +5,9 @@ public enum ManualCaptureDebugCommand: Equatable, Sendable {
     case listWindowCandidates
     case manualCapture(ManualCaptureDebugCaptureOptions)
     case dryRunLatencyReport(DryRunLatencyReportDebugOptions)
+    case localRuntimeStatus
+    case localRuntimeInstructions
+    case installLocalRuntime(LocalRuntimeInstallDebugOptions)
 }
 
 public struct ManualCaptureDebugCaptureOptions: Equatable, Sendable {
@@ -36,6 +39,16 @@ public struct DryRunLatencyReportDebugOptions: Equatable, Sendable {
     }
 }
 
+public struct LocalRuntimeInstallDebugOptions: Equatable, Sendable {
+    public var runtimeID: LocalModelRuntimeID
+    public var sourceDirectory: URL
+
+    public init(runtimeID: LocalModelRuntimeID, sourceDirectory: URL) {
+        self.runtimeID = runtimeID
+        self.sourceDirectory = sourceDirectory
+    }
+}
+
 public enum ManualCaptureDebugCommandParseError: Error, Equatable, Sendable, CustomStringConvertible {
     case conflictingCommands
     case missingCommand
@@ -43,6 +56,7 @@ public enum ManualCaptureDebugCommandParseError: Error, Equatable, Sendable, Cus
     case invalidWindowID(String)
     case invalidFrameCount(String)
     case invalidBenchmarkMode(String)
+    case invalidRuntimeID(String)
     case invalidIdentifier(option: String, value: String)
     case unsupportedOption(String)
 
@@ -60,6 +74,8 @@ public enum ManualCaptureDebugCommandParseError: Error, Equatable, Sendable, Cus
             return "Invalid --frame-count value: \(value)."
         case .invalidBenchmarkMode(let value):
             return "Invalid --benchmark-mode value: \(value)."
+        case .invalidRuntimeID(let value):
+            return "Invalid --runtime-id value: \(value)."
         case .invalidIdentifier(let option, let value):
             return "Invalid \(option) value: \(value). Use letters, numbers, '.', '_', or '-'."
         case .unsupportedOption(let option):
@@ -74,11 +90,16 @@ public enum ManualCaptureDebugCommandParser {
             argument == "--list-window-candidates"
                 || argument == "--manual-capture"
                 || argument == "--dry-run-latency-report"
+                || argument == "--local-runtime-status"
+                || argument == "--local-runtime-instructions"
+                || argument == "--install-local-runtime"
                 || argument == "--window-id"
                 || argument == "--run-id"
                 || argument == "--trace-id"
                 || argument == "--frame-count"
                 || argument == "--benchmark-mode"
+                || argument == "--runtime-id"
+                || argument == "--runtime-source"
         }
     }
 
@@ -96,6 +117,8 @@ public enum ManualCaptureDebugCommandParser {
         var traceID: String?
         var frameCount = 30
         var benchmarkMode = ReflexReplayBenchmarkMode.endToEndDryRun
+        var runtimeID: LocalModelRuntimeID?
+        var runtimeSource: URL?
         var index = 0
 
         while index < arguments.count {
@@ -109,6 +132,15 @@ public enum ManualCaptureDebugCommandParser {
                 index += 1
             case "--dry-run-latency-report":
                 try setMode(.dryRunLatencyReport, current: &mode)
+                index += 1
+            case "--local-runtime-status":
+                try setMode(.localRuntimeStatus, current: &mode)
+                index += 1
+            case "--local-runtime-instructions":
+                try setMode(.localRuntimeInstructions, current: &mode)
+                index += 1
+            case "--install-local-runtime":
+                try setMode(.installLocalRuntime, current: &mode)
                 index += 1
             case "--window-id":
                 let value = try value(after: argument, in: arguments, at: index)
@@ -140,6 +172,17 @@ public enum ManualCaptureDebugCommandParser {
                     throw ManualCaptureDebugCommandParseError.invalidBenchmarkMode(value)
                 }
                 benchmarkMode = parsed
+                index += 2
+            case "--runtime-id":
+                let value = try value(after: argument, in: arguments, at: index)
+                guard let parsed = LocalModelRuntimeID(rawValue: value) else {
+                    throw ManualCaptureDebugCommandParseError.invalidRuntimeID(value)
+                }
+                runtimeID = parsed
+                index += 2
+            case "--runtime-source":
+                let value = try value(after: argument, in: arguments, at: index)
+                runtimeSource = URL(fileURLWithPath: value)
                 index += 2
             default:
                 throw ManualCaptureDebugCommandParseError.unsupportedOption(argument)
@@ -181,6 +224,44 @@ public enum ManualCaptureDebugCommandParser {
                 DryRunLatencyReportDebugOptions(
                     frameCount: frameCount,
                     mode: benchmarkMode
+                )
+            )
+        case .localRuntimeStatus:
+            guard windowID == nil, runID == nil, traceID == nil, frameCount == 30,
+                  benchmarkMode == .endToEndDryRun, runtimeID == nil, runtimeSource == nil
+            else {
+                throw ManualCaptureDebugCommandParseError.unsupportedOption(
+                    "runtime install options require --install-local-runtime"
+                )
+            }
+            return .localRuntimeStatus
+        case .localRuntimeInstructions:
+            guard windowID == nil, runID == nil, traceID == nil, frameCount == 30,
+                  benchmarkMode == .endToEndDryRun, runtimeID == nil, runtimeSource == nil
+            else {
+                throw ManualCaptureDebugCommandParseError.unsupportedOption(
+                    "runtime install options require --install-local-runtime"
+                )
+            }
+            return .localRuntimeInstructions
+        case .installLocalRuntime:
+            guard windowID == nil, runID == nil, traceID == nil, frameCount == 30,
+                  benchmarkMode == .endToEndDryRun
+            else {
+                throw ManualCaptureDebugCommandParseError.unsupportedOption(
+                    "capture or benchmark options are not supported with --install-local-runtime"
+                )
+            }
+            guard let runtimeID else {
+                throw ManualCaptureDebugCommandParseError.missingValue("--runtime-id")
+            }
+            guard let runtimeSource else {
+                throw ManualCaptureDebugCommandParseError.missingValue("--runtime-source")
+            }
+            return .installLocalRuntime(
+                LocalRuntimeInstallDebugOptions(
+                    runtimeID: runtimeID,
+                    sourceDirectory: runtimeSource
                 )
             )
         }
@@ -299,6 +380,60 @@ public enum ManualCaptureDebugCommandFormatter {
         return lines
     }
 
+    public static func lines(
+        for instructions: [LocalModelRuntimeInstallInstruction]
+    ) -> [String] {
+        var lines = ["local runtime setup instructions"]
+        for instruction in instructions {
+            lines.append("runtime=\(instruction.spec.id.rawValue)")
+            lines.append("name=\(instruction.spec.displayName)")
+            lines.append("model=\(instruction.spec.modelName)")
+            lines.append("env=\(instruction.spec.environmentVariableName)")
+            lines.append("expectedExecutable=\(instruction.spec.expectedExecutableRelativePath)")
+            lines.append("setupDirectory=\(instruction.setupDirectory.path)")
+            if let downloadPageURL = instruction.spec.downloadPageURL {
+                lines.append("downloadPage=\(downloadPageURL.absoluteString)")
+            }
+            for (index, step) in instruction.spec.installSteps.enumerated() {
+                lines.append("step\(index + 1)=\(step)")
+            }
+        }
+        return lines
+    }
+
+    public static func lines(
+        for statuses: [LocalModelRuntimeStatus]
+    ) -> [String] {
+        var lines = ["local runtime status"]
+        for status in statuses {
+            lines.append(
+                [
+                    "runtime=\(status.spec.id.rawValue)",
+                    "state=\(status.state.rawValue)",
+                    "env=\(status.spec.environmentVariableName)",
+                    "executable=\(status.installation?.executablePath ?? "-")",
+                    "reason=\(status.metadata["reason"] ?? "-")"
+                ]
+                .joined(separator: " | ")
+            )
+        }
+        return lines
+    }
+
+    public static func lines(
+        for installation: LocalModelRuntimeInstallation,
+        spec: LocalModelRuntimeSpec
+    ) -> [String] {
+        [
+            "local runtime installed",
+            "runtime=\(installation.runtimeID.rawValue)",
+            "name=\(spec.displayName)",
+            "env=\(spec.environmentVariableName)",
+            "executable=\(installation.executablePath)",
+            "downloadedDirectory=\(installation.downloadedDirectoryPath)"
+        ]
+    }
+
     public static func errorLine(for error: Error) -> String {
         if let parseError = error as? ManualCaptureDebugCommandParseError {
             return "manual capture debug error: \(parseError.description)"
@@ -323,4 +458,7 @@ private enum ManualCaptureDebugCommandMode {
     case listWindowCandidates
     case manualCapture
     case dryRunLatencyReport
+    case localRuntimeStatus
+    case localRuntimeInstructions
+    case installLocalRuntime
 }

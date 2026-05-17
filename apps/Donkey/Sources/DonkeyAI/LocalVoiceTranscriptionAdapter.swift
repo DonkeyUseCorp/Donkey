@@ -1,4 +1,5 @@
 import DonkeyContracts
+import DonkeyRuntime
 import Foundation
 
 public struct LocalVoiceAudioBuffer: Equatable, Sendable {
@@ -102,6 +103,102 @@ public struct UnavailableLocalVoiceTranscriptionRuntime: LocalVoiceTranscription
 public enum LocalVoiceTranscriptionRuntimeError: Error, Equatable, Sendable {
     case runtimeUnavailable(String)
     case emptyTranscript
+    case invalidOutput(String)
+}
+
+public struct ProcessBackedParakeetTranscriptionRuntime: LocalVoiceTranscriptionRuntime {
+    public var sidecarRunner: any LocalJSONSidecarRunning
+    public var encoder: JSONEncoder
+    public var decoder: JSONDecoder
+
+    public init(
+        sidecarRunner: any LocalJSONSidecarRunning = ProcessBackedLocalJSONSidecarRunner(),
+        encoder: JSONEncoder = JSONEncoder(),
+        decoder: JSONDecoder = JSONDecoder()
+    ) {
+        self.sidecarRunner = sidecarRunner
+        self.encoder = encoder
+        self.decoder = decoder
+    }
+
+    public func transcribe(
+        audio: LocalVoiceAudioBuffer,
+        model: AIModelRegistryEntry
+    ) async throws -> LocalVoiceTranscript {
+        let request = ParakeetSidecarRequest(
+            audioID: audio.id,
+            format: audio.format,
+            sampleRateHz: audio.sampleRateHz,
+            channelCount: audio.channelCount,
+            durationMS: audio.durationMS,
+            audioBase64: audio.data.base64EncodedString(),
+            modelID: model.modelID,
+            metadata: audio.metadata
+        )
+        let inputData = try encoder.encode(request)
+        let result = await sidecarRunner.run(
+            LocalJSONSidecarRequest(
+                environmentVariableName: "DONKEY_PARAKEET_TRANSCRIBER",
+                inputData: inputData,
+                timeoutMS: model.timeoutMS,
+                metadata: [
+                    "sidecar.role": "voiceTranscription",
+                    "modelID": model.modelID
+                ]
+            )
+        )
+        guard result.status == .completed else {
+            throw LocalVoiceTranscriptionRuntimeError.runtimeUnavailable(
+                result.metadata["sidecar.reason"] ?? result.status.rawValue
+            )
+        }
+
+        do {
+            let response = try decoder.decode(ParakeetSidecarResponse.self, from: result.outputData)
+            return LocalVoiceTranscript(
+                text: response.text,
+                language: response.language,
+                confidence: response.confidence,
+                segments: response.segments,
+                metadata: result.metadata.merging(response.metadata) { current, _ in current }
+            )
+        } catch {
+            throw LocalVoiceTranscriptionRuntimeError.invalidOutput(String(describing: error))
+        }
+    }
+}
+
+private struct ParakeetSidecarRequest: Codable, Equatable, Sendable {
+    var audioID: String
+    var format: String
+    var sampleRateHz: Int
+    var channelCount: Int
+    var durationMS: Double
+    var audioBase64: String
+    var modelID: String
+    var metadata: [String: String]
+}
+
+private struct ParakeetSidecarResponse: Codable, Equatable, Sendable {
+    var text: String
+    var language: String?
+    var confidence: Double
+    var segments: [String]
+    var metadata: [String: String]
+
+    init(
+        text: String,
+        language: String? = nil,
+        confidence: Double = 0,
+        segments: [String] = [],
+        metadata: [String: String] = [:]
+    ) {
+        self.text = text
+        self.language = language
+        self.confidence = confidence
+        self.segments = segments
+        self.metadata = metadata
+    }
 }
 
 public struct LocalVoiceTranscriptionAdapter: Sendable {

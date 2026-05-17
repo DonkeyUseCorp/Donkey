@@ -43,6 +43,7 @@ public struct ReflexLatencyReport: Codable, Equatable, Sendable {
     public var decisionMS: ReflexLatencyPercentiles
     public var actionProjectionMS: ReflexLatencyPercentiles
     public var inputMS: ReflexLatencyPercentiles
+    public var componentLatencyMS: [String: ReflexLatencyPercentiles]
     public var captureFPS: Double?
     public var perceptionFPS: Double?
     public var controllerTickRate: Double?
@@ -63,6 +64,7 @@ public struct ReflexLatencyReport: Codable, Equatable, Sendable {
         decisionMS: ReflexLatencyPercentiles,
         actionProjectionMS: ReflexLatencyPercentiles = ReflexLatencyPercentiles(),
         inputMS: ReflexLatencyPercentiles,
+        componentLatencyMS: [String: ReflexLatencyPercentiles] = [:],
         captureFPS: Double? = nil,
         perceptionFPS: Double? = nil,
         controllerTickRate: Double? = nil,
@@ -82,6 +84,7 @@ public struct ReflexLatencyReport: Codable, Equatable, Sendable {
         self.decisionMS = decisionMS
         self.actionProjectionMS = actionProjectionMS
         self.inputMS = inputMS
+        self.componentLatencyMS = componentLatencyMS
         self.captureFPS = captureFPS
         self.perceptionFPS = perceptionFPS
         self.controllerTickRate = controllerTickRate
@@ -127,6 +130,7 @@ public enum ReflexLatencyReportBuilder {
             decisionMS: percentiles(traces.compactMap(\.latencyBreakdown.decisionMS)),
             actionProjectionMS: percentiles(traces.compactMap(\.latencyBreakdown.actionProjectionMS)),
             inputMS: percentiles(traces.compactMap(\.latencyBreakdown.inputMS)),
+            componentLatencyMS: componentLatencyPercentiles(from: traces),
             captureFPS: rate(
                 count: traces.count,
                 first: traces.compactMap(\.timestamps.captureEnd).first,
@@ -212,11 +216,33 @@ public enum ReflexLatencyReportBuilder {
                 )
             }
     }
+
+    private static func componentLatencyPercentiles(
+        from traces: [ReflexTraceRecord]
+    ) -> [String: ReflexLatencyPercentiles] {
+        let components = [
+            "commandParse": "latency.commandParseMS",
+            "launchFocus": "latency.launchFocusMS",
+            "observation": "latency.observationMS",
+            "accessibilityAction": "latency.accessibilityActionMS",
+            "keyboardAction": "latency.keyboardActionMS",
+            "verification": "latency.verificationMS",
+            "yoloSegmentation": "latency.yoloSegmentationMS",
+            "uiUnderstanding": "latency.uiUnderstandingMS",
+            "parakeetTranscription": "latency.parakeetTranscriptionMS"
+        ]
+
+        return components.reduce(into: [:]) { result, item in
+            let values = traces.compactMap { Double($0.metadata[item.value] ?? "") }
+            guard !values.isEmpty else { return }
+            result[item.key] = percentiles(values)
+        }
+    }
 }
 
 public enum ReflexLatencyReportFormatter {
     public static func lines(for report: ReflexLatencyReport) -> [String] {
-        [
+        var lines = [
             "reflex latency report",
             "mode=\(report.mode.rawValue)",
             "traceCount=\(report.traceCount)",
@@ -236,6 +262,17 @@ public enum ReflexLatencyReportFormatter {
             "staleActionCount=\(report.staleActionCount)",
             "worstTraces=\(report.worstTraces.map { "\($0.traceID):\($0.frameID):\(format($0.softwareLoopMS))" }.joined(separator: ","))"
         ]
+        lines.insert(
+            contentsOf: componentLines(for: report.componentLatencyMS),
+            at: 13
+        )
+        return lines
+    }
+
+    private static func componentLines(for components: [String: ReflexLatencyPercentiles]) -> [String] {
+        components.keys.sorted().map { key in
+            "componentLatency.\(key)MS=\(format(components[key] ?? ReflexLatencyPercentiles()))"
+        }
     }
 
     private static func format(_ percentiles: ReflexLatencyPercentiles) -> String {

@@ -210,6 +210,63 @@ public struct RunMemorySnapshot: Codable, Equatable, Sendable {
     }
 }
 
+public struct RunMemoryRetrievalBudget: Codable, Equatable, Sendable {
+    public var maxRecords: Int
+    public var maxPromptCharacters: Int
+    public var minRelevance: Double
+
+    public init(
+        maxRecords: Int = 6,
+        maxPromptCharacters: Int = 2_000,
+        minRelevance: Double = 0.2
+    ) {
+        self.maxRecords = max(0, maxRecords)
+        self.maxPromptCharacters = max(0, maxPromptCharacters)
+        self.minRelevance = min(max(minRelevance, 0), 1)
+    }
+}
+
+public struct RunMemorySemanticQuery: Codable, Equatable, Sendable {
+    public var text: String
+    public var targetID: String?
+    public var scope: RunMemoryScope?
+    public var budget: RunMemoryRetrievalBudget
+    public var metadata: [String: String]
+
+    public init(
+        text: String,
+        targetID: String? = nil,
+        scope: RunMemoryScope? = nil,
+        budget: RunMemoryRetrievalBudget = RunMemoryRetrievalBudget(),
+        metadata: [String: String] = [:]
+    ) {
+        self.text = text
+        self.targetID = targetID
+        self.scope = scope
+        self.budget = budget
+        self.metadata = metadata
+    }
+}
+
+public struct RunMemorySemanticResult: Codable, Equatable, Sendable {
+    public var record: RunMemoryRecord
+    public var relevance: Double
+    public var embeddingModelID: String?
+    public var metadata: [String: String]
+
+    public init(
+        record: RunMemoryRecord,
+        relevance: Double,
+        embeddingModelID: String? = nil,
+        metadata: [String: String] = [:]
+    ) {
+        self.record = record
+        self.relevance = min(max(relevance, 0), 1)
+        self.embeddingModelID = embeddingModelID
+        self.metadata = metadata
+    }
+}
+
 public enum RunMemoryApprover {
     public static func evaluate(
         _ proposal: RunMemoryWriteProposal,

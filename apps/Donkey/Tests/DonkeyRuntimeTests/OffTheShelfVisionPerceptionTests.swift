@@ -127,6 +127,7 @@ struct OffTheShelfVisionPerceptionTests {
                 frameID: "frame-yolo",
                 targetID: "target-yolo",
                 cropID: "crop-search",
+                cropImageFileURL: URL(fileURLWithPath: "/tmp/crop-search.png"),
                 cropBounds: HotLoopRect(x: 0, y: 0, width: 320, height: 180, space: .window),
                 pixelSize: HotLoopSize(width: 320, height: 180, space: .crop)
             )
@@ -143,6 +144,93 @@ struct OffTheShelfVisionPerceptionTests {
         #expect(signal.adapterOverheadMS == 6)
         #expect(signal.observations.first?.label == "search-field")
         #expect(signal.metadata["requiresLocalBenchmark"] == "true")
+    }
+
+    @Test
+    func processBackedYOLORuntimeDecodesSidecarMasks() async throws {
+        let backend = ProcessBackedScreenshotSegmentationBackend(
+            sidecarRunner: FakeSidecarRunner(
+                result: LocalJSONSidecarResult(
+                    status: .completed,
+                    outputData: Data("""
+                    {"masks":[{"id":"mask-play","label":"play-button","bounds":{"x":0.2,"y":0.3,"width":0.4,"height":0.1,"space":"normalizedTarget"},"confidence":0.88,"pointCount":12,"metadata":{"source":"fake-yolo"}}],"preprocessMS":4,"modelInferenceMS":11,"metadata":{"backend":"fake-sidecar-yolo"}}
+                    """.utf8),
+                    metadata: ["sidecar.reason": "completed"]
+                )
+            )
+        )
+
+        let result = try await backend.segment(
+            request: ScreenshotSegmentationRequest(
+                traceID: "trace-sidecar-yolo",
+                frameID: "frame-sidecar-yolo",
+                targetID: "target-sidecar-yolo",
+                cropID: "crop-play",
+                artifactURL: URL(string: "donkey-artifact://crop-play"),
+                cropBounds: HotLoopRect(x: 0, y: 0, width: 100, height: 100, space: .window),
+                pixelSize: HotLoopSize(width: 100, height: 100, space: .crop)
+            ),
+            model: OffTheShelfVisionModelCatalog.yolo26NanoScreenshotSegmentation
+        )
+
+        #expect(result.masks.first?.label == "play-button")
+        #expect(result.preprocessMS == 4)
+        #expect(result.modelInferenceMS == 11)
+        #expect(result.metadata["backend"] == "fake-sidecar-yolo")
+    }
+
+    @Test
+    func processBackedYOLORuntimeFailsClearlyWhenUnavailable() async throws {
+        let backend = ProcessBackedScreenshotSegmentationBackend(
+            sidecarRunner: FakeSidecarRunner(
+                result: LocalJSONSidecarResult(
+                    status: .unavailable,
+                    metadata: ["sidecar.reason": "missingEnvironmentVariable"]
+                )
+            )
+        )
+
+        await #expect(throws: ScreenshotSegmentationRunnerError.backendUnavailable("missingEnvironmentVariable")) {
+            _ = try await backend.segment(
+                request: ScreenshotSegmentationRequest(
+                    traceID: "trace-missing-yolo",
+                    frameID: "frame-missing-yolo",
+                    targetID: "target-missing-yolo",
+                    cropID: "crop-missing",
+                    cropBounds: HotLoopRect(x: 0, y: 0, width: 100, height: 100, space: .window),
+                    pixelSize: HotLoopSize(width: 100, height: 100, space: .crop)
+                ),
+                model: OffTheShelfVisionModelCatalog.yolo26NanoScreenshotSegmentation
+            )
+        }
+    }
+
+    @Test
+    func localUIUnderstandingSidecarFeedsObservationShape() async throws {
+        let adapter = ProcessBackedLocalUIUnderstandingAdapter(
+            sidecarRunner: FakeSidecarRunner(
+                result: LocalJSONSidecarResult(
+                    status: .completed,
+                    outputData: Data("""
+                    {"visibleText":{"title":"Music","result":"Coldplay"},"controls":[{"id":"search","label":"Search","kind":"searchField","frame":{"x":0.1,"y":0.1,"width":0.8,"height":0.08,"space":"normalizedTarget"},"confidence":0.86,"metadata":{"controlID":"search"}}],"formFields":[],"confidence":0.84,"metadata":{"understander":"fake-local-llm"}}
+                    """.utf8),
+                    metadata: ["sidecar.reason": "completed"]
+                )
+            )
+        )
+        let request = LocalUIUnderstandingRequest(
+            traceID: "trace-ui-understanding",
+            targetID: "music-app",
+            imageFileURL: URL(fileURLWithPath: "/tmp/music-crop.png")
+        )
+
+        let result = try await adapter.understand(request)
+        let observation = result.observation(for: request)
+
+        #expect(observation.availableControls["search"] == true)
+        #expect(observation.visibleText["result"] == "Coldplay")
+        #expect(observation.metadata["directInputActionsAllowed"] == "false")
+        #expect(observation.metadata["understander"] == "fake-local-llm")
     }
 
     private func recordedSignal(
@@ -253,5 +341,13 @@ private struct FakeScreenshotSegmentationBackend: ScreenshotSegmentationBackend 
             modelInferenceMS: 9,
             metadata: ["backend": "fake-yolo"]
         )
+    }
+}
+
+private struct FakeSidecarRunner: LocalJSONSidecarRunning {
+    var result: LocalJSONSidecarResult
+
+    func run(_ request: LocalJSONSidecarRequest) async -> LocalJSONSidecarResult {
+        result
     }
 }
