@@ -20,6 +20,7 @@ public struct LocalAppTaskLiveRunResult: Equatable, Sendable {
     public var initialPlan: LocalAppTaskDryRunPlan?
     public var finalPlan: LocalAppTaskDryRunPlan?
     public var observation: LocalAppTaskObservation?
+    public var documentFormFillPlan: DocumentFormFillPlan?
     public var actionTraces: [ActionEngineCommandTrace]
     public var metadata: [String: String]
 
@@ -31,6 +32,7 @@ public struct LocalAppTaskLiveRunResult: Equatable, Sendable {
         initialPlan: LocalAppTaskDryRunPlan? = nil,
         finalPlan: LocalAppTaskDryRunPlan? = nil,
         observation: LocalAppTaskObservation? = nil,
+        documentFormFillPlan: DocumentFormFillPlan? = nil,
         actionTraces: [ActionEngineCommandTrace] = [],
         metadata: [String: String] = [:]
     ) {
@@ -41,6 +43,7 @@ public struct LocalAppTaskLiveRunResult: Equatable, Sendable {
         self.initialPlan = initialPlan
         self.finalPlan = finalPlan
         self.observation = observation
+        self.documentFormFillPlan = documentFormFillPlan
         self.actionTraces = actionTraces
         self.metadata = metadata
     }
@@ -62,17 +65,23 @@ public struct LocalAppTaskLiveRunner: Sendable {
 
     public var catalog: LocalAppTaskCatalog
     public var appController: any LocalAppTaskAppControlling
+    public var contextProvider: any LocalAppTaskContextProviding
+    public var documentFormFillPlanner: DocumentFormFillPlanner
     public var actionEngineFactory: ActionEngineFactory
     public var permissionPolicy: ToolCallPolicy
 
     public init(
-        catalog: LocalAppTaskCatalog = LocalAppTaskCatalog(taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults),
+        catalog: LocalAppTaskCatalog = .defaultLocal(),
         appController: any LocalAppTaskAppControlling = MacLocalAppTaskController(),
+        contextProvider: any LocalAppTaskContextProviding = MacLocalAppTaskContextProvider(),
+        documentFormFillPlanner: DocumentFormFillPlanner = DocumentFormFillPlanner(),
         actionEngineFactory: @escaping ActionEngineFactory = Self.defaultActionEngine(for:),
         permissionPolicy: ToolCallPolicy = ToolCallPolicy(deniedCapabilities: [])
     ) {
         self.catalog = catalog
         self.appController = appController
+        self.contextProvider = contextProvider
+        self.documentFormFillPlanner = documentFormFillPlanner
         self.actionEngineFactory = actionEngineFactory
         self.permissionPolicy = permissionPolicy
     }
@@ -119,6 +128,46 @@ public struct LocalAppTaskLiveRunner: Sendable {
 
         intent.metadata["traceID"] = traceID
         let adapter = catalog.adapter(for: definition)
+        if definition.metadata["guardedLiveDefault"] == "reviewOnly" {
+            let context = await contextProvider.snapshot()
+            let documentPlan = documentFormFillPlanner.plan(
+                intent: intent,
+                definition: definition,
+                context: context
+            )
+            let observation = LocalAppTaskObservation(
+                appIsRunning: context.focusedBundleIdentifier == definition.targetApp.bundleIdentifier,
+                appIsFocused: context.focusedBundleIdentifier == definition.targetApp.bundleIdentifier,
+                availableControls: [:],
+                visibleText: [
+                    "document": context.focusedWindowTitle
+                        ?? intent.normalizedEntities["document"]
+                        ?? "current document"
+                ],
+                confidence: context.focusedWindowTitle == nil ? 0.4 : 0.72,
+                metadata: [
+                    "observer": "local-app-task-context",
+                    "documentFormFillPlan.status": documentPlan.status.rawValue
+                ]
+            )
+            let initialPlan = adapter.dryRunPlan(for: intent, observation: observation)
+            return LocalAppTaskLiveRunResult(
+                command: command,
+                traceID: traceID,
+                status: .needsUserReview,
+                resolution: resolution,
+                initialPlan: initialPlan,
+                finalPlan: initialPlan,
+                observation: observation,
+                documentFormFillPlan: documentPlan,
+                metadata: metadata.merging([
+                    "reason": "reviewOnlyTask",
+                    "documentFormFillPlan.status": documentPlan.status.rawValue,
+                    "documentFormFillPlan.proposalCount": String(documentPlan.proposals.count)
+                ]) { current, _ in current }
+            )
+        }
+
         let launchObservation = await appController.launchOrFocus(
             definition: definition,
             availability: availability
@@ -136,12 +185,38 @@ public struct LocalAppTaskLiveRunner: Sendable {
             )
         }
 
-        let engine = actionEngineFactory(definition)
         var actionTraces: [ActionEngineCommandTrace] = []
+        let accessibilityCommands = await accessibilityCommandTemplates(
+            intent: intent,
+            definition: definition
+        )
+        if !accessibilityCommands.isEmpty {
+            let accessibilityEngine = Self.accessibilityActionEngine(for: definition)
+            for (index, actionCommand) in accessibilityCommands.enumerated() {
+                let spacedCommand = actionCommand.withIssuedAt(Self.now(advancedByMilliseconds: Double(index) * 60))
+                let trace = await accessibilityEngine.handle(
+                    spacedCommand,
+                    permissionPolicy: permissionPolicy
+                )
+                actionTraces.append(trace)
+                guard trace.executed || trace.decision == .projectedDryRun else {
+                    break
+                }
+            }
+        }
+
+        let engine = actionEngineFactory(definition)
+        let accessibilityHandledStepIDs: Set<String> = Set(actionTraces.compactMap { trace -> String? in
+            guard trace.executed || trace.decision == ActionEngineCommandDecision.projectedDryRun else { return nil }
+            return trace.command.metadata["workflowStepID"]
+        })
         let commands = adapter.guardedKeyboardCommandTemplates(
             for: intent,
             issuedAt: Self.now()
-        )
+        ).filter { command in
+            guard let workflowStepID = command.metadata["workflowStepID"] else { return true }
+            return !accessibilityHandledStepIDs.contains(workflowStepID)
+        }
 
         for (index, actionCommand) in commands.enumerated() {
             let spacedCommand = actionCommand.withIssuedAt(Self.now(advancedByMilliseconds: Double(index) * 40))
@@ -151,7 +226,7 @@ public struct LocalAppTaskLiveRunner: Sendable {
             )
             actionTraces.append(trace)
 
-            guard trace.executed || trace.decision == .projectedDryRun else {
+            guard trace.executed || trace.decision == ActionEngineCommandDecision.projectedDryRun else {
                 let finalObservation = await appController.observe(definition: definition)
                 let finalPlan = adapter.dryRunPlan(for: intent, observation: finalObservation)
                 return LocalAppTaskLiveRunResult(
@@ -198,6 +273,17 @@ public struct LocalAppTaskLiveRunner: Sendable {
         )
     }
 
+    public static func accessibilityActionEngine(for definition: LocalAppTaskDefinition) -> ActionEngineGuardrail {
+        ActionEngineGuardrail(
+            configuration: ActionEngineConfiguration(liveInputEnabled: true),
+            focusGuard: MacLocalAppFocusGuard(
+                targetID: LocalAppTaskAdapter(definition: definition).targetID,
+                bundleIdentifier: definition.targetApp.bundleIdentifier
+            ),
+            inputBackend: MacAccessibilityActionEngineInputBackend()
+        )
+    }
+
     private func unresolvedResult(
         command: String,
         traceID: String,
@@ -222,6 +308,41 @@ public struct LocalAppTaskLiveRunner: Sendable {
             status: status,
             resolution: resolution,
             metadata: metadata
+        )
+    }
+
+    @MainActor
+    private func accessibilityCommandTemplates(
+        intent: TaskIntent,
+        definition: LocalAppTaskDefinition
+    ) -> [ActionEngineCommand] {
+        guard AXIsProcessTrusted(),
+              let target = try? MacWindowResolver().selectTarget(),
+              target.bundleIdentifier == definition.targetApp.bundleIdentifier
+        else {
+            return []
+        }
+
+        let limits = MacAccessibilitySnapshotLimits(maxDepth: 6, maxChildrenPerNode: 80, maxTotalNodes: 500)
+        guard let tree = try? ApplicationServicesMacAccessibilitySnapshotCapturer().captureTree(
+            target: target,
+            limits: limits
+        ) else {
+            return []
+        }
+        let snapshot = MacAccessibilitySnapshot(
+            target: target,
+            limits: limits,
+            root: tree.root,
+            totalNodeCount: tree.totalNodeCount,
+            isTreeTruncated: tree.isTreeTruncated
+        )
+        let index = LocalAppAccessibilityControlDiscovery().discover(in: snapshot)
+        return LocalAppAccessibilityActionPlanner().commands(
+            for: intent,
+            definition: definition,
+            index: index,
+            issuedAt: Self.now()
         )
     }
 
@@ -289,7 +410,8 @@ public struct MacLocalAppTaskController: LocalAppTaskAppControlling {
     public func observe(definition: LocalAppTaskDefinition) async -> LocalAppTaskObservation {
         let runningApplication = runningApplication(for: definition.targetApp)
         let isFocused = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == definition.targetApp.bundleIdentifier
-        let visibleText = accessibilityVisibleText(for: runningApplication)
+        let accessibilityIndex = accessibilityControlIndex(for: definition, runningApplication: runningApplication)
+        let visibleText = accessibilityIndex?.visibleText ?? accessibilityVisibleText(for: runningApplication)
         let verificationKey = definition.metadata["verificationTextKey"]
             ?? definition.verificationEntityName
             ?? "visibleText"
@@ -300,7 +422,8 @@ public struct MacLocalAppTaskController: LocalAppTaskAppControlling {
                 else {
                     return nil
                 }
-                return (controlID, step.metadata["key"] != nil || visibleText != nil)
+                let discovered = accessibilityIndex?.firstControl(matching: controlID) != nil
+                return (controlID, discovered || step.metadata["key"] != nil || visibleText != nil)
             }
         )
 
@@ -315,12 +438,44 @@ public struct MacLocalAppTaskController: LocalAppTaskAppControlling {
             appIsFocused: isFocused,
             availableControls: controls,
             visibleText: textValues,
-            confidence: visibleText == nil ? 0.4 : 0.75,
+            confidence: accessibilityIndex == nil ? (visibleText == nil ? 0.4 : 0.75) : 0.86,
             metadata: [
                 "observer": "mac-local-app-controller",
-                "accessibilityTrusted": String(AXIsProcessTrusted())
+                "accessibilityTrusted": String(AXIsProcessTrusted()),
+                "accessibilityControlDiscovery": String(accessibilityIndex != nil),
+                "accessibilityControlCount": accessibilityIndex?.metadata["controlCount"] ?? "0"
             ]
         )
+    }
+
+    @MainActor
+    private func accessibilityControlIndex(
+        for definition: LocalAppTaskDefinition,
+        runningApplication: NSRunningApplication?
+    ) -> LocalAppAccessibilityControlIndex? {
+        guard AXIsProcessTrusted(),
+              runningApplication != nil,
+              let target = try? MacWindowResolver().selectTarget(),
+              target.bundleIdentifier == definition.targetApp.bundleIdentifier
+        else {
+            return nil
+        }
+
+        let limits = MacAccessibilitySnapshotLimits(maxDepth: 6, maxChildrenPerNode: 80, maxTotalNodes: 500)
+        guard let tree = try? ApplicationServicesMacAccessibilitySnapshotCapturer().captureTree(
+            target: target,
+            limits: limits
+        ) else {
+            return nil
+        }
+        let snapshot = MacAccessibilitySnapshot(
+            target: target,
+            limits: limits,
+            root: tree.root,
+            totalNodeCount: tree.totalNodeCount,
+            isTreeTruncated: tree.isTreeTruncated
+        )
+        return LocalAppAccessibilityControlDiscovery().discover(in: snapshot)
     }
 
     @MainActor

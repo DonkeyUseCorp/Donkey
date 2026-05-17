@@ -115,6 +115,36 @@ struct OffTheShelfVisionPerceptionTests {
         #expect(report.decisionMS.p95 == 1)
     }
 
+    @Test
+    func yoloScreenshotSegmentationRunnerProducesRecordedLocalEvidence() async throws {
+        let runner = YOLOScreenshotSegmentationRunner(
+            backend: FakeScreenshotSegmentationBackend(),
+            now: fixedClock([100, 118])
+        )
+        let result = try await runner.run(
+            ScreenshotSegmentationRequest(
+                traceID: "trace-yolo",
+                frameID: "frame-yolo",
+                targetID: "target-yolo",
+                cropID: "crop-search",
+                cropBounds: HotLoopRect(x: 0, y: 0, width: 320, height: 180, space: .window),
+                pixelSize: HotLoopSize(width: 320, height: 180, space: .crop)
+            )
+        )
+        let decoded = RecordedOffTheShelfVisionMetadataCodec.decode(from: result.metadata)
+        let signal = try #require(decoded.first)
+
+        #expect(result.model.id == "ultralytics-yolo26n-seg-screenshot")
+        #expect(signal.kind == .segmentation)
+        #expect(signal.modelID == "ultralytics-yolo26n-seg-screenshot")
+        #expect(signal.cropID == "crop-search")
+        #expect(signal.preprocessMS == 3)
+        #expect(signal.modelInferenceMS == 9)
+        #expect(signal.adapterOverheadMS == 6)
+        #expect(signal.observations.first?.label == "search-field")
+        #expect(signal.metadata["requiresLocalBenchmark"] == "true")
+    }
+
     private func recordedSignal(
         kind: OffTheShelfVisionSignalKind,
         id: String,
@@ -175,6 +205,53 @@ struct OffTheShelfVisionPerceptionTests {
         RunTraceTimestamp(
             wallClock: Date(timeIntervalSince1970: Double(milliseconds) / 1_000),
             monotonicUptimeNanoseconds: milliseconds * 1_000_000
+        )
+    }
+
+    private func fixedClock(_ milliseconds: [UInt64]) -> @Sendable () -> RunTraceTimestamp {
+        let clock = FixedVisionClock(milliseconds: milliseconds)
+        return {
+            clock.next()
+        }
+    }
+}
+
+private final class FixedVisionClock: @unchecked Sendable {
+    private var milliseconds: [UInt64]
+    private var index = 0
+
+    init(milliseconds: [UInt64]) {
+        self.milliseconds = milliseconds
+    }
+
+    func next() -> RunTraceTimestamp {
+        let value = milliseconds[min(index, milliseconds.count - 1)]
+        index += 1
+        return RunTraceTimestamp(
+            wallClock: Date(timeIntervalSince1970: Double(value) / 1_000),
+            monotonicUptimeNanoseconds: value * 1_000_000
+        )
+    }
+}
+
+private struct FakeScreenshotSegmentationBackend: ScreenshotSegmentationBackend {
+    func segment(
+        request: ScreenshotSegmentationRequest,
+        model: OffTheShelfVisionModelCandidate
+    ) async throws -> ScreenshotSegmentationBackendResult {
+        ScreenshotSegmentationBackendResult(
+            masks: [
+                ScreenshotSegmentationMask(
+                    id: "mask-search",
+                    label: "search-field",
+                    bounds: HotLoopRect(x: 0.1, y: 0.2, width: 0.5, height: 0.1, space: .normalizedTarget),
+                    confidence: 0.87,
+                    pointCount: 18
+                )
+            ],
+            preprocessMS: 3,
+            modelInferenceMS: 9,
+            metadata: ["backend": "fake-yolo"]
         )
     }
 }

@@ -1,6 +1,6 @@
 # AI Harness
 
-> Active status: not complete. The current repo now has OpenAI and Ollama-compatible planner adapters, model routing, local task-intent parsing, local voice-transcription model selection, memory scaffolding, and a provider-backed slow-planner generator, but live transcription, semantic retrieval, redaction, aggregate model observability, and provider-decoded memory write proposals still remain.
+> Active status: not complete. The current repo now has OpenAI and Ollama-compatible planner adapters, model routing, local task-intent parsing, local voice-transcription model selection and adapter boundary, memory scaffolding, and a provider-backed slow-planner generator, but installed live transcription runtime wiring, semantic retrieval, redaction, aggregate model observability, and provider-decoded memory write proposals still remain.
 
 ## Goal
 
@@ -349,7 +349,7 @@ Voice input should become plain transcript text before it enters command parsing
 
 The current default candidate is NVIDIA Parakeet TDT 0.6B v3 through a local NeMo-style runtime. It is selected because the official model card describes a current 600M-parameter ASR model with automatic language detection across 25 languages, punctuation/capitalization, word and segment timestamps, 16kHz mono `.wav`/`.flac` input, and a permissive CC BY 4.0 license. Whisper large-v3-turbo remains the local rollback candidate because it is widely supported in Transformers and local speech stacks.
 
-The next implementation slice should add an adapter that accepts bounded local microphone buffers, normalizes the audio format, invokes the selected local runtime model, emits transcript text plus timing/confidence metadata, and then passes the transcript to the same validated `TaskIntent` path used by typed commands.
+The current implementation has the adapter boundary: it accepts bounded local audio buffers, routes through `AIModelRouter`, invokes an injectable local transcription runtime, emits transcript text plus timing/confidence metadata, and marks transcript text as input to the same validated `TaskIntent` path used by typed commands. The next slice is installing concrete Parakeet/Whisper runtime adapters and wiring pointer-prompt microphone buffers into this adapter.
 
 ## Model Roles
 

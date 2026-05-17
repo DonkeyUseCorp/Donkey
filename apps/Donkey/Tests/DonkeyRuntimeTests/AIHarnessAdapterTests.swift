@@ -128,6 +128,39 @@ struct AIHarnessAdapterTests {
     }
 
     @Test
+    func localVoiceTranscriptionAdapterReturnsTranscriptForCommandParser() async {
+        let adapter = LocalVoiceTranscriptionAdapter(
+            runtime: FakeVoiceRuntime(
+                transcript: LocalVoiceTranscript(
+                    text: "play Coldplay",
+                    language: "en",
+                    confidence: 0.91,
+                    segments: ["play Coldplay"]
+                )
+            ),
+            now: fixedClock([10, 42])
+        )
+        let result = await adapter.transcribe(
+            LocalVoiceTranscriptionRequest(
+                audio: LocalVoiceAudioBuffer(
+                    id: "audio-1",
+                    durationMS: 1_200,
+                    data: Data([0, 1, 2])
+                ),
+                sourceTraceID: "trace-voice"
+            )
+        )
+
+        #expect(result.transcript?.text == "play Coldplay")
+        #expect(result.trace.status == .completed)
+        #expect(result.trace.role == .voiceTranscription)
+        #expect(result.trace.modelID == "nvidia/parakeet-tdt-0.6b-v3")
+        #expect(result.trace.validationStatus == "transcriptDecoded")
+        #expect(result.trace.metadata["transcriptFeedsCommandParser"] == "true")
+        #expect(result.trace.metadata["localOnly"] == "true")
+    }
+
+    @Test
     func ollamaTaskIntentAdapterBuildsLocalRequestAndDecodesValidatedIntent() async throws {
         let httpClient = FakeAIHTTPClient(
             data: ollamaResponseData(
@@ -505,6 +538,42 @@ struct AIHarnessAdapterTests {
             wallClock: Date(timeIntervalSince1970: Double(milliseconds) / 1_000),
             monotonicUptimeNanoseconds: milliseconds * 1_000_000
         )
+    }
+
+    private func fixedClock(_ milliseconds: [UInt64]) -> @Sendable () -> RunTraceTimestamp {
+        let clock = FixedTraceClock(milliseconds: milliseconds)
+        return {
+            clock.next()
+        }
+    }
+}
+
+private final class FixedTraceClock: @unchecked Sendable {
+    private var milliseconds: [UInt64]
+    private var index = 0
+
+    init(milliseconds: [UInt64]) {
+        self.milliseconds = milliseconds
+    }
+
+    func next() -> RunTraceTimestamp {
+        let value = milliseconds[min(index, milliseconds.count - 1)]
+        index += 1
+        return RunTraceTimestamp(
+            wallClock: Date(timeIntervalSince1970: Double(value) / 1_000),
+            monotonicUptimeNanoseconds: value * 1_000_000
+        )
+    }
+}
+
+private struct FakeVoiceRuntime: LocalVoiceTranscriptionRuntime {
+    var transcript: LocalVoiceTranscript
+
+    func transcribe(
+        audio: LocalVoiceAudioBuffer,
+        model: AIModelRegistryEntry
+    ) async throws -> LocalVoiceTranscript {
+        transcript
     }
 }
 

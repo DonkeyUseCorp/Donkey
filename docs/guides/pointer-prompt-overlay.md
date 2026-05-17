@@ -19,7 +19,7 @@ Donkey supports a floating macOS pointer prompt overlay:
 - keeps that fixed offset at screen edges instead of flipping or clamping to the visible screen bounds
 - submits typed prompt text through the local-app command pipeline while keeping model parsing, task validation, and live input outside the SwiftUI rendering path
 
-This is a visual, typed-command, and microphone-level UI capability. Typed submissions go to the local-app command handler, which prefers local-model task-intent parsing, validates the intent against the app-task catalog, and then runs the guarded local-app live runner. The overlay itself does not capture the screen, synthesize input, transcribe speech, or require Accessibility permission. It does request microphone permission so the waveform can reflect live local audio levels. The AI harness has a local voice-transcription model route, but the overlay has not yet wired microphone buffers into a speech-to-text adapter.
+This is a visual, typed-command, and microphone-level UI capability. Typed submissions go to the local-app command handler, which loads built-in plus local JSON/JSONL task definitions, prefers local-model task-intent parsing, validates the intent against the app-task catalog, and then runs the guarded local-app live runner. Review-only document tasks can return a compact review summary such as the number of mapped fields. The overlay itself does not capture the screen, synthesize input, transcribe speech, or require Accessibility permission. It does request microphone permission so the waveform can reflect live local audio levels. The AI harness has a local voice-transcription adapter boundary, but the overlay has not yet wired microphone buffers into that speech-to-text adapter.
 
 ## Technical Guidelines
 
@@ -43,6 +43,7 @@ This is a visual, typed-command, and microphone-level UI capability. Typed submi
 - Double-Command prompt activation should require two clean Command down/up taps within 450ms. Any intervening key press, mouse press, extra modifier, or overlong Command hold should reset the sequence so normal shortcuts do not summon the modal.
 - Holding the second clean Command press for the shortcut's configured hold duration should activate the prompt modal and start microphone level capture instead of waiting for the second release.
 - Keep the overlay non-invasive: no screen capture loop, input execution, Accessibility prompt, or direct model call in SwiftUI rendering. Submit text to a command handler boundary instead.
+- Keep the command handler data-driven. It should resolve task knowledge from the local catalog, including local task definitions in Application Support, before invoking the guarded runtime path.
 - Keep voice capture separate from transcription. The overlay may publish bounded local audio buffers to a future transcription adapter, but model execution and command parsing should remain outside the SwiftUI view/controller rendering path.
 
 ## Verification
@@ -59,5 +60,6 @@ Launch Donkey and confirm the inactive overlay does not render a visible cursor.
 ## Source Entry Points
 
 - App orchestration starts in `apps/Donkey/Sources/Donkey/`.
+- Typed prompt command handling lives in `apps/Donkey/Sources/Donkey/PointerPromptCommandHandler.swift`.
 - Reusable SwiftUI rendering lives in `apps/Donkey/Sources/DonkeyUI/`.
 - Historical completion notes live in `plans/done/21-swiftui-pointer-ui.md`.

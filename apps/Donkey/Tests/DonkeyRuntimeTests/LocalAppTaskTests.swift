@@ -187,6 +187,203 @@ struct LocalAppTaskTests {
         #expect(unavailableCatalog.resolve(command: "show me the weather for SF").status == .appUnavailable)
     }
 
+    @Test
+    func taskDefinitionLoaderLoadsLocalJSONDefinitions() throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DonkeyTaskDefinitionLoader-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let definition = LocalAppTaskDefinition(
+            taskType: "notes_capture",
+            targetApp: LocalAppTarget(appName: "Notes", bundleIdentifier: "com.apple.Notes"),
+            triggerTerms: ["note", "remember"],
+            entityRules: [
+                LocalAppTaskEntityRule(
+                    name: "note",
+                    markers: ["note", "remember"],
+                    metadata: ["capture": "afterTrigger"]
+                )
+            ],
+            workflowSteps: [
+                LocalAppTaskWorkflowStepDefinition(
+                    id: "parse-intent",
+                    role: .parseIntent,
+                    summary: "Parse note intent"
+                )
+            ],
+            verificationEntityName: "note",
+            metadata: ["source": "test-json"]
+        )
+        let fileURL = directoryURL.appendingPathComponent("notes.json")
+        try JSONEncoder().encode(definition).write(to: fileURL)
+
+        let definitions = try LocalAppTaskDefinitionLoader().mergedWithBuiltIns(from: directoryURL)
+        let loaded = try #require(definitions.first(where: { $0.taskType == "notes_capture" }))
+        #expect(loaded.targetApp.bundleIdentifier == "com.apple.Notes")
+        #expect(loaded.metadata["source"] == "test-json")
+
+        let catalog = LocalAppTaskCatalog(
+            taskDefinitions: definitions,
+            availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.Notes"])
+        )
+        #expect(catalog.resolve(command: "remember buy milk").status == .resolved)
+    }
+
+    @Test
+    func documentFormFillPlannerMapsStructuredDataToObservedFieldsForReview() throws {
+        let intent = try #require(parser().parse("fill out this PDF using this data"))
+        let context = LocalAppTaskContext(
+            focusedAppName: "Preview",
+            focusedBundleIdentifier: "com.apple.Preview",
+            focusedWindowTitle: "W-9.pdf",
+            structuredData: [
+                "Name": "Ada Lovelace",
+                "Address": "12 Algorithm Ave"
+            ],
+            observedFormFields: [
+                LocalDocumentFormField(id: "field-name", label: "Name", isRequired: true),
+                LocalDocumentFormField(id: "field-address", label: "Mailing Address", isRequired: true)
+            ]
+        )
+
+        let plan = DocumentFormFillPlanner().plan(
+            intent: intent,
+            definition: BuiltInLocalAppTaskDefinitions.documentFormFill,
+            context: context
+        )
+
+        #expect(plan.status == .readyForReview)
+        #expect(plan.proposals.count == 2)
+        #expect(plan.proposals.first(where: { $0.fieldID == "field-name" })?.proposedValue == "Ada Lovelace")
+        #expect(plan.metadata["requiresReview"] == "true")
+    }
+
+    @Test
+    func documentFormFillApprovalBuildsOnlyApprovedAccessibilityCommands() throws {
+        let intent = try #require(parser().parse("fill out this PDF using this data"))
+        let context = LocalAppTaskContext(
+            focusedWindowTitle: "W-9.pdf",
+            structuredData: [
+                "Name": "Ada Lovelace",
+                "Address": "12 Algorithm Ave"
+            ],
+            observedFormFields: [
+                LocalDocumentFormField(id: "ax-1.1", label: "Name", isRequired: true),
+                LocalDocumentFormField(id: "ax-1.2", label: "Address", isRequired: true)
+            ]
+        )
+        let planner = DocumentFormFillPlanner()
+        let plan = planner.plan(
+            intent: intent,
+            definition: BuiltInLocalAppTaskDefinitions.documentFormFill,
+            context: context
+        )
+        let approval = planner.approval(
+            for: plan,
+            traceID: "trace-approval",
+            approvedFieldIDs: ["ax-1.1"]
+        )
+        let commands = LocalAppAccessibilityActionPlanner().fillCommands(
+            approval: approval,
+            definition: BuiltInLocalAppTaskDefinitions.documentFormFill,
+            issuedAt: timestamp(200)
+        )
+
+        #expect(approval.status == .partiallyApproved)
+        #expect(approval.approvedProposals.map(\.fieldID) == ["ax-1.1"])
+        #expect(approval.rejectedFieldIDs == ["ax-1.2"])
+        #expect(commands.count == 1)
+        #expect(commands.first?.metadata["accessibility.action"] == "AXSetValue")
+        #expect(commands.first?.metadata["accessibility.nodeID"] == "ax-1.1")
+        #expect(commands.first?.metadata["documentFormFill.approvalID"] == approval.id)
+    }
+
+    @Test
+    func accessibilityControlDiscoveryIndexesControlsAndFormFields() throws {
+        let target = MacWindowTargetCandidate(
+            windowID: 7,
+            processID: 99,
+            appName: "Preview",
+            bundleIdentifier: "com.apple.Preview",
+            title: "Form.pdf",
+            bounds: WindowTargetBounds(x: 0, y: 0, width: 600, height: 800),
+            isVisible: true,
+            isOnScreen: true,
+            isFrontmost: true,
+            isFocused: true,
+            isIPhoneMirroring: false,
+            safetyAssessment: WindowTargetSafetyAssessment(status: .allowed, summary: "allowed")
+        )
+        let snapshot = MacAccessibilitySnapshot(
+            target: target,
+            limits: .default,
+            root: MacAccessibilitySnapshotNode(
+                nodeID: "ax-1",
+                role: "AXWindow",
+                title: "Form.pdf",
+                children: [
+                    MacAccessibilitySnapshotNode(
+                        nodeID: "ax-1.1",
+                        role: "AXSearchField",
+                        label: "Search",
+                        frame: WindowTargetBounds(x: 20, y: 20, width: 200, height: 30),
+                        actions: ["AXPress"]
+                    ),
+                    MacAccessibilitySnapshotNode(
+                        nodeID: "ax-1.2",
+                        role: "AXTextField",
+                        label: "Name",
+                        valueSummary: "",
+                        frame: WindowTargetBounds(x: 40, y: 90, width: 240, height: 30)
+                    )
+                ]
+            ),
+            totalNodeCount: 3,
+            isTreeTruncated: false
+        )
+        let discovery = LocalAppAccessibilityControlDiscovery()
+        let index = discovery.discover(in: snapshot)
+        let fields = discovery.observedFormFields(in: snapshot)
+
+        #expect(index.controls.count == 2)
+        #expect(index.firstControl(matching: "search")?.id == "ax-1.1")
+        #expect(fields.map(\.id) == ["ax-1.1", "ax-1.2"])
+        #expect(fields.first(where: { $0.id == "ax-1.2" })?.label == "Name")
+    }
+
+    @Test @MainActor
+    func liveRunnerReturnsReviewPlanForDocumentFormFillWithoutExecutingInput() async throws {
+        let catalog = LocalAppTaskCatalog(
+            taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
+            availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.Preview"])
+        )
+        let context = LocalAppTaskContext(
+            focusedAppName: "Preview",
+            focusedBundleIdentifier: "com.apple.Preview",
+            focusedWindowTitle: "Application.pdf",
+            structuredData: ["Name": "Grace Hopper"],
+            observedFormFields: [
+                LocalDocumentFormField(id: "name", label: "Name", isRequired: true)
+            ]
+        )
+        let runner = LocalAppTaskLiveRunner(
+            catalog: catalog,
+            contextProvider: StaticLocalAppTaskContextProvider(context: context)
+        )
+
+        let result = await runner.run(
+            command: "fill out this PDF using this data",
+            traceID: "trace-document-fill"
+        )
+
+        #expect(result.status == .needsUserReview)
+        #expect(result.actionTraces.isEmpty)
+        #expect(result.documentFormFillPlan?.status == .readyForReview)
+        #expect(result.documentFormFillPlan?.proposals.first?.proposedValue == "Grace Hopper")
+        #expect(result.metadata["reason"] == "reviewOnlyTask")
+    }
+
     @Test @MainActor
     func liveRunnerLaunchesFocusesExecutesGuardedCommandsAndVerifies() async throws {
         let backend = RecordingLocalAppTaskInputBackend()

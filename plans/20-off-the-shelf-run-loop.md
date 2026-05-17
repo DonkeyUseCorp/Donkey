@@ -1,6 +1,6 @@
 # Off-The-Shelf Run Loop
 
-> Active status: not complete. The current repo supports metadata-only local-navigation dry-run scaffolding, generic local-app task catalog parsing/adaptation, local JSON/JSONL task-definition loading, local-model command parsing, local task-context intake, review-first document form-fill planning, pointer-prompt typed command submission, macOS app launch/focus, guarded macOS keyboard input, local voice-transcription model selection, target-app availability checks, Accessibility visible-text observation when trusted, built-in task definitions across weather/media/document domains, and guarded live-action smoke. It still needs real-session verification and richer control discovery before any benchmark should be treated as done.
+> Active status: not complete. The current repo supports metadata-only local-navigation dry-run scaffolding, generic local-app task catalog parsing/adaptation, local JSON/JSONL task-definition loading, local-model command parsing, local task-context intake, Accessibility control discovery and guarded AX action commands, review/approval-first document form-fill planning, pointer-prompt typed command submission, macOS app launch/focus, guarded macOS keyboard input, local voice-transcription model selection and adapter boundary, target-app availability checks, Accessibility visible-text observation when trusted, built-in task definitions across weather/media/document domains, YOLO26 screenshot segmentation runner boundary, and guarded live-action smoke. It still needs installed local model runtimes, user-visible document approval UI, benchmark evidence, and real-session verification before any benchmark should be treated as done.
 
 ## Goal
 
@@ -515,20 +515,21 @@ The runtime foundation now supports a product-shaped local-navigation slice of t
 - p50/p95/p99 latency reports across capture, preprocess, model, perception, state update, controller decision, action projection, and input stages
 - action-engine permission, focus, rate, hold-duration, release, and backend-execution guardrails
 - guarded live-action smoke through an injected backend only after dry-run latency evidence, explicit input policy allowance, and focus guard success
-- generic local-app task catalog, intent contracts, built-in benchmark definitions across Weather lookup, Music playback, and PDF/document form-fill, local JSON/JSONL task-definition loading, local-model command parsing, deterministic fallback parsing, local task-context intake, review-first document form-fill planning, pointer-prompt typed command submission, dry-run workflow-step projection, guarded keyboard command templates, macOS launch/focus, guarded macOS keyboard input, Accessibility visible-text observation when trusted, and visible-text verification
-- screenshot segmentation model-candidate metadata for Ultralytics YOLO26 nano segmentation (`yolo26n-seg.pt`)
+- generic local-app task catalog, intent contracts, built-in benchmark definitions across Weather lookup, Music playback, and PDF/document form-fill, local JSON/JSONL task-definition loading, local-model command parsing, deterministic fallback parsing, local task-context intake, Accessibility control discovery, review/approval-first document form-fill planning, pointer-prompt typed command submission, dry-run workflow-step projection, guarded keyboard and Accessibility command templates, macOS launch/focus, guarded macOS keyboard input, guarded `AXPress`/`AXSetValue` backend, Accessibility visible-text observation when trusted, and visible-text verification
+- screenshot segmentation model-candidate metadata and runner evidence boundary for Ultralytics YOLO26 nano segmentation (`yolo26n-seg.pt`)
+- local voice transcription adapter boundary that routes bounded local audio to the selected local ASR runtime and emits transcript text for the normal command parser
 - optional slow-planner sidecar that publishes only validated hints without blocking reflex latency
 
-This is still not the full off-the-shelf vision stack and must not be treated as completion. It can replay and trace compact local vision evidence, name a current YOLO segmentation candidate, load local task definitions, build reviewable document form-fill plans, and run a guarded keyboard-based local-app task path, but it does not ship live local detector/local-model/OCR/segmentation adapters over captured pixels, continuous streaming capture, Accessibility action execution, approved form-fill execution, robust UI control discovery, high-volume persisted replay traces, or target-specific visual calibration.
+This is still not the full off-the-shelf vision stack and must not be treated as completion. It can replay and trace compact local vision evidence, name a current YOLO segmentation candidate, load local task definitions, discover Accessibility controls, build approval-gated document form-fill commands, and run a guarded keyboard/AX local-app task path, but it does not bundle live local detector/local-model/OCR/segmentation runtimes, continuous streaming capture, user-visible form-fill approval UI, high-volume persisted replay traces, or target-specific visual calibration.
 
 ## Required Before This Plan Is Done
 
 - Manually verify measured guarded-live execution for the first local-app task benchmark command "show me the weather for SF".
 - Prove fast local navigation from parsed intent, local app observation, deterministic controller state, and guarded live input, not remote planning.
-- Extend the narrow macOS app-control backend from keyboard-only workflows to Accessibility action/control discovery where available.
-- Add the user-visible review and approval UI for document form-fill proposals before enabling guarded field entry.
+- Add the user-visible review and approval UI for document form-fill proposals before enabling default guarded field entry.
 - Add result verification through Accessibility plus local model UI-understanding fallback, with OCR only if a narrow benchmark justifies it.
-- Add measured YOLO26 screenshot/crop segmentation inference for visual fallback, including export/runtime choice, crop size, mask quality, and p95 latency.
+- Add installed measured YOLO26 screenshot/crop segmentation inference for visual fallback, including export/runtime choice, crop size, mask quality, and p95 latency.
+- Add installed measured local ASR runtime wiring for Parakeet/Whisper and route transcripts through command parsing.
 - Add continuous streaming capture once queue-depth, stale-result, and trace sinks are ready for longer sessions.
 - Add durable high-volume replay trace persistence and target-specific benchmark baselines.
 - Keep local model UI understanding, segmentation, and OCR optional in the live path until each has cropped, measured, target-specific evidence.

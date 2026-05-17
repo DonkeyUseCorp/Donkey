@@ -272,7 +272,7 @@ public final class MacAccessibilitySnapshotCaptureService {
     }
 }
 
-private final class ApplicationServicesMacAccessibilitySnapshotCapturer: MacAccessibilitySnapshotCapturing {
+final class ApplicationServicesMacAccessibilitySnapshotCapturer: MacAccessibilitySnapshotCapturing {
     func trustStatus() -> MacAccessibilityTrustStatus {
         AXIsProcessTrusted() ? .trusted : .notTrusted
     }

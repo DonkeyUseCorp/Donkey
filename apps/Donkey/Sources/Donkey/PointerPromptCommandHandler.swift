@@ -20,7 +20,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
     var liveRunner: LocalAppTaskLiveRunner
 
     init(
-        catalog: LocalAppTaskCatalog = LocalAppTaskCatalog(taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults),
+        catalog: LocalAppTaskCatalog = .defaultLocal(),
         localModelResolver: LocalModelTaskIntentResolver? = nil,
         liveRunner: LocalAppTaskLiveRunner? = nil
     ) {
@@ -70,6 +70,10 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         case .completed:
             return "Done"
         case .needsUserReview:
+            if let proposalCount = result.documentFormFillPlan?.proposals.count,
+               proposalCount > 0 {
+                return "Review \(proposalCount) fields"
+            }
             return "Needs review"
         case .needsConfirmation:
             if let reason = result.resolution.metadata["reason"] {
