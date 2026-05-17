@@ -8,6 +8,82 @@ public enum OffTheShelfVisionSignalKind: String, Codable, Equatable, Sendable {
     case segmentation
 }
 
+public enum OffTheShelfVisionInputSource: String, Codable, Equatable, Sendable {
+    case screenshot
+    case crop
+    case recorded
+}
+
+public struct OffTheShelfVisionModelCandidate: Codable, Equatable, Sendable {
+    public var id: String
+    public var family: String
+    public var modelName: String
+    public var signalKind: OffTheShelfVisionSignalKind
+    public var preferredInputSource: OffTheShelfVisionInputSource
+    public var componentID: String
+    public var docsURL: URL
+    public var lastVerifiedAt: String
+    public var metadata: [String: String]
+
+    public init(
+        id: String,
+        family: String,
+        modelName: String,
+        signalKind: OffTheShelfVisionSignalKind,
+        preferredInputSource: OffTheShelfVisionInputSource,
+        componentID: String,
+        docsURL: URL,
+        lastVerifiedAt: String,
+        metadata: [String: String] = [:]
+    ) {
+        self.id = id
+        self.family = family
+        self.modelName = modelName
+        self.signalKind = signalKind
+        self.preferredInputSource = preferredInputSource
+        self.componentID = componentID
+        self.docsURL = docsURL
+        self.lastVerifiedAt = lastVerifiedAt
+        self.metadata = metadata
+    }
+}
+
+public enum OffTheShelfVisionModelCatalog {
+    public static let yolo26NanoScreenshotSegmentation = OffTheShelfVisionModelCandidate(
+        id: "ultralytics-yolo26n-seg-screenshot",
+        family: "YOLO26",
+        modelName: "yolo26n-seg.pt",
+        signalKind: .segmentation,
+        preferredInputSource: .crop,
+        componentID: "screenshot-segmentation-yolo26",
+        docsURL: URL(string: "https://docs.ultralytics.com/models/yolo26/")!,
+        lastVerifiedAt: "2026-05-17",
+        metadata: [
+            "provider": "ultralytics",
+            "task": "instanceSegmentation",
+            "latestYOLOFamilyVerified": "YOLO26",
+            "screenshotUse": "boundedCropFirst",
+            "liveDefault": "false",
+            "requiresLocalBenchmark": "true",
+            "docsTaskURL": "https://docs.ultralytics.com/tasks/segment/"
+        ]
+    )
+
+    public static var screenshotSegmentationCandidates: [OffTheShelfVisionModelCandidate] {
+        [yolo26NanoScreenshotSegmentation]
+    }
+
+    public static func defaultCandidate(
+        signalKind: OffTheShelfVisionSignalKind,
+        inputSource: OffTheShelfVisionInputSource
+    ) -> OffTheShelfVisionModelCandidate? {
+        screenshotSegmentationCandidates.first {
+            $0.signalKind == signalKind
+                && ($0.preferredInputSource == inputSource || inputSource == .screenshot)
+        }
+    }
+}
+
 public struct RecordedOffTheShelfVisionObservation: Codable, Equatable, Sendable {
     public var id: String
     public var label: String

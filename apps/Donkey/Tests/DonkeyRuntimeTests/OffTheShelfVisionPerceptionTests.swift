@@ -6,6 +6,23 @@ import Testing
 @Suite
 struct OffTheShelfVisionPerceptionTests {
     @Test
+    func modelCatalogIncludesLatestYOLOForScreenshotSegmentation() throws {
+        let candidate = try #require(OffTheShelfVisionModelCatalog.defaultCandidate(
+            signalKind: .segmentation,
+            inputSource: .screenshot
+        ))
+
+        #expect(candidate.family == "YOLO26")
+        #expect(candidate.modelName == "yolo26n-seg.pt")
+        #expect(candidate.signalKind == .segmentation)
+        #expect(candidate.preferredInputSource == .crop)
+        #expect(candidate.componentID == "screenshot-segmentation-yolo26")
+        #expect(candidate.metadata["latestYOLOFamilyVerified"] == "YOLO26")
+        #expect(candidate.metadata["requiresLocalBenchmark"] == "true")
+        #expect(candidate.docsURL.absoluteString == "https://docs.ultralytics.com/models/yolo26/")
+    }
+
+    @Test
     func metadataCodecRoundTripsLocalVisionEvidence() throws {
         let metadata = RecordedOffTheShelfVisionMetadataCodec.encode(signals: [
             recordedSignal(kind: .detector, id: "detector-signal", modelID: "yolo-nano-local"),

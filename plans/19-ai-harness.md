@@ -347,7 +347,7 @@ Do not hardcode one model everywhere. Assign models by role.
 
 | Role | Default Candidate | Use |
 | --- | --- | --- |
-| `intent_local` | deterministic parser, then small local model if needed | common command-to-intent parsing before local app execution |
+| `intent_local` | small local structured-output model, with deterministic parser as fallback/validator | common command-to-intent parsing before local app execution |
 | `planner_default` | `gpt-5.4-mini` | routine slow planning, recovery hints, target reasoning |
 | `planner_strong` | `gpt-5.5` | hard recovery, unfamiliar screens, complex strategy, plan generation |
 | `planner_deep_eval` | `gpt-5.5-pro` | offline trace critique or high-value evaluation only |
@@ -366,11 +366,11 @@ Current OpenAI docs list GPT-5.5 as the flagship model for complex coding/profes
 Route by job type, risk, latency tolerance, and failure history.
 
 ```text
-if deterministic intent parser can resolve the command:
-  skip model call
+if job is common app command parsing:
+  prefer intent_local with a strict timeout and validate output against app-task definitions
 
-if job is common app intent disambiguation and local model is available:
-  prefer intent_local or planner_local with a strict timeout
+if intent_local is unavailable or invalid:
+  use deterministic parser only as fallback for known commands
 
 if job is hot_path:
   reject remote model call

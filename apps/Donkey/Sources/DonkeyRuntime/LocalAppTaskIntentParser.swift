@@ -163,7 +163,7 @@ public struct LocalAppTaskIntentParser: Sendable {
             .joined(separator: "-")
     }
 
-    static func normalizedPhrase(_ value: String) -> String {
+    public static func normalizedPhrase(_ value: String) -> String {
         let folded = value.folding(
             options: [.diacriticInsensitive, .caseInsensitive],
             locale: Locale(identifier: "en_US_POSIX")

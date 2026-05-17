@@ -69,6 +69,121 @@ struct AIHarnessAdapterTests {
     }
 
     @Test
+    func privacySensitiveTaskIntentRouteSelectsLocalProvider() throws {
+        let router = AIModelRouter(registry: .defaultHybridPlanner)
+
+        let selected = try router.route(
+            AIModelRouteRequest(
+                jobType: .taskIntent,
+                privacyMode: .privacySensitive
+            )
+        )
+
+        #expect(selected.id == "ollama-task-intent-local")
+        #expect(selected.role == .taskIntent)
+        #expect(selected.provider == .ollama)
+    }
+
+    @Test
+    func ollamaTaskIntentAdapterBuildsLocalRequestAndDecodesValidatedIntent() async throws {
+        let httpClient = FakeAIHTTPClient(
+            data: ollamaResponseData(
+                response: """
+                {"taskType":"weather_lookup","targetAppName":"Weather","entities":{"city":"SF"},"normalizedEntities":{"city":"San Francisco"},"confidence":0.93,"needsConfirmation":false,"metadata":{"source":"test"}}
+                """
+            ),
+            statusCode: 200
+        )
+        let adapter = OllamaTaskIntentAdapter(
+            router: AIModelRouter(
+                registry: AIModelRegistry(
+                    entries: [
+                        entry(
+                            id: "local-intent",
+                            role: .taskIntent,
+                            provider: .ollama,
+                            modelID: "qwen3:8b",
+                            endpoint: URL(string: "http://127.0.0.1:11434/api/generate")!,
+                            promptVersion: "task-intent-v1"
+                        )
+                    ]
+                )
+            ),
+            httpClient: httpClient
+        )
+
+        let result = await adapter.parseTaskIntent(
+            TaskIntentAdapterRequest(
+                command: "show me the weather for SF",
+                taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
+                sourceTraceID: "trace-intent"
+            )
+        )
+
+        #expect(result.intent?.taskType == "weather_lookup")
+        #expect(result.intent?.targetApp.appName == "Weather")
+        #expect(result.intent?.normalizedEntities["city"] == "San Francisco")
+        #expect(result.intent?.parserSource == .localModel)
+        #expect(result.intent?.sourceModelCallID == "model-call-trace-intent")
+        #expect(result.trace.status == .completed)
+        #expect(result.trace.role == .taskIntent)
+        #expect(result.trace.provider == .ollama)
+
+        let request = try #require(httpClient.requests.first)
+        #expect(request.url?.absoluteString == "http://127.0.0.1:11434/api/generate")
+        let body = try #require(request.httpBodyJSONObject)
+        #expect(body["model"] as? String == "qwen3:8b")
+        #expect(body["stream"] as? Bool == false)
+        #expect(body["format"] as? [String: Any] != nil)
+        #expect((body["prompt"] as? String)?.contains("Use only the provided task definitions") == true)
+    }
+
+    @Test
+    func localModelTaskIntentResolverValidatesAgainstCatalogAvailability() async {
+        let httpClient = FakeAIHTTPClient(
+            data: ollamaResponseData(
+                response: """
+                {"taskType":"weather_lookup","targetAppName":"Weather","entities":{"city":"SF"},"normalizedEntities":{"city":"San Francisco"},"confidence":0.93,"needsConfirmation":false,"metadata":{}}
+                """
+            ),
+            statusCode: 200
+        )
+        let resolver = LocalModelTaskIntentResolver(
+            catalog: LocalAppTaskCatalog(
+                taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
+                availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.weather"])
+            ),
+            adapter: OllamaTaskIntentAdapter(
+                router: AIModelRouter(
+                    registry: AIModelRegistry(
+                        entries: [
+                            entry(
+                                id: "local-intent",
+                                role: .taskIntent,
+                                provider: .ollama,
+                                modelID: "qwen3:8b",
+                                endpoint: URL(string: "http://127.0.0.1:11434/api/generate")!,
+                                promptVersion: "task-intent-v1"
+                            )
+                        ]
+                    )
+                ),
+                httpClient: httpClient
+            )
+        )
+
+        let result = await resolver.resolve(
+            command: "show me the weather for SF",
+            sourceTraceID: "trace-resolve-intent"
+        )
+
+        #expect(result.resolution.status == .resolved)
+        #expect(result.resolution.intent?.parserSource == .localModel)
+        #expect(result.resolution.availability?.isInstalled == true)
+        #expect(result.trace.status == .completed)
+    }
+
+    @Test
     func openAIAdapterBuildsResponsesRequestWithStoreFalseAndDecodesStructuredHint() async throws {
         let httpClient = FakeAIHTTPClient(
             data: responseData(
@@ -248,21 +363,23 @@ struct AIHarnessAdapterTests {
 
     private func entry(
         id: String,
+        role: AIModelRole = .plannerHint,
         provider: AIModelProvider = .openAI,
         modelID: String,
         endpoint: URL = URL(string: "https://api.openai.com/v1/responses")!,
         evalStatus: AIModelEvalStatus = .candidate,
-        timeoutMS: Int = 8_000
+        timeoutMS: Int = 8_000,
+        promptVersion: String = "planner-hint-v1"
     ) -> AIModelRegistryEntry {
         AIModelRegistryEntry(
             id: id,
-            role: .plannerHint,
+            role: role,
             provider: provider,
             modelID: modelID,
             endpoint: endpoint,
             capabilities: [.textInput, .structuredOutputs],
             timeoutMS: timeoutMS,
-            promptVersion: "planner-hint-v1",
+            promptVersion: promptVersion,
             evalStatus: evalStatus,
             docsURL: provider == .openAI
                 ? URL(string: "https://platform.openai.com/docs/api-reference/responses/create")!

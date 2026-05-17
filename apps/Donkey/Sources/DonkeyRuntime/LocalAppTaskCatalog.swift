@@ -119,6 +119,10 @@ public struct LocalAppTaskCatalog: Sendable {
             )
         }
 
+        return resolve(intent: intent)
+    }
+
+    public func resolve(intent: TaskIntent) -> LocalAppTaskCatalogResolution {
         guard let definition = taskDefinitions.first(where: { supports(intent: intent, definition: $0) }) else {
             return LocalAppTaskCatalogResolution(
                 status: .unsupportedCommand,

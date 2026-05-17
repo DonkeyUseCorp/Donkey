@@ -7,6 +7,7 @@ public enum AIModelProvider: String, Codable, Equatable, Sendable {
 }
 
 public enum AIModelRole: String, Codable, Equatable, Sendable {
+    case taskIntent
     case plannerHint
     case traceSummary
     case recovery
@@ -100,6 +101,23 @@ public struct AIModelRegistry: Codable, Equatable, Sendable {
     public static let defaultHybridPlanner = AIModelRegistry(
         entries: [
             AIModelRegistryEntry(
+                id: "ollama-task-intent-local",
+                role: .taskIntent,
+                provider: .ollama,
+                modelID: "qwen3:8b",
+                endpoint: URL(string: "http://127.0.0.1:11434/api/generate")!,
+                capabilities: [.textInput, .structuredOutputs],
+                timeoutMS: 4_000,
+                promptVersion: "task-intent-v1",
+                evalStatus: .candidate,
+                docsURL: URL(string: "https://docs.ollama.com/api")!,
+                rollbackID: nil,
+                metadata: [
+                    "local": "true",
+                    "docsSource": "official Ollama API docs"
+                ]
+            ),
+            AIModelRegistryEntry(
                 id: "ollama-planner-hint-local",
                 role: .plannerHint,
                 provider: .ollama,
@@ -138,6 +156,7 @@ public struct AIModelRegistry: Codable, Equatable, Sendable {
 }
 
 public enum AIModelJobType: String, Codable, Equatable, Sendable {
+    case taskIntent
     case plannerHint
     case traceSummary
     case recovery
@@ -236,6 +255,8 @@ public struct AIModelRouter: Sendable {
 
     private func role(for jobType: AIModelJobType) -> AIModelRole {
         switch jobType {
+        case .taskIntent:
+            return .taskIntent
         case .plannerHint:
             return .plannerHint
         case .traceSummary:

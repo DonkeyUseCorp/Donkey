@@ -1,6 +1,6 @@
 # Off-The-Shelf Run Loop
 
-> Active status: not complete. The current repo supports metadata-only local-navigation dry-run scaffolding, generic local-app task catalog parsing/adaptation, target-app availability checks, and guarded live-action smoke, but not a live fast-navigation agent for a concrete command such as "show me the weather for SF".
+> Active status: not complete. The current repo supports metadata-only local-navigation dry-run scaffolding, generic local-app task catalog parsing/adaptation, local-model command parsing, target-app availability checks, and guarded live-action smoke, but not a live fast-navigation agent for a concrete command such as "show me the weather for SF".
 
 ## Goal
 
@@ -36,7 +36,7 @@ Do not build a custom model pipeline for the first version.
 
 The first version should prove:
 
-- command-to-intent parsing is reliable for common tasks
+- local-model command-to-intent parsing is reliable for common tasks and validated against known app-task definitions
 - macOS app launch/focus is reliable
 - Accessibility/window metadata can extract useful app state
 - local visual fallback is available only when Accessibility and metadata are insufficient
@@ -51,7 +51,8 @@ The first version should prove:
 
 Use existing, swappable components:
 
-- deterministic intent parser for common local commands using app-task definitions
+- local-model command parser for common local commands using app-task definitions
+- deterministic parser only as fallback, validator, and test scaffold
 - installed-app and task-knowledge lookup for target app identity, workflows, controls, and verification rules
 - small local model or planner hint only for ambiguous command parsing
 - target/task adapters for app-specific workflows
@@ -282,7 +283,7 @@ Good jobs:
 - lane markers
 - minimap markers
 
-Use current Ultralytics YOLO-family nano/small models as candidates. The exact model should be selected by export support, license, latency, and whether the built-in labels are useful. As of current Ultralytics docs, YOLO26 is the newest line, YOLO11 is a stable modern line, and YOLOv8 remains widely supported.
+Use current Ultralytics YOLO-family nano/small models as candidates. The exact model should be selected by export support, license, latency, and whether the built-in labels are useful. As of the official Ultralytics docs checked on May 17, 2026, YOLO26 is the latest line, YOLO11 is a stable modern line, and YOLOv8 remains widely supported. The current screenshot segmentation catalog candidate is `yolo26n-seg.pt`, and it should run on bounded crops before any full-screenshot or live-control use.
 
 ### Segment Anything When Needed
 
@@ -451,7 +452,7 @@ Good follow-on tasks:
 Suggested first stack:
 
 ```text
-Intent: deterministic parser with local-model fallback for ambiguity
+Intent: local-model parser with deterministic fallback/validation
 App control: NSWorkspace/LaunchServices activation
 Observation: Accessibility snapshot first, local model UI understanding over bounded screenshot/crop fallback
 Rules: deterministic local-app task state machine
@@ -463,7 +464,7 @@ Runtime: native Swift coordinator and trace pipeline
 ## Rollout
 
 1. Define generic `TaskIntent`, target-app, entity, workflow-step, observation, and verification contracts.
-2. Add deterministic parsing from local app-task definitions, including aliases such as `SF -> San Francisco` in benchmark data.
+2. Add local-model command parsing from local app-task definitions, including aliases such as `SF -> San Francisco` in benchmark data, with deterministic parsing kept as fallback/validation.
 3. Add installed-app and app-task knowledge lookup for target app identity, workflows, controls, and verification rules.
 4. Define generic task-state fields and terminal states.
 5. Extend the generic local-app task adapter from dry-run semantic actions to guarded-live orchestration.
@@ -507,10 +508,11 @@ The runtime foundation now supports a product-shaped local-navigation slice of t
 - p50/p95/p99 latency reports across capture, preprocess, model, perception, state update, controller decision, action projection, and input stages
 - action-engine permission, focus, rate, hold-duration, release, and backend-execution guardrails
 - guarded live-action smoke through an injected backend only after dry-run latency evidence, explicit input policy allowance, and focus guard success
-- generic local-app task catalog, intent contracts, built-in benchmark definition, deterministic parsing, dry-run workflow-step projection, guarded keyboard command templates, and visible-text verification
+- generic local-app task catalog, intent contracts, built-in benchmark definition, local-model command parsing, deterministic fallback parsing, dry-run workflow-step projection, guarded keyboard command templates, and visible-text verification
+- screenshot segmentation model-candidate metadata for Ultralytics YOLO26 nano segmentation (`yolo26n-seg.pt`)
 - optional slow-planner sidecar that publishes only validated hints without blocking reflex latency
 
-This is still not the full off-the-shelf vision stack and must not be treated as completion. It can replay and trace compact local vision evidence, but it does not ship live local detector/local-model/OCR/segmentation adapters over captured pixels, continuous streaming capture, a default OS input backend, high-volume persisted replay traces, or target-specific visual calibration.
+This is still not the full off-the-shelf vision stack and must not be treated as completion. It can replay and trace compact local vision evidence and name a current YOLO segmentation candidate, but it does not ship live local detector/local-model/OCR/segmentation adapters over captured pixels, continuous streaming capture, a default OS input backend, high-volume persisted replay traces, or target-specific visual calibration.
 
 ## Required Before This Plan Is Done
 
@@ -518,6 +520,7 @@ This is still not the full off-the-shelf vision stack and must not be treated as
 - Prove fast local navigation from parsed intent, local app observation, deterministic controller state, and guarded live input, not remote planning.
 - Add a default narrow macOS app-control backend for launch/focus/type/select/verify with focus guard and emergency release.
 - Add result verification through Accessibility or local model UI-understanding fallback, with OCR only if a narrow benchmark justifies it.
+- Add measured YOLO26 screenshot/crop segmentation inference for visual fallback, including export/runtime choice, crop size, mask quality, and p95 latency.
 - Add continuous streaming capture once queue-depth, stale-result, and trace sinks are ready for longer sessions.
 - Add durable high-volume replay trace persistence and target-specific benchmark baselines.
 - Keep local model UI understanding, segmentation, and OCR optional in the live path until each has cropped, measured, target-specific evidence.
@@ -525,6 +528,8 @@ This is still not the full off-the-shelf vision stack and must not be treated as
 ## Where To Look
 
 - Ultralytics supported models: https://docs.ultralytics.com/models/
+- Ultralytics YOLO26 model docs: https://docs.ultralytics.com/models/yolo26/
+- Ultralytics segmentation task docs: https://docs.ultralytics.com/tasks/segment/
 - YOLO11 model card: https://huggingface.co/Ultralytics/YOLO11
 - Segment Anything repository: https://github.com/facebookresearch/segment-anything
 - SAM2 repository: https://github.com/facebookresearch/sam2
