@@ -21,17 +21,15 @@ export function Hero() {
       <h1
         style={{
           fontWeight: 900,
-          lineHeight: 0.9,
-          fontSize: "clamp(56px, 9vw, 112px)",
+          letterSpacing: "-0.03em",
+          lineHeight: 0.88,
+          fontSize: "clamp(56px, 12vw, 168px)",
           margin: 0,
-          maxWidth: "14ch",
         }}
       >
-        Get work
+        Get work done
         <br />
-        done while
-        <br />
-        <span style={{ fontStyle: "italic" }}>you sleep.</span>
+        while <span style={{ fontStyle: "italic" }}>you sleep.</span>
       </h1>
       <p
         style={{
@@ -62,8 +60,6 @@ export function Hero() {
           flexWrap: "wrap",
         }}
       >
-        <span style={{ fontWeight: 600 }}>macOS 14+</span>
-        <span aria-hidden="true">-</span>
         <span>Free during beta</span>
       </div>
     </section>

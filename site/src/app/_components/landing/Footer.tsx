@@ -78,7 +78,7 @@ export function Footer() {
         >
           <div>
             <div style={{ fontWeight: 800, color: BLACK, marginBottom: 4 }}>
-              hello@donkeyuse.com
+              david@donkeyuse.com
             </div>
             <div>2026 Donkey, Inc. Made for Macs.</div>
           </div>

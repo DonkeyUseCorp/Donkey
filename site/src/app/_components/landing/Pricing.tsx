@@ -102,7 +102,7 @@ export function Pricing() {
               Running Donkey across an org? Reach out and we will figure out
               what makes sense.
             </p>
-            <PillButton href="mailto:hello@donkeyuse.com" variant="dark" size="md">
+            <PillButton href="mailto:david@donkeyuse.com" variant="dark" size="md">
               Contact us <ArrowRight size={14} />
             </PillButton>
           </div>
