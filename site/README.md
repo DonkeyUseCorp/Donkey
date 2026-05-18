@@ -45,6 +45,20 @@ Do not commit `.env`. Set `DATABASE_URL` and `DIRECT_URL` in Vercel before deplo
 
 Use Supabase's pooled connection string for `DATABASE_URL` in serverless runtime code. Use the direct, non-pooled connection string for `DIRECT_URL`; Prisma CLI commands use it through `prisma.config.ts` for migrations and schema pushes.
 
+For local Supabase, run CLI commands from this `site` directory. The local Supabase project id is `donkey`, and the database listens on port `54332` so it can run alongside another local Supabase project using the default ports.
+
+```bash
+supabase start
+supabase status
+```
+
+Use the local database URL for both Prisma variables during development:
+
+```bash
+DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:54332/postgres"
+DIRECT_URL="postgresql://postgres:postgres@127.0.0.1:54332/postgres"
+```
+
 ## Scripts
 
 - `npm run dev`: run the app locally.
