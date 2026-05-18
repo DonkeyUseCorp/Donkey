@@ -10,6 +10,7 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 BUILD_DIR="$ROOT_DIR/apps/Donkey"
 EXECUTABLE="$BUILD_DIR/.build/release/Donkey"
 CACHE_DIR="$BUILD_DIR/.build/package-cache"
+RUNTIME_RUNNER_SOURCE="$ROOT_DIR/scripts/local-runtime-runners/donkey_runtime_runner.py"
 
 mkdir -p "$CACHE_DIR/clang" "$CACHE_DIR/swiftpm" "$CACHE_DIR/home"
 export CLANG_MODULE_CACHE_PATH="$CACHE_DIR/clang"
@@ -28,39 +29,40 @@ make_runtime_package() {
   local executable_name="$2"
   local model_id="$3"
   local role="$4"
+  local model_url="${5:-}"
+  local model_sha256="${6:-}"
+  local model_filename="${7:-model.bin}"
   local package_dir="$RUNTIME_PACKAGE_DIR/$runtime_id"
   local bin_dir="$package_dir/bin"
+  local lib_dir="$package_dir/lib"
   local executable_path="$bin_dir/$executable_name"
+  local runner_path="$lib_dir/donkey_runtime_runner.py"
 
-  mkdir -p "$bin_dir"
+  mkdir -p "$bin_dir" "$lib_dir"
+  cp "$RUNTIME_RUNNER_SOURCE" "$runner_path"
+  chmod 755 "$runner_path"
   cat > "$executable_path" <<EOF_RUNTIME
 #!/usr/bin/env sh
-REQUEST="\$(cat)"
-if printf '%s' "\$REQUEST" | grep -q '"operation"[[:space:]]*:[[:space:]]*"healthCheck"'; then
-  printf '{"status":"ok","runtimeID":"$runtime_id","runtimeVersion":"0.1.0-bootstrap","modelID":"$model_id","protocolVersion":"v1","metadata":{"runtime.package":"bundled-bootstrap","modelWeightsBundled":"false","sidecar.role":"$role"}}'
-  exit 0
-fi
-
-case "$runtime_id" in
-  parakeet-transcriber)
-    printf '{"text":"","language":null,"confidence":0,"segments":[],"metadata":{"runtime.package":"bundled-bootstrap","modelWeightsBundled":"false","reason":"modelWeightsNotInstalled"}}'
-    ;;
-  yolo-segmenter)
-    printf '{"masks":[],"preprocessMS":0,"modelInferenceMS":0,"metadata":{"runtime.package":"bundled-bootstrap","modelWeightsBundled":"false","reason":"modelWeightsNotInstalled"}}'
-    ;;
-  ui-understander)
-    printf '{"visibleText":{},"controls":[],"formFields":[],"confidence":0,"metadata":{"runtime.package":"bundled-bootstrap","modelWeightsBundled":"false","reason":"modelWeightsNotInstalled"}}'
-    ;;
-esac
+SCRIPT_DIR="\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)"
+PYTHON="\${DONKEY_RUNTIME_PYTHON:-python3}"
+export DONKEY_RUNTIME_ID="$runtime_id"
+export DONKEY_MODEL_ID="$model_id"
+export DONKEY_RUNTIME_ROLE="$role"
+export DONKEY_MODEL_URL="$model_url"
+export DONKEY_MODEL_SHA256="$model_sha256"
+export DONKEY_MODEL_FILENAME="$model_filename"
+exec "\$PYTHON" "\$SCRIPT_DIR/../lib/donkey_runtime_runner.py"
 EOF_RUNTIME
   chmod 755 "$executable_path"
 
-  local sha
-  sha="$(shasum -a 256 "$executable_path" | awk '{print $1}')"
+  local executable_sha
+  local runner_sha
+  executable_sha="$(shasum -a 256 "$executable_path" | awk '{print $1}')"
+  runner_sha="$(shasum -a 256 "$runner_path" | awk '{print $1}')"
   cat > "$package_dir/manifest.json" <<EOF_MANIFEST
 {
   "runtimeID" : "$runtime_id",
-  "runtimeVersion" : "0.1.0-bootstrap",
+  "runtimeVersion" : "0.2.0-runner",
   "modelID" : "$model_id",
   "platform" : "macos",
   "architecture" : "$(uname -m | sed 's/aarch64/arm64/;s/x86_64/x86_64/')",
@@ -70,15 +72,23 @@ EOF_RUNTIME
   "files" : [
     {
       "relativePath" : "bin/$executable_name",
-      "sha256" : "$sha",
+      "sha256" : "$executable_sha",
+      "isExecutable" : true
+    },
+    {
+      "relativePath" : "lib/donkey_runtime_runner.py",
+      "sha256" : "$runner_sha",
       "isExecutable" : true
     }
   ],
-  "signature" : "bundled-bootstrap-package",
-  "signingKeyID" : "donkey-bootstrap",
+  "signature" : "bundled-runner-package",
+  "signingKeyID" : "donkey-runner",
   "metadata" : {
-    "runtime.package" : "bundled-bootstrap",
+    "runtime.package" : "donkey-runner-package",
     "modelWeightsBundled" : "false",
+    "modelWeights.downloadURL" : "$model_url",
+    "modelWeights.sha256" : "$model_sha256",
+    "modelWeights.filename" : "$model_filename",
     "sidecar.role" : "$role"
   }
 }
@@ -87,9 +97,10 @@ EOF_MANIFEST
 
 rm -rf "$RUNTIME_PACKAGE_DIR"
 mkdir -p "$RUNTIME_PACKAGE_DIR"
-make_runtime_package "parakeet-transcriber" "donkey-parakeet-transcriber" "nvidia/parakeet-tdt-0.6b-v3" "voiceTranscription"
-make_runtime_package "yolo-segmenter" "donkey-yolo-segmenter" "ultralytics/yolo26n-seg" "screenshotSegmentation"
-make_runtime_package "ui-understander" "donkey-ui-understander" "local-ui-understander" "uiUnderstanding"
+make_runtime_package "parakeet-transcriber" "donkey-parakeet-transcriber" "nvidia/parakeet-tdt-0.6b-v3" "voiceTranscription" "${DONKEY_PARAKEET_MODEL_URL:-}" "${DONKEY_PARAKEET_MODEL_SHA256:-}" "${DONKEY_PARAKEET_MODEL_FILENAME:-parakeet-model.bin}"
+make_runtime_package "yolo-segmenter" "donkey-yolo-segmenter" "ultralytics/yolo26n-seg" "screenshotSegmentation" "${DONKEY_YOLO_MODEL_URL:-}" "${DONKEY_YOLO_MODEL_SHA256:-}" "${DONKEY_YOLO_MODEL_FILENAME:-yolo26n-seg.pt}"
+make_runtime_package "ui-understander" "donkey-ui-understander" "local-ui-understander" "uiUnderstanding" "${DONKEY_UI_UNDERSTANDER_MODEL_URL:-}" "${DONKEY_UI_UNDERSTANDER_MODEL_SHA256:-}" "${DONKEY_UI_UNDERSTANDER_MODEL_FILENAME:-ui-understander-model.bin}"
+make_runtime_package "local-llm" "donkey-local-llm" "${DONKEY_LOCAL_LLM_MODEL_ID:-qwen3:8b}" "localLLM" "" "" "${DONKEY_LOCAL_LLM_MODEL_FILENAME:-ollama-qwen3-8b}"
 cp -R "$RUNTIME_PACKAGE_DIR" "$RESOURCES_DIR/LocalRuntimePackages"
 
 RESOURCE_BUNDLE="$(find "$BUILD_DIR/.build" -path "*/release/Donkey_Donkey.bundle" -type d | head -n 1 || true)"

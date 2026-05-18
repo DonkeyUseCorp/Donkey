@@ -1,0 +1,615 @@
+#!/usr/bin/env python3
+"""Donkey local runtime sidecar runner.
+
+The app packages this file with small executable wrappers for each runtime. It
+keeps the Donkey sidecar protocol stable while allowing each runtime package to
+prepare model weights and call a real local backend when the user's machine has
+the required runtime installed.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+
+RUNTIME_ID = os.environ.get("DONKEY_RUNTIME_ID", "")
+MODEL_ID = os.environ.get("DONKEY_MODEL_ID", "")
+ROLE = os.environ.get("DONKEY_RUNTIME_ROLE", "")
+MODEL_URL = os.environ.get("DONKEY_MODEL_URL", "")
+MODEL_SHA256 = os.environ.get("DONKEY_MODEL_SHA256", "")
+MODEL_FILENAME = os.environ.get("DONKEY_MODEL_FILENAME", "model.bin")
+OLLAMA_ENDPOINT = os.environ.get("DONKEY_OLLAMA_ENDPOINT", "http://127.0.0.1:11434")
+
+
+def main() -> int:
+    try:
+        request = json.loads(sys.stdin.read() or "{}")
+    except json.JSONDecodeError as exc:
+        write_json(error_payload("invalidJSON", {"detail": str(exc)}))
+        return 0
+
+    operation = request.get("operation")
+    if operation == "prepareModelWeights":
+        write_json(prepare_model_weights(request))
+        return 0
+    if operation == "healthCheck":
+        write_json(health_check(request))
+        return 0
+
+    if RUNTIME_ID == "local-llm":
+        write_json(run_local_llm(request))
+        return 0
+    if RUNTIME_ID == "parakeet-transcriber":
+        write_json(run_parakeet(request))
+        return 0
+    if RUNTIME_ID == "yolo-segmenter":
+        write_json(run_yolo(request))
+        return 0
+    if RUNTIME_ID == "ui-understander":
+        write_json(run_ui_understander(request))
+        return 0
+
+    write_json(error_payload("unknownRuntime"))
+    return 0
+
+
+def write_json(payload: dict[str, Any]) -> None:
+    sys.stdout.write(json.dumps(payload, separators=(",", ":")))
+
+
+def metadata(extra: dict[str, Any] | None = None) -> dict[str, str]:
+    values: dict[str, str] = {
+        "runtime.package": "donkey-runner-package",
+        "modelWeightsBundled": "false",
+        "sidecar.role": ROLE,
+    }
+    if extra:
+        for key, value in extra.items():
+            if value is not None:
+                values[key] = str(value)
+    return values
+
+
+def error_payload(reason: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "status": "error",
+        "runtimeID": RUNTIME_ID,
+        "modelID": MODEL_ID,
+        "metadata": metadata({"reason": reason, **(extra or {})}),
+    }
+
+
+def safe_model_dir(cache_dir: str | None = None, model_id: str | None = None) -> Path:
+    root = Path(cache_dir or tempfile.gettempdir())
+    safe_model = (model_id or MODEL_ID or RUNTIME_ID).replace("/", "-").replace(":", "-")
+    return root / safe_model
+
+
+def prepare_model_weights(request: dict[str, Any]) -> dict[str, Any]:
+    cache_dir = request.get("cacheDirectory")
+    if not isinstance(cache_dir, str) or not cache_dir:
+        return error_payload("missingCacheDirectory")
+
+    if RUNTIME_ID == "local-llm":
+        return prepare_ollama_model(cache_dir)
+
+    target_dir = safe_model_dir(cache_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    if RUNTIME_ID == "parakeet-transcriber" and not MODEL_URL:
+        return prepare_huggingface_snapshot(cache_dir)
+
+    if MODEL_URL:
+        target_file = Path(cache_dir) / MODEL_FILENAME
+        if target_file.exists() and target_file.stat().st_size > 0:
+            return prepared(cache_dir, {"modelWeights.status": "cached", "modelWeights.path": str(target_file)})
+        return download_model_file(MODEL_URL, target_file, MODEL_SHA256, cache_dir)
+
+    if RUNTIME_ID == "yolo-segmenter":
+        return prepare_ultralytics_model(cache_dir)
+
+    return error_payload(
+        "missingModelWeightDownloadURL",
+        {"cacheDirectory": cache_dir, "modelWeights.status": "notConfigured"},
+    )
+
+
+def prepared(cache_dir: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "runtimeID": RUNTIME_ID,
+        "modelID": MODEL_ID,
+        "cacheDirectory": cache_dir,
+        "metadata": metadata({"modelWeights.status": "downloaded", **(extra or {})}),
+    }
+
+
+def prepare_ollama_model(cache_dir: str) -> dict[str, Any]:
+    if ollama_has_model(MODEL_ID):
+        return prepared(
+            cache_dir,
+            {
+                "modelWeights.status": "cached",
+                "modelWeights.provider": "ollama",
+                "modelWeights.ollamaModel": MODEL_ID,
+            },
+        )
+
+    if shutil.which("ollama"):
+        completed = subprocess.run(
+            ["ollama", "pull", MODEL_ID],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if completed.returncode == 0:
+            return prepared(
+                cache_dir,
+                {
+                    "modelWeights.provider": "ollama",
+                    "modelWeights.ollamaModel": MODEL_ID,
+                },
+            )
+        return error_payload(
+            "ollamaPullFailed",
+            {
+                "cacheDirectory": cache_dir,
+                "modelWeights.status": "downloadFailed",
+                "modelWeights.provider": "ollama",
+                "stderr": completed.stderr[-400:],
+            },
+        )
+
+    try:
+        payload = json.dumps({"model": MODEL_ID, "stream": False}).encode("utf-8")
+        post_json("/api/pull", payload, timeout=1800)
+        return prepared(
+            cache_dir,
+            {
+                "modelWeights.provider": "ollama",
+                "modelWeights.ollamaModel": MODEL_ID,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        return error_payload(
+            "ollamaUnavailable",
+            {
+                "cacheDirectory": cache_dir,
+                "modelWeights.status": "notConfigured",
+                "modelWeights.provider": "ollama",
+                "detail": str(exc),
+            },
+        )
+
+
+def prepare_huggingface_snapshot(cache_dir: str) -> dict[str, Any]:
+    try:
+        from huggingface_hub import snapshot_download  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        return error_payload(
+            "pythonDependencyUnavailable",
+            {
+                "cacheDirectory": cache_dir,
+                "dependency": "huggingface_hub",
+                "detail": str(exc),
+            },
+        )
+
+    target_dir = safe_model_dir(cache_dir)
+    try:
+        snapshot_path = snapshot_download(
+            repo_id=MODEL_ID,
+            local_dir=str(target_dir),
+            local_dir_use_symlinks=False,
+        )
+        return prepared(
+            cache_dir,
+            {
+                "modelWeights.status": "cached",
+                "modelWeights.provider": "huggingface_hub",
+                "modelWeights.path": snapshot_path,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        return error_payload(
+            "huggingFaceSnapshotDownloadFailed",
+            {"cacheDirectory": cache_dir, "detail": str(exc)},
+        )
+
+
+def prepare_ultralytics_model(cache_dir: str) -> dict[str, Any]:
+    try:
+        from ultralytics import YOLO  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        return error_payload(
+            "pythonDependencyUnavailable",
+            {"cacheDirectory": cache_dir, "dependency": "ultralytics", "detail": str(exc)},
+        )
+
+    try:
+        YOLO(MODEL_ID)
+        return prepared(
+            cache_dir,
+            {
+                "modelWeights.status": "cached",
+                "modelWeights.provider": "ultralytics",
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        return error_payload(
+            "ultralyticsModelPrepareFailed",
+            {"cacheDirectory": cache_dir, "detail": str(exc)},
+        )
+
+
+def download_model_file(url: str, target_file: Path, expected_sha256: str, cache_dir: str) -> dict[str, Any]:
+    target_file.parent.mkdir(parents=True, exist_ok=True)
+    tmp_file = target_file.with_suffix(target_file.suffix + ".tmp")
+    try:
+        with urllib.request.urlopen(url, timeout=1800) as response, tmp_file.open("wb") as output:
+            shutil.copyfileobj(response, output)
+    except Exception as exc:  # noqa: BLE001
+        tmp_file.unlink(missing_ok=True)
+        return error_payload("modelWeightDownloadFailed", {"cacheDirectory": cache_dir, "detail": str(exc)})
+
+    if expected_sha256:
+        actual = sha256_file(tmp_file)
+        if actual.lower() != expected_sha256.lower():
+            tmp_file.unlink(missing_ok=True)
+            return error_payload(
+                "modelWeightChecksumMismatch",
+                {"cacheDirectory": cache_dir, "expectedSHA256": expected_sha256, "actualSHA256": actual},
+            )
+
+    tmp_file.replace(target_file)
+    return prepared(cache_dir, {"modelWeights.path": str(target_file)})
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as input_file:
+        for chunk in iter(lambda: input_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def health_check(request: dict[str, Any]) -> dict[str, Any]:
+    cache_dir = request.get("cacheDirectory")
+    weights_status = "missing"
+    provider = ""
+
+    if RUNTIME_ID == "local-llm":
+        weights_status = "cached" if ollama_has_model(MODEL_ID) else "missing"
+        provider = "ollama"
+    elif isinstance(cache_dir, str) and cache_dir:
+        model_file = Path(cache_dir) / MODEL_FILENAME
+        model_dir = safe_model_dir(cache_dir)
+        weights_status = "cached" if model_file.exists() or any(model_dir.glob("*")) else "missing"
+
+    extra = {
+        "runtime.package": "donkey-runner-package",
+        "modelWeights.status": weights_status,
+        "modelWeights.provider": provider,
+    }
+    return {
+        "status": "ok",
+        "runtimeID": RUNTIME_ID,
+        "runtimeVersion": "0.2.0-runner",
+        "modelID": MODEL_ID,
+        "protocolVersion": "v1",
+        "metadata": metadata(extra),
+    }
+
+
+def run_local_llm(request: dict[str, Any]) -> dict[str, Any]:
+    command = request.get("command", "")
+    task_definitions = request.get("taskDefinitions", [])
+    prompt = task_intent_prompt(command, task_definitions)
+    schema = task_intent_schema(task_definitions)
+    body = {
+        "model": request.get("modelID") or MODEL_ID,
+        "prompt": prompt,
+        "stream": False,
+        "format": schema,
+        "options": {"num_predict": 512},
+    }
+    started = time.monotonic()
+    try:
+        response = post_json("/api/generate", json.dumps(body).encode("utf-8"), timeout=60)
+        latency_ms = (time.monotonic() - started) * 1000
+        return {
+            "outputText": response.get("response", ""),
+            "metadata": metadata(
+                {
+                    "local.provider": "ollama-sidecar",
+                    "http.status": "200",
+                    "latency.localLLMGenerationMS": f"{latency_ms:.3f}",
+                }
+            ),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "outputText": "",
+            "metadata": metadata({"reason": "localLLMGenerationFailed", "detail": str(exc)}),
+        }
+
+
+def task_intent_prompt(command: str, task_definitions: list[dict[str, Any]]) -> str:
+    task_lines: list[str] = []
+    for definition in task_definitions:
+        target = definition.get("targetApp", {})
+        entity_parts = []
+        for rule in definition.get("entityRules", []):
+            aliases = ",".join(sorted((rule.get("aliases") or {}).keys()))
+            markers = ",".join(rule.get("markers") or [])
+            entity_parts.append(
+                f"{rule.get('name')} required={rule.get('required', True)} markers={markers} aliases={aliases}"
+            )
+        task_lines.append(
+            " | ".join(
+                [
+                    f"task_type={definition.get('taskType')}",
+                    f"app={target.get('appName')}",
+                    f"bundle={target.get('bundleIdentifier', 'unknown')}",
+                    f"triggers={','.join(definition.get('triggerTerms') or [])}",
+                    f"entities={'; '.join(entity_parts)}",
+                ]
+            )
+        )
+
+    return "\n".join(
+        [
+            "Return exactly one local app task intent as strict JSON.",
+            "Use only the provided task definitions. Do not invent apps, task types, entities, or actions.",
+            "If a required entity is missing, set needsConfirmation=true and include missingEntity in metadata.",
+            f"Command: {command}",
+            "Task definitions:",
+            "\n".join(task_lines),
+        ]
+    )
+
+
+def task_intent_schema(task_definitions: list[dict[str, Any]]) -> dict[str, Any]:
+    task_types = sorted({str(item.get("taskType")) for item in task_definitions if item.get("taskType")})
+    app_names = sorted(
+        {
+            str((item.get("targetApp") or {}).get("appName"))
+            for item in task_definitions
+            if (item.get("targetApp") or {}).get("appName")
+        }
+    )
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "taskType",
+            "targetAppName",
+            "entities",
+            "normalizedEntities",
+            "confidence",
+            "needsConfirmation",
+            "metadata",
+        ],
+        "properties": {
+            "taskType": {"type": "string", "enum": task_types},
+            "targetAppName": {"type": "string", "enum": app_names},
+            "entities": {"type": "object", "additionalProperties": {"type": "string"}},
+            "normalizedEntities": {"type": "object", "additionalProperties": {"type": "string"}},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "needsConfirmation": {"type": "boolean"},
+            "metadata": {"type": "object", "additionalProperties": {"type": "string"}},
+        },
+    }
+
+
+def run_parakeet(request: dict[str, Any]) -> dict[str, Any]:
+    external_command = os.environ.get("DONKEY_PARAKEET_COMMAND")
+    if external_command:
+        return run_external_json_command(external_command, request)
+
+    try:
+        import nemo.collections.asr as nemo_asr  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        return transcript_payload("", 0, {"reason": "pythonDependencyUnavailable", "dependency": "nemo_toolkit", "detail": str(exc)})
+
+    audio_b64 = request.get("audioBase64", "")
+    audio_format = request.get("format", "wav") or "wav"
+    try:
+        audio_bytes = base64.b64decode(audio_b64)
+    except Exception as exc:  # noqa: BLE001
+        return transcript_payload("", 0, {"reason": "invalidAudioBase64", "detail": str(exc)})
+
+    suffix = "." + str(audio_format).lower().lstrip(".")
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as audio_file:
+        audio_file.write(audio_bytes)
+        audio_path = audio_file.name
+
+    started = time.monotonic()
+    try:
+        model = nemo_asr.models.ASRModel.from_pretrained(model_name=request.get("modelID") or MODEL_ID)
+        output = model.transcribe([audio_path])
+        latency_ms = (time.monotonic() - started) * 1000
+        text = transcription_text(output)
+        return transcript_payload(
+            text,
+            0.8 if text else 0,
+            {"runtime.backend": "nvidia-nemo", "latency.parakeetModelMS": f"{latency_ms:.3f}"},
+        )
+    except Exception as exc:  # noqa: BLE001
+        return transcript_payload("", 0, {"reason": "parakeetTranscriptionFailed", "detail": str(exc)})
+    finally:
+        Path(audio_path).unlink(missing_ok=True)
+
+
+def transcription_text(output: Any) -> str:
+    if isinstance(output, str):
+        return output.strip()
+    if isinstance(output, list) and output:
+        return transcription_text(output[0])
+    if hasattr(output, "text"):
+        return str(output.text).strip()
+    return str(output or "").strip()
+
+
+def transcript_payload(text: str, confidence: float, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "text": text,
+        "language": None,
+        "confidence": confidence,
+        "segments": [text] if text else [],
+        "metadata": metadata(extra),
+    }
+
+
+def run_yolo(request: dict[str, Any]) -> dict[str, Any]:
+    external_command = os.environ.get("DONKEY_YOLO_COMMAND")
+    if external_command:
+        return run_external_json_command(external_command, request)
+
+    try:
+        from ultralytics import YOLO  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        return {"masks": [], "preprocessMS": 0, "modelInferenceMS": 0, "metadata": metadata({"reason": "pythonDependencyUnavailable", "dependency": "ultralytics", "detail": str(exc)})}
+
+    image_path = request.get("cropImagePath")
+    if not image_path:
+        return {"masks": [], "preprocessMS": 0, "modelInferenceMS": 0, "metadata": metadata({"reason": "missingCropImagePath"})}
+
+    started = time.monotonic()
+    try:
+        model = YOLO(MODEL_ID)
+        loaded = time.monotonic()
+        results = model(image_path)
+        finished = time.monotonic()
+        masks = yolo_masks(results)
+        return {
+            "masks": masks,
+            "preprocessMS": (loaded - started) * 1000,
+            "modelInferenceMS": (finished - loaded) * 1000,
+            "metadata": metadata({"runtime.backend": "ultralytics"}),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"masks": [], "preprocessMS": 0, "modelInferenceMS": 0, "metadata": metadata({"reason": "yoloSegmentationFailed", "detail": str(exc)})}
+
+
+def yolo_masks(results: Any) -> list[dict[str, Any]]:
+    masks: list[dict[str, Any]] = []
+    first = results[0] if results else None
+    if first is None or getattr(first, "boxes", None) is None:
+        return masks
+    names = getattr(first, "names", {}) or {}
+    boxes = getattr(first.boxes, "xyxy", []) or []
+    confidences = getattr(first.boxes, "conf", []) or []
+    classes = getattr(first.boxes, "cls", []) or []
+    for index, box in enumerate(boxes):
+        values = [float(v) for v in box.tolist()]
+        confidence = float(confidences[index]) if index < len(confidences) else 0
+        class_id = int(classes[index]) if index < len(classes) else -1
+        label = str(names.get(class_id, class_id))
+        masks.append(
+            {
+                "id": f"mask-{index}",
+                "label": label,
+                "bounds": {
+                    "origin": {"x": values[0], "y": values[1], "space": "window"},
+                    "size": {"width": max(0, values[2] - values[0]), "height": max(0, values[3] - values[1]), "space": "window"},
+                },
+                "confidence": confidence,
+                "pointCount": 0,
+                "metadata": {"classID": str(class_id)},
+            }
+        )
+    return masks
+
+
+def run_ui_understander(request: dict[str, Any]) -> dict[str, Any]:
+    external_command = os.environ.get("DONKEY_UI_UNDERSTANDER_COMMAND")
+    if external_command:
+        return run_external_json_command(external_command, request)
+    return {
+        "visibleText": {},
+        "controls": [],
+        "formFields": [],
+        "confidence": 0,
+        "metadata": metadata({"reason": "uiUnderstandingBackendNotConfigured"}),
+    }
+
+
+def run_external_json_command(command: str, request: dict[str, Any]) -> dict[str, Any]:
+    completed = subprocess.run(
+        command.split(),
+        input=json.dumps(request),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return error_payload("externalCommandFailed", {"stderr": completed.stderr[-400:]})
+    try:
+        payload = json.loads(completed.stdout or "{}")
+    except json.JSONDecodeError:
+        return error_payload("externalCommandInvalidJSON", {"stdout": completed.stdout[-400:]})
+    if isinstance(payload, dict):
+        return payload
+    return error_payload("externalCommandInvalidPayload")
+
+
+def ollama_has_model(model_id: str) -> bool:
+    try:
+        tags = get_json("/api/tags", timeout=3)
+        models = tags.get("models", [])
+        names = {item.get("name") for item in models if isinstance(item, dict)}
+        return model_id in names or f"{model_id}:latest" in names
+    except Exception:  # noqa: BLE001
+        pass
+
+    if shutil.which("ollama"):
+        completed = subprocess.run(
+            ["ollama", "list"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+        if completed.returncode == 0:
+            names = {line.split()[0] for line in completed.stdout.splitlines()[1:] if line.split()}
+            return model_id in names
+    return False
+
+
+def get_json(path: str, timeout: int) -> dict[str, Any]:
+    with urllib.request.urlopen(OLLAMA_ENDPOINT + path, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def post_json(path: str, payload: bytes, timeout: int) -> dict[str, Any]:
+    request = urllib.request.Request(
+        OLLAMA_ENDPOINT + path,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"ollama HTTP {exc.code}: {detail}") from exc
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
