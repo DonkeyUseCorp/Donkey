@@ -9,5 +9,8 @@ DerivedData/
 xcuserdata/
 *.dSYM
 
+## Build artifacts
+/dist/
+
 ## Project policy
 # Keep Package.resolved tracked for reproducible dependency resolution.
