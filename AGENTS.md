@@ -11,6 +11,14 @@ Use `plans/master-plan.md` as the active implementation driver when it exists an
 
 Use other `plans/` files only for background unless the user explicitly asks to plan from them or the master plan names them as cleanup targets. Do not let older plans override the current master plan.
 
+## Site Project
+
+Before changing `site/` UI, routes, API handlers, or data access patterns:
+
+- Read the relevant Next.js guide in `site/node_modules/next/dist/docs/`; this version may differ from your training data.
+- Read the applicable site guidance in `docs/guides/`.
+- Do not run database migrations, including `prisma migrate`, `prisma db push`, or any command that applies schema changes to Supabase or another database.
+
 ## Working Rules
 
 - Ask before creating any new plan document.

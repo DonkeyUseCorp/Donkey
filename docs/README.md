@@ -6,22 +6,18 @@ Plans describe what we might build. Guides describe what Donkey currently suppor
 
 There is an active milestone plan in `plans/master-plan.md`. It tracks the unfinished work needed before the fast local navigation and AI-harness roadmap can be considered complete: generic local-app task knowledge, local JSON/JSONL task-definition loading, installed-app/task resolution, local-model command parsing with catalog validation, local task-context intake, Accessibility control discovery and action planning, review-first document form-fill planning, Parakeet-only local voice transcription, YOLO screenshot segmentation and local UI-understanding sidecar boundaries, post-install local runtime setup without bundled model weights, setup-managed command-parser LLM weight download, semantic memory/redaction/model-observability scaffolding, local navigation, guarded input, result verification, latency reporting, and optional slow planner recovery. Weather lookup, media playback, and document form-fill are benchmark definitions for this generic system, not source-specific architectures.
 
-## Product Guides
+## Guides
 
-- [Pointer Prompt Overlay](guides/pointer-prompt-overlay.md): double-Command standard macOS-style `Make this so` composer that opens near the mouse at a fixed offset.
-- [Install Donkey Locally](guides/install-donkey.md): package the SwiftPM executable into a clickable local macOS app bundle for manual testing.
+Supported product and engineering guides live in `docs/guides/`.
 
-## Engineering Guides
-
-- [Swift MVC Guide](guides/swift-mvc.md): Swift/AppKit/SwiftUI organization rules for model-view-controller boundaries.
-- [Minimal Run Coordinator](guides/minimal-run-coordinator.md): in-memory run lifecycle, events, policy checks, session queueing, context compaction, manual capture orchestration, and reflex trace boundary.
+Add or update a guide there when behavior becomes supported. Do not maintain duplicate guide indexes in subdirectories or app folders; use descriptive filenames and link directly from related docs only when the relationship helps a maintainer.
 
 ## Navigation Rules
 
-- Add a guide here when a plan moves to `plans/done/`.
 - Treat `plans/done/` as background only; do not use archived plans as active implementation instructions.
 - Ask before creating a new active plan.
 - Move active plans to `plans/done/` only after the behavior is implemented, documented, and verified.
 - Product guides should explain supported behavior, boundaries, and verification.
 - Engineering guides should explain patterns current code must follow, not speculative architecture.
 - Guides should not duplicate implementation. Prefer intent, rules, and concise source entrypoints over code listings or long file inventories.
+- New docs do not need to be registered in multiple places. Prefer one canonical file in `docs/` and selective cross-links only where they carry context.
