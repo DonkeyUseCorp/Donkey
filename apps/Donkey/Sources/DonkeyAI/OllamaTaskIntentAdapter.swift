@@ -325,23 +325,31 @@ public struct OllamaTaskIntentAdapter: TaskIntentParsingAdapter {
                 appNames: adapterRequest.taskDefinitions.map(\.targetApp.appName)
             ),
             "options": [
-                "num_predict": 512
-            ]
+                "num_ctx": 2048,
+                "num_predict": 128,
+                "temperature": 0,
+                "top_p": 0.8
+            ],
+            "keep_alive": "10m"
         ]
     }
 
     private func promptText(for request: TaskIntentAdapterRequest) -> String {
         let tasks = request.taskDefinitions.map { definition in
             let entities = definition.entityRules.map { rule in
-                "\(rule.name) required=\(rule.required) markers=\(rule.markers.joined(separator: ",")) aliases=\(rule.aliases.keys.sorted().joined(separator: ","))"
+                "\(rule.name) required=\(rule.required) aliases=\(rule.aliases.keys.sorted().joined(separator: ","))"
             }
             .joined(separator: "; ")
+            let workflow = definition.workflowSteps
+                .filter { $0.role != .parseIntent }
+                .map(\.summary)
+                .joined(separator: " -> ")
 
             return [
                 "task_type=\(definition.taskType)",
                 "app=\(definition.targetApp.appName)",
                 "bundle=\(definition.targetApp.bundleIdentifier ?? "unknown")",
-                "triggers=\(definition.triggerTerms.joined(separator: ","))",
+                "capability=\(workflow)",
                 "entities=\(entities)"
             ]
             .joined(separator: " | ")
@@ -349,11 +357,14 @@ public struct OllamaTaskIntentAdapter: TaskIntentParsingAdapter {
         .joined(separator: "\n")
 
         return [
-            "Return exactly one local app task intent as strict JSON.",
+            "Classify the user's natural-language request into exactly one supported local app task intent, then return strict JSON.",
+            "Choose by capability and target app, not by exact wording. The user should not need to remember command phrases.",
+            "Do not include reasoning.",
             "Use only the provided task definitions. Do not invent apps, task types, entities, or actions.",
+            "If no capability fits, return the closest supported task with confidence below 0.55.",
             "If a required entity is missing, set needsConfirmation=true and include missingEntity in metadata.",
             "Command: \(request.command)",
-            "Task definitions:",
+            "Supported task capabilities:",
             tasks
         ]
         .joined(separator: "\n")
@@ -440,7 +451,7 @@ public struct LocalModelTaskIntentResolver: Sendable {
 
             return (
                 LocalAppTaskCatalogResolution(
-                    status: .unsupportedCommand,
+                    status: .needsConfirmation,
                     metadata: [
                         "reason": "localModelIntentUnavailable",
                         "modelCallStatus": result.trace.status.rawValue

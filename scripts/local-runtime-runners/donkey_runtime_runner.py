@@ -474,11 +474,17 @@ def run_local_llm(request: dict[str, Any]) -> dict[str, Any]:
         "prompt": prompt,
         "stream": False,
         "format": schema,
-        "options": {"num_predict": 512},
+        "options": {
+            "num_ctx": 2048,
+            "num_predict": 128,
+            "temperature": 0,
+            "top_p": 0.8,
+        },
+        "keep_alive": "10m",
     }
     started = time.monotonic()
     try:
-        response = post_json("/api/generate", json.dumps(body).encode("utf-8"), timeout=60)
+        response = post_json("/api/generate", json.dumps(body).encode("utf-8"), timeout=4)
         latency_ms = (time.monotonic() - started) * 1000
         return {
             "outputText": response.get("response", ""),
@@ -504,17 +510,21 @@ def task_intent_prompt(command: str, task_definitions: list[dict[str, Any]]) -> 
         entity_parts = []
         for rule in definition.get("entityRules", []):
             aliases = ",".join(sorted((rule.get("aliases") or {}).keys()))
-            markers = ",".join(rule.get("markers") or [])
             entity_parts.append(
-                f"{rule.get('name')} required={rule.get('required', True)} markers={markers} aliases={aliases}"
+                f"{rule.get('name')} required={rule.get('required', True)} aliases={aliases}"
             )
+        workflow = " -> ".join(
+            step.get("summary", "")
+            for step in definition.get("workflowSteps", [])
+            if step.get("role") != "parseIntent" and step.get("summary")
+        )
         task_lines.append(
             " | ".join(
                 [
                     f"task_type={definition.get('taskType')}",
                     f"app={target.get('appName')}",
                     f"bundle={target.get('bundleIdentifier', 'unknown')}",
-                    f"triggers={','.join(definition.get('triggerTerms') or [])}",
+                    f"capability={workflow}",
                     f"entities={'; '.join(entity_parts)}",
                 ]
             )
@@ -522,11 +532,14 @@ def task_intent_prompt(command: str, task_definitions: list[dict[str, Any]]) -> 
 
     return "\n".join(
         [
-            "Return exactly one local app task intent as strict JSON.",
+            "Classify the user's natural-language request into exactly one supported local app task intent, then return strict JSON.",
+            "Choose by capability and target app, not by exact wording. The user should not need to remember command phrases.",
+            "Do not include reasoning.",
             "Use only the provided task definitions. Do not invent apps, task types, entities, or actions.",
+            "If no capability fits, return the closest supported task with confidence below 0.55.",
             "If a required entity is missing, set needsConfirmation=true and include missingEntity in metadata.",
             f"Command: {command}",
-            "Task definitions:",
+            "Supported task capabilities:",
             "\n".join(task_lines),
         ]
     )

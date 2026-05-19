@@ -8,6 +8,7 @@ public struct PointerPromptNotchStatusView: View {
     private let surfaceWidth: CGFloat
     private let surfaceHeight: CGFloat
     private let isExpanded: Bool
+    private let accentIndex: Int
     private let hoverChanged: @MainActor (Bool) -> Void
     private let commandRequested: @MainActor () -> Void
     private let updateRequested: @MainActor () -> Void
@@ -19,6 +20,7 @@ public struct PointerPromptNotchStatusView: View {
         surfaceWidth: CGFloat,
         surfaceHeight: CGFloat,
         isExpanded: Bool,
+        accentIndex: Int,
         hoverChanged: @escaping @MainActor (Bool) -> Void,
         commandRequested: @escaping @MainActor () -> Void,
         updateRequested: @escaping @MainActor () -> Void
@@ -29,6 +31,7 @@ public struct PointerPromptNotchStatusView: View {
         self.surfaceWidth = surfaceWidth
         self.surfaceHeight = surfaceHeight
         self.isExpanded = isExpanded
+        self.accentIndex = accentIndex
         self.hoverChanged = hoverChanged
         self.commandRequested = commandRequested
         self.updateRequested = updateRequested
@@ -36,19 +39,12 @@ public struct PointerPromptNotchStatusView: View {
 
     public var body: some View {
         ZStack(alignment: .top) {
-            UnevenRoundedRectangle(
-                cornerRadii: RectangleCornerRadii(
-                    topLeading: 0,
-                    bottomLeading: cornerRadius,
-                    bottomTrailing: cornerRadius,
-                    topTrailing: 0
-                ),
-                style: .continuous
-            )
-            .fill(Color.black)
+            collapsedWindow
+                .opacity(isExpanded ? 0 : 1)
 
-            content
-                .offset(y: max(0, layout.voidHeight))
+            expandedWindow
+                .offset(y: isExpanded ? 0 : -expandedSurfaceHeight)
+                .animation(.smooth(duration: 0.24), value: isExpanded)
         }
         .frame(width: surfaceWidth, height: surfaceHeight, alignment: .top)
         .clipped()
@@ -57,39 +53,167 @@ public struct PointerPromptNotchStatusView: View {
                 hoverChanged(isHovering)
             }
         }
-        .animation(.smooth(duration: 0.24), value: isExpanded)
         .accessibilityElement(children: .contain)
     }
 
     @ViewBuilder
-    private var content: some View {
-        if isExpanded {
-            expandedContent
+    private var collapsedWindow: some View {
+        if isResting {
+            restingCollapsedWindow
         } else {
-            collapsedContent
+            regularCollapsedWindow
         }
     }
 
-    private var collapsedContent: some View {
-        HStack(spacing: 10) {
-            agentIcon(agent: activeAgent, size: 25, symbolSize: 11)
+    private var regularCollapsedWindow: some View {
+        ZStack(alignment: .top) {
+            notchSurface(height: collapsedSurfaceHeight, cornerRadius: collapsedCornerRadius)
 
-            Text("\(activeAgent.name) · \(activeAgent.subtitle)")
-                .font(.system(size: 13, weight: .medium))
+            physicalNotchDebugOutline
+
+            collapsedContent
+                .offset(y: max(0, layout.voidHeight))
+        }
+        .frame(width: surfaceWidth, height: collapsedSurfaceHeight, alignment: .top)
+    }
+
+    private var restingCollapsedWindow: some View {
+        ZStack(alignment: .top) {
+            physicalNotchDebugOutline
+
+            restingCollapsedSurface
+                .offset(x: restingSurfaceOffsetX, y: 0)
+        }
+        .frame(width: surfaceWidth, height: collapsedSurfaceHeight, alignment: .top)
+    }
+
+    private var restingCollapsedSurface: some View {
+        ZStack(alignment: .leading) {
+            notchSurface(
+                width: restingSurfaceWidth,
+                height: restingVisibleHeight,
+                cornerRadius: restingCornerRadius
+            )
+
+            TaskArrowMark(color: accentColor)
+                .frame(width: 13, height: 13)
+                .padding(.leading, 10)
+        }
+        .frame(width: restingSurfaceWidth, height: restingVisibleHeight, alignment: .leading)
+    }
+
+    private var expandedWindow: some View {
+        ZStack(alignment: .top) {
+            notchSurface(height: expandedSurfaceHeight, cornerRadius: expandedCornerRadius)
+
+            physicalNotchDebugOutline
+
+            expandedContent
+                .offset(y: max(0, layout.voidHeight))
+        }
+        .frame(width: surfaceWidth, height: expandedSurfaceHeight, alignment: .top)
+    }
+
+    private func notchSurface(
+        width: CGFloat? = nil,
+        height: CGFloat,
+        cornerRadius: CGFloat
+    ) -> some View {
+        notchSurfaceShape(cornerRadius: cornerRadius)
+            .fill(Color.black)
+            .overlay {
+                notchSurfaceShape(cornerRadius: cornerRadius)
+                    .stroke(
+                        notchDebugColor,
+                        style: StrokeStyle(lineWidth: 1, dash: [5, 4])
+                    )
+            }
+            .frame(width: width ?? surfaceWidth, height: height, alignment: .top)
+    }
+
+    private var physicalNotchDebugOutline: some View {
+        Rectangle()
+            .stroke(
+                Color.cyan.opacity(0.85),
+                style: StrokeStyle(lineWidth: 1, dash: [3, 3])
+            )
+            .frame(width: max(1, layout.voidWidth), height: max(1, layout.voidHeight))
+            .opacity(layout.voidWidth > 0 && layout.voidHeight > 0 ? 1 : 0)
+    }
+
+    private func notchSurfaceShape(cornerRadius: CGFloat) -> UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            cornerRadii: RectangleCornerRadii(
+                topLeading: 0,
+                bottomLeading: cornerRadius,
+                bottomTrailing: cornerRadius,
+                topTrailing: 0
+            ),
+            style: .continuous
+        )
+    }
+
+    private var notchDebugColor: Color {
+        Color(red: 1.0, green: 0.14, blue: 0.58).opacity(0.92)
+    }
+
+    private var collapsedSurfaceHeight: CGFloat {
+        layout.voidHeight + layout.collapsedVisibleHeight
+    }
+
+    private var expandedSurfaceHeight: CGFloat {
+        layout.voidHeight + layout.expandedVisibleHeight
+    }
+
+    private var collapsedCornerRadius: CGFloat {
+        13
+    }
+
+    private var expandedCornerRadius: CGFloat {
+        28
+    }
+
+    private var restingVisibleHeight: CGFloat {
+        layout.voidHeight > 0 ? layout.voidHeight : layout.collapsedVisibleHeight
+    }
+
+    private var restingCornerRadius: CGFloat {
+        9
+    }
+
+    private var restingArrowAllowance: CGFloat {
+        34
+    }
+
+    private var restingSurfaceWidth: CGFloat {
+        max(restingArrowAllowance, layout.voidWidth + restingArrowAllowance * 2)
+    }
+
+    private var restingSurfaceOffsetX: CGFloat {
+        0
+    }
+
+    private var collapsedContent: some View {
+        HStack(spacing: 7) {
+            TaskArrowMark(color: accentColor)
+                .frame(width: 13, height: 13)
+
+            Text(taskTitle)
+                .font(.system(size: 12, weight: .regular))
                 .foregroundStyle(Color.white.opacity(0.92))
                 .lineLimit(1)
                 .truncationMode(.tail)
 
             Spacer(minLength: 0)
 
-            if activeAgent.isRunning {
-                activityBars(color: activeAgent.color)
+            if isWorking {
+                activityBars(color: accentColor, height: 12)
             }
         }
-        .padding(.horizontal, max(12, layout.contentHorizontalInset))
+        .padding(.horizontal, max(10, layout.contentHorizontalInset))
         .frame(
             width: surfaceWidth,
-            height: layout.visibleHeight,
+            height: layout.collapsedVisibleHeight,
             alignment: .center
         )
     }
@@ -98,45 +222,34 @@ public struct PointerPromptNotchStatusView: View {
         VStack(spacing: 0) {
             expandedHeader
 
-            VStack(spacing: 10) {
-                ForEach(displayAgentRows) { agent in
-                    expandedAgentRow(agent)
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 12)
+            currentTaskRow
+                .padding(.horizontal, 14)
+                .padding(.top, 10)
 
-            Spacer(minLength: 10)
+            Spacer(minLength: 8)
 
             commandRow
                 .padding(.horizontal, 14)
-                .padding(.bottom, 12)
+                .padding(.bottom, 10)
         }
         .frame(
             width: surfaceWidth,
-            height: max(0, surfaceHeight - layout.voidHeight),
+            height: layout.expandedVisibleHeight,
             alignment: .top
         )
     }
 
     private var expandedHeader: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(activeAgent.color.opacity(0.92))
+        HStack(spacing: 10) {
+            TaskArrowMark(color: accentColor)
+                .frame(width: 15, height: 15)
 
-                Image(systemName: "face.smiling")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(Color.white)
-            }
-            .frame(width: 22, height: 22)
-
-            Text("Donkey")
-                .font(.system(size: 15, weight: .semibold))
+            Text("Current task")
+                .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(Color.white.opacity(0.92))
 
-            Text("\(runningAgentCount) of 5 running")
-                .font(.system(size: 13, weight: .medium))
+            Text(statusLabel)
+                .font(.system(size: 12, weight: .regular))
                 .foregroundStyle(Color.white.opacity(0.42))
 
             Spacer()
@@ -149,7 +262,7 @@ public struct PointerPromptNotchStatusView: View {
                             .frame(width: 7, height: 7)
 
                         Text(updateTitle)
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.system(size: 12, weight: .regular))
                     }
                     .foregroundStyle(Color.white.opacity(0.9))
                     .padding(.horizontal, 11)
@@ -164,15 +277,15 @@ public struct PointerPromptNotchStatusView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "plus")
                         .font(.system(size: 13, weight: .regular))
-                    Text("new task")
-                        .font(.system(size: 13, weight: .medium))
+                    Text("new")
+                        .font(.system(size: 13, weight: .regular))
                 }
                 .foregroundStyle(Color.white.opacity(0.46))
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 22)
-        .frame(height: 52)
+        .padding(.horizontal, 18)
+        .frame(height: 40)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(Color.white.opacity(0.08))
@@ -180,217 +293,148 @@ public struct PointerPromptNotchStatusView: View {
         }
     }
 
-    private func expandedAgentRow(_ agent: NotchAgentDisplay) -> some View {
-        HStack(spacing: 14) {
-            agentIcon(agent: agent, size: 32, symbolSize: 15)
+    private var currentTaskRow: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(accentColor)
+                .frame(width: 7, height: 7)
 
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Text(agent.name)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color.white.opacity(0.9))
-
-                    Text(agent.statusLabel)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(agent.isRunning ? agent.color : Color.white.opacity(0.44))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(agent.isRunning ? agent.color.opacity(0.18) : Color.clear)
-                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                }
-
-                Text(agent.isRunning ? agent.subtitle : "No active task")
+                Text(taskTitle)
                     .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(Color.white.opacity(0.42))
+                    .foregroundStyle(Color.white.opacity(0.9))
                     .lineLimit(1)
+
+                Text(statusDescription)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(Color.white.opacity(0.42))
             }
 
             Spacer()
 
-            if agent.isRunning {
-                activityBars(color: agent.color)
-            } else {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.42))
+            if isWorking {
+                activityBars(color: accentColor)
             }
         }
         .padding(.horizontal, 12)
-        .frame(height: 58)
-        .background {
-            if agent.isRunning {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(agent.color.opacity(0.1))
-                    .overlay(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 2, style: .continuous)
-                            .fill(agent.color)
-                            .frame(width: 3)
-                    }
-            }
-        }
+        .frame(height: 48)
+        .background(Color.white.opacity(0.055))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private var commandRow: some View {
         Button(action: commandRequested) {
-            HStack(spacing: 13) {
+            HStack(spacing: 10) {
                 Image(systemName: "sparkles")
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 14, weight: .regular))
                     .foregroundStyle(Color.white.opacity(0.42))
 
-                Text("Tell donkey what to do...")
-                    .font(.system(size: 14, weight: .medium))
+                Text("Type a task...")
+                    .font(.system(size: 13, weight: .regular))
                     .foregroundStyle(Color.white.opacity(0.42))
 
                 Spacer()
-
-                Text("⌘ K")
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Color.white.opacity(0.42))
-                    .padding(.horizontal, 10)
-                    .frame(height: 28)
-                    .background(Color.white.opacity(0.06))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .stroke(Color.white.opacity(0.13), lineWidth: 1)
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
             }
-            .padding(.horizontal, 16)
-            .frame(height: 52)
+            .padding(.horizontal, 12)
+            .frame(height: 42)
             .background(Color.white.opacity(0.055))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
     }
 
-    private func agentIcon(
-        agent: NotchAgentDisplay,
-        size: CGFloat,
-        symbolSize: CGFloat
-    ) -> some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
-                .fill(agent.color)
-
-            Image(systemName: agent.symbolName)
-                .font(.system(size: symbolSize, weight: .semibold))
-                .foregroundStyle(Color.white)
-        }
-        .frame(width: size, height: size)
-    }
-
-    private func activityBars(color: Color) -> some View {
+    private func activityBars(color: Color, height: CGFloat = 18) -> some View {
         HStack(spacing: 3) {
             ForEach([0.44, 0.82, 0.58], id: \.self) { scale in
                 Capsule(style: .continuous)
                     .fill(color)
-                    .frame(width: 3, height: 18 * scale)
+                    .frame(width: 3, height: height * scale)
             }
         }
-        .frame(width: 18, height: 18)
+        .frame(width: 18, height: height)
     }
 
-    private var activeAgent: NotchAgentDisplay {
-        displayAgentRows[0]
+    private var taskTitle: String {
+        switch state.leadingSignalLevel {
+        case .idle:
+            let text = state.promptText.trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty || text == "Make this so" ? "Resting" : text
+        case .ready:
+            let text = state.promptText.trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? "Ready" : text
+        case .thinking:
+            let text = state.promptText.trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? "Working" : text
+        }
     }
 
-    private var activeSubtitle: String {
+    private var statusLabel: String {
         switch state.leadingSignalLevel {
         case .idle:
             return "resting"
         case .ready:
-            let text = state.promptText.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { return "ready" }
-            return text
+            return "ready"
         case .thinking:
-            return "ranking models on SWE-bench"
+            return "working"
         }
     }
 
-    private var activeStatusLabel: String {
+    private var statusDescription: String {
         switch state.leadingSignalLevel {
         case .idle:
-            return "idle"
+            return "Waiting for a task"
         case .ready:
-            return "done"
+            return "Ready for the next task"
         case .thinking:
-            return "running"
+            return "Classifying and running"
         }
     }
 
-    private var runningAgentCount: Int {
-        displayAgentRows.filter(\.isRunning).count
+    private var isWorking: Bool {
+        state.leadingSignalLevel == .thinking
     }
 
-    private var displayAgentRows: [NotchAgentDisplay] {
-        var rows = baseAgentRows
-        rows[0].subtitle = activeSubtitle
-        rows[0].statusLabel = activeStatusLabel
-        rows[0].isRunning = state.leadingSignalLevel == .thinking
-        return rows
+    private var isResting: Bool {
+        state.leadingSignalLevel == .idle && taskTitle == "Resting"
     }
 
-    private var baseAgentRows: [NotchAgentDisplay] {
-        [
-            NotchAgentDisplay(
-                id: "coder",
-                name: "Coder",
-                subtitle: "Ranking models on SWE-bench",
-                statusLabel: "running",
-                symbolName: "chevron.left.forwardslash.chevron.right",
-                color: Color(red: 0.114, green: 0.62, blue: 0.46),
-                isRunning: true
-            ),
-            NotchAgentDisplay(
-                id: "browser",
-                name: "Browser",
-                subtitle: "Pulling pricing from 3 sites",
-                statusLabel: "idle",
-                symbolName: "globe",
-                color: Color(red: 0.94, green: 0.62, blue: 0.15),
-                isRunning: false
-            ),
-            NotchAgentDisplay(
-                id: "researcher",
-                name: "Researcher",
-                subtitle: "Reading 12 ArXiv papers",
-                statusLabel: "idle",
-                symbolName: "magnifyingglass",
-                color: Color(red: 0.83, green: 0.33, blue: 0.49),
-                isRunning: false
-            ),
-            NotchAgentDisplay(
-                id: "inbox",
-                name: "Inbox",
-                subtitle: "Drafting reply to recruiter",
-                statusLabel: "idle",
-                symbolName: "envelope",
-                color: Color(red: 0.22, green: 0.54, blue: 0.87),
-                isRunning: false
-            ),
-            NotchAgentDisplay(
-                id: "scheduler",
-                name: "Scheduler",
-                subtitle: "Finding slots across KST/PT",
-                statusLabel: "idle",
-                symbolName: "calendar",
-                color: Color(red: 0.5, green: 0.47, blue: 0.87),
-                isRunning: false
-            )
-        ]
+    private var accentColor: Color {
+        Self.accentColors[((accentIndex % Self.accentColors.count) + Self.accentColors.count) % Self.accentColors.count]
     }
+
+    private static let accentColors: [Color] = [
+        Color(red: 0.114, green: 0.62, blue: 0.46),
+        Color(red: 0.94, green: 0.62, blue: 0.15),
+        Color(red: 0.83, green: 0.33, blue: 0.49),
+        Color(red: 0.22, green: 0.54, blue: 0.87),
+        Color(red: 0.5, green: 0.47, blue: 0.87),
+        Color(red: 0.88, green: 0.35, blue: 0.28),
+        Color(red: 0.24, green: 0.69, blue: 0.71),
+        Color(red: 0.66, green: 0.34, blue: 0.79)
+    ]
 
     private var cornerRadius: CGFloat {
         layout.cornerRadius
     }
 }
 
-private struct NotchAgentDisplay: Identifiable {
-    var id: String
-    var name: String
-    var subtitle: String
-    var statusLabel: String
-    var symbolName: String
+private struct TaskArrowMark: View {
     var color: Color
-    var isRunning: Bool
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let height = proxy.size.height
+            Path { path in
+                path.move(to: CGPoint(x: width * 0.18, y: height * 0.06))
+                path.addLine(to: CGPoint(x: width * 0.88, y: height * 0.5))
+                path.addLine(to: CGPoint(x: width * 0.18, y: height * 0.94))
+                path.addLine(to: CGPoint(x: width * 0.34, y: height * 0.5))
+                path.closeSubpath()
+            }
+            .fill(color)
+        }
+        .aspectRatio(1, contentMode: .fit)
+        .accessibilityHidden(true)
+    }
 }

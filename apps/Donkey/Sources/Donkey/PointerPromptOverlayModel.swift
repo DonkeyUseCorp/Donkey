@@ -10,6 +10,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
     @Published var placement: PointerPromptPlacement = .bottomRight
     @Published var inputTextHeight = PointerPromptLayout.composerInputTextMinimumHeight
     @Published var isInputExpanded = false
+    @Published private(set) var notchAccentIndex = Int.random(in: 0..<8)
     @Published private(set) var updateState: PointerPromptUpdateState
 
     private let commandHandler: any PointerPromptCommandHandling
@@ -131,23 +132,48 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
     }
 
     private func submitCommand(_ text: String) {
+        let taskLabel = Self.taskLabel(for: text)
         messageText = ""
         inputTextHeight = PointerPromptLayout.composerInputTextMinimumHeight
         isInputExpanded = false
+        notchAccentIndex = Self.nextAccentIndex(after: notchAccentIndex)
         promptState.isActive = false
         promptState.leadingSignalLevel = .thinking
-        promptState.promptText = "Working..."
+        promptState.promptText = taskLabel
         Task { [weak self, commandHandler] in
             let result = await commandHandler.handleSubmittedCommand(text)
             await MainActor.run {
                 guard let self else { return }
                 self.promptState.leadingSignalLevel = result.status == .completed ? .ready : .idle
-                self.promptState.promptText = result.summary
+                self.promptState.promptText = result.taskLabel ?? result.summary
                 if let documentReviewRequest = result.documentReviewRequest {
                     self.documentReviewController.show(request: documentReviewRequest)
                 }
             }
         }
+    }
+
+    private static func nextAccentIndex(after currentIndex: Int) -> Int {
+        let accentCount = 8
+        var nextIndex = Int.random(in: 0..<accentCount)
+        if nextIndex == currentIndex {
+            nextIndex = (nextIndex + 1) % accentCount
+        }
+        return nextIndex
+    }
+
+    private static func taskLabel(for text: String) -> String {
+        let collapsed = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+        guard !collapsed.isEmpty else { return "New task" }
+
+        let maxLength = 44
+        guard collapsed.count > maxLength else { return collapsed }
+
+        let endIndex = collapsed.index(collapsed.startIndex, offsetBy: maxLength)
+        return String(collapsed[..<endIndex]).trimmingCharacters(in: .whitespacesAndNewlines) + "..."
     }
 
     private static func bundledTheme() -> PointerPromptTheme {

@@ -15,7 +15,7 @@ Donkey Swift code should keep product state, UI rendering, and AppKit orchestrat
 
 - Keep SwiftUI views value-like: pass state in, pass typed intent sinks out, and avoid timers, global mouse reads, model providers, or window management inside views.
 - Keep models on `@MainActor` when they publish UI state. Models may depend on narrow provider protocols, but not on AppKit windows or timers.
-- Keep controllers on `@MainActor` when they touch AppKit. Controllers may read screen and event geometry, monitor Command-K and double-Command activation, own `NSPanel`, and translate geometry into model state.
+- Keep controllers on `@MainActor` when they touch AppKit. Controllers may read screen and event geometry, monitor double-Command activation, own `NSPanel`, and translate geometry into model state.
 - Keep app entry files small. They should define `@main`, delegate adaptation, and little else.
 - Prefer target-level separation for reusable contracts and UI: `DonkeyContracts`, `DonkeyUI`, `DonkeyRuntime`, and `DonkeyAI`.
 - Keep shared UI state types in `DonkeyContracts`, not in `DonkeyUI`, when models and views both need them.
@@ -28,7 +28,7 @@ The pointer overlay follows this split:
 
 - model state covers prompt text, typed input, placement, theme, and typed intents
 - views render the notch status and composer from model state
-- the controller owns AppKit-only work such as the notch and prompt panels, Command-K and double-Command activation, screen positioning, and movement timing
+- the controller owns AppKit-only work such as the notch and prompt panels, double-Command activation, screen positioning, and movement timing
 - app entry bootstraps the feature and avoids owning product behavior
 
 ## Review Checklist

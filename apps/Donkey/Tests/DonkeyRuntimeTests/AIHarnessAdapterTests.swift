@@ -82,6 +82,8 @@ struct AIHarnessAdapterTests {
         #expect(selected.id == "local-runtime-task-intent-qwen3")
         #expect(selected.role == .taskIntent)
         #expect(selected.provider == .localRuntime)
+        #expect(selected.modelID == "qwen3:8b")
+        #expect(selected.timeoutMS == 4_000)
     }
 
     @Test
@@ -329,7 +331,15 @@ struct AIHarnessAdapterTests {
         #expect(body["model"] as? String == "qwen3:8b")
         #expect(body["stream"] as? Bool == false)
         #expect(body["format"] as? [String: Any] != nil)
+        #expect(body["keep_alive"] as? String == "10m")
+        let options = try #require(body["options"] as? [String: Any])
+        #expect(options["num_predict"] as? Int == 128)
+        #expect(options["num_ctx"] as? Int == 2048)
         #expect((body["prompt"] as? String)?.contains("Use only the provided task definitions") == true)
+        #expect((body["prompt"] as? String)?.contains("Choose by capability and target app") == true)
+        #expect((body["prompt"] as? String)?.contains("Do not include reasoning") == true)
+        #expect((body["prompt"] as? String)?.contains("triggers=") == false)
+        #expect((body["prompt"] as? String)?.contains("metadata=") == false)
     }
 
     @Test
@@ -430,6 +440,70 @@ struct AIHarnessAdapterTests {
         #expect(result.resolution.intent?.normalizedEntities["city"] == "San Francisco")
         #expect(result.trace.validationStatus == "deterministicFallback")
         #expect(result.trace.metadata["fallback.reason"] == "localModelIntentUnavailable")
+    }
+
+    @Test
+    func localModelTaskIntentResolverAsksForDetailsInsteadOfUnsupportedWhenRuntimeUnavailable() async {
+        let resolver = LocalModelTaskIntentResolver(
+            catalog: LocalAppTaskCatalog(
+                taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
+                availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.weather"])
+            ),
+            adapter: UnavailableTaskIntentAdapter()
+        )
+
+        let result = await resolver.resolve(
+            command: "do the thing with that value",
+            sourceTraceID: "trace-resolve-clarify"
+        )
+
+        #expect(result.resolution.status == .needsConfirmation)
+        #expect(result.resolution.metadata["reason"] == "localModelIntentUnavailable")
+        #expect(result.resolution.metadata["modelCallStatus"] == "providerOutage")
+    }
+
+    @Test
+    func localModelTaskIntentResolverAcceptsClosestLowConfidenceClassification() async {
+        let httpClient = FakeAIHTTPClient(
+            data: ollamaResponseData(
+                response: """
+                {"taskType":"weather_lookup","targetAppName":"Weather","entities":{},"normalizedEntities":{},"confidence":0.2,"needsConfirmation":false,"metadata":{}}
+                """
+            ),
+            statusCode: 200
+        )
+        let resolver = LocalModelTaskIntentResolver(
+            catalog: LocalAppTaskCatalog(
+                taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
+                availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.weather"])
+            ),
+            adapter: OllamaTaskIntentAdapter(
+                router: AIModelRouter(
+                    registry: AIModelRegistry(
+                        entries: [
+                            entry(
+                                id: "local-intent",
+                                role: .taskIntent,
+                                provider: .ollama,
+                                modelID: "qwen3:8b",
+                                endpoint: URL(string: "http://127.0.0.1:11434/api/generate")!,
+                                promptVersion: "task-intent-v1"
+                            )
+                        ]
+                    )
+                ),
+                httpClient: httpClient
+            )
+        )
+
+        let result = await resolver.resolve(
+            command: "banana",
+            sourceTraceID: "trace-low-confidence"
+        )
+
+        #expect(result.resolution.status == .needsConfirmation)
+        #expect(result.resolution.intent?.taskType == "weather_lookup")
+        #expect(result.resolution.metadata["reason"] == "city")
     }
 
     @Test

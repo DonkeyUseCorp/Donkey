@@ -1,15 +1,16 @@
 import { Apple, Wifi, BatteryFull } from 'lucide-react';
 
-import { AGENTS, ALL_AGENT_IDS } from '@/app/prototype/_components/agents';
 import { Notch } from '@/app/prototype/_components/Notch';
 import { SpawnedCursor } from '@/app/prototype/_components/SpawnedCursor';
 import { SpawnInputOverlay } from '@/app/prototype/_components/SpawnInputOverlay';
-import type { AgentId, DesktopRef, DesktopSize, NotchState, SetHovering, Spawn } from '@/app/prototype/_components/types';
+import { TaskArrow } from '@/app/prototype/_components/TaskArrow';
+import { ALL_TASK_IDS, TASKS } from '@/app/prototype/_components/tasks';
+import type { DesktopRef, DesktopSize, NotchState, SetHovering, Spawn, TaskId } from '@/app/prototype/_components/types';
 
 type Props = {
   state: NotchState;
-  activeAgentId: AgentId;
-  runningIds: AgentId[];
+  activeTaskId: TaskId;
+  runningTaskIds: TaskId[];
   hovering: boolean;
   setHovering: SetHovering;
   spawns: Spawn[];
@@ -22,8 +23,8 @@ type Props = {
 
 export function MacDesktop({
   state,
-  activeAgentId,
-  runningIds,
+  activeTaskId,
+  runningTaskIds,
   hovering,
   setHovering,
   spawns,
@@ -67,7 +68,7 @@ export function MacDesktop({
 
       {isExpanded && <div className="absolute inset-0 bg-black/40 z-10 transition-opacity duration-300" />}
 
-      <Notch state={state} activeAgentId={activeAgentId} hovering={hovering} setHovering={setHovering} runningIds={runningIds} />
+      <Notch state={state} activeTaskId={activeTaskId} hovering={hovering} setHovering={setHovering} runningTaskIds={runningTaskIds} />
 
       {spawns.map((s) => (
         <SpawnedCursor key={s.id} spawn={s} notchAnchor={notchAnchor} />
@@ -84,14 +85,13 @@ export function MacDesktop({
           opacity: isExpanded ? 0.5 : 1,
         }}
       >
-        {ALL_AGENT_IDS.map((id) => {
-          const a = AGENTS[id];
-          const IconC = a.Icon;
-          const isRunning = runningIds.includes(id);
+        {ALL_TASK_IDS.map((id) => {
+          const task = TASKS[id];
+          const isRunning = runningTaskIds.includes(id);
           return (
             <div key={id} className="relative">
-              <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: a.color }}>
-                <IconC size={16} color="#fff" />
+              <div className="w-8 h-8 flex items-center justify-center">
+                <TaskArrow color={task.color} size={22} />
               </div>
               {isRunning && <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-white" />}
             </div>

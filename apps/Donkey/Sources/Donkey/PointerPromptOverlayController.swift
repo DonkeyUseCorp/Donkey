@@ -6,9 +6,6 @@ import SwiftUI
 
 @MainActor
 final class PointerPromptOverlayController {
-    private static let commandKHotKeySignature: OSType = 0x444B4559
-    private static let commandKHotKeyID: UInt32 = 1
-
     private let model: PointerPromptOverlayModel
     private let fixedPlacement: PointerPromptPlacement = .bottomRight
     private let activationShortcut: PointerPromptActivationShortcut
@@ -20,8 +17,6 @@ final class PointerPromptOverlayController {
     private var timer: Timer?
     private var globalActivationMonitor: Any?
     private var localActivationMonitor: Any?
-    private var commandKHotKeyRef: EventHotKeyRef?
-    private var commandKEventHandlerRef: EventHandlerRef?
     private var activationTapStartedAt: Date?
     private var activationTapIsClean = false
     private var completedActivationTapCount = 0
@@ -29,6 +24,7 @@ final class PointerPromptOverlayController {
     private var activationHoldStartedAt: Date?
     private var isVoiceInputActive = false
     private var isStatusExpanded = false
+    private var statusCollapseWorkItem: DispatchWorkItem?
 
     init(
         model: PointerPromptOverlayModel,
@@ -50,7 +46,6 @@ final class PointerPromptOverlayController {
         self.inputPanel = inputPanel
         self.statusPanel = statusPanel
         startActivationMonitoring()
-        startCommandKHotKeyMonitoring()
         positionStatusPanel()
         centerInputPanel()
         inputPanel.orderOut(nil)
@@ -90,6 +85,9 @@ final class PointerPromptOverlayController {
         panel.ignoresMouseEvents = false
         panel.dragRegionProvider = { [weak self] in
             self?.composerDragRegions() ?? []
+        }
+        panel.escapeKeyHandler = { [weak self] in
+            self?.dismissActivePromptFromKeyboard()
         }
         panel.level = .statusBar
         panel.collectionBehavior = [
@@ -141,8 +139,9 @@ final class PointerPromptOverlayController {
     func stop() {
         timer?.invalidate()
         timer = nil
+        statusCollapseWorkItem?.cancel()
+        statusCollapseWorkItem = nil
         stopActivationMonitoring()
-        stopCommandKHotKeyMonitoring()
         microphoneWaveformMeter.stop()
         inputPanel?.close()
         inputPanel = nil
@@ -187,79 +186,7 @@ final class PointerPromptOverlayController {
         }
     }
 
-    private func startCommandKHotKeyMonitoring() {
-        stopCommandKHotKeyMonitoring()
-
-        var eventType = EventTypeSpec(
-            eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed)
-        )
-        let userData = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
-        InstallEventHandler(
-            GetApplicationEventTarget(),
-            { _, event, userData in
-                guard let event,
-                      let userData else {
-                    return noErr
-                }
-
-                var hotKeyID = EventHotKeyID()
-                let status = GetEventParameter(
-                    event,
-                    EventParamName(kEventParamDirectObject),
-                    EventParamType(typeEventHotKeyID),
-                    nil,
-                    MemoryLayout<EventHotKeyID>.size,
-                    nil,
-                    &hotKeyID
-                )
-                guard status == noErr,
-                      hotKeyID.signature == PointerPromptOverlayController.commandKHotKeySignature,
-                      hotKeyID.id == PointerPromptOverlayController.commandKHotKeyID else {
-                    return noErr
-                }
-
-                let controller = Unmanaged<PointerPromptOverlayController>
-                    .fromOpaque(userData)
-                    .takeUnretainedValue()
-                Task { @MainActor in
-                    controller.handleCommandKHotKey()
-                }
-                return noErr
-            },
-            1,
-            &eventType,
-            userData,
-            &commandKEventHandlerRef
-        )
-
-        let hotKeyID = EventHotKeyID(
-            signature: Self.commandKHotKeySignature,
-            id: Self.commandKHotKeyID
-        )
-        RegisterEventHotKey(
-            UInt32(kVK_ANSI_K),
-            UInt32(cmdKey),
-            hotKeyID,
-            GetApplicationEventTarget(),
-            0,
-            &commandKHotKeyRef
-        )
-    }
-
-    private func stopCommandKHotKeyMonitoring() {
-        if let commandKHotKeyRef {
-            UnregisterEventHotKey(commandKHotKeyRef)
-            self.commandKHotKeyRef = nil
-        }
-
-        if let commandKEventHandlerRef {
-            RemoveEventHandler(commandKEventHandlerRef)
-            self.commandKEventHandlerRef = nil
-        }
-    }
-
-    private func handleCommandKHotKey() {
+    private func activateInputFromStatusCommand() {
         resetActivationTapSequence()
         activateInputAtScreenCenter()
     }
@@ -269,7 +196,7 @@ final class PointerPromptOverlayController {
         case .flagsChanged:
             handleModifierFlagsChanged(event.modifierFlags)
         case .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown:
-            if event.type == .keyDown, activateFromCommandKIfNeeded(event) {
+            if event.type == .keyDown, dismissActivePromptIfEscape(event) {
                 resetActivationTapSequence()
                 return
             }
@@ -283,19 +210,6 @@ final class PointerPromptOverlayController {
         default:
             break
         }
-    }
-
-    private func activateFromCommandKIfNeeded(_ event: NSEvent) -> Bool {
-        let flags = event.modifierFlags
-            .intersection(.deviceIndependentFlagsMask)
-            .subtracting(.capsLock)
-        guard flags == .command,
-              event.charactersIgnoringModifiers?.lowercased() == "k" else {
-            return false
-        }
-
-        activateInputAtScreenCenter()
-        return true
     }
 
     private func handleModifierFlagsChanged(_ modifierFlags: NSEvent.ModifierFlags) {
@@ -530,11 +444,12 @@ final class PointerPromptOverlayController {
             surfaceWidth: metrics.surfaceSize.width,
             surfaceHeight: metrics.surfaceSize.height,
             isExpanded: isStatusExpanded,
+            accentIndex: model.notchAccentIndex,
             hoverChanged: { [weak self] isHovering in
                 self?.setStatusExpanded(isHovering)
             },
             commandRequested: { [weak self] in
-                self?.handleCommandKHotKey()
+                self?.activateInputFromStatusCommand()
             },
             updateRequested: { [weak self] in
                 self?.openAvailableUpdate()
@@ -547,11 +462,49 @@ final class PointerPromptOverlayController {
     }
 
     private func setStatusExpanded(_ isExpanded: Bool) {
+        if isExpanded {
+            statusCollapseWorkItem?.cancel()
+            statusCollapseWorkItem = nil
+            applyStatusExpanded(true)
+            return
+        }
+
+        scheduleStatusCollapse()
+    }
+
+    private func applyStatusExpanded(_ isExpanded: Bool) {
         guard isStatusExpanded != isExpanded else { return }
 
         isStatusExpanded = isExpanded
         positionStatusPanel()
         updateStatusPanelView()
+    }
+
+    private func scheduleStatusCollapse() {
+        statusCollapseWorkItem?.cancel()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            Task { @MainActor in
+                self?.collapseStatusIfPointerIsOutside()
+            }
+        }
+        statusCollapseWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: workItem)
+    }
+
+    private func collapseStatusIfPointerIsOutside() {
+        statusCollapseWorkItem = nil
+
+        guard let statusPanel else {
+            applyStatusExpanded(false)
+            return
+        }
+
+        let hoverTolerance: CGFloat = 2
+        let hoverFrame = statusPanel.frame.insetBy(dx: -hoverTolerance, dy: -hoverTolerance)
+        guard !hoverFrame.contains(NSEvent.mouseLocation) else { return }
+
+        applyStatusExpanded(false)
     }
 
     private func activeScreen() -> NSScreen? {
@@ -624,16 +577,7 @@ final class PointerPromptOverlayController {
 
         let composerFrame = composerFrame(for: fixedPlacement)
         let inputSurfaceFrame = composerInputSurfaceFrame(in: composerFrame)
-        let closeButtonFrame = composerCloseButtonFrame(in: composerFrame).insetBy(dx: -3, dy: -3)
-        var regions = [
-            inputSurfaceFrame,
-            CGRect(
-                x: composerFrame.minX,
-                y: inputSurfaceFrame.maxY,
-                width: max(0, closeButtonFrame.minX - composerFrame.minX),
-                height: max(0, composerFrame.maxY - inputSurfaceFrame.maxY)
-            )
-        ]
+        var regions = [inputSurfaceFrame]
 
         regions.removeAll { $0.width <= 0 || $0.height <= 0 }
         return regions
@@ -646,10 +590,9 @@ final class PointerPromptOverlayController {
             x: x,
             y: currentContentSize.height -
                 composerTopFromPanelTop -
-                PointerPromptLayout.externalCloseButtonOutsideMargin -
                 currentComposerHeight,
             width: PointerPromptLayout.composerWidth,
-            height: currentComposerHeight + PointerPromptLayout.externalCloseButtonOutsideMargin
+            height: currentComposerHeight
         )
     }
 
@@ -666,15 +609,6 @@ final class PointerPromptOverlayController {
                 inputTextHeight: model.inputTextHeight,
                 isExpanded: model.isInputExpanded
             )
-        )
-    }
-
-    private func composerCloseButtonFrame(in composerFrame: CGRect) -> CGRect {
-        CGRect(
-            x: composerFrame.maxX - PointerPromptLayout.externalCloseButtonSize,
-            y: composerFrame.maxY - PointerPromptLayout.externalCloseButtonSize,
-            width: PointerPromptLayout.externalCloseButtonSize,
-            height: PointerPromptLayout.externalCloseButtonSize
         )
     }
 
@@ -734,6 +668,22 @@ final class PointerPromptOverlayController {
         isVoiceInputActive = false
         microphoneWaveformMeter.stop()
         return true
+    }
+
+    private func dismissActivePromptIfEscape(_ event: NSEvent) -> Bool {
+        guard model.promptState.isActive,
+              event.keyCode == UInt16(kVK_Escape) else { return false }
+
+        dismissActivePromptFromKeyboard()
+        return true
+    }
+
+    private func dismissActivePromptFromKeyboard() {
+        guard model.promptState.isActive else { return }
+
+        model.handle(.dismissed)
+        isVoiceInputActive = false
+        microphoneWaveformMeter.stop()
     }
 
     private var currentContentSize: CGSize {
@@ -833,6 +783,7 @@ final class PointerPromptOverlayController {
 
 private final class PointerPromptPanel: NSPanel {
     var dragRegionProvider: (() -> [CGRect])?
+    var escapeKeyHandler: (() -> Void)?
 
     override var canBecomeKey: Bool {
         true
@@ -843,6 +794,12 @@ private final class PointerPromptPanel: NSPanel {
     }
 
     override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown,
+           event.keyCode == UInt16(kVK_Escape) {
+            escapeKeyHandler?()
+            return
+        }
+
         if event.type == .leftMouseDown,
            dragRegionProvider?().contains(where: { $0.contains(event.locationInWindow) }) == true {
             performDrag(with: event)
@@ -873,10 +830,13 @@ private struct NotchMetrics {
 
     var layout: PointerPromptNotchLayout {
         PointerPromptNotchLayout(
+            voidWidth: voidWidth,
             voidHeight: voidHeight,
+            collapsedVisibleHeight: collapsedVisibleHeight,
+            expandedVisibleHeight: expandedVisibleHeight,
             contentHorizontalInset: max(12, surfaceWidth * 0.035),
             visibleHeight: visibleHeight,
-            cornerRadius: isExpanded ? 28 : 14
+            cornerRadius: isExpanded ? 28 : 13
         )
     }
 
@@ -891,14 +851,23 @@ private struct NotchMetrics {
 
     private var visibleHeight: CGFloat {
         if isExpanded {
-            let headerHeight: CGFloat = 52
-            let rosterHeight = CGFloat(5 * 58 + 4 * 10)
-            let verticalPadding: CGFloat = 12 + 10 + 52 + 12
-
-            return headerHeight + rosterHeight + verticalPadding
+            return expandedVisibleHeight
         }
 
-        return max(40, voidHeight + 14)
+        return collapsedVisibleHeight
+    }
+
+    private var collapsedVisibleHeight: CGFloat {
+        26
+    }
+
+    private var expandedVisibleHeight: CGFloat {
+        let headerHeight: CGFloat = 40
+        let taskRowHeight: CGFloat = 48
+        let commandRowHeight: CGFloat = 42
+        let verticalPadding: CGFloat = 10 + 8 + 10
+
+        return headerHeight + taskRowHeight + commandRowHeight + verticalPadding
     }
 }
 

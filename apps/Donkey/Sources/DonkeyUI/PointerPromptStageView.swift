@@ -72,9 +72,6 @@ public struct PointerPromptStageView: View {
             messageText: $messageText,
             inputTextHeight: inputTextHeight,
             isInputExpanded: isInputExpanded,
-            dismiss: {
-                intentSink?.handle(.dismissed)
-            },
             submit: {
                 intentSink?.handle(.messageSubmitted(text: messageText))
             },
@@ -109,22 +106,12 @@ private struct PointerPromptComposer: View {
     @Binding var messageText: String
     let inputTextHeight: CGFloat
     let isInputExpanded: Bool
-    let dismiss: @MainActor () -> Void
     let submit: @MainActor () -> Void
     let inputTextHeightChanged: @MainActor (CGFloat) -> Void
     let inputExpansionChanged: @MainActor (Bool) -> Void
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            promptSurface
-
-            ComposerExternalCloseButton(action: dismiss)
-                .offset(
-                    x: 0,
-                    y: -PointerPromptLayout.externalCloseButtonSize -
-                        PointerPromptLayout.externalCloseButtonGap
-                )
-        }
+        promptSurface
         .frame(
             width: PointerPromptLayout.composerInputSurfaceWidth,
             height: PointerPromptLayout.composerInputHeight(
@@ -133,7 +120,6 @@ private struct PointerPromptComposer: View {
             ),
             alignment: .topLeading
         )
-        .padding(.top, PointerPromptLayout.externalCloseButtonSize + PointerPromptLayout.externalCloseButtonGap)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -299,40 +285,6 @@ private struct PointerPromptComposer: View {
 
     private var isExpanded: Bool {
         isInputExpanded || messageText.contains("\n")
-    }
-}
-
-private struct ComposerExternalCloseButton: View {
-    let action: @MainActor () -> Void
-    @State private var isHovered = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: "xmark")
-                .font(.system(size: 8.8, weight: .bold))
-                .foregroundStyle(Color.white.opacity(0.92))
-                .frame(
-                    width: PointerPromptLayout.externalCloseButtonSize,
-                    height: PointerPromptLayout.externalCloseButtonSize
-                )
-                .background {
-                    Circle()
-                        .fill(Color.black.opacity(isHovered ? 0.82 : 0.68))
-                        .overlay {
-                            Circle()
-                                .stroke(Color.white.opacity(0.42), lineWidth: 1)
-                        }
-                }
-        }
-        .buttonStyle(.plain)
-        .frame(
-            width: PointerPromptLayout.externalCloseButtonSize,
-            height: PointerPromptLayout.externalCloseButtonSize
-        )
-        .contentShape(Circle())
-        .onHover { isHovered = $0 }
-        .animation(.easeOut(duration: 0.12), value: isHovered)
-        .accessibilityLabel("Close prompt")
     }
 }
 

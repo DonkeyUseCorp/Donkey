@@ -1,7 +1,6 @@
 import type { Dispatch, RefObject, SetStateAction } from 'react';
-import type { LucideIcon } from 'lucide-react';
 
-export type AgentId = 'coder' | 'browser' | 'researcher' | 'inbox' | 'scheduler';
+export type TaskId = 'compare' | 'research' | 'reply' | 'schedule' | 'update';
 
 export type NotchState =
   | 'idle'
@@ -11,12 +10,11 @@ export type NotchState =
   | 'needs-input'
   | 'expanded-pinned';
 
-export type Agent = {
-  id: AgentId;
-  name: string;
+export type TaskSample = {
+  id: TaskId;
+  label: string;
   color: string;
-  Icon: LucideIcon;
-  subtitle: string;
+  detail: string;
 };
 
 export type Point = {

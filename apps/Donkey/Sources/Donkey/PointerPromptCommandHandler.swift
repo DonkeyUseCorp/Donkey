@@ -6,6 +6,7 @@ import Foundation
 struct PointerPromptCommandHandlingResult: Equatable, Sendable {
     var status: LocalAppTaskLiveRunStatus
     var summary: String
+    var taskLabel: String?
     var traceID: String
     var metadata: [String: String]
     var documentReviewRequest: DocumentFormFillReviewRequest?
@@ -104,6 +105,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         return PointerPromptCommandHandlingResult(
             status: result.status,
             summary: summary(for: result),
+            taskLabel: taskLabel(for: result),
             traceID: traceID,
             metadata: result.metadata,
             documentReviewRequest: documentReviewRequest(
@@ -173,15 +175,49 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             return "Needs review"
         case .needsConfirmation:
             if let reason = result.resolution.metadata["reason"] {
+                guard reason != "localModelIntentUnavailable",
+                      reason != "needsConfirmation"
+                else {
+                    return "Need more detail"
+                }
                 return "Need \(reason)"
             }
             return "Need more detail"
         case .appUnavailable:
             return "App unavailable"
         case .unsupportedCommand:
-            return "Unsupported command"
+            return "Need more detail"
         case .failedSafe:
             return "Stopped safely"
+        }
+    }
+
+    private func taskLabel(for result: LocalAppTaskLiveRunResult) -> String? {
+        guard result.status == .completed || result.status == .needsUserReview,
+              let definition = result.resolution.definition
+        else {
+            return nil
+        }
+
+        let entities = result.resolution.intent?.normalizedEntities ?? [:]
+        switch definition.taskType {
+        case "weather_lookup":
+            if let city = entities["city"], !city.isEmpty {
+                return "Weather for \(city)"
+            }
+            return "Weather lookup"
+        case "media_playback":
+            if let query = entities["query"], !query.isEmpty {
+                return "Play \(query)"
+            }
+            return "Play media"
+        case "document_form_fill":
+            return "Fill PDF"
+        default:
+            return definition.taskType
+                .split(separator: "_")
+                .map { word in word.prefix(1).uppercased() + word.dropFirst() }
+                .joined(separator: " ")
         }
     }
 

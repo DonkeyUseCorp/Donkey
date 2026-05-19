@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Sparkles } from 'lucide-react';
-import type { KeyboardEvent } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 
 type Props = {
   onSubmit: (taskText: string) => void;
@@ -15,14 +15,25 @@ export function SpawnInputOverlay({ onSubmit, onClose }: Props) {
     setTimeout(() => inputRef.current?.focus(), 50);
   }, []);
 
-  const handleKey = (e: KeyboardEvent<HTMLInputElement>) => {
+  useEffect(() => {
+    const handleWindowKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+
+      onClose();
+    };
+
+    window.addEventListener('keydown', handleWindowKey);
+    return () => window.removeEventListener('keydown', handleWindowKey);
+  }, [onClose]);
+
+  const handleKey = useCallback((e: ReactKeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && text.trim()) {
       onSubmit(text.trim());
       setText('');
     } else if (e.key === 'Escape') {
       onClose();
     }
-  };
+  }, [onClose, onSubmit, text]);
 
   return (
     <div
@@ -42,16 +53,9 @@ export function SpawnInputOverlay({ onSubmit, onClose }: Props) {
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKey}
-          placeholder="Spawn an agent to…"
+          placeholder="Ask Donkey to…"
           className="bg-transparent border-0 outline-none flex-1 text-[12px] text-white placeholder-white/40"
         />
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-[9px] text-white/40 hover:text-white/80 px-1.5 py-px border border-white/15 rounded font-mono"
-        >
-          esc
-        </button>
         <button
           type="button"
           onClick={() => text.trim() && (onSubmit(text.trim()), setText(''))}

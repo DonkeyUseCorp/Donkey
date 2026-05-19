@@ -32,12 +32,6 @@ public enum PointerPromptLayout {
     public static let composerExpandedTextHorizontalPadding: CGFloat = 24
     public static let composerExpandedToolbarHeight: CGFloat = 54
     public static let composerExpandedMinimumHeight: CGFloat = 156
-    public static let closeButtonSize: CGFloat = 12
-    public static let closeButtonInset: CGFloat = 16
-    public static let closeControlWidth = closeButtonSize
-    public static let externalCloseButtonSize: CGFloat = 19.2
-    public static let externalCloseButtonGap: CGFloat = 2
-    public static let externalCloseButtonOutsideMargin: CGFloat = externalCloseButtonSize + externalCloseButtonGap
 
     public static let contentSize = contentSize(inputTextHeight: composerInputTextMinimumHeight)
     public static let composerSize = CGSize(

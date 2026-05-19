@@ -77,7 +77,7 @@ export const workflowSteps = [
     color: "coral",
     title: "Tell Donkey",
     timing: "Seconds",
-    body: "Hit Command-K in the notch. Type or speak the task. Donkey picks the right agent and asks any clarifying questions up front.",
+    body: "Double-tap Command. Type or speak the task. Donkey picks the right agent and asks any clarifying questions up front.",
   },
   {
     n: 2,
