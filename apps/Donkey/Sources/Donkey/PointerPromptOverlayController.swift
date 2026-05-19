@@ -13,7 +13,7 @@ final class PointerPromptOverlayController {
     private let microphoneWaveformMeter = MicrophoneWaveformMeter()
 
     private var statusPanel: NSPanel?
-    private var statusHostingView: NSHostingView<PointerPromptNotchStatusView>?
+    private var statusHostingView: PointerPromptHostingView<PointerPromptNotchStatusView>?
     private var inputPanel: NSPanel?
     private var timer: Timer?
     private var globalActivationMonitor: Any?
@@ -113,11 +113,14 @@ final class PointerPromptOverlayController {
 
     private func makeStatusPanel() -> NSPanel {
         let metrics = notchMetrics()
-        let hostingView = NSHostingView(rootView: notchStatusView(metrics: metrics))
+        let hostingView = PointerPromptHostingView(rootView: notchStatusView(metrics: metrics))
         hostingView.frame = CGRect(origin: .zero, size: metrics.surfaceSize)
         hostingView.autoresizingMask = [.width, .height]
         hostingView.wantsLayer = true
-        hostingView.layer?.backgroundColor = NSColor.clear.cgColor
+        configureStatusHostingLayer(hostingView, metrics: metrics)
+        hostingView.hitTestRegionProvider = { [weak self] in
+            self?.statusHitTestRegions() ?? []
+        }
         statusHostingView = hostingView
         lastStatusViewSnapshot = statusViewSnapshot(metrics: metrics)
 
@@ -494,7 +497,24 @@ final class PointerPromptOverlayController {
         }
 
         lastStatusViewSnapshot = snapshot
+        if let statusHostingView {
+            configureStatusHostingLayer(statusHostingView, metrics: metrics)
+        }
         statusHostingView?.rootView = notchStatusView(metrics: metrics)
+    }
+
+    private func configureStatusHostingLayer(
+        _ hostingView: PointerPromptHostingView<PointerPromptNotchStatusView>,
+        metrics: NotchMetrics
+    ) {
+        hostingView.layer?.backgroundColor = statusHostDebugBackgroundColor?.cgColor
+        hostingView.layer?.cornerRadius = metrics.hostCornerRadius
+        hostingView.layer?.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        hostingView.layer?.masksToBounds = true
+    }
+
+    private var statusHostDebugBackgroundColor: NSColor? {
+        nil
     }
 
     private func statusViewSnapshot(metrics: NotchMetrics) -> StatusPanelViewSnapshot {
@@ -566,9 +586,18 @@ final class PointerPromptOverlayController {
 
         if metrics.hoverFramesInPanel.contains(where: { $0.contains(mouseLocationInPanel) }) {
             setStatusExpanded(true)
-        } else if statusHoverPhase != .collapsed, statusCollapseWorkItem == nil {
+        } else if statusHoverPhase != .collapsed,
+                  statusHoverPhase != .closing,
+                  statusCollapseWorkItem == nil {
             scheduleStatusCollapse()
         }
+    }
+
+    private func statusHitTestRegions() -> [CGRect] {
+        guard let statusPanel else { return [] }
+
+        let metrics = notchMetrics(for: statusPanel.screen)
+        return [metrics.visibleSurfaceFrameInPanel]
     }
 
     private func setStatusExpanded(_ isExpanded: Bool) {
@@ -619,7 +648,9 @@ final class PointerPromptOverlayController {
 
         guard statusHoverPhase != .collapsed else { return }
         guard statusHoverPhase != .closing else {
-            scheduleStatusHostShrink()
+            if statusHostShrinkWorkItem == nil {
+                scheduleStatusHostShrink()
+            }
             return
         }
 
@@ -684,11 +715,8 @@ final class PointerPromptOverlayController {
     }
 
     private func scheduleStatusHostShrink() {
-        statusHostShrinkWorkItem?.cancel()
+        guard statusHostShrinkWorkItem == nil else { return }
 
-        // Wait for SwiftUI's short close animation, then collapse the transparent
-        // host without animation. Shrinking it earlier changes the coordinate
-        // space while the visible surface is still animating.
         let workItem = DispatchWorkItem { [weak self] in
             Task { @MainActor in
                 self?.shrinkStatusHostIfCollapsed()
@@ -1078,6 +1106,19 @@ private final class PointerPromptPanel: NSPanel {
     }
 }
 
+private final class PointerPromptHostingView<Content: View>: NSHostingView<Content> {
+    var hitTestRegionProvider: (() -> [CGRect])?
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if let hitTestRegionProvider,
+           !hitTestRegionProvider().contains(where: { $0.contains(point) }) {
+            return nil
+        }
+
+        return super.hitTest(point)
+    }
+}
+
 private struct NotchMetrics {
     static let fallbackVoidWidth: CGFloat = 180
     static let fallbackVoidHeight: CGFloat = 32
@@ -1093,6 +1134,10 @@ private struct NotchMetrics {
 
     var surfaceSize: CGSize {
         surfaceFrame.size
+    }
+
+    var hostCornerRadius: CGFloat {
+        isHostExpanded ? Self.expandedCornerRadius : Self.collapsedCornerRadius
     }
 
     var visibleSurfaceFrameInPanel: CGRect {
