@@ -20,6 +20,8 @@ struct DocumentFormFillReviewRequest: Equatable, Sendable {
 
 protocol PointerPromptCommandHandling: Sendable {
     func handleSubmittedCommand(_ command: String) async -> PointerPromptCommandHandlingResult
+    func pauseCurrentCommand() async
+    func resumeCurrentCommand() async
 }
 
 struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
@@ -113,6 +115,14 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                 result: result
             )
         )
+    }
+
+    func pauseCurrentCommand() async {
+        await coordinator.pause(reason: "Pointer prompt paused current task")
+    }
+
+    func resumeCurrentCommand() async {
+        await coordinator.resume(reason: "Pointer prompt resumed current task")
     }
 
     private func retrieveSemanticMemory(

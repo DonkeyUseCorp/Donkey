@@ -10,7 +10,11 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
     @Published var placement: PointerPromptPlacement = .bottomRight
     @Published var inputTextHeight = PointerPromptLayout.composerInputTextMinimumHeight
     @Published var isInputExpanded = false
+    @Published var notchCommandText = ""
+    @Published private(set) var notchCommandInputTextHeight = PointerPromptLayout.composerInputTextMinimumHeight
+    @Published private(set) var isNotchCommandInputExpanded = true
     @Published private(set) var notchAccentIndex = Int.random(in: 0..<8)
+    @Published private(set) var isCurrentTaskPaused = false
     @Published private(set) var updateState: PointerPromptUpdateState
 
     private let commandHandler: any PointerPromptCommandHandling
@@ -79,6 +83,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
             promptState.leadingSignalLevel = .ready
             promptState.promptText = "Listening..."
         case .primaryActionRequested:
+            isCurrentTaskPaused = false
             promptState.leadingSignalLevel = .thinking
         case .messageSubmitted(let text):
             let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -136,6 +141,10 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         messageText = ""
         inputTextHeight = PointerPromptLayout.composerInputTextMinimumHeight
         isInputExpanded = false
+        notchCommandText = ""
+        notchCommandInputTextHeight = PointerPromptLayout.composerInputTextMinimumHeight
+        isNotchCommandInputExpanded = true
+        isCurrentTaskPaused = false
         notchAccentIndex = Self.nextAccentIndex(after: notchAccentIndex)
         promptState.isActive = false
         promptState.leadingSignalLevel = .thinking
@@ -144,6 +153,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
             let result = await commandHandler.handleSubmittedCommand(text)
             await MainActor.run {
                 guard let self else { return }
+                self.isCurrentTaskPaused = false
                 self.promptState.leadingSignalLevel = result.status == .completed ? .ready : .idle
                 self.promptState.promptText = result.taskLabel ?? result.summary
                 if let documentReviewRequest = result.documentReviewRequest {
@@ -151,6 +161,45 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
                 }
             }
         }
+    }
+
+    func pauseCurrentTask() {
+        guard promptState.leadingSignalLevel == .thinking,
+              !isCurrentTaskPaused else {
+            return
+        }
+
+        isCurrentTaskPaused = true
+        Task { [commandHandler] in
+            await commandHandler.pauseCurrentCommand()
+        }
+    }
+
+    func resumeCurrentTask() {
+        guard isCurrentTaskPaused else { return }
+
+        isCurrentTaskPaused = false
+        Task { [commandHandler] in
+            await commandHandler.resumeCurrentCommand()
+        }
+    }
+
+    func updateNotchCommandInputTextHeight(_ height: CGFloat) {
+        let clampedHeight = PointerPromptLayout.clampedComposerInputTextHeight(height)
+        guard abs(notchCommandInputTextHeight - clampedHeight) > 0.5 else { return }
+
+        notchCommandInputTextHeight = clampedHeight
+    }
+
+    func updateNotchCommandInputExpansion(_ isExpanded: Bool) {
+        let shouldExpand = true
+        guard isNotchCommandInputExpanded != shouldExpand else { return }
+
+        isNotchCommandInputExpanded = shouldExpand
+    }
+
+    var notchCommandInputSurfaceHeight: CGFloat {
+        max(92, notchCommandInputTextHeight + 60)
     }
 
     private static func nextAccentIndex(after currentIndex: Int) -> Int {

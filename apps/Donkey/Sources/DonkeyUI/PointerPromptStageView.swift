@@ -99,25 +99,50 @@ public struct PointerPromptStageView: View {
     }
 }
 
-private struct PointerPromptComposer: View {
-    private static let rendersToolbarControls = false
-
+struct PointerPromptComposer: View {
     let state: PointerPromptState
     @Binding var messageText: String
     let inputTextHeight: CGFloat
     let isInputExpanded: Bool
+    let surfaceFill: Color
+    let forceExpandedSurface: Bool
+    let toolbarStyle: PointerPromptComposerToolbarStyle
+    let sizeProfile: PointerPromptComposerSizeProfile
     let submit: @MainActor () -> Void
     let inputTextHeightChanged: @MainActor (CGFloat) -> Void
     let inputExpansionChanged: @MainActor (Bool) -> Void
+
+    init(
+        state: PointerPromptState,
+        messageText: Binding<String>,
+        inputTextHeight: CGFloat,
+        isInputExpanded: Bool,
+        surfaceFill: Color = .black,
+        forceExpandedSurface: Bool = false,
+        toolbarStyle: PointerPromptComposerToolbarStyle = .waveformOnly,
+        sizeProfile: PointerPromptComposerSizeProfile = .standard,
+        submit: @escaping @MainActor () -> Void,
+        inputTextHeightChanged: @escaping @MainActor (CGFloat) -> Void,
+        inputExpansionChanged: @escaping @MainActor (Bool) -> Void
+    ) {
+        self.state = state
+        _messageText = messageText
+        self.inputTextHeight = inputTextHeight
+        self.isInputExpanded = isInputExpanded
+        self.surfaceFill = surfaceFill
+        self.forceExpandedSurface = forceExpandedSurface
+        self.toolbarStyle = toolbarStyle
+        self.sizeProfile = sizeProfile
+        self.submit = submit
+        self.inputTextHeightChanged = inputTextHeightChanged
+        self.inputExpansionChanged = inputExpansionChanged
+    }
 
     var body: some View {
         promptSurface
         .frame(
             width: PointerPromptLayout.composerInputSurfaceWidth,
-            height: PointerPromptLayout.composerInputHeight(
-                inputTextHeight: inputTextHeight,
-                isExpanded: isExpanded
-            ),
+            height: composerHeight,
             alignment: .topLeading
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -125,7 +150,7 @@ private struct PointerPromptComposer: View {
 
     @ViewBuilder
     private var promptSurface: some View {
-        if isExpanded {
+        if usesExpandedSurface {
             expandedPromptSurface
         } else {
             promptCapsule
@@ -147,14 +172,11 @@ private struct PointerPromptComposer: View {
         .padding(.trailing, PointerPromptLayout.composerInputTrailingContentPadding)
         .frame(
             width: PointerPromptLayout.composerInputSurfaceWidth,
-            height: PointerPromptLayout.composerInputHeight(
-                inputTextHeight: inputTextHeight,
-                isExpanded: isExpanded
-            )
+            height: composerHeight
         )
         .background {
             Capsule(style: .continuous)
-                .fill(Color.black)
+                .fill(surfaceFill)
         }
         .overlay {
             Capsule(style: .continuous)
@@ -173,7 +195,7 @@ private struct PointerPromptComposer: View {
         VStack(spacing: 0) {
             textInput
                 .frame(width: PointerPromptLayout.composerExpandedTextWidth)
-                .padding(.top, PointerPromptLayout.composerExpandedTextTopPadding)
+                .padding(.top, sizeProfile.expandedTextTopPadding)
                 .padding(.horizontal, PointerPromptLayout.composerExpandedTextHorizontalPadding)
                 .frame(
                     width: PointerPromptLayout.composerInputSurfaceWidth,
@@ -185,24 +207,23 @@ private struct PointerPromptComposer: View {
         }
         .frame(
             width: PointerPromptLayout.composerInputSurfaceWidth,
-            height: PointerPromptLayout.composerInputHeight(
-                inputTextHeight: inputTextHeight,
-                isExpanded: isExpanded
-            )
+            height: composerHeight
         )
         .background {
             RoundedRectangle(
                 cornerRadius: PointerPromptLayout.composerCornerRadius,
                 style: .continuous
             )
-            .fill(Color.black)
+            .fill(surfaceFill)
         }
         .overlay {
-            RoundedRectangle(
-                cornerRadius: PointerPromptLayout.composerCornerRadius,
-                style: .continuous
-            )
-            .stroke(Color.white.opacity(0.28), lineWidth: 1)
+            if showsSurfaceStroke {
+                RoundedRectangle(
+                    cornerRadius: PointerPromptLayout.composerCornerRadius,
+                    style: .continuous
+                )
+                .stroke(Color.white.opacity(0.28), lineWidth: 1)
+            }
         }
         .shadow(
             color: Color.black.opacity(state.isActive ? 0.2 : 0.08),
@@ -215,48 +236,38 @@ private struct PointerPromptComposer: View {
 
     private var promptToolbar: some View {
         HStack {
-            if Self.rendersToolbarControls {
-                toolbarControls
-            }
-
             Spacer(minLength: 0)
 
-            VoiceWaveformView(levels: state.voiceWaveformLevels)
-                .frame(
-                    width: PointerPromptLayout.composerWaveformSize.width,
-                    height: PointerPromptLayout.composerWaveformSize.height
-                )
+            switch toolbarStyle {
+            case .waveformOnly:
+                VoiceWaveformView(levels: state.voiceWaveformLevels)
+                    .frame(
+                        width: PointerPromptLayout.composerWaveformSize.width,
+                        height: PointerPromptLayout.composerWaveformSize.height
+                    )
+            case .followUp:
+                followUpTrailingControls
+            }
         }
-        .padding(.horizontal, PointerPromptLayout.composerExpandedTextHorizontalPadding)
+        .padding(.horizontal, toolbarHorizontalPadding)
+        .padding(.bottom, toolbarBottomPadding)
         .frame(
             width: PointerPromptLayout.composerInputSurfaceWidth,
-            height: PointerPromptLayout.composerExpandedToolbarHeight
+            height: sizeProfile.toolbarHeight
         )
     }
 
-    private var toolbarControls: some View {
-        HStack(spacing: 12) {
-            toolbarIcon(systemName: "plus")
-
-            HStack(spacing: 8) {
-                Image(systemName: "hand.raised")
-                    .font(.system(size: 15, weight: .medium))
-
-                Text("Default permissions")
-                    .font(.system(size: 14, weight: .medium))
-
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 11, weight: .semibold))
-            }
-            .foregroundStyle(Color.white.opacity(0.6))
+    private var followUpTrailingControls: some View {
+        Button(action: submit) {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.black.opacity(0.75))
+                .frame(width: 32, height: 32)
+                .background(Color.white.opacity(0.9))
+                .clipShape(Circle())
         }
-    }
-
-    private func toolbarIcon(systemName: String) -> some View {
-        Image(systemName: systemName)
-            .font(.system(size: 18, weight: .regular))
-            .foregroundStyle(Color.white.opacity(0.62))
-            .frame(width: 24, height: 24)
+        .buttonStyle(.plain)
+        .disabled(messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     private var textInput: some View {
@@ -273,18 +284,92 @@ private struct PointerPromptComposer: View {
     }
 
     private var expandedSurfaceHeight: CGFloat {
-        PointerPromptLayout.composerInputHeight(inputTextHeight: inputTextHeight, isExpanded: true)
+        composerHeight
     }
 
     private var expandedTextAreaHeight: CGFloat {
         max(
-            inputTextHeight + PointerPromptLayout.composerExpandedTextTopPadding,
-            expandedSurfaceHeight - PointerPromptLayout.composerExpandedToolbarHeight
+            inputTextHeight + sizeProfile.expandedTextTopPadding,
+            expandedSurfaceHeight - sizeProfile.toolbarHeight
         )
+    }
+
+    private var toolbarHorizontalPadding: CGFloat {
+        switch toolbarStyle {
+        case .waveformOnly:
+            PointerPromptLayout.composerExpandedTextHorizontalPadding
+        case .followUp:
+            16
+        }
+    }
+
+    private var toolbarBottomPadding: CGFloat {
+        switch toolbarStyle {
+        case .waveformOnly:
+            0
+        case .followUp:
+            16
+        }
     }
 
     private var isExpanded: Bool {
         isInputExpanded || messageText.contains("\n")
+    }
+
+    private var usesExpandedSurface: Bool {
+        forceExpandedSurface || isExpanded
+    }
+
+    private var showsSurfaceStroke: Bool {
+        toolbarStyle != .followUp
+    }
+
+    var composerHeight: CGFloat {
+        if usesExpandedSurface {
+            return max(
+                sizeProfile.expandedMinimumHeight,
+                inputTextHeight + sizeProfile.expandedTextTopPadding + sizeProfile.toolbarHeight
+            )
+        }
+
+        return PointerPromptLayout.composerInputMinimumHeight
+    }
+}
+
+enum PointerPromptComposerToolbarStyle {
+    case waveformOnly
+    case followUp
+}
+
+enum PointerPromptComposerSizeProfile {
+    case standard
+    case compact
+
+    var expandedTextTopPadding: CGFloat {
+        switch self {
+        case .standard:
+            PointerPromptLayout.composerExpandedTextTopPadding
+        case .compact:
+            12
+        }
+    }
+
+    var toolbarHeight: CGFloat {
+        switch self {
+        case .standard:
+            PointerPromptLayout.composerExpandedToolbarHeight
+        case .compact:
+            48
+        }
+    }
+
+    var expandedMinimumHeight: CGFloat {
+        switch self {
+        case .standard:
+            PointerPromptLayout.composerExpandedMinimumHeight
+        case .compact:
+            92
+        }
     }
 }
 

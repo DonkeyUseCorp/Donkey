@@ -8,8 +8,16 @@ public struct PointerPromptNotchStatusView: View {
     private let surfaceWidth: CGFloat
     private let surfaceHeight: CGFloat
     private let isExpanded: Bool
+    private let isCurrentTaskPaused: Bool
+    @Binding private var commandText: String
+    private let commandInputTextHeight: CGFloat
+    private let isCommandInputExpanded: Bool
     private let accentIndex: Int
-    private let commandRequested: @MainActor () -> Void
+    private let commandSubmitted: @MainActor (String) -> Void
+    private let commandInputTextHeightChanged: @MainActor (CGFloat) -> Void
+    private let commandInputExpansionChanged: @MainActor (Bool) -> Void
+    private let pauseRequested: @MainActor () -> Void
+    private let resumeRequested: @MainActor () -> Void
     private let updateRequested: @MainActor () -> Void
 
     public init(
@@ -19,8 +27,16 @@ public struct PointerPromptNotchStatusView: View {
         surfaceWidth: CGFloat,
         surfaceHeight: CGFloat,
         isExpanded: Bool,
+        isCurrentTaskPaused: Bool,
+        commandText: Binding<String>,
+        commandInputTextHeight: CGFloat,
+        isCommandInputExpanded: Bool,
         accentIndex: Int,
-        commandRequested: @escaping @MainActor () -> Void,
+        commandSubmitted: @escaping @MainActor (String) -> Void,
+        commandInputTextHeightChanged: @escaping @MainActor (CGFloat) -> Void,
+        commandInputExpansionChanged: @escaping @MainActor (Bool) -> Void,
+        pauseRequested: @escaping @MainActor () -> Void,
+        resumeRequested: @escaping @MainActor () -> Void,
         updateRequested: @escaping @MainActor () -> Void
     ) {
         self.state = state
@@ -29,8 +45,16 @@ public struct PointerPromptNotchStatusView: View {
         self.surfaceWidth = surfaceWidth
         self.surfaceHeight = surfaceHeight
         self.isExpanded = isExpanded
+        self.isCurrentTaskPaused = isCurrentTaskPaused
+        _commandText = commandText
+        self.commandInputTextHeight = commandInputTextHeight
+        self.isCommandInputExpanded = isCommandInputExpanded
         self.accentIndex = accentIndex
-        self.commandRequested = commandRequested
+        self.commandSubmitted = commandSubmitted
+        self.commandInputTextHeightChanged = commandInputTextHeightChanged
+        self.commandInputExpansionChanged = commandInputExpansionChanged
+        self.pauseRequested = pauseRequested
+        self.resumeRequested = resumeRequested
         self.updateRequested = updateRequested
     }
 
@@ -65,6 +89,15 @@ public struct PointerPromptNotchStatusView: View {
                     isExpanded ? Self.expandedContentAnimation : Self.expandedContentDismissAnimation,
                     value: isExpanded
                 )
+
+            if !hasTaskDisplayText {
+                expandedNotchArrow
+                    .opacity(isExpanded ? 1 : 0)
+                    .animation(
+                        isExpanded ? Self.expandedContentAnimation : Self.expandedContentDismissAnimation,
+                        value: isExpanded
+                    )
+            }
         }
         .frame(width: animatingSurfaceWidth, height: animatingSurfaceHeight, alignment: .top)
         .clipShape(notchSurfaceShape(cornerRadius: animatingSurfaceCornerRadius))
@@ -152,18 +185,12 @@ public struct PointerPromptNotchStatusView: View {
     }
 
     private var expandedContent: some View {
-        VStack(spacing: 0) {
-            expandedHeader
-
-            currentTaskRow
-                .padding(.horizontal, 14)
-                .padding(.top, 10)
-
-            Spacer(minLength: 8)
-
-            commandRow
-                .padding(.horizontal, 14)
-                .padding(.bottom, 10)
+        Group {
+            if hasTaskDisplayText {
+                expandedTaskContent
+            } else {
+                expandedCommandOnlyContent
+            }
         }
         .frame(
             width: layout.expandedContentFrame.width,
@@ -177,19 +204,47 @@ public struct PointerPromptNotchStatusView: View {
         .clipped()
     }
 
-    private var expandedHeader: some View {
-        HStack(spacing: 10) {
-            TaskArrowMark(color: accentColor)
-                .frame(width: 15, height: 15)
+    private var expandedTaskContent: some View {
+        VStack(spacing: 0) {
+            if updateState.headerButtonTitle != nil {
+                expandedUpdateHeader
+            }
 
-            Text("Current task")
-                .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(Color.white.opacity(0.92))
+            ScrollView(.vertical, showsIndicators: false) {
+                currentTaskRow
+                    .padding(.horizontal, 14)
+                    .padding(.top, 10)
+            }
 
-            Text(statusLabel)
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(Color.white.opacity(0.42))
+            Spacer(minLength: 8)
 
+            commandRow
+                .padding(.horizontal, 24)
+                .padding(.bottom, 24)
+        }
+    }
+
+    private var expandedCommandOnlyContent: some View {
+        VStack(spacing: 0) {
+            if updateState.headerButtonTitle != nil {
+                expandedUpdateHeader
+            }
+
+            commandRow
+                .padding(.horizontal, 24)
+                .padding(.top, 16)
+                .padding(.bottom, 24)
+        }
+    }
+
+    private var expandedNotchArrow: some View {
+        TaskArrowMark(color: accentColor)
+            .frame(width: 15, height: 15)
+            .position(x: expandedNotchArrowX, y: expandedNotchArrowY)
+    }
+
+    private var expandedUpdateHeader: some View {
+        HStack {
             Spacer()
 
             if let updateTitle = updateState.headerButtonTitle {
@@ -210,17 +265,6 @@ public struct PointerPromptNotchStatusView: View {
                 }
                 .buttonStyle(.plain)
             }
-
-            Button(action: commandRequested) {
-                HStack(spacing: 6) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 13, weight: .regular))
-                    Text("new")
-                        .font(.system(size: 13, weight: .regular))
-                }
-                .foregroundStyle(Color.white.opacity(0.46))
-            }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 18)
         .frame(height: 40)
@@ -231,11 +275,18 @@ public struct PointerPromptNotchStatusView: View {
         }
     }
 
+    private var expandedNotchArrowX: CGFloat {
+        24
+    }
+
+    private var expandedNotchArrowY: CGFloat {
+        max(14, layout.collapsedVisibleHeight / 2)
+    }
+
     private var currentTaskRow: some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(accentColor)
-                .frame(width: 7, height: 7)
+        HStack(spacing: 12) {
+            TaskArrowMark(color: accentColor)
+                .frame(width: 14, height: 14)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(taskTitle)
@@ -250,7 +301,9 @@ public struct PointerPromptNotchStatusView: View {
 
             Spacer()
 
-            if isWorking {
+            if isActiveTask {
+                activeTaskControls
+            } else if isWorking {
                 activityBars(color: accentColor)
             }
         }
@@ -261,24 +314,75 @@ public struct PointerPromptNotchStatusView: View {
     }
 
     private var commandRow: some View {
-        Button(action: commandRequested) {
-            HStack(spacing: 10) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 14, weight: .regular))
-                    .foregroundStyle(Color.white.opacity(0.42))
+        PointerPromptComposer(
+            state: commandInputState,
+            messageText: $commandText,
+            inputTextHeight: commandInputTextHeight,
+            isInputExpanded: isCommandInputExpanded,
+            surfaceFill: Color.white.opacity(0.085),
+            forceExpandedSurface: true,
+            toolbarStyle: .followUp,
+            sizeProfile: .compact,
+            submit: submitCommandText,
+            inputTextHeightChanged: commandInputTextHeightChanged,
+            inputExpansionChanged: commandInputExpansionChanged
+        )
+    }
 
-                Text("Type a task...")
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(Color.white.opacity(0.42))
+    private func submitCommandText() {
+        let text = commandText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
 
-                Spacer()
-            }
-            .padding(.horizontal, 12)
-            .frame(height: 42)
-            .background(Color.white.opacity(0.055))
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        commandText = ""
+        commandSubmitted(text)
+    }
+
+    private var commandInputState: PointerPromptState {
+        PointerPromptState(
+            promptText: "Ask for follow-up changes",
+            isPrimaryActionEnabled: true,
+            leadingSignalLevel: .ready,
+            isActive: isExpanded,
+            theme: state.theme,
+            voiceWaveformLevels: state.voiceWaveformLevels
+        )
+    }
+
+    private var activeTaskControls: some View {
+        HStack(spacing: 6) {
+            statusControlButton(
+                systemName: "play.fill",
+                label: "Resume",
+                isEnabled: isCurrentTaskPaused,
+                action: resumeRequested
+            )
+
+            statusControlButton(
+                systemName: "pause.fill",
+                label: "Pause",
+                isEnabled: !isCurrentTaskPaused,
+                action: pauseRequested
+            )
+        }
+    }
+
+    private func statusControlButton(
+        systemName: String,
+        label: String,
+        isEnabled: Bool,
+        action: @escaping @MainActor () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 10, weight: .regular))
+                .foregroundStyle(Color.white.opacity(isEnabled ? 0.88 : 0.3))
+                .frame(width: 24, height: 24)
+                .background(Color.white.opacity(isEnabled ? 0.12 : 0.055))
+                .clipShape(Circle())
         }
         .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .accessibilityLabel(label)
     }
 
     private func activityBars(color: Color, height: CGFloat = 18) -> some View {
@@ -293,38 +397,32 @@ public struct PointerPromptNotchStatusView: View {
     }
 
     private var taskTitle: String {
-        switch state.leadingSignalLevel {
-        case .idle:
-            let text = state.promptText.trimmingCharacters(in: .whitespacesAndNewlines)
-            return text.isEmpty || text == "Make this so" ? "Resting" : text
-        case .ready:
-            let text = state.promptText.trimmingCharacters(in: .whitespacesAndNewlines)
-            return text.isEmpty ? "Ready" : text
-        case .thinking:
-            let text = state.promptText.trimmingCharacters(in: .whitespacesAndNewlines)
-            return text.isEmpty ? "Working" : text
+        if let taskDisplayText {
+            return taskDisplayText
         }
-    }
 
-    private var statusLabel: String {
         switch state.leadingSignalLevel {
         case .idle:
-            return "resting"
+            return "Resting"
         case .ready:
-            return "ready"
+            return "Ready"
         case .thinking:
-            return "working"
+            return "Working"
         }
     }
 
     private var statusDescription: String {
+        if isCurrentTaskPaused {
+            return "Paused"
+        }
+
         switch state.leadingSignalLevel {
         case .idle:
-            return "Waiting for a task"
+            return hasTaskDisplayText ? "Needs attention" : "Idle"
         case .ready:
-            return "Ready for the next task"
+            return "Ready"
         case .thinking:
-            return "Classifying and running"
+            return "Running"
         }
     }
 
@@ -332,8 +430,28 @@ public struct PointerPromptNotchStatusView: View {
         state.leadingSignalLevel == .thinking
     }
 
+    private var isActiveTask: Bool {
+        isWorking || isCurrentTaskPaused
+    }
+
+    private var hasTaskDisplayText: Bool {
+        taskDisplayText != nil
+    }
+
+    private var taskDisplayText: String? {
+        let text = state.promptText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+        guard !text.isEmpty, text != "Make this so", text != "Resting" else {
+            return nil
+        }
+
+        return text
+    }
+
     private var isResting: Bool {
-        state.leadingSignalLevel == .idle && taskTitle == "Resting"
+        state.leadingSignalLevel == .idle && !hasTaskDisplayText
     }
 
     private var accentColor: Color {
