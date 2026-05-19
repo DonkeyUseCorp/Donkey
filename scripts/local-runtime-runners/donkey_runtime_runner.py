@@ -215,9 +215,6 @@ def install_python_requirements(venv_python: Path, requirements: list[str], stat
     requirements_path = state_dir / "requirements.txt"
     requirements_path.write_text("\n".join(requirements) + "\n")
     command = [str(venv_python), "-m", "pip", "install", "-r", str(requirements_path)]
-    wheelhouse = runtime_wheelhouse()
-    if wheelhouse is not None:
-        command.extend(["--no-index", "--find-links", str(wheelhouse)])
     environment = os.environ.copy()
     environment["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
     completed = subprocess.run(
@@ -230,18 +227,6 @@ def install_python_requirements(venv_python: Path, requirements: list[str], stat
     )
     if completed.returncode != 0:
         raise RuntimeError(f"pip install failed: {completed.stderr[-1200:]}")
-
-
-def runtime_wheelhouse() -> Path | None:
-    configured = os.environ.get("DONKEY_RUNTIME_WHEELHOUSE")
-    if configured and Path(configured).exists():
-        return Path(configured)
-    package_dir = os.environ.get("DONKEY_RUNTIME_PACKAGE_DIR")
-    if package_dir:
-        candidate = Path(package_dir) / "wheelhouse"
-        if candidate.exists():
-            return candidate
-    return None
 
 
 def safe_model_dir(cache_dir: str | None = None, model_id: str | None = None) -> Path:

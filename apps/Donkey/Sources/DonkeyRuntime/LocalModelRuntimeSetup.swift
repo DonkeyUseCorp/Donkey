@@ -396,7 +396,6 @@ public struct LocalModelRuntimeSetupManager: Sendable {
     public var specs: [LocalModelRuntimeSpec]
     public var isExecutableFile: @Sendable (String) -> Bool
     public var now: @Sendable () -> Date
-    public var bundledPackageDirectory: @Sendable (LocalModelRuntimeID) -> URL?
     public var trustedManifestSigningKeys: [String: String]
     public var requiresCryptographicManifestSignatures: Bool
 
@@ -405,7 +404,6 @@ public struct LocalModelRuntimeSetupManager: Sendable {
         specs: [LocalModelRuntimeSpec] = Self.defaultSpecs,
         isExecutableFile: @escaping @Sendable (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) },
         now: @escaping @Sendable () -> Date = Date.init,
-        bundledPackageDirectory: @escaping @Sendable (LocalModelRuntimeID) -> URL? = Self.defaultBundledPackageDirectory,
         trustedManifestSigningKeys: [LocalModelRuntimeManifestSigningKey] = Self.defaultTrustedManifestSigningKeys(),
         requiresCryptographicManifestSignatures: Bool = Self.defaultRequiresCryptographicManifestSignatures()
     ) throws {
@@ -413,7 +411,6 @@ public struct LocalModelRuntimeSetupManager: Sendable {
         self.specs = specs
         self.isExecutableFile = isExecutableFile
         self.now = now
-        self.bundledPackageDirectory = bundledPackageDirectory
         self.trustedManifestSigningKeys = Dictionary(
             uniqueKeysWithValues: trustedManifestSigningKeys.map { ($0.keyID, $0.publicKeyBase64) }
         )
@@ -428,6 +425,7 @@ public struct LocalModelRuntimeSetupManager: Sendable {
             expectedExecutableRelativePath: "bin/donkey-parakeet-transcriber",
             modelName: "nvidia/parakeet-tdt-0.6b-v3",
             downloadPageURL: URL(string: "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3"),
+            manifestURL: Self.defaultPackageManifestURL(for: .parakeetTranscriber),
             installSteps: [
                 "Click Set Up in Donkey after installing the app.",
                 "Donkey downloads and verifies the compatible Parakeet runtime package.",
@@ -442,6 +440,7 @@ public struct LocalModelRuntimeSetupManager: Sendable {
             expectedExecutableRelativePath: "bin/donkey-yolo-segmenter",
             modelName: "ultralytics/yolo26n-seg",
             downloadPageURL: URL(string: "https://docs.ultralytics.com/models/yolo26/"),
+            manifestURL: Self.defaultPackageManifestURL(for: .yoloSegmenter),
             installSteps: [
                 "Click Set Up in Donkey after installing the app.",
                 "Donkey downloads and verifies the compatible YOLO26 segmentation runtime package.",
@@ -456,6 +455,7 @@ public struct LocalModelRuntimeSetupManager: Sendable {
             expectedExecutableRelativePath: "bin/donkey-ui-understander",
             modelName: "apple-vision-text-recognition",
             downloadPageURL: nil,
+            manifestURL: Self.defaultPackageManifestURL(for: .uiUnderstander),
             installSteps: [
                 "Click Set Up in Donkey after installing the app.",
                 "Donkey downloads and verifies the compatible UI-understanding runtime package.",
@@ -470,6 +470,7 @@ public struct LocalModelRuntimeSetupManager: Sendable {
             expectedExecutableRelativePath: "bin/donkey-local-llm",
             modelName: "qwen3:8b",
             downloadPageURL: URL(string: "https://ollama.com/library/qwen3"),
+            manifestURL: Self.defaultPackageManifestURL(for: .localLLM),
             installSteps: [
                 "Click Set Up in Donkey after installing the app.",
                 "Donkey asks the local LLM runner to download and cache qwen3:8b.",
@@ -495,19 +496,42 @@ public struct LocalModelRuntimeSetupManager: Sendable {
             .appendingPathComponent("LocalModelRuntimes", isDirectory: true)
     }
 
-    public static func defaultBundledPackageDirectory(runtimeID: LocalModelRuntimeID) -> URL? {
-        guard let resourcesURL = Bundle.main.resourceURL else { return nil }
-        let packageDirectory = resourcesURL
-            .appendingPathComponent("LocalRuntimePackages", isDirectory: true)
-            .appendingPathComponent(runtimeID.rawValue, isDirectory: true)
-        guard FileManager.default.fileExists(
-            atPath: packageDirectory
-                .appendingPathComponent("manifest.json", isDirectory: false)
-                .path
-        ) else {
-            return nil
+    public static func defaultPackageManifestURL(for runtimeID: LocalModelRuntimeID) -> URL? {
+        if let bundledURLs = Bundle.main.object(
+            forInfoDictionaryKey: "DonkeyRuntimePackageManifestURLs"
+        ) as? [String: String],
+            let value = bundledURLs[runtimeID.rawValue],
+            let url = URL(string: value) {
+            return url
         }
-        return packageDirectory
+
+        if let value = ProcessInfo.processInfo.environment[manifestURLEnvironmentName(for: runtimeID)],
+           let url = URL(string: value) {
+            return url
+        }
+
+        return ProcessInfo.processInfo.environment["DONKEY_RUNTIME_PACKAGE_MANIFEST_URLS"]?
+            .split(separator: ",")
+            .compactMap { pair -> (String, String)? in
+                let parts = pair.split(separator: "=", maxSplits: 1).map(String.init)
+                guard parts.count == 2 else { return nil }
+                return (parts[0], parts[1])
+            }
+            .first(where: { runtime, _ in runtime == runtimeID.rawValue })
+            .flatMap { _, value in URL(string: value) }
+    }
+
+    private static func manifestURLEnvironmentName(for runtimeID: LocalModelRuntimeID) -> String {
+        switch runtimeID {
+        case .parakeetTranscriber:
+            return "DONKEY_PARAKEET_RUNTIME_MANIFEST_URL"
+        case .yoloSegmenter:
+            return "DONKEY_YOLO_RUNTIME_MANIFEST_URL"
+        case .uiUnderstander:
+            return "DONKEY_UI_UNDERSTANDER_RUNTIME_MANIFEST_URL"
+        case .localLLM:
+            return "DONKEY_LOCAL_LLM_RUNTIME_MANIFEST_URL"
+        }
     }
 
     public static func defaultTrustedManifestSigningKeys() -> [LocalModelRuntimeManifestSigningKey] {
@@ -541,13 +565,6 @@ public struct LocalModelRuntimeSetupManager: Sendable {
         return ProcessInfo.processInfo.environment["DONKEY_RUNTIME_REQUIRE_CRYPTO_SIGNATURES"] == "1"
     }
 
-    private func bundledPackageManifest(for runtimeID: LocalModelRuntimeID) throws -> LocalModelRuntimePackageManifest? {
-        guard let packageDirectory = bundledPackageDirectory(runtimeID) else { return nil }
-        let manifestURL = packageDirectory.appendingPathComponent("manifest.json", isDirectory: false)
-        let manifestData = try Data(contentsOf: manifestURL)
-        return try Self.decoder().decode(LocalModelRuntimePackageManifest.self, from: manifestData)
-    }
-
     public func instructions() -> [LocalModelRuntimeInstallInstruction] {
         specs.map { spec in
             LocalModelRuntimeInstallInstruction(
@@ -571,20 +588,6 @@ public struct LocalModelRuntimeSetupManager: Sendable {
                 spec: spec,
                 state: .notInstalled,
                 metadata: ["reason": "noRegisteredRuntime"]
-            )
-        }
-
-        if let bundledManifest = try? bundledPackageManifest(for: runtimeID),
-           bundledManifest.runtimeVersion != installation.runtimeVersion {
-            return LocalModelRuntimeStatus(
-                spec: spec,
-                state: .notInstalled,
-                installation: installation,
-                metadata: [
-                    "reason": "bundledRuntimeUpdateAvailable",
-                    "installedRuntimeVersion": installation.runtimeVersion ?? "",
-                    "bundledRuntimeVersion": bundledManifest.runtimeVersion
-                ]
             )
         }
 
@@ -758,26 +761,6 @@ public struct LocalModelRuntimeSetupManager: Sendable {
         downloader: any LocalModelRuntimePackageDownloading = URLSessionLocalModelRuntimePackageDownloader(),
         requiresSignature: Bool = true
     ) async throws -> LocalModelRuntimeDownloadResult {
-        if let packageDirectory = bundledPackageDirectory(runtimeID) {
-            let manifestURL = packageDirectory.appendingPathComponent("manifest.json", isDirectory: false)
-            let manifestData = try Data(contentsOf: manifestURL)
-            let manifest = try Self.decoder().decode(LocalModelRuntimePackageManifest.self, from: manifestData)
-            let installation = try installDownloadedPackage(
-                manifest: manifest,
-                packageDirectory: packageDirectory,
-                requiresSignature: requiresSignature
-            )
-            return LocalModelRuntimeDownloadResult(
-                runtimeID: runtimeID,
-                state: .installed,
-                installation: installation,
-                metadata: [
-                    "download.source": "bundledRuntimePackage",
-                    "download.packageDirectory": packageDirectory.path
-                ]
-            )
-        }
-
         let spec = try spec(for: runtimeID)
         guard let manifestURL = spec.manifestURL else {
             throw LocalModelRuntimeSetupError.manifestMissingDownloadURL(relativePath: "manifest")

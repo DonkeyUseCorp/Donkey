@@ -276,54 +276,6 @@ struct LocalModelRuntimeSetupTests {
     }
 
     @Test
-    func bundledRuntimePackageInstallsWithoutNetworkDownload() async throws {
-        let root = temporaryDirectory()
-        let package = temporaryDirectory()
-        defer {
-            try? FileManager.default.removeItem(at: root)
-            try? FileManager.default.removeItem(at: package)
-        }
-        let executableData = Data("#!/bin/sh\ncat >/dev/null\nprintf '{\"status\":\"ok\",\"runtimeID\":\"yolo-segmenter\",\"runtimeVersion\":\"0.1.0\",\"modelID\":\"bootstrap-yolo26\",\"protocolVersion\":\"v1\",\"metadata\":{}}'\n".utf8)
-        let executableURL = try makeExecutable(
-            root: package,
-            relativePath: "bin/donkey-yolo-segmenter",
-            data: executableData
-        )
-        let manifest = LocalModelRuntimePackageManifest(
-            runtimeID: .yoloSegmenter,
-            runtimeVersion: "0.1.0",
-            modelID: "bootstrap-yolo26",
-            executableRelativePath: "bin/donkey-yolo-segmenter",
-            files: [
-                LocalModelRuntimePackageFile(
-                    relativePath: "bin/donkey-yolo-segmenter",
-                    sha256: LocalModelRuntimeSetupManager.sha256Hex(executableData),
-                    isExecutable: true
-                )
-            ],
-            signature: "bundled-bootstrap-signature",
-            signingKeyID: "donkey-bootstrap"
-        )
-        let manifestData = try JSONEncoder().encode(manifest)
-        try manifestData.write(to: package.appendingPathComponent("manifest.json", isDirectory: false))
-        let manager = try LocalModelRuntimeSetupManager(
-            baseDirectory: root,
-            bundledPackageDirectory: { runtimeID in
-                runtimeID == .yoloSegmenter ? package : nil
-            }
-        )
-
-        let result = try await manager.downloadAndInstall(runtimeID: .yoloSegmenter)
-        let status = try manager.status(for: .yoloSegmenter)
-
-        #expect(result.state == .installed)
-        #expect(result.metadata["download.source"] == "bundledRuntimePackage")
-        #expect(status.state == .installed)
-        #expect(status.installation?.executablePath != executableURL.path)
-        #expect(status.installation?.downloadedDirectoryPath.contains("/Packages/yolo-segmenter/0.1.0") == true)
-    }
-
-    @Test
     func manifestDownloadRejectsMissingSignatureAndBadChecksums() async throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

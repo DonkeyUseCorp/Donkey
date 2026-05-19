@@ -7,6 +7,8 @@ DMG_PATH="$ROOT_DIR/dist/Donkey.dmg"
 DMG_ROOT="$ROOT_DIR/dist/DonkeyInstaller"
 RUNTIME_PACKAGE_DIR="$ROOT_DIR/dist/LocalRuntimePackages"
 RUNTIME_PACKAGE_VERSION="${DONKEY_RUNTIME_PACKAGE_VERSION:-0.3.0-runner}"
+RUNTIME_PACKAGE_BASE_URL="${DONKEY_RUNTIME_PACKAGE_BASE_URL:-}"
+RUNTIME_PACKAGE_MANIFEST_URLS="${DONKEY_RUNTIME_PACKAGE_MANIFEST_URLS:-}"
 APP_VERSION="${DONKEY_APP_VERSION:-0.1.0}"
 APP_BUILD="${DONKEY_APP_BUILD:-1}"
 SPARKLE_FEED_URL="${DONKEY_SPARKLE_FEED_URL:-}"
@@ -22,19 +24,19 @@ EXECUTABLE="$BUILD_DIR/.build/release/Donkey"
 UI_UNDERSTANDER_EXECUTABLE="$BUILD_DIR/.build/release/DonkeyUIUnderstandingSidecar"
 CACHE_DIR="$BUILD_DIR/.build/package-cache"
 RUNTIME_RUNNER_SOURCE="$ROOT_DIR/scripts/local-runtime-runners/donkey_runtime_runner.py"
-RUNTIME_WHEELHOUSE_ROOT="${DONKEY_RUNTIME_WHEELHOUSE_ROOT:-$ROOT_DIR/dist/LocalRuntimeWheelhouses}"
-BUNDLE_RUNTIME_WHEELHOUSES="${DONKEY_BUNDLE_RUNTIME_WHEELHOUSES:-0}"
 
 mkdir -p "$CACHE_DIR/clang" "$CACHE_DIR/swiftpm" "$CACHE_DIR/home"
 export CLANG_MODULE_CACHE_PATH="$CACHE_DIR/clang"
 export SWIFTPM_CACHE_PATH="$CACHE_DIR/swiftpm"
 export HOME="$CACHE_DIR/home"
 
-if [ "$BUNDLE_RUNTIME_WHEELHOUSES" = "1" ]; then
-  echo "Runtime wheelhouses will be bundled from $RUNTIME_WHEELHOUSE_ROOT"
-else
-  echo "Runtime wheelhouses will not be bundled; setup will install Python dependencies from the network."
-fi
+manifest_download_url_entry() {
+  local runtime_id="$1"
+  local relative_path="$2"
+  if [ -n "$RUNTIME_PACKAGE_BASE_URL" ]; then
+    printf ',\n      "downloadURL" : "%s/%s/%s"' "${RUNTIME_PACKAGE_BASE_URL%/}" "$runtime_id" "$relative_path"
+  fi
+}
 
 cd "$BUILD_DIR"
 echo "Compiling Donkey for Mac ..."
@@ -67,7 +69,6 @@ make_runtime_package() {
   local executable_path="$bin_dir/$executable_name"
   local runner_path="$lib_dir/donkey_runtime_runner.py"
   local requirements_path="$package_dir/requirements.txt"
-  local wheelhouse_source="$RUNTIME_WHEELHOUSE_ROOT/$runtime_id"
 
   mkdir -p "$bin_dir" "$lib_dir"
   cp "$RUNTIME_RUNNER_SOURCE" "$runner_path"
@@ -96,40 +97,27 @@ EOF_RUNTIME
   if [ -n "$requirements" ]; then
     printf '%s\n' "$requirements" > "$requirements_path"
   fi
-  if [ "$BUNDLE_RUNTIME_WHEELHOUSES" = "1" ] && [ -d "$wheelhouse_source" ]; then
-    mkdir -p "$package_dir/wheelhouse"
-    cp -R "$wheelhouse_source/." "$package_dir/wheelhouse/"
-  fi
 
   local executable_sha
   local runner_sha
   local requirements_sha=""
   local requirements_manifest_entry=""
-  local wheelhouse_manifest_entries=""
   executable_sha="$(shasum -a 256 "$executable_path" | awk '{print $1}')"
   runner_sha="$(shasum -a 256 "$runner_path" | awk '{print $1}')"
+  local executable_download_url_entry
+  local runner_download_url_entry
+  executable_download_url_entry="$(manifest_download_url_entry "$runtime_id" "bin/$executable_name")"
+  runner_download_url_entry="$(manifest_download_url_entry "$runtime_id" "lib/donkey_runtime_runner.py")"
   if [ -f "$requirements_path" ]; then
     requirements_sha="$(shasum -a 256 "$requirements_path" | awk '{print $1}')"
+    local requirements_download_url_entry
+    requirements_download_url_entry="$(manifest_download_url_entry "$runtime_id" "requirements.txt")"
     requirements_manifest_entry=",
     {
-      \"relativePath\" : \"requirements.txt\",
+      \"relativePath\" : \"requirements.txt\"$requirements_download_url_entry,
       \"sha256\" : \"$requirements_sha\",
       \"isExecutable\" : false
     }"
-  fi
-  if [ -d "$package_dir/wheelhouse" ]; then
-    while IFS= read -r wheelhouse_file; do
-      local wheelhouse_sha
-      local wheelhouse_relative_path
-      wheelhouse_sha="$(shasum -a 256 "$wheelhouse_file" | awk '{print $1}')"
-      wheelhouse_relative_path="${wheelhouse_file#$package_dir/}"
-      wheelhouse_manifest_entries="$wheelhouse_manifest_entries,
-    {
-      \"relativePath\" : \"$wheelhouse_relative_path\",
-      \"sha256\" : \"$wheelhouse_sha\",
-      \"isExecutable\" : false
-    }"
-    done < <(find "$package_dir/wheelhouse" -type f | sort)
   fi
   cat > "$package_dir/manifest.json" <<EOF_MANIFEST
 {
@@ -143,17 +131,17 @@ EOF_RUNTIME
   "executableRelativePath" : "bin/$executable_name",
   "files" : [
     {
-      "relativePath" : "bin/$executable_name",
+      "relativePath" : "bin/$executable_name"$executable_download_url_entry,
       "sha256" : "$executable_sha",
       "isExecutable" : true
     },
     {
-      "relativePath" : "lib/donkey_runtime_runner.py",
+      "relativePath" : "lib/donkey_runtime_runner.py"$runner_download_url_entry,
       "sha256" : "$runner_sha",
       "isExecutable" : true
-    }$requirements_manifest_entry$wheelhouse_manifest_entries
+    }$requirements_manifest_entry
   ],
-  "signature" : "bundled-runner-package",
+  "signature" : "donkey-runner-package",
   "signingKeyID" : "donkey-runner",
   "metadata" : {
     "runtime.package" : "donkey-runner-package",
@@ -183,6 +171,8 @@ make_binary_runtime_package() {
 
   local executable_sha
   executable_sha="$(shasum -a 256 "$executable_path" | awk '{print $1}')"
+  local executable_download_url_entry
+  executable_download_url_entry="$(manifest_download_url_entry "$runtime_id" "bin/$executable_name")"
   cat > "$package_dir/manifest.json" <<EOF_MANIFEST
 {
   "runtimeID" : "$runtime_id",
@@ -195,12 +185,12 @@ make_binary_runtime_package() {
   "executableRelativePath" : "bin/$executable_name",
   "files" : [
     {
-      "relativePath" : "bin/$executable_name",
+      "relativePath" : "bin/$executable_name"$executable_download_url_entry,
       "sha256" : "$executable_sha",
       "isExecutable" : true
     }
   ],
-  "signature" : "bundled-runner-package",
+  "signature" : "donkey-runner-package",
   "signingKeyID" : "donkey-runner",
   "metadata" : {
     "runtime.package" : "donkey-binary-runtime-package",
@@ -219,7 +209,6 @@ make_runtime_package "parakeet-transcriber" "donkey-parakeet-transcriber" "nvidi
 make_runtime_package "yolo-segmenter" "donkey-yolo-segmenter" "ultralytics/yolo26n-seg" "screenshotSegmentation" "${DONKEY_YOLO_MODEL_URL:-}" "${DONKEY_YOLO_MODEL_SHA256:-}" "${DONKEY_YOLO_MODEL_FILENAME:-yolo26n-seg.pt}" $'ultralytics>=8.3,<9\nopencv-python-headless>=4.10,<5'
 make_binary_runtime_package "ui-understander" "donkey-ui-understander" "$UI_UNDERSTANDER_EXECUTABLE" "apple-vision-text-recognition" "uiUnderstanding"
 make_runtime_package "local-llm" "donkey-local-llm" "${DONKEY_LOCAL_LLM_MODEL_ID:-qwen3:8b}" "localLLM" "" "" "${DONKEY_LOCAL_LLM_MODEL_FILENAME:-ollama-qwen3-8b}"
-cp -R "$RUNTIME_PACKAGE_DIR" "$RESOURCES_DIR/LocalRuntimePackages"
 
 RESOURCE_BUNDLE="$(find "$BUILD_DIR/.build" -path "*/release/Donkey_Donkey.bundle" -type d | head -n 1 || true)"
 if [ -n "$RESOURCE_BUNDLE" ]; then
@@ -268,6 +257,39 @@ if [ -n "$RUNTIME_MANIFEST_PUBLIC_KEYS" ]; then
   </dict>"
 fi
 
+RUNTIME_PACKAGE_MANIFEST_PLIST_KEYS=""
+append_runtime_package_manifest_url() {
+  local runtime_id="$1"
+  local manifest_url="$2"
+  if [ -z "$runtime_id" ] || [ -z "$manifest_url" ]; then
+    return
+  fi
+  RUNTIME_PACKAGE_MANIFEST_PLIST_KEYS="$RUNTIME_PACKAGE_MANIFEST_PLIST_KEYS
+    <key>$runtime_id</key>
+    <string>$manifest_url</string>"
+}
+
+if [ -n "$RUNTIME_PACKAGE_MANIFEST_URLS" ]; then
+  IFS=',' read -r -a manifest_url_pairs <<< "$RUNTIME_PACKAGE_MANIFEST_URLS"
+  for pair in "${manifest_url_pairs[@]}"; do
+    runtime_id="${pair%%=*}"
+    manifest_url="${pair#*=}"
+    if [ "$runtime_id" != "$manifest_url" ]; then
+      append_runtime_package_manifest_url "$runtime_id" "$manifest_url"
+    fi
+  done
+fi
+append_runtime_package_manifest_url "parakeet-transcriber" "${DONKEY_PARAKEET_RUNTIME_MANIFEST_URL:-}"
+append_runtime_package_manifest_url "yolo-segmenter" "${DONKEY_YOLO_RUNTIME_MANIFEST_URL:-}"
+append_runtime_package_manifest_url "ui-understander" "${DONKEY_UI_UNDERSTANDER_RUNTIME_MANIFEST_URL:-}"
+append_runtime_package_manifest_url "local-llm" "${DONKEY_LOCAL_LLM_RUNTIME_MANIFEST_URL:-}"
+
+if [ -n "$RUNTIME_PACKAGE_MANIFEST_PLIST_KEYS" ]; then
+  RUNTIME_PACKAGE_MANIFEST_PLIST_KEYS="  <key>DonkeyRuntimePackageManifestURLs</key>
+  <dict>$RUNTIME_PACKAGE_MANIFEST_PLIST_KEYS
+  </dict>"
+fi
+
 cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -296,6 +318,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>NSAppleEventsUsageDescription</key>
   <string>Donkey uses local app automation only for user-requested actions.</string>
 $SPARKLE_PLIST_KEYS
+$RUNTIME_PACKAGE_MANIFEST_PLIST_KEYS
 $RUNTIME_SIGNATURE_PLIST_KEYS
 </dict>
 </plist>
