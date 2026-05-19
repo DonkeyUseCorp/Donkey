@@ -11,12 +11,25 @@ Donkey is a low-latency desktop agent for macOS that sees the screen, understand
 
 ## Build
 
-Build and run the macOS app:
+Build and run the macOS app in development:
 
 ```sh
 cd apps/Donkey
 swift build
 swift run Donkey
+```
+
+Rebuild the packaged macOS app and installer disk image:
+
+```sh
+./scripts/package-donkey-app.sh
+open dist/Donkey.app
+```
+
+The packaging script creates `dist/Donkey.app` and `dist/Donkey.dmg`. To test the drag-to-Applications installer flow:
+
+```sh
+open dist/Donkey.dmg
 ```
 
 Build and run the site:
