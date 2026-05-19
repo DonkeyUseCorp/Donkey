@@ -2,6 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 import DonkeyContracts
 import DonkeyUI
+import QuartzCore
 import SwiftUI
 
 @MainActor
@@ -24,7 +25,12 @@ final class PointerPromptOverlayController {
     private var activationHoldStartedAt: Date?
     private var isVoiceInputActive = false
     private var isStatusExpanded = false
+    private var isStatusHostExpanded = false
+    private var statusHoverPhase: StatusHoverPhase = .collapsed
     private var statusCollapseWorkItem: DispatchWorkItem?
+    private var statusExpansionWorkItem: DispatchWorkItem?
+    private var statusHostShrinkWorkItem: DispatchWorkItem?
+    private var lastStatusViewSnapshot: StatusPanelViewSnapshot?
 
     init(
         model: PointerPromptOverlayModel,
@@ -108,6 +114,7 @@ final class PointerPromptOverlayController {
         hostingView.wantsLayer = true
         hostingView.layer?.backgroundColor = NSColor.clear.cgColor
         statusHostingView = hostingView
+        lastStatusViewSnapshot = statusViewSnapshot(metrics: metrics)
 
         let panel = NSPanel(
             contentRect: CGRect(origin: .zero, size: metrics.surfaceSize),
@@ -141,6 +148,11 @@ final class PointerPromptOverlayController {
         timer = nil
         statusCollapseWorkItem?.cancel()
         statusCollapseWorkItem = nil
+        statusExpansionWorkItem?.cancel()
+        statusExpansionWorkItem = nil
+        statusHostShrinkWorkItem?.cancel()
+        statusHostShrinkWorkItem = nil
+        statusHoverPhase = .collapsed
         stopActivationMonitoring()
         microphoneWaveformMeter.stop()
         inputPanel?.close()
@@ -148,6 +160,7 @@ final class PointerPromptOverlayController {
         statusPanel?.close()
         statusPanel = nil
         statusHostingView = nil
+        lastStatusViewSnapshot = nil
     }
 
     private func startActivationMonitoring() {
@@ -382,6 +395,7 @@ final class PointerPromptOverlayController {
 
         activateVoiceInputIfNeeded()
         positionStatusPanel()
+        updateStatusHoverExpansion()
         updateStatusPanelView()
         resizeActivePanelIfNeeded(inputPanel)
         updateMouseEventPassthrough(for: inputPanel)
@@ -409,31 +423,57 @@ final class PointerPromptOverlayController {
         )
     }
 
-    private func positionStatusPanel() {
+    private func positionStatusPanel(disableAnimations: Bool = true) {
         guard let statusPanel,
               let screen = activeScreen() else {
             return
         }
 
         let metrics = notchMetrics(for: screen)
-        if statusPanel.frame.size != metrics.surfaceSize {
-            statusHostingView?.frame = CGRect(origin: .zero, size: metrics.surfaceSize)
+        let frame = CGRect(
+            x: screen.frame.midX - metrics.surfaceSize.width / 2,
+            y: screen.frame.maxY - metrics.surfaceSize.height,
+            width: metrics.surfaceSize.width,
+            height: metrics.surfaceSize.height
+        )
+
+        guard disableAnimations else {
+            statusPanel.setFrame(frame, display: true)
+            return
         }
 
-        statusPanel.setFrame(
-            CGRect(
-                x: screen.frame.midX - metrics.surfaceSize.width / 2,
-                y: screen.frame.maxY - metrics.surfaceSize.height,
-                width: metrics.surfaceSize.width,
-                height: metrics.surfaceSize.height
-            ),
-            display: true
-        )
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            context.allowsImplicitAnimation = false
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            if statusPanel.frame.size != metrics.surfaceSize {
+                statusHostingView?.frame = CGRect(origin: .zero, size: metrics.surfaceSize)
+            }
+            statusPanel.setFrame(frame, display: true)
+            CATransaction.commit()
+        }
     }
 
     private func updateStatusPanelView() {
         let metrics = notchMetrics()
+        let snapshot = statusViewSnapshot(metrics: metrics)
+        guard snapshot != lastStatusViewSnapshot else { return }
+
+        lastStatusViewSnapshot = snapshot
         statusHostingView?.rootView = notchStatusView(metrics: metrics)
+    }
+
+    private func statusViewSnapshot(metrics: NotchMetrics) -> StatusPanelViewSnapshot {
+        StatusPanelViewSnapshot(
+            state: model.promptState,
+            updateState: model.updateState,
+            layout: metrics.layout,
+            surfaceSize: metrics.surfaceSize,
+            isExpanded: isStatusExpanded,
+            isHostExpanded: isStatusHostExpanded,
+            accentIndex: model.notchAccentIndex
+        )
     }
 
     private func notchStatusView(metrics: NotchMetrics) -> PointerPromptNotchStatusView {
@@ -445,9 +485,6 @@ final class PointerPromptOverlayController {
             surfaceHeight: metrics.surfaceSize.height,
             isExpanded: isStatusExpanded,
             accentIndex: model.notchAccentIndex,
-            hoverChanged: { [weak self] isHovering in
-                self?.setStatusExpanded(isHovering)
-            },
             commandRequested: { [weak self] in
                 self?.activateInputFromStatusCommand()
             },
@@ -461,10 +498,26 @@ final class PointerPromptOverlayController {
         model.showUpdateUI()
     }
 
+    private func updateStatusHoverExpansion() {
+        guard let statusPanel else { return }
+
+        let metrics = notchMetrics(for: statusPanel.screen)
+        let mouseLocationInPanel = statusPanel.convertPoint(fromScreen: NSEvent.mouseLocation)
+
+        if metrics.hoverFramesInPanel.contains(where: { $0.contains(mouseLocationInPanel) }) {
+            setStatusExpanded(true)
+        } else if statusHoverPhase != .collapsed, statusCollapseWorkItem == nil {
+            scheduleStatusCollapse()
+        }
+    }
+
     private func setStatusExpanded(_ isExpanded: Bool) {
         if isExpanded {
             statusCollapseWorkItem?.cancel()
             statusCollapseWorkItem = nil
+            statusHostShrinkWorkItem?.cancel()
+            statusHostShrinkWorkItem = nil
+            guard statusHoverPhase != .preparingOpen, statusHoverPhase != .expanded else { return }
             applyStatusExpanded(true)
             return
         }
@@ -473,9 +526,48 @@ final class PointerPromptOverlayController {
     }
 
     private func applyStatusExpanded(_ isExpanded: Bool) {
-        guard isStatusExpanded != isExpanded else { return }
+        if isExpanded {
+            guard statusHoverPhase != .preparingOpen, statusHoverPhase != .expanded else { return }
 
-        isStatusExpanded = isExpanded
+            statusHoverPhase = .preparingOpen
+            isStatusExpanded = false
+            prepareStatusHostForExpansion()
+
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self,
+                      self.statusHoverPhase == .preparingOpen,
+                      self.isStatusHostExpanded,
+                      !self.isStatusExpanded else { return }
+                self.isStatusExpanded = true
+                self.statusHoverPhase = .expanded
+                self.statusExpansionWorkItem = nil
+                self.updateStatusPanelView()
+            }
+            statusExpansionWorkItem = workItem
+            DispatchQueue.main.async(execute: workItem)
+            return
+        }
+
+        statusExpansionWorkItem?.cancel()
+        statusExpansionWorkItem = nil
+
+        guard statusHoverPhase != .collapsed else { return }
+        guard statusHoverPhase != .closing else {
+            scheduleStatusHostShrink()
+            return
+        }
+
+        if isStatusExpanded {
+            isStatusExpanded = false
+            updateStatusPanelView()
+        }
+
+        statusHoverPhase = .closing
+        scheduleStatusHostShrink()
+    }
+
+    private func prepareStatusHostForExpansion() {
+        isStatusHostExpanded = true
         positionStatusPanel()
         updateStatusPanelView()
     }
@@ -500,11 +592,33 @@ final class PointerPromptOverlayController {
             return
         }
 
-        let hoverTolerance: CGFloat = 2
-        let hoverFrame = statusPanel.frame.insetBy(dx: -hoverTolerance, dy: -hoverTolerance)
-        guard !hoverFrame.contains(NSEvent.mouseLocation) else { return }
+        let metrics = notchMetrics(for: statusPanel.screen)
+        let mouseLocationInPanel = statusPanel.convertPoint(fromScreen: NSEvent.mouseLocation)
+        guard !metrics.hoverFramesInPanel.contains(where: { $0.contains(mouseLocationInPanel) }) else { return }
 
         applyStatusExpanded(false)
+    }
+
+    private func scheduleStatusHostShrink() {
+        statusHostShrinkWorkItem?.cancel()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            Task { @MainActor in
+                self?.shrinkStatusHostIfCollapsed()
+            }
+        }
+        statusHostShrinkWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + NotchMetrics.closeAnimationDuration, execute: workItem)
+    }
+
+    private func shrinkStatusHostIfCollapsed() {
+        statusHostShrinkWorkItem = nil
+        guard !isStatusExpanded, isStatusHostExpanded, statusHoverPhase == .closing else { return }
+
+        isStatusHostExpanded = false
+        statusHoverPhase = .collapsed
+        positionStatusPanel()
+        updateStatusPanelView()
     }
 
     private func activeScreen() -> NSScreen? {
@@ -518,6 +632,7 @@ final class PointerPromptOverlayController {
                 voidWidth: NotchMetrics.fallbackVoidWidth,
                 voidHeight: NotchMetrics.fallbackVoidHeight,
                 isExpanded: isStatusExpanded,
+                isHostExpanded: isStatusHostExpanded,
                 screenWidth: NotchMetrics.defaultScreenWidth
             )
         }
@@ -541,6 +656,7 @@ final class PointerPromptOverlayController {
             voidWidth: voidWidth,
             voidHeight: voidHeight,
             isExpanded: isStatusExpanded,
+            isHostExpanded: isStatusHostExpanded,
             screenWidth: screen.frame.width
         )
     }
@@ -819,13 +935,20 @@ private struct NotchMetrics {
     var voidWidth: CGFloat
     var voidHeight: CGFloat
     var isExpanded: Bool
+    var isHostExpanded: Bool
     var screenWidth: CGFloat
 
     var surfaceSize: CGSize {
-        return CGSize(
-            width: surfaceWidth,
-            height: max(layout.visibleHeight, voidHeight + layout.visibleHeight)
-        )
+        surfaceFrame.size
+    }
+
+    var visibleSurfaceFrameInPanel: CGRect {
+        frameInPanel(for: visibleSurfaceFrame)
+    }
+
+    var hoverFramesInPanel: [CGRect] {
+        let tolerance: CGFloat = 2
+        return [visibleSurfaceFrameInPanel.insetBy(dx: -tolerance, dy: -tolerance)]
     }
 
     var layout: PointerPromptNotchLayout {
@@ -834,41 +957,112 @@ private struct NotchMetrics {
             voidHeight: voidHeight,
             collapsedVisibleHeight: collapsedVisibleHeight,
             expandedVisibleHeight: expandedVisibleHeight,
-            contentHorizontalInset: max(12, surfaceWidth * 0.035),
+            contentHorizontalInset: 14,
             visibleHeight: visibleHeight,
-            cornerRadius: isExpanded ? 28 : 13
+            cornerRadius: isExpanded ? Self.expandedCornerRadius : Self.collapsedCornerRadius,
+            collapsedSurfaceFrame: collapsedSurfaceFrame,
+            expandedSurfaceFrame: expandedSurfaceFrame,
+            expandedContentFrame: expandedContentFrame,
+            collapsedCornerRadius: Self.collapsedCornerRadius,
+            expandedCornerRadius: Self.expandedCornerRadius
         )
     }
 
-    private var surfaceWidth: CGFloat {
-        if isExpanded {
-            return min(max(360, screenWidth - 48), 690)
-        }
-
-        let contentAllowance: CGFloat = 170
-        return min(max(voidWidth + contentAllowance, 300), min(420, screenWidth - 24))
+    private var visibleHeight: CGFloat {
+        visibleSurfaceFrame.height
     }
 
-    private var visibleHeight: CGFloat {
-        if isExpanded {
-            return expandedVisibleHeight
-        }
+    private func frameInPanel(for frame: CGRect) -> CGRect {
+        CGRect(
+            x: (surfaceSize.width - frame.width) / 2,
+            y: surfaceSize.height - frame.height,
+            width: frame.width,
+            height: frame.height
+        )
+    }
 
-        return collapsedVisibleHeight
+    private var surfaceFrame: CGRect {
+        isHostExpanded ? expandedSurfaceFrame : collapsedSurfaceFrame
+    }
+
+    private var visibleSurfaceFrame: CGRect {
+        isExpanded ? expandedSurfaceFrame : collapsedSurfaceFrame
+    }
+
+    private var expandedSurfaceFrame: CGRect {
+        CGRect(
+            x: 0,
+            y: 0,
+            width: Self.expandedContentDesignFrame.width,
+            height: expandedSurfaceHeight
+        )
+    }
+
+    private var collapsedSurfaceFrame: CGRect {
+        CGRect(
+            x: 0,
+            y: 0,
+            width: collapsedSurfaceWidth,
+            height: collapsedVisibleHeight
+        )
+    }
+
+    private var expandedContentFrame: CGRect {
+        CGRect(
+            x: Self.expandedContentDesignFrame.minX,
+            y: expandedContentTopInset,
+            width: Self.expandedContentDesignFrame.width,
+            height: Self.expandedContentDesignFrame.height
+        )
+    }
+
+    private var collapsedSurfaceWidth: CGFloat {
+        min(
+            Self.expandedContentDesignFrame.width,
+            max(Self.minimumCollapsedSurfaceFrame.width, voidWidth + Self.collapsedSideLaneWidth * 2)
+        )
     }
 
     private var collapsedVisibleHeight: CGFloat {
-        26
+        voidHeight > 0 ? voidHeight : Self.minimumCollapsedSurfaceFrame.height
     }
 
     private var expandedVisibleHeight: CGFloat {
-        let headerHeight: CGFloat = 40
-        let taskRowHeight: CGFloat = 48
-        let commandRowHeight: CGFloat = 42
-        let verticalPadding: CGFloat = 10 + 8 + 10
-
-        return headerHeight + taskRowHeight + commandRowHeight + verticalPadding
+        expandedSurfaceHeight
     }
+
+    private var expandedContentTopInset: CGFloat {
+        min(max(0, voidHeight), Self.maximumExpandedContentTopInset)
+    }
+
+    private var expandedSurfaceHeight: CGFloat {
+        Self.expandedContentDesignFrame.height + expandedContentTopInset
+    }
+
+    private static let minimumCollapsedSurfaceFrame = CGRect(x: 0, y: 0, width: 110, height: 28)
+    private static let expandedContentDesignFrame = CGRect(x: 0, y: 0, width: 480, height: 280)
+    private static let collapsedSideLaneWidth: CGFloat = 34
+    private static let collapsedCornerRadius: CGFloat = 14
+    private static let expandedCornerRadius: CGFloat = 26
+    static let closeAnimationDuration: TimeInterval = 0.22
+    private static let maximumExpandedContentTopInset: CGFloat = 44
+}
+
+private struct StatusPanelViewSnapshot: Equatable {
+    var state: PointerPromptState
+    var updateState: PointerPromptUpdateState
+    var layout: PointerPromptNotchLayout
+    var surfaceSize: CGSize
+    var isExpanded: Bool
+    var isHostExpanded: Bool
+    var accentIndex: Int
+}
+
+private enum StatusHoverPhase {
+    case collapsed
+    case preparingOpen
+    case expanded
+    case closing
 }
 
 private extension PointerPromptActivationModifier {

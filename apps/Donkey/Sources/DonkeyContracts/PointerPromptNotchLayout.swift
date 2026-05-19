@@ -8,6 +8,11 @@ public struct PointerPromptNotchLayout: Equatable, Sendable {
     public var contentHorizontalInset: CGFloat
     public var visibleHeight: CGFloat
     public var cornerRadius: CGFloat
+    public var collapsedSurfaceFrame: CGRect
+    public var expandedSurfaceFrame: CGRect
+    public var expandedContentFrame: CGRect
+    public var collapsedCornerRadius: CGFloat
+    public var expandedCornerRadius: CGFloat
 
     public init(
         voidWidth: CGFloat,
@@ -16,7 +21,12 @@ public struct PointerPromptNotchLayout: Equatable, Sendable {
         expandedVisibleHeight: CGFloat,
         contentHorizontalInset: CGFloat,
         visibleHeight: CGFloat,
-        cornerRadius: CGFloat
+        cornerRadius: CGFloat,
+        collapsedSurfaceFrame: CGRect,
+        expandedSurfaceFrame: CGRect,
+        expandedContentFrame: CGRect,
+        collapsedCornerRadius: CGFloat,
+        expandedCornerRadius: CGFloat
     ) {
         self.voidWidth = voidWidth
         self.voidHeight = voidHeight
@@ -25,5 +35,10 @@ public struct PointerPromptNotchLayout: Equatable, Sendable {
         self.contentHorizontalInset = contentHorizontalInset
         self.visibleHeight = visibleHeight
         self.cornerRadius = cornerRadius
+        self.collapsedSurfaceFrame = collapsedSurfaceFrame
+        self.expandedSurfaceFrame = expandedSurfaceFrame
+        self.expandedContentFrame = expandedContentFrame
+        self.collapsedCornerRadius = collapsedCornerRadius
+        self.expandedCornerRadius = expandedCornerRadius
     }
 }

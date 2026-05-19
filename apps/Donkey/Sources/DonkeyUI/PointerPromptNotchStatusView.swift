@@ -9,7 +9,6 @@ public struct PointerPromptNotchStatusView: View {
     private let surfaceHeight: CGFloat
     private let isExpanded: Bool
     private let accentIndex: Int
-    private let hoverChanged: @MainActor (Bool) -> Void
     private let commandRequested: @MainActor () -> Void
     private let updateRequested: @MainActor () -> Void
 
@@ -21,7 +20,6 @@ public struct PointerPromptNotchStatusView: View {
         surfaceHeight: CGFloat,
         isExpanded: Bool,
         accentIndex: Int,
-        hoverChanged: @escaping @MainActor (Bool) -> Void,
         commandRequested: @escaping @MainActor () -> Void,
         updateRequested: @escaping @MainActor () -> Void
     ) {
@@ -32,113 +30,68 @@ public struct PointerPromptNotchStatusView: View {
         self.surfaceHeight = surfaceHeight
         self.isExpanded = isExpanded
         self.accentIndex = accentIndex
-        self.hoverChanged = hoverChanged
         self.commandRequested = commandRequested
         self.updateRequested = updateRequested
     }
 
     public var body: some View {
-        ZStack(alignment: .top) {
-            collapsedWindow
-                .opacity(isExpanded ? 0 : 1)
-
-            expandedWindow
-                .offset(y: isExpanded ? 0 : -expandedSurfaceHeight)
-                .animation(.smooth(duration: 0.24), value: isExpanded)
+        GeometryReader { proxy in
+            animatedNotchSurface
+                .position(
+                    x: proxy.size.width / 2,
+                    y: animatingSurfaceHeight / 2
+                )
         }
-        .frame(width: surfaceWidth, height: surfaceHeight, alignment: .top)
+        .frame(width: surfaceWidth, height: surfaceHeight)
         .clipped()
-        .onHover { isHovering in
-            Task { @MainActor in
-                hoverChanged(isHovering)
-            }
-        }
         .accessibilityElement(children: .contain)
     }
 
-    @ViewBuilder
-    private var collapsedWindow: some View {
-        if isResting {
-            restingCollapsedWindow
-        } else {
-            regularCollapsedWindow
-        }
-    }
-
-    private var regularCollapsedWindow: some View {
+    private var animatedNotchSurface: some View {
         ZStack(alignment: .top) {
-            notchSurface(height: collapsedSurfaceHeight, cornerRadius: collapsedCornerRadius)
+            Color.black
 
-            physicalNotchDebugOutline
-
-            collapsedContent
-                .offset(y: max(0, layout.voidHeight))
-        }
-        .frame(width: surfaceWidth, height: collapsedSurfaceHeight, alignment: .top)
-    }
-
-    private var restingCollapsedWindow: some View {
-        ZStack(alignment: .top) {
-            physicalNotchDebugOutline
-
-            restingCollapsedSurface
-                .offset(x: restingSurfaceOffsetX, y: 0)
-        }
-        .frame(width: surfaceWidth, height: collapsedSurfaceHeight, alignment: .top)
-    }
-
-    private var restingCollapsedSurface: some View {
-        ZStack(alignment: .leading) {
-            notchSurface(
-                width: restingSurfaceWidth,
-                height: restingVisibleHeight,
-                cornerRadius: restingCornerRadius
-            )
-
-            TaskArrowMark(color: accentColor)
-                .frame(width: 13, height: 13)
-                .padding(.leading, 10)
-        }
-        .frame(width: restingSurfaceWidth, height: restingVisibleHeight, alignment: .leading)
-    }
-
-    private var expandedWindow: some View {
-        ZStack(alignment: .top) {
-            notchSurface(height: expandedSurfaceHeight, cornerRadius: expandedCornerRadius)
-
-            physicalNotchDebugOutline
+            collapsedContentLayer
+                .opacity(isExpanded ? 0 : 1)
+                .animation(Self.restContentAnimation, value: isExpanded)
 
             expandedContent
-                .offset(y: max(0, layout.voidHeight))
+                .opacity(isExpanded ? 1 : 0)
+                .animation(
+                    isExpanded ? Self.expandedContentAnimation : Self.expandedContentDismissAnimation,
+                    value: isExpanded
+                )
         }
-        .frame(width: surfaceWidth, height: expandedSurfaceHeight, alignment: .top)
+        .frame(width: animatingSurfaceWidth, height: animatingSurfaceHeight, alignment: .top)
+        .clipShape(notchSurfaceShape(cornerRadius: animatingSurfaceCornerRadius))
+        .shadow(
+            color: Color.black.opacity(isExpanded ? 0.5 : 0),
+            radius: isExpanded ? 24 : 0,
+            x: 0,
+            y: isExpanded ? 12 : 0
+        )
+        .animation(isExpanded ? Self.openEnvelopeAnimation : Self.closeEnvelopeAnimation, value: isExpanded)
     }
 
-    private func notchSurface(
-        width: CGFloat? = nil,
-        height: CGFloat,
-        cornerRadius: CGFloat
-    ) -> some View {
-        notchSurfaceShape(cornerRadius: cornerRadius)
-            .fill(Color.black)
-            .overlay {
-                notchSurfaceShape(cornerRadius: cornerRadius)
-                    .stroke(
-                        notchDebugColor,
-                        style: StrokeStyle(lineWidth: 1, dash: [5, 4])
-                    )
-            }
-            .frame(width: width ?? surfaceWidth, height: height, alignment: .top)
+    @ViewBuilder
+    private var collapsedContentLayer: some View {
+        if isResting {
+            restingCollapsedContent
+        } else {
+            regularCollapsedContent
+        }
     }
 
-    private var physicalNotchDebugOutline: some View {
-        Rectangle()
-            .stroke(
-                Color.cyan.opacity(0.85),
-                style: StrokeStyle(lineWidth: 1, dash: [3, 3])
-            )
-            .frame(width: max(1, layout.voidWidth), height: max(1, layout.voidHeight))
-            .opacity(layout.voidWidth > 0 && layout.voidHeight > 0 ? 1 : 0)
+    private var regularCollapsedContent: some View {
+        collapsedContent
+            .frame(width: animatingSurfaceWidth, height: animatingSurfaceHeight, alignment: .top)
+    }
+
+    private var restingCollapsedContent: some View {
+        TaskArrowMark(color: accentColor)
+            .frame(width: 13, height: 13)
+            .padding(.leading, 10)
+            .frame(width: animatingSurfaceWidth, height: animatingSurfaceHeight, alignment: .leading)
     }
 
     private func notchSurfaceShape(cornerRadius: CGFloat) -> UnevenRoundedRectangle {
@@ -153,44 +106,20 @@ public struct PointerPromptNotchStatusView: View {
         )
     }
 
-    private var notchDebugColor: Color {
-        Color(red: 1.0, green: 0.14, blue: 0.58).opacity(0.92)
+    private var animatingSurfaceWidth: CGFloat {
+        animatingSurfaceFrame.width
     }
 
-    private var collapsedSurfaceHeight: CGFloat {
-        layout.voidHeight + layout.collapsedVisibleHeight
+    private var animatingSurfaceHeight: CGFloat {
+        animatingSurfaceFrame.height
     }
 
-    private var expandedSurfaceHeight: CGFloat {
-        layout.voidHeight + layout.expandedVisibleHeight
+    private var animatingSurfaceFrame: CGRect {
+        isExpanded ? layout.expandedSurfaceFrame : layout.collapsedSurfaceFrame
     }
 
-    private var collapsedCornerRadius: CGFloat {
-        13
-    }
-
-    private var expandedCornerRadius: CGFloat {
-        28
-    }
-
-    private var restingVisibleHeight: CGFloat {
-        layout.voidHeight > 0 ? layout.voidHeight : layout.collapsedVisibleHeight
-    }
-
-    private var restingCornerRadius: CGFloat {
-        9
-    }
-
-    private var restingArrowAllowance: CGFloat {
-        34
-    }
-
-    private var restingSurfaceWidth: CGFloat {
-        max(restingArrowAllowance, layout.voidWidth + restingArrowAllowance * 2)
-    }
-
-    private var restingSurfaceOffsetX: CGFloat {
-        0
+    private var animatingSurfaceCornerRadius: CGFloat {
+        isExpanded ? layout.expandedCornerRadius : layout.collapsedCornerRadius
     }
 
     private var collapsedContent: some View {
@@ -212,8 +141,8 @@ public struct PointerPromptNotchStatusView: View {
         }
         .padding(.horizontal, max(10, layout.contentHorizontalInset))
         .frame(
-            width: surfaceWidth,
-            height: layout.collapsedVisibleHeight,
+            width: animatingSurfaceWidth,
+            height: animatingSurfaceHeight,
             alignment: .center
         )
     }
@@ -233,10 +162,15 @@ public struct PointerPromptNotchStatusView: View {
                 .padding(.bottom, 10)
         }
         .frame(
-            width: surfaceWidth,
-            height: layout.expandedVisibleHeight,
+            width: layout.expandedContentFrame.width,
+            height: layout.expandedContentFrame.height,
             alignment: .top
         )
+        .offset(
+            x: layout.expandedContentFrame.minX,
+            y: layout.expandedContentFrame.minY
+        )
+        .clipped()
     }
 
     private var expandedHeader: some View {
@@ -416,6 +350,18 @@ public struct PointerPromptNotchStatusView: View {
     private var cornerRadius: CGFloat {
         layout.cornerRadius
     }
+
+    private static let openEnvelopeAnimation = Animation.spring(
+        response: 0.55,
+        dampingFraction: 0.82,
+        blendDuration: 0
+    )
+    private static let closeEnvelopeAnimation = Animation.easeOut(duration: 0.22)
+    private static let restContentAnimation = Animation.easeOut(duration: 0.15)
+    private static let expandedContentAnimation = Animation
+        .easeOut(duration: 0.3)
+        .delay(0.15)
+    private static let expandedContentDismissAnimation = Animation.easeOut(duration: 0.1)
 }
 
 private struct TaskArrowMark: View {
@@ -435,6 +381,7 @@ private struct TaskArrowMark: View {
             .fill(color)
         }
         .aspectRatio(1, contentMode: .fit)
+        .rotationEffect(.degrees(-45))
         .accessibilityHidden(true)
     }
 }
