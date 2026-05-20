@@ -10,6 +10,7 @@ public actor RunCoordinator {
     private var lifecycleState: RunLifecycleState = .idle
     private var requiresInputRelease = false
     private var activeTraceID: String?
+    private var pauseContinuations: [CheckedContinuation<Void, Never>] = []
 
     public init(
         sessionQueue: LatestRunSessionQueue = LatestRunSessionQueue(),
@@ -61,6 +62,17 @@ public actor RunCoordinator {
 
     public func resume(reason: String? = nil) async {
         await transition(to: .running, reason: reason ?? "Run resumed")
+        let continuations = pauseContinuations
+        pauseContinuations.removeAll()
+        continuations.forEach { $0.resume() }
+    }
+
+    public func waitIfPaused() async {
+        guard lifecycleState == .paused else { return }
+
+        await withCheckedContinuation { continuation in
+            pauseContinuations.append(continuation)
+        }
     }
 
     public func complete(reason: String? = nil) async {

@@ -1,5 +1,7 @@
 import DonkeyContracts
+import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 public struct PointerPromptNotchStatusView: View {
     private let state: PointerPromptState
@@ -12,12 +14,14 @@ public struct PointerPromptNotchStatusView: View {
     @Binding private var commandText: String
     private let commandInputTextHeight: CGFloat
     private let isCommandInputExpanded: Bool
+    private let tasks: [PointerPromptNotchTask]
     private let accentIndex: Int
     private let commandSubmitted: @MainActor (String) -> Void
     private let commandInputTextHeightChanged: @MainActor (CGFloat) -> Void
     private let commandInputExpansionChanged: @MainActor (Bool) -> Void
-    private let pauseRequested: @MainActor () -> Void
-    private let resumeRequested: @MainActor () -> Void
+    private let assetsDropped: @MainActor ([PointerPromptTaskAssetDraft]) -> Void
+    private let pauseRequested: @MainActor (String) -> Void
+    private let resumeRequested: @MainActor (String) -> Void
     private let updateRequested: @MainActor () -> Void
 
     public init(
@@ -31,12 +35,14 @@ public struct PointerPromptNotchStatusView: View {
         commandText: Binding<String>,
         commandInputTextHeight: CGFloat,
         isCommandInputExpanded: Bool,
+        tasks: [PointerPromptNotchTask] = [],
         accentIndex: Int,
         commandSubmitted: @escaping @MainActor (String) -> Void,
         commandInputTextHeightChanged: @escaping @MainActor (CGFloat) -> Void,
         commandInputExpansionChanged: @escaping @MainActor (Bool) -> Void,
-        pauseRequested: @escaping @MainActor () -> Void,
-        resumeRequested: @escaping @MainActor () -> Void,
+        assetsDropped: @escaping @MainActor ([PointerPromptTaskAssetDraft]) -> Void,
+        pauseRequested: @escaping @MainActor (String) -> Void,
+        resumeRequested: @escaping @MainActor (String) -> Void,
         updateRequested: @escaping @MainActor () -> Void
     ) {
         self.state = state
@@ -49,10 +55,12 @@ public struct PointerPromptNotchStatusView: View {
         _commandText = commandText
         self.commandInputTextHeight = commandInputTextHeight
         self.isCommandInputExpanded = isCommandInputExpanded
+        self.tasks = tasks
         self.accentIndex = accentIndex
         self.commandSubmitted = commandSubmitted
         self.commandInputTextHeightChanged = commandInputTextHeightChanged
         self.commandInputExpansionChanged = commandInputExpansionChanged
+        self.assetsDropped = assetsDropped
         self.pauseRequested = pauseRequested
         self.resumeRequested = resumeRequested
         self.updateRequested = updateRequested
@@ -108,6 +116,12 @@ public struct PointerPromptNotchStatusView: View {
             y: isExpanded ? 12 : 0
         )
         .animation(isExpanded ? Self.openEnvelopeAnimation : Self.closeEnvelopeAnimation, value: isExpanded)
+        .contentShape(Rectangle())
+        .onDrop(
+            of: [UTType.fileURL],
+            isTargeted: nil,
+            perform: handleDroppedFileProviders
+        )
     }
 
     @ViewBuilder
@@ -211,8 +225,16 @@ public struct PointerPromptNotchStatusView: View {
 
             VStack(spacing: 0) {
                 ScrollView(.vertical, showsIndicators: false) {
-                    currentTaskRow
-                        .padding(.top, 10)
+                    VStack(spacing: 8) {
+                        if tasks.isEmpty {
+                            currentTaskRow
+                        } else {
+                            ForEach(tasks) { task in
+                                taskRow(task)
+                            }
+                        }
+                    }
+                    .padding(.top, 10)
                 }
 
                 commandRow
@@ -299,10 +321,39 @@ public struct PointerPromptNotchStatusView: View {
 
             Spacer()
 
-            if isActiveTask {
-                activeTaskControls
-            } else if isWorking {
+            if isWorking {
                 activityBars(color: accentColor)
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 48)
+        .background(Color.white.opacity(0.055))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func taskRow(_ task: PointerPromptNotchTask) -> some View {
+        HStack(spacing: 12) {
+            TaskArrowMark(color: accentColor(for: task.accentIndex))
+                .frame(width: 14, height: 14)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(task.title)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(Color.white.opacity(0.9))
+                    .lineLimit(1)
+
+                Text(taskStatusDescription(task))
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(Color.white.opacity(0.42))
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            if task.status == .running || task.status == .paused {
+                activeTaskControls(for: task)
+            } else {
+                taskStatusAccessory(task)
             }
         }
         .padding(.horizontal, 12)
@@ -335,6 +386,37 @@ public struct PointerPromptNotchStatusView: View {
         commandSubmitted(text)
     }
 
+    private func handleDroppedFileProviders(_ providers: [NSItemProvider]) -> Bool {
+        let fileProviders = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        }
+        guard !fileProviders.isEmpty else { return false }
+
+        let group = DispatchGroup()
+        let collector = DroppedAssetCollector()
+        for provider in fileProviders {
+            group.enter()
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                defer { group.leave() }
+                guard let url = DroppedAssetUtilities.fileURL(from: item),
+                      let draft = DroppedAssetUtilities.assetDraft(for: url) else {
+                    return
+                }
+
+                collector.append(draft)
+            }
+        }
+        group.notify(queue: .main) {
+            let drafts = collector.values()
+            guard !drafts.isEmpty else { return }
+
+            Task { @MainActor in
+                assetsDropped(drafts)
+            }
+        }
+        return true
+    }
+
     private var commandInputState: PointerPromptState {
         PointerPromptState(
             promptText: "Ask for follow-up changes",
@@ -346,20 +428,24 @@ public struct PointerPromptNotchStatusView: View {
         )
     }
 
-    private var activeTaskControls: some View {
+    private func activeTaskControls(for task: PointerPromptNotchTask) -> some View {
         HStack(spacing: 6) {
             statusControlButton(
                 systemName: "play.fill",
                 label: "Resume",
-                isEnabled: isCurrentTaskPaused,
-                action: resumeRequested
+                isEnabled: task.status == .paused,
+                action: {
+                    resumeRequested(task.id)
+                }
             )
 
             statusControlButton(
                 systemName: "pause.fill",
                 label: "Pause",
-                isEnabled: !isCurrentTaskPaused,
-                action: pauseRequested
+                isEnabled: task.status == .running,
+                action: {
+                    pauseRequested(task.id)
+                }
             )
         }
     }
@@ -394,7 +480,39 @@ public struct PointerPromptNotchStatusView: View {
         .frame(width: 18, height: height)
     }
 
+    @ViewBuilder
+    private func taskStatusAccessory(_ task: PointerPromptNotchTask) -> some View {
+        switch task.status {
+        case .running:
+            activityBars(color: accentColor(for: task.accentIndex))
+        case .paused:
+            Image(systemName: "pause.fill")
+                .font(.system(size: 10, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.5))
+                .frame(width: 18, height: 18)
+        case .completed:
+            Image(systemName: "checkmark")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(accentColor(for: task.accentIndex))
+                .frame(width: 18, height: 18)
+        case .needsAttention:
+            Image(systemName: "exclamationmark")
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.62))
+                .frame(width: 18, height: 18)
+        case .failed:
+            Image(systemName: "xmark")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.55))
+                .frame(width: 18, height: 18)
+        }
+    }
+
     private var taskTitle: String {
+        if let primaryTask {
+            return primaryTask.title
+        }
+
         if let taskDisplayText {
             return taskDisplayText
         }
@@ -410,6 +528,10 @@ public struct PointerPromptNotchStatusView: View {
     }
 
     private var statusDescription: String {
+        if let primaryTask {
+            return taskStatusDescription(primaryTask)
+        }
+
         if isCurrentTaskPaused {
             return "Paused"
         }
@@ -425,15 +547,15 @@ public struct PointerPromptNotchStatusView: View {
     }
 
     private var isWorking: Bool {
-        state.leadingSignalLevel == .thinking
+        primaryTask?.status == .running || state.leadingSignalLevel == .thinking
     }
 
     private var isActiveTask: Bool {
-        isWorking || isCurrentTaskPaused
+        isWorking || isCurrentTaskPaused || primaryTask?.status == .paused
     }
 
     private var hasTaskDisplayText: Bool {
-        taskDisplayText != nil
+        !tasks.isEmpty || taskDisplayText != nil
     }
 
     private var taskDisplayText: String? {
@@ -453,7 +575,34 @@ public struct PointerPromptNotchStatusView: View {
     }
 
     private var accentColor: Color {
-        Self.accentColors[((accentIndex % Self.accentColors.count) + Self.accentColors.count) % Self.accentColors.count]
+        accentColor(for: primaryTask?.accentIndex ?? accentIndex)
+    }
+
+    private var primaryTask: PointerPromptNotchTask? {
+        tasks.first
+    }
+
+    private func isPrimaryTask(_ task: PointerPromptNotchTask) -> Bool {
+        task.id == primaryTask?.id
+    }
+
+    private func taskStatusDescription(_ task: PointerPromptNotchTask) -> String {
+        switch task.status {
+        case .running:
+            return task.detail.isEmpty ? "Running" : task.detail
+        case .paused:
+            return "Paused"
+        case .completed:
+            return task.detail.isEmpty ? "Done" : task.detail
+        case .needsAttention:
+            return task.detail.isEmpty ? "Needs attention" : task.detail
+        case .failed:
+            return task.detail.isEmpty ? "Stopped" : task.detail
+        }
+    }
+
+    private func accentColor(for index: Int) -> Color {
+        Self.accentColors[((index % Self.accentColors.count) + Self.accentColors.count) % Self.accentColors.count]
     }
 
     private static let accentColors: [Color] = [
@@ -504,5 +653,61 @@ private struct TaskArrowMark: View {
         .aspectRatio(1, contentMode: .fit)
         .rotationEffect(.degrees(-45))
         .accessibilityHidden(true)
+    }
+}
+
+private final class DroppedAssetCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var drafts: [PointerPromptTaskAssetDraft] = []
+
+    func append(_ draft: PointerPromptTaskAssetDraft) {
+        lock.lock()
+        drafts.append(draft)
+        lock.unlock()
+    }
+
+    func values() -> [PointerPromptTaskAssetDraft] {
+        lock.lock()
+        let snapshot = drafts
+        lock.unlock()
+        return snapshot
+    }
+}
+
+private enum DroppedAssetUtilities {
+    static func fileURL(from item: NSSecureCoding?) -> URL? {
+        if let url = item as? URL {
+            return url
+        }
+
+        if let data = item as? Data {
+            return URL(dataRepresentation: data, relativeTo: nil)
+        }
+
+        if let string = item as? String {
+            return URL(string: string)
+        }
+
+        if let string = item as? NSString {
+            return URL(string: string as String)
+        }
+
+        return nil
+    }
+
+    static func assetDraft(for url: URL) -> PointerPromptTaskAssetDraft? {
+        guard url.isFileURL else { return nil }
+
+        let contentType = (try? url.resourceValues(forKeys: [.contentTypeKey]).contentType?.preferredMIMEType)
+            ?? UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
+            ?? "application/octet-stream"
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let byteCount = (attributes?[.size] as? NSNumber)?.int64Value
+        return PointerPromptTaskAssetDraft(
+            displayName: url.lastPathComponent,
+            contentType: contentType,
+            urlString: url.absoluteString,
+            byteCount: byteCount
+        )
     }
 }

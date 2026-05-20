@@ -12,28 +12,34 @@ source of truth for behavior and boundaries remains
 |                                                                                |
 |  +----------------------+      +----------------------+      +---------------+ |
 |  | Pointer Prompt UI    |      | Runtime Setup UI     |      | Debug CLI     | |
-|  | typed/voice command  |      | install runtimes     |      | smoke tools   | |
+|  | text/voice/assets    |      | install runtimes     |      | smoke tools   | |
 |  +----------+-----------+      +----------+-----------+      +-------+-------+ |
 |             |                             |                          |         |
 |             v                             v                          v         |
 |  +----------------------+      +----------------------+      +---------------+ |
-|  | Command Intake       |      | Local Runtime Setup  |      | Manual Target | |
-|  | text/transcript      |      | manifests/cache      |      | Capture       | |
+|  | Task Thread Intake   |      | Local Runtime Setup  |      | Manual Target | |
+|  | route + persist      |      | manifests/cache      |      | Capture       | |
 |  +----------+-----------+      +----------+-----------+      +-------+-------+ |
 |             |                             |                          |         |
 |             v                             v                          v         |
 |  +----------------------+      +----------------------+      +---------------+ |
-|  | Task Intent Resolver |<---->| Runtime Registry     |      | Artifact Store| |
-|  | validated TaskIntent |      | sidecar executables  |      | traces/files  | |
+|  | Follow-up Resolver   |<---->| Runtime Registry     |      | Artifact Store| |
+|  | recent task match    |      | sidecar executables  |      | traces/files  | |
 |  +----------+-----------+      +----------------------+      +-------+-------+ |
 |             |                                                        ^         |
 |             v                                                        |         |
 |  +----------------------+      +----------------------+      +-------+-------+ |
-|  | RunCoordinator       |----->| Event Stream         |----->| Status/Reports| |
-|  | lifecycle + policy   |      | assistant/tool/etc.  |      | latency/replay| |
-|  +----------+-----------+      +----------------------+      +---------------+ |
-|             |                                                                  |
-|             v                                                                  |
+|  | Core Data Task Store |----->| Notch Task List      |----->| Status/Reports| |
+|  | tasks/events/assets  |      | recent threads       |      | latency/replay| |
+|  +----------+-----------+      +----------------------+      +-------+-------+ |
+|             |                                                        ^         |
+|             v                                                        |         |
+|  +----------------------+      +----------------------+              |         |
+|  | Task Intent Resolver |<---->| Per-Task Coordinator |--------------+         |
+|  | validated TaskIntent |      | lifecycle + policy   |                        |
+|  +----------+-----------+      +----------+-----------+                        |
+|             |                             |                                    |
+|             v                             v                                    |
 |  +----------------------+      +----------------------+      +---------------+ |
 |  | Local App Runner     |----->| Capture/Observation  |----->| Action Engine | |
 |  | dry-run or guarded   |      | AX/window/screenshot |      | keyboard/AX   | |
@@ -42,10 +48,44 @@ source of truth for behavior and boundaries remains
 +--------------------------------------------------------------------------------+
 ```
 
-The app shell owns user entrypoints and setup. `RunCoordinator` owns lifecycle,
-event ordering, permission policy, bounded context assembly, and reflex trace
-publication. Capture, observation, model sidecars, task adaptation, and input
+The app shell owns entrypoints, durable task threads, setup, and per-task runtime
+coordination. Capture, observation, model sidecars, task adaptation, and input
 execution stay behind narrow runtime boundaries.
+
+## Pointer Prompt Task Threads
+
+```text
++--------------------------------------------------------------------------------+
+|                              Durable Task Threads                               |
++--------------------------------------------------------------------------------+
+|                                                                                |
+|  +----------------------+      +----------------------+      +---------------+ |
+|  | Cmd-Cmd Input        |      | Notch Composer       |      | File Drop     | |
+|  | text/voice           |      | follow-up text       |      | collapsed ok  | |
+|  +----------+-----------+      +----------+-----------+      +-------+-------+ |
+|             |                             |                          |         |
+|             +-------------+---------------+                          |         |
+|                           |                                          |         |
+|                           v                                          v         |
+|  +----------------------+      +----------------------+      +---------------+ |
+|  | Recent Tasks         |----->| Follow-up LLM        |----->| Task Select   | |
+|  | updatedAt order      |      | match or new         |      | existing/new  | |
+|  +----------+-----------+      +----------------------+      +-------+-------+ |
+|             ^                                                        |         |
+|             |                                                        v         |
+|  +----------------------+      +----------------------+      +---------------+ |
+|  | Core Data            |<-----| Task Events          |<-----| Agent Run     | |
+|  | task/event/asset     |      | user/assistant/tool  |      | command path  | |
+|  +----------+-----------+      +----------------------+      +-------+-------+ |
+|             ^                                                        |         |
+|             |                                                        v         |
+|  +----------------------+      +----------------------+      +---------------+ |
+|  | Asset Files          |      | Coordinator Registry |----->| RunCoordinator| |
+|  | App Support          |      | taskID -> run        |      | pause/resume  | |
+|  +----------------------+      +----------------------+      +---------------+ |
+|                                                                                |
++--------------------------------------------------------------------------------+
+```
 
 ## Fast Local Runloop
 
@@ -54,18 +94,18 @@ execution stay behind narrow runtime boundaries.
 |                         Fast Local Navigation Hot Path                         |
 +--------------------------------------------------------------------------------+
 |                                                                                |
-|  user command or transcript                                                    |
+|  selected task command                                                         |
 |             |                                                                  |
 |             v                                                                  |
 |  +----------------------+      +----------------------+      +---------------+ |
-|  | Task Definitions     |----->| Local LLM Parser     |----->| TaskIntent    | |
-|  | built-in + JSON/JSONL|      | sidecar JSON schema  |      | validated     | |
+|  | Task Context         |----->| Local LLM Parser     |----->| TaskIntent    | |
+|  | command/events/assets|      | sidecar JSON schema  |      | validated     | |
 |  +----------+-----------+      +----------------------+      +-------+-------+ |
 |             |                                                        |         |
 |             v                                                        v         |
 |  +----------------------+      +----------------------+      +---------------+ |
-|  | Catalog Resolution   |----->| Local App Adapter    |----->| Run Request   | |
-|  | app/task available   |      | steps + verification |      | target + plan | |
+|  | Catalog Resolution   |----->| Local App Adapter    |----->| Task Run      | |
+|  | app/task available   |      | steps + verification |      | per-task coord| |
 |  +----------------------+      +----------+-----------+      +-------+-------+ |
 |                                           |                          |         |
 |                                           v                          v         |

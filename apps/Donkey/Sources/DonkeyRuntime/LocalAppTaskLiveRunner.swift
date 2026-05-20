@@ -218,6 +218,7 @@ public struct LocalAppTaskLiveRunner: Sendable {
             )
         }
 
+        await coordinator?.waitIfPaused()
         let launchStartedAt = Self.uptimeMilliseconds()
         await coordinator?.recordToolEvent(
             capability: .input,
@@ -261,6 +262,7 @@ public struct LocalAppTaskLiveRunner: Sendable {
         if !accessibilityCommands.isEmpty {
             let accessibilityEngine = Self.accessibilityActionEngine(for: definition)
             for (index, actionCommand) in accessibilityCommands.enumerated() {
+                await coordinator?.waitIfPaused()
                 let spacedCommand = actionCommand.withIssuedAt(Self.now(advancedByMilliseconds: Double(index) * 60))
                 let actionStartedAt = Self.uptimeMilliseconds()
                 await coordinator?.recordToolEvent(
@@ -303,6 +305,7 @@ public struct LocalAppTaskLiveRunner: Sendable {
 
         var keyboardActionMS = 0.0
         for (index, actionCommand) in commands.enumerated() {
+            await coordinator?.waitIfPaused()
             let spacedCommand = actionCommand.withIssuedAt(Self.now(advancedByMilliseconds: Double(index) * 40))
             let actionStartedAt = Self.uptimeMilliseconds()
             await coordinator?.recordToolEvent(
@@ -376,7 +379,9 @@ public struct LocalAppTaskLiveRunner: Sendable {
         }
         runMetadata["latency.keyboardActionMS"] = Self.formatLatency(keyboardActionMS)
 
+        await coordinator?.waitIfPaused()
         try? await Task.sleep(nanoseconds: 700_000_000)
+        await coordinator?.waitIfPaused()
         let observationStartedAt = Self.uptimeMilliseconds()
         await coordinator?.recordToolEvent(
             capability: .perception,

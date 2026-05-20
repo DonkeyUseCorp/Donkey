@@ -83,6 +83,41 @@ struct RunCoordinatorTests {
     }
 
     @Test
+    func waitIfPausedBlocksUntilResume() async {
+        let coordinator = RunCoordinator()
+
+        _ = await coordinator.start(
+            RunSession(
+                id: "session-paused-gate",
+                userGoal: "wait while paused",
+                targetID: "target-1"
+            )
+        )
+        await coordinator.pause(reason: "operator paused")
+
+        let gate = Task {
+            await coordinator.waitIfPaused()
+            return true
+        }
+        let completedBeforeResume = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                await gate.value
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                return false
+            }
+            let firstResult = await group.next() ?? false
+            group.cancelAll()
+            return firstResult
+        }
+        #expect(completedBeforeResume == false)
+
+        await coordinator.resume(reason: "operator resumed")
+        #expect(await gate.value == true)
+    }
+
+    @Test
     func latestSessionQueueDropsStaleSessions() async {
         let queue = LatestRunSessionQueue()
         await queue.submit(

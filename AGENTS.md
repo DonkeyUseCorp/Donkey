@@ -21,6 +21,7 @@ Before changing `site/` UI, routes, API handlers, or data access patterns:
 
 ## Working Rules
 
+- Do not touch `prototype/` unless the user explicitly asks for prototype work. By default, assume requested product changes are for the Mac app or the site/landing page.
 - Ask before creating any new plan document.
 - Manage plans deliberately: move a plan to `plans/done/` when its work is complete, and create or keep plans only for work that remains.
 - Over time, prefer shrinking active `plans/` by completing work and moving finished plans to `plans/done/`.

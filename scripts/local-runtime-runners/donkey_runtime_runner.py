@@ -466,9 +466,17 @@ def health_check(request: dict[str, Any]) -> dict[str, Any]:
 
 def run_local_llm(request: dict[str, Any]) -> dict[str, Any]:
     command = request.get("command", "")
-    task_definitions = request.get("taskDefinitions", [])
-    prompt = task_intent_prompt(command, task_definitions)
-    schema = task_intent_schema(task_definitions)
+    schema_id = (request.get("metadata") or {}).get("schemaID", "")
+    if schema_id == "task_followup_resolution_v1":
+        candidates = request.get("candidates", [])
+        prompt = task_followup_prompt(command, candidates)
+        schema = task_followup_schema(candidates)
+        max_tokens = 96
+    else:
+        task_definitions = request.get("taskDefinitions", [])
+        prompt = task_intent_prompt(command, task_definitions)
+        schema = task_intent_schema(task_definitions)
+        max_tokens = 128
     body = {
         "model": request.get("modelID") or MODEL_ID,
         "prompt": prompt,
@@ -476,7 +484,7 @@ def run_local_llm(request: dict[str, Any]) -> dict[str, Any]:
         "format": schema,
         "options": {
             "num_ctx": 2048,
-            "num_predict": 128,
+            "num_predict": max_tokens,
             "temperature": 0,
             "top_p": 0.8,
         },
@@ -501,6 +509,65 @@ def run_local_llm(request: dict[str, Any]) -> dict[str, Any]:
             "outputText": "",
             "metadata": metadata({"reason": "localLLMGenerationFailed", "detail": str(exc)}),
         }
+
+
+def task_followup_prompt(command: str, candidates: list[dict[str, Any]]) -> str:
+    candidate_lines: list[str] = []
+    for index, candidate in enumerate(candidates, start=1):
+        events = " | ".join(
+            str(event)
+            for event in candidate.get("recentEvents", [])
+            if str(event).strip()
+        )
+        assets = ", ".join(
+            str(asset)
+            for asset in candidate.get("assetNames", [])
+            if str(asset).strip()
+        )
+        candidate_lines.append(
+            " ; ".join(
+                [
+                    f"rank={index}",
+                    f"taskID={candidate.get('taskID', '')}",
+                    f"title={candidate.get('title', '')}",
+                    f"detail={candidate.get('detail', '')}",
+                    f"status={candidate.get('status', '')}",
+                    f"original={candidate.get('commandText', '')}",
+                    f"recentEvents={events}",
+                    f"assets={assets}",
+                ]
+            )
+        )
+
+    return "\n".join(
+        [
+            "Decide whether the user's latest text is a follow-up to one recent task, then return strict JSON.",
+            "Recent tasks are ordered newest first. Prefer a newer task only when it plausibly matches.",
+            "A follow-up depends on previous task context, such as edits, refinements, references like it/that, answers to a question, or asset-related continuation.",
+            "Do not match only because the topics are generic or the user asks for a separate new action.",
+            "If no task clearly matches, set isFollowUp=false, taskID='', confidence below 0.55.",
+            "Do not include reasoning outside JSON.",
+            f"Latest user text: {command}",
+            "Recent task candidates:",
+            "\n".join(candidate_lines),
+        ]
+    )
+
+
+def task_followup_schema(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    task_ids = [str(item.get("taskID")) for item in candidates if item.get("taskID")]
+    task_ids = sorted(set(task_ids + [""]))
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["isFollowUp", "taskID", "confidence", "reason"],
+        "properties": {
+            "isFollowUp": {"type": "boolean"},
+            "taskID": {"type": "string", "enum": task_ids},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "reason": {"type": "string"},
+        },
+    }
 
 
 def task_intent_prompt(command: str, task_definitions: list[dict[str, Any]]) -> str:

@@ -141,7 +141,7 @@ final class PointerPromptOverlayController {
         panel.becomesKeyOnlyIfNeeded = true
         panel.ignoresMouseEvents = false
         panel.mouseDownHandler = { [weak self] in
-            self?.focusStatusComposerTextInputIfEmpty()
+            self?.focusStatusComposerTextInputIfAvailable()
         }
         panel.level = .statusBar
         panel.collectionBehavior = [
@@ -529,6 +529,7 @@ final class PointerPromptOverlayController {
             notchCommandText: model.notchCommandText,
             notchCommandInputTextHeight: model.notchCommandInputTextHeight,
             isNotchCommandInputExpanded: model.isNotchCommandInputExpanded,
+            notchTasks: model.notchTasks,
             accentIndex: model.notchAccentIndex
         )
     }
@@ -552,6 +553,7 @@ final class PointerPromptOverlayController {
             ),
             commandInputTextHeight: model.notchCommandInputTextHeight,
             isCommandInputExpanded: model.isNotchCommandInputExpanded,
+            tasks: model.notchTasks,
             accentIndex: model.notchAccentIndex,
             commandSubmitted: { [weak self] text in
                 self?.model.handle(.messageSubmitted(text: text))
@@ -562,11 +564,14 @@ final class PointerPromptOverlayController {
             commandInputExpansionChanged: { [weak self] isExpanded in
                 self?.model.updateNotchCommandInputExpansion(isExpanded)
             },
-            pauseRequested: { [weak self] in
-                self?.model.pauseCurrentTask()
+            assetsDropped: { [weak self] drafts in
+                self?.model.handleDroppedAssets(drafts)
             },
-            resumeRequested: { [weak self] in
-                self?.model.resumeCurrentTask()
+            pauseRequested: { [weak self] taskID in
+                self?.model.pauseTask(id: taskID)
+            },
+            resumeRequested: { [weak self] taskID in
+                self?.model.resumeTask(id: taskID)
             },
             updateRequested: { [weak self] in
                 self?.openAvailableUpdate()
@@ -633,7 +638,7 @@ final class PointerPromptOverlayController {
                 self.statusHoverPhase = .expanded
                 self.statusExpansionWorkItem = nil
                 self.updateStatusPanelView()
-                self.focusStatusComposerTextInputIfEmpty()
+                self.focusStatusComposerTextInputIfAvailable()
             }
             statusExpansionWorkItem = workItem
             DispatchQueue.main.asyncAfter(
@@ -764,7 +769,7 @@ final class PointerPromptOverlayController {
         } else {
             measuredVoidWidth = 0
         }
-        let hasNotch = safeTop > 0 || measuredVoidWidth > 0
+        let hasNotch = measuredVoidWidth > 0 || safeTop >= NotchMetrics.minimumPhysicalVoidHeight
         let voidHeight = hasNotch ? max(safeTop, NotchMetrics.fallbackVoidHeight) : 0
         let voidWidth = hasNotch ? max(measuredVoidWidth, inferredVoidWidth(for: screen, safeTop: safeTop)) : 0
 
@@ -779,7 +784,7 @@ final class PointerPromptOverlayController {
     }
 
     private var statusExpandedContentHeight: CGFloat {
-        if hasStatusTaskDisplayText || model.updateState.headerButtonTitle != nil {
+        if hasStatusTaskDisplayText || !model.notchTasks.isEmpty || model.updateState.headerButtonTitle != nil {
             return NotchMetrics.expandedTaskContentHeight
         }
 
@@ -1065,9 +1070,7 @@ final class PointerPromptOverlayController {
         }
     }
 
-    private func focusStatusComposerTextInputIfEmpty() {
-        guard !hasStatusTaskDisplayText else { return }
-
+    private func focusStatusComposerTextInputIfAvailable() {
         focusStatusComposerTextInput()
     }
 }
@@ -1124,6 +1127,7 @@ private struct NotchMetrics {
     static let fallbackVoidHeight: CGFloat = 32
     static let maximumInferredVoidWidth: CGFloat = 220
     static let defaultScreenWidth: CGFloat = 1512
+    static let minimumPhysicalVoidHeight: CGFloat = 30
 
     var voidWidth: CGFloat
     var voidHeight: CGFloat
@@ -1217,12 +1221,16 @@ private struct NotchMetrics {
     private var collapsedSurfaceWidth: CGFloat {
         min(
             Self.expandedContentDesignFrame.width,
-            max(Self.minimumCollapsedSurfaceFrame.width, voidWidth + Self.collapsedSideLaneWidth * 2)
+            max(
+                Self.minimumCollapsedSurfaceFrame.width,
+                Self.commonCollapsedSurfaceFrame.width,
+                voidWidth + Self.collapsedSideLaneWidth * 2
+            )
         )
     }
 
     private var collapsedVisibleHeight: CGFloat {
-        voidHeight > 0 ? voidHeight : Self.minimumCollapsedSurfaceFrame.height
+        max(Self.minimumCollapsedSurfaceFrame.height, Self.commonCollapsedSurfaceFrame.height, voidHeight)
     }
 
     private var expandedVisibleHeight: CGFloat {
@@ -1230,14 +1238,26 @@ private struct NotchMetrics {
     }
 
     private var expandedContentTopInset: CGFloat {
-        min(max(0, voidHeight), Self.maximumExpandedContentTopInset)
+        guard hasPhysicalVoid else { return 0 }
+
+        return min(max(0, voidHeight), Self.maximumExpandedContentTopInset)
     }
 
     private var expandedSurfaceHeight: CGFloat {
         expandedContentHeight + expandedContentTopInset
     }
 
+    private var hasPhysicalVoid: Bool {
+        voidWidth > 0 || voidHeight > 0
+    }
+
     private static let minimumCollapsedSurfaceFrame = CGRect(x: 0, y: 0, width: 110, height: 28)
+    private static let commonCollapsedSurfaceFrame = CGRect(
+        x: 0,
+        y: 0,
+        width: Self.fallbackVoidWidth + Self.collapsedSideLaneWidth * 2,
+        height: Self.fallbackVoidHeight
+    )
     private static let expandedContentDesignFrame = CGRect(
         x: 0,
         y: 0,
@@ -1266,6 +1286,7 @@ private struct StatusPanelViewSnapshot: Equatable {
     var notchCommandText: String
     var notchCommandInputTextHeight: CGFloat
     var isNotchCommandInputExpanded: Bool
+    var notchTasks: [PointerPromptNotchTask]
     var accentIndex: Int
 }
 

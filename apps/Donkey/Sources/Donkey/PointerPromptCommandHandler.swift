@@ -18,10 +18,26 @@ struct DocumentFormFillReviewRequest: Equatable, Sendable {
     var traceID: String
 }
 
+struct PointerPromptCommandContext: Equatable, Sendable {
+    var task: PointerPromptNotchTask
+    var recentEvents: [PointerPromptTaskEvent]
+    var assets: [PointerPromptTaskAsset]
+    var isFollowUp: Bool
+}
+
 protocol PointerPromptCommandHandling: Sendable {
-    func handleSubmittedCommand(_ command: String) async -> PointerPromptCommandHandlingResult
-    func pauseCurrentCommand() async
-    func resumeCurrentCommand() async
+    func handleSubmittedCommand(
+        _ command: String,
+        context: PointerPromptCommandContext?
+    ) async -> PointerPromptCommandHandlingResult
+    func pauseCommand(taskID: String) async -> Bool
+    func resumeCommand(taskID: String) async -> Bool
+}
+
+extension PointerPromptCommandHandling {
+    func handleSubmittedCommand(_ command: String) async -> PointerPromptCommandHandlingResult {
+        await handleSubmittedCommand(command, context: nil)
+    }
 }
 
 struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
@@ -30,7 +46,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
     var liveRunner: LocalAppTaskLiveRunner
     var redactor: AIHarnessRedactor
     var memoryRetriever: SemanticRunMemoryRetriever
-    var coordinator: RunCoordinator
+    var coordinatorRegistry: PointerPromptRunCoordinatorRegistry
     var targetMemoryStore: TargetMemoryJSONLStore?
 
     init(
@@ -39,40 +55,48 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         liveRunner: LocalAppTaskLiveRunner? = nil,
         redactor: AIHarnessRedactor = AIHarnessRedactor(),
         memoryRetriever: SemanticRunMemoryRetriever = SemanticRunMemoryRetriever(),
-        coordinator: RunCoordinator = RunCoordinator(),
+        coordinatorRegistry: PointerPromptRunCoordinatorRegistry = PointerPromptRunCoordinatorRegistry(),
         targetMemoryStore: TargetMemoryJSONLStore? = try? TargetMemoryJSONLStore()
     ) {
         self.catalog = catalog
-        self.coordinator = coordinator
+        self.coordinatorRegistry = coordinatorRegistry
         self.localModelResolver = localModelResolver ?? LocalModelTaskIntentResolver(catalog: catalog)
-        self.liveRunner = liveRunner ?? LocalAppTaskLiveRunner(catalog: catalog, coordinator: coordinator)
+        self.liveRunner = liveRunner ?? LocalAppTaskLiveRunner(catalog: catalog)
         self.redactor = redactor
         self.memoryRetriever = memoryRetriever
         self.targetMemoryStore = targetMemoryStore
     }
 
-    func handleSubmittedCommand(_ command: String) async -> PointerPromptCommandHandlingResult {
+    func handleSubmittedCommand(
+        _ command: String,
+        context: PointerPromptCommandContext?
+    ) async -> PointerPromptCommandHandlingResult {
         let traceID = "pointer-prompt-\(UUID().uuidString)"
-        let redaction = redactor.redact(command, surface: .modelContext)
+        let taskID = context?.task.id ?? traceID
+        let coordinator = await coordinatorRegistry.coordinator(for: taskID)
+        var taskLiveRunner = liveRunner
+        taskLiveRunner.coordinator = coordinator
+        let modelCommand = Self.modelCommand(for: command, context: context)
+        let redaction = redactor.redact(modelCommand, surface: .modelContext)
         let memoryProposalDecisions = (try? ProviderDecodedMemoryProposalHandler.decisions(
             from: Data("[]".utf8),
             decidedAt: Self.now()
         )) ?? []
         let parseStartedAt = Self.uptimeMilliseconds()
         let localModelResult = await localModelResolver.resolve(
-            command: command,
+            command: modelCommand,
             sourceTraceID: traceID
         )
         let resolution = localModelResult.resolution
         let parseLatencyMS = Self.uptimeMilliseconds() - parseStartedAt
         let semanticMemoryResults = await retrieveSemanticMemory(
-            command: command,
+            command: modelCommand,
             resolution: resolution
         )
         let modelObservability = AIModelObservabilityReportBuilder.build(from: [localModelResult.trace])
 
-        let result = await liveRunner.run(
-            command: command,
+        let result = await taskLiveRunner.run(
+            command: modelCommand,
             traceID: traceID,
             resolution: resolution,
             metadata: [
@@ -89,7 +113,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                 "semanticMemory.recordIDs": semanticMemoryResults.map(\.record.id).joined(separator: ","),
                 "semanticMemory.targetID": semanticMemoryTargetID(for: resolution) ?? "",
                 "memoryProposal.decisionCount": String(memoryProposalDecisions.count)
-            ]
+            ].merging(Self.contextMetadata(context)) { current, _ in current }
         )
         await coordinator.recordToolEvent(
             capability: .model,
@@ -104,7 +128,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             ]
         )
 
-        return PointerPromptCommandHandlingResult(
+        let handlingResult = PointerPromptCommandHandlingResult(
             status: result.status,
             summary: summary(for: result),
             taskLabel: taskLabel(for: result),
@@ -115,14 +139,22 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                 result: result
             )
         )
+        await coordinatorRegistry.finish(taskID: taskID)
+        return handlingResult
     }
 
-    func pauseCurrentCommand() async {
-        await coordinator.pause(reason: "Pointer prompt paused current task")
+    func pauseCommand(taskID: String) async -> Bool {
+        await coordinatorRegistry.pause(
+            taskID: taskID,
+            reason: "Pointer prompt paused task"
+        )
     }
 
-    func resumeCurrentCommand() async {
-        await coordinator.resume(reason: "Pointer prompt resumed current task")
+    func resumeCommand(taskID: String) async -> Bool {
+        await coordinatorRegistry.resume(
+            taskID: taskID,
+            reason: "Pointer prompt resumed task"
+        )
     }
 
     private func retrieveSemanticMemory(
@@ -244,5 +276,74 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             wallClock: Date(),
             monotonicUptimeNanoseconds: UInt64(ProcessInfo.processInfo.systemUptime * 1_000_000_000)
         )
+    }
+
+    private static func modelCommand(
+        for command: String,
+        context: PointerPromptCommandContext?
+    ) -> String {
+        guard let context, context.isFollowUp else { return command }
+
+        let events = context.recentEvents
+            .suffix(8)
+            .map { "\($0.role.rawValue): \($0.text)" }
+            .joined(separator: "\n")
+        let assets = context.assets
+            .suffix(8)
+            .map { "\($0.displayName) (\($0.contentType))" }
+            .joined(separator: ", ")
+        return [
+            "Existing task title: \(context.task.title)",
+            "Existing task original request: \(context.task.commandText)",
+            "Existing task status: \(context.task.status.rawValue)",
+            events.isEmpty ? nil : "Recent task thread:\n\(events)",
+            assets.isEmpty ? nil : "Task assets: \(assets)",
+            "Latest user follow-up: \(command)"
+        ]
+        .compactMap(\.self)
+        .joined(separator: "\n\n")
+    }
+
+    private static func contextMetadata(_ context: PointerPromptCommandContext?) -> [String: String] {
+        guard let context else { return [:] }
+
+        return [
+            "taskContext.taskID": context.task.id,
+            "taskContext.isFollowUp": String(context.isFollowUp),
+            "taskContext.eventCount": String(context.recentEvents.count),
+            "taskContext.assetCount": String(context.assets.count)
+        ]
+    }
+}
+
+actor PointerPromptRunCoordinatorRegistry {
+    private var coordinators: [String: RunCoordinator] = [:]
+
+    func coordinator(for taskID: String) -> RunCoordinator {
+        if let coordinator = coordinators[taskID] {
+            return coordinator
+        }
+
+        let coordinator = RunCoordinator()
+        coordinators[taskID] = coordinator
+        return coordinator
+    }
+
+    func pause(taskID: String, reason: String) async -> Bool {
+        guard let coordinator = coordinators[taskID] else { return false }
+
+        await coordinator.pause(reason: reason)
+        return true
+    }
+
+    func resume(taskID: String, reason: String) async -> Bool {
+        guard let coordinator = coordinators[taskID] else { return false }
+
+        await coordinator.resume(reason: reason)
+        return true
+    }
+
+    func finish(taskID: String) {
+        coordinators[taskID] = nil
     }
 }
