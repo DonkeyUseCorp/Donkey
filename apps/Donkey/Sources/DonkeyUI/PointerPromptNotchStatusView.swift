@@ -174,6 +174,16 @@ public struct PointerPromptNotchStatusView: View {
     }
 
     private var collapsedContent: some View {
+        Group {
+            if layout.canRenderTextInTopRow {
+                fullWidthCollapsedContent
+            } else {
+                voidAwareCollapsedContent
+            }
+        }
+    }
+
+    private var fullWidthCollapsedContent: some View {
         HStack(spacing: 7) {
             TaskArrowMark(color: accentColor)
                 .frame(width: 13, height: 13)
@@ -191,6 +201,27 @@ public struct PointerPromptNotchStatusView: View {
             }
         }
         .padding(.horizontal, max(10, layout.contentHorizontalInset))
+        .frame(
+            width: animatingSurfaceWidth,
+            height: animatingSurfaceHeight,
+            alignment: .center
+        )
+    }
+
+    private var voidAwareCollapsedContent: some View {
+        ZStack {
+            TaskArrowMark(color: accentColor)
+                .frame(width: 13, height: 13)
+                .position(x: collapsedLeadingLaneCenterX, y: layout.collapsedVisibleHeight / 2)
+
+            Text(compactTopRowStatusText)
+                .font(.system(size: 9, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.72))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(width: collapsedSideLaneWidth, height: layout.collapsedVisibleHeight)
+                .position(x: collapsedTrailingLaneCenterX, y: layout.collapsedVisibleHeight / 2)
+        }
         .frame(
             width: animatingSurfaceWidth,
             height: animatingSurfaceHeight,
@@ -251,7 +282,7 @@ public struct PointerPromptNotchStatusView: View {
             }
 
             commandRow
-                .padding(.top, 16)
+                .padding(.top, expandedCommandOnlyTopPadding)
         }
         .padding(.horizontal, Self.contentInset)
         .padding(.bottom, Self.contentInset)
@@ -301,6 +332,22 @@ public struct PointerPromptNotchStatusView: View {
 
     private var expandedNotchArrowY: CGFloat {
         max(14, layout.collapsedVisibleHeight / 2)
+    }
+
+    private var expandedCommandOnlyTopPadding: CGFloat {
+        layout.expandedCommandOnlyTopPadding
+    }
+
+    private var collapsedSideLaneWidth: CGFloat {
+        max(0, (animatingSurfaceWidth - layout.voidWidth) / 2)
+    }
+
+    private var collapsedLeadingLaneCenterX: CGFloat {
+        collapsedSideLaneWidth / 2
+    }
+
+    private var collapsedTrailingLaneCenterX: CGFloat {
+        animatingSurfaceWidth - collapsedSideLaneWidth / 2
     }
 
     private var currentTaskRow: some View {
@@ -543,6 +590,36 @@ public struct PointerPromptNotchStatusView: View {
             return "Ready"
         case .thinking:
             return "Running"
+        }
+    }
+
+    private var compactTopRowStatusText: String {
+        if let primaryTask {
+            switch primaryTask.status {
+            case .running:
+                return "Run"
+            case .paused:
+                return "Hld"
+            case .completed:
+                return "Done"
+            case .needsAttention:
+                return "Ask"
+            case .failed:
+                return "Fail"
+            }
+        }
+
+        if isCurrentTaskPaused {
+            return "Hld"
+        }
+
+        switch state.leadingSignalLevel {
+        case .idle:
+            return "Idle"
+        case .ready:
+            return "Rdy"
+        case .thinking:
+            return "Run"
         }
     }
 
