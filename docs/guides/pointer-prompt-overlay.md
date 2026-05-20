@@ -2,98 +2,38 @@
 
 ## Supported Behavior
 
-Donkey supports a floating macOS pointer prompt overlay:
+Donkey supports a floating macOS overlay for quick local-app commands:
 
-- double-tap Command and release to activate and focus a compact prompt modal centered on the current screen without clicking into the target app
-- double-tap Command and hold the second Command press to activate voice input
-- shows a notch-anchored black status panel flush with the top center of the current screen
-- sizes the notch status panel from `NSScreen.safeAreaInsets` and `auxiliaryTopLeftArea` / `auxiliaryTopRightArea`, with fallback dimensions for non-reporting displays
-- uses a common fixed collapsed notch slot on external monitors and Macs without a physical notch, keeping the same top-center position while treating the full slot as renderable space
-- keeps status text below the physical notch void while the black panel visually extends the notch
-- renders the resting collapsed notch as a slim arrow-only strip beside the physical notch, without adding black padding over the notch void
-- starts the resting notch envelope as an arrow lane plus physical notch void plus empty trailing lane, so the arrow remains visible and hover expansion grows from the real collapsed strip
-- makes the resting notch envelope height match the detected physical notch height when a notch is present
-- only expands from controller-tracked hover over the visible notch surface, not SwiftUI hover over the transparent host panel area
-- lets the physical notch void participate in collapsed hover activation while keeping expanded content below the void
-- keeps the native status panel collapsed at rest, jumps it to expanded render bounds with AppKit animations disabled, forces a collapsed layout/display in that expanded host before the SwiftUI open spring, and jumps it back after the short non-spring close finishes
-- coalesces quick hover enter and exit samples through explicit collapsed, preparing-open, expanded, and closing phases so pending opens and closes do not fight each other
-- keeps expanded notch text and controls below the detected physical notch void while allowing the black surface to extend through it, adding vertical surface space instead of squeezing the below-notch content area
-- keeps the notch arrow mark pointed up-right at a fixed 45-degree angle
-- uses regular-weight notch text; collapsed and expanded notch labels should not render bold text
-- expands one notch status surface outward and downward together on hover, with width, height, bottom corner radius, and shadow using one native spring; collapse uses a short ease-out without a spring tail
-- uses a native macOS spring envelope from a shared collapsed top-center slot to the expanded `480x280` content surface, with interaction container `520x300`, corner radius `14` to `26`, and `spring(response: 0.55, dampingFraction: 0.82)`
-- lays out collapsed and expanded notch content inside the animated, clipped surface so content reveals and reflows with the current surface width
-- fades collapsed notch content out quickly, then fades expanded content in after the surface has started expanding
-- shows an update button in the expanded notch header when Sparkle reports a valid appcast update
-- accepts mouse clicks in the notch status panel so expanded header and command-row controls can invoke their actions
-- shows per-task pause and resume controls for running or paused tasks in the expanded notch panel and routes them through the pointer-prompt command handler
-- shows a black prompt modal with text input and a white voice waveform while active
-- uses a wide pill-shaped prompt for single-line text, then expands to a rounded rectangle when text wraps at the max input width or the user inserts new lines
-- places the waveform in a bottom toolbar that blends with the input background when the prompt is expanded
-- captures microphone audio while active and renders the waveform from recent live audio levels
-- on voice activation, records a bounded local audio buffer, sends it to the Parakeet-only local transcription adapter, displays transcript progress, and submits decoded transcript text through the same command path as typed input
-- keeps the prompt modal centered until the user drags or dismisses the modal
-- dismisses the active modal when the user clicks outside it
-- dismisses the active modal when the user presses Escape while it is visible
-- supports dragging the active modal from capsule areas outside the text input
-- opens the prompt input centered on the current screen instead of following the cursor
-- dismisses the centered prompt after submission and moves visible progress/result feedback into the notch status panel
-- submits typed prompt text through the local-app command pipeline while keeping model parsing, task validation, and live input outside the SwiftUI rendering path
-- records each submitted typed or transcribed command as a durable, searchable Core Data task/run so a double-Command prompt submission immediately appears in the expanded notch menu with running, paused, completed, review, or failed status; multiple task runs may be active at once
-- routes new typed submissions through a local LLM follow-up classifier that compares the text to recently updated task runs, continues the matched run when confidence is high, and creates a fresh run when no recent task clearly matches
-- accepts user file drops on the notch surface, including the collapsed/non-expanded notch, and persists those files as user-uploaded task assets on the active or most recent task
-
-This is a visual, typed-command, voice-command, and task-threading UI capability. Typed submissions first pass through task-thread routing: recent tasks are ordered by update time and a local LLM classifier decides whether the submission is a follow-up to one of them. Matched follow-ups append to that task's event history before the local-app command handler runs with the task context; unmatched submissions create a new task. The command handler loads built-in plus local JSON/JSONL task definitions, prefers local-model task-intent parsing, validates the intent against the app-task catalog, and then runs the guarded local-app live runner. Each durable task run gets its own runtime coordinator so pause/resume applies to the selected task rather than a global current run. Voice submissions produce local transcript text through the Parakeet-only transcription boundary before entering that same task-thread routing and command handler flow. Review-only document tasks can return a compact review summary such as the number of mapped fields. The overlay itself does not capture the screen, synthesize input, or require Accessibility permission. It does request microphone permission for local waveform capture and voice commands.
+- Double-tap Command and release to open a centered prompt with keyboard focus.
+- Double-tap Command and hold the second press to open the prompt in voice mode.
+- Show a top-center notch status surface for task progress, recent tasks, follow-up input, file drops, updates, and per-task pause/resume.
+- Keep prompt submissions, voice transcripts, and follow-ups on the same command path: task-thread routing, catalog-backed command parsing, task validation, and guarded local-app execution.
+- Persist submitted commands as searchable Core Data task runs with event history, task assets, and per-run runtime coordination.
+- Keep the overlay non-invasive. It may request microphone permission for local waveform capture and voice commands, but it must not capture the screen, synthesize input directly, or require Accessibility permission.
 
 ## Technical Guidelines
 
-- The overlay uses `NSPanel` surfaces owned by `PointerPromptOverlayController`: a top-center notch status panel and a separate centered prompt input panel.
-- Donkey runs with the accessory activation policy, and prompt focus must make the app active, make the panel key, then make the composer text view first responder. A blinking insertion point alone does not mean macOS is sending keyboard events to the panel.
-- SwiftUI rendering stays in `DonkeyUI`; it receives `PointerPromptState` and `PointerPromptPlacement` from `DonkeyContracts`.
-- Product state stays in `PointerPromptOverlayModel`.
-- Notch tasks are durable product state persisted through Core Data in Application Support. Treat each task as an agent run: task metadata drives the notch's recent slice, ordered task events preserve user messages, assistant/LLM responses, system notes, and tool summaries for back-and-forth history, and task assets can record files uploaded by the user or returned by the agent. Store search should include task title, detail, original command text, event text, and asset metadata. Recent task selection and follow-up classification should prioritize `updatedAt`, not original creation time.
-- Treat the active modal as a compact black prompt surface with a text input and embedded waveform. It has no visible close button and no separate voice button.
-- Single-line input should render as a full pill. Multiline input should render as a rounded rectangle with non-pill corners and a bottom toolbar matching the input background, containing the waveform without a divider between text and toolbar. The plus and permissions controls may remain available in code for future wiring, but should not render while non-functional.
-- The text input should use 16pt light system UI text with ligatures disabled, matching thin `-apple-system` sans-serif web input rendering.
-- Text expansion is triggered from a stable pill-width measurement so reaching the single-line edge transitions cleanly without shape flicker. Expanded text uses balanced horizontal padding. Return submits typed text. Shift-Return inserts a deliberate newline.
-- Expanded text input grows to a bounded multiline height, then scrolls inside the composer so the waveform toolbar stays attached to the bottom of the prompt instead of being pushed off-screen.
-- The controller owns microphone capture and publishes normalized audio levels into product state; SwiftUI only renders the levels it receives.
-- The active prompt modal should use a capsule shape and keep transparent active overlay space passing clicks through to windows underneath after it dismisses.
-- Pointer drawing and theme code may remain available for future features, but the prompt overlay should not render a visible cursor.
-- Runtime placement remains fixed to `bottomRight` for compatibility with the existing view contract; the rendered input panel itself is centered and no longer uses pointer-relative geometry.
-- The notch status panel should keep its visual language aligned with the `/prototype` route without exposing agent names or implementation roles: a slim arrow-only resting mark beside the physical notch when one exists, a minimal one-line task label when collapsed and active, and a compact expanded surface with the arrow anchored left of the notch void in the same row as the physical notch. On external monitors and Macs without a physical notch, the collapsed top-center slot and expanded top row should keep the same fixed size and position but have no unavailable void, so the whole first row can render status data. When no task text exists, the expanded surface should render the shared double-Command prompt composer in-place as a padded follow-up editor with a darker gray rounded-rectangle fill, normal macOS text scale, only a small circular send button in the toolbar, and multiline resizing up to the shared composer text-height cap before the text view scrolls. Opening or clicking the expanded status panel should focus the composer input. When task text exists, it should show the colored arrow, task title, status, active pause/resume controls when running, a scrollable task-item area, and the shared composer row.
-- SwiftUI notch rendering should consume `PointerPromptNotchLayout` for derived surface/content frames, corner radii, and notch-safe content offsets instead of duplicating screen-geometry constants in the view.
-- `PointerPromptNotchLayout.canRenderTextInTopRow` is the automatic boundary for top-row status text. It should be false whenever the active screen has a physical void, so collapsed rendering only uses side-lane marks or very short status tokens and expanded task/status content starts below the void. It should be true on external monitors and Macs without a physical notch, so status data may render across the full first row. Command-only expanded content should still preserve the MacBook composition: render the top-row arrow marker and place the composer below that row.
-- Hover activation should be bounded to the visible notch surface using controller-side mouse location checks. The transparent host panel and expanded interaction padding must not trigger expansion or keep the notch expanded by themselves.
-- The native status panel should not animate its frame while the SwiftUI notch surface animates. When expansion starts, resize the panel to expanded render bounds with AppKit animations disabled, render the collapsed notch once in that expanded host, then flip SwiftUI expansion state on the next frame; after the short non-spring collapse finishes, resize it back to the resting surface bounds with animations disabled.
-- Expanded notch content must treat the physical notch void as unavailable layout space. The surface may cover the void, but text, buttons, and task rows should start below the detected void height while retaining the normal below-notch content height. Displays without a physical notch should still render the expanded top notch row but use no void offset, making that first row available to content.
-- Notch expansion should reveal from the top edge, growing width and height together so the expanded surface feels attached to the physical notch rather than growing from a lower corner. Use a single rendered surface with the prototype dimensions and a native spring for opening width, height, bottom corner radius, and shadow; use a short ease-out on close so there is no spring tail. Keep collapsed and expanded content inside that clipped surface so layout follows the animated width. Delay the expanded content fade-in so the surface leads the content.
-- The expanded notch header may show an update button when `PointerPromptUpdateState` is actionable; clicking it should invoke Sparkle's standard update UI outside the SwiftUI view.
-- Expanded notch pause/resume controls should call the model/controller boundary with the selected task ID and route through `PointerPromptCommandHandling`, keeping per-task run coordination outside SwiftUI rendering.
-- The controller should derive notch geometry from the active `NSScreen`, prefer safe-area and auxiliary-top areas over hardcoded notch sizes, and keep visible status content below the top safe-area inset.
-- Launch positioning, notch positioning, and double-Command activation handling belong in `PointerPromptOverlayController`, not the SwiftUI view.
-- Double-Command is the prompt activation shortcut through `PointerPromptActivationShortcut.doubleCommand`.
-- Double-Command prompt activation should require two clean Command down/up taps within 450ms. Any intervening key press, mouse press, extra modifier, or overlong Command hold should reset the sequence so normal shortcuts do not summon the modal.
-- Holding the second clean Command press for the shortcut's configured hold duration should activate the prompt modal and start microphone level capture instead of waiting for the second release.
-- Keep the overlay non-invasive: no screen capture loop, input execution, Accessibility prompt, or direct model call in SwiftUI rendering. Submit text to a command handler boundary instead.
-- Escape dismissal belongs to the input panel/controller path so the prompt closes even when focus is inside the text input or another active panel child.
-- Keep the command handler data-driven. It should resolve task knowledge from the local catalog, including local task definitions in Application Support, before invoking the guarded runtime path.
-- Keep voice capture separate from transcription. The overlay publishes bounded local audio buffers to the model layer, and model execution plus command parsing remain outside the SwiftUI view/controller rendering path.
+- `PointerPromptOverlayController` owns AppKit surfaces, placement, hover tracking, focus, keyboard shortcut recognition, dismissal, file-drop routing, and microphone level capture.
+- SwiftUI rendering lives in `DonkeyUI` and consumes state/contracts from `DonkeyContracts`. It should not perform command parsing, model calls, input execution, screen capture, or microphone capture.
+- `PointerPromptOverlayModel` owns product state. Durable task data is persisted through Core Data in Application Support.
+- Notch geometry comes from the active `NSScreen`, preferring safe-area and auxiliary-top metrics over hardcoded notch sizes. Content must stay out of the physical notch void; displays without a physical notch should use the same top-center composition without reserving unavailable space.
+- `PointerPromptNotchLayout` is the shared source for notch surface frames, content frames, corner radii, and notch-safe offsets. `canRenderTextInTopRow` describes whether text can draw in the top row, not whether that row exists.
+- The prompt is a compact black composer: single-line text is pill-shaped, multiline text becomes a bounded rounded rectangle, Return submits, Shift-Return inserts a newline, Escape and outside clicks dismiss, and non-input capsule areas can drag the modal.
+- Voice capture and transcription remain separate. The controller records bounded local audio and publishes levels; transcription uses the Parakeet-only adapter before submitting transcript text through the typed-command path.
+- Task actions in the notch, including follow-up submission and pause/resume, must cross the model/controller command boundary with the selected task ID.
 
 ## Verification
 
-From `apps/Donkey/`:
+Manually verify:
 
-```sh
-swift build
-swift run Donkey
-```
-
-Launch Donkey and confirm the inactive overlay renders as a black notch extension at the top center, with status content below the physical notch area on notched displays. On an external monitor or Mac without a physical notch, confirm the same collapsed top-center slot appears without a reserved void and collapsed status text can use the full slot width. Hover the notch and confirm it expands downward into the current-task panel with the same top notch row shape as a notched display, while content can render in that first row instead of being pushed below it. With Sparkle configured to a local appcast that contains a newer signed update, confirm the expanded header shows an update button and clicking it opens Sparkle's update UI. Submit multiple commands, expand the notch while they are running, and confirm each running or paused task row has its own pause/resume controls. Pause one task and confirm only that task changes to paused while other running tasks keep their running state; resume it and confirm it returns to running. Submit a follow-up from the expanded notch composer and confirm it appends to the matched recent task instead of creating a duplicate; submit an unrelated command and confirm it creates a new task. Drag a file onto the collapsed notch surface and confirm it persists as a user-uploaded asset on the active or most recent task. Double-tap Command and release to confirm the black prompt capsule opens centered on the screen with keyboard focus and no visible close button, grant microphone permission if prompted, then speak or tap near the microphone and confirm the waveform responds to real audio levels. Type enough text to wrap and confirm the prompt changes from a pill into a rounded rectangle and remains centered as it grows. Press Shift-Return and confirm it inserts a newline; press Return and confirm it submits, dismisses the prompt, and shows working/result status in the notch panel. Move the mouse and confirm the active modal stays centered. Double-tap Command again but hold the second Command press, and confirm the same prompt modal appears with voice capture. Press Escape and confirm the active modal dismisses. Click outside the active modal and confirm it dismisses. Reactivate and drag the modal from non-input capsule areas. Confirm Command plus another key, Command-click, and a single Command tap do not activate the modal.
+- The notch renders at the top center, respects physical notch safe areas, expands only from visible notch hover, and accepts expanded controls/clicks.
+- Double-Command release opens a centered focused text prompt; double-Command hold opens voice mode; unrelated Command use does not activate the overlay.
+- Typed, voice, and follow-up submissions create or update durable task runs, show status in the notch, and preserve per-task pause/resume behavior.
+- The prompt supports wrapping, Shift-Return newline insertion, Return submission, Escape dismissal, outside-click dismissal, and dragging from non-input areas.
+- File drops on the notch attach to the active or most recent task.
 
 ## Source Entry Points
 
 - App orchestration starts in `apps/Donkey/Sources/Donkey/`.
 - Typed prompt command handling lives in `apps/Donkey/Sources/Donkey/PointerPromptCommandHandler.swift`.
 - Reusable SwiftUI rendering lives in `apps/Donkey/Sources/DonkeyUI/`.
-- Historical completion notes live in `plans/done/21-swiftui-pointer-ui.md`.

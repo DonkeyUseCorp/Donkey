@@ -20,12 +20,15 @@ struct PointerPromptNotchMetricsTests {
         #expect(layout.shouldRenderExpandedTopRowVoidMarker)
         #expect(
             layout.expandedCommandOnlyTopPadding ==
-                PointerPromptNotchMetrics.fallbackVoidHeight +
                 PointerPromptNotchLayout.expandedCommandOnlyTopPaddingBelowPhysicalVoid
         )
-        #expect(layout.expandedContentFrame.minY == 0)
-        #expect(layout.expandedContentFrame.height == layout.expandedSurfaceFrame.height)
-        #expect(layout.expandedSurfaceFrame.height > PointerPromptNotchMetrics.expandedTaskContentHeight)
+        #expect(layout.expandedContentFrame.minY == PointerPromptNotchMetrics.fallbackVoidHeight)
+        #expect(layout.expandedContentFrame.height == PointerPromptNotchMetrics.expandedTaskContentHeight)
+        #expect(
+            layout.expandedSurfaceFrame.height ==
+                PointerPromptNotchMetrics.expandedTaskContentHeight +
+                PointerPromptNotchMetrics.fallbackVoidHeight
+        )
     }
 
     @Test
@@ -44,7 +47,6 @@ struct PointerPromptNotchMetricsTests {
         #expect(layout.shouldRenderExpandedTopRowVoidMarker)
         #expect(
             layout.expandedCommandOnlyTopPadding ==
-                PointerPromptNotchMetrics.fallbackVoidHeight +
                 PointerPromptNotchLayout.expandedCommandOnlyTopPaddingBelowPhysicalVoid
         )
         #expect(layout.expandedContentFrame.minY == PointerPromptNotchMetrics.fallbackVoidHeight)

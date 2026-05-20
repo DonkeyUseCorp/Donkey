@@ -53,7 +53,7 @@ public struct PointerPromptNotchLayout: Equatable, Sendable {
     }
 
     public var expandedCommandOnlyTopPadding: CGFloat {
-        collapsedVisibleHeight + Self.expandedCommandOnlyTopPaddingBelowPhysicalVoid
+        Self.expandedCommandOnlyTopPaddingBelowPhysicalVoid
     }
 }
 
@@ -195,13 +195,11 @@ public struct PointerPromptNotchMetrics: Equatable, Sendable {
     }
 
     private var expandedContentTopInset: CGFloat {
-        guard !canRenderTextInTopRow else { return 0 }
-
-        return min(max(0, voidHeight), Self.maximumExpandedContentTopInset)
+        expandedSurfaceTopInset
     }
 
     private var expandedContentFrameHeight: CGFloat {
-        expandedContentHeight + max(0, expandedSurfaceTopInset - expandedContentTopInset)
+        expandedContentHeight
     }
 
     private var expandedSurfaceHeight: CGFloat {
@@ -213,7 +211,7 @@ public struct PointerPromptNotchMetrics: Equatable, Sendable {
             return Self.commonCollapsedSurfaceFrame.height
         }
 
-        return expandedContentTopInset
+        return min(max(0, voidHeight), Self.maximumExpandedContentTopInset)
     }
 
     private var canRenderTextInTopRow: Bool {
