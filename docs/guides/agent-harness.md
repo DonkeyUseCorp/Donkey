@@ -42,10 +42,93 @@ The normal flow is:
 6. Persist assistant/tool/lifecycle events and update the notch with the thread
    state and any action state.
 
+The harness loop looks like this:
+
+```text
+ pointer prompt / file drop / follow-up        voice audio
+                  |                                |
+                  v                                v
+        +-------------------+         +--------------------------+
+        | user-visible turn |         | local model call        |
+        +-------------------+         | Parakeet transcription  |
+                  |                   +--------------------------+
+                  |                                |
+                  |                         transcript turn
+                  |                                |
+                  +---------------+----------------+
+                                  |
+                                  v
+                     +------------------------+
+                     | intake + thread attach |
+                     +------------------------+
+                                  |
+                                  v
+                     +------------------------+
+                     | bounded context packet |
+                     +------------------------+
+                                  |
+          +-----------------------+-----------------------+
+          |                       |                       |
+          v                       v                       v
++--------------------+  +--------------------+  +----------------------+
+| deterministic      |  | local LLM call     |  | provider LLM call    |
+| parser/fallback    |  | intent/follow-up   |  | response/planner/    |
+|                    |  | classifier         |  | memory proposals     |
++--------------------+  +--------------------+  +----------------------+
+          |                       |                       |
+          +-----------------------+-----------------------+
+                                  |
+                                  v
+                     +------------------------+
+                     | AppHarnessDecision     |
+                     +------------------------+
+                        |                    |
+                        v                    v
+          +-------------------------+  +------------------------+
+          | respond / clarify /     |  | catalog validation     |
+          | review / no-op          |  +------------------------+
+          +-------------------------+             |
+                        |                         v
+                        |             +------------------------+
+                        |             | observe target app     |
+                        |             +------------------------+
+                        |                         |
+                        |                         v
+                        |             +------------------------+
+                        |             | local model calls      |
+                        |             | YOLO screenshot seg    |
+                        |             | UI understanding       |
+                        |             +------------------------+
+                        |                         |
+                        |                         v
+                        |             +------------------------+
+                        |             | project, approve,      |
+                        |             | execute, verify        |
+                        |             +------------------------+
+                        |                         |
+                        +-------------+-----------+
+                                      |
+                                      v
+                         +------------------------+
+                         | persist events + notch |
+                         +------------------------+
+                                      |
+                                      v
+                                 next turn
+```
+
 The harness should make conversation feel continuous even when execution happens
 inside the thread. The user should not need to know whether a turn was answered
 by a chat response, a local model classifier, deterministic parsing, or a
 guarded runtime path.
+
+Model calls live behind typed harness boundaries. Voice transcription is a local
+model call before intake and produces a transcript turn. The local LLM call,
+provider LLM call, memory helpers, and deterministic fallback each consume the
+bounded context packet and return typed decisions or helper artifacts.
+Observation models such as screenshot segmentation and UI understanding run
+inside the local-task branch and produce observation evidence, not direct input
+actions.
 
 Routing outcomes carry a structured `AppHarnessDecision`. The decision names the
 next supported harness action:
