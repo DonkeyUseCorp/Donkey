@@ -254,7 +254,7 @@ public struct PointerPromptNotchStatusView: View {
                 expandedUpdateHeader
             }
 
-            VStack(spacing: 0) {
+            VStack(spacing: Self.taskListCommandSpacing) {
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: 8) {
                         if tasks.isEmpty {
@@ -733,6 +733,7 @@ public struct PointerPromptNotchStatusView: View {
         .delay(0.15)
     private static let expandedContentDismissAnimation = Animation.easeOut(duration: 0.1)
     private static let contentInset: CGFloat = 14
+    private static let taskListCommandSpacing: CGFloat = 8
 }
 
 private struct TaskArrowMark: View {
