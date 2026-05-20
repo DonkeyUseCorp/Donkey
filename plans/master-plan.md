@@ -28,3 +28,5 @@ No active implementation tasks.
 - Completed behavior belongs in `docs/`, not in active plans.
 - Plans should stay brief and represent remaining work.
 - Runtime, input, and latency claims should be tied to verifiable local traces.
+- Task threads are conversations first; action execution is a routed outcome of
+  the app harness, not the default meaning of every prompt turn.

@@ -511,14 +511,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
     }
 
     private static func taskStatus(for result: PointerPromptCommandHandlingResult) -> PointerPromptTaskStatus {
-        switch result.status {
-        case .completed:
-            return .completed
-        case .needsUserReview, .needsConfirmation, .unsupportedCommand:
-            return .needsAttention
-        case .appUnavailable, .failedSafe:
-            return .failed
-        }
+        result.threadStatus
     }
 
     private static func nextAccentIndex(after currentIndex: Int) -> Int {

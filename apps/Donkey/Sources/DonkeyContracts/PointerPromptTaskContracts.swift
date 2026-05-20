@@ -1,9 +1,12 @@
 import Foundation
 
 public enum PointerPromptTaskStatus: String, Codable, Equatable, Sendable {
+    case chatting
     case running
     case paused
     case completed
+    case waitingForClarification
+    case waitingForReview
     case needsAttention
     case failed
 }

@@ -530,6 +530,11 @@ public struct PointerPromptNotchStatusView: View {
     @ViewBuilder
     private func taskStatusAccessory(_ task: PointerPromptNotchTask) -> some View {
         switch task.status {
+        case .chatting:
+            Image(systemName: "text.bubble")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(accentColor(for: task.accentIndex))
+                .frame(width: 18, height: 18)
         case .running:
             activityBars(color: accentColor(for: task.accentIndex))
         case .paused:
@@ -541,6 +546,16 @@ public struct PointerPromptNotchStatusView: View {
             Image(systemName: "checkmark")
                 .font(.system(size: 11, weight: .regular))
                 .foregroundStyle(accentColor(for: task.accentIndex))
+                .frame(width: 18, height: 18)
+        case .waitingForClarification:
+            Image(systemName: "questionmark")
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.62))
+                .frame(width: 18, height: 18)
+        case .waitingForReview:
+            Image(systemName: "doc.text.magnifyingglass")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.62))
                 .frame(width: 18, height: 18)
         case .needsAttention:
             Image(systemName: "exclamationmark")
@@ -596,12 +611,18 @@ public struct PointerPromptNotchStatusView: View {
     private var compactTopRowStatusText: String {
         if let primaryTask {
             switch primaryTask.status {
+            case .chatting:
+                return "Chat"
             case .running:
                 return "Run"
             case .paused:
                 return "Hld"
             case .completed:
                 return "Done"
+            case .waitingForClarification:
+                return "Ask"
+            case .waitingForReview:
+                return "Rev"
             case .needsAttention:
                 return "Ask"
             case .failed:
@@ -662,12 +683,18 @@ public struct PointerPromptNotchStatusView: View {
 
     private func taskStatusDescription(_ task: PointerPromptNotchTask) -> String {
         switch task.status {
+        case .chatting:
+            return task.detail.isEmpty ? "Conversation" : task.detail
         case .running:
             return task.detail.isEmpty ? "Running" : task.detail
         case .paused:
             return "Paused"
         case .completed:
             return task.detail.isEmpty ? "Done" : task.detail
+        case .waitingForClarification:
+            return task.detail.isEmpty ? "Waiting for detail" : task.detail
+        case .waitingForReview:
+            return task.detail.isEmpty ? "Waiting for review" : task.detail
         case .needsAttention:
             return task.detail.isEmpty ? "Needs attention" : task.detail
         case .failed:

@@ -5,6 +5,8 @@ import Foundation
 
 struct PointerPromptCommandHandlingResult: Equatable, Sendable {
     var status: LocalAppTaskLiveRunStatus
+    var threadStatus: PointerPromptTaskStatus
+    var routeKind: AppHarnessTurnRouteKind
     var summary: String
     var taskLabel: String?
     var traceID: String
@@ -42,6 +44,7 @@ extension PointerPromptCommandHandling {
 
 struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
     var catalog: LocalAppTaskCatalog
+    var appHarnessRouter: AppHarnessTurnRouter
     var localModelResolver: LocalModelTaskIntentResolver
     var liveRunner: LocalAppTaskLiveRunner
     var redactor: AIHarnessRedactor
@@ -59,6 +62,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         targetMemoryStore: TargetMemoryJSONLStore? = try? TargetMemoryJSONLStore()
     ) {
         self.catalog = catalog
+        self.appHarnessRouter = AppHarnessTurnRouter(catalog: catalog)
         self.coordinatorRegistry = coordinatorRegistry
         self.localModelResolver = localModelResolver ?? LocalModelTaskIntentResolver(catalog: catalog)
         self.liveRunner = liveRunner ?? LocalAppTaskLiveRunner(catalog: catalog)
@@ -73,10 +77,56 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
     ) async -> PointerPromptCommandHandlingResult {
         let traceID = "pointer-prompt-\(UUID().uuidString)"
         let taskID = context?.task.id ?? traceID
+        let routing = appHarnessRouter.route(
+            request: Self.harnessRequest(command: command, context: context),
+            traceID: traceID
+        )
+        switch routing.outcome.kind {
+        case .conversation, .assistantResponse:
+            return PointerPromptCommandHandlingResult(
+                status: .completed,
+                threadStatus: .chatting,
+                routeKind: routing.outcome.kind,
+                summary: routing.outcome.assistantResponse ?? "Tell me what local app task you want to work on.",
+                taskLabel: nil,
+                traceID: traceID,
+                metadata: Self.contextPacketMetadata(routing.contextPacket, outcome: routing.outcome),
+                documentReviewRequest: nil
+            )
+        case .clarification:
+            return PointerPromptCommandHandlingResult(
+                status: .needsConfirmation,
+                threadStatus: .waitingForClarification,
+                routeKind: routing.outcome.kind,
+                summary: routing.outcome.assistantResponse ?? "What detail should I use?",
+                taskLabel: nil,
+                traceID: traceID,
+                metadata: Self.contextPacketMetadata(routing.contextPacket, outcome: routing.outcome),
+                documentReviewRequest: nil
+            )
+        case .noOp:
+            return PointerPromptCommandHandlingResult(
+                status: .completed,
+                threadStatus: .chatting,
+                routeKind: routing.outcome.kind,
+                summary: "",
+                taskLabel: nil,
+                traceID: traceID,
+                metadata: Self.contextPacketMetadata(routing.contextPacket, outcome: routing.outcome),
+                documentReviewRequest: nil
+            )
+        case .actionableIntent, .review, .execution, .failure:
+            break
+        }
+
         let coordinator = await coordinatorRegistry.coordinator(for: taskID)
         var taskLiveRunner = liveRunner
         taskLiveRunner.coordinator = coordinator
-        let modelCommand = Self.modelCommand(for: command, context: context)
+        let modelCommand = Self.modelCommand(
+            for: command,
+            context: context,
+            contextPacket: routing.contextPacket
+        )
         let redaction = redactor.redact(modelCommand, surface: .modelContext)
         let memoryProposalDecisions = (try? ProviderDecodedMemoryProposalHandler.decisions(
             from: Data("[]".utf8),
@@ -100,6 +150,9 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             traceID: traceID,
             resolution: resolution,
             metadata: [
+                "appHarness.route": routing.outcome.kind.rawValue,
+                "appHarness.context.promptCharacters": String(routing.contextPacket.promptText.count),
+                "appHarness.context.redactionCount": String(routing.contextPacket.redactionCount),
                 "intentParser": "localModel",
                 "latency.commandParseMS": Self.formatLatency(parseLatencyMS),
                 "modelCallID": localModelResult.trace.id,
@@ -130,10 +183,14 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
 
         let handlingResult = PointerPromptCommandHandlingResult(
             status: result.status,
+            threadStatus: threadStatus(for: result),
+            routeKind: routing.outcome.kind,
             summary: summary(for: result),
             taskLabel: taskLabel(for: result),
             traceID: traceID,
-            metadata: result.metadata,
+            metadata: result.metadata.merging(
+                Self.contextPacketMetadata(routing.contextPacket, outcome: routing.outcome)
+            ) { current, _ in current },
             documentReviewRequest: documentReviewRequest(
                 traceID: traceID,
                 result: result
@@ -234,6 +291,19 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         }
     }
 
+    private func threadStatus(for result: LocalAppTaskLiveRunResult) -> PointerPromptTaskStatus {
+        switch result.status {
+        case .completed:
+            return .completed
+        case .needsUserReview:
+            return .waitingForReview
+        case .needsConfirmation, .unsupportedCommand:
+            return .waitingForClarification
+        case .appUnavailable, .failedSafe:
+            return .failed
+        }
+    }
+
     private func taskLabel(for result: LocalAppTaskLiveRunResult) -> String? {
         guard result.status == .completed || result.status == .needsUserReview,
               let definition = result.resolution.definition
@@ -280,28 +350,53 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
 
     private static func modelCommand(
         for command: String,
-        context: PointerPromptCommandContext?
+        context: PointerPromptCommandContext?,
+        contextPacket: AppHarnessContextPacket
     ) -> String {
-        guard let context, context.isFollowUp else { return command }
+        guard let context, context.isFollowUp else {
+            return contextPacket.currentTurn.text
+        }
 
-        let events = context.recentEvents
-            .suffix(8)
-            .map { "\($0.role.rawValue): \($0.text)" }
-            .joined(separator: "\n")
-        let assets = context.assets
-            .suffix(8)
-            .map { "\($0.displayName) (\($0.contentType))" }
-            .joined(separator: ", ")
         return [
             "Existing task title: \(context.task.title)",
             "Existing task original request: \(context.task.commandText)",
             "Existing task status: \(context.task.status.rawValue)",
-            events.isEmpty ? nil : "Recent task thread:\n\(events)",
-            assets.isEmpty ? nil : "Task assets: \(assets)",
-            "Latest user follow-up: \(command)"
+            contextPacket.promptText
         ]
         .compactMap(\.self)
         .joined(separator: "\n\n")
+    }
+
+    private static func harnessRequest(
+        command: String,
+        context: PointerPromptCommandContext?
+    ) -> AppHarnessTurnRequest {
+        AppHarnessTurnRequest(
+            turn: AppHarnessTurn(
+                text: command,
+                source: context?.isFollowUp == true ? .followUp : .typedPrompt,
+                taskID: context?.task.id,
+                isFollowUp: context?.isFollowUp ?? false
+            ),
+            recentEvents: context?.recentEvents ?? [],
+            assets: context?.assets ?? [],
+            policy: ["localInput": "guarded"]
+        )
+    }
+
+    private static func contextPacketMetadata(
+        _ packet: AppHarnessContextPacket,
+        outcome: AppHarnessRoutingOutcome
+    ) -> [String: String] {
+        [
+            "appHarness.route": outcome.kind.rawValue,
+            "appHarness.missingDetail": outcome.missingDetail ?? "",
+            "appHarness.context.traceID": packet.traceID,
+            "appHarness.context.eventCount": String(packet.recentEvents.count),
+            "appHarness.context.assetCount": String(packet.assets.count),
+            "appHarness.context.promptCharacters": String(packet.promptText.count),
+            "appHarness.context.redactionCount": String(packet.redactionCount)
+        ]
     }
 
     private static func contextMetadata(_ context: PointerPromptCommandContext?) -> [String: String] {
