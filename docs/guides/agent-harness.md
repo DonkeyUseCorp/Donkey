@@ -1,8 +1,8 @@
-# App Harness
+# Agent Harness
 
 ## What It Is
 
-The app harness is Donkey's boundary between the user's conversation and the
+The agent harness is Donkey's boundary between the user's conversation and the
 systems that can act on the Mac. It owns the question: "What should this turn do
 next?" Sometimes the answer is normal conversation. Sometimes it is a
 clarifying question. Sometimes it is a reviewed plan. Sometimes it is a guarded

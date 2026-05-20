@@ -8,7 +8,7 @@ quick local-app actions:
 - Double-tap Command and release to open a centered prompt with keyboard focus.
 - Double-tap Command and hold the second press to open the prompt in voice mode.
 - Show a top-center notch status surface for task progress, recent tasks, follow-up input, file drops, updates, and per-task pause/resume.
-- Keep prompt submissions, voice transcripts, and follow-ups on the same app-harness path: task-thread routing, context assembly, conversational response, clarification, review, catalog-backed action parsing, task validation, and guarded local-app execution when a turn is actionable.
+- Keep prompt submissions, voice transcripts, and follow-ups on the same agent-harness path: task-thread routing, context assembly, conversational response, clarification, review, catalog-backed action parsing, task validation, and guarded local-app execution when a turn is actionable.
 - Persist task threads as searchable Core Data conversations with event history, task assets, and per-run runtime coordination for any action work attached to the thread.
 - Keep the overlay non-invasive. It may request microphone permission for local waveform capture and voice commands, but it must not capture the screen, synthesize input directly, or require Accessibility permission.
 
@@ -20,7 +20,7 @@ quick local-app actions:
 - Notch geometry comes from the active `NSScreen`, preferring safe-area and auxiliary-top metrics over hardcoded notch sizes. Content must stay out of the physical notch void; displays without a physical notch should use the same top-center composition without reserving unavailable space.
 - `PointerPromptNotchLayout` is the shared source for notch surface frames, content frames, corner radii, and notch-safe offsets. `canRenderTextInTopRow` describes whether text can draw in the top row, not whether that row exists.
 - The prompt is a compact black composer: single-line text is pill-shaped, multiline text becomes a bounded rounded rectangle, Return submits, Shift-Return inserts a newline, Escape and outside clicks dismiss, and non-input capsule areas can drag the modal.
-- Voice capture and transcription remain separate. The controller records bounded local audio and publishes levels; transcription uses the Parakeet-only adapter before submitting transcript text through the app-harness turn path.
+- Voice capture and transcription remain separate. The controller records bounded local audio and publishes levels; transcription uses the Parakeet-only adapter before submitting transcript text through the agent-harness turn path.
 - Task actions in the notch, including follow-up submission and pause/resume, must cross the model/controller command boundary with the selected task ID.
 
 ## Verification

@@ -31,7 +31,7 @@ The supported behavior is documented in:
 
 - `docs/architecture.md`
 - `docs/guides/install-donkey.md`
-- `docs/guides/app-harness.md`
+- `docs/guides/agent-harness.md`
 
 ## Follow-Up Work
 

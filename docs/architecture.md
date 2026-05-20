@@ -2,7 +2,7 @@
 
 This document is a compact map of Donkey's supported runtime architecture. The
 source of truth for behavior and boundaries remains
-[`docs/guides/app-harness.md`](guides/app-harness.md).
+[`docs/guides/agent-harness.md`](guides/agent-harness.md).
 
 ## App-Level Components
 
@@ -35,7 +35,7 @@ source of truth for behavior and boundaries remains
 |             |                                                        ^         |
 |             v                                                        |         |
 |  +----------------------+      +----------------------+              |         |
-|  | App Harness          |<---->| Per-Task Coordinator |--------------+         |
+|  | Agent Harness        |<---->| Per-Task Coordinator |--------------+         |
 |  | context + routing    |      | lifecycle + policy   |                        |
 |  +----------+-----------+      +----------+-----------+                        |
 |             |                             |                                    |
@@ -135,7 +135,7 @@ execution stay behind narrow runtime boundaries.
 +--------------------------------------------------------------------------------+
 ```
 
-Every prompt turn enters the app harness as conversation first. The harness
+Every prompt turn enters the agent harness as conversation first. The harness
 builds bounded context from thread history, assets, target state, memory,
 runtime capabilities, policy, and trace ids, then routes the turn to
 conversation, clarification, review, planning, or action execution. The hot path

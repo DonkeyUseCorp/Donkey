@@ -3,7 +3,7 @@
 > Archived status: historical context only. This file is not an active implementation queue. Supported behavior lives in `docs/`; future work from this idea needs a fresh active plan created deliberately.
 
 This file records the completed manual target context capture milestone.
-Supported behavior and engineering guidance belong in `docs/guides/app-harness.md`.
+Supported behavior and engineering guidance belong in `docs/guides/agent-harness.md`.
 
 ## Completed Tasks
 
@@ -34,4 +34,4 @@ Supported behavior and engineering guidance belong in `docs/guides/app-harness.m
 
 ## Completion
 
-This milestone is complete. Supported behavior and engineering guidance live in `docs/guides/app-harness.md`; future implementation should continue from the active capture, Accessibility, benchmarking, and off-the-shelf run-loop plans.
+This milestone is complete. Supported behavior and engineering guidance live in `docs/guides/agent-harness.md`; future implementation should continue from the active capture, Accessibility, benchmarking, and off-the-shelf run-loop plans.
