@@ -148,12 +148,12 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
                 }
 
                 self.messageText = transcript.text
-                self.submitCommand(transcript.text)
+                self.submitCommand(transcript.text, source: .voiceTranscript)
             }
         }
     }
 
-    private func submitCommand(_ text: String) {
+    private func submitCommand(_ text: String, source: AppHarnessTurnSource = .typedPrompt) {
         let candidates = followUpCandidates()
         clearSubmissionInputs()
         promptState.isActive = false
@@ -182,7 +182,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
             }
 
             await MainActor.run {
-                self?.startCommandRun(text: text, matchedTaskID: matchedTaskID)
+                self?.startCommandRun(text: text, matchedTaskID: matchedTaskID, source: source)
             }
         }
     }
@@ -216,7 +216,11 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         syncPrimaryTaskPausedFlag()
     }
 
-    private func startCommandRun(text: String, matchedTaskID: String?) {
+    private func startCommandRun(
+        text: String,
+        matchedTaskID: String?,
+        source: AppHarnessTurnSource = .typedPrompt
+    ) {
         let isFollowUp = matchedTaskID != nil
         let task = taskForSubmittedCommand(text: text, matchedTaskID: matchedTaskID)
         activeTaskIDs.insert(task.id)
@@ -232,7 +236,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         promptState.leadingSignalLevel = .thinking
         promptState.promptText = task.title
         syncPrimaryTaskPausedFlag()
-        let context = commandContext(taskID: task.id, isFollowUp: isFollowUp)
+        let context = commandContext(taskID: task.id, isFollowUp: isFollowUp, source: source)
         Task { [weak self, commandHandler] in
             let result = await commandHandler.handleSubmittedCommand(text, context: context)
             await MainActor.run {
@@ -389,14 +393,19 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
             .first { $0.id == taskID }
     }
 
-    private func commandContext(taskID: String, isFollowUp: Bool) -> PointerPromptCommandContext? {
+    private func commandContext(
+        taskID: String,
+        isFollowUp: Bool,
+        source: AppHarnessTurnSource = .typedPrompt
+    ) -> PointerPromptCommandContext? {
         guard let task = task(withID: taskID) else { return nil }
 
         return PointerPromptCommandContext(
             task: task,
             recentEvents: Array(taskStore.loadEvents(taskID: taskID).suffix(10)),
             assets: taskStore.loadAssets(taskID: taskID),
-            isFollowUp: isFollowUp
+            isFollowUp: isFollowUp,
+            turnSource: source
         )
     }
 

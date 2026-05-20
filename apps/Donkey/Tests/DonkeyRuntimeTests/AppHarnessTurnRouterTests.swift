@@ -33,6 +33,21 @@ struct AppHarnessTurnRouterTests {
     }
 
     @Test
+    func voiceTranscriptRoutesThroughSameHarnessPathAsTypedText() {
+        let result = router().route(
+            request: AppHarnessTurnRequest(
+                turn: AppHarnessTurn(text: "show me the weather for SF", source: .voiceTranscript)
+            ),
+            traceID: "trace-voice-action"
+        )
+
+        #expect(result.contextPacket.currentTurn.source == .voiceTranscript)
+        #expect(result.outcome.kind == .actionableIntent)
+        #expect(result.outcome.resolution?.status == .resolved)
+        #expect(result.outcome.resolution?.intent?.normalizedEntities["city"] == "San Francisco")
+    }
+
+    @Test
     func ambiguousWeatherRequestAsksForSpecificMissingDetail() {
         let result = router().route(
             request: AppHarnessTurnRequest(

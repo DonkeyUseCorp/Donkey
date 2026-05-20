@@ -25,6 +25,7 @@ struct PointerPromptCommandContext: Equatable, Sendable {
     var recentEvents: [PointerPromptTaskEvent]
     var assets: [PointerPromptTaskAsset]
     var isFollowUp: Bool
+    var turnSource: AppHarnessTurnSource = .typedPrompt
 }
 
 protocol PointerPromptCommandHandling: Sendable {
@@ -374,7 +375,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         AppHarnessTurnRequest(
             turn: AppHarnessTurn(
                 text: command,
-                source: context?.isFollowUp == true ? .followUp : .typedPrompt,
+                source: context?.isFollowUp == true ? .followUp : context?.turnSource ?? .typedPrompt,
                 taskID: context?.task.id,
                 isFollowUp: context?.isFollowUp ?? false
             ),
