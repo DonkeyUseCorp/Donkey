@@ -390,18 +390,24 @@ final class PointerPromptOverlayController {
     }
 
     private func activateVoiceInputIfNeeded() {
+        guard !activatePromptVoiceInputIfNeeded() else { return }
+
         activateSpawnVoiceInputIfNeeded()
-        guard activeSpawnVoiceInputID == nil else { return }
+    }
+
+    private func activatePromptVoiceInputIfNeeded() -> Bool {
+        guard activeSpawnVoiceInputID == nil else { return false }
 
         guard let holdToVoiceInputDuration = activationShortcut.holdToVoiceInputDuration,
               let activationHoldStartedAt,
               activationTapIsClean,
               Date().timeIntervalSince(activationHoldStartedAt) >= holdToVoiceInputDuration else {
-            return
+            return false
         }
 
         resetActivationTapSequence()
         activateVoiceInputAtScreenCenter()
+        return true
     }
 
     private func activateInputAtScreenCenter() {
@@ -440,6 +446,7 @@ final class PointerPromptOverlayController {
         }
 
         activeSpawnVoiceInputID = spawnID
+        resetActivationTapSequence()
         microphoneWaveformMeter.startAudioCapture()
     }
 
@@ -1002,6 +1009,9 @@ final class PointerPromptOverlayController {
         let composerFrame = composerFrame(for: fixedPlacement)
         let inputSurfaceFrame = composerInputSurfaceFrame(in: composerFrame)
         var regions = [inputSurfaceFrame]
+        for frame in composerInteractiveFrames(in: inputSurfaceFrame) {
+            regions = regions.flatMap { Self.subtract(frame, from: $0) }
+        }
 
         regions.removeAll { $0.width <= 0 || $0.height <= 0 }
         return regions
@@ -1059,6 +1069,76 @@ final class PointerPromptOverlayController {
             width: width,
             height: height
         )
+    }
+
+    private func composerInteractiveFrames(in inputSurfaceFrame: CGRect) -> [CGRect] {
+        [
+            composerTextInputFrame(in: inputSurfaceFrame).insetBy(dx: -4, dy: -6),
+            composerTrailingControlsFrame(in: inputSurfaceFrame).insetBy(dx: -6, dy: -6)
+        ]
+    }
+
+    private func composerTrailingControlsFrame(in inputSurfaceFrame: CGRect) -> CGRect {
+        if model.isInputExpanded {
+            return CGRect(
+                x: inputSurfaceFrame.maxX -
+                    PointerPromptLayout.composerExpandedTextHorizontalPadding -
+                    PointerPromptLayout.composerTrailingControlsWidth,
+                y: inputSurfaceFrame.minY,
+                width: PointerPromptLayout.composerTrailingControlsWidth,
+                height: PointerPromptLayout.composerExpandedToolbarHeight
+            )
+        }
+
+        return CGRect(
+            x: inputSurfaceFrame.maxX -
+                PointerPromptLayout.composerInputTrailingContentPadding -
+                PointerPromptLayout.composerTrailingControlsWidth,
+            y: inputSurfaceFrame.minY,
+            width: PointerPromptLayout.composerTrailingControlsWidth,
+            height: inputSurfaceFrame.height
+        )
+    }
+
+    private static func subtract(_ excludedFrame: CGRect, from frame: CGRect) -> [CGRect] {
+        let excludedFrame = excludedFrame.intersection(frame)
+        guard !excludedFrame.isNull, !excludedFrame.isEmpty else { return [frame] }
+
+        var regions: [CGRect] = []
+        if excludedFrame.minY > frame.minY {
+            regions.append(CGRect(
+                x: frame.minX,
+                y: frame.minY,
+                width: frame.width,
+                height: excludedFrame.minY - frame.minY
+            ))
+        }
+        if excludedFrame.maxY < frame.maxY {
+            regions.append(CGRect(
+                x: frame.minX,
+                y: excludedFrame.maxY,
+                width: frame.width,
+                height: frame.maxY - excludedFrame.maxY
+            ))
+        }
+        if excludedFrame.minX > frame.minX {
+            regions.append(CGRect(
+                x: frame.minX,
+                y: excludedFrame.minY,
+                width: excludedFrame.minX - frame.minX,
+                height: excludedFrame.height
+            ))
+        }
+        if excludedFrame.maxX < frame.maxX {
+            regions.append(CGRect(
+                x: excludedFrame.maxX,
+                y: excludedFrame.minY,
+                width: frame.maxX - excludedFrame.maxX,
+                height: excludedFrame.height
+            ))
+        }
+
+        return regions.filter { $0.width > 0 && $0.height > 0 }
     }
 
     private func updateMouseEventPassthrough(for panel: NSPanel) {

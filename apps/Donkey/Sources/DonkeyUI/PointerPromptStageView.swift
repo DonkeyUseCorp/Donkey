@@ -162,11 +162,7 @@ struct PointerPromptComposer: View {
             textInput
                 .frame(width: PointerPromptLayout.composerWrappingTextWidth)
 
-            VoiceWaveformView(levels: state.voiceWaveformLevels)
-                .frame(
-                    width: PointerPromptLayout.composerWaveformSize.width,
-                    height: PointerPromptLayout.composerWaveformSize.height
-                )
+            composerTrailingControls
         }
         .padding(.leading, PointerPromptLayout.composerInputLeadingContentPadding)
         .padding(.trailing, PointerPromptLayout.composerInputTrailingContentPadding)
@@ -240,11 +236,7 @@ struct PointerPromptComposer: View {
 
             switch toolbarStyle {
             case .waveformOnly:
-                VoiceWaveformView(levels: state.voiceWaveformLevels)
-                    .frame(
-                        width: PointerPromptLayout.composerWaveformSize.width,
-                        height: PointerPromptLayout.composerWaveformSize.height
-                    )
+                composerTrailingControls
             case .followUp:
                 followUpTrailingControls
             }
@@ -257,17 +249,76 @@ struct PointerPromptComposer: View {
         )
     }
 
+    private var composerTrailingControls: some View {
+        HStack(spacing: PointerPromptLayout.composerTrailingControlsSpacing) {
+            microphoneIcon
+
+            if hasMessageText {
+                sendButton(size: PointerPromptLayout.composerSendButtonSize)
+            } else if state.isVoiceInputActive {
+                VoiceWaveformView(levels: state.voiceWaveformLevels)
+                    .frame(
+                        width: PointerPromptLayout.composerWaveformSize.width,
+                        height: PointerPromptLayout.composerWaveformSize.height
+                    )
+            } else {
+                Color.clear
+                    .frame(
+                        width: PointerPromptLayout.composerSendButtonSize,
+                        height: PointerPromptLayout.composerSendButtonSize
+                    )
+                    .accessibilityHidden(true)
+            }
+        }
+        .frame(
+            width: PointerPromptLayout.composerTrailingControlsWidth,
+            height: PointerPromptLayout.composerSendButtonSize,
+            alignment: .trailing
+        )
+    }
+
+    private var microphoneIcon: some View {
+        Image(systemName: "mic")
+            .font(.system(size: 24, weight: .regular))
+            .symbolRenderingMode(.monochrome)
+            .foregroundStyle(Color.white.opacity(microphoneOpacity))
+            .frame(
+                width: PointerPromptLayout.composerMicrophoneIconSize,
+                height: PointerPromptLayout.composerMicrophoneIconSize
+            )
+            .background {
+                if isMicrophoneEmphasized {
+                    Circle()
+                        .fill(Color.white.opacity(0.14))
+                }
+            }
+            .overlay {
+                if isMicrophoneEmphasized {
+                    Circle()
+                        .stroke(Color.white.opacity(0.42), lineWidth: 1)
+                }
+            }
+            .accessibilityLabel(state.isVoiceInputActive ? "Voice input active" : "Voice input")
+            .help(state.isVoiceInputActive ? "Voice input active" : "Voice input")
+    }
+
     private var followUpTrailingControls: some View {
+        sendButton(size: 32)
+    }
+
+    private func sendButton(size: CGFloat) -> some View {
         Button(action: submit) {
             Image(systemName: "arrow.up")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.black.opacity(0.75))
-                .frame(width: 32, height: 32)
-                .background(Color.white.opacity(0.9))
+                .font(.system(size: sendIconSize(for: size), weight: .semibold))
+                .foregroundStyle(Color.black.opacity(hasMessageText ? 0.78 : 0.32))
+                .frame(width: size, height: size)
+                .background(Color.white.opacity(hasMessageText ? 0.94 : 0.34))
                 .clipShape(Circle())
         }
         .buttonStyle(.plain)
-        .disabled(messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .disabled(!hasMessageText)
+        .accessibilityLabel("Send")
+        .help("Send")
     }
 
     private var textInput: some View {
@@ -314,6 +365,30 @@ struct PointerPromptComposer: View {
 
     private var isExpanded: Bool {
         isInputExpanded || messageText.contains("\n")
+    }
+
+    private var hasMessageText: Bool {
+        !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var microphoneOpacity: Double {
+        if hasMessageText {
+            return 0.34
+        }
+
+        if state.isVoiceInputActive {
+            return 0.92
+        }
+
+        return 0.52
+    }
+
+    private var isMicrophoneEmphasized: Bool {
+        state.isVoiceInputActive && !hasMessageText
+    }
+
+    private func sendIconSize(for buttonSize: CGFloat) -> CGFloat {
+        buttonSize >= 44 ? 26 : 13
     }
 
     private var usesExpandedSurface: Bool {

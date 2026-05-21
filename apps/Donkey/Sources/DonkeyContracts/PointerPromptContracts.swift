@@ -50,6 +50,7 @@ public struct PointerPromptState: Equatable, Sendable {
     public var isActive: Bool
     public var theme: PointerPromptTheme
     public var voiceWaveformLevels: [Double]
+    public var isVoiceInputActive: Bool
 
     public init(
         promptText: String,
@@ -57,7 +58,8 @@ public struct PointerPromptState: Equatable, Sendable {
         leadingSignalLevel: SignalLevel = .idle,
         isActive: Bool = false,
         theme: PointerPromptTheme = .defaultBlue,
-        voiceWaveformLevels: [Double] = PointerPromptState.defaultVoiceWaveformLevels
+        voiceWaveformLevels: [Double] = PointerPromptState.defaultVoiceWaveformLevels,
+        isVoiceInputActive: Bool = false
     ) {
         self.promptText = promptText
         self.isPrimaryActionEnabled = isPrimaryActionEnabled
@@ -65,6 +67,7 @@ public struct PointerPromptState: Equatable, Sendable {
         self.isActive = isActive
         self.theme = theme
         self.voiceWaveformLevels = voiceWaveformLevels
+        self.isVoiceInputActive = isVoiceInputActive
     }
 
     public static let productionDefault = PointerPromptState(

@@ -77,6 +77,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
     func activate() {
         promptState.isActive = true
         promptState.isPrimaryActionEnabled = true
+        promptState.isVoiceInputActive = false
         promptState.leadingSignalLevel = .ready
         promptState.promptText = PointerPromptCopy.defaultPromptPlaceholder
     }
@@ -102,6 +103,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
             promptState.leadingSignalLevel = .ready
         case .voiceInputRequested:
             promptState.leadingSignalLevel = .ready
+            promptState.isVoiceInputActive = true
             promptState.promptText = "Listening..."
         case .primaryActionRequested(let promptText):
             let trimmedText = promptText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -123,11 +125,14 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
             isInputExpanded = shouldExpand
         case .dismissed:
             promptState.isPrimaryActionEnabled = false
+            promptState.isVoiceInputActive = false
             promptState.isActive = false
         }
     }
 
     func submitVoiceAudio(_ audio: LocalVoiceAudioBuffer?) {
+        promptState.isVoiceInputActive = false
+
         guard let audio else {
             promptState.leadingSignalLevel = .idle
             promptState.promptText = "No voice captured"
@@ -207,6 +212,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         let spawnID = source == .voiceTranscript ? nil : beginSpawn(for: text)
         clearSubmissionInputs()
         promptState.isActive = false
+        promptState.isVoiceInputActive = false
         promptState.leadingSignalLevel = .thinking
         promptState.promptText = "Routing task"
         let sourceTraceID = "pointer-prompt-followup-\(UUID().uuidString)"
@@ -386,6 +392,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         notchCommandInputTextHeight = PointerPromptLayout.composerInputTextMinimumHeight
         isNotchCommandInputExpanded = true
         promptState.isActive = false
+        promptState.isVoiceInputActive = false
         promptState.leadingSignalLevel = .thinking
         promptState.promptText = task.title
         syncPrimaryTaskPausedFlag()
@@ -626,6 +633,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         notchCommandText = ""
         notchCommandInputTextHeight = PointerPromptLayout.composerInputTextMinimumHeight
         isNotchCommandInputExpanded = true
+        promptState.isVoiceInputActive = false
     }
 
     private func taskForSubmittedCommand(text: String, matchedTaskID: String?) -> PointerPromptNotchTask {

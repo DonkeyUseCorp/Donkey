@@ -555,7 +555,8 @@ public struct PointerPromptNotchStatusView: View {
             leadingSignalLevel: .ready,
             isActive: isExpanded,
             theme: state.theme,
-            voiceWaveformLevels: state.voiceWaveformLevels
+            voiceWaveformLevels: state.voiceWaveformLevels,
+            isVoiceInputActive: false
         )
     }
 

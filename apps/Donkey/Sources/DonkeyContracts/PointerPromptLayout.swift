@@ -28,6 +28,11 @@ public enum PointerPromptLayout {
     public static let composerInputTextMaximumHeight: CGFloat = 134.4
     public static let composerInputTextVerticalPadding: CGFloat = 23.4
     public static let composerInputVoiceButtonSize: CGFloat = 33.6
+    public static let composerMicrophoneIconSize: CGFloat = 28
+    public static let composerSendButtonSize: CGFloat = 56
+    public static let composerTrailingControlsSpacing: CGFloat = 8
+    public static let composerTrailingControlsWidth: CGFloat =
+        composerMicrophoneIconSize + composerTrailingControlsSpacing + composerSendButtonSize
     public static let composerExpandedTextTopPadding: CGFloat = 18
     public static let composerExpandedTextHorizontalPadding: CGFloat = 24
     public static let composerExpandedToolbarHeight: CGFloat = 54
@@ -79,7 +84,7 @@ public enum PointerPromptLayout {
             composerInputLeadingContentPadding -
             composerInputTrailingContentPadding -
             composerTextWaveformSpacing -
-            composerWaveformSize.width
+            composerTrailingControlsWidth
     }
 
     public static var composerExpandedTextWidth: CGFloat {
