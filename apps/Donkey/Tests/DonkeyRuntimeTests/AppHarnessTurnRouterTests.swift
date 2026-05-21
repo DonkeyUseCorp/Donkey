@@ -5,22 +5,66 @@ import Testing
 @Suite
 struct AppHarnessTurnRouterTests {
     @Test
-    func greetingRoutesToConversationWithoutTaskExecution() {
+    func greetingDefersToModelIntentClassifierWithoutWordScanning() {
         let result = router().route(
             request: AppHarnessTurnRequest(
-                turn: AppHarnessTurn(text: "hi", source: .typedPrompt)
+                turn: AppHarnessTurn(text: "hi there", source: .typedPrompt)
             ),
             traceID: "trace-chat"
         )
 
-        #expect(result.outcome.decision.kind == .respond)
+        #expect(result.outcome.decision.kind == .runLocalTask)
         #expect(result.outcome.decision.traceID == "trace-chat")
-        #expect(result.outcome.resolution == nil)
-        #expect(result.outcome.assistantResponse?.contains("local app task") == true)
+        #expect(result.outcome.metadata["router"] == "modelIntent")
+        #expect(result.outcome.resolution?.status == .unsupportedCommand)
+        #expect(result.outcome.resolution?.metadata["reason"] == "modelIntentRequired")
+        #expect(result.outcome.assistantResponse == nil)
     }
 
     @Test
-    func actionableWeatherRequestRoutesThroughCatalog() {
+    func simpleArithmeticRoutesToLocalAnswerWithoutCommandWords() {
+        let result = router().route(
+            request: AppHarnessTurnRequest(
+                turn: AppHarnessTurn(text: "What is 2+2?", source: .typedPrompt)
+            ),
+            traceID: "trace-math"
+        )
+
+        #expect(result.outcome.decision.kind == .respond)
+        #expect(result.outcome.metadata["router"] == "simpleArithmetic")
+        #expect(result.outcome.assistantResponse == "2 + 2 = 4.")
+    }
+
+    @Test
+    func openMusicDefersToModelIntentRouting() {
+        let result = router().route(
+            request: AppHarnessTurnRequest(
+                turn: AppHarnessTurn(text: "open music", source: .typedPrompt)
+            ),
+            traceID: "trace-open-music"
+        )
+
+        #expect(result.outcome.decision.kind == .runLocalTask)
+        #expect(result.outcome.metadata["router"] == "modelIntent")
+        #expect(result.outcome.resolution?.status == .unsupportedCommand)
+    }
+
+    @Test
+    func missingAppOpenDefersToModelIntentRouting() {
+        let result = router().route(
+            request: AppHarnessTurnRequest(
+                turn: AppHarnessTurn(text: "open Imaginary App", source: .typedPrompt)
+            ),
+            traceID: "trace-missing-app"
+        )
+
+        #expect(result.outcome.decision.kind == .runLocalTask)
+        #expect(result.outcome.metadata["router"] == "modelIntent")
+        #expect(result.outcome.resolution?.status == .unsupportedCommand)
+    }
+
+    @Test
+    func actionableWeatherRequestDefersToModelIntentRouting() {
         let result = router().route(
             request: AppHarnessTurnRequest(
                 turn: AppHarnessTurn(text: "show me the weather for SF", source: .typedPrompt)
@@ -29,9 +73,9 @@ struct AppHarnessTurnRouterTests {
         )
 
         #expect(result.outcome.decision.kind == .runLocalTask)
-        #expect(result.outcome.decision.taskIntentID == result.outcome.resolution?.intent?.intentID)
-        #expect(result.outcome.resolution?.status == .resolved)
-        #expect(result.outcome.resolution?.intent?.normalizedEntities["city"] == "San Francisco")
+        #expect(result.outcome.metadata["router"] == "modelIntent")
+        #expect(result.outcome.resolution?.status == .unsupportedCommand)
+        #expect(result.outcome.resolution?.metadata["reason"] == "modelIntentRequired")
     }
 
     @Test
@@ -45,12 +89,12 @@ struct AppHarnessTurnRouterTests {
 
         #expect(result.contextPacket.currentTurn.source == .voiceTranscript)
         #expect(result.outcome.decision.kind == .runLocalTask)
-        #expect(result.outcome.resolution?.status == .resolved)
-        #expect(result.outcome.resolution?.intent?.normalizedEntities["city"] == "San Francisco")
+        #expect(result.outcome.metadata["router"] == "modelIntent")
+        #expect(result.outcome.resolution?.status == .unsupportedCommand)
     }
 
     @Test
-    func ambiguousWeatherRequestAsksForSpecificMissingDetail() {
+    func ambiguousWeatherRequestAlsoRequiresModelIntent() {
         let result = router().route(
             request: AppHarnessTurnRequest(
                 turn: AppHarnessTurn(text: "show weather", source: .typedPrompt)
@@ -58,10 +102,10 @@ struct AppHarnessTurnRouterTests {
             traceID: "trace-clarify"
         )
 
-        #expect(result.outcome.decision.kind == .askClarification)
-        #expect(result.outcome.decision.missingDetail == "city")
-        #expect(result.outcome.missingDetail == "city")
-        #expect(result.outcome.assistantResponse == "Which city should I use?")
+        #expect(result.outcome.decision.kind == .runLocalTask)
+        #expect(result.outcome.metadata["router"] == "modelIntent")
+        #expect(result.outcome.resolution?.status == .unsupportedCommand)
+        #expect(result.outcome.resolution?.metadata["reason"] == "modelIntentRequired")
     }
 
     @Test
@@ -141,7 +185,7 @@ struct AppHarnessTurnRouterTests {
     }
 
     @Test
-    func contextCompactionDropsTransientCorrectionsBeforeDurableEvents() {
+    func contextCompactionDoesNotInferTransientCorrectionsFromText() {
         let limits = AppHarnessContextPacketLimits(
             maxRecentEvents: 2,
             maxAssets: 0,
@@ -178,9 +222,9 @@ struct AppHarnessTurnRouterTests {
         )
 
         #expect(result.contextPacket.recentEvents.map(\.sequence) == [2, 3])
-        #expect(result.contextPacket.metadata["events.droppedTransientCorrectionCount"] == "1")
+        #expect(result.contextPacket.metadata["events.droppedTransientCorrectionCount"] == "0")
         #expect(result.contextPacket.compactionRecords.contains {
-            $0.itemKind == .transientCorrection && $0.droppedCount == 1
+            $0.itemKind == .transientCorrection && $0.droppedCount == 0
         })
     }
 
@@ -189,7 +233,7 @@ struct AppHarnessTurnRouterTests {
     ) -> AppHarnessTurnRouter {
         AppHarnessTurnRouter(
             catalog: LocalAppTaskCatalog(
-                taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
+                taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
                 availabilityProvider: StaticLocalAppAvailabilityProvider(
                     installedBundleIdentifiers: [
                         "com.apple.weather",

@@ -119,6 +119,62 @@ public struct LocalAppTaskAdapter: Sendable {
         }
     }
 
+    public func guardedAutomationCommandTemplates(
+        for intent: TaskIntent,
+        issuedAt: RunTraceTimestamp
+    ) -> [ActionEngineCommand] {
+        guard supports(intent),
+              intent.needsConfirmation == false,
+              definition.metadata["automationBackend"] == "appleScript"
+        else {
+            return []
+        }
+
+        let automationMetadata = definition.metadata.merging(intent.metadata) { _, new in new }
+        let action = automationMetadata["appleScript.action"] ?? "generated.\(definition.taskType)"
+        let entityName = automationMetadata["appleScript.entityName"]
+            ?? definition.verificationEntityName
+            ?? definition.entityRules.first?.name
+        let entityValue = entityName.flatMap { name in
+            intent.normalizedEntities[name] ?? intent.entities[name]
+        } ?? intent.normalizedEntities.values.sorted().first
+            ?? intent.entities.values.sorted().first
+            ?? ""
+        let trimmedEntityValue = entityValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasScriptSource = automationMetadata["appleScript.source"]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            || automationMetadata["appleScript.template"]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        guard !trimmedEntityValue.isEmpty || hasScriptSource else { return [] }
+
+        let workflowStepID = "apple-script-\(slug(action))"
+        var commandMetadata = automationMetadata.merging([
+            "taskIntentID": intent.intentID,
+            "taskType": intent.taskType,
+            "targetApp": definition.targetApp.appName,
+            "bundleIdentifier": definition.targetApp.bundleIdentifier ?? "",
+            "workflowStepID": workflowStepID,
+            "workflowStepRole": LocalAppTaskStepRole.custom.rawValue,
+            "automationBackend": "appleScript",
+            "appleScript.action": action,
+            "appleScript.entityName": entityName ?? "",
+            "appleScript.entityValue": trimmedEntityValue
+        ]) { current, _ in current }
+        if commandMetadata["appleScript.query"] == nil {
+            commandMetadata["appleScript.query"] = trimmedEntityValue
+        }
+
+        return [
+            ActionEngineCommand(
+                id: "\(intent.intentID)-\(workflowStepID)",
+                traceID: intent.metadata["traceID"] ?? intent.intentID,
+                targetID: targetID,
+                kind: .controller,
+                issuedAt: issuedAt,
+                key: trimmedEntityValue.isEmpty ? nil : trimmedEntityValue,
+                metadata: commandMetadata
+            )
+        ]
+    }
+
     public func verifiesVisibleText(
         _ visibleText: String?,
         matches intent: TaskIntent
@@ -145,20 +201,16 @@ public struct LocalAppTaskAdapter: Sendable {
             "bundleIdentifier": definition.targetApp.bundleIdentifier ?? "",
             "guardedLiveRequiresInputPolicy": "true",
             "defaultOSInputBackendAvailable": "true",
-            "defaultOSInputBackend": "mac-keyboard"
+            "defaultOSInputBackend": definition.metadata["automationBackend"] == "appleScript"
+                ? "mac-apple-script"
+                : "mac-keyboard"
         ].merging(definition.metadata) { current, _ in current }
     }
 
     private func resolvedWorkflowSteps(
         intent: TaskIntent,
         observation: LocalAppTaskObservation?,
-        verification: (
-            status: LocalAppTaskStepStatus,
-            terminalState: LocalAppTaskTerminalState,
-            confidence: Double,
-            summary: String,
-            metadata: [String: String]
-        )
+        verification: LocalAppTaskVerificationResult
     ) -> [LocalAppTaskDryRunStep] {
         if definition.workflowSteps.isEmpty {
             return [
@@ -248,79 +300,11 @@ public struct LocalAppTaskAdapter: Sendable {
     private func verificationStatus(
         for intent: TaskIntent,
         observation: LocalAppTaskObservation?
-    ) -> (
-        status: LocalAppTaskStepStatus,
-        terminalState: LocalAppTaskTerminalState,
-        confidence: Double,
-        summary: String,
-        metadata: [String: String]
-    ) {
-        guard let entityName = definition.verificationEntityName,
-              let expected = intent.normalizedEntities[entityName]
-        else {
-            return (
-                .blocked,
-                .needsUserReview,
-                0,
-                "No verification entity is configured for this task",
-                ["reason": "missingVerificationEntity"]
-            )
-        }
-
-        guard let observation else {
-            return (
-                .blocked,
-                .needsUserReview,
-                0,
-                "Visible app result has not been observed yet",
-                [
-                    "reason": "missingObservation",
-                    "expectedEntityName": entityName,
-                    "expectedEntityValue": expected
-                ]
-            )
-        }
-
-        let visibleTextKey = definition.metadata["verificationTextKey"] ?? entityName
-        guard let visibleText = observation.visibleText[visibleTextKey] else {
-            return (
-                .blocked,
-                .needsUserReview,
-                observation.confidence,
-                "Verification text is not available yet",
-                [
-                    "reason": "missingVisibleText",
-                    "visibleTextKey": visibleTextKey,
-                    "expectedEntityValue": expected
-                ]
-            )
-        }
-
-        if verifiesVisibleText(visibleText, matches: intent) {
-            return (
-                .verified,
-                .completed,
-                max(observation.confidence, 0.8),
-                "Visible app result matches the requested entity",
-                [
-                    "visibleText": visibleText,
-                    "expectedEntityName": entityName,
-                    "expectedEntityValue": expected
-                ]
-            )
-        }
-
-        return (
-            .blocked,
-            .needsUserReview,
-            observation.confidence,
-            "Visible app result does not match the requested entity",
-            [
-                "reason": "resultMismatch",
-                "visibleText": visibleText,
-                "expectedEntityName": entityName,
-                "expectedEntityValue": expected
-            ]
+    ) -> LocalAppTaskVerificationResult {
+        LocalAppTaskVerificationPolicy.verify(
+            intent: intent,
+            definition: definition,
+            observation: observation
         )
     }
 

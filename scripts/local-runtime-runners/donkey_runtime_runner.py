@@ -472,6 +472,14 @@ def run_local_llm(request: dict[str, Any]) -> dict[str, Any]:
         prompt = task_followup_prompt(command, candidates)
         schema = task_followup_schema(candidates)
         max_tokens = 96
+    elif schema_id == "pointer_coach_cursor_guide_v1":
+        prompt = pointer_coach_cursor_guide_prompt(
+            command,
+            request.get("runtimeCapabilities", []),
+            request.get("cacheSnippets", []),
+        )
+        schema = pointer_coach_cursor_guide_schema()
+        max_tokens = 240
     else:
         task_definitions = request.get("taskDefinitions", [])
         prompt = task_intent_prompt(command, task_definitions)
@@ -570,6 +578,72 @@ def task_followup_schema(candidates: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def pointer_coach_cursor_guide_prompt(
+    command: str,
+    runtime_capabilities: list[Any],
+    cache_snippets: list[Any],
+) -> str:
+    capabilities = "\n".join(str(item) for item in runtime_capabilities if str(item).strip())
+    cache = "\n".join(str(item) for item in cache_snippets if str(item).strip())
+    return "\n".join(
+        [
+            "Classify whether the user's request should be answered by visual coaching with an on-screen cursor guide.",
+            "Use semantic intent, not command wording. Visual coaching is for teaching or demonstrating where/how to do something inside an app.",
+            "If the request is an executable local task, app/file open request, arithmetic/chat answer, or missing-detail clarification, set shouldShowGuide=false.",
+            "If shouldShowGuide=true, generate two to five cursor steps with short labels. Coordinates are normalized screen positions from 0 to 1.",
+            "The guide must explain and point only. It must not claim to click, type, submit, or perform the user's task.",
+            "Do not include reasoning outside JSON.",
+            f"User request: {command}",
+            "Known executable runtime capabilities:",
+            capabilities,
+            "Relevant local cache snippets:",
+            cache,
+        ]
+    )
+
+
+def pointer_coach_cursor_guide_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "shouldShowGuide",
+            "title",
+            "goal",
+            "targetApp",
+            "confidence",
+            "reason",
+            "steps",
+            "metadata",
+        ],
+        "properties": {
+            "shouldShowGuide": {"type": "boolean"},
+            "title": {"type": "string"},
+            "goal": {"type": "string"},
+            "targetApp": {"type": "string"},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "reason": {"type": "string"},
+            "steps": {
+                "type": "array",
+                "maxItems": 5,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["label", "x", "y"],
+                    "properties": {
+                        "label": {"type": "string"},
+                        "x": {"type": "number", "minimum": 0, "maximum": 1},
+                        "y": {"type": "number", "minimum": 0, "maximum": 1},
+                        "travelDuration": {"type": "number", "minimum": 0.1, "maximum": 2.0},
+                        "holdDuration": {"type": "number", "minimum": 0.4, "maximum": 4.0},
+                    },
+                },
+            },
+            "metadata": {"type": "object", "additionalProperties": {"type": "string"}},
+        },
+    }
+
+
 def task_intent_prompt(command: str, task_definitions: list[dict[str, Any]]) -> str:
     task_lines: list[str] = []
     for definition in task_definitions:
@@ -593,6 +667,7 @@ def task_intent_prompt(command: str, task_definitions: list[dict[str, Any]]) -> 
                     f"bundle={target.get('bundleIdentifier', 'unknown')}",
                     f"capability={workflow}",
                     f"entities={'; '.join(entity_parts)}",
+                    f"dynamic_target={(definition.get('metadata') or {}).get('dynamicTarget', 'false')}",
                 ]
             )
         )
@@ -605,6 +680,7 @@ def task_intent_prompt(command: str, task_definitions: list[dict[str, Any]]) -> 
             "Use only the provided task definitions. Do not invent apps, task types, entities, or actions.",
             "If no capability fits, return the closest supported task with confidence below 0.55.",
             "If a required entity is missing, set needsConfirmation=true and include missingEntity in metadata.",
+            "For dynamic local-item capabilities, extract the requested local app/file/folder name into entities.appName and normalizedEntities.appName. Use targetAppName for the resolved item name when you know it.",
             f"Command: {command}",
             "Supported task capabilities:",
             "\n".join(task_lines),
@@ -621,6 +697,14 @@ def task_intent_schema(task_definitions: list[dict[str, Any]]) -> dict[str, Any]
             if (item.get("targetApp") or {}).get("appName")
         }
     )
+    allows_dynamic_targets = any(
+        (item.get("metadata") or {}).get("dynamicTarget") == "true"
+        for item in task_definitions
+    )
+    target_app_name_schema: dict[str, Any] = {"type": "string"}
+    if not allows_dynamic_targets:
+        target_app_name_schema["enum"] = app_names
+
     return {
         "type": "object",
         "additionalProperties": False,
@@ -635,7 +719,7 @@ def task_intent_schema(task_definitions: list[dict[str, Any]]) -> dict[str, Any]
         ],
         "properties": {
             "taskType": {"type": "string", "enum": task_types},
-            "targetAppName": {"type": "string", "enum": app_names},
+            "targetAppName": target_app_name_schema,
             "entities": {"type": "object", "additionalProperties": {"type": "string"}},
             "normalizedEntities": {"type": "object", "additionalProperties": {"type": "string"}},
             "confidence": {"type": "number", "minimum": 0, "maximum": 1},

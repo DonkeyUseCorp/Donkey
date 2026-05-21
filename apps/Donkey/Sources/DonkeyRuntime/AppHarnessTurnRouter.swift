@@ -402,18 +402,8 @@ public struct AppHarnessContextPacketBuilder: Sendable {
         )
     }
 
-    private static func isTransientCorrection(_ event: PointerPromptTaskEvent) -> Bool {
-        let normalized = LocalAppTaskIntentParser.normalizedPhrase(event.text)
-        guard event.role == .assistant || event.role == .system else { return false }
-
-        return normalized.contains("retry")
-            || normalized.contains("try again")
-            || normalized.contains("invalid format")
-            || normalized.contains("invalid output")
-            || normalized.contains("unknown tool")
-            || normalized.contains("missing prerequisite")
-            || normalized.contains("step nudge")
-            || normalized.contains("retry nudge")
+    private static func isTransientCorrection(_: PointerPromptTaskEvent) -> Bool {
+        false
     }
 }
 
@@ -434,13 +424,16 @@ private struct HarnessEventCompactionResult: Equatable, Sendable {
 public struct AppHarnessTurnRouter: Sendable {
     public var catalog: LocalAppTaskCatalog
     public var contextBuilder: AppHarnessContextPacketBuilder
+    public var turnClassifier: AppHarnessTurnClassifier
 
     public init(
         catalog: LocalAppTaskCatalog,
-        contextBuilder: AppHarnessContextPacketBuilder = AppHarnessContextPacketBuilder()
+        contextBuilder: AppHarnessContextPacketBuilder = AppHarnessContextPacketBuilder(),
+        turnClassifier: AppHarnessTurnClassifier = AppHarnessTurnClassifier()
     ) {
         self.catalog = catalog
         self.contextBuilder = contextBuilder
+        self.turnClassifier = turnClassifier
     }
 
     public func route(
@@ -467,78 +460,35 @@ public struct AppHarnessTurnRouter: Sendable {
             )
         }
 
-        let deterministicResolution = catalog.resolve(command: trimmedText)
-        switch deterministicResolution.status {
-        case .resolved:
-            return AppHarnessRoutingResult(
-                contextPacket: packet,
-                outcome: AppHarnessRoutingOutcome(
-                    decision: decision(
-                        kind: .runLocalTask,
-                        traceID: traceID,
-                        resolution: deterministicResolution,
-                        metadata: ["router": "deterministicCatalog"]
-                    ),
-                    resolution: deterministicResolution,
-                    metadata: ["router": "deterministicCatalog"]
-                )
-            )
-        case .needsConfirmation:
-            let missingDetail = deterministicResolution.metadata["reason"] ?? "detail"
-            let response = clarificationPrompt(for: missingDetail, resolution: deterministicResolution)
-            return AppHarnessRoutingResult(
-                contextPacket: packet,
-                outcome: AppHarnessRoutingOutcome(
-                    decision: decision(
-                        kind: .askClarification,
-                        traceID: traceID,
-                        message: response,
-                        missingDetail: missingDetail,
-                        resolution: deterministicResolution,
-                        metadata: ["router": "deterministicCatalog"]
-                    ),
-                    assistantResponse: response,
-                    missingDetail: missingDetail,
-                    resolution: deterministicResolution,
-                    metadata: ["router": "deterministicCatalog"]
-                )
-            )
-        case .appUnavailable:
-            return AppHarnessRoutingResult(
-                contextPacket: packet,
-                outcome: AppHarnessRoutingOutcome(
-                    decision: decision(
-                        kind: .runLocalTask,
-                        traceID: traceID,
-                        resolution: deterministicResolution,
-                        metadata: ["router": "deterministicCatalog"]
-                    ),
-                    resolution: deterministicResolution,
-                    metadata: ["router": "deterministicCatalog"]
-                )
-            )
-        case .unsupportedCommand:
-            break
-        }
+        let modelIntentResolution = LocalAppTaskCatalogResolution(
+            status: .unsupportedCommand,
+            metadata: ["reason": "modelIntentRequired"]
+        )
 
-        if request.turn.isFollowUp && !Self.isConversational(trimmedText) {
+        let classification = turnClassifier.classify(
+            text: trimmedText,
+            request: request,
+            catalog: catalog
+        )
+
+        if request.turn.isFollowUp && classification.kind == .unknown {
             return AppHarnessRoutingResult(
                 contextPacket: packet,
                 outcome: AppHarnessRoutingOutcome(
                     decision: decision(
                         kind: .runLocalTask,
                         traceID: traceID,
-                        resolution: deterministicResolution,
+                        resolution: modelIntentResolution,
                         metadata: ["router": "followUpActionContext"]
                     ),
-                    resolution: deterministicResolution,
+                    resolution: modelIntentResolution,
                     metadata: ["router": "followUpActionContext"]
                 )
             )
         }
 
-        if Self.isConversational(trimmedText) {
-            let response = conversationResponse(for: trimmedText)
+        if classification.kind == .answer,
+           let response = classification.response {
             return AppHarnessRoutingResult(
                 contextPacket: packet,
                 outcome: AppHarnessRoutingOutcome(
@@ -546,30 +496,25 @@ public struct AppHarnessTurnRouter: Sendable {
                         kind: .respond,
                         traceID: traceID,
                         message: response,
-                        metadata: ["router": "conversationRules"]
+                        metadata: ["router": classification.router]
                     ),
                     assistantResponse: response,
-                    metadata: ["router": "conversationRules"]
+                    metadata: ["router": classification.router].merging(classification.metadata) { current, _ in current }
                 )
             )
         }
 
-        let response = "What would you like Donkey to do?"
         return AppHarnessRoutingResult(
             contextPacket: packet,
             outcome: AppHarnessRoutingOutcome(
                 decision: decision(
-                    kind: .askClarification,
+                    kind: .runLocalTask,
                     traceID: traceID,
-                    message: response,
-                    missingDetail: "actionable request",
-                    resolution: deterministicResolution,
-                    metadata: ["router": "unsupportedClarification"]
+                    resolution: modelIntentResolution,
+                    metadata: ["router": "modelIntent"]
                 ),
-                assistantResponse: response,
-                missingDetail: "actionable request",
-                resolution: deterministicResolution,
-                metadata: ["router": "unsupportedClarification"]
+                resolution: modelIntentResolution,
+                metadata: ["router": "modelIntent"].merging(classification.metadata) { current, _ in current }
             )
         )
     }
@@ -595,61 +540,26 @@ public struct AppHarnessTurnRouter: Sendable {
         )
     }
 
-    private func conversationResponse(for text: String) -> String {
-        let normalized = LocalAppTaskIntentParser.normalizedPhrase(text)
-        if normalized.contains("what can") || normalized.contains("help") || normalized.contains("capabil") {
-            let examples = catalog.taskDefinitions
-                .map { $0.taskType.split(separator: "_").joined(separator: " ") }
-                .sorted()
-                .joined(separator: ", ")
-            return examples.isEmpty
-                ? "I can keep a task thread going and ask for details before taking action."
-                : "I can keep a task thread going, ask for missing details, and run supported local tasks such as \(examples)."
-        }
-
-        return "Hi. Tell me what local app task you want to work on."
-    }
-
     private func clarificationPrompt(
         for missingDetail: String,
         resolution: LocalAppTaskCatalogResolution
     ) -> String {
-        switch missingDetail {
-        case "city":
-            return "Which city should I use?"
-        case "query":
-            return "What should I play?"
-        case "document":
-            return "Which document should I use?"
-        default:
-            if let taskType = resolution.definition?.taskType.split(separator: "_").joined(separator: " ") {
-                return "What \(missingDetail) should I use for \(taskType)?"
-            }
-            return "What \(missingDetail) should I use?"
+        let readableDetail = missingDetail
+            .split(separator: "_")
+            .joined(separator: " ")
+        if let definition = resolution.definition {
+            let taskTitle = Self.displayTitle(for: definition)
+            return "What \(readableDetail) should I use for \(taskTitle)?"
         }
+        return "What \(readableDetail) should I use?"
     }
 
-    private static func isConversational(_ text: String) -> Bool {
-        let normalized = LocalAppTaskIntentParser.normalizedPhrase(text)
-        let greetings: Set<String> = [
-            "hi",
-            "hello",
-            "hey",
-            "good morning",
-            "good afternoon",
-            "good evening",
-            "thanks",
-            "thank you"
-        ]
-        if greetings.contains(normalized) {
-            return true
+    private static func displayTitle(for definition: LocalAppTaskDefinition) -> String {
+        if let displayTitle = definition.metadata["displayTitle"], !displayTitle.isEmpty {
+            return displayTitle
         }
-
-        return normalized.contains("what can you do")
-            || normalized.contains("what can donkey do")
-            || normalized.contains("help")
-            || normalized.contains("capabilities")
-            || normalized.contains("how does donkey work")
-            || normalized.contains("who are you")
+        return definition.taskType
+            .split(separator: "_")
+            .joined(separator: " ")
     }
 }

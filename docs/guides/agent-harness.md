@@ -119,22 +119,68 @@ The harness loop looks like this:
 
 The harness should make conversation feel continuous even when execution happens
 inside the thread. The user should not need to know whether a turn was answered
-by a chat response, a local model classifier, deterministic parsing, or a
+by a chat response, a local model classifier, a typed runtime artifact, or a
 guarded runtime path.
 
 Model calls live behind typed harness boundaries. Voice transcription is a local
 model call before intake and produces a transcript turn. The local LLM call,
-provider LLM call, memory helpers, and deterministic fallback each consume the
-bounded context packet and return typed decisions or helper artifacts.
+provider LLM call, memory helpers, and explicit metadata helpers each consume
+the bounded context packet and return typed decisions or helper artifacts.
 Observation models such as screenshot segmentation and UI understanding run
 inside the local-task branch and produce observation evidence, not direct input
-actions.
+actions. Any semantic user-intent distinction, including whether a turn is an
+instructional visual-coaching request, belongs behind one of these typed model
+or catalog boundaries.
 
 Routing outcomes carry a structured `AppHarnessDecision`. The decision names the
 next supported harness action:
 respond, ask for clarification, open review, run a local task, or no-op. This
 keeps model-assisted routing in a typed decision space instead of treating free
 text as an implicit action signal.
+
+## Intent Classification Rules
+
+User intent must not be inferred with ad hoc phrase, prefix, suffix, substring,
+or regex checks against natural-language command text. Donkey has local LLMs,
+task definitions, runtime catalogs, and cache context for this job. Use them.
+The fast classifier may know typed capability buckets such as task ids,
+capability ids, cache entry kinds, and model output statuses. It must not
+recover those buckets by reading natural-language words out of the user's
+prompt.
+
+Allowed deterministic checks are narrow primitives whose correctness does not
+depend on open-ended language semantics: empty input, numeric-only arithmetic
+expression extraction, exact schema validation, explicit metadata flags, and
+bounded normalization of lookup text after a typed decision has already selected
+a lookup path. These checks must stay generic and must not encode app-specific
+or workflow-specific user phrasing.
+
+Disallowed checks include code that decides a user's semantic intent from
+phrases like "show me how", "within", "play", "open", or app names outside a
+declared task definition or model output. If behavior depends on what the user
+means, add or reuse a typed classifier/resolver and test it with structured
+model output. Do not patch another string list.
+
+Do not look for words inside user command strings to decide what the user wants.
+This includes local deterministic parser fallbacks, command trigger arrays,
+prefix/suffix tests, and conversation/greeting/help classifiers. A typed model
+or explicit runtime artifact must produce the intent first. Exact string checks
+remain acceptable for non-semantic technical validation such as JSON schema
+fields, CLI arguments, AppleScript syntax/output validation, filesystem paths,
+accessibility constants, colors, and safety metadata.
+
+Generic local-item lookup must follow the same rule. Do not add static command
+verb, lookup prefix, or lookup suffix arrays to guess that text means "open this
+app/file/folder." A typed model or catalog artifact selects the local-item
+lookup capability and extracts the requested item name; after that, the runtime
+may normalize that item name and resolve it through the cache, Spotlight, and
+bounded filesystem lookup.
+
+Instructional visual coaching is the canonical example. The harness may show an
+animated guide cursor only after a model-backed resolver returns a structured
+guide decision with cursor steps. It must not use hardcoded prompt prefixes to
+decide that a turn is a coaching request, and it must not parse app names or
+goals out of text with local string slicing.
 
 ## Context Engineering
 
@@ -164,23 +210,27 @@ kind.
 
 ## Routing Outcomes
 
-Conversation is a first-class outcome. Greetings, "what can you do?", small
-talk, and explanatory questions should stay in the task thread and get an
-assistant response. These turns may update memory or teach the user about
-available capabilities, but they should not create a failed local-app run.
+Conversation is a first-class outcome. Turns that do not produce a typed local
+task intent stay in the task thread and get an assistant response instead of a
+failed local-app run. Conversation classification may be model-backed or derived
+from explicit runtime/model statuses, but it must not use greeting/help/small
+talk phrase lists.
 
-Clarification is for actionable intent with missing required information. If
-the user says "play music", the harness should ask what to play. If the user
-says "fill this out" without a document or data source, it should ask for the
-missing input or invite an upload. The prompt should name the missing detail
-rather than using generic copy like "Need more detail".
+Clarification is for typed actionable intent with missing required information.
+When the model returns a supported task but marks a required entity as missing,
+the harness should ask for that exact entity or invite an upload. The prompt
+should name the missing detail rather than using generic copy like "Need more
+detail".
 
-Action execution is for validated, supported tasks. The local-model classifier
-and deterministic fallback can produce a `TaskIntent`, but execution may only
-continue after catalog validation confirms the target app/task, required
-entities, app availability, and safety policy. Built-in examples such as
-weather lookup, media playback, and document form-fill are benchmark definitions
-inside this generic path, not separate architectures.
+Action execution is for validated, supported tasks. The fast turn classifier can
+answer narrow non-semantic turns such as numeric arithmetic; otherwise the local
+model classifier or explicit runtime metadata produces a `TaskIntent`. Execution
+may only continue after catalog validation confirms the target app/task,
+required entities, app availability, and safety policy. Weather lookup, media
+playback, and document form-fill are benchmark fixtures for tests and replay
+evaluation, not runtime defaults. Runtime defaults come from the local
+resolution cache, which is seeded with generic capabilities and enriched by
+model-generated or user-reviewed task definition files.
 
 Review is required when the harness can propose work but should not perform it
 blindly. Document form-fill is the main supported example: Donkey can inspect
@@ -206,13 +256,37 @@ model can be told about this state, but the runner owns it.
 
 Live input remains guarded. The action engine checks permission policy, target
 focus, rate limits, hold duration, and backend evidence before issuing input.
-The macOS keyboard and Accessibility backends are intentionally narrow. They
-exist for validated local-app workflows, not arbitrary UI automation.
+The macOS AppleScript, keyboard, and Accessibility backends are intentionally
+narrow. They exist for validated local-app workflows, not arbitrary UI
+automation. Prefer app-native AppleScript for scriptable app tasks before
+falling back to Accessibility or keyboard input. AppleScript commands may be
+generated from task metadata or compact model-provided source/templates, but
+they still run only after catalog validation and through the guarded controller
+backend.
+
+App automation scripts must be generated artifacts, not product code fixtures.
+Do not add hardcoded app-specific AppleScript bodies, UI-scripting sequences, or
+workflow scripts to Swift as static strings. The harness may keep generic
+rendering/execution utilities such as string escaping, template interpolation,
+schema validation, AppleScript syntax/language validation, and guarded backend
+dispatch. The actual app-control script for a task must come from a typed
+model/script-generation step, cached resolution metadata, or a user-reviewed
+task definition, and it must be logged with the model/schema/action metadata
+that produced it.
+
+If an app task needs AppleScript, the supported shape is: classify the task,
+resolve the target app and entities, ask the model or task-definition layer for
+a bounded script or template, validate that it matches the resolved task and
+allowed backend, then execute it through the AppleScript backend. Adding a
+`musicPlaybackScript`, `openFooScript`, or similar app-named helper is a harness
+bug, even if the script happens to work on one machine.
 
 Observation prefers Accessibility and app/window metadata. Bounded screenshots
 and local UI understanding are fallback observation context only; they do not
 emit direct input actions. Captured screenshots, Accessibility snapshots, and
 manual capture artifacts are trace evidence, not a general live vision loop.
+Verification and screenshot fallback behavior should be derived from task
+metadata and runtime item metadata, not one-off branches for individual apps.
 
 The fast local path must keep working without remote model calls. Local sidecars
 can classify actionable turns, transcribe voice, segment screenshots, or

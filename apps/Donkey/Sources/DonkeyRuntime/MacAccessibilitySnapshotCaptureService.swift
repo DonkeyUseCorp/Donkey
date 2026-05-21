@@ -303,59 +303,13 @@ public struct MacAccessibilityNativeDialogDetector: Sendable {
     public func safetyAssessment(
         for snapshot: MacAccessibilitySnapshot
     ) -> WindowTargetSafetyAssessment? {
-        guard let dialogText = dialogTexts(in: snapshot.root).first else {
+        guard dialogTexts(in: snapshot.root).first != nil else {
             return nil
-        }
-
-        var reasons: [WindowTargetSafetyReason] = [.systemSurface]
-        let haystack = dialogText.lowercased()
-
-        if containsAny(haystack, [
-            "permission",
-            "privacy",
-            "accessibility",
-            "screen recording",
-            "allow",
-            "deny"
-        ]) {
-            reasons.append(.permissionSurface)
-        }
-
-        if containsAny(haystack, [
-            "sign in",
-            "signin",
-            "sign-in",
-            "log in",
-            "login",
-            "authentication",
-            "unlock"
-        ]) {
-            reasons.append(.loginSurface)
-        }
-
-        if containsAny(haystack, [
-            "password",
-            "passcode",
-            "credential",
-            "keychain"
-        ]) {
-            reasons.append(.passwordSurface)
-        }
-
-        if containsAny(haystack, [
-            "payment",
-            "checkout",
-            "billing",
-            "credit card",
-            "apple pay",
-            "purchase"
-        ]) {
-            reasons.append(.paymentSurface)
         }
 
         return WindowTargetSafetyAssessment(
             status: .blocked,
-            reasons: reasons.uniqued(),
+            reasons: [.systemSurface],
             summary: "Native macOS dialog detected in Accessibility tree"
         )
     }
@@ -369,7 +323,7 @@ public struct MacAccessibilityNativeDialogDetector: Sendable {
             .filter { !$0.isEmpty }
             .joined(separator: " ")
 
-        if isDialogRole(node.role) || isDialogText(combined) {
+        if isDialogRole(node.role) {
             return [combined]
         }
 
@@ -384,19 +338,6 @@ public struct MacAccessibilityNativeDialogDetector: Sendable {
             || role == "AXPopover"
     }
 
-    private func isDialogText(_ text: String) -> Bool {
-        let normalized = text.lowercased()
-        return normalized.contains("system dialog")
-            || normalized.contains("permission")
-            || normalized.contains("wants to access")
-            || normalized.contains("would like to access")
-            || normalized.contains("screen recording")
-            || normalized.contains("accessibility")
-    }
-
-    private func containsAny(_ value: String, _ needles: [String]) -> Bool {
-        needles.contains { value.contains($0) }
-    }
 }
 
 final class ApplicationServicesMacAccessibilitySnapshotCapturer: MacAccessibilitySnapshotCapturing {

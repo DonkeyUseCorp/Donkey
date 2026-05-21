@@ -9,9 +9,14 @@ public enum LocalAppTaskDefinitionLoaderError: Error, Equatable, Sendable {
 
 public struct LocalAppTaskDefinitionLoader: Sendable {
     public var decoder: JSONDecoder
+    public var cache: LocalItemResolutionCache
 
-    public init(decoder: JSONDecoder = JSONDecoder()) {
+    public init(
+        decoder: JSONDecoder = JSONDecoder(),
+        cache: LocalItemResolutionCache = .shared
+    ) {
         self.decoder = decoder
+        self.cache = cache
     }
 
     public static var defaultDirectoryURL: URL {
@@ -50,13 +55,24 @@ public struct LocalAppTaskDefinitionLoader: Sendable {
         return definitions
     }
 
-    public func mergedWithBuiltIns(from directoryURL: URL) throws -> [LocalAppTaskDefinition] {
-        BuiltInLocalAppTaskDefinitions.defaults + (try loadDirectory(directoryURL))
+    public func cachedDefinitions(from directoryURL: URL) throws -> [LocalAppTaskDefinition] {
+        let definitions = try loadDirectory(directoryURL)
+        cache.prewarmTaskDefinitions(definitions)
+        return cache.taskDefinitions()
     }
 
     public func defaultDefinitions() -> [LocalAppTaskDefinition] {
-        (try? mergedWithBuiltIns(from: Self.defaultDirectoryURL))
-            ?? BuiltInLocalAppTaskDefinitions.defaults
+        cache.prewarmTaskDefinitions(Self.runtimeSeedDefinitions)
+        if let generatedDefinitions = try? loadDirectory(Self.defaultDirectoryURL) {
+            cache.prewarmTaskDefinitions(generatedDefinitions)
+        }
+        return cache.taskDefinitions()
+    }
+
+    public static var runtimeSeedDefinitions: [LocalAppTaskDefinition] {
+        [
+            LocalAppTaskCatalog.genericLocalItemOpenDefinition
+        ]
     }
 
     private func loadJSON(from url: URL) throws -> [LocalAppTaskDefinition] {

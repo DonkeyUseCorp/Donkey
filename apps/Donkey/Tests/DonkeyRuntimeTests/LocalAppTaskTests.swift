@@ -6,24 +6,23 @@ import Testing
 @Suite
 struct LocalAppTaskTests {
     @Test
-    func deterministicParserBuildsGenericTaskIntentWithAliasExpansion() throws {
-        let intent = try #require(parser().parse("show me the weather for SF"))
+    func structuredWeatherIntentCarriesModelSelectedEntities() throws {
+        let intent = weatherIntent(rawCity: "SF", city: "San Francisco")
 
         #expect(intent.taskType == "weather_lookup")
         #expect(intent.targetApp.appName == "Weather")
         #expect(intent.targetApp.bundleIdentifier == "com.apple.weather")
-        #expect(intent.entities["city"] == "sf")
+        #expect(intent.entities["city"] == "SF")
         #expect(intent.normalizedEntities["city"] == "San Francisco")
-        #expect(intent.confidence == 0.96)
-        #expect(intent.parserSource == .deterministic)
+        #expect(intent.confidence == 0.93)
+        #expect(intent.parserSource == .localModel)
         #expect(intent.needsConfirmation == false)
         #expect(intent.metadata["catalogEntry"] == "built-in-weather-lookup")
-        #expect(intent.metadata["entityAliasExpanded"] == "true")
     }
 
     @Test
-    func deterministicParserBuildsMediaPlaybackIntentWithoutWeatherSpecificCode() throws {
-        let intent = try #require(parser().parse("play cold play"))
+    func structuredMediaPlaybackIntentCarriesModelSelectedEntities() throws {
+        let intent = mediaPlaybackIntent(rawQuery: "cold play", query: "Coldplay")
 
         #expect(intent.taskType == "media_playback")
         #expect(intent.targetApp.appName == "Music")
@@ -34,8 +33,76 @@ struct LocalAppTaskTests {
     }
 
     @Test
-    func deterministicParserBuildsDocumentFormFillIntentAsReviewOnlyTask() throws {
-        let intent = try #require(parser().parse("fill out this PDF using this data"))
+    func catalogResolvesGenericAppOpenIntentFromModelSelectedLocalItem() throws {
+        let catalog = LocalAppTaskCatalog(
+            taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
+            availabilityProvider: StaticLocalAppAvailabilityProvider(
+                installedBundleIdentifiers: ["com.figma.Desktop"],
+                installedApplicationNames: ["Figma": "com.figma.Desktop"],
+                installedLocalItemNames: ["Quarterly Plan.pdf": "file"]
+            )
+        )
+        let resolution = catalog.resolve(intent: TaskIntent(
+            intentID: "app_open-figma",
+            taskType: "app_open",
+            targetApp: LocalAppTarget(appName: "Local Item", metadata: ["dynamicTarget": "true"]),
+            entities: ["appName": "figma"],
+            normalizedEntities: ["appName": "Figma"],
+            confidence: 0.91,
+            parserSource: .localModel,
+            metadata: ["requestedItemName": "figma"]
+        ))
+        let intent = try #require(resolution.intent)
+
+        #expect(resolution.status == .resolved)
+        #expect(intent.taskType == "app_open")
+        #expect(intent.targetApp.appName == "Figma")
+        #expect(intent.targetApp.bundleIdentifier == "com.figma.Desktop")
+        #expect(intent.normalizedEntities["appName"] == "Figma")
+        #expect(intent.metadata["catalogEntry"] == "generic-app-open")
+
+        let fileResolution = catalog.resolve(intent: TaskIntent(
+            intentID: "app_open-quarterly-plan",
+            taskType: "app_open",
+            targetApp: LocalAppTarget(appName: "Local Item", metadata: ["dynamicTarget": "true"]),
+            entities: ["appName": "quarterly plan.pdf"],
+            normalizedEntities: ["appName": "Quarterly Plan.pdf"],
+            confidence: 0.88,
+            parserSource: .localModel,
+            metadata: ["requestedItemName": "quarterly plan.pdf"]
+        ))
+        #expect(fileResolution.status == .resolved)
+        let fileDefinition = try #require(fileResolution.definition)
+        #expect(LocalAppTaskVerificationPolicy.mode(for: fileDefinition) == .openedLocalItem)
+        #expect(fileResolution.metadata["itemKind"] == "file")
+    }
+
+    @Test
+    func lowConfidenceModelIntentAsksForConfirmationBeforeLookupExecution() {
+        let catalog = LocalAppTaskCatalog(
+            taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
+            availabilityProvider: StaticLocalAppAvailabilityProvider(
+                installedBundleIdentifiers: ["com.figma.Desktop"],
+                installedApplicationNames: ["Figma": "com.figma.Desktop"]
+            )
+        )
+        let resolution = catalog.resolve(intent: TaskIntent(
+            intentID: "app_open-uncertain",
+            taskType: "app_open",
+            targetApp: LocalAppTarget(appName: "Local Item", metadata: ["dynamicTarget": "true"]),
+            entities: ["appName": "figma"],
+            normalizedEntities: ["appName": "Figma"],
+            confidence: 0.4,
+            parserSource: .localModel
+        ))
+
+        #expect(resolution.status == .needsConfirmation)
+        #expect(resolution.metadata["reason"] == "lowConfidenceIntent")
+    }
+
+    @Test
+    func structuredDocumentFormFillIntentBuildsReviewOnlyTask() throws {
+        let intent = documentFormFillIntent()
 
         #expect(intent.taskType == "document_form_fill")
         #expect(intent.targetApp.appName == "Preview")
@@ -51,8 +118,8 @@ struct LocalAppTaskTests {
     }
 
     @Test
-    func deterministicParserRequestsConfirmationForMissingRequiredEntity() throws {
-        let intent = try #require(parser().parse("show me the weather"))
+    func modelIntentCanRequestConfirmationForMissingRequiredEntity() throws {
+        let intent = weatherIntent(rawCity: "", city: "", needsConfirmation: true)
 
         #expect(intent.taskType == "weather_lookup")
         #expect(intent.intentID == "weather_lookup-needs-city")
@@ -61,13 +128,16 @@ struct LocalAppTaskTests {
     }
 
     @Test
-    func deterministicParserIgnoresUnsupportedCommands() {
-        #expect(parser().parse("open my calendar") == nil)
+    func catalogResolveCommandDoesNotParseWordsFromUserText() {
+        let resolution = catalog().resolve(command: "open my calendar")
+
+        #expect(resolution.status == .unsupportedCommand)
+        #expect(resolution.metadata["reason"] == "modelIntentRequired")
     }
 
     @Test
     func genericAdapterBuildsLocalNavigationRequestForTargetApp() throws {
-        let intent = try #require(parser().parse("weather in San Francisco"))
+        let intent = weatherIntent(rawCity: "San Francisco", city: "San Francisco")
         let request = try #require(adapter().localNavigationFrameRequest(
             for: intent,
             traceID: "trace-local-app-task",
@@ -83,7 +153,7 @@ struct LocalAppTaskTests {
 
     @Test
     func genericAdapterProjectsDryRunStepsAndGuardedKeyboardTemplates() throws {
-        let intent = try #require(parser().parse("show me the weather for SF"))
+        let intent = weatherIntent(rawCity: "SF", city: "San Francisco")
         let localAdapter = adapter()
 
         let plan = localAdapter.dryRunPlan(for: intent)
@@ -119,7 +189,7 @@ struct LocalAppTaskTests {
 
     @Test
     func genericAdapterVerifiesObservedVisibleText() throws {
-        let intent = try #require(parser().parse("weather for SF"))
+        let intent = weatherIntent(rawCity: "SF", city: "San Francisco")
         let localAdapter = adapter()
         let plan = localAdapter.dryRunPlan(
             for: intent,
@@ -140,9 +210,87 @@ struct LocalAppTaskTests {
     }
 
     @Test
-    func catalogResolvesCommandAgainstAvailableInstalledAppDefinition() throws {
+    func appOpenAdapterVerifiesFocusedApp() throws {
         let catalog = LocalAppTaskCatalog(
-            taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
+            taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
+            availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.Music"])
+        )
+        let resolution = catalog.resolve(intent: TaskIntent(
+            intentID: "app_open-music",
+            taskType: "app_open",
+            targetApp: LocalAppTarget(appName: "Local Item", metadata: ["dynamicTarget": "true"]),
+            entities: ["appName": "music"],
+            normalizedEntities: ["appName": "Music"],
+            confidence: 0.9,
+            parserSource: .localModel
+        ))
+        let intent = try #require(resolution.intent)
+        let definition = try #require(resolution.definition)
+        let localAdapter = LocalAppTaskAdapter(definition: definition)
+        let plan = localAdapter.dryRunPlan(
+            for: intent,
+            observation: LocalAppTaskObservation(
+                appIsRunning: true,
+                appIsFocused: true,
+                confidence: 0.72
+            )
+        )
+
+        #expect(plan.terminalState == .completed)
+        #expect(plan.verificationConfidence == 0.8)
+        #expect(plan.steps.first(where: { $0.role == .verifyResult })?.status == .verified)
+    }
+
+    @Test
+    func mediaPlaybackAdapterPlaysFirstSearchResultAndDoesNotRequireVisibleText() throws {
+        let intent = mediaPlaybackIntent(rawQuery: "justin bieber", query: "justin bieber")
+        let localAdapter = LocalAppTaskAdapter(definition: BuiltInLocalAppTaskDefinitions.mediaPlayback)
+        let plan = localAdapter.dryRunPlan(
+            for: intent,
+            observation: LocalAppTaskObservation(
+                appIsRunning: true,
+                appIsFocused: true,
+                availableControls: ["search": true],
+                visibleText: [:],
+                confidence: 0.68
+            )
+        )
+
+        #expect(plan.terminalState == .completed)
+        #expect(plan.metadata["defaultOSInputBackend"] == "mac-apple-script")
+        #expect(plan.metadata["automationBackend"] == "appleScript")
+        #expect(plan.steps.map(\.role) == [
+            .parseIntent,
+            .launchOrFocusApp,
+            .observeApp,
+            .focusControl,
+            .enterText,
+            .submit,
+            .submit,
+            .verifyResult
+        ])
+        #expect(plan.steps.first(where: { $0.role == .verifyResult })?.summary == "Command was sent to Music")
+
+        let commands = localAdapter.guardedKeyboardCommandTemplates(
+            for: intent,
+            issuedAt: timestamp(100)
+        )
+        #expect(commands.map(\.key) == ["Command+F", "justin bieber", "Return", "Return"])
+
+        let automationCommands = localAdapter.guardedAutomationCommandTemplates(
+            for: intent,
+            issuedAt: timestamp(100)
+        )
+        #expect(automationCommands.map(\.kind) == [.controller])
+        #expect(automationCommands.first?.key == "justin bieber")
+        #expect(automationCommands.first?.metadata["automationBackend"] == "appleScript")
+        #expect(automationCommands.first?.metadata["appleScript.action"] == "music.playMediaQuery")
+    }
+
+    @Test
+    func catalogResolvesStructuredIntentAgainstAvailableInstalledAppDefinition() throws {
+        let catalog = LocalAppTaskCatalog(
+            taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
             availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: [
                 "com.apple.weather",
                 "com.apple.Music",
@@ -150,7 +298,7 @@ struct LocalAppTaskTests {
             ])
         )
 
-        let resolution = catalog.resolve(command: "show me the weather for SF")
+        let resolution = catalog.resolve(intent: weatherIntent(rawCity: "SF", city: "San Francisco"))
 
         #expect(resolution.status == .resolved)
         #expect(resolution.intent?.normalizedEntities["city"] == "San Francisco")
@@ -163,11 +311,11 @@ struct LocalAppTaskTests {
         let plan = catalog.adapter(for: definition).dryRunPlan(for: intent)
         #expect(plan.steps.map(\.role).contains(.verifyResult))
 
-        let mediaResolution = catalog.resolve(command: "play Coldplay")
+        let mediaResolution = catalog.resolve(intent: mediaPlaybackIntent(rawQuery: "Coldplay", query: "Coldplay"))
         #expect(mediaResolution.status == .resolved)
         #expect(mediaResolution.definition?.taskType == "media_playback")
 
-        let documentResolution = catalog.resolve(command: "fill out this PDF using this data")
+        let documentResolution = catalog.resolve(intent: documentFormFillIntent())
         #expect(documentResolution.status == .resolved)
         #expect(documentResolution.definition?.taskType == "document_form_fill")
     }
@@ -175,17 +323,27 @@ struct LocalAppTaskTests {
     @Test
     func catalogSeparatesUnsupportedMissingEntityAndUnavailableApp() {
         let availableCatalog = LocalAppTaskCatalog(
-            taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
+            taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
             availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.weather"])
         )
-        #expect(availableCatalog.resolve(command: "open my calendar").status == .unsupportedCommand)
-        #expect(availableCatalog.resolve(command: "show me the weather").status == .needsConfirmation)
+        let unavailableAppResolution = availableCatalog.resolve(intent: TaskIntent(
+            intentID: "app_open-missing",
+            taskType: "app_open",
+            targetApp: LocalAppTarget(appName: "Local Item", metadata: ["dynamicTarget": "true"]),
+            entities: ["appName": "an app that does not exist"],
+            normalizedEntities: ["appName": "An App That Does Not Exist"],
+            confidence: 0.86,
+            parserSource: .localModel
+        ))
+        #expect(unavailableAppResolution.status == .appUnavailable)
+        #expect(unavailableAppResolution.metadata["reason"] == "targetAppUnavailable")
+        #expect(availableCatalog.resolve(intent: weatherIntent(rawCity: "", city: "", needsConfirmation: true)).status == .needsConfirmation)
 
         let unavailableCatalog = LocalAppTaskCatalog(
-            taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
+            taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
             availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: [])
         )
-        #expect(unavailableCatalog.resolve(command: "show me the weather for SF").status == .appUnavailable)
+        #expect(unavailableCatalog.resolve(intent: weatherIntent(rawCity: "SF", city: "San Francisco")).status == .appUnavailable)
     }
 
     @Test
@@ -198,12 +356,10 @@ struct LocalAppTaskTests {
         let definition = LocalAppTaskDefinition(
             taskType: "notes_capture",
             targetApp: LocalAppTarget(appName: "Notes", bundleIdentifier: "com.apple.Notes"),
-            triggerTerms: ["note", "remember"],
+            triggerTerms: [],
             entityRules: [
                 LocalAppTaskEntityRule(
-                    name: "note",
-                    markers: ["note", "remember"],
-                    metadata: ["capture": "afterTrigger"]
+                    name: "note"
                 )
             ],
             workflowSteps: [
@@ -219,21 +375,52 @@ struct LocalAppTaskTests {
         let fileURL = directoryURL.appendingPathComponent("notes.json")
         try JSONEncoder().encode(definition).write(to: fileURL)
 
-        let definitions = try LocalAppTaskDefinitionLoader().mergedWithBuiltIns(from: directoryURL)
+        let cacheURL = temporaryCacheURL()
+        defer { try? FileManager.default.removeItem(at: cacheURL.deletingLastPathComponent()) }
+        let cache = LocalItemResolutionCache(storeURL: cacheURL)
+        let definitions = try LocalAppTaskDefinitionLoader(cache: cache).cachedDefinitions(from: directoryURL)
         let loaded = try #require(definitions.first(where: { $0.taskType == "notes_capture" }))
         #expect(loaded.targetApp.bundleIdentifier == "com.apple.Notes")
         #expect(loaded.metadata["source"] == "test-json")
+        #expect(cache.taskDefinitions().map(\.taskType).contains("notes_capture"))
 
         let catalog = LocalAppTaskCatalog(
             taskDefinitions: definitions,
             availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.Notes"])
         )
-        #expect(catalog.resolve(command: "remember buy milk").status == .resolved)
+        #expect(catalog.resolve(intent: TaskIntent(
+            intentID: "notes_capture-buy-milk",
+            taskType: "notes_capture",
+            targetApp: LocalAppTarget(appName: "Notes", bundleIdentifier: "com.apple.Notes"),
+            entities: ["note": "buy milk"],
+            normalizedEntities: ["note": "buy milk"],
+            confidence: 0.9,
+            parserSource: .localModel
+        )).status == .resolved)
+    }
+
+    @Test
+    func defaultLocalCatalogLoadsRuntimeDefinitionsFromCache() {
+        let cacheURL = temporaryCacheURL()
+        defer { try? FileManager.default.removeItem(at: cacheURL.deletingLastPathComponent()) }
+        let cache = LocalItemResolutionCache(storeURL: cacheURL)
+        let loader = LocalAppTaskDefinitionLoader(cache: cache)
+
+        let catalog = LocalAppTaskCatalog.defaultLocal(
+            availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: []),
+            loader: loader
+        )
+
+        #expect(catalog.taskDefinitions.map(\.taskType) == ["app_open"])
+        #expect(cache.taskDefinitions().map(\.taskType) == ["app_open"])
+        #expect(catalog.taskDefinitions.contains { $0.targetApp.appName == "Weather" } == false)
+        #expect(catalog.taskDefinitions.contains { $0.targetApp.appName == "Music" } == false)
+        #expect(catalog.taskDefinitions.contains { $0.targetApp.appName == "Preview" } == false)
     }
 
     @Test
     func documentFormFillPlannerMapsStructuredDataToObservedFieldsForReview() throws {
-        let intent = try #require(parser().parse("fill out this PDF using this data"))
+        let intent = documentFormFillIntent()
         let context = LocalAppTaskContext(
             focusedAppName: "Preview",
             focusedBundleIdentifier: "com.apple.Preview",
@@ -262,7 +449,7 @@ struct LocalAppTaskTests {
 
     @Test
     func documentFormFillApprovalBuildsOnlyApprovedAccessibilityCommands() throws {
-        let intent = try #require(parser().parse("fill out this PDF using this data"))
+        let intent = documentFormFillIntent()
         let context = LocalAppTaskContext(
             focusedWindowTitle: "W-9.pdf",
             structuredData: [
@@ -356,7 +543,7 @@ struct LocalAppTaskTests {
     @Test @MainActor
     func liveRunnerReturnsReviewPlanForDocumentFormFillWithoutExecutingInput() async throws {
         let catalog = LocalAppTaskCatalog(
-            taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
+            taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
             availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.Preview"])
         )
         let context = LocalAppTaskContext(
@@ -372,10 +559,13 @@ struct LocalAppTaskTests {
             catalog: catalog,
             contextProvider: StaticLocalAppTaskContextProvider(context: context)
         )
+        let intent = documentFormFillIntent()
 
         let result = await runner.run(
             command: "fill out this PDF using this data",
-            traceID: "trace-document-fill"
+            traceID: "trace-document-fill",
+            resolution: catalog.resolve(intent: intent),
+            metadata: ["intentParser": "test-model"]
         )
 
         #expect(result.status == .needsUserReview)
@@ -406,7 +596,7 @@ struct LocalAppTaskTests {
             )
         )
         let catalog = LocalAppTaskCatalog(
-            taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
+            taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
             availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.weather"])
         )
         let runner = LocalAppTaskLiveRunner(
@@ -420,8 +610,14 @@ struct LocalAppTaskTests {
             },
             permissionPolicy: ToolCallPolicy(deniedCapabilities: [])
         )
+        let intent = weatherIntent(rawCity: "SF", city: "San Francisco")
 
-        let result = await runner.run(command: "show me the weather for SF", traceID: "trace-live-task")
+        let result = await runner.run(
+            command: "show me the weather for SF",
+            traceID: "trace-live-task",
+            resolution: catalog.resolve(intent: intent),
+            metadata: ["intentParser": "test-model"]
+        )
 
         #expect(result.status == .completed)
         #expect(result.finalPlan?.terminalState == .completed)
@@ -437,6 +633,57 @@ struct LocalAppTaskTests {
         #expect(result.workflowProgress.state(for: .execute)?.status == .completed)
         #expect(result.workflowProgress.state(for: .verify)?.status == .completed)
         #expect(result.metadata["workflow.verify.status"] == "completed")
+    }
+
+    @Test @MainActor
+    func liveRunnerUsesAppleScriptAutomationForMediaPlayback() async throws {
+        let backend = RecordingLocalAppTaskInputBackend()
+        let controller = FakeLocalAppTaskAppController(
+            launchObservation: LocalAppTaskObservation(
+                appIsRunning: true,
+                appIsFocused: true,
+                availableControls: ["search": true],
+                confidence: 0.5
+            ),
+            finalObservation: LocalAppTaskObservation(
+                appIsRunning: true,
+                appIsFocused: true,
+                availableControls: ["search": true],
+                visibleText: [:],
+                confidence: 0.72
+            )
+        )
+        let catalog = LocalAppTaskCatalog(
+            taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
+            availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.Music"])
+        )
+        let runner = LocalAppTaskLiveRunner(
+            catalog: catalog,
+            appController: controller,
+            actionEngineFactory: { _ in
+                ActionEngineGuardrail(
+                    configuration: ActionEngineConfiguration(liveInputEnabled: true),
+                    inputBackend: backend
+                )
+            },
+            permissionPolicy: ToolCallPolicy(deniedCapabilities: [])
+        )
+        let intent = mediaPlaybackIntent(rawQuery: "justin bieber", query: "justin bieber")
+
+        let result = await runner.run(
+            command: "play justin bieber",
+            traceID: "trace-live-media",
+            resolution: catalog.resolve(intent: intent),
+            metadata: ["intentParser": "test-model"]
+        )
+
+        #expect(result.status == .completed)
+        #expect(result.actionTraces.map(\.command.kind) == [.controller])
+        #expect(await backend.executedKeys() == ["justin bieber"])
+        #expect(result.metadata["automation.backend"] == "appleScript")
+        #expect(result.metadata["automation.action"] == "music.playMediaQuery")
+        #expect(result.workflowProgress.state(for: .execute)?.status == .completed)
+        #expect(result.workflowProgress.state(for: .verify)?.status == .completed)
     }
 
     @Test @MainActor
@@ -459,7 +706,7 @@ struct LocalAppTaskTests {
         )
         let coordinator = RunCoordinator()
         let catalog = LocalAppTaskCatalog(
-            taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
+            taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
             availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.weather"])
         )
         let runner = LocalAppTaskLiveRunner(
@@ -474,8 +721,14 @@ struct LocalAppTaskTests {
             permissionPolicy: ToolCallPolicy(deniedCapabilities: []),
             coordinator: coordinator
         )
+        let intent = weatherIntent(rawCity: "SF", city: "San Francisco")
 
-        let result = await runner.run(command: "show me the weather for SF", traceID: "trace-live-task-events")
+        let result = await runner.run(
+            command: "show me the weather for SF",
+            traceID: "trace-live-task-events",
+            resolution: catalog.resolve(intent: intent),
+            metadata: ["intentParser": "test-model"]
+        )
         let events = await coordinator.events()
 
         #expect(result.status == .completed)
@@ -509,6 +762,34 @@ struct LocalAppTaskTests {
                 availableControls: [:],
                 visibleText: [:],
                 confidence: 0.4
+            ),
+            verificationKey: "city"
+        ) == true)
+
+        var neverFallback = definition
+        neverFallback.metadata["screenshotFallback"] = "never"
+        #expect(LocalAppTaskObservationFallbackPolicy.shouldUseScreenshotUnderstanding(
+            definition: neverFallback,
+            accessibilityObservation: LocalAppTaskObservation(
+                appIsRunning: true,
+                appIsFocused: true,
+                availableControls: [:],
+                visibleText: [:],
+                confidence: 0.4
+            ),
+            verificationKey: "city"
+        ) == false)
+
+        var controlFallback = definition
+        controlFallback.metadata["screenshotFallback"] = "missingControls"
+        #expect(LocalAppTaskObservationFallbackPolicy.shouldUseScreenshotUnderstanding(
+            definition: controlFallback,
+            accessibilityObservation: LocalAppTaskObservation(
+                appIsRunning: true,
+                appIsFocused: true,
+                availableControls: [:],
+                visibleText: ["city": "San Francisco"],
+                confidence: 0.7
             ),
             verificationKey: "city"
         ) == true)
@@ -566,12 +847,81 @@ struct LocalAppTaskTests {
         #expect(controller.launchCount == 1)
     }
 
-    private func parser() -> LocalAppTaskIntentParser {
-        LocalAppTaskIntentParser(taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults)
+    private func catalog() -> LocalAppTaskCatalog {
+        LocalAppTaskCatalog(
+            taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
+            availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: [])
+        )
+    }
+
+    private func weatherIntent(
+        rawCity: String,
+        city: String,
+        confidence: Double = 0.93,
+        needsConfirmation: Bool = false
+    ) -> TaskIntent {
+        let definition = BuiltInLocalAppTaskDefinitions.weatherLookup
+        return TaskIntent(
+            intentID: needsConfirmation ? "weather_lookup-needs-city" : "weather_lookup-\(slug(city))",
+            taskType: definition.taskType,
+            targetApp: definition.targetApp,
+            entities: rawCity.isEmpty ? [:] : ["city": rawCity],
+            normalizedEntities: city.isEmpty ? [:] : ["city": city],
+            confidence: confidence,
+            parserSource: .localModel,
+            needsConfirmation: needsConfirmation,
+            metadata: definition.metadata.merging(
+                needsConfirmation ? ["missingEntity": "city"] : [:]
+            ) { current, _ in current }
+        )
+    }
+
+    private func mediaPlaybackIntent(
+        rawQuery: String,
+        query: String,
+        confidence: Double = 0.93
+    ) -> TaskIntent {
+        let definition = BuiltInLocalAppTaskDefinitions.mediaPlayback
+        return TaskIntent(
+            intentID: "media_playback-\(slug(query))",
+            taskType: definition.taskType,
+            targetApp: definition.targetApp,
+            entities: ["query": rawQuery],
+            normalizedEntities: ["query": query],
+            confidence: confidence,
+            parserSource: .localModel,
+            metadata: definition.metadata
+        )
+    }
+
+    private func documentFormFillIntent(confidence: Double = 0.9) -> TaskIntent {
+        let definition = BuiltInLocalAppTaskDefinitions.documentFormFill
+        return TaskIntent(
+            intentID: "document_form_fill-current-pdf",
+            taskType: definition.taskType,
+            targetApp: definition.targetApp,
+            entities: [
+                "document": "this PDF",
+                "dataSource": "this data"
+            ],
+            normalizedEntities: [
+                "document": "current PDF",
+                "dataSource": "provided data"
+            ],
+            confidence: confidence,
+            parserSource: .localModel,
+            metadata: definition.metadata
+        )
     }
 
     private func adapter() -> LocalAppTaskAdapter {
         LocalAppTaskAdapter(definition: BuiltInLocalAppTaskDefinitions.weatherLookup)
+    }
+
+    private func slug(_ value: String) -> String {
+        LocalAppTaskIntentParser.normalizedPhrase(value)
+            .split(separator: " ")
+            .joined(separator: "-")
     }
 
     private func timestamp(_ milliseconds: UInt64) -> RunTraceTimestamp {
@@ -579,6 +929,12 @@ struct LocalAppTaskTests {
             wallClock: Date(timeIntervalSince1970: Double(milliseconds) / 1_000),
             monotonicUptimeNanoseconds: milliseconds * 1_000_000
         )
+    }
+
+    private func temporaryCacheURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("donkey-task-cache-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("cache.jsonl")
     }
 }
 

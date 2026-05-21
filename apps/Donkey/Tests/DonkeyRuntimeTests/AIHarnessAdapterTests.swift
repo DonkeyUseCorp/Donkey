@@ -351,7 +351,7 @@ struct AIHarnessAdapterTests {
         let result = await adapter.parseTaskIntent(
             TaskIntentAdapterRequest(
                 command: "show me the weather for SF",
-                taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
+                taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
                 sourceTraceID: "trace-intent"
             )
         )
@@ -401,7 +401,7 @@ struct AIHarnessAdapterTests {
         let result = await adapter.parseTaskIntent(
             TaskIntentAdapterRequest(
                 command: "play cold play",
-                taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
+                taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
                 sourceTraceID: "trace-local-llm"
             )
         )
@@ -427,7 +427,7 @@ struct AIHarnessAdapterTests {
         )
         let resolver = LocalModelTaskIntentResolver(
             catalog: LocalAppTaskCatalog(
-                taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
+                taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
                 availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.weather"])
             ),
             adapter: OllamaTaskIntentAdapter(
@@ -461,10 +461,59 @@ struct AIHarnessAdapterTests {
     }
 
     @Test
-    func localModelTaskIntentResolverFallsBackToDeterministicParserWhenRuntimeUnavailable() async {
+    func localModelTaskIntentResolverResolvesDynamicLocalItemLookup() async {
+        let httpClient = FakeAIHTTPClient(
+            data: ollamaResponseData(
+                response: """
+                {"taskType":"app_open","targetAppName":"Figma","entities":{"appName":"figma"},"normalizedEntities":{"appName":"Figma"},"confidence":0.94,"needsConfirmation":false,"metadata":{}}
+                """
+            ),
+            statusCode: 200
+        )
         let resolver = LocalModelTaskIntentResolver(
             catalog: LocalAppTaskCatalog(
-                taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
+                taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
+                availabilityProvider: StaticLocalAppAvailabilityProvider(
+                    installedBundleIdentifiers: ["com.figma.Desktop"],
+                    installedApplicationNames: ["Figma": "com.figma.Desktop"]
+                )
+            ),
+            adapter: OllamaTaskIntentAdapter(
+                router: AIModelRouter(
+                    registry: AIModelRegistry(
+                        entries: [
+                            entry(
+                                id: "local-intent",
+                                role: .taskIntent,
+                                provider: .ollama,
+                                modelID: "qwen3:8b",
+                                endpoint: URL(string: "http://127.0.0.1:11434/api/generate")!,
+                                promptVersion: "task-intent-v1"
+                            )
+                        ]
+                    )
+                ),
+                httpClient: httpClient
+            )
+        )
+
+        let result = await resolver.resolve(
+            command: "open figma",
+            sourceTraceID: "trace-resolve-local-item"
+        )
+
+        #expect(result.resolution.status == .resolved)
+        #expect(result.resolution.definition?.taskType == "app_open")
+        #expect(result.resolution.intent?.targetApp.appName == "Figma")
+        #expect(result.resolution.intent?.normalizedEntities["appName"] == "Figma")
+        #expect(result.resolution.metadata["lookupProvider"] == "static")
+    }
+
+    @Test
+    func localModelTaskIntentResolverDoesNotParseCommandTextWhenRuntimeUnavailable() async {
+        let resolver = LocalModelTaskIntentResolver(
+            catalog: LocalAppTaskCatalog(
+                taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
                 availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.weather"])
             ),
             adapter: UnavailableTaskIntentAdapter()
@@ -475,18 +524,19 @@ struct AIHarnessAdapterTests {
             sourceTraceID: "trace-resolve-fallback"
         )
 
-        #expect(result.resolution.status == .resolved)
-        #expect(result.resolution.intent?.parserSource == .deterministic)
-        #expect(result.resolution.intent?.normalizedEntities["city"] == "San Francisco")
-        #expect(result.trace.validationStatus == "deterministicFallback")
-        #expect(result.trace.metadata["fallback.reason"] == "localModelIntentUnavailable")
+        #expect(result.resolution.status == .needsConfirmation)
+        #expect(result.resolution.intent == nil)
+        #expect(result.resolution.metadata["reason"] == "localModelIntentUnavailable")
+        #expect(result.resolution.metadata["modelCallStatus"] == "providerOutage")
+        #expect(result.trace.validationStatus == "notValidated")
+        #expect(result.trace.metadata["fallback.reason"] == nil)
     }
 
     @Test
     func localModelTaskIntentResolverAsksForDetailsInsteadOfUnsupportedWhenRuntimeUnavailable() async {
         let resolver = LocalModelTaskIntentResolver(
             catalog: LocalAppTaskCatalog(
-                taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
+                taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
                 availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.weather"])
             ),
             adapter: UnavailableTaskIntentAdapter()
@@ -514,7 +564,7 @@ struct AIHarnessAdapterTests {
         )
         let resolver = LocalModelTaskIntentResolver(
             catalog: LocalAppTaskCatalog(
-                taskDefinitions: BuiltInLocalAppTaskDefinitions.defaults,
+                taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
                 availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.weather"])
             ),
             adapter: OllamaTaskIntentAdapter(

@@ -316,13 +316,12 @@ public struct OllamaTaskIntentAdapter: TaskIntentParsingAdapter {
         entry: AIModelRegistryEntry,
         adapterRequest: TaskIntentAdapterRequest
     ) -> [String: Any] {
-        [
+        return [
             "model": entry.modelID,
             "prompt": promptText(for: adapterRequest),
             "stream": false,
             "format": TaskIntentWireCodec.jsonSchema(
-                taskTypes: adapterRequest.taskDefinitions.map(\.taskType),
-                appNames: adapterRequest.taskDefinitions.map(\.targetApp.appName)
+                taskDefinitions: adapterRequest.taskDefinitions
             ),
             "options": [
                 "num_ctx": 2048,
@@ -337,21 +336,30 @@ public struct OllamaTaskIntentAdapter: TaskIntentParsingAdapter {
     private func promptText(for request: TaskIntentAdapterRequest) -> String {
         let tasks = request.taskDefinitions.map { definition in
             let entities = definition.entityRules.map { rule in
-                "\(rule.name) required=\(rule.required) aliases=\(rule.aliases.keys.sorted().joined(separator: ","))"
+                "\(rule.name) required=\(rule.required)"
             }
             .joined(separator: "; ")
             let workflow = definition.workflowSteps
                 .filter { $0.role != .parseIntent }
                 .map(\.summary)
                 .joined(separator: " -> ")
+            let automation = [
+                definition.metadata["automationBackend"].map { "automation_backend=\($0)" },
+                definition.metadata["appleScript.action"].map { "apple_script_action=\($0)" },
+                definition.metadata["appleScript.entityName"].map { "apple_script_entity=\($0)" }
+            ]
+            .compactMap(\.self)
+            .joined(separator: " | ")
 
             return [
                 "task_type=\(definition.taskType)",
                 "app=\(definition.targetApp.appName)",
                 "bundle=\(definition.targetApp.bundleIdentifier ?? "unknown")",
                 "capability=\(workflow)",
-                "entities=\(entities)"
+                "entities=\(entities)",
+                automation
             ]
+            .filter { !$0.isEmpty }
             .joined(separator: " | ")
         }
         .joined(separator: "\n")
@@ -363,6 +371,8 @@ public struct OllamaTaskIntentAdapter: TaskIntentParsingAdapter {
             "Use only the provided task definitions. Do not invent apps, task types, entities, or actions.",
             "If no capability fits, return the closest supported task with confidence below 0.55.",
             "If a required entity is missing, set needsConfirmation=true and include missingEntity in metadata.",
+            "For dynamic local-item capabilities, extract the requested local app/file/folder name into entities.appName and normalizedEntities.appName. Use targetAppName for the resolved item name when you know it.",
+            "For AppleScript-backed capabilities, include compact appleScript.source or appleScript.template metadata only when the provided action is insufficient; prefer task metadata and normalized entities for speed.",
             "Command: \(request.command)",
             "Supported task capabilities:",
             tasks
@@ -443,14 +453,6 @@ public struct LocalModelTaskIntentResolver: Sendable {
         )
 
         guard let intent = result.intent else {
-            if let fallbackIntent = LocalAppTaskIntentParser(taskDefinitions: catalog.taskDefinitions).parse(command) {
-                var fallbackTrace = result.trace
-                fallbackTrace.validationStatus = "deterministicFallback"
-                fallbackTrace.metadata["fallback.parser"] = "local-app-task-deterministic-v1"
-                fallbackTrace.metadata["fallback.reason"] = "localModelIntentUnavailable"
-                return (catalog.resolve(intent: fallbackIntent), fallbackTrace)
-            }
-
             return (
                 LocalAppTaskCatalogResolution(
                     status: .needsConfirmation,
@@ -472,8 +474,15 @@ private struct OllamaTaskIntentResponse: Decodable {
 }
 
 private enum TaskIntentWireCodec {
-    static func jsonSchema(taskTypes: [String], appNames: [String]) -> [String: Any] {
-        [
+    static func jsonSchema(taskDefinitions: [LocalAppTaskDefinition]) -> [String: Any] {
+        let allowsDynamicTargets = taskDefinitions.contains { definition in
+            definition.metadata["dynamicTarget"] == "true"
+        }
+        let targetAppNameSchema: [String: Any] = allowsDynamicTargets
+            ? ["type": "string"]
+            : ["type": "string", "enum": Array(Set(taskDefinitions.map(\.targetApp.appName))).sorted()]
+
+        return [
             "type": "object",
             "additionalProperties": false,
             "required": [
@@ -486,8 +495,8 @@ private enum TaskIntentWireCodec {
                 "metadata"
             ],
             "properties": [
-                "taskType": ["type": "string", "enum": Array(Set(taskTypes)).sorted()],
-                "targetAppName": ["type": "string", "enum": Array(Set(appNames)).sorted()],
+                "taskType": ["type": "string", "enum": Array(Set(taskDefinitions.map(\.taskType))).sorted()],
+                "targetAppName": targetAppNameSchema,
                 "entities": [
                     "type": "object",
                     "additionalProperties": ["type": "string"]
@@ -514,18 +523,32 @@ private enum TaskIntentWireCodec {
     ) throws -> TaskIntent? {
         let data = Data(outputText.utf8)
         let wire = try JSONDecoder().decode(TaskIntentWire.self, from: data)
-        guard let definition = definitions.first(where: {
+        let exactDefinition = definitions.first(where: {
             $0.taskType == wire.taskType && $0.targetApp.appName == wire.targetAppName
-        }) else {
+        })
+        let dynamicDefinition = definitions.first(where: {
+            $0.taskType == wire.taskType && $0.metadata["dynamicTarget"] == "true"
+        })
+        guard let definition = exactDefinition ?? dynamicDefinition else {
             return nil
         }
 
-        let normalizedEntities = normalizedEntities(from: wire, definition: definition)
+        var entities = wire.entities
+        var normalizedEntities = normalizedEntities(from: wire, definition: definition)
+        if definition.metadata["dynamicTarget"] == "true",
+           normalizedEntities["appName"] == nil,
+           wire.targetAppName != definition.targetApp.appName {
+            entities["appName"] = wire.targetAppName
+            normalizedEntities["appName"] = wire.targetAppName
+        }
         let missingRequiredEntity = definition.entityRules.first { rule in
             rule.required && normalizedEntities[rule.name] == nil
         }
         var metadata = wire.metadata.merging(definition.metadata) { current, _ in current }
         metadata["parser"] = parserName
+        if definition.metadata["dynamicTarget"] == "true" {
+            metadata["requestedItemName"] = normalizedEntities["appName"] ?? entities["appName"] ?? ""
+        }
         if let missingRequiredEntity {
             metadata["missingEntity"] = missingRequiredEntity.name
         }
@@ -541,8 +564,8 @@ private enum TaskIntentWireCodec {
                 ? "\(definition.taskType)-needs-\(missingRequiredEntity?.name ?? "confirmation")"
                 : "\(definition.taskType)-\(slug(primaryEntity))",
             taskType: definition.taskType,
-            targetApp: definition.targetApp,
-            entities: wire.entities,
+            targetApp: targetApp(from: wire, definition: definition),
+            entities: entities,
             normalizedEntities: normalizedEntities,
             confidence: wire.confidence,
             parserSource: .localModel,
@@ -564,6 +587,23 @@ private enum TaskIntentWireCodec {
             }
         }
         return normalized
+    }
+
+    private static func targetApp(
+        from wire: TaskIntentWire,
+        definition: LocalAppTaskDefinition
+    ) -> LocalAppTarget {
+        guard definition.metadata["dynamicTarget"] == "true",
+              wire.targetAppName != definition.targetApp.appName else {
+            return definition.targetApp
+        }
+
+        return LocalAppTarget(
+            appName: wire.targetAppName,
+            bundleIdentifier: nil,
+            titleContains: wire.targetAppName,
+            metadata: definition.targetApp.metadata
+        )
     }
 
     private static func slug(_ value: String) -> String {

@@ -103,7 +103,7 @@ public struct LocalAppTaskLiveRunner: Sendable {
             command: command,
             traceID: traceID,
             resolution: catalog.resolve(command: command),
-            metadata: ["intentParser": "deterministic"]
+            metadata: ["intentParser": "externalRequired"]
         )
     }
 
@@ -351,39 +351,75 @@ public struct LocalAppTaskLiveRunner: Sendable {
             summary: "Dry-run plan allows guarded live execution",
             metadata: ["terminalState": initialPlan.terminalState.rawValue]
         )
+        if LocalAppTaskVerificationPolicy.mode(for: definition) == .openedLocalItem,
+           initialPlan.terminalState == .completed {
+            stepTracker.skip(.approval, summary: "No review gate required for opened local item")
+            stepTracker.skip(.execute, summary: "Local item was opened through NSWorkspace")
+            stepTracker.complete(
+                .verify,
+                summary: "Local item open request confirmed",
+                metadata: ["terminalState": initialPlan.terminalState.rawValue]
+            )
+            await coordinator?.complete(reason: "Local item opened")
+            let progress = stepTracker.snapshot()
+            return LocalAppTaskLiveRunResult(
+                command: command,
+                traceID: traceID,
+                status: .completed,
+                resolution: resolution,
+                initialPlan: initialPlan,
+                finalPlan: initialPlan,
+                observation: launchObservation,
+                workflowProgress: progress,
+                metadata: runMetadata.merging([
+                    "reason": "openedLocalItem",
+                    "latency.totalMS": Self.formatLatency(Self.uptimeMilliseconds() - runStartedAt)
+                ], uniquingKeysWith: { current, _ in current }).merging(
+                    Self.workflowProgressMetadata(progress),
+                    uniquingKeysWith: { current, _ in current }
+                )
+            )
+        }
         stepTracker.skip(.approval, summary: "No review gate required for this local-app task")
 
         var actionTraces: [ActionEngineCommandTrace] = []
-        var accessibilityActionMS = 0.0
-        let accessibilityCommands = await accessibilityCommandTemplates(
-            intent: intent,
-            definition: definition
+        let automationCommands = adapter.guardedAutomationCommandTemplates(
+            for: intent,
+            issuedAt: Self.now()
         )
-        if !accessibilityCommands.isEmpty {
-            let accessibilityEngine = Self.accessibilityActionEngine(for: definition)
-            for (index, actionCommand) in accessibilityCommands.enumerated() {
-                await coordinator?.waitIfPaused()
-                let spacedCommand = actionCommand.withIssuedAt(Self.now(advancedByMilliseconds: Double(index) * 60))
-                let actionStartedAt = Self.uptimeMilliseconds()
-                await coordinator?.recordToolEvent(
-                    capability: .accessibility,
-                    decision: permissionPolicy.decision(for: .accessibility),
-                    toolName: "mac-accessibility-action-engine",
-                    summary: "Executing guarded Accessibility command",
-                    traceID: traceID,
-                    metadata: [
-                        "commandID": spacedCommand.id,
-                        "workflowStepID": spacedCommand.metadata["workflowStepID"] ?? ""
-                    ]
-                )
-                let trace = await accessibilityEngine.handle(
-                    spacedCommand,
-                    permissionPolicy: permissionPolicy
-                )
-                accessibilityActionMS += Self.uptimeMilliseconds() - actionStartedAt
-                actionTraces.append(trace)
-                guard trace.executed || trace.decision == .projectedDryRun else {
-                    break
+        let usesAutomationBackend = !automationCommands.isEmpty
+        var accessibilityActionMS = 0.0
+        if !usesAutomationBackend {
+            let accessibilityCommands = await accessibilityCommandTemplates(
+                intent: intent,
+                definition: definition
+            )
+            if !accessibilityCommands.isEmpty {
+                let accessibilityEngine = Self.accessibilityActionEngine(for: definition)
+                for (index, actionCommand) in accessibilityCommands.enumerated() {
+                    await coordinator?.waitIfPaused()
+                    let spacedCommand = actionCommand.withIssuedAt(Self.now(advancedByMilliseconds: Double(index) * 60))
+                    let actionStartedAt = Self.uptimeMilliseconds()
+                    await coordinator?.recordToolEvent(
+                        capability: .accessibility,
+                        decision: permissionPolicy.decision(for: .accessibility),
+                        toolName: "mac-accessibility-action-engine",
+                        summary: "Executing guarded Accessibility command",
+                        traceID: traceID,
+                        metadata: [
+                            "commandID": spacedCommand.id,
+                            "workflowStepID": spacedCommand.metadata["workflowStepID"] ?? ""
+                        ]
+                    )
+                    let trace = await accessibilityEngine.handle(
+                        spacedCommand,
+                        permissionPolicy: permissionPolicy
+                    )
+                    accessibilityActionMS += Self.uptimeMilliseconds() - actionStartedAt
+                    actionTraces.append(trace)
+                    guard trace.executed || trace.decision == .projectedDryRun else {
+                        break
+                    }
                 }
             }
         }
@@ -395,13 +431,15 @@ public struct LocalAppTaskLiveRunner: Sendable {
             return workflowStepID(from: trace.command)
         })
         runMetadata["accessibilityHandledStepIDs"] = accessibilityHandledStepIDs.sorted().joined(separator: ",")
-        let commands = adapter.guardedKeyboardCommandTemplates(
-            for: intent,
-            issuedAt: Self.now()
-        ).filter { command in
-            guard let workflowStepID = command.metadata["workflowStepID"] else { return true }
-            return !accessibilityHandledStepIDs.contains(workflowStepID)
-        }
+        let commands = usesAutomationBackend
+            ? automationCommands
+            : adapter.guardedKeyboardCommandTemplates(
+                for: intent,
+                issuedAt: Self.now()
+            ).filter { command in
+                guard let workflowStepID = command.metadata["workflowStepID"] else { return true }
+                return !accessibilityHandledStepIDs.contains(workflowStepID)
+            }
 
         var keyboardActionMS = 0.0
         stepTracker.start(.execute, summary: "Executing guarded local-app actions")
@@ -409,11 +447,17 @@ public struct LocalAppTaskLiveRunner: Sendable {
             await coordinator?.waitIfPaused()
             let spacedCommand = actionCommand.withIssuedAt(Self.now(advancedByMilliseconds: Double(index) * 40))
             let actionStartedAt = Self.uptimeMilliseconds()
+            let automationBackend = actionCommand.metadata["automationBackend"] ?? ""
+            let actionToolName = automationBackend == "appleScript"
+                ? "mac-applescript-action-engine"
+                : "mac-keyboard-action-engine"
             await coordinator?.recordToolEvent(
                 capability: .input,
                 decision: permissionPolicy.decision(for: .input),
-                toolName: "mac-keyboard-action-engine",
-                summary: "Executing guarded keyboard command",
+                toolName: actionToolName,
+                summary: automationBackend == "appleScript"
+                    ? "Executing guarded AppleScript command"
+                    : "Executing guarded keyboard command",
                 traceID: traceID,
                 metadata: [
                     "commandID": spacedCommand.id,
@@ -492,6 +536,11 @@ public struct LocalAppTaskLiveRunner: Sendable {
             }
         }
         runMetadata["latency.keyboardActionMS"] = Self.formatLatency(keyboardActionMS)
+        if usesAutomationBackend {
+            runMetadata["automation.backend"] = automationCommands.first?.metadata["automationBackend"] ?? ""
+            runMetadata["automation.action"] = automationCommands.first?.metadata["appleScript.action"] ?? ""
+            runMetadata["latency.automationActionMS"] = Self.formatLatency(keyboardActionMS)
+        }
         stepTracker.complete(
             .execute,
             summary: "Guarded local-app actions completed",
@@ -564,13 +613,17 @@ public struct LocalAppTaskLiveRunner: Sendable {
     }
 
     public static func defaultActionEngine(for definition: LocalAppTaskDefinition) -> ActionEngineGuardrail {
-        ActionEngineGuardrail(
+        let inputBackend: any ActionEngineInputBackend = definition.metadata["automationBackend"] == "appleScript"
+            ? MacAppleScriptActionEngineInputBackend()
+            : MacKeyboardActionEngineInputBackend()
+
+        return ActionEngineGuardrail(
             configuration: ActionEngineConfiguration(liveInputEnabled: true),
             focusGuard: MacLocalAppFocusGuard(
                 targetID: LocalAppTaskAdapter(definition: definition).targetID,
                 bundleIdentifier: definition.targetApp.bundleIdentifier
             ),
-            inputBackend: MacKeyboardActionEngineInputBackend()
+            inputBackend: inputBackend
         )
     }
 
@@ -794,6 +847,37 @@ public struct MacLocalAppTaskController: LocalAppTaskAppControlling {
         definition: LocalAppTaskDefinition,
         availability: LocalAppAvailability
     ) async -> LocalAppTaskObservation {
+        if let itemURL = availability.appURL,
+           let itemKind = availability.metadata["itemKind"],
+           itemKind != "application" {
+            let opened = await openLocalItem(at: itemURL)
+            if let bundleIdentifier = definition.targetApp.bundleIdentifier {
+                await waitForFrontmostApplication(
+                    LocalAppTarget(
+                        appName: definition.targetApp.appName,
+                        bundleIdentifier: bundleIdentifier,
+                        titleContains: definition.targetApp.titleContains
+                    )
+                )
+            }
+            let isFocused = definition.targetApp.bundleIdentifier == nil
+                || NSWorkspace.shared.frontmostApplication?.bundleIdentifier == definition.targetApp.bundleIdentifier
+            return LocalAppTaskObservation(
+                appIsRunning: opened,
+                appIsFocused: opened && isFocused,
+                availableControls: [:],
+                visibleText: ["appName": definition.targetApp.appName],
+                confidence: opened ? 0.72 : 0.2,
+                metadata: [
+                    "observer": "mac-local-app-controller",
+                    "openedLocalItem": String(opened),
+                    "localItem.kind": itemKind,
+                    "localItem.path": itemURL.path,
+                    "defaultApplication": availability.metadata["defaultApplication"] ?? ""
+                ]
+            )
+        }
+
         if let appURL = availability.appURL {
             await openApplication(at: appURL)
         } else if let runningApplication = runningApplication(for: definition.targetApp) {
@@ -1015,6 +1099,11 @@ public struct MacLocalAppTaskController: LocalAppTaskAppControlling {
                 continuation.resume()
             }
         }
+    }
+
+    @MainActor
+    private func openLocalItem(at url: URL) async -> Bool {
+        NSWorkspace.shared.open(url)
     }
 
     @MainActor

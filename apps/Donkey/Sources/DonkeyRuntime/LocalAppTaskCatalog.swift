@@ -23,6 +23,8 @@ public struct LocalAppAvailability: Equatable, Sendable {
 
 public protocol LocalAppAvailabilityProviding: Sendable {
     func availability(for target: LocalAppTarget) -> LocalAppAvailability
+    func availability(namedApp appName: String) -> LocalAppAvailability
+    func availability(namedLocalItem itemName: String) -> LocalAppAvailability
 }
 
 public struct MacLocalAppAvailabilityProvider: LocalAppAvailabilityProviding {
@@ -30,15 +32,19 @@ public struct MacLocalAppAvailabilityProvider: LocalAppAvailabilityProviding {
 
     public func availability(for target: LocalAppTarget) -> LocalAppAvailability {
         guard let bundleIdentifier = target.bundleIdentifier else {
-            return LocalAppAvailability(
-                target: target,
-                isInstalled: false,
-                metadata: ["reason": "missingBundleIdentifier"]
-            )
+            return availability(namedApp: target.appName)
         }
 
         let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
-        return LocalAppAvailability(
+        if appURL == nil,
+           let cachedAvailability = LocalItemResolutionCache.shared.cachedAvailability(
+            named: target.appName,
+            preferredKind: .application
+           ) {
+            return cachedAvailability
+        }
+
+        let availability = LocalAppAvailability(
             target: target,
             isInstalled: appURL != nil,
             appURL: appURL,
@@ -47,18 +53,341 @@ public struct MacLocalAppAvailabilityProvider: LocalAppAvailabilityProviding {
                 "provider": "mac-nsworkspace"
             ]
         )
+        LocalItemResolutionCache.shared.record(
+            availability: availability,
+            query: target.appName,
+            source: "bundleLookup"
+        )
+        return availability
+    }
+
+    public func availability(namedApp appName: String) -> LocalAppAvailability {
+        availability(namedLocalItem: appName, preferredKind: .application)
+    }
+
+    public func availability(namedLocalItem itemName: String) -> LocalAppAvailability {
+        availability(namedLocalItem: itemName, preferredKind: nil)
+    }
+
+    private func availability(
+        namedLocalItem itemName: String,
+        preferredKind: LocalItemKind?
+    ) -> LocalAppAvailability {
+        let requestedName = LocalAppLookup.cleanedLookupName(itemName)
+        guard !requestedName.isEmpty else {
+            return LocalAppAvailability(
+                target: LocalAppTarget(appName: itemName),
+                isInstalled: false,
+                metadata: [
+                    "provider": "mac-local-item-lookup",
+                    "reason": "missingLookupName"
+                ]
+            )
+        }
+
+        if let cachedAvailability = LocalItemResolutionCache.shared.cachedAvailability(
+            named: requestedName,
+            preferredKind: preferredKind
+        ) {
+            return cachedAvailability
+        }
+
+        if preferredKind == .application,
+           let runningApplication = Self.runningApplication(named: requestedName) {
+            let appName = runningApplication.localizedName ?? requestedName
+            let availability = LocalAppAvailability(
+                target: LocalAppTarget(
+                    appName: appName,
+                    bundleIdentifier: runningApplication.bundleIdentifier,
+                    titleContains: appName
+                ),
+                isInstalled: true,
+                appURL: runningApplication.bundleURL,
+                metadata: [
+                    "provider": "mac-local-item-lookup",
+                    "requestedItemName": requestedName,
+                    "bundleIdentifier": runningApplication.bundleIdentifier ?? "",
+                    "itemKind": LocalItemKind.application.rawValue,
+                    "itemURL": runningApplication.bundleURL?.path ?? "",
+                    "match": "runningApplication"
+                ]
+            )
+            LocalItemResolutionCache.shared.record(
+                availability: availability,
+                query: requestedName,
+                source: "runningApplication"
+            )
+            return availability
+        }
+
+        guard let match = Self.localItem(named: requestedName, preferredKind: preferredKind) else {
+            let availability = LocalAppAvailability(
+                target: LocalAppTarget(appName: LocalAppLookup.titleCased(requestedName)),
+                isInstalled: false,
+                metadata: [
+                    "provider": "mac-local-item-lookup",
+                    "reason": "localItemUnavailable",
+                    "requestedItemName": requestedName
+                ]
+            )
+            LocalItemResolutionCache.shared.record(
+                availability: availability,
+                query: requestedName,
+                source: "missingLookup"
+            )
+            return availability
+        }
+
+        let defaultApplication = Self.defaultApplication(for: match)
+        let availability = LocalAppAvailability(
+            target: LocalAppTarget(
+                appName: match.displayName,
+                bundleIdentifier: match.bundleIdentifier ?? defaultApplication?.bundleIdentifier,
+                titleContains: match.displayName,
+                metadata: [
+                    "localItem.kind": match.kind.rawValue,
+                    "localItem.path": match.url.path,
+                    "localItem.defaultApplication": defaultApplication?.displayName ?? ""
+                ]
+            ),
+            isInstalled: true,
+            appURL: match.url,
+            metadata: [
+                "provider": match.provider,
+                "requestedItemName": requestedName,
+                "bundleIdentifier": match.bundleIdentifier ?? defaultApplication?.bundleIdentifier ?? "",
+                "itemKind": match.kind.rawValue,
+                "itemURL": match.url.path,
+                "defaultApplication": defaultApplication?.displayName ?? "",
+                "match": match.matchKind
+            ]
+        )
+        LocalItemResolutionCache.shared.record(
+            availability: availability,
+            query: requestedName,
+            source: match.provider
+        )
+        return availability
+    }
+
+    private static func runningApplication(named appName: String) -> NSRunningApplication? {
+        let normalizedName = LocalAppLookup.normalized(appName)
+        return NSWorkspace.shared.runningApplications.first { application in
+            guard let localizedName = application.localizedName else { return false }
+            return LocalAppLookup.nameMatches(
+                candidate: localizedName,
+                requested: normalizedName
+            ) != nil
+        }
+    }
+
+    private static func localItem(
+        named itemName: String,
+        preferredKind: LocalItemKind?
+    ) -> LocalItemMatch? {
+        let normalizedName = LocalAppLookup.normalized(itemName)
+        let matches = spotlightItems(named: itemName, requested: normalizedName, preferredKind: preferredKind)
+            + fallbackFileSystemItems(named: normalizedName, preferredKind: preferredKind)
+        return matches
+            .sorted(by: LocalItemMatch.isBetterMatch)
+            .first
+    }
+
+    private static func spotlightItems(
+        named itemName: String,
+        requested normalizedName: String,
+        preferredKind: LocalItemKind?
+    ) -> [LocalItemMatch] {
+        let escapedName = itemName.replacingOccurrences(of: "\"", with: "\\\"")
+        var query = #"kMDItemDisplayName == "*\#(escapedName)*"cd || kMDItemFSName == "*\#(escapedName)*"cd"#
+        if preferredKind == .application {
+            query = "(\(query)) && kMDItemContentTypeTree == \"com.apple.application-bundle\""
+        }
+
+        guard let output = runProcess(
+            executableURL: URL(fileURLWithPath: "/usr/bin/mdfind"),
+            arguments: [query],
+            timeoutSeconds: 1.5
+        ) else {
+            return []
+        }
+
+        return output
+            .split(whereSeparator: \.isNewline)
+            .prefix(100)
+            .compactMap { line in
+                localItemMatch(
+                    url: URL(fileURLWithPath: String(line)),
+                    requested: normalizedName,
+                    provider: "mdfind",
+                    preferredKind: preferredKind
+                )
+            }
+    }
+
+    private static func fallbackFileSystemItems(
+        named normalizedName: String,
+        preferredKind: LocalItemKind?
+    ) -> [LocalItemMatch] {
+        var matches: [LocalItemMatch] = []
+        for rootURL in fallbackSearchRoots() {
+            guard let enumerator = FileManager.default.enumerator(
+                at: rootURL,
+                includingPropertiesForKeys: [.isDirectoryKey, .contentTypeKey],
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            ) else {
+                continue
+            }
+
+            for case let itemURL as URL in enumerator {
+                guard let match = localItemMatch(
+                    url: itemURL,
+                    requested: normalizedName,
+                    provider: "filesystem",
+                    preferredKind: preferredKind
+                ) else {
+                    continue
+                }
+                matches.append(match)
+                if matches.count >= 100 { return matches }
+            }
+        }
+
+        return matches
+    }
+
+    private static func localItemMatch(
+        url: URL,
+        requested normalizedName: String,
+        provider: String,
+        preferredKind: LocalItemKind?
+    ) -> LocalItemMatch? {
+        let kind = LocalItemKind(url: url)
+        if let preferredKind, kind != preferredKind {
+            return nil
+        }
+
+        let displayName = displayName(for: url, kind: kind)
+        guard let nameMatch = LocalAppLookup.nameMatches(
+            candidate: displayName,
+            requested: normalizedName
+        ) ?? LocalAppLookup.nameMatches(
+            candidate: url.deletingPathExtension().lastPathComponent,
+            requested: normalizedName
+        ) else {
+            return nil
+        }
+
+        let bundle = kind == .application ? Bundle(url: url) : nil
+        return LocalItemMatch(
+            url: url,
+            displayName: displayName,
+            kind: kind,
+            bundleIdentifier: bundle?.bundleIdentifier,
+            score: nameMatch.score + kind.scoreBias(preferredKind: preferredKind),
+            matchKind: nameMatch.kind,
+            provider: provider
+        )
+    }
+
+    private static func defaultApplication(for match: LocalItemMatch) -> LocalItemDefaultApplication? {
+        guard match.kind != .application,
+              let applicationURL = NSWorkspace.shared.urlForApplication(toOpen: match.url)
+        else {
+            return nil
+        }
+
+        let bundle = Bundle(url: applicationURL)
+        let displayName = bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+            ?? bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String
+            ?? applicationURL.deletingPathExtension().lastPathComponent
+        return LocalItemDefaultApplication(
+            displayName: displayName,
+            bundleIdentifier: bundle?.bundleIdentifier
+        )
+    }
+
+    private static func displayName(for url: URL, kind: LocalItemKind) -> String {
+        if kind == .application,
+           let bundle = Bundle(url: url) {
+            return bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+                ?? bundle.object(forInfoDictionaryKey: "CFBundleName") as? String
+                ?? url.deletingPathExtension().lastPathComponent
+        }
+
+        return url.lastPathComponent
+    }
+
+    private static func fallbackSearchRoots() -> [URL] {
+        let homeApplications = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Applications", isDirectory: true)
+        let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
+        return [
+            URL(fileURLWithPath: "/Applications", isDirectory: true),
+            URL(fileURLWithPath: "/Applications/Utilities", isDirectory: true),
+            URL(fileURLWithPath: "/System/Applications", isDirectory: true),
+            URL(fileURLWithPath: "/System/Applications/Utilities", isDirectory: true),
+            homeApplications,
+            homeDirectory.appendingPathComponent("Desktop", isDirectory: true),
+            homeDirectory.appendingPathComponent("Documents", isDirectory: true),
+            homeDirectory.appendingPathComponent("Downloads", isDirectory: true)
+        ]
+    }
+
+    private static func runProcess(
+        executableURL: URL,
+        arguments: [String],
+        timeoutSeconds: TimeInterval
+    ) -> String? {
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = arguments
+
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+
+        if process.isRunning {
+            process.terminate()
+        }
+
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8)
     }
 }
 
 public struct StaticLocalAppAvailabilityProvider: LocalAppAvailabilityProviding {
     public var installedBundleIdentifiers: Set<String>
+    public var installedApplicationNames: [String: String]
+    public var installedLocalItemNames: [String: String]
 
-    public init(installedBundleIdentifiers: Set<String>) {
+    public init(
+        installedBundleIdentifiers: Set<String>,
+        installedApplicationNames: [String: String] = [:],
+        installedLocalItemNames: [String: String] = [:]
+    ) {
         self.installedBundleIdentifiers = installedBundleIdentifiers
+        self.installedApplicationNames = installedApplicationNames
+        self.installedLocalItemNames = installedLocalItemNames
     }
 
     public func availability(for target: LocalAppTarget) -> LocalAppAvailability {
         let bundleIdentifier = target.bundleIdentifier ?? ""
+        guard !bundleIdentifier.isEmpty else {
+            return availability(namedApp: target.appName)
+        }
+
         return LocalAppAvailability(
             target: target,
             isInstalled: installedBundleIdentifiers.contains(bundleIdentifier),
@@ -67,6 +396,207 @@ public struct StaticLocalAppAvailabilityProvider: LocalAppAvailabilityProviding 
                 "provider": "static"
             ]
         )
+    }
+
+    public func availability(namedApp appName: String) -> LocalAppAvailability {
+        availability(namedLocalItem: appName, preferredKind: .application)
+    }
+
+    public func availability(namedLocalItem itemName: String) -> LocalAppAvailability {
+        availability(namedLocalItem: itemName, preferredKind: nil)
+    }
+
+    private func availability(
+        namedLocalItem itemName: String,
+        preferredKind: LocalItemKind?
+    ) -> LocalAppAvailability {
+        let requestedName = LocalAppLookup.cleanedLookupName(itemName)
+        let normalizedRequestedName = LocalAppLookup.normalized(requestedName)
+        if let match = installedApplicationNames.first(where: { item in
+            LocalAppLookup.normalized(item.key) == normalizedRequestedName
+        }), preferredKind == nil || preferredKind == .application {
+            let bundleIdentifier = match.value
+            return LocalAppAvailability(
+                target: LocalAppTarget(
+                    appName: match.key,
+                    bundleIdentifier: bundleIdentifier,
+                    titleContains: match.key,
+                    metadata: [
+                        "localItem.kind": LocalItemKind.application.rawValue
+                    ]
+                ),
+                isInstalled: installedBundleIdentifiers.contains(bundleIdentifier),
+                metadata: [
+                    "bundleIdentifier": bundleIdentifier,
+                    "provider": "static",
+                    "requestedItemName": requestedName,
+                    "itemKind": LocalItemKind.application.rawValue
+                ]
+            )
+        }
+
+        if let bundleIdentifier = installedBundleIdentifiers.first(where: { bundleIdentifier in
+            LocalAppLookup.normalized(Self.inferredAppName(from: bundleIdentifier)) == normalizedRequestedName
+        }), preferredKind == nil || preferredKind == .application {
+            let appName = Self.inferredAppName(from: bundleIdentifier)
+            return LocalAppAvailability(
+                target: LocalAppTarget(
+                    appName: appName,
+                    bundleIdentifier: bundleIdentifier,
+                    titleContains: appName,
+                    metadata: [
+                        "localItem.kind": LocalItemKind.application.rawValue
+                    ]
+                ),
+                isInstalled: true,
+                metadata: [
+                    "bundleIdentifier": bundleIdentifier,
+                    "provider": "static",
+                    "requestedItemName": requestedName,
+                    "itemKind": LocalItemKind.application.rawValue
+                ]
+            )
+        }
+
+        if let match = installedLocalItemNames.first(where: { item in
+            LocalAppLookup.nameMatches(
+                candidate: item.key,
+                requested: normalizedRequestedName
+            ) != nil || LocalAppLookup.nameMatches(
+                candidate: URL(fileURLWithPath: item.key).deletingPathExtension().lastPathComponent,
+                requested: normalizedRequestedName
+            ) != nil
+        }), preferredKind == nil || preferredKind?.rawValue == match.value {
+            let itemKind = match.value
+            return LocalAppAvailability(
+                target: LocalAppTarget(
+                    appName: match.key,
+                    titleContains: match.key,
+                    metadata: [
+                        "localItem.kind": itemKind
+                    ]
+                ),
+                isInstalled: true,
+                metadata: [
+                    "provider": "static",
+                    "requestedItemName": requestedName,
+                    "itemKind": itemKind
+                ]
+            )
+        }
+
+        return LocalAppAvailability(
+            target: LocalAppTarget(appName: LocalAppLookup.titleCased(requestedName)),
+            isInstalled: false,
+            metadata: [
+                "provider": "static",
+                "reason": "localItemUnavailable",
+                "requestedItemName": requestedName
+            ]
+        )
+    }
+
+    private static func inferredAppName(from bundleIdentifier: String) -> String {
+        LocalAppLookup.titleCased(bundleIdentifier.split(separator: ".").last.map(String.init) ?? bundleIdentifier)
+    }
+}
+
+private struct LocalItemMatch: Equatable {
+    var url: URL
+    var displayName: String
+    var kind: LocalItemKind
+    var bundleIdentifier: String?
+    var score: Int
+    var matchKind: String
+    var provider: String
+
+    static func isBetterMatch(lhs: LocalItemMatch, rhs: LocalItemMatch) -> Bool {
+        if lhs.score == rhs.score {
+            if lhs.displayName.count == rhs.displayName.count {
+                return lhs.url.path.count < rhs.url.path.count
+            }
+            return lhs.displayName.count < rhs.displayName.count
+        }
+        return lhs.score < rhs.score
+    }
+}
+
+private struct LocalItemDefaultApplication: Equatable {
+    var displayName: String
+    var bundleIdentifier: String?
+}
+
+enum LocalItemKind: String, Equatable, Hashable {
+    case application
+    case folder
+    case file
+    case other
+
+    init(url: URL) {
+        if url.pathExtension == "app" {
+            self = .application
+            return
+        }
+
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+           isDirectory.boolValue {
+            self = .folder
+            return
+        }
+
+        self = url.pathExtension.isEmpty ? .other : .file
+    }
+
+    func scoreBias(preferredKind: LocalItemKind?) -> Int {
+        if self == preferredKind {
+            return -10
+        }
+
+        switch self {
+        case .application:
+            return 0
+        case .folder:
+            return 8
+        case .file:
+            return 12
+        case .other:
+            return 20
+        }
+    }
+}
+
+enum LocalAppLookup {
+    static func cleanedLookupName(_ value: String) -> String {
+        normalized(value).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func normalized(_ value: String) -> String {
+        LocalAppTaskIntentParser.normalizedPhrase(value)
+    }
+
+    static func titleCased(_ value: String) -> String {
+        normalized(value)
+            .split(separator: " ")
+            .map { word in word.prefix(1).uppercased() + word.dropFirst() }
+            .joined(separator: " ")
+    }
+
+    static func nameMatches(
+        candidate: String,
+        requested normalizedRequestedName: String
+    ) -> (score: Int, kind: String)? {
+        let normalizedCandidate = normalized(candidate)
+        if normalizedCandidate == normalizedRequestedName {
+            return (0, "exact")
+        }
+        if normalizedCandidate.hasSuffix(" \(normalizedRequestedName)") {
+            return (1, "suffix")
+        }
+        if normalizedCandidate.contains(" \(normalizedRequestedName) ") {
+            return (2, "contains")
+        }
+        return nil
     }
 }
 
@@ -111,18 +641,32 @@ public struct LocalAppTaskCatalog: Sendable {
         self.availabilityProvider = availabilityProvider
     }
 
-    public func resolve(command: String) -> LocalAppTaskCatalogResolution {
-        guard let intent = LocalAppTaskIntentParser(taskDefinitions: taskDefinitions).parse(command) else {
-            return LocalAppTaskCatalogResolution(
-                status: .unsupportedCommand,
-                metadata: ["reason": "noTaskDefinitionMatched"]
-            )
-        }
-
-        return resolve(intent: intent)
+    public func resolve(command _: String) -> LocalAppTaskCatalogResolution {
+        LocalAppTaskCatalogResolution(
+            status: .unsupportedCommand,
+            metadata: ["reason": "modelIntentRequired"]
+        )
     }
 
     public func resolve(intent: TaskIntent) -> LocalAppTaskCatalogResolution {
+        if intent.parserSource != .deterministic,
+           intent.confidence < Self.minimumModelIntentConfidence {
+            return LocalAppTaskCatalogResolution(
+                status: .needsConfirmation,
+                intent: intent,
+                metadata: [
+                    "reason": "lowConfidenceIntent",
+                    "taskType": intent.taskType,
+                    "targetApp": intent.targetApp.appName,
+                    "intentConfidence": String(intent.confidence)
+                ]
+            )
+        }
+
+        if intent.taskType == Self.genericAppOpenTaskType {
+            return resolveGenericAppOpen(intent: intent)
+        }
+
         guard let definition = taskDefinitions.first(where: { supports(intent: intent, definition: $0) }) else {
             return LocalAppTaskCatalogResolution(
                 status: .unsupportedCommand,
@@ -175,10 +719,130 @@ public struct LocalAppTaskCatalog: Sendable {
             && intent.targetApp.appName == definition.targetApp.appName
             && intent.targetApp.bundleIdentifier == definition.targetApp.bundleIdentifier
     }
+
+    private func resolveGenericAppOpen(intent: TaskIntent) -> LocalAppTaskCatalogResolution {
+        let requestedAppName = intent.metadata["requestedItemName"]
+            ?? intent.entities["appName"]
+            ?? intent.targetApp.appName
+        let cleanedRequestedAppName = LocalAppLookup.cleanedLookupName(requestedAppName)
+        guard !cleanedRequestedAppName.isEmpty,
+              cleanedRequestedAppName != LocalAppLookup.cleanedLookupName(Self.genericLocalItemTarget.appName)
+        else {
+            return LocalAppTaskCatalogResolution(
+                status: .needsConfirmation,
+                intent: intent,
+                definition: Self.genericAppOpenDefinition(target: Self.genericLocalItemTarget),
+                metadata: [
+                    "reason": "appName",
+                    "taskType": Self.genericAppOpenTaskType
+                ]
+            )
+        }
+        let availability = availabilityProvider.availability(namedLocalItem: cleanedRequestedAppName)
+        let target = availability.target
+        let definition = Self.genericAppOpenDefinition(target: target)
+        var resolvedIntent = intent
+        resolvedIntent.targetApp = target
+        resolvedIntent.normalizedEntities["appName"] = target.appName
+        resolvedIntent.metadata["bundleIdentifier"] = target.bundleIdentifier ?? ""
+        resolvedIntent.metadata["targetApp"] = target.appName
+        resolvedIntent.metadata["requestedItemName"] = cleanedRequestedAppName
+
+        guard availability.isInstalled else {
+            return LocalAppTaskCatalogResolution(
+                status: .appUnavailable,
+                intent: resolvedIntent,
+                definition: definition,
+                availability: availability,
+                metadata: [
+                    "reason": "targetAppUnavailable",
+                    "taskType": definition.taskType,
+                    "targetApp": target.appName,
+                    "requestedItemName": cleanedRequestedAppName,
+                    "lookupProvider": availability.metadata["provider"] ?? "",
+                    "itemKind": availability.metadata["itemKind"] ?? target.metadata["localItem.kind"] ?? ""
+                ]
+            )
+        }
+
+        return LocalAppTaskCatalogResolution(
+            status: .resolved,
+            intent: resolvedIntent,
+            definition: definition,
+            availability: availability,
+            metadata: [
+                "taskType": definition.taskType,
+                "targetApp": target.appName,
+                "requestedItemName": cleanedRequestedAppName,
+                "lookupProvider": availability.metadata["provider"] ?? "",
+                "itemKind": availability.metadata["itemKind"] ?? target.metadata["localItem.kind"] ?? ""
+            ]
+        )
+    }
+
+    public static var genericLocalItemOpenDefinition: LocalAppTaskDefinition {
+        genericAppOpenDefinition(target: genericLocalItemTarget)
+    }
+
+    public static func genericAppOpenDefinition(target: LocalAppTarget) -> LocalAppTaskDefinition {
+        LocalAppTaskDefinition(
+            taskType: genericAppOpenTaskType,
+            targetApp: target,
+            triggerTerms: [],
+            entityRules: [
+                LocalAppTaskEntityRule(
+                    name: "appName",
+                    required: true,
+                    metadata: [
+                        "dynamicLookupEntity": "true",
+                        "description": "Requested local app, file, or folder name selected by the model"
+                    ]
+                )
+            ],
+            workflowSteps: BuiltInLocalAppTaskDefinitions.commonWorkflowPrefix + [
+                LocalAppTaskWorkflowStepDefinition(
+                    id: "verify-opened-app",
+                    role: .verifyResult,
+                    summary: "Verify the target app is visible or focused"
+                )
+            ],
+            observationStrategies: [.accessibility, .windowMetadata],
+            verificationEntityName: "appName",
+            metadata: [
+                "catalogEntry": "generic-app-open",
+                "displayTitle": "open local item",
+                "taskLabelTemplate": "Open {appName}",
+                "verificationTextKey": "appName",
+                "domain": "app",
+                "dynamicTarget": target.metadata["dynamicTarget"] ?? "false",
+                "localItem.kind": target.metadata["localItem.kind"] ?? "",
+                "localItem.path": target.metadata["localItem.path"] ?? ""
+            ]
+        )
+    }
+
+    private func slug(_ value: String) -> String {
+        LocalAppTaskIntentParser.normalizedPhrase(value)
+            .split(separator: " ")
+            .joined(separator: "-")
+    }
+
+    private static let genericAppOpenTaskType = "app_open"
+    private static let minimumModelIntentConfidence = 0.55
+    private static var genericLocalItemTarget: LocalAppTarget {
+        LocalAppTarget(
+            appName: "Local Item",
+            titleContains: nil,
+            metadata: [
+                "dynamicTarget": "true",
+                "localItem.kind": "dynamic"
+            ]
+        )
+    }
 }
 
 public enum BuiltInLocalAppTaskDefinitions {
-    private static var commonWorkflowPrefix: [LocalAppTaskWorkflowStepDefinition] {
+    public static var commonWorkflowPrefix: [LocalAppTaskWorkflowStepDefinition] {
         [
             LocalAppTaskWorkflowStepDefinition(
                 id: "parse-intent",
@@ -207,20 +871,10 @@ public enum BuiltInLocalAppTaskDefinitions {
                 bundleIdentifier: "com.apple.weather",
                 titleContains: "Weather"
             ),
-            triggerTerms: ["weather", "forecast", "temperature", "temp"],
+            triggerTerms: [],
             entityRules: [
                 LocalAppTaskEntityRule(
-                    name: "city",
-                    markers: ["for", "in", "at", "near"],
-                    aliases: [
-                        "sf": "San Francisco",
-                        "san fran": "San Francisco",
-                        "san francisco": "San Francisco",
-                        "nyc": "New York",
-                        "new york city": "New York",
-                        "la": "Los Angeles",
-                        "los angeles": "Los Angeles"
-                    ]
+                    name: "city"
                 )
             ],
             workflowSteps: commonWorkflowPrefix + [
@@ -261,7 +915,10 @@ public enum BuiltInLocalAppTaskDefinitions {
             verificationEntityName: "city",
             metadata: [
                 "catalogEntry": "built-in-weather-lookup",
+                "displayTitle": "weather lookup",
+                "taskLabelTemplate": "Weather for {city}",
                 "verificationTextKey": "city",
+                "screenshotFallback": "missingVerificationOrControls",
                 "visualFallback": "localModel",
                 "ocrFallbackDefault": "false"
             ]
@@ -276,16 +933,10 @@ public enum BuiltInLocalAppTaskDefinitions {
                 bundleIdentifier: "com.apple.Music",
                 titleContains: "Music"
             ),
-            triggerTerms: ["play", "listen to", "put on"],
+            triggerTerms: [],
             entityRules: [
                 LocalAppTaskEntityRule(
-                    name: "query",
-                    markers: ["play", "listen to", "put on"],
-                    aliases: [
-                        "cold play": "Coldplay",
-                        "coldplay": "Coldplay"
-                    ],
-                    metadata: ["capture": "afterTrigger"]
+                    name: "query"
                 )
             ],
             workflowSteps: commonWorkflowPrefix + [
@@ -311,16 +962,29 @@ public enum BuiltInLocalAppTaskDefinitions {
                     metadata: ["key": "Return"]
                 ),
                 LocalAppTaskWorkflowStepDefinition(
+                    id: "play-first-media-result",
+                    role: .submit,
+                    summary: "Play the first matching media result",
+                    metadata: ["key": "Return"]
+                ),
+                LocalAppTaskWorkflowStepDefinition(
                     id: "verify-media-query",
                     role: .verifyResult,
-                    summary: "Verify the requested media is visible or selected"
+                    summary: "Verify the playback command was sent"
                 )
             ],
             observationStrategies: [.accessibility, .windowMetadata, .screenshotForLocalModel],
             verificationEntityName: "query",
             metadata: [
                 "catalogEntry": "built-in-media-playback",
+                "displayTitle": "media playback",
+                "taskLabelTemplate": "Play {query}",
                 "verificationTextKey": "query",
+                "verificationMode": "playbackCommandAttempted",
+                "automationBackend": "appleScript",
+                "appleScript.action": "music.playMediaQuery",
+                "appleScript.entityName": "query",
+                "screenshotFallback": "missingVerificationOrControls",
                 "domain": "media",
                 "visualFallback": "localModel",
                 "ocrFallbackDefault": "false"
@@ -336,26 +1000,14 @@ public enum BuiltInLocalAppTaskDefinitions {
                 bundleIdentifier: "com.apple.Preview",
                 titleContains: nil
             ),
-            triggerTerms: ["fill pdf", "fill out pdf", "complete pdf", "fill form", "fill out this pdf"],
+            triggerTerms: [],
             entityRules: [
                 LocalAppTaskEntityRule(
                     name: "document",
-                    markers: ["fill", "complete"],
-                    aliases: [
-                        "this pdf": "current PDF",
-                        "the pdf": "current PDF",
-                        "this form": "current form"
-                    ],
                     metadata: ["contextRole": "documentTarget"]
                 ),
                 LocalAppTaskEntityRule(
                     name: "dataSource",
-                    markers: ["using", "with", "from"],
-                    aliases: [
-                        "this data": "provided data",
-                        "the data": "provided data",
-                        "these details": "provided data"
-                    ],
                     metadata: ["contextRole": "structuredInputData"]
                 )
             ],
@@ -388,18 +1040,22 @@ public enum BuiltInLocalAppTaskDefinitions {
             verificationEntityName: "document",
             metadata: [
                 "catalogEntry": "built-in-document-form-fill",
+                "displayTitle": "document form fill",
+                "taskLabelTemplate": "Fill {document}",
                 "domain": "document",
                 "requiresDocumentContext": "true",
                 "requiresStructuredData": "true",
                 "guardedLiveDefault": "reviewOnly",
+                "screenshotFallback": "missingVerificationOrControls",
                 "visualFallback": "localModel",
                 "ocrFallbackDefault": "false"
             ]
         )
     }
 
-    public static var defaults: [LocalAppTaskDefinition] {
+    public static var benchmarkFixtures: [LocalAppTaskDefinition] {
         [
+            LocalAppTaskCatalog.genericLocalItemOpenDefinition,
             weatherLookup,
             mediaPlayback,
             documentFormFill
