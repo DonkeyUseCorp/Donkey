@@ -34,9 +34,18 @@ start_logger() {
   if [ -n "${DONKEY_LOG_CONTAINS:-}" ]; then
     log_args+=(--contains "$DONKEY_LOG_CONTAINS")
   fi
+  if [ "${DONKEY_LOG_ALL:-0}" != "1" ]; then
+    log_args+=(--subsystem "${DONKEY_LOG_SUBSYSTEM:-com.donkey.app}")
+  elif [ -n "${DONKEY_LOG_SUBSYSTEM:-}" ]; then
+    log_args+=(--subsystem "$DONKEY_LOG_SUBSYSTEM")
+  fi
 
   echo "Tailing Donkey logs..."
-  "$LOG_SCRIPT" "${log_args[@]}" &
+  if [ "${#log_args[@]}" -eq 0 ]; then
+    "$LOG_SCRIPT" &
+  else
+    "$LOG_SCRIPT" "${log_args[@]}" &
+  fi
   LOG_PID="$!"
 }
 

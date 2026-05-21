@@ -1,5 +1,6 @@
 import DonkeyAI
 import DonkeyContracts
+import DonkeyRuntime
 import Foundation
 import SwiftUI
 
@@ -17,6 +18,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
     @Published private(set) var isCurrentTaskPaused = false
     @Published private(set) var updateState: PointerPromptUpdateState
     @Published private(set) var notchTasks: [PointerPromptNotchTask]
+    var coachGuidePresenter: ((PointerCoachCursorGuideRequest) -> Void)?
 
     private let commandHandler: any PointerPromptCommandHandling
     private let taskStore: any PointerPromptTaskStoring
@@ -66,6 +68,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
             self?.updateState = state
         }
         updateChecker.start()
+        LocalItemResolutionCache.shared.prewarmDefaultLocalItemsInBackground()
         checkForUpdates()
     }
 
@@ -255,6 +258,9 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
                 )
                 if let documentReviewRequest = result.documentReviewRequest {
                     self.documentReviewController.show(request: documentReviewRequest)
+                }
+                if let cursorGuideRequest = result.cursorGuideRequest {
+                    self.coachGuidePresenter?(cursorGuideRequest)
                 }
             }
         }

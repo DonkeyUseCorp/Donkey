@@ -11,6 +11,7 @@ final class PointerPromptOverlayController {
     private let fixedPlacement: PointerPromptPlacement = .bottomRight
     private let activationShortcut: PointerPromptActivationShortcut
     private let microphoneWaveformMeter = MicrophoneWaveformMeter()
+    private let coachCursorController = PointerCoachCursorOverlayController()
 
     private var statusPanel: NSPanel?
     private var statusHostingView: PointerPromptHostingView<PointerPromptNotchStatusView>?
@@ -34,6 +35,7 @@ final class PointerPromptOverlayController {
     private var statusCollapseWorkItem: DispatchWorkItem?
     private var statusExpansionWorkItem: DispatchWorkItem?
     private var statusHostShrinkWorkItem: DispatchWorkItem?
+    private var hasPrewarmedInputPanel = false
     private var hasPrewarmedStatusPanelExpansion = false
     private var lastStatusViewSnapshot: StatusPanelViewSnapshot?
 
@@ -43,6 +45,9 @@ final class PointerPromptOverlayController {
     ) {
         self.model = model
         self.activationShortcut = activationShortcut
+        model.coachGuidePresenter = { [weak self] request in
+            self?.coachCursorController.show(request: request)
+        }
         microphoneWaveformMeter.onLevelsChanged = { [weak model] levels in
             model?.updateVoiceWaveformLevels(levels)
         }
@@ -56,6 +61,7 @@ final class PointerPromptOverlayController {
 
         self.inputPanel = inputPanel
         self.statusPanel = statusPanel
+        prewarmInputPanel()
         prewarmStatusPanelExpansion()
         startActivationMonitoring()
         startAppDeactivationMonitoring()
@@ -169,11 +175,13 @@ final class PointerPromptOverlayController {
         stopActivationMonitoring()
         stopAppDeactivationMonitoring()
         microphoneWaveformMeter.stop()
+        coachCursorController.close()
         inputPanel?.close()
         inputPanel = nil
         statusPanel?.close()
         statusPanel = nil
         statusHostingView = nil
+        hasPrewarmedInputPanel = false
         hasPrewarmedStatusPanelExpansion = false
         lastStatusViewSnapshot = nil
     }
@@ -697,19 +705,30 @@ final class PointerPromptOverlayController {
         flushStatusHostLayout()
     }
 
+    private func prewarmInputPanel() {
+        guard !hasPrewarmedInputPanel,
+              let inputPanel else { return }
+        hasPrewarmedInputPanel = true
+
+        flushPanelLayout(inputPanel)
+    }
+
     private func flushStatusHostLayout() {
         guard let statusPanel else { return }
 
+        flushPanelLayout(statusPanel)
+    }
+
+    private func flushPanelLayout(_ panel: NSPanel) {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0
             context.allowsImplicitAnimation = false
 
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            statusPanel.contentView?.layoutSubtreeIfNeeded()
-            statusHostingView?.layoutSubtreeIfNeeded()
-            statusHostingView?.displayIfNeeded()
-            statusPanel.displayIfNeeded()
+            panel.contentView?.layoutSubtreeIfNeeded()
+            panel.contentView?.displayIfNeeded()
+            panel.displayIfNeeded()
             CATransaction.commit()
         }
     }

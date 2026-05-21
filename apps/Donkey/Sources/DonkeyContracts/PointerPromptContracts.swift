@@ -235,3 +235,47 @@ public final class NoopPointerPromptIntentSink: PointerPromptIntentSink {
 
     public func handle(_ intent: PointerPromptIntent) {}
 }
+
+public struct PointerCoachCursorGuideRequest: Equatable, Sendable {
+    public var id: String
+    public var title: String
+    public var origin: CGPoint
+    public var steps: [PointerCoachCursorGuideStep]
+    public var metadata: [String: String]
+
+    public init(
+        id: String = UUID().uuidString,
+        title: String,
+        origin: CGPoint = CGPoint(x: 0.5, y: 0.14),
+        steps: [PointerCoachCursorGuideStep],
+        metadata: [String: String] = [:]
+    ) {
+        self.id = id
+        self.title = title
+        self.origin = origin
+        self.steps = steps
+        self.metadata = metadata
+    }
+}
+
+public struct PointerCoachCursorGuideStep: Equatable, Sendable, Identifiable {
+    public var id: String
+    public var label: String
+    public var target: CGPoint
+    public var travelDuration: TimeInterval
+    public var holdDuration: TimeInterval
+
+    public init(
+        id: String = UUID().uuidString,
+        label: String,
+        target: CGPoint,
+        travelDuration: TimeInterval = 0.9,
+        holdDuration: TimeInterval = 1.8
+    ) {
+        self.id = id
+        self.label = label
+        self.target = target
+        self.travelDuration = max(0.1, travelDuration)
+        self.holdDuration = max(0.4, holdDuration)
+    }
+}
