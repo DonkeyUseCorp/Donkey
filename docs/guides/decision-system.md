@@ -12,6 +12,9 @@ Donkey treats every prompt, voice transcript, file drop, and follow-up as a task
 
 Action is not the default. A local action only starts after a typed model or runtime artifact says the turn is actionable and the runtime validates the target, plan, permissions, and available control surface.
 
+A runnable task needs a clear action, a destination or target, and enough payload to execute safely. If the turn is a question, conversation, or malformed local-task request, the model should mark it as conversational in structured metadata and Donkey answers in the thread instead of opening an app.
+For document-writing plans, Donkey also validates the model output itself: a short unquoted label-like payload is not enough to create or edit a document, even if the model selected Notes or another writing app.
+
 ## Decision Flow
 
 The pointer prompt records the user-visible turn, builds a bounded context packet, and routes it through the harness. Narrow non-semantic primitives, such as empty input and numeric arithmetic, can be handled directly. Semantic decisions go through typed model boundaries.
@@ -48,14 +51,17 @@ The supported plan tools are intentionally small:
 ```text
 app.openOrFocus
 app.observe
+ui.newDocument
 ui.focusSearch
+ui.focusAddressBar
+ui.focusTextEntry
 ui.setText
 ui.pressReturn
 app.verifyCommand
 app.verifyVisibleText
 ```
 
-The model may choose tools, entities, target app, and confidence. It may not invent arbitrary automation APIs, shell commands, hidden AppleScript, or unbounded UI actions. Unsupported tool names fail model-output validation or block before execution and become clarification/review instead of input.
+The model may choose tools, entities, target app, and confidence. Website navigation should target Safari or the user's browser and use `ui.focusAddressBar` with a URL query. Simple document creation, such as writing in Notes or putting tabular text into Numbers, should use `ui.newDocument` and `ui.setText`. Unsupported tool names fail model-output validation or block before execution and become clarification/review instead of input.
 
 ## Runtime Validation
 

@@ -22,7 +22,7 @@ For distribution through the site, publish the disk image:
 dist/Donkey.dmg
 ```
 
-Opening the disk image mounts a `Donkey` volume with `Donkey.app` and an `Applications` shortcut, matching the standard Codex-style macOS install flow. The user installs Donkey by dragging the app onto the shortcut, which copies it into `/Applications`.
+Opening the disk image mounts a `Donkey` volume with `Donkey.app` and an `Applications` shortcut, matching the standard drag-to-Applications macOS install flow. The user installs Donkey by dragging the app onto the shortcut, which copies it into `/Applications`.
 
 To launch the packaged app:
 
@@ -83,7 +83,7 @@ DONKEY_RUNTIME_PACKAGE_MANIFEST_URLS="parakeet-transcriber=https://example.com/d
 
 On first launch, Donkey shows one setup button for local runtimes. Setup downloads the configured sidecar packages, verifies their manifests/checksums/signatures, registers them in Application Support, asks them to prepare model weights, and health-checks them. The packages do not include Parakeet or YOLO model weights; they contain protocol-speaking runner entrypoints for the local command parser, Parakeet voice transcription, and YOLO screenshot segmentation. UI understanding ships as a local Swift sidecar that uses Apple's on-device Vision text recognition and does not need downloaded model weights. If setup fails, clicking the same button retries failed or not-yet-attempted runtimes while keeping completed installs. The setup window can also be reopened from the app settings.
 
-Each sidecar supports setup-time model weight preparation. During setup, Donkey calls the sidecar with `prepareModelWeights`; the sidecar downloads or warms the configured model cache and reports cached/downloaded status before health check. The local command-parser LLM is setup-managed too: Donkey packages a `local-llm` sidecar that pulls `qwen3:8b` through Ollama by default, then actionable prompt turns are parsed through `DONKEY_LOCAL_LLM_RUNNER` instead of a direct in-app Ollama request. The Parakeet runner can fetch the Hugging Face snapshot when `huggingface_hub` is available and transcribes through NVIDIA NeMo when the local Python backend is installed.
+Each sidecar supports setup-time model weight preparation. During setup, Donkey calls the sidecar with `prepareModelWeights`; the sidecar downloads or warms the configured model cache and reports cached/downloaded status before health check. The local command-parser LLM is setup-managed too: Donkey packages a `local-llm` sidecar that pulls `qwen3:8b` through Ollama by default, then actionable prompt turns are parsed through `DONKEY_LOCAL_LLM_RUNNER` instead of a direct in-app Ollama request. If the configured Ollama model is missing at runtime but another local, non-cloud Ollama model is installed, Donkey can retry the task-intent parse with that model and records the fallback in model metadata. The Parakeet runner can fetch the Hugging Face snapshot when `huggingface_hub` is available and transcribes through NVIDIA NeMo when the local Python backend is installed.
 
 Configure model-weight URLs when packaging:
 

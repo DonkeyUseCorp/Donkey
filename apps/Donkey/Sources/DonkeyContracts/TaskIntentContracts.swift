@@ -28,7 +28,10 @@ public struct LocalAppTarget: Codable, Equatable, Sendable {
 public enum LocalAppActionPlanTool: String, Codable, CaseIterable, Equatable, Sendable {
     case openOrFocusApp = "app.openOrFocus"
     case observeApp = "app.observe"
+    case newDocument = "ui.newDocument"
     case focusSearch = "ui.focusSearch"
+    case focusAddressBar = "ui.focusAddressBar"
+    case focusTextEntry = "ui.focusTextEntry"
     case setText = "ui.setText"
     case pressReturn = "ui.pressReturn"
     case verifyCommand = "app.verifyCommand"

@@ -283,7 +283,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                 PointerPromptSpawnProgressUpdate(label: "Answering"),
                 context: context
             )
-            let response = "I couldn't find a supported local action for that yet."
+            let response = Self.conversationResponse(for: resolution)
             let decision = AppHarnessDecision(
                 kind: .respond,
                 message: response,
@@ -430,9 +430,23 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
 
         let taskType = resolution.definition?.taskType ?? resolution.intent?.taskType ?? ""
         let reason = resolution.metadata["reason"] ?? ""
+        let modelReason = resolution.metadata["model.reason"]
+            ?? resolution.metadata["model.fallback.reason"]
+            ?? trace.metadata["reason"]
+            ?? trace.metadata["fallback.reason"]
+            ?? trace.metadata["modelFallback.reason"]
+            ?? ""
+        let modelDetail = resolution.metadata["model.detail"]
+            ?? resolution.metadata["model.http.bodyPreview"]
+            ?? resolution.metadata["model.fallback.http.bodyPreview"]
+            ?? trace.metadata["detail"]
+            ?? trace.metadata["http.bodyPreview"]
+            ?? trace.metadata["fallback.http.bodyPreview"]
+            ?? ""
+        let fallbackStatus = trace.metadata["fallback.status"] ?? ""
         let latency = Self.formatLatency(latencyMS)
         PointerPromptLog.commands.notice(
-            "intent resolved traceID=\(traceID, privacy: .public) resolution=\(resolution.status.rawValue, privacy: .public) taskType=\(taskType, privacy: .public) reason=\(reason, privacy: .public) modelStatus=\(trace.status.rawValue, privacy: .public) validation=\(trace.validationStatus, privacy: .public) latencyMS=\(latency, privacy: .public) command=\(command, privacy: .public)"
+            "intent resolved traceID=\(traceID, privacy: .public) resolution=\(resolution.status.rawValue, privacy: .public) taskType=\(taskType, privacy: .public) reason=\(reason, privacy: .public) modelStatus=\(trace.status.rawValue, privacy: .public) validation=\(trace.validationStatus, privacy: .public) modelReason=\(modelReason, privacy: .public) modelDetail=\(modelDetail, privacy: .public) fallbackStatus=\(fallbackStatus, privacy: .public) latencyMS=\(latency, privacy: .public) command=\(command, privacy: .public)"
         )
     }
 
@@ -480,9 +494,25 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
     }
 
     private static func shouldRespondWithoutLocalTask(_ resolution: LocalAppTaskCatalogResolution) -> Bool {
-        resolution.intent == nil
-            && resolution.status == .needsConfirmation
-            && resolution.metadata["reason"] == "localModelIntentUnavailable"
+        guard resolution.status == .needsConfirmation else { return false }
+        if resolution.intent == nil,
+           resolution.metadata["reason"] == "localModelIntentUnavailable" {
+            return true
+        }
+        if resolution.metadata["responseMode"] == "conversation",
+           resolution.metadata["assistantResponse"]?.isEmpty == false {
+            return true
+        }
+        return resolution.metadata["reason"] == "lowConfidenceIntent"
+            && resolution.metadata["assistantResponse"]?.isEmpty == false
+    }
+
+    private static func conversationResponse(for resolution: LocalAppTaskCatalogResolution) -> String {
+        if let assistantResponse = resolution.metadata["assistantResponse"],
+           !assistantResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return assistantResponse
+        }
+        return "I couldn't find a supported local action for that yet."
     }
 
     private func retrieveSemanticMemory(

@@ -83,7 +83,7 @@ struct AIHarnessAdapterTests {
         #expect(selected.role == .taskIntent)
         #expect(selected.provider == .localRuntime)
         #expect(selected.modelID == "qwen3:8b")
-        #expect(selected.timeoutMS == 4_000)
+        #expect(selected.timeoutMS == 20_000)
     }
 
     @Test
@@ -373,13 +373,79 @@ struct AIHarnessAdapterTests {
         #expect(body["format"] as? [String: Any] != nil)
         #expect(body["keep_alive"] as? String == "10m")
         let options = try #require(body["options"] as? [String: Any])
-        #expect(options["num_predict"] as? Int == 256)
+        #expect(options["num_predict"] as? Int == 512)
         #expect(options["num_ctx"] as? Int == 2048)
         #expect((body["prompt"] as? String)?.contains("Use only the provided task definitions") == true)
-        #expect((body["prompt"] as? String)?.contains("Choose by capability and target app") == true)
+        #expect((body["prompt"] as? String)?.contains("choose by capability and target app") == true)
         #expect((body["prompt"] as? String)?.contains("Do not include reasoning") == true)
+        #expect((body["prompt"] as? String)?.contains("For website navigation") == true)
+        #expect((body["prompt"] as? String)?.contains("ui.newDocument") == true)
+        #expect((body["prompt"] as? String)?.contains("action, destination or target app/item") == true)
+        #expect((body["prompt"] as? String)?.contains("metadata.responseMode=conversation") == true)
         #expect((body["prompt"] as? String)?.contains("triggers=") == false)
         #expect((body["prompt"] as? String)?.contains("metadata=") == false)
+    }
+
+    @Test
+    func ollamaTaskIntentAdapterUsesInstalledLocalModelWhenConfiguredModelIsMissing() async throws {
+        let httpClient = SequencedFakeAIHTTPClient(
+            responses: [
+                HTTPStub(
+                    data: Data(#"{"error":"model 'qwen3:8b' not found"}"#.utf8),
+                    statusCode: 404
+                ),
+                HTTPStub(
+                    data: Data(#"{"models":[{"name":"kimi-k2.5:cloud","size":0},{"name":"llama3:latest","size":4700000000}]}"#.utf8),
+                    statusCode: 200
+                ),
+                HTTPStub(
+                    data: ollamaResponseData(
+                        response: """
+                        {"taskType":"local_app_interaction","targetAppName":"Music","entities":{"appName":"Music","goal":"play media","query":"justin bieber"},"normalizedEntities":{"appName":"Music","goal":"play media","query":"Justin Bieber"},"confidence":0.91,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.focusSearch","ui.setText","ui.pressReturn","app.verifyCommand"],"inputEntity":"query","controlID":"search","focusKey":"Command+F","verification":"commandAttempted"},"metadata":{}}
+                        """
+                    ),
+                    statusCode: 200
+                )
+            ]
+        )
+        let adapter = OllamaTaskIntentAdapter(
+            router: AIModelRouter(
+                registry: AIModelRegistry(
+                    entries: [
+                        entry(
+                            id: "local-intent",
+                            role: .taskIntent,
+                            provider: .ollama,
+                            modelID: "qwen3:8b",
+                            endpoint: URL(string: "http://127.0.0.1:11434/api/generate")!,
+                            promptVersion: "task-intent-v1"
+                        )
+                    ]
+                )
+            ),
+            httpClient: httpClient
+        )
+
+        let result = await adapter.parseTaskIntent(
+            TaskIntentAdapterRequest(
+                command: "play some justin bieber",
+                taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
+                contextSnippets: ["Music application com.apple.Music"],
+                sourceTraceID: "trace-ollama-model-fallback"
+            )
+        )
+
+        #expect(result.intent?.taskType == "local_app_interaction")
+        #expect(result.intent?.targetApp.appName == "Music")
+        #expect(result.intent?.normalizedEntities["query"] == "Justin Bieber")
+        #expect(result.trace.status == .completed)
+        #expect(result.trace.modelID == "llama3:latest")
+        #expect(result.trace.metadata["modelFallback.originalModelID"] == "qwen3:8b")
+        #expect(result.trace.metadata["modelFallback.selectedModelID"] == "llama3:latest")
+        #expect(httpClient.requests.map { $0.url?.path } == ["/api/generate", "/api/tags", "/api/generate"])
+        let fallbackRequest = try #require(httpClient.requests.last)
+        let fallbackBody = try #require(fallbackRequest.httpBodyJSONObject)
+        #expect(fallbackBody["model"] as? String == "llama3:latest")
     }
 
     @Test
@@ -446,6 +512,194 @@ struct AIHarnessAdapterTests {
         #expect(result.intent?.actionPlan?.tools.contains(.setText) == true)
         #expect(result.intent?.actionPlan?.inputEntity == "query")
         #expect(result.trace.status == .completed)
+    }
+
+    @Test
+    func processBackedLocalLLMTaskIntentAdapterDecodesWrappedStructuredOutput() async throws {
+        let adapter = ProcessBackedLocalLLMTaskIntentAdapter(
+            router: AIModelRouter(registry: .defaultHybridPlanner),
+            sidecarRunner: FakeSidecarRunner(
+                result: LocalJSONSidecarResult(
+                    status: .completed,
+                    outputData: try localLLMSidecarOutputData(
+                        outputText: """
+                        <think>I should choose the generic app interaction.</think>
+                        ```json
+                        {"taskType":"local_app_interaction","targetAppName":"Music","entities":{"appName":"Music","goal":"play media","query":"justin bieber"},"normalizedEntities":{"appName":"Music","goal":"play media","query":"Justin Bieber"},"confidence":0.91,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.focusSearch","ui.setText","ui.pressReturn","app.verifyCommand"],"inputEntity":"query","controlID":"search","focusKey":"Command+F","verification":"commandAttempted"},"metadata":{}}
+                        ```
+                        """,
+                        metadata: ["local.provider": "ollama-sidecar"]
+                    ),
+                    latencyMS: 14,
+                    metadata: ["sidecar.role": "taskIntent"]
+                )
+            )
+        )
+
+        let result = await adapter.parseTaskIntent(
+            TaskIntentAdapterRequest(
+                command: "play some justin bieber",
+                taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
+                contextSnippets: ["Music application com.apple.Music"],
+                sourceTraceID: "trace-wrapped-local-app-plan"
+            )
+        )
+
+        #expect(result.intent?.taskType == "local_app_interaction")
+        #expect(result.intent?.targetApp.appName == "Music")
+        #expect(result.intent?.normalizedEntities["query"] == "Justin Bieber")
+        #expect(result.trace.status == .completed)
+    }
+
+    @Test
+    func processBackedLocalLLMTaskIntentAdapterMapsEmptySidecarFailureToProviderOutage() async throws {
+        let adapter = ProcessBackedLocalLLMTaskIntentAdapter(
+            router: AIModelRouter(registry: .defaultHybridPlanner),
+            sidecarRunner: FakeSidecarRunner(
+                result: LocalJSONSidecarResult(
+                    status: .completed,
+                    outputData: try localLLMSidecarOutputData(
+                        outputText: "",
+                        metadata: [
+                            "reason": "localLLMGenerationFailed",
+                            "detail": "ollama HTTP 404: model 'qwen3:8b' not found"
+                        ]
+                    ),
+                    latencyMS: 14,
+                    metadata: ["sidecar.role": "taskIntent"]
+                )
+            )
+        )
+
+        let result = await adapter.parseTaskIntent(
+            TaskIntentAdapterRequest(
+                command: "play some justin bieber",
+                taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
+                sourceTraceID: "trace-empty-sidecar"
+            )
+        )
+
+        #expect(result.intent == nil)
+        #expect(result.trace.status == .providerOutage)
+        #expect(result.trace.validationStatus == "notValidated")
+        #expect(result.trace.metadata["reason"] == "localLLMGenerationFailed")
+        #expect(result.trace.metadata["modelOutput.empty"] == "true")
+        #expect(result.trace.metadata["detail"]?.contains("qwen3:8b") == true)
+    }
+
+    @Test
+    func processBackedLocalLLMTaskIntentAdapterRepairsIncompleteModelPlannedInteraction() async throws {
+        let adapter = ProcessBackedLocalLLMTaskIntentAdapter(
+            router: AIModelRouter(registry: .defaultHybridPlanner),
+            sidecarRunner: FakeSidecarRunner(
+                result: LocalJSONSidecarResult(
+                    status: .completed,
+                    outputData: try localLLMSidecarOutputData(
+                        outputText: """
+                        {"taskType":"local_app_interaction","targetAppName":"com.apple.Music","entities":{"appName":"Music","goal":"play some justin bieber"},"normalizedEntities":{"query":"Justin Bieber"},"confidence":1.0,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","ui.focusSearch"],"inputEntity":"query","controlID":"","focusKey":"","verification":"commandAttempted"},"metadata":{}}
+                        """,
+                        metadata: [
+                            "local.provider": "ollama-sidecar",
+                            "modelFallback.selectedModelID": "llama3:latest"
+                        ]
+                    ),
+                    latencyMS: 14,
+                    metadata: ["sidecar.role": "taskIntent"]
+                )
+            )
+        )
+
+        let result = await adapter.parseTaskIntent(
+            TaskIntentAdapterRequest(
+                command: "play some justin bieber",
+                taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
+                contextSnippets: ["Music application com.apple.Music"],
+                sourceTraceID: "trace-repaired-local-app-plan"
+            )
+        )
+
+        #expect(result.intent?.taskType == "local_app_interaction")
+        #expect(result.intent?.normalizedEntities["appName"] == "Music")
+        #expect(result.intent?.normalizedEntities["query"] == "Justin Bieber")
+        #expect(result.intent?.metadata["modelPlan.repaired"] == "true")
+        #expect(result.intent?.actionPlan?.tools.contains(.setText) == true)
+        #expect(result.intent?.actionPlan?.tools.contains(.pressReturn) == true)
+        #expect(result.intent?.actionPlan?.controlID == "search")
+        #expect(result.intent?.actionPlan?.focusKey == "Command+F")
+        #expect(result.trace.status == .completed)
+    }
+
+    @Test
+    func processBackedLocalLLMTaskIntentAdapterDecodesRepresentativeAppCommands() async throws {
+        let examples: [(command: String, outputText: String, appName: String, requiredTools: [LocalAppActionPlanTool], queryContains: String)] = [
+            (
+                command: "go to cnn.com",
+                outputText: """
+                {"taskType":"local_app_interaction","targetAppName":"Safari","entities":{"appName":"Safari","goal":"open website","query":"https://cnn.com"},"normalizedEntities":{"appName":"Safari","goal":"open website","query":"https://cnn.com"},"confidence":0.94,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.focusAddressBar","ui.setText","ui.pressReturn","app.verifyCommand"],"inputEntity":"query","controlID":"addressBar","focusKey":"Command+L","verification":"commandAttempted"},"metadata":{}}
+                """,
+                appName: "Safari",
+                requiredTools: [.focusAddressBar, .setText, .pressReturn],
+                queryContains: "cnn.com"
+            ),
+            (
+                command: "write poem in notes",
+                outputText: """
+                {"taskType":"local_app_interaction","targetAppName":"Notes","entities":{"appName":"Notes","goal":"write a poem","query":"Morning light spills softly across the page,\\nA quiet thought wakes up and learns to sing."},"normalizedEntities":{"appName":"Notes","goal":"write a poem","query":"Morning light spills softly across the page,\\nA quiet thought wakes up and learns to sing."},"confidence":0.9,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.newDocument","ui.setText","app.verifyCommand"],"inputEntity":"query","controlID":"editor","focusKey":"","verification":"commandAttempted"},"metadata":{}}
+                """,
+                appName: "Notes",
+                requiredTools: [.newDocument, .setText],
+                queryContains: "Morning light"
+            ),
+            (
+                command: "create a table in numbers with the marketcap of the 10 largest companies in s&p",
+                outputText: """
+                {"taskType":"local_app_interaction","targetAppName":"Numbers","entities":{"appName":"Numbers","goal":"create spreadsheet table","query":"Company\\tMarket Cap\\nLargest S&P 500 companies\\tNeeds current market-cap data"},"normalizedEntities":{"appName":"Numbers","goal":"create spreadsheet table","query":"Company\\tMarket Cap\\nLargest S&P 500 companies\\tNeeds current market-cap data"},"confidence":0.86,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.newDocument","ui.setText","app.verifyCommand"],"inputEntity":"query","controlID":"editor","focusKey":"","verification":"commandAttempted"},"metadata":{}}
+                """,
+                appName: "Numbers",
+                requiredTools: [.newDocument, .setText],
+                queryContains: "Market Cap"
+            )
+        ]
+
+        for example in examples {
+            let adapter = ProcessBackedLocalLLMTaskIntentAdapter(
+                router: AIModelRouter(registry: .defaultHybridPlanner),
+                sidecarRunner: FakeSidecarRunner(
+                    result: LocalJSONSidecarResult(
+                        status: .completed,
+                        outputData: try localLLMSidecarOutputData(
+                            outputText: example.outputText,
+                            metadata: ["local.provider": "ollama-sidecar"]
+                        ),
+                        latencyMS: 14,
+                        metadata: ["sidecar.role": "taskIntent"]
+                    )
+                )
+            )
+
+            let result = await adapter.parseTaskIntent(
+                TaskIntentAdapterRequest(
+                    command: example.command,
+                    taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
+                    contextSnippets: [
+                        "Safari application com.apple.Safari",
+                        "Notes application com.apple.Notes",
+                        "Numbers application com.apple.iWork.Numbers"
+                    ],
+                    sourceTraceID: "trace-\(slug(example.appName))"
+                )
+            )
+
+            let intent = try #require(result.intent)
+            let actionPlan = try #require(intent.actionPlan)
+            #expect(intent.taskType == "local_app_interaction")
+            #expect(intent.normalizedEntities["appName"] == example.appName)
+            #expect(intent.normalizedEntities["query"]?.contains(example.queryContains) == true)
+            for tool in example.requiredTools {
+                #expect(actionPlan.tools.contains(tool), "Expected \(example.command) to include \(tool.rawValue)")
+            }
+            #expect(result.trace.status == .completed)
+        }
     }
 
     @Test
@@ -627,6 +881,221 @@ struct AIHarnessAdapterTests {
         #expect(result.resolution.status == .needsConfirmation)
         #expect(result.resolution.intent?.taskType == "weather_lookup")
         #expect(result.resolution.metadata["reason"] == "city")
+    }
+
+    @Test
+    func localModelTaskIntentResolverPreservesConversationResponseForMalformedTask() async {
+        let httpClient = FakeAIHTTPClient(
+            data: ollamaResponseData(
+                response: """
+                {"taskType":"local_app_interaction","targetAppName":"Notes","entities":{"appName":"Notes","goal":"unclear writing request"},"normalizedEntities":{"appName":"Notes","goal":"unclear writing request"},"confidence":0.2,"needsConfirmation":false,"actionPlan":{"tools":[],"inputEntity":"query","controlID":"","focusKey":"","verification":"commandAttempted"},"metadata":{"responseMode":"conversation","assistantResponse":"I can help with that, but I need a clearer thing to write before opening Notes."}}
+                """
+            ),
+            statusCode: 200
+        )
+        let resolver = LocalModelTaskIntentResolver(
+            catalog: LocalAppTaskCatalog(
+                taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
+                availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.Notes"])
+            ),
+            adapter: OllamaTaskIntentAdapter(
+                router: AIModelRouter(
+                    registry: AIModelRegistry(
+                        entries: [
+                            entry(
+                                id: "local-intent",
+                                role: .taskIntent,
+                                provider: .ollama,
+                                modelID: "qwen3:8b",
+                                endpoint: URL(string: "http://127.0.0.1:11434/api/generate")!,
+                                promptVersion: "task-intent-v1"
+                            )
+                        ]
+                    )
+                ),
+                httpClient: httpClient
+            )
+        )
+
+        let result = await resolver.resolve(
+            command: "write a people in notes",
+            sourceTraceID: "trace-malformed-writing"
+        )
+
+        #expect(result.resolution.status == .needsConfirmation)
+        #expect(result.resolution.metadata["reason"] == "lowConfidenceIntent")
+        #expect(result.resolution.metadata["responseMode"] == "conversation")
+        #expect(result.resolution.metadata["assistantResponse"]?.contains("clearer thing to write") == true)
+    }
+
+    @Test
+    func taskIntentDecoderRoutesShortUnquotedDocumentPayloadToConversation() async throws {
+        let adapter = ProcessBackedLocalLLMTaskIntentAdapter(
+            router: AIModelRouter(registry: .defaultHybridPlanner),
+            sidecarRunner: FakeSidecarRunner(
+                result: LocalJSONSidecarResult(
+                    status: .completed,
+                    outputData: try localLLMSidecarOutputData(
+                        outputText: """
+                        {"taskType":"local_app_interaction","targetAppName":"Notes","entities":{"appName":"Notes","goal":"write requested text","query":"a people"},"normalizedEntities":{"appName":"Notes","goal":"write requested text","query":"a people"},"confidence":0.9,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","ui.newDocument","ui.setText"],"inputEntity":"query","controlID":"editor","focusKey":"","verification":"commandAttempted"},"metadata":{}}
+                        """,
+                        metadata: ["local.provider": "ollama-sidecar"]
+                    ),
+                    latencyMS: 14,
+                    metadata: ["sidecar.role": "taskIntent"]
+                )
+            )
+        )
+
+        let result = await adapter.parseTaskIntent(
+            TaskIntentAdapterRequest(
+                command: "write a people in notes",
+                taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
+                contextSnippets: ["Notes application com.apple.Notes"],
+                sourceTraceID: "trace-short-document-payload"
+            )
+        )
+
+        #expect(result.intent?.confidence == 0.2)
+        #expect(result.intent?.actionPlan == nil)
+        #expect(result.intent?.metadata["responseMode"] == "conversation")
+        #expect(result.intent?.metadata["notActionableReason"] == "insufficientDocumentPayload")
+        #expect(result.intent?.metadata["assistantResponse"]?.contains("clearer thing to write") == true)
+    }
+
+    @Test
+    func taskIntentDecoderKeepsShortQuotedDocumentPayloadActionable() async throws {
+        let adapter = ProcessBackedLocalLLMTaskIntentAdapter(
+            router: AIModelRouter(registry: .defaultHybridPlanner),
+            sidecarRunner: FakeSidecarRunner(
+                result: LocalJSONSidecarResult(
+                    status: .completed,
+                    outputData: try localLLMSidecarOutputData(
+                        outputText: """
+                        {"taskType":"local_app_interaction","targetAppName":"Notes","entities":{"appName":"Notes","goal":"write requested text","query":"hello"},"normalizedEntities":{"appName":"Notes","goal":"write requested text","query":"hello"},"confidence":0.9,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","ui.newDocument","ui.setText"],"inputEntity":"query","controlID":"editor","focusKey":"","verification":"commandAttempted"},"metadata":{}}
+                        """,
+                        metadata: ["local.provider": "ollama-sidecar"]
+                    ),
+                    latencyMS: 14,
+                    metadata: ["sidecar.role": "taskIntent"]
+                )
+            )
+        )
+
+        let result = await adapter.parseTaskIntent(
+            TaskIntentAdapterRequest(
+                command: "write \"hello\" in notes",
+                taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
+                contextSnippets: ["Notes application com.apple.Notes"],
+                sourceTraceID: "trace-quoted-document-payload"
+            )
+        )
+
+        #expect(result.intent?.confidence == 0.9)
+        #expect(result.intent?.actionPlan?.tools.contains(.setText) == true)
+        #expect(result.intent?.metadata["responseMode"] == nil)
+    }
+
+    @Test
+    func taskIntentDecoderRoutesCopiedPromptPlaceholderToConversation() async throws {
+        let adapter = ProcessBackedLocalLLMTaskIntentAdapter(
+            router: AIModelRouter(registry: .defaultHybridPlanner),
+            sidecarRunner: FakeSidecarRunner(
+                result: LocalJSONSidecarResult(
+                    status: .completed,
+                    outputData: try localLLMSidecarOutputData(
+                        outputText: """
+                        {"taskType":"local_app_interaction","targetAppName":"Notes","entities":{"appName":"Notes","goal":"write requested text","query":"A complete piece of text generated for the user writing request."},"normalizedEntities":{"appName":"Notes","goal":"write requested text","query":"A complete piece of text generated for the user writing request."},"confidence":0.9,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","ui.newDocument","ui.setText"],"inputEntity":"query","controlID":"editor","focusKey":"","verification":"commandAttempted"},"metadata":{}}
+                        """,
+                        metadata: ["local.provider": "ollama-sidecar"]
+                    ),
+                    latencyMS: 14,
+                    metadata: ["sidecar.role": "taskIntent"]
+                )
+            )
+        )
+
+        let result = await adapter.parseTaskIntent(
+            TaskIntentAdapterRequest(
+                command: "write a people in notes",
+                taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
+                contextSnippets: ["Notes application com.apple.Notes"],
+                sourceTraceID: "trace-placeholder-document-payload"
+            )
+        )
+
+        #expect(result.intent?.confidence == 0.2)
+        #expect(result.intent?.actionPlan == nil)
+        #expect(result.intent?.metadata["responseMode"] == "conversation")
+        #expect(result.intent?.metadata["notActionableReason"] == "promptPlaceholderPayload")
+    }
+
+    @Test
+    func taskIntentDecoderRoutesEmptyTextInputPlanToConversation() async throws {
+        let adapter = ProcessBackedLocalLLMTaskIntentAdapter(
+            router: AIModelRouter(registry: .defaultHybridPlanner),
+            sidecarRunner: FakeSidecarRunner(
+                result: LocalJSONSidecarResult(
+                    status: .completed,
+                    outputData: try localLLMSidecarOutputData(
+                        outputText: """
+                        {"taskType":"local_app_interaction","targetAppName":"Notes","entities":{"appName":"Notes","goal":"write requested text","query":""},"normalizedEntities":{"appName":"Notes","goal":"write requested text","query":""},"confidence":0.9,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","ui.newDocument","ui.setText"],"inputEntity":"query","controlID":"editor","focusKey":"","verification":"commandAttempted"},"metadata":{}}
+                        """,
+                        metadata: ["local.provider": "ollama-sidecar"]
+                    ),
+                    latencyMS: 14,
+                    metadata: ["sidecar.role": "taskIntent"]
+                )
+            )
+        )
+
+        let result = await adapter.parseTaskIntent(
+            TaskIntentAdapterRequest(
+                command: "write poem in notes",
+                taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
+                contextSnippets: ["Notes application com.apple.Notes"],
+                sourceTraceID: "trace-empty-document-payload"
+            )
+        )
+
+        #expect(result.intent?.confidence == 0.2)
+        #expect(result.intent?.actionPlan == nil)
+        #expect(result.intent?.metadata["responseMode"] == "conversation")
+        #expect(result.intent?.metadata["notActionableReason"] == "missingTextPayload")
+    }
+
+    @Test
+    func taskIntentDecoderRepairsSentenceSpreadsheetPayloadIntoTableText() async throws {
+        let adapter = ProcessBackedLocalLLMTaskIntentAdapter(
+            router: AIModelRouter(registry: .defaultHybridPlanner),
+            sidecarRunner: FakeSidecarRunner(
+                result: LocalJSONSidecarResult(
+                    status: .completed,
+                    outputData: try localLLMSidecarOutputData(
+                        outputText: """
+                        {"taskType":"local_app_interaction","targetAppName":"Numbers","entities":{"appName":"Numbers","goal":"create requested table","query":"Market capital of the 10 largest companies in S&P"},"normalizedEntities":{"appName":"Numbers","goal":"create requested table","query":"Market capital of the 10 largest companies in S&P"},"confidence":0.9,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.newDocument","ui.setText"],"inputEntity":"query","controlID":"editor","focusKey":"","verification":"commandAttempted"},"metadata":{}}
+                        """,
+                        metadata: ["local.provider": "ollama-sidecar"]
+                    ),
+                    latencyMS: 14,
+                    metadata: ["sidecar.role": "taskIntent"]
+                )
+            )
+        )
+
+        let result = await adapter.parseTaskIntent(
+            TaskIntentAdapterRequest(
+                command: "create a table in numbers with the marketcap of the 10 largest companies in s&p",
+                taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
+                contextSnippets: ["Numbers application com.apple.iWork.Numbers"],
+                sourceTraceID: "trace-repaired-table-payload"
+            )
+        )
+
+        #expect(result.intent?.actionPlan?.tools.contains(.setText) == true)
+        #expect(result.intent?.metadata["modelPlan.repairedTableText"] == "true")
+        #expect(result.intent?.normalizedEntities["query"]?.contains("Request\tStatus") == true)
+        #expect(result.intent?.normalizedEntities["query"]?.contains("Market capital") == true)
     }
 
     @Test
@@ -912,8 +1381,10 @@ struct AIHarnessAdapterTests {
 
     @Test
     func redactorCoversRemoteBoundModelContext() {
+        let sampleEmail = "privacy-test" + "@example.invalid"
+        let sampleSecret = "example-secret"
         let result = AIHarnessRedactor().redact(
-            "email david@example.com password: hunter2",
+            "email \(sampleEmail) password: \(sampleSecret)",
             surface: .modelContext
         )
 
@@ -1220,6 +1691,24 @@ private struct FakeSidecarRunner: LocalJSONSidecarRunning {
     }
 }
 
+private func localLLMSidecarOutputData(
+    outputText: String,
+    metadata: [String: String]
+) throws -> Data {
+    try JSONSerialization.data(
+        withJSONObject: [
+            "outputText": outputText,
+            "metadata": metadata
+        ]
+    )
+}
+
+private func slug(_ value: String) -> String {
+    LocalAppTaskIntentParser.normalizedPhrase(value)
+        .split(separator: " ")
+        .joined(separator: "-")
+}
+
 private struct UnavailableTaskIntentAdapter: TaskIntentParsingAdapter {
     func parseTaskIntent(_ request: TaskIntentAdapterRequest) async -> TaskIntentAdapterResult {
         TaskIntentAdapterResult(
@@ -1271,6 +1760,36 @@ private final class FakeAIHTTPClient: AIHTTPClient, @unchecked Sendable {
             HTTPURLResponse(
                 url: request.url!,
                 statusCode: statusCode,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+        )
+    }
+}
+
+private struct HTTPStub {
+    var data: Data
+    var statusCode: Int
+}
+
+private final class SequencedFakeAIHTTPClient: AIHTTPClient, @unchecked Sendable {
+    var responses: [HTTPStub]
+    var requests: [URLRequest] = []
+
+    init(responses: [HTTPStub]) {
+        self.responses = responses
+    }
+
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        requests.append(request)
+        let response = responses.isEmpty
+            ? HTTPStub(data: Data(), statusCode: 500)
+            : responses.removeFirst()
+        return (
+            response.data,
+            HTTPURLResponse(
+                url: request.url!,
+                statusCode: response.statusCode,
                 httpVersion: nil,
                 headerFields: nil
             )!

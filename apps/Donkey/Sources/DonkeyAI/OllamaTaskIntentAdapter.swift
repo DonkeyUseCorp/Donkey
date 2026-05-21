@@ -117,9 +117,25 @@ public struct ProcessBackedLocalLLMTaskIntentAdapter: TaskIntentParsingAdapter {
 
         do {
             let response = try decoder.decode(LocalLLMTaskIntentSidecarResponse.self, from: result.outputData)
+            let responseMetadata = result.metadata
+                .merging(response.metadata) { current, _ in current }
+                .merging(Self.outputDiagnostics(for: response.outputText)) { current, _ in current }
+            if response.outputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               response.metadata["reason"] != nil {
+                return self.result(
+                    entry: entry,
+                    request: request,
+                    status: .providerOutage,
+                    validationStatus: "notValidated",
+                    latencyMS: result.latencyMS,
+                    metadata: responseMetadata
+                )
+            }
+
             guard let intent = try TaskIntentWireCodec.decodeIntent(
                 response.outputText,
                 definitions: request.taskDefinitions,
+                originalCommand: request.command,
                 sourceModelCallID: "model-call-\(request.sourceTraceID)",
                 parserName: "local-llm-sidecar-v1"
             ) else {
@@ -129,7 +145,7 @@ public struct ProcessBackedLocalLLMTaskIntentAdapter: TaskIntentParsingAdapter {
                     status: .invalidOutput,
                     validationStatus: "invalid",
                     latencyMS: result.latencyMS,
-                    metadata: result.metadata.merging(response.metadata) { current, _ in current }
+                    metadata: responseMetadata
                 )
             }
 
@@ -141,7 +157,7 @@ public struct ProcessBackedLocalLLMTaskIntentAdapter: TaskIntentParsingAdapter {
                     status: .completed,
                     validationStatus: "schemaDecoded",
                     latencyMS: result.latencyMS,
-                    metadata: result.metadata.merging(response.metadata) { current, _ in current }
+                    metadata: responseMetadata
                 )
             )
         } catch {
@@ -152,10 +168,35 @@ public struct ProcessBackedLocalLLMTaskIntentAdapter: TaskIntentParsingAdapter {
                 validationStatus: "invalid",
                 latencyMS: result.latencyMS,
                 metadata: result.metadata.merging([
-                    "error": String(describing: error)
+                    "error": String(describing: error),
+                    "sidecar.outputPreview": Self.preview(result.outputData, maxCharacters: 240)
                 ]) { current, _ in current }
             )
         }
+    }
+
+    private static func outputDiagnostics(for outputText: String) -> [String: String] {
+        let trimmed = outputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return ["modelOutput.empty": "true"]
+        }
+
+        return [
+            "modelOutput.empty": "false",
+            "modelOutput.preview": preview(trimmed, maxCharacters: 240)
+        ]
+    }
+
+    private static func preview(_ data: Data, maxCharacters: Int) -> String {
+        preview(String(decoding: data, as: UTF8.self), maxCharacters: maxCharacters)
+    }
+
+    private static func preview(_ value: String, maxCharacters: Int) -> String {
+        let singleLine = value
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+        guard singleLine.count > maxCharacters else { return singleLine }
+        return String(singleLine.prefix(maxCharacters))
     }
 
     private func result(
@@ -250,17 +291,69 @@ public struct OllamaTaskIntentAdapter: TaskIntentParsingAdapter {
         }
 
         let startedAt = ProcessInfo.processInfo.systemUptime
+        return await parseTaskIntent(
+            request,
+            entry: entry,
+            startedAt: startedAt,
+            fallbackFromModelID: nil
+        )
+    }
+
+    private func parseTaskIntent(
+        _ request: TaskIntentAdapterRequest,
+        entry: AIModelRegistryEntry,
+        startedAt: Double,
+        fallbackFromModelID: String?
+    ) async -> TaskIntentAdapterResult {
         do {
             let urlRequest = try makeURLRequest(entry: entry, adapterRequest: request)
             let (data, response) = try await httpClient.send(urlRequest)
             let latencyMS = (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
 
+            if response.statusCode == 404,
+               fallbackFromModelID == nil,
+               let fallbackModelID = try? await fallbackOllamaModelID(
+                for: entry,
+                excluding: [entry.modelID]
+               ),
+               fallbackModelID != entry.modelID {
+                var fallbackEntry = entry
+                fallbackEntry.modelID = fallbackModelID
+                fallbackEntry.metadata["modelFallback.originalModelID"] = entry.modelID
+                fallbackEntry.metadata["modelFallback.reason"] = "requestedModelUnavailable"
+                let fallbackResult = await parseTaskIntent(
+                    request,
+                    entry: fallbackEntry,
+                    startedAt: startedAt,
+                    fallbackFromModelID: entry.modelID
+                )
+                var trace = fallbackResult.trace
+                trace.metadata["modelFallback.originalModelID"] = entry.modelID
+                trace.metadata["modelFallback.selectedModelID"] = fallbackModelID
+                trace.metadata["modelFallback.reason"] = "requestedModelUnavailable"
+                return TaskIntentAdapterResult(intent: fallbackResult.intent, trace: trace)
+            }
+
             if response.statusCode == 429 {
-                return result(entry: entry, request: request, status: .rateLimited, validationStatus: "notValidated", latencyMS: latencyMS)
+                return result(
+                    entry: entry,
+                    request: request,
+                    status: .rateLimited,
+                    validationStatus: "notValidated",
+                    latencyMS: latencyMS,
+                    metadata: httpMetadata(response: response, data: data, fallbackFromModelID: fallbackFromModelID)
+                )
             }
 
             if response.statusCode >= 500 {
-                return result(entry: entry, request: request, status: .providerOutage, validationStatus: "notValidated", latencyMS: latencyMS)
+                return result(
+                    entry: entry,
+                    request: request,
+                    status: .providerOutage,
+                    validationStatus: "notValidated",
+                    latencyMS: latencyMS,
+                    metadata: httpMetadata(response: response, data: data, fallbackFromModelID: fallbackFromModelID)
+                )
             }
 
             guard (200..<300).contains(response.statusCode),
@@ -268,11 +361,19 @@ public struct OllamaTaskIntentAdapter: TaskIntentParsingAdapter {
                   let intent = try TaskIntentWireCodec.decodeIntent(
                     outputText,
                     definitions: request.taskDefinitions,
+                    originalCommand: request.command,
                     sourceModelCallID: "model-call-\(request.sourceTraceID)",
                     parserName: "ollama-task-intent-v1"
                   )
             else {
-                return result(entry: entry, request: request, status: .invalidOutput, validationStatus: "invalid", latencyMS: latencyMS)
+                return result(
+                    entry: entry,
+                    request: request,
+                    status: (200..<300).contains(response.statusCode) ? .invalidOutput : .providerOutage,
+                    validationStatus: (200..<300).contains(response.statusCode) ? "invalid" : "notValidated",
+                    latencyMS: latencyMS,
+                    metadata: httpMetadata(response: response, data: data, fallbackFromModelID: fallbackFromModelID)
+                )
             }
 
             return TaskIntentAdapterResult(
@@ -283,10 +384,13 @@ public struct OllamaTaskIntentAdapter: TaskIntentParsingAdapter {
                     status: .completed,
                     validationStatus: "schemaDecoded",
                     latencyMS: latencyMS,
-                    metadata: [
-                        "http.status": String(response.statusCode),
+                    metadata: httpMetadata(
+                        response: response,
+                        data: data,
+                        fallbackFromModelID: fallbackFromModelID
+                    ).merging([
                         "local.provider": "ollama"
-                    ]
+                    ]) { current, _ in current }
                 )
             )
         } catch is CancellationError {
@@ -303,6 +407,87 @@ public struct OllamaTaskIntentAdapter: TaskIntentParsingAdapter {
                 metadata: ["error": String(describing: error)]
             )
         }
+    }
+
+    private func fallbackOllamaModelID(
+        for entry: AIModelRegistryEntry,
+        excluding excludedModelIDs: Set<String>
+    ) async throws -> String? {
+        var request = URLRequest(url: Self.ollamaAPIURL(for: entry.endpoint, path: "tags"))
+        request.httpMethod = "GET"
+        request.timeoutInterval = min(Double(entry.timeoutMS) / 1_000, 2)
+        let (data, response) = try await httpClient.send(request)
+        guard (200..<300).contains(response.statusCode) else {
+            return nil
+        }
+
+        let tags = try JSONDecoder().decode(OllamaTagsResponse.self, from: data)
+        return Self.preferredInstalledModelID(
+            from: tags.models,
+            excluding: excludedModelIDs
+        )
+    }
+
+    private static func ollamaAPIURL(for endpoint: URL, path: String) -> URL {
+        var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
+        components?.path = "/api/\(path)"
+        components?.query = nil
+        return components?.url ?? endpoint
+    }
+
+    private static func preferredInstalledModelID(
+        from models: [OllamaModelTag],
+        excluding excludedModelIDs: Set<String>
+    ) -> String? {
+        let candidates = models
+            .filter { model in
+                !model.name.isEmpty
+                    && !excludedModelIDs.contains(model.name)
+                    && !model.name.contains(":cloud")
+                    && (model.size ?? 1) > 0
+            }
+            .map(\.name)
+
+        for prefix in fallbackModelPrefixes {
+            if let match = candidates.first(where: { $0 == prefix || $0.hasPrefix("\(prefix):") }) {
+                return match
+            }
+        }
+
+        return candidates.first
+    }
+
+    private static let fallbackModelPrefixes = [
+        "qwen3",
+        "qwen2.5",
+        "llama3.1",
+        "llama3",
+        "mistral",
+        "gemma3",
+        "gemma2"
+    ]
+
+    private func httpMetadata(
+        response: HTTPURLResponse,
+        data: Data,
+        fallbackFromModelID: String?
+    ) -> [String: String] {
+        var metadata = [
+            "http.status": String(response.statusCode),
+            "http.bodyPreview": Self.preview(data, maxCharacters: 240)
+        ]
+        if let fallbackFromModelID {
+            metadata["modelFallback.originalModelID"] = fallbackFromModelID
+        }
+        return metadata
+    }
+
+    private static func preview(_ data: Data, maxCharacters: Int) -> String {
+        let singleLine = String(decoding: data, as: UTF8.self)
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+        guard singleLine.count > maxCharacters else { return singleLine }
+        return String(singleLine.prefix(maxCharacters))
     }
 
     private func makeURLRequest(
@@ -330,7 +515,7 @@ public struct OllamaTaskIntentAdapter: TaskIntentParsingAdapter {
             ),
             "options": [
                 "num_ctx": 2048,
-                "num_predict": 256,
+                "num_predict": Self.maxGeneratedTokens,
                 "temperature": 0,
                 "top_p": 0.8
             ],
@@ -382,16 +567,33 @@ public struct OllamaTaskIntentAdapter: TaskIntentParsingAdapter {
             .joined(separator: "\n")
 
         return [
-            "Classify the user's natural-language request into exactly one supported local app task intent, then return strict JSON.",
-            "Choose by capability and target app, not by exact wording. The user should not need to remember command phrases.",
-            "Do not include reasoning.",
-            "Use only the provided task definitions. Do not invent task types, unsupported entities, or actions.",
+            "You are Donkey's local task-intent boundary. Return strict JSON only; do not include reasoning.",
+            "First decide whether Command is an executable local-app task or a conversation turn.",
+            "Executable local-app task means all three are clear: action, destination or target app/item, and enough payload to execute safely.",
+            "If Command is a question, conversation, malformed request, or lacks a real executable payload, do not invent one. Return the closest supported task with confidence below 0.55, needsConfirmation=false, metadata.responseMode=conversation, and metadata.assistantResponse with a brief natural-language reply.",
+            "If Command is an executable local task with one ordinary missing detail, set needsConfirmation=true and include missingEntity in metadata.",
+            "If Command is executable, choose by capability and target app, not exact wording. Use only provided task definitions; do not invent task types, unsupported entities, or actions.",
             "If no capability fits, return the closest supported task with confidence below 0.55.",
-            "If a required entity is missing, set needsConfirmation=true and include missingEntity in metadata.",
             "For dynamic local-item capabilities, app/file/folder names may come from the request, relevant local cache, or default-app inference; the catalog will verify availability before execution.",
+            "For write/create document requests: if the requested content is malformed or not meaningful enough to type, choose conversation; do not fabricate a document payload just to make the task executable.",
             "For local_app_interaction, select the most likely local app for the user's goal, set entities.goal, and when text must be entered set entities.query plus normalizedEntities.query.",
-            "For local_app_interaction, fill actionPlan.tools with allowed tools only: app.openOrFocus, app.observe, ui.focusSearch, ui.setText, ui.pressReturn, app.verifyCommand, app.verifyVisibleText.",
+            "For local_app_interaction, fill actionPlan.tools with allowed tools only: app.openOrFocus, app.observe, ui.newDocument, ui.focusSearch, ui.focusAddressBar, ui.focusTextEntry, ui.setText, ui.pressReturn, app.verifyCommand, app.verifyVisibleText.",
+            "For website navigation, choose Safari or the user's browser, set query to the URL, use ui.focusAddressBar with controlID=addressBar and focusKey=Command+L, then ui.setText and ui.pressReturn.",
+            "For writing in Notes, choose Notes, create the requested prose in query, and use ui.newDocument followed by ui.setText.",
+            "For generative writing requests, query must be the complete final text to type, not a single category label, restatement of the request, or placeholder copied from these instructions.",
+            "If the writing type is clear but topic/details are sparse, compose a short generic piece that satisfies the requested writing type and put that complete text in query.",
+            "For spreadsheet or table creation, choose Numbers, put compact tab-separated table content in query, and use ui.newDocument followed by ui.setText. If exact live data is unavailable, make a table-shaped brief with a data-needed note; do not output a single sentence.",
+            "When ui.setText is present, entities.query and normalizedEntities.query must be non-empty.",
+            "If you cannot produce non-empty text for ui.setText, choose conversation; never return ui.setText with an empty query.",
+            "For sparse writing requests such as 'write a [form] in Notes', infer the requested form and write a short finished piece. If the requested object is malformed or nonsensical, choose conversation.",
+            "Example malformed writing boundary: 'write a people in Notes' is not a meaningful writing form or payload, so choose conversation rather than writing a definition.",
+            "entities.appName must be the human app name, such as Safari, Notes, Numbers, or Music; do not put a bundle identifier in appName.",
             "For local_app_interaction, set actionPlan.inputEntity to query when ui.setText should type the query, and set actionPlan.controlID/focusKey for the UI control strategy.",
+            "The examples below show output structure only. Replace every example entity value with values inferred from Command and local cache; do not copy example query text unless the user asked for that exact text.",
+            "Example website output shape: {\"taskType\":\"local_app_interaction\",\"targetAppName\":\"Safari\",\"entities\":{\"appName\":\"Safari\",\"goal\":\"open requested website\",\"query\":\"https://example.org\"},\"normalizedEntities\":{\"appName\":\"Safari\",\"goal\":\"open requested website\",\"query\":\"https://example.org\"},\"confidence\":0.9,\"needsConfirmation\":false,\"actionPlan\":{\"tools\":[\"app.openOrFocus\",\"app.observe\",\"ui.focusAddressBar\",\"ui.setText\",\"ui.pressReturn\",\"app.verifyCommand\"],\"inputEntity\":\"query\",\"controlID\":\"addressBar\",\"focusKey\":\"Command+L\",\"verification\":\"commandAttempted\"},\"metadata\":{}}",
+            "Writing output shape: targetAppName=Notes, entities.appName=Notes, entities.goal=write requested text, entities.query=<the actual final text to type>, actionPlan.tools=[app.openOrFocus, app.observe, ui.newDocument, ui.setText, app.verifyCommand], inputEntity=query, controlID=editor.",
+            "Table output shape: targetAppName=Numbers, entities.appName=Numbers, entities.goal=create requested table, entities.query=<tab-separated rows for the requested table>, actionPlan.tools=[app.openOrFocus, app.observe, ui.newDocument, ui.setText, app.verifyCommand], inputEntity=query, controlID=editor.",
+            "Example malformed request output shape: {\"taskType\":\"local_app_interaction\",\"targetAppName\":\"Notes\",\"entities\":{\"appName\":\"Notes\",\"goal\":\"unclear local writing request\"},\"normalizedEntities\":{\"appName\":\"Notes\",\"goal\":\"unclear local writing request\"},\"confidence\":0.2,\"needsConfirmation\":false,\"actionPlan\":{\"tools\":[],\"inputEntity\":\"query\",\"controlID\":\"\",\"focusKey\":\"\",\"verification\":\"commandAttempted\"},\"metadata\":{\"responseMode\":\"conversation\",\"assistantResponse\":\"I can help, but I need a clearer thing to write before opening an app.\"}}",
             "For every other task type, actionPlan.tools must be empty.",
             "For AppleScript-backed capabilities, include compact appleScript.source or appleScript.template metadata only when the provided action is insufficient; prefer task metadata and normalized entities for speed.",
             "Command: \(request.command)",
@@ -402,6 +604,8 @@ public struct OllamaTaskIntentAdapter: TaskIntentParsingAdapter {
         ]
         .joined(separator: "\n")
     }
+
+    private static let maxGeneratedTokens = 512
 
     private func result(
         entry: AIModelRegistryEntry?,
@@ -471,7 +675,24 @@ public struct FallbackTaskIntentParsingAdapter: TaskIntentParsingAdapter {
 
         let fallbackResult = await fallback.parseTaskIntent(request)
         guard fallbackResult.intent != nil else {
-            return primaryResult
+            var trace = primaryResult.trace
+            trace.metadata["fallback.status"] = fallbackResult.trace.status.rawValue
+            trace.metadata["fallback.validation"] = fallbackResult.trace.validationStatus
+            trace.metadata["fallback.provider"] = fallbackResult.trace.provider.rawValue
+            trace.metadata["fallback.modelID"] = fallbackResult.trace.modelID
+            if let reason = fallbackResult.trace.metadata["reason"] ?? fallbackResult.trace.metadata["modelFallback.reason"] {
+                trace.metadata["fallback.reason"] = reason
+            }
+            if let httpStatus = fallbackResult.trace.metadata["http.status"] {
+                trace.metadata["fallback.http.status"] = httpStatus
+            }
+            if let bodyPreview = fallbackResult.trace.metadata["http.bodyPreview"] {
+                trace.metadata["fallback.http.bodyPreview"] = bodyPreview
+            }
+            if let selectedModelID = fallbackResult.trace.metadata["modelFallback.selectedModelID"] {
+                trace.metadata["fallback.modelFallback.selectedModelID"] = selectedModelID
+            }
+            return TaskIntentAdapterResult(intent: nil, trace: trace)
         }
 
         var trace = fallbackResult.trace
@@ -513,13 +734,33 @@ public struct LocalModelTaskIntentResolver: Sendable {
         )
 
         guard let intent = result.intent else {
+            var metadata = [
+                "reason": "localModelIntentUnavailable",
+                "modelCallStatus": result.trace.status.rawValue,
+                "modelValidationStatus": result.trace.validationStatus
+            ]
+            for key in [
+                "reason",
+                "detail",
+                "http.status",
+                "http.bodyPreview",
+                "modelOutput.empty",
+                "modelOutput.preview",
+                "fallback.status",
+                "fallback.validation",
+                "fallback.reason",
+                "fallback.http.status",
+                "fallback.http.bodyPreview",
+                "fallback.modelFallback.selectedModelID"
+            ] {
+                if let value = result.trace.metadata[key], !value.isEmpty {
+                    metadata["model.\(key)"] = value
+                }
+            }
             return (
                 LocalAppTaskCatalogResolution(
                     status: .needsConfirmation,
-                    metadata: [
-                        "reason": "localModelIntentUnavailable",
-                        "modelCallStatus": result.trace.status.rawValue
-                    ]
+                    metadata: metadata
                 ),
                 result.trace
             )
@@ -531,6 +772,15 @@ public struct LocalModelTaskIntentResolver: Sendable {
 
 private struct OllamaTaskIntentResponse: Decodable {
     var response: String?
+}
+
+private struct OllamaTagsResponse: Decodable {
+    var models: [OllamaModelTag]
+}
+
+private struct OllamaModelTag: Decodable {
+    var name: String
+    var size: Int64?
 }
 
 private enum TaskIntentWireCodec {
@@ -608,11 +858,11 @@ private enum TaskIntentWireCodec {
     static func decodeIntent(
         _ outputText: String,
         definitions: [LocalAppTaskDefinition],
+        originalCommand: String,
         sourceModelCallID: String,
         parserName: String
     ) throws -> TaskIntent? {
-        let data = Data(outputText.utf8)
-        let wire = try JSONDecoder().decode(TaskIntentWire.self, from: data)
+        let wire = try decodeWire(from: outputText)
         let exactDefinition = definitions.first(where: {
             $0.taskType == wire.taskType && $0.targetApp.appName == wire.targetAppName
         })
@@ -630,9 +880,9 @@ private enum TaskIntentWireCodec {
         var normalizedEntities = normalizedEntities(from: wire, definition: definition)
         if definition.metadata["dynamicTarget"] == "true",
            normalizedEntities["appName"] == nil,
-           wire.targetAppName != definition.targetApp.appName {
-            entities["appName"] = wire.targetAppName
-            normalizedEntities["appName"] = wire.targetAppName
+           let appName = dynamicAppName(from: wire, definition: definition) {
+            entities["appName"] = appName
+            normalizedEntities["appName"] = appName
         }
         let missingRequiredEntity = definition.entityRules.first { rule in
             rule.required && normalizedEntities[rule.name] == nil
@@ -646,8 +896,44 @@ private enum TaskIntentWireCodec {
             metadata["missingEntity"] = missingRequiredEntity.name
         }
 
-        let needsConfirmation = wire.needsConfirmation || missingRequiredEntity != nil
-        let actionPlan = wire.actionPlan.tools.isEmpty ? nil : wire.actionPlan
+        var confidence = wire.confidence
+        var needsConfirmation = wire.needsConfirmation || missingRequiredEntity != nil
+        var actionPlan = wire.actionPlan.tools.isEmpty ? nil : wire.actionPlan
+        if definition.metadata["modelPlanned"] == "true",
+           let modelActionPlan = actionPlan {
+            let repairedPlan = repairedModelActionPlan(
+                modelActionPlan,
+                normalizedEntities: normalizedEntities
+            )
+            if repairedPlan != modelActionPlan {
+                metadata["modelPlan.repaired"] = "true"
+                actionPlan = repairedPlan
+            }
+        }
+        if let tableRepair = repairedSpreadsheetQueryIfNeeded(
+            actionPlan: actionPlan,
+            normalizedEntities: normalizedEntities,
+            wire: wire
+        ) {
+            entities[tableRepair.entityName] = tableRepair.text
+            normalizedEntities[tableRepair.entityName] = tableRepair.text
+            metadata["modelPlan.repairedTableText"] = "true"
+        }
+        if let conversationReason = textInputConversationReason(
+            actionPlan: actionPlan,
+            normalizedEntities: normalizedEntities
+        ) ?? documentConversationReason(
+            actionPlan: actionPlan,
+            normalizedEntities: normalizedEntities,
+            originalCommand: originalCommand
+        ) {
+            confidence = min(confidence, 0.2)
+            needsConfirmation = false
+            actionPlan = nil
+            metadata["responseMode"] = "conversation"
+            metadata["assistantResponse"] = "I can help, but I need a clearer thing to write before opening an app."
+            metadata["notActionableReason"] = conversationReason
+        }
         let primaryEntity = definition.verificationEntityName
             .flatMap { normalizedEntities[$0] }
             ?? normalizedEntities.values.sorted().first
@@ -661,13 +947,76 @@ private enum TaskIntentWireCodec {
             targetApp: targetApp(from: wire, definition: definition),
             entities: entities,
             normalizedEntities: normalizedEntities,
-            confidence: wire.confidence,
+            confidence: confidence,
             parserSource: .localModel,
             needsConfirmation: needsConfirmation,
             sourceModelCallID: sourceModelCallID,
             actionPlan: actionPlan,
             metadata: metadata
         )
+    }
+
+    private static func decodeWire(from outputText: String) throws -> TaskIntentWire {
+        var lastError: Error?
+        for candidate in jsonObjectCandidates(in: outputText) {
+            do {
+                return try JSONDecoder().decode(TaskIntentWire.self, from: Data(candidate.utf8))
+            } catch {
+                lastError = error
+            }
+        }
+
+        if let lastError {
+            throw lastError
+        }
+        throw DecodingError.dataCorrupted(
+            DecodingError.Context(
+                codingPath: [],
+                debugDescription: "No JSON object found in task intent model output"
+            )
+        )
+    }
+
+    private static func jsonObjectCandidates(in outputText: String) -> [String] {
+        let trimmed = outputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        var candidates: [String] = trimmed.isEmpty ? [] : [trimmed]
+        var objectStart: String.Index?
+        var depth = 0
+        var isInsideString = false
+        var isEscaped = false
+        var index = outputText.startIndex
+
+        while index < outputText.endIndex {
+            let character = outputText[index]
+            if isInsideString {
+                if isEscaped {
+                    isEscaped = false
+                } else if character == "\\" {
+                    isEscaped = true
+                } else if character == "\"" {
+                    isInsideString = false
+                }
+            } else if character == "\"" {
+                isInsideString = true
+            } else if character == "{" {
+                if depth == 0 {
+                    objectStart = index
+                }
+                depth += 1
+            } else if character == "}", depth > 0 {
+                depth -= 1
+                if depth == 0, let start = objectStart {
+                    let objectEnd = outputText.index(after: index)
+                    candidates.append(String(outputText[start..<objectEnd]))
+                    objectStart = nil
+                }
+            }
+
+            index = outputText.index(after: index)
+        }
+
+        var seen = Set<String>()
+        return candidates.filter { seen.insert($0).inserted }
     }
 
     private static func normalizedEntities(
@@ -682,6 +1031,233 @@ private enum TaskIntentWireCodec {
             }
         }
         return normalized
+    }
+
+    private static func dynamicAppName(
+        from wire: TaskIntentWire,
+        definition: LocalAppTaskDefinition
+    ) -> String? {
+        let entityAppName = wire.normalizedEntities["appName"] ?? wire.entities["appName"]
+        if let entityAppName,
+           !entityAppName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return entityAppName
+        }
+
+        guard wire.targetAppName != definition.targetApp.appName else { return nil }
+        return wire.targetAppName
+    }
+
+    private static func repairedModelActionPlan(
+        _ actionPlan: LocalAppActionPlan,
+        normalizedEntities: [String: String]
+    ) -> LocalAppActionPlan {
+        var plan = actionPlan
+        if plan.inputEntity.isEmpty {
+            plan.inputEntity = "query"
+        }
+        if plan.controlID.isEmpty {
+            plan.controlID = defaultControlID(for: plan.tools)
+        }
+        if plan.focusKey.isEmpty {
+            plan.focusKey = defaultFocusKey(for: plan.tools)
+        }
+
+        let inputValue = normalizedEntities[plan.inputEntity] ?? normalizedEntities["query"] ?? ""
+        guard !plan.isExecutable,
+              !inputValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return plan
+        }
+
+        if plan.tools.contains(.newDocument) || plan.tools.contains(.focusTextEntry) {
+            return LocalAppActionPlan(
+                tools: repairedTools(
+                    from: plan.tools,
+                    appending: [.setText, .verifyCommand]
+                ),
+                inputEntity: plan.inputEntity,
+                controlID: plan.controlID,
+                focusKey: plan.focusKey,
+                verification: plan.verification
+            )
+        }
+
+        if plan.tools.contains(.focusAddressBar) {
+            return LocalAppActionPlan(
+                tools: repairedTools(
+                    from: plan.tools,
+                    appending: [.setText, .pressReturn, .verifyCommand]
+                ),
+                inputEntity: plan.inputEntity,
+                controlID: plan.controlID,
+                focusKey: plan.focusKey,
+                verification: plan.verification
+            )
+        }
+
+        return LocalAppActionPlan(
+            tools: LocalAppActionPlan.defaultSearchSubmitPlan.tools,
+            inputEntity: plan.inputEntity,
+            controlID: plan.controlID,
+            focusKey: plan.focusKey,
+            verification: plan.verification
+        )
+    }
+
+    private static func defaultControlID(for tools: [LocalAppActionPlanTool]) -> String {
+        if tools.contains(.focusAddressBar) {
+            return "addressBar"
+        }
+        if tools.contains(.focusTextEntry) || tools.contains(.newDocument) {
+            return "editor"
+        }
+        return "search"
+    }
+
+    private static func defaultFocusKey(for tools: [LocalAppActionPlanTool]) -> String {
+        if tools.contains(.focusAddressBar) {
+            return "Command+L"
+        }
+        if tools.contains(.focusTextEntry) || tools.contains(.newDocument) {
+            return ""
+        }
+        return "Command+F"
+    }
+
+    private static func repairedTools(
+        from tools: [LocalAppActionPlanTool],
+        appending repairTools: [LocalAppActionPlanTool]
+    ) -> [LocalAppActionPlanTool] {
+        var repaired = tools
+        for tool in repairTools where !repaired.contains(tool) {
+            repaired.append(tool)
+        }
+        return repaired
+    }
+
+    private static func repairedSpreadsheetQueryIfNeeded(
+        actionPlan: LocalAppActionPlan?,
+        normalizedEntities: [String: String],
+        wire: TaskIntentWire
+    ) -> (entityName: String, text: String)? {
+        guard let actionPlan,
+              actionPlan.tools.contains(.newDocument),
+              actionPlan.tools.contains(.setText)
+        else {
+            return nil
+        }
+
+        let appName = normalizedEntities["appName"] ?? wire.entities["appName"] ?? wire.targetAppName
+        guard LocalAppTaskIntentParser.normalizedPhrase(appName) == "numbers" else {
+            return nil
+        }
+
+        let entityName = actionPlan.inputEntity.isEmpty ? "query" : actionPlan.inputEntity
+        let query = (normalizedEntities[entityName] ?? normalizedEntities["query"] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty,
+              !query.contains("\n"),
+              !query.contains("\t")
+        else {
+            return nil
+        }
+
+        let subject = query
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !subject.isEmpty else { return nil }
+
+        let clippedSubject = String(subject.prefix(160))
+        return (
+            entityName,
+            "Request\tStatus\n\(clippedSubject)\tNeeds table data"
+        )
+    }
+
+    private static func textInputConversationReason(
+        actionPlan: LocalAppActionPlan?,
+        normalizedEntities: [String: String]
+    ) -> String? {
+        guard let actionPlan,
+              actionPlan.requiresTextInput
+        else {
+            return nil
+        }
+
+        let entityName = actionPlan.inputEntity.isEmpty ? "query" : actionPlan.inputEntity
+        let query = (normalizedEntities[entityName] ?? normalizedEntities["query"] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if query.isEmpty {
+            return "missingTextPayload"
+        }
+        if isCopiedPromptPlaceholder(query) {
+            return "promptPlaceholderPayload"
+        }
+
+        return nil
+    }
+
+    private static func documentConversationReason(
+        actionPlan: LocalAppActionPlan?,
+        normalizedEntities: [String: String],
+        originalCommand: String
+    ) -> String? {
+        guard let actionPlan,
+              actionPlan.tools.contains(.newDocument),
+              actionPlan.tools.contains(.setText),
+              !actionPlan.tools.contains(.pressReturn)
+        else {
+            return nil
+        }
+
+        let entityName = actionPlan.inputEntity.isEmpty ? "query" : actionPlan.inputEntity
+        let query = (normalizedEntities[entityName] ?? normalizedEntities["query"] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty,
+              !commandContainsQuoted(query, originalCommand: originalCommand),
+              !query.contains("\n"),
+              !query.contains("\t"),
+              query.rangeOfCharacter(from: CharacterSet(charactersIn: ".?!:;,")) == nil
+        else {
+            return nil
+        }
+
+        let words = LocalAppTaskIntentParser.normalizedPhrase(query)
+            .split(separator: " ")
+        return words.count <= 5 ? "insufficientDocumentPayload" : nil
+    }
+
+    private static func isCopiedPromptPlaceholder(_ query: String) -> Bool {
+        let normalizedQuery = LocalAppTaskIntentParser.normalizedPhrase(query)
+        guard !normalizedQuery.isEmpty else { return false }
+
+        return copiedPromptPayloadPhrases.contains { phrase in
+            normalizedQuery.contains(LocalAppTaskIntentParser.normalizedPhrase(phrase))
+        }
+    }
+
+    private static let copiedPromptPayloadPhrases = [
+        "complete piece of text generated for the user writing request",
+        "complete piece of text generated for the user's writing request",
+        "generated for the user writing request",
+        "the actual final text to type",
+        "tab separated rows for the requested table",
+        "column a column b row label value or data needed note"
+    ]
+
+    private static func commandContainsQuoted(
+        _ query: String,
+        originalCommand: String
+    ) -> Bool {
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQuery.isEmpty else { return false }
+        let quotedPatterns = [
+            "\"\(trimmedQuery)\"",
+            "'\(trimmedQuery)'",
+            "`\(trimmedQuery)`"
+        ]
+        return quotedPatterns.contains { originalCommand.localizedCaseInsensitiveContains($0) }
     }
 
     private static func targetApp(

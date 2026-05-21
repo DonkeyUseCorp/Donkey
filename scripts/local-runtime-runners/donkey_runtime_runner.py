@@ -13,6 +13,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -467,6 +468,7 @@ def health_check(request: dict[str, Any]) -> dict[str, Any]:
 def run_local_llm(request: dict[str, Any]) -> dict[str, Any]:
     command = request.get("command", "")
     schema_id = (request.get("metadata") or {}).get("schemaID", "")
+    is_task_intent_request = False
     if schema_id == "task_followup_resolution_v1":
         candidates = request.get("candidates", [])
         prompt = task_followup_prompt(command, candidates)
@@ -481,12 +483,13 @@ def run_local_llm(request: dict[str, Any]) -> dict[str, Any]:
         schema = pointer_coach_cursor_guide_schema()
         max_tokens = 240
     else:
+        is_task_intent_request = True
         task_definitions = request.get("taskDefinitions", [])
         prompt = task_intent_prompt(command, task_definitions, request.get("contextSnippets", []))
         schema = task_intent_schema(task_definitions)
-        max_tokens = 256
+        max_tokens = 512
     body = {
-        "model": request.get("modelID") or MODEL_ID,
+        "model": selected_ollama_model(str(request.get("modelID") or MODEL_ID)),
         "prompt": prompt,
         "stream": False,
         "format": schema,
@@ -500,23 +503,470 @@ def run_local_llm(request: dict[str, Any]) -> dict[str, Any]:
     }
     started = time.monotonic()
     try:
-        response = post_json("/api/generate", json.dumps(body).encode("utf-8"), timeout=4)
+        response = post_json(
+            "/api/generate",
+            json.dumps(body).encode("utf-8"),
+            timeout=local_llm_timeout_seconds(),
+        )
         latency_ms = (time.monotonic() - started) * 1000
-        return {
-            "outputText": response.get("response", ""),
-            "metadata": metadata(
+        output_text = str(response.get("response", ""))
+        response_metadata = {
+            "local.provider": "ollama-sidecar",
+            "http.status": "200",
+            "latency.localLLMGenerationMS": f"{latency_ms:.3f}",
+        }
+        requested_model = str(request.get("modelID") or MODEL_ID)
+        if body["model"] != requested_model:
+            response_metadata.update(
                 {
-                    "local.provider": "ollama-sidecar",
-                    "http.status": "200",
-                    "latency.localLLMGenerationMS": f"{latency_ms:.3f}",
+                    "modelFallback.originalModelID": requested_model,
+                    "modelFallback.selectedModelID": body["model"],
+                    "modelFallback.reason": "requestedModelUnavailable",
                 }
-            ),
+            )
+        if is_task_intent_request:
+            output_text, repair_metadata = repair_task_intent_output(
+                output_text,
+                command=str(command),
+                model_id=str(body["model"]),
+                context_snippets=request.get("contextSnippets", []),
+            )
+            response_metadata.update(repair_metadata)
+        return {
+            "outputText": output_text,
+            "metadata": metadata(response_metadata),
         }
     except Exception as exc:  # noqa: BLE001
         return {
             "outputText": "",
             "metadata": metadata({"reason": "localLLMGenerationFailed", "detail": str(exc)}),
         }
+
+
+def repair_task_intent_output(
+    output_text: str,
+    command: str,
+    model_id: str,
+    context_snippets: list[Any] | None = None,
+) -> tuple[str, dict[str, str]]:
+    intent = decode_json_object(output_text)
+    if not isinstance(intent, dict):
+        return output_text, {}
+
+    output_metadata: dict[str, str] = {}
+    if clear_empty_conversation_mode(intent):
+        output_metadata["modelPlan.clearedEmptyConversationMode"] = "true"
+
+    chain_metadata = repair_app_chain_metadata(
+        intent,
+        command=command,
+        model_id=model_id,
+        context_snippets=context_snippets or [],
+    )
+    output_metadata.update(chain_metadata)
+
+    if not should_repair_document_text_payload(intent, command):
+        if output_metadata:
+            return json.dumps(intent, separators=(",", ":")), output_metadata
+        return output_text, {}
+
+    started = time.monotonic()
+    try:
+        response = post_json(
+            "/api/generate",
+            json.dumps(
+                {
+                    "model": model_id,
+                    "prompt": document_text_payload_prompt(command),
+                    "stream": False,
+                    "format": document_text_payload_schema(),
+                    "options": {
+                        "num_ctx": 1024,
+                        "num_predict": 220,
+                        "temperature": 0.35,
+                        "top_p": 0.9,
+                    },
+                    "keep_alive": "10m",
+                }
+            ).encode("utf-8"),
+            timeout=min(local_llm_timeout_seconds(), 15),
+        )
+        latency_ms = (time.monotonic() - started) * 1000
+        payload = decode_json_object(str(response.get("response", "")))
+        metadata = {
+            "modelPlan.textPayloadRepair": "attempted",
+            "latency.textPayloadRepairMS": f"{latency_ms:.3f}",
+        }
+        if isinstance(payload, dict) and bool(payload.get("canWrite")):
+            text = str(payload.get("text") or "").strip()
+            if text:
+                set_intent_query(intent, text)
+                intent_metadata = intent.setdefault("metadata", {})
+                if isinstance(intent_metadata, dict):
+                    intent_metadata.pop("responseMode", None)
+                    intent_metadata.pop("assistantResponse", None)
+                    intent_metadata.pop("notActionableReason", None)
+                    intent_metadata["modelPlan.repairedTextPayload"] = "true"
+                metadata["modelPlan.textPayloadRepair"] = "completed"
+                metadata.update(output_metadata)
+                return json.dumps(intent, separators=(",", ":")), metadata
+
+        assistant_response = "I can help, but I need a clearer thing to write before opening an app."
+        if isinstance(payload, dict):
+            candidate_response = str(payload.get("assistantResponse") or "").strip()
+            if candidate_response:
+                assistant_response = candidate_response
+        mark_intent_as_conversation(intent, assistant_response, "contentGenerationDeclined")
+        metadata["modelPlan.textPayloadRepair"] = "conversation"
+        metadata.update(output_metadata)
+        return json.dumps(intent, separators=(",", ":")), metadata
+    except Exception as exc:  # noqa: BLE001
+        output_metadata.update(
+            {
+            "modelPlan.textPayloadRepair": "failed",
+            "modelPlan.textPayloadRepairError": str(exc)[:240],
+            }
+        )
+        return json.dumps(intent, separators=(",", ":")), output_metadata
+
+
+def clear_empty_conversation_mode(intent: dict[str, Any]) -> bool:
+    action_plan = intent.get("actionPlan") if isinstance(intent.get("actionPlan"), dict) else {}
+    tools = action_plan.get("tools") if isinstance(action_plan.get("tools"), list) else []
+    metadata_value = intent.get("metadata")
+    if not isinstance(metadata_value, dict):
+        return False
+    if not tools or metadata_value.get("responseMode") != "conversation":
+        return False
+    if str(metadata_value.get("assistantResponse") or "").strip():
+        return False
+    metadata_value.pop("responseMode", None)
+    metadata_value.pop("assistantResponse", None)
+    metadata_value.pop("notActionableReason", None)
+    return True
+
+
+def repair_app_chain_metadata(
+    intent: dict[str, Any],
+    *,
+    command: str,
+    model_id: str,
+    context_snippets: list[Any],
+) -> dict[str, str]:
+    if existing_app_chain(intent):
+        return {}
+    if not should_consider_app_chain_repair(intent):
+        return {}
+
+    started = time.monotonic()
+    try:
+        response = post_json(
+            "/api/generate",
+            json.dumps(
+                {
+                    "model": model_id,
+                    "prompt": app_chain_repair_prompt(command, intent, context_snippets),
+                    "stream": False,
+                    "format": app_chain_repair_schema(),
+                    "options": {
+                        "num_ctx": 1024,
+                        "num_predict": 180,
+                        "temperature": 0,
+                        "top_p": 0.8,
+                    },
+                    "keep_alive": "10m",
+                }
+            ).encode("utf-8"),
+            timeout=min(local_llm_timeout_seconds(), 15),
+        )
+        latency_ms = (time.monotonic() - started) * 1000
+        payload = decode_json_object(str(response.get("response", "")))
+        metadata = {
+            "modelPlan.appChainRepair": "attempted",
+            "latency.appChainRepairMS": f"{latency_ms:.3f}",
+        }
+        if not isinstance(payload, dict) or not bool(payload.get("needsChain")):
+            metadata["modelPlan.appChainRepair"] = "notNeeded"
+            return metadata
+
+        app_chain = [str(item).strip() for item in payload.get("appChain", []) if str(item).strip()]
+        target_app = target_app_name(intent)
+        if target_app and (not app_chain or normalized_words(app_chain[-1]) != normalized_words(target_app)):
+            app_chain.append(target_app)
+        if len(app_chain) < 2:
+            metadata["modelPlan.appChainRepair"] = "invalid"
+            return metadata
+
+        source_apps = [item for item in app_chain[:-1]]
+        intent_metadata = intent.setdefault("metadata", {})
+        if isinstance(intent_metadata, dict):
+            intent_metadata["appChain"] = json.dumps(app_chain, separators=(",", ":"))
+            intent_metadata["sourceApps"] = json.dumps(source_apps, separators=(",", ":"))
+            reason = str(payload.get("reason") or "").strip()
+            if reason:
+                intent_metadata["chainReason"] = reason
+        metadata["modelPlan.appChainRepair"] = "completed"
+        return metadata
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "modelPlan.appChainRepair": "failed",
+            "modelPlan.appChainRepairError": str(exc)[:240],
+        }
+
+
+def existing_app_chain(intent: dict[str, Any]) -> list[str]:
+    metadata_value = intent.get("metadata") if isinstance(intent.get("metadata"), dict) else {}
+    for key in ["appChain", "appSequence", "requiredAppChain"]:
+        raw_value = metadata_value.get(key) if isinstance(metadata_value, dict) else None
+        chain = parse_app_chain_value(raw_value)
+        if chain:
+            return chain
+    return []
+
+
+def parse_app_chain_value(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if not isinstance(value, str) or not value.strip():
+        return []
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        decoded = None
+    if isinstance(decoded, list):
+        return [str(item).strip() for item in decoded if str(item).strip()]
+    for separator in ["->", ">", "|", ","]:
+        if separator in value:
+            return [part.strip() for part in value.split(separator) if part.strip()]
+    return [value.strip()]
+
+
+def should_consider_app_chain_repair(intent: dict[str, Any]) -> bool:
+    if str(intent.get("taskType") or "") != "local_app_interaction":
+        return False
+    action_plan = intent.get("actionPlan") if isinstance(intent.get("actionPlan"), dict) else {}
+    tools = action_plan.get("tools") if isinstance(action_plan.get("tools"), list) else []
+    if "ui.newDocument" not in tools or "ui.setText" not in tools:
+        return False
+    target_words = normalized_words(target_app_name(intent))
+    return target_words in (["numbers"], ["keynote"], ["pages"])
+
+
+def target_app_name(intent: dict[str, Any]) -> str:
+    normalized_entities = intent.get("normalizedEntities") if isinstance(intent.get("normalizedEntities"), dict) else {}
+    entities = intent.get("entities") if isinstance(intent.get("entities"), dict) else {}
+    return str(intent.get("targetAppName") or normalized_entities.get("appName") or entities.get("appName") or "")
+
+
+def app_chain_repair_prompt(command: str, intent: dict[str, Any], context_snippets: list[Any]) -> str:
+    target_app = target_app_name(intent)
+    available_apps = "\n".join(str(item) for item in context_snippets[:8] if str(item).strip())
+    return "\n".join(
+        [
+            "You repair missing multi-app chain metadata for Donkey. Return strict JSON only.",
+            "Donkey has one final destination app in targetAppName, but some tasks require opening a source app first to gather or inspect information.",
+            "If the command can be completed entirely in the destination app from user-provided content, set needsChain=false.",
+            "If the command asks for fresh/current/reference data that should be found in another local app before creating the destination artifact, set needsChain=true.",
+            "When needsChain=true, appChain must be ordered source apps first and final destination app last.",
+            "Use only app names that appear in Available local apps when possible.",
+            "Examples: market data or market-cap tables use Stocks before Numbers; forecast tables use Weather before Numbers; place/distance tables use Maps before Numbers.",
+            f"Command: {command}",
+            f"Destination app: {target_app}",
+            "Current intent:",
+            json.dumps(
+                {
+                    "taskType": intent.get("taskType"),
+                    "targetAppName": intent.get("targetAppName"),
+                    "entities": intent.get("entities"),
+                    "normalizedEntities": intent.get("normalizedEntities"),
+                    "actionPlan": intent.get("actionPlan"),
+                },
+                separators=(",", ":"),
+            ),
+            "Available local apps:",
+            available_apps,
+        ]
+    )
+
+
+def app_chain_repair_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["needsChain", "appChain", "reason"],
+        "properties": {
+            "needsChain": {"type": "boolean"},
+            "appChain": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
+            "reason": {"type": "string"},
+        },
+    }
+
+
+def should_repair_document_text_payload(intent: dict[str, Any], command: str) -> bool:
+    if str(intent.get("taskType") or "") != "local_app_interaction":
+        return False
+
+    app_name = str(
+        intent.get("targetAppName")
+        or (intent.get("normalizedEntities") or {}).get("appName")
+        or (intent.get("entities") or {}).get("appName")
+        or ""
+    )
+    if "notes" not in normalized_words(app_name):
+        return False
+
+    action_plan = intent.get("actionPlan") or {}
+    tools = action_plan.get("tools") or []
+    if not isinstance(tools, list) or "ui.newDocument" not in tools or "ui.setText" not in tools:
+        return False
+    if "ui.pressReturn" in tools:
+        return False
+
+    query = intent_query(intent).strip()
+    if not query:
+        return True
+    if is_copied_prompt_placeholder(query):
+        return True
+    if command_contains_quoted(query, command):
+        return False
+    if any(separator in query for separator in ["\n", "\t"]):
+        return False
+    if re.search(r"[.?!:;,]", query):
+        return False
+    return len(normalized_words(query)) <= 5
+
+
+def document_text_payload_prompt(command: str) -> str:
+    return "\n".join(
+        [
+            "You repair missing document text for Donkey. Return strict JSON only.",
+            "Decide whether Command clearly asks to write or generate a meaningful finished text payload for Notes.",
+            "If it does, set canWrite=true and text to the final text to type. Text must be the content itself, not a label, not a restatement, and not instructions.",
+            "If details are sparse but the requested writing form is clear, write a short generic finished piece for that form.",
+            "If the requested object is malformed, nonsensical, or not a writing task, set canWrite=false, text=\"\", and assistantResponse to a brief clarification.",
+            "Example: Command 'write a people in notes' is malformed because 'a people' is not a meaningful writing form or payload; return canWrite=false.",
+            f"Command: {command}",
+        ]
+    )
+
+
+def document_text_payload_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["canWrite", "text", "assistantResponse"],
+        "properties": {
+            "canWrite": {"type": "boolean"},
+            "text": {"type": "string"},
+            "assistantResponse": {"type": "string"},
+        },
+    }
+
+
+def decode_json_object(output_text: str) -> Any:
+    try:
+        return json.loads(output_text)
+    except json.JSONDecodeError:
+        pass
+
+    start = output_text.find("{")
+    end = output_text.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            return json.loads(output_text[start : end + 1])
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def intent_query(intent: dict[str, Any]) -> str:
+    action_plan = intent.get("actionPlan") or {}
+    entity_name = str(action_plan.get("inputEntity") or "query")
+    normalized_entities = intent.get("normalizedEntities") or {}
+    entities = intent.get("entities") or {}
+    return str(normalized_entities.get(entity_name) or normalized_entities.get("query") or entities.get(entity_name) or entities.get("query") or "")
+
+
+def set_intent_query(intent: dict[str, Any], text: str) -> None:
+    action_plan = intent.get("actionPlan") or {}
+    entity_name = str(action_plan.get("inputEntity") or "query")
+    entities = intent.setdefault("entities", {})
+    normalized_entities = intent.setdefault("normalizedEntities", {})
+    if isinstance(entities, dict):
+        entities[entity_name] = text
+    if isinstance(normalized_entities, dict):
+        normalized_entities[entity_name] = text
+
+
+def mark_intent_as_conversation(intent: dict[str, Any], assistant_response: str, reason: str) -> None:
+    intent["confidence"] = min(float(intent.get("confidence") or 0.2), 0.2)
+    intent["needsConfirmation"] = False
+    intent["actionPlan"] = {
+        "tools": [],
+        "inputEntity": "query",
+        "controlID": "",
+        "focusKey": "",
+        "verification": "commandAttempted",
+    }
+    intent_metadata = intent.setdefault("metadata", {})
+    if isinstance(intent_metadata, dict):
+        intent_metadata["responseMode"] = "conversation"
+        intent_metadata["assistantResponse"] = assistant_response
+        intent_metadata["notActionableReason"] = reason
+
+
+def normalized_words(value: str) -> list[str]:
+    return [word for word in re.sub(r"[^a-z0-9]+", " ", value.lower()).split() if word]
+
+
+def is_copied_prompt_placeholder(query: str) -> bool:
+    normalized_query = " ".join(normalized_words(query))
+    phrases = [
+        "complete piece of text generated for the user writing request",
+        "complete piece of text generated for the user s writing request",
+        "generated for the user writing request",
+        "the actual final text to type",
+        "tab separated rows for the requested table",
+        "column a column b row label value or data needed note",
+    ]
+    return any(phrase in normalized_query for phrase in phrases)
+
+
+def command_contains_quoted(query: str, command: str) -> bool:
+    trimmed = query.strip()
+    if not trimmed:
+        return False
+    lowered_command = command.lower()
+    return any(f"{quote}{trimmed.lower()}{quote}" in lowered_command for quote in ["\"", "'", "`"])
+
+
+def selected_ollama_model(requested_model_id: str) -> str:
+    names = ollama_model_names()
+    if requested_model_id in names or f"{requested_model_id}:latest" in names:
+        return requested_model_id
+
+    for prefix in [
+        "qwen3",
+        "qwen2.5",
+        "llama3.1",
+        "llama3",
+        "mistral",
+        "gemma3",
+        "gemma2",
+    ]:
+        for name in names:
+            if name == prefix or name.startswith(f"{prefix}:"):
+                return name
+
+    return requested_model_id
+
+
+def local_llm_timeout_seconds() -> int:
+    raw_value = os.environ.get("DONKEY_LOCAL_LLM_TIMEOUT_SECONDS", "20")
+    try:
+        return max(1, int(raw_value))
+    except ValueError:
+        return 20
 
 
 def task_followup_prompt(command: str, candidates: list[dict[str, Any]]) -> str:
@@ -687,16 +1137,34 @@ def task_intent_prompt(
 
     return "\n".join(
         [
-            "Classify the user's natural-language request into exactly one supported local app task intent, then return strict JSON.",
-            "Choose by capability and target app, not by exact wording. The user should not need to remember command phrases.",
-            "Do not include reasoning.",
-            "Use only the provided task definitions. Do not invent task types, unsupported entities, or actions.",
+            "You are Donkey's local task-intent boundary. Return strict JSON only; do not include reasoning.",
+            "First decide whether Command is an executable local-app task or a conversation turn.",
+            "Executable local-app task means all three are clear: action, destination or target app/item, and enough payload to execute safely.",
+            "If Command is a question, conversation, malformed request, or lacks a real executable payload, do not invent one. Return the closest supported task with confidence below 0.55, needsConfirmation=false, metadata.responseMode=conversation, and metadata.assistantResponse with a brief natural-language reply.",
+            "If Command is an executable local task with one ordinary missing detail, set needsConfirmation=true and include missingEntity in metadata.",
+            "If Command is executable, choose by capability and target app, not exact wording. Use only provided task definitions; do not invent task types, unsupported entities, or actions.",
             "If no capability fits, return the closest supported task with confidence below 0.55.",
-            "If a required entity is missing, set needsConfirmation=true and include missingEntity in metadata.",
             "For dynamic local-item capabilities, app/file/folder names may come from the request, relevant local cache, or default-app inference; the catalog will verify availability before execution.",
+            "For write/create document requests: if the requested content is malformed or not meaningful enough to type, choose conversation; do not fabricate a document payload just to make the task executable.",
             "For local_app_interaction, select the most likely local app for the user's goal, set entities.goal, and when text must be entered set entities.query plus normalizedEntities.query.",
-            "For local_app_interaction, fill actionPlan.tools with allowed tools only: app.openOrFocus, app.observe, ui.focusSearch, ui.setText, ui.pressReturn, app.verifyCommand, app.verifyVisibleText.",
+            "For local_app_interaction, fill actionPlan.tools with allowed tools only: app.openOrFocus, app.observe, ui.newDocument, ui.focusSearch, ui.focusAddressBar, ui.focusTextEntry, ui.setText, ui.pressReturn, app.verifyCommand, app.verifyVisibleText.",
+            "For website navigation, choose Safari or the user's browser, set query to the URL, use ui.focusAddressBar with controlID=addressBar and focusKey=Command+L, then ui.setText and ui.pressReturn.",
+            "For writing in Notes, choose Notes, create the requested prose in query, and use ui.newDocument followed by ui.setText.",
+            "For generative writing requests, query must be the complete final text to type, not a single category label, restatement of the request, or placeholder copied from these instructions.",
+            "If the writing type is clear but topic/details are sparse, compose a short generic piece that satisfies the requested writing type and put that complete text in query.",
+            "For spreadsheet or table creation, choose Numbers, put compact tab-separated table content in query, and use ui.newDocument followed by ui.setText. If exact live data is unavailable, make a table-shaped brief with a data-needed note; do not output a single sentence.",
+            "For spreadsheet/table requests that require fresh data from another local app, set targetAppName to the final destination app and include the source-to-destination chain in metadata.appChain as a JSON string array of app names. Example: a market-cap table should use metadata.appChain=[\"Stocks\",\"Numbers\"] and targetAppName=Numbers.",
+            "When ui.setText is present, entities.query and normalizedEntities.query must be non-empty.",
+            "If you cannot produce non-empty text for ui.setText, choose conversation; never return ui.setText with an empty query.",
+            "For sparse writing requests such as 'write a [form] in Notes', infer the requested form and write a short finished piece. If the requested object is malformed or nonsensical, choose conversation.",
+            "Example malformed writing boundary: 'write a people in Notes' is not a meaningful writing form or payload, so choose conversation rather than writing a definition.",
+            "entities.appName must be the human app name, such as Safari, Notes, Numbers, or Music; do not put a bundle identifier in appName.",
             "For local_app_interaction, set actionPlan.inputEntity to query when ui.setText should type the query, and set actionPlan.controlID/focusKey for the UI control strategy.",
+            "The examples below show output structure only. Replace every example entity value with values inferred from Command and local cache; do not copy example query text unless the user asked for that exact text.",
+            'Example website output shape: {"taskType":"local_app_interaction","targetAppName":"Safari","entities":{"appName":"Safari","goal":"open requested website","query":"https://example.org"},"normalizedEntities":{"appName":"Safari","goal":"open requested website","query":"https://example.org"},"confidence":0.9,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.focusAddressBar","ui.setText","ui.pressReturn","app.verifyCommand"],"inputEntity":"query","controlID":"addressBar","focusKey":"Command+L","verification":"commandAttempted"},"metadata":{}}',
+            "Writing output shape: targetAppName=Notes, entities.appName=Notes, entities.goal=write requested text, entities.query=<the actual final text to type>, actionPlan.tools=[app.openOrFocus, app.observe, ui.newDocument, ui.setText, app.verifyCommand], inputEntity=query, controlID=editor.",
+            "Table output shape: targetAppName=Numbers, entities.appName=Numbers, entities.goal=create requested table, entities.query=<tab-separated rows for the requested table>, actionPlan.tools=[app.openOrFocus, app.observe, ui.newDocument, ui.setText, app.verifyCommand], inputEntity=query, controlID=editor.",
+            'Example malformed request output shape: {"taskType":"local_app_interaction","targetAppName":"Notes","entities":{"appName":"Notes","goal":"unclear local writing request"},"normalizedEntities":{"appName":"Notes","goal":"unclear local writing request"},"confidence":0.2,"needsConfirmation":false,"actionPlan":{"tools":[],"inputEntity":"query","controlID":"","focusKey":"","verification":"commandAttempted"},"metadata":{"responseMode":"conversation","assistantResponse":"I can help, but I need a clearer thing to write before opening an app."}}',
             "For every other task type, actionPlan.tools must be empty.",
             f"Command: {command}",
             "Relevant local cache:",
@@ -742,7 +1210,10 @@ def task_intent_schema(task_definitions: list[dict[str, Any]]) -> dict[str, Any]
                     "enum": [
                         "app.openOrFocus",
                         "app.observe",
+                        "ui.newDocument",
                         "ui.focusSearch",
+                        "ui.focusAddressBar",
+                        "ui.focusTextEntry",
                         "ui.setText",
                         "ui.pressReturn",
                         "app.verifyCommand",
@@ -937,11 +1408,25 @@ def run_external_json_command(command: str, request: dict[str, Any]) -> dict[str
 
 
 def ollama_has_model(model_id: str) -> bool:
+    names = set(ollama_model_names())
+    if names:
+        return model_id in names or f"{model_id}:latest" in names
+    return False
+
+
+def ollama_model_names() -> list[str]:
     try:
         tags = get_json("/api/tags", timeout=3)
         models = tags.get("models", [])
-        names = {item.get("name") for item in models if isinstance(item, dict)}
-        return model_id in names or f"{model_id}:latest" in names
+        names = []
+        for item in models:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "")
+            size = int(item.get("size") or 0)
+            if name and ":cloud" not in name and size > 0:
+                names.append(name)
+        return names
     except Exception:  # noqa: BLE001
         pass
 
@@ -954,9 +1439,16 @@ def ollama_has_model(model_id: str) -> bool:
             check=False,
         )
         if completed.returncode == 0:
-            names = {line.split()[0] for line in completed.stdout.splitlines()[1:] if line.split()}
-            return model_id in names
-    return False
+            names = []
+            for line in completed.stdout.splitlines()[1:]:
+                parts = line.split()
+                if not parts:
+                    continue
+                name = parts[0]
+                if name and ":cloud" not in name:
+                    names.append(name)
+            return names
+    return []
 
 
 def get_json(path: str, timeout: int) -> dict[str, Any]:

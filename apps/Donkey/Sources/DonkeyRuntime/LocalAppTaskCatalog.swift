@@ -651,15 +651,26 @@ public struct LocalAppTaskCatalog: Sendable {
     public func resolve(intent: TaskIntent) -> LocalAppTaskCatalogResolution {
         if intent.parserSource != .deterministic,
            intent.confidence < Self.minimumModelIntentConfidence {
+            var metadata = [
+                "reason": "lowConfidenceIntent",
+                "taskType": intent.taskType,
+                "targetApp": intent.targetApp.appName,
+                "intentConfidence": String(intent.confidence)
+            ]
+            for key in [
+                "responseMode",
+                "assistantResponse",
+                "missingEntity",
+                "notActionableReason"
+            ] {
+                if let value = intent.metadata[key], !value.isEmpty {
+                    metadata[key] = value
+                }
+            }
             return LocalAppTaskCatalogResolution(
                 status: .needsConfirmation,
                 intent: intent,
-                metadata: [
-                    "reason": "lowConfidenceIntent",
-                    "taskType": intent.taskType,
-                    "targetApp": intent.targetApp.appName,
-                    "intentConfidence": String(intent.confidence)
-                ]
+                metadata: metadata
             )
         }
 
@@ -1000,16 +1011,29 @@ public struct LocalAppTaskCatalog: Sendable {
             switch tool {
             case .openOrFocusApp, .observeApp:
                 continue
-            case .focusSearch:
+            case .newDocument:
                 steps.append(LocalAppTaskWorkflowStepDefinition(
-                    id: "model-plan-focus-search",
-                    role: .focusControl,
-                    summary: "Focus the model-selected search control",
+                    id: "model-plan-new-document",
+                    role: .submit,
+                    summary: "Create a new document or note",
                     metadata: [
-                        "controlID": plan.controlID,
-                        "key": plan.focusKey,
+                        "key": "Command+N",
                         "plan.tool": tool.rawValue
                     ]
+                ))
+            case .focusSearch, .focusAddressBar, .focusTextEntry:
+                var metadata = [
+                    "controlID": plan.controlID,
+                    "plan.tool": tool.rawValue
+                ]
+                if !plan.focusKey.isEmpty {
+                    metadata["key"] = plan.focusKey
+                }
+                steps.append(LocalAppTaskWorkflowStepDefinition(
+                    id: "model-plan-\(Self.toolSlug(tool.rawValue))",
+                    role: .focusControl,
+                    summary: "Focus the model-selected input control",
+                    metadata: metadata
                 ))
             case .setText:
                 steps.append(LocalAppTaskWorkflowStepDefinition(
@@ -1050,6 +1074,13 @@ public struct LocalAppTaskCatalog: Sendable {
             ))
         }
         return steps
+    }
+
+    private static func toolSlug(_ value: String) -> String {
+        value
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .joined(separator: "-")
+            .lowercased()
     }
 
     private static func entityValue(named entityName: String, in intent: TaskIntent) -> String {
