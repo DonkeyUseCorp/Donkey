@@ -1,28 +1,33 @@
 import Foundation
 
-public enum RunMemoryScope: String, Codable, Equatable, Sendable {
+public enum AgentMemoryScope: String, Codable, CaseIterable, Equatable, Sendable {
+    case global
     case run
     case target
     case user
 }
 
-public enum RunMemoryKind: String, Codable, Equatable, Sendable {
+public enum AgentMemoryKind: String, Codable, CaseIterable, Equatable, Sendable {
+    case localItem
+    case negativeLookup
+    case taskDefinition
+    case targetFact
+    case userInstruction
+    case safetyStop
+    case workflowMemory
     case currentGoal
     case activeHint
     case recentState
     case failure
-    case userInstruction
-    case safetyStop
-    case targetFact
 }
 
-public enum RunMemoryAuthor: String, Codable, Equatable, Sendable {
+public enum AgentMemoryAuthor: String, Codable, CaseIterable, Equatable, Sendable {
     case deterministicRuntime
     case user
     case model
 }
 
-public struct RunMemorySource: Codable, Equatable, Sendable {
+public struct AgentMemorySource: Codable, Equatable, Sendable {
     public var traceID: String?
     public var frameID: String?
     public var stateID: String?
@@ -63,10 +68,20 @@ public struct RunMemorySource: Codable, Equatable, Sendable {
     }
 }
 
-public struct RunMemoryRecord: Codable, Equatable, Sendable {
+public struct AgentMemoryEmbeddingMetadata: Codable, Equatable, Sendable {
+    public var modelID: String
+    public var dimensions: Int
+
+    public init(modelID: String, dimensions: Int) {
+        self.modelID = modelID
+        self.dimensions = max(0, dimensions)
+    }
+}
+
+public struct AgentMemoryRecord: Codable, Equatable, Sendable {
     public var id: String
-    public var scope: RunMemoryScope
-    public var kind: RunMemoryKind
+    public var scope: AgentMemoryScope
+    public var kind: AgentMemoryKind
     public var targetID: String?
     public var runID: String?
     public var userID: String?
@@ -74,13 +89,17 @@ public struct RunMemoryRecord: Codable, Equatable, Sendable {
     public var createdAt: RunTraceTimestamp
     public var expiresAt: RunTraceTimestamp?
     public var durable: Bool
-    public var source: RunMemorySource
+    public var source: AgentMemorySource
     public var metadata: [String: String]
+    public var confidence: Double
+    public var useCount: Int
+    public var lastUsedAt: RunTraceTimestamp?
+    public var embedding: AgentMemoryEmbeddingMetadata?
 
     public init(
         id: String,
-        scope: RunMemoryScope,
-        kind: RunMemoryKind,
+        scope: AgentMemoryScope,
+        kind: AgentMemoryKind,
         targetID: String? = nil,
         runID: String? = nil,
         userID: String? = nil,
@@ -88,8 +107,12 @@ public struct RunMemoryRecord: Codable, Equatable, Sendable {
         createdAt: RunTraceTimestamp,
         expiresAt: RunTraceTimestamp? = nil,
         durable: Bool = false,
-        source: RunMemorySource,
-        metadata: [String: String] = [:]
+        source: AgentMemorySource,
+        metadata: [String: String] = [:],
+        confidence: Double = 1,
+        useCount: Int = 0,
+        lastUsedAt: RunTraceTimestamp? = nil,
+        embedding: AgentMemoryEmbeddingMetadata? = nil
     ) {
         self.id = id
         self.scope = scope
@@ -103,6 +126,10 @@ public struct RunMemoryRecord: Codable, Equatable, Sendable {
         self.durable = durable
         self.source = source
         self.metadata = metadata
+        self.confidence = min(max(confidence, 0), 1)
+        self.useCount = max(0, useCount)
+        self.lastUsedAt = lastUsedAt
+        self.embedding = embedding
     }
 
     public func isExpired(at timestamp: RunTraceTimestamp) -> Bool {
@@ -115,27 +142,26 @@ public struct RunMemoryRecord: Codable, Equatable, Sendable {
     }
 }
 
-public enum RunMemoryApprovalIssue: String, Codable, Equatable, Sendable {
+public enum AgentMemoryApprovalIssue: String, Codable, CaseIterable, Equatable, Sendable {
     case emptyValue
     case missingSourceLink
     case missingTargetID
     case missingRunID
     case missingUserID
     case missingRetention
-    case unsupportedScope
     case sensitiveContent
 }
 
-public struct RunMemoryWriteProposal: Codable, Equatable, Sendable {
+public struct AgentMemoryWriteProposal: Codable, Equatable, Sendable {
     public var id: String
-    public var proposedBy: RunMemoryAuthor
-    public var record: RunMemoryRecord
+    public var proposedBy: AgentMemoryAuthor
+    public var record: AgentMemoryRecord
     public var rationale: String
 
     public init(
         id: String,
-        proposedBy: RunMemoryAuthor,
-        record: RunMemoryRecord,
+        proposedBy: AgentMemoryAuthor,
+        record: AgentMemoryRecord,
         rationale: String
     ) {
         self.id = id
@@ -145,19 +171,19 @@ public struct RunMemoryWriteProposal: Codable, Equatable, Sendable {
     }
 }
 
-public struct RunMemoryWriteApproval: Codable, Equatable, Sendable {
+public struct AgentMemoryWriteApproval: Codable, Equatable, Sendable {
     public var proposalID: String
     public var approved: Bool
-    public var issues: [RunMemoryApprovalIssue]
+    public var issues: [AgentMemoryApprovalIssue]
     public var decidedAt: RunTraceTimestamp
     public var approver: String
 
     public init(
         proposalID: String,
         approved: Bool,
-        issues: [RunMemoryApprovalIssue],
+        issues: [AgentMemoryApprovalIssue],
         decidedAt: RunTraceTimestamp,
-        approver: String = "deterministic-memory-approver-v1"
+        approver: String = "deterministic-agent-memory-approver-v1"
     ) {
         self.proposalID = proposalID
         self.approved = approved
@@ -167,15 +193,15 @@ public struct RunMemoryWriteApproval: Codable, Equatable, Sendable {
     }
 }
 
-public struct RunMemoryWriteDecision: Codable, Equatable, Sendable {
-    public var proposal: RunMemoryWriteProposal
-    public var approval: RunMemoryWriteApproval
-    public var storedRecord: RunMemoryRecord?
+public struct AgentMemoryWriteDecision: Codable, Equatable, Sendable {
+    public var proposal: AgentMemoryWriteProposal
+    public var approval: AgentMemoryWriteApproval
+    public var storedRecord: AgentMemoryRecord?
 
     public init(
-        proposal: RunMemoryWriteProposal,
-        approval: RunMemoryWriteApproval,
-        storedRecord: RunMemoryRecord?
+        proposal: AgentMemoryWriteProposal,
+        approval: AgentMemoryWriteApproval,
+        storedRecord: AgentMemoryRecord?
     ) {
         self.proposal = proposal
         self.approval = approval
@@ -188,18 +214,18 @@ public struct RunMemorySnapshot: Codable, Equatable, Sendable {
     public var activeHints: [RunPlannerHint]
     public var recentStates: [RunWorldStateSummary]
     public var recentFailures: [RunFailureSummary]
-    public var userInstructions: [RunMemoryRecord]
-    public var safetyStops: [RunMemoryRecord]
-    public var targetRecords: [RunMemoryRecord]
+    public var userInstructions: [AgentMemoryRecord]
+    public var safetyStops: [AgentMemoryRecord]
+    public var targetRecords: [AgentMemoryRecord]
 
     public init(
         currentGoal: String? = nil,
         activeHints: [RunPlannerHint] = [],
         recentStates: [RunWorldStateSummary] = [],
         recentFailures: [RunFailureSummary] = [],
-        userInstructions: [RunMemoryRecord] = [],
-        safetyStops: [RunMemoryRecord] = [],
-        targetRecords: [RunMemoryRecord] = []
+        userInstructions: [AgentMemoryRecord] = [],
+        safetyStops: [AgentMemoryRecord] = [],
+        targetRecords: [AgentMemoryRecord] = []
     ) {
         self.currentGoal = currentGoal
         self.activeHints = activeHints
@@ -211,7 +237,7 @@ public struct RunMemorySnapshot: Codable, Equatable, Sendable {
     }
 }
 
-public struct RunMemoryRetrievalBudget: Codable, Equatable, Sendable {
+public struct AgentMemoryRetrievalBudget: Codable, Equatable, Sendable {
     public var maxRecords: Int
     public var maxPromptCharacters: Int
     public var minRelevance: Double
@@ -227,53 +253,71 @@ public struct RunMemoryRetrievalBudget: Codable, Equatable, Sendable {
     }
 }
 
-public struct RunMemorySemanticQuery: Codable, Equatable, Sendable {
+public struct AgentMemoryQuery: Codable, Equatable, Sendable {
     public var text: String
     public var targetID: String?
-    public var scope: RunMemoryScope?
-    public var budget: RunMemoryRetrievalBudget
+    public var runID: String?
+    public var userID: String?
+    public var scope: AgentMemoryScope?
+    public var kinds: [AgentMemoryKind]
+    public var budget: AgentMemoryRetrievalBudget
     public var metadata: [String: String]
 
     public init(
         text: String,
         targetID: String? = nil,
-        scope: RunMemoryScope? = nil,
-        budget: RunMemoryRetrievalBudget = RunMemoryRetrievalBudget(),
+        runID: String? = nil,
+        userID: String? = nil,
+        scope: AgentMemoryScope? = nil,
+        kinds: [AgentMemoryKind] = [],
+        budget: AgentMemoryRetrievalBudget = AgentMemoryRetrievalBudget(),
         metadata: [String: String] = [:]
     ) {
         self.text = text
         self.targetID = targetID
+        self.runID = runID
+        self.userID = userID
         self.scope = scope
+        self.kinds = kinds
         self.budget = budget
         self.metadata = metadata
     }
 }
 
-public struct RunMemorySemanticResult: Codable, Equatable, Sendable {
-    public var record: RunMemoryRecord
+public struct AgentMemorySearchResult: Codable, Equatable, Sendable {
+    public var record: AgentMemoryRecord
     public var relevance: Double
     public var embeddingModelID: String?
+    public var lexicalScore: Double
+    public var vectorScore: Double
+    public var rankScore: Double
     public var metadata: [String: String]
 
     public init(
-        record: RunMemoryRecord,
+        record: AgentMemoryRecord,
         relevance: Double,
         embeddingModelID: String? = nil,
+        lexicalScore: Double = 0,
+        vectorScore: Double = 0,
+        rankScore: Double? = nil,
         metadata: [String: String] = [:]
     ) {
         self.record = record
         self.relevance = min(max(relevance, 0), 1)
         self.embeddingModelID = embeddingModelID
+        self.lexicalScore = min(max(lexicalScore, 0), 1)
+        self.vectorScore = min(max(vectorScore, 0), 1)
+        self.rankScore = rankScore ?? self.relevance
         self.metadata = metadata
     }
 }
 
-public enum RunMemoryApprover {
+public enum AgentMemoryApprover {
     public static func evaluate(
-        _ proposal: RunMemoryWriteProposal,
+        _ proposal: AgentMemoryWriteProposal,
         decidedAt: RunTraceTimestamp
-    ) -> RunMemoryWriteApproval {
-        var issues: [RunMemoryApprovalIssue] = []
+    ) -> AgentMemoryWriteApproval {
+        var issues: [AgentMemoryApprovalIssue] = []
         let record = proposal.record
 
         if record.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -289,6 +333,8 @@ public enum RunMemoryApprover {
         }
 
         switch record.scope {
+        case .global:
+            break
         case .run:
             if record.runID == nil {
                 issues.append(.missingRunID)
@@ -309,7 +355,7 @@ public enum RunMemoryApprover {
             }
         }
 
-        return RunMemoryWriteApproval(
+        return AgentMemoryWriteApproval(
             proposalID: proposal.id,
             approved: issues.isEmpty,
             issues: Array(Set(issues)).sorted { $0.rawValue < $1.rawValue },
@@ -332,3 +378,17 @@ public enum RunMemoryApprover {
         }
     }
 }
+
+public typealias RunMemoryScope = AgentMemoryScope
+public typealias RunMemoryKind = AgentMemoryKind
+public typealias RunMemoryAuthor = AgentMemoryAuthor
+public typealias RunMemorySource = AgentMemorySource
+public typealias RunMemoryRecord = AgentMemoryRecord
+public typealias RunMemoryApprovalIssue = AgentMemoryApprovalIssue
+public typealias RunMemoryWriteProposal = AgentMemoryWriteProposal
+public typealias RunMemoryWriteApproval = AgentMemoryWriteApproval
+public typealias RunMemoryWriteDecision = AgentMemoryWriteDecision
+public typealias RunMemoryRetrievalBudget = AgentMemoryRetrievalBudget
+public typealias RunMemorySemanticQuery = AgentMemoryQuery
+public typealias RunMemorySemanticResult = AgentMemorySearchResult
+public typealias RunMemoryApprover = AgentMemoryApprover

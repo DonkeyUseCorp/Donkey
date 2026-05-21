@@ -53,11 +53,11 @@ struct RunMemoryStoreTests {
     }
 
     @Test
-    func targetMemoryJsonlStoresListsAndDeletesApprovedRecords() async throws {
+    func sqliteAgentMemoryStoresListsAndDeletesApprovedRecords() throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let store = try TargetMemoryJSONLStore(baseDirectory: root)
+        let store = try SQLiteAgentMemoryStore(baseDirectory: root, cleanupLegacyStores: false)
         let proposal = RunMemoryWriteProposal(
             id: "proposal-1",
             proposedBy: .model,
@@ -65,28 +65,28 @@ struct RunMemoryStoreTests {
             rationale: "fixture-proven target fact"
         )
 
-        let decision = try await store.appendApprovedProposal(proposal, decidedAt: timestamp(20))
+        let decision = try store.appendApprovedProposal(proposal, decidedAt: timestamp(20))
 
         #expect(decision.approval.approved == true)
         #expect(decision.storedRecord?.id == "memory-1")
 
-        let records = try await store.records(targetID: "target-1")
+        let records = try store.records(scope: .target, kinds: [.targetFact], targetID: "target-1")
         #expect(records.map(\.id) == ["memory-1"])
 
-        let scoped = try await store.records(targetID: "target-1", runID: "run-1", userID: "user-1")
+        let scoped = try store.records(scope: .target, kinds: [.targetFact], targetID: "target-1", runID: "run-1", userID: "user-1")
         #expect(scoped.map(\.id) == ["memory-1"])
 
-        let deleted = try await store.delete(targetID: "target-1", recordID: "memory-1")
+        let deleted = try store.delete(recordID: "memory-1", scope: .target, targetID: "target-1")
         #expect(deleted == 1)
-        #expect(try await store.records(targetID: "target-1").isEmpty)
+        #expect(try store.records(scope: .target, targetID: "target-1").isEmpty)
     }
 
     @Test
-    func rejectedMemoryProposalIsInspectableAndNotStored() async throws {
+    func rejectedMemoryProposalIsInspectableAndNotStored() throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let store = try TargetMemoryJSONLStore(baseDirectory: root)
+        let store = try SQLiteAgentMemoryStore(baseDirectory: root, cleanupLegacyStores: false)
         let proposal = RunMemoryWriteProposal(
             id: "proposal-rejected",
             proposedBy: .model,
@@ -102,12 +102,12 @@ struct RunMemoryStoreTests {
             rationale: "bad proposal"
         )
 
-        let decision = try await store.appendApprovedProposal(proposal, decidedAt: timestamp(20))
+        let decision = try store.appendApprovedProposal(proposal, decidedAt: timestamp(20))
 
         #expect(decision.approval.approved == false)
         #expect(decision.storedRecord == nil)
         #expect(decision.approval.issues == [.emptyValue, .missingRetention])
-        #expect(try await store.records(targetID: "target-1").isEmpty)
+        #expect(try store.records(scope: .target, targetID: "target-1").isEmpty)
     }
 
     @Test

@@ -63,7 +63,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
     var redactor: AIHarnessRedactor
     var memoryRetriever: SemanticRunMemoryRetriever
     var coordinatorRegistry: PointerPromptRunCoordinatorRegistry
-    var targetMemoryStore: TargetMemoryJSONLStore?
+    var memoryStore: SQLiteAgentMemoryStore?
     var pointerCoachGuideResolver: any PointerCoachCursorGuideResolving
 
     init(
@@ -73,7 +73,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         redactor: AIHarnessRedactor = AIHarnessRedactor(),
         memoryRetriever: SemanticRunMemoryRetriever = SemanticRunMemoryRetriever(),
         coordinatorRegistry: PointerPromptRunCoordinatorRegistry = PointerPromptRunCoordinatorRegistry(),
-        targetMemoryStore: TargetMemoryJSONLStore? = try? TargetMemoryJSONLStore(),
+        memoryStore: SQLiteAgentMemoryStore? = .shared,
         pointerCoachGuideResolver: any PointerCoachCursorGuideResolving = ProcessBackedLocalLLMPointerCoachCursorGuideResolver()
     ) {
         self.catalog = catalog
@@ -83,7 +83,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         self.liveRunner = liveRunner ?? LocalAppTaskLiveRunner(catalog: catalog)
         self.redactor = redactor
         self.memoryRetriever = memoryRetriever
-        self.targetMemoryStore = targetMemoryStore
+        self.memoryStore = memoryStore
         self.pointerCoachGuideResolver = pointerCoachGuideResolver
     }
 
@@ -98,7 +98,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             PointerCoachCursorGuideResolverRequest(
                 command: command,
                 runtimeCapabilities: Self.runtimeCapabilities(for: catalog),
-                cacheSnippets: LocalItemResolutionCache.shared.contextSnippets(for: command),
+                cacheSnippets: memoryStore?.contextSnippets(for: command) ?? [],
                 sourceTraceID: traceID
             )
         )
@@ -440,23 +440,19 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         command: String,
         resolution: LocalAppTaskCatalogResolution
     ) async -> [RunMemorySemanticResult] {
-        guard let targetMemoryStore,
-              let targetID = semanticMemoryTargetID(for: resolution),
-              let records = try? await targetMemoryStore.records(targetID: targetID),
-              !records.isEmpty
+        guard let memoryStore,
+              let targetID = semanticMemoryTargetID(for: resolution)
         else {
             return []
         }
 
-        return await memoryRetriever.retrieve(
-            query: RunMemorySemanticQuery(
+        return (try? memoryStore.search(query: AgentMemoryQuery(
                 text: command,
                 targetID: targetID,
                 scope: .target,
+                kinds: [.targetFact, .workflowMemory, .userInstruction],
                 budget: RunMemoryRetrievalBudget(maxRecords: 3, maxPromptCharacters: 800)
-            ),
-            records: records
-        )
+        ))) ?? []
     }
 
     private func semanticMemoryTargetID(
@@ -629,7 +625,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             ),
             recentEvents: context?.recentEvents ?? [],
             assets: context?.assets ?? [],
-            memory: LocalItemResolutionCache.shared.contextSnippets(for: command),
+            memory: SQLiteAgentMemoryStore.shared?.contextSnippets(for: command) ?? [],
             policy: ["localInput": "guarded"]
         )
     }

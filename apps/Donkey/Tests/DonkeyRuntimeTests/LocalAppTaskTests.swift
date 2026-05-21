@@ -375,14 +375,14 @@ struct LocalAppTaskTests {
         let fileURL = directoryURL.appendingPathComponent("notes.json")
         try JSONEncoder().encode(definition).write(to: fileURL)
 
-        let cacheURL = temporaryCacheURL()
-        defer { try? FileManager.default.removeItem(at: cacheURL.deletingLastPathComponent()) }
-        let cache = LocalItemResolutionCache(storeURL: cacheURL)
-        let definitions = try LocalAppTaskDefinitionLoader(cache: cache).cachedDefinitions(from: directoryURL)
+        let storeURL = temporaryStoreDirectory()
+        defer { try? FileManager.default.removeItem(at: storeURL) }
+        let store = try SQLiteAgentMemoryStore(baseDirectory: storeURL, cleanupLegacyStores: false)
+        let definitions = try LocalAppTaskDefinitionLoader(memoryStore: store).cachedDefinitions(from: directoryURL)
         let loaded = try #require(definitions.first(where: { $0.taskType == "notes_capture" }))
         #expect(loaded.targetApp.bundleIdentifier == "com.apple.Notes")
         #expect(loaded.metadata["source"] == "test-json")
-        #expect(cache.taskDefinitions().map(\.taskType).contains("notes_capture"))
+        #expect(store.taskDefinitions().map(\.taskType).contains("notes_capture"))
 
         let catalog = LocalAppTaskCatalog(
             taskDefinitions: definitions,
@@ -401,10 +401,10 @@ struct LocalAppTaskTests {
 
     @Test
     func defaultLocalCatalogLoadsRuntimeDefinitionsFromCache() {
-        let cacheURL = temporaryCacheURL()
-        defer { try? FileManager.default.removeItem(at: cacheURL.deletingLastPathComponent()) }
-        let cache = LocalItemResolutionCache(storeURL: cacheURL)
-        let loader = LocalAppTaskDefinitionLoader(cache: cache)
+        let storeURL = temporaryStoreDirectory()
+        defer { try? FileManager.default.removeItem(at: storeURL) }
+        let store = try? SQLiteAgentMemoryStore(baseDirectory: storeURL, cleanupLegacyStores: false)
+        let loader = LocalAppTaskDefinitionLoader(memoryStore: store)
 
         let catalog = LocalAppTaskCatalog.defaultLocal(
             availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: []),
@@ -412,7 +412,7 @@ struct LocalAppTaskTests {
         )
 
         #expect(catalog.taskDefinitions.map(\.taskType) == ["app_open"])
-        #expect(cache.taskDefinitions().map(\.taskType) == ["app_open"])
+        #expect(store?.taskDefinitions().map(\.taskType) == ["app_open"])
         #expect(catalog.taskDefinitions.contains { $0.targetApp.appName == "Weather" } == false)
         #expect(catalog.taskDefinitions.contains { $0.targetApp.appName == "Music" } == false)
         #expect(catalog.taskDefinitions.contains { $0.targetApp.appName == "Preview" } == false)
@@ -931,10 +931,9 @@ struct LocalAppTaskTests {
         )
     }
 
-    private func temporaryCacheURL() -> URL {
+    private func temporaryStoreDirectory() -> URL {
         FileManager.default.temporaryDirectory
-            .appendingPathComponent("donkey-task-cache-\(UUID().uuidString)", isDirectory: true)
-            .appendingPathComponent("cache.jsonl")
+            .appendingPathComponent("donkey-task-memory-\(UUID().uuidString)", isDirectory: true)
     }
 }
 

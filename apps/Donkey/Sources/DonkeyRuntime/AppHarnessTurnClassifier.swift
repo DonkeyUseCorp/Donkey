@@ -38,11 +38,16 @@ public struct AppHarnessTurnClassifier: Sendable {
         catalog _: LocalAppTaskCatalog
     ) -> AppHarnessTurnClassification {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let cacheCandidates = LocalItemResolutionCache.shared.search(query: trimmedText, limit: 3)
+        let memoryCandidates = (try? SQLiteAgentMemoryStore.shared?.search(query: AgentMemoryQuery(
+            text: trimmedText,
+            scope: .global,
+            kinds: [.localItem, .negativeLookup, .taskDefinition],
+            budget: AgentMemoryRetrievalBudget(maxRecords: 3, maxPromptCharacters: 800, minRelevance: 0.05)
+        ))) ?? []
         let classifierMetadata = [
             "classifier": "fast-local-v1",
-            "cache.candidateKinds": cacheCandidates.map(\.entry.kind).joined(separator: ","),
-            "cache.candidateNames": cacheCandidates.map(\.entry.displayName).joined(separator: ",")
+            "memory.candidateKinds": memoryCandidates.map { $0.record.kind.rawValue }.joined(separator: ","),
+            "memory.candidateNames": memoryCandidates.map(\.record.value).joined(separator: ",")
         ]
         if let response = Self.simpleArithmeticResponse(for: trimmedText) {
             return AppHarnessTurnClassification(

@@ -68,7 +68,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
             self?.updateState = state
         }
         updateChecker.start()
-        LocalItemResolutionCache.shared.prewarmDefaultLocalItemsInBackground()
+        SQLiteAgentMemoryStore.shared?.prewarmDefaultLocalItemsInBackground()
         checkForUpdates()
     }
 

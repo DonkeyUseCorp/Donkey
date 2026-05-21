@@ -37,7 +37,7 @@ public struct MacLocalAppAvailabilityProvider: LocalAppAvailabilityProviding {
 
         let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
         if appURL == nil,
-           let cachedAvailability = LocalItemResolutionCache.shared.cachedAvailability(
+           let cachedAvailability = SQLiteAgentMemoryStore.shared?.cachedAvailability(
             named: target.appName,
             preferredKind: .application
            ) {
@@ -53,7 +53,7 @@ public struct MacLocalAppAvailabilityProvider: LocalAppAvailabilityProviding {
                 "provider": "mac-nsworkspace"
             ]
         )
-        LocalItemResolutionCache.shared.record(
+        SQLiteAgentMemoryStore.shared?.record(
             availability: availability,
             query: target.appName,
             source: "bundleLookup"
@@ -85,7 +85,7 @@ public struct MacLocalAppAvailabilityProvider: LocalAppAvailabilityProviding {
             )
         }
 
-        if let cachedAvailability = LocalItemResolutionCache.shared.cachedAvailability(
+        if let cachedAvailability = SQLiteAgentMemoryStore.shared?.cachedAvailability(
             named: requestedName,
             preferredKind: preferredKind
         ) {
@@ -112,7 +112,7 @@ public struct MacLocalAppAvailabilityProvider: LocalAppAvailabilityProviding {
                     "match": "runningApplication"
                 ]
             )
-            LocalItemResolutionCache.shared.record(
+            SQLiteAgentMemoryStore.shared?.record(
                 availability: availability,
                 query: requestedName,
                 source: "runningApplication"
@@ -130,7 +130,7 @@ public struct MacLocalAppAvailabilityProvider: LocalAppAvailabilityProviding {
                     "requestedItemName": requestedName
                 ]
             )
-            LocalItemResolutionCache.shared.record(
+            SQLiteAgentMemoryStore.shared?.record(
                 availability: availability,
                 query: requestedName,
                 source: "missingLookup"
@@ -162,7 +162,7 @@ public struct MacLocalAppAvailabilityProvider: LocalAppAvailabilityProviding {
                 "match": match.matchKind
             ]
         )
-        LocalItemResolutionCache.shared.record(
+        SQLiteAgentMemoryStore.shared?.record(
             availability: availability,
             query: requestedName,
             source: match.provider

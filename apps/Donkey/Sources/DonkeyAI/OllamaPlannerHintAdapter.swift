@@ -7,16 +7,16 @@ public struct OllamaPlannerHintAdapter: Sendable {
 
     public var router: AIModelRouter
     public var httpClient: any AIHTTPClient
-    public var targetMemoryStore: TargetMemoryJSONLStore?
+    public var memoryStore: SQLiteAgentMemoryStore?
 
     public init(
         router: AIModelRouter = AIModelRouter(registry: .defaultHybridPlanner),
         httpClient: any AIHTTPClient = URLSessionAIHTTPClient(),
-        targetMemoryStore: TargetMemoryJSONLStore? = try? TargetMemoryJSONLStore()
+        memoryStore: SQLiteAgentMemoryStore? = .shared
     ) {
         self.router = router
         self.httpClient = httpClient
-        self.targetMemoryStore = targetMemoryStore
+        self.memoryStore = memoryStore
     }
 
     public func generatePlannerHint(
@@ -70,7 +70,7 @@ public struct OllamaPlannerHintAdapter: Sendable {
             let proposalProcessing = await ProviderDecodedMemoryProposalHandler.process(
                 proposals: providerOutput.memoryWriteProposals,
                 decidedAt: request.now,
-                targetMemoryStore: targetMemoryStore
+                memoryStore: memoryStore
             )
 
             return PlannerHintAdapterResult(

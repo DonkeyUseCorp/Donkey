@@ -30,7 +30,10 @@ let package = Package(
         ),
         .target(
             name: "DonkeyRuntime",
-            dependencies: ["DonkeyContracts"]
+            dependencies: ["DonkeyContracts"],
+            linkerSettings: [
+                .linkedLibrary("sqlite3")
+            ]
         ),
         .target(
             name: "DonkeyAI",

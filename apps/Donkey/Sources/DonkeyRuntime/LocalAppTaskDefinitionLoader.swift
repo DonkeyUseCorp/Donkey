@@ -9,14 +9,14 @@ public enum LocalAppTaskDefinitionLoaderError: Error, Equatable, Sendable {
 
 public struct LocalAppTaskDefinitionLoader: Sendable {
     public var decoder: JSONDecoder
-    public var cache: LocalItemResolutionCache
+    public var memoryStore: SQLiteAgentMemoryStore?
 
     public init(
         decoder: JSONDecoder = JSONDecoder(),
-        cache: LocalItemResolutionCache = .shared
+        memoryStore: SQLiteAgentMemoryStore? = .shared
     ) {
         self.decoder = decoder
-        self.cache = cache
+        self.memoryStore = memoryStore
     }
 
     public static var defaultDirectoryURL: URL {
@@ -57,16 +57,16 @@ public struct LocalAppTaskDefinitionLoader: Sendable {
 
     public func cachedDefinitions(from directoryURL: URL) throws -> [LocalAppTaskDefinition] {
         let definitions = try loadDirectory(directoryURL)
-        cache.prewarmTaskDefinitions(definitions)
-        return cache.taskDefinitions()
+        memoryStore?.prewarmTaskDefinitions(definitions)
+        return memoryStore?.taskDefinitions() ?? definitions
     }
 
     public func defaultDefinitions() -> [LocalAppTaskDefinition] {
-        cache.prewarmTaskDefinitions(Self.runtimeSeedDefinitions)
+        memoryStore?.prewarmTaskDefinitions(Self.runtimeSeedDefinitions)
         if let generatedDefinitions = try? loadDirectory(Self.defaultDirectoryURL) {
-            cache.prewarmTaskDefinitions(generatedDefinitions)
+            memoryStore?.prewarmTaskDefinitions(generatedDefinitions)
         }
-        return cache.taskDefinitions()
+        return memoryStore?.taskDefinitions() ?? Self.runtimeSeedDefinitions
     }
 
     public static var runtimeSeedDefinitions: [LocalAppTaskDefinition] {

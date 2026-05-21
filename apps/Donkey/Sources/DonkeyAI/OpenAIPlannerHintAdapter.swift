@@ -125,18 +125,18 @@ public struct OpenAIPlannerHintAdapter: Sendable {
     public var router: AIModelRouter
     public var httpClient: any AIHTTPClient
     public var environment: [String: String]
-    public var targetMemoryStore: TargetMemoryJSONLStore?
+    public var memoryStore: SQLiteAgentMemoryStore?
 
     public init(
         router: AIModelRouter = AIModelRouter(),
         httpClient: any AIHTTPClient = URLSessionAIHTTPClient(),
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        targetMemoryStore: TargetMemoryJSONLStore? = try? TargetMemoryJSONLStore()
+        memoryStore: SQLiteAgentMemoryStore? = .shared
     ) {
         self.router = router
         self.httpClient = httpClient
         self.environment = environment
-        self.targetMemoryStore = targetMemoryStore
+        self.memoryStore = memoryStore
     }
 
     public func generatePlannerHint(
@@ -206,7 +206,7 @@ public struct OpenAIPlannerHintAdapter: Sendable {
             let proposalProcessing = await ProviderDecodedMemoryProposalHandler.process(
                 proposals: providerOutput.memoryWriteProposals,
                 decidedAt: request.now,
-                targetMemoryStore: targetMemoryStore
+                memoryStore: memoryStore
             )
 
             return PlannerHintAdapterResult(

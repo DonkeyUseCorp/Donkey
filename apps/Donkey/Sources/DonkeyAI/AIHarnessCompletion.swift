@@ -169,7 +169,7 @@ public enum ProviderDecodedMemoryProposalHandler {
     public static func process(
         proposals: [RunMemoryWriteProposal],
         decidedAt: RunTraceTimestamp,
-        targetMemoryStore: TargetMemoryJSONLStore?
+        memoryStore: SQLiteAgentMemoryStore?
     ) async -> ProviderMemoryProposalProcessingResult {
         var decisions: [RunMemoryWriteDecision] = []
         var approvedCount = 0
@@ -192,10 +192,9 @@ public enum ProviderDecodedMemoryProposalHandler {
             }
 
             approvedCount += 1
-            if let targetMemoryStore,
-               proposal.record.scope == .target {
+            if let memoryStore {
                 do {
-                    let decision = try await targetMemoryStore.appendApprovedProposal(
+                    let decision = try memoryStore.appendApprovedProposal(
                         proposal,
                         decidedAt: decidedAt
                     )

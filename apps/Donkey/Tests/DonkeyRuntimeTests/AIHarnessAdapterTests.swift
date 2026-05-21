@@ -647,7 +647,7 @@ struct AIHarnessAdapterTests {
             router: AIModelRouter(registry: AIModelRegistry(entries: [entry(id: "planner", modelID: "gpt-5.2")])),
             httpClient: httpClient,
             environment: ["OPENAI_API_KEY": "test-key"],
-            targetMemoryStore: nil
+            memoryStore: nil
         )
         var request = adapterRequest()
         request.context.semanticMemoryResults = [
@@ -676,7 +676,7 @@ struct AIHarnessAdapterTests {
     func openAIAdapterPersistsProviderMemoryProposalsWithValidatedHint() async throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = try TargetMemoryJSONLStore(baseDirectory: root)
+        let store = try SQLiteAgentMemoryStore(baseDirectory: root, cleanupLegacyStores: false)
         let httpClient = FakeAIHTTPClient(
             data: responseData(
                 outputText: providerOutput(
@@ -696,11 +696,11 @@ struct AIHarnessAdapterTests {
             router: AIModelRouter(registry: AIModelRegistry(entries: [entry(id: "planner", modelID: "gpt-5.2")])),
             httpClient: httpClient,
             environment: ["OPENAI_API_KEY": "test-key"],
-            targetMemoryStore: store
+            memoryStore: store
         )
 
         let result = await adapter.generatePlannerHint(adapterRequest())
-        let records = try await store.records(targetID: "target-1")
+        let records = try store.records(scope: .target, kinds: [.targetFact], targetID: "target-1")
 
         #expect(result.hint?.id == "hint-memory")
         #expect(result.trace.status == .completed)
@@ -725,7 +725,7 @@ struct AIHarnessAdapterTests {
             router: AIModelRouter(registry: AIModelRegistry(entries: [entry(id: "planner", modelID: "gpt-5.2")])),
             httpClient: httpClient,
             environment: ["OPENAI_API_KEY": "test-key"],
-            targetMemoryStore: nil
+            memoryStore: nil
         )
 
         let result = await adapter.generatePlannerHint(adapterRequest())
