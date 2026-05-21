@@ -76,6 +76,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         promptState.isActive = true
         promptState.isPrimaryActionEnabled = true
         promptState.leadingSignalLevel = .ready
+        promptState.promptText = PointerPromptCopy.defaultPromptPlaceholder
     }
 
     func updateVoiceWaveformLevels(_ levels: [Double]) {
@@ -502,6 +503,13 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         result: PointerPromptCommandHandlingResult
     ) {
         syncPrimaryTaskPausedFlag()
+        if promptState.isActive {
+            if lastActiveTaskID == taskID {
+                lastActiveTaskID = notchTasks.first?.id
+            }
+            return
+        }
+
         if let runningTask = notchTasks.first(where: { activeTaskIDs.contains($0.id) && $0.status == .running }) {
             promptState.leadingSignalLevel = .thinking
             promptState.promptText = runningTask.title

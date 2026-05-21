@@ -16,4 +16,17 @@ struct PointerPromptCopyTests {
         #expect(!PointerPromptCopy.isTaskDisplayText("  \(PointerPromptCopy.defaultPromptPlaceholder)  "))
         #expect(PointerPromptCopy.isTaskDisplayText("Open Safari"))
     }
+
+    @Test
+    func composerPlaceholderDoesNotReuseTaskOrResultText() {
+        #expect(
+            PointerPromptCopy.composerPlaceholder(for: "I couldn't find a supported local action for that yet.") ==
+                PointerPromptCopy.defaultPromptPlaceholder
+        )
+        #expect(
+            PointerPromptCopy.composerPlaceholder(for: "play some justin bieber") ==
+                PointerPromptCopy.defaultPromptPlaceholder
+        )
+        #expect(PointerPromptCopy.composerPlaceholder(for: "Listening...") == "Listening...")
+    }
 }

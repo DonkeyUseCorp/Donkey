@@ -3,12 +3,27 @@ import Foundation
 
 public enum PointerPromptCopy {
     public static let defaultPromptPlaceholder = "What can donkey do for you?"
+    private static let transientComposerPlaceholders: Set<String> = [
+        "Listening...",
+        "No voice captured",
+        "Transcribing...",
+        "Voice unavailable"
+    ]
 
     public static func normalizedDisplayText(_ text: String) -> String {
         text
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")
+    }
+
+    public static func composerPlaceholder(for text: String) -> String {
+        let normalizedText = normalizedDisplayText(text)
+        guard transientComposerPlaceholders.contains(normalizedText) else {
+            return defaultPromptPlaceholder
+        }
+
+        return normalizedText
     }
 
     public static func isTaskDisplayText(_ text: String) -> Bool {

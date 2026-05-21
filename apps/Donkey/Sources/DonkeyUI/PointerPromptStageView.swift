@@ -273,7 +273,7 @@ struct PointerPromptComposer: View {
     private var textInput: some View {
         ComposerMultilineTextInput(
             text: $messageText,
-            placeholder: state.promptText,
+            placeholder: PointerPromptCopy.composerPlaceholder(for: state.promptText),
             isActive: state.isActive,
             textHeightChanged: inputTextHeightChanged,
             expansionChanged: inputExpansionChanged,
