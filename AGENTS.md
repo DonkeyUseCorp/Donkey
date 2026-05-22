@@ -31,4 +31,5 @@ Before changing `site/` UI, routes, API handlers, or data access patterns:
 - Keep guides explanatory. They should teach what the system is, how it works, and which boundaries matter; do not turn guides into feature inventories, implementation logs, duplicated code, or long file lists.
 - Keep guide source entrypoints short and readable. Do not write exhaustive file inventories. Prefer a small maintainer map by subsystem or one to seven high-signal paths, and link to a source path only when it gives someone a clear place to start.
 - Build forward by default. Prefer updating callers and contracts to the new supported shape instead of preserving old compatibility paths; ask before adding or keeping backwards-compatibility shims.
+- This is an open source project. Stay alert for security concerns, and never commit PII, API keys, tokens, credentials, private config, or other secrets.
 - Keep this file stable and lightweight.
