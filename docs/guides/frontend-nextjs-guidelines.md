@@ -35,6 +35,7 @@ This app is the `site` Next.js project. It is intended to run the public site an
 ## Data and API Access
 
 - Route Handlers live in `src/app/api/**/route.ts`.
+- Protect Donkey APIs with `withDonkeyAuth` from `src/lib/donkey-api-auth.ts` unless an endpoint is intentionally public, such as health checks.
 - Validate request bodies, search params, and dynamic route params with Zod before using them.
 - Keep API responses explicit with `NextResponse.json(...)`.
 - Do not call `fetch(...)` directly from React components. Put browser-facing API calls in a focused API client module, then import that client into components.
