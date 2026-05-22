@@ -70,7 +70,8 @@ let package = Package(
             dependencies: [
                 "DonkeyAI",
                 "DonkeyContracts",
-                "DonkeyRuntime"
+                "DonkeyRuntime",
+                "DonkeyUI"
             ],
             swiftSettings: [
                 .unsafeFlags([

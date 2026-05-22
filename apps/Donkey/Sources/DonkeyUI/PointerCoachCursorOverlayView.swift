@@ -79,102 +79,20 @@ public final class PointerCoachCursorOverlayViewModel: ObservableObject {
     }
 
     private func animationFrame(size: CGSize) -> CoachCursorAnimationFrame {
-        guard !request.steps.isEmpty else {
-            return CoachCursorAnimationFrame(
-                position: point(request.origin, in: size),
-                angle: 0,
-                visibleLabel: "",
-                isHolding: false
-            )
-        }
-
-        var elapsed = now.timeIntervalSince(startedAt)
-        var origin = point(request.origin, in: size)
-        for step in request.steps {
-            let target = point(step.target, in: size)
-            if elapsed <= step.travelDuration {
-                let progress = eased(elapsed / step.travelDuration)
-                let position = curvedPoint(from: origin, to: target, progress: progress)
-                return CoachCursorAnimationFrame(
-                    position: position,
-                    angle: angle(from: origin, to: target),
-                    visibleLabel: "",
-                    isHolding: false
-                )
-            }
-
-            elapsed -= step.travelDuration
-            if elapsed <= step.holdDuration {
-                let typeProgress = min(1, elapsed / min(step.holdDuration, max(0.6, Double(step.label.count) * 0.035)))
-                let wobble = sin(elapsed * 8) * 1.8
-                return CoachCursorAnimationFrame(
-                    position: CGPoint(x: target.x + wobble, y: target.y),
-                    angle: angle(from: origin, to: target),
-                    visibleLabel: typedText(step.label, progress: typeProgress),
-                    isHolding: true,
-                    haloScale: 1 + 0.14 * sin(elapsed * 3.2),
-                    haloOpacity: 0.24 + 0.18 * cos(elapsed * 3.2),
-                    labelOpacity: min(1, elapsed / 0.18)
-                )
-            }
-
-            elapsed -= step.holdDuration
-            origin = target
-        }
-
-        let finalStep = request.steps[request.steps.count - 1]
+        let sample = AgentVisualizationCursorPathSampler.sample(
+            request: request,
+            elapsed: now.timeIntervalSince(startedAt),
+            screenSize: size
+        )
         return CoachCursorAnimationFrame(
-            position: point(finalStep.target, in: size),
-            angle: 0,
-            visibleLabel: finalStep.label,
-            isHolding: true,
-            labelOpacity: 1
+            position: sample.position,
+            angle: sample.angle,
+            visibleLabel: sample.visibleLabel,
+            isHolding: sample.isHolding,
+            haloScale: sample.haloScale,
+            haloOpacity: sample.haloOpacity,
+            labelOpacity: sample.labelOpacity
         )
-    }
-
-    private func point(_ normalizedPoint: CGPoint, in size: CGSize) -> CGPoint {
-        CGPoint(
-            x: min(max(normalizedPoint.x, 0.04), 0.96) * max(1, size.width),
-            y: min(max(normalizedPoint.y, 0.06), 0.94) * max(1, size.height)
-        )
-    }
-
-    private func curvedPoint(
-        from origin: CGPoint,
-        to target: CGPoint,
-        progress: Double
-    ) -> CGPoint {
-        let dx = target.x - origin.x
-        let dy = target.y - origin.y
-        let length = max(1, hypot(dx, dy))
-        let curve = min(80, length * 0.35)
-        let control = CGPoint(
-            x: (origin.x + target.x) / 2 + (-dy / length) * curve,
-            y: (origin.y + target.y) / 2 + (dx / length) * curve
-        )
-        let t = CGFloat(progress)
-        let inv = 1 - t
-        return CGPoint(
-            x: inv * inv * origin.x + 2 * inv * t * control.x + t * t * target.x,
-            y: inv * inv * origin.y + 2 * inv * t * control.y + t * t * target.y
-        )
-    }
-
-    private func typedText(_ text: String, progress: Double) -> String {
-        guard progress < 1 else { return text }
-
-        let count = max(1, Int(Double(text.count) * progress))
-        let endIndex = text.index(text.startIndex, offsetBy: min(count, text.count))
-        return String(text[..<endIndex])
-    }
-
-    private func angle(from origin: CGPoint, to target: CGPoint) -> Double {
-        atan2(target.y - origin.y, target.x - origin.x) * 180 / .pi
-    }
-
-    private func eased(_ progress: Double) -> Double {
-        let t = min(max(progress, 0), 1)
-        return 1 - pow(1 - t, 3)
     }
 }
 
