@@ -23,7 +23,9 @@ export function Footer() {
     <footer
       style={{
         borderTop: `2px solid ${BLACK}`,
+        boxSizing: "border-box",
         padding: isDesktop ? "80px 48px" : "64px 24px",
+        width: "100%",
       }}
     >
       <div style={{ maxWidth: 1400, margin: "0 auto" }}>

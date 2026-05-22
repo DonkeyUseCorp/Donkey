@@ -5,9 +5,9 @@ import { ArrowRight } from "lucide-react";
 import {
   Headline,
   PillButton,
-  SectionLabel,
-  TapedCard,
 } from "@/app/_components/landing/LandingPrimitives";
+import { PricingPlanCard } from "@/app/_components/landing/PricingPlanCard";
+import { pricingPreviewPlans } from "@/app/_components/landing/pricingPlans";
 import { useMediaQuery } from "@/app/_components/landing/useMediaQuery";
 
 export function Pricing() {
@@ -17,15 +17,29 @@ export function Pricing() {
     <section
       id="pricing"
       style={{
+        boxSizing: "border-box",
         padding: isDesktop ? "96px 48px" : "80px 24px",
         maxWidth: 1400,
         margin: "0 auto",
+        width: "100%",
       }}
     >
-      <SectionLabel number={7}>Pricing</SectionLabel>
       <Headline>
-        Free for now. <span style={{ fontStyle: "italic" }}>Forever curious.</span>
+        Plans for the work.{" "}
+        <span style={{ fontStyle: "italic" }}>Built for momentum.</span>
       </Headline>
+      <p
+        style={{
+          color: "#454545",
+          fontSize: isDesktop ? 18 : 16,
+          lineHeight: 1.55,
+          margin: "24px 0 0",
+          maxWidth: 620,
+        }}
+      >
+        Start with Pro when you are ready for self-serve billing, or talk to us
+        about rolling Donkey out across a team.
+      </p>
       <div
         style={{
           marginTop: 48,
@@ -34,79 +48,14 @@ export function Pricing() {
           gap: 24,
         }}
       >
-        <TapedCard color="cream" tapeColor="coral">
-          <div style={{ padding: isDesktop ? 36 : 28 }}>
-            <div style={{ fontWeight: 900, fontSize: 22, marginBottom: 8 }}>
-              Free
-            </div>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-              <span style={{ fontWeight: 900, fontSize: isDesktop ? 56 : 44 }}>
-                $0
-              </span>
-            </div>
-            <div
-              style={{
-                fontSize: 13,
-                fontWeight: 700,
-                color: "#444",
-                marginBottom: 24,
-              }}
-            >
-              during beta
-            </div>
-            <p
-              style={{
-                fontSize: 15,
-                lineHeight: 1.55,
-                color: "#222",
-                margin: "0 0 28px",
-              }}
-            >
-              Everything Donkey can do, no caps, no credit card. We want you
-              using it.
-            </p>
-            <PillButton href="#download" variant="dark" size="md">
-              Get Donkey <ArrowRight size={14} />
-            </PillButton>
-          </div>
-        </TapedCard>
-
-        <TapedCard color="coral" tapeColor="yellow" tapePosition="right">
-          <div style={{ padding: isDesktop ? 36 : 28 }}>
-            <div style={{ fontWeight: 900, fontSize: 22, marginBottom: 8 }}>
-              Enterprise
-            </div>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-              <span style={{ fontWeight: 900, fontSize: isDesktop ? 56 : 44 }}>
-                Let&apos;s talk
-              </span>
-            </div>
-            <div
-              style={{
-                fontSize: 13,
-                fontWeight: 700,
-                color: "#222",
-                marginBottom: 24,
-              }}
-            >
-              built around your team
-            </div>
-            <p
-              style={{
-                fontSize: 15,
-                lineHeight: 1.55,
-                color: "#1a1a1a",
-                margin: "0 0 28px",
-              }}
-            >
-              Running Donkey across an org? Reach out and we will figure out
-              what makes sense.
-            </p>
-            <PillButton href="mailto:david@donkeyuse.com" variant="dark" size="md">
-              Contact us <ArrowRight size={14} />
-            </PillButton>
-          </div>
-        </TapedCard>
+        {pricingPreviewPlans.map((plan) => (
+          <PricingPlanCard key={plan.name} plan={plan} />
+        ))}
+      </div>
+      <div style={{ marginTop: 36 }}>
+        <PillButton href="/pricing" variant="secondary" size="lg">
+          Open pricing <ArrowRight size={18} />
+        </PillButton>
       </div>
     </section>
   );

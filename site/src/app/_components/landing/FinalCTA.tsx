@@ -14,9 +14,11 @@ export function FinalCTA() {
     <section
       id="download"
       style={{
+        boxSizing: "border-box",
         padding: isDesktop ? "64px 48px 120px" : "48px 24px 80px",
         maxWidth: 1400,
         margin: "0 auto",
+        width: "100%",
       }}
     >
       <div style={{ position: "relative" }}>
@@ -100,7 +102,7 @@ export function FinalCTA() {
             <PillButton href={GITHUB_REPO_URL} variant="primary" size="lg">
               Download for Mac <ArrowRight size={18} />
             </PillButton>
-            <PillButton href="#pricing" variant="secondary" size="lg">
+            <PillButton href="/pricing" variant="secondary" size="lg">
               See pricing
             </PillButton>
           </div>

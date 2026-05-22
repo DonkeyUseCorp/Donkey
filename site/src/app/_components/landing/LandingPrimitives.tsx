@@ -34,7 +34,14 @@ export function TapedCard({
       : "rotate(-2deg)";
 
   return (
-    <div style={{ position: "relative", ...style }}>
+    <div
+      style={{
+        boxSizing: "border-box",
+        minWidth: 0,
+        position: "relative",
+        ...style,
+      }}
+    >
       <div
         style={{
           position: "absolute",
@@ -47,6 +54,7 @@ export function TapedCard({
       <div
         style={{
           position: "relative",
+          boxSizing: "border-box",
           borderRadius: 16,
           border: `2px solid ${BLACK}`,
           background: CARD[color],
@@ -75,15 +83,21 @@ export function TapedCard({
 }
 
 type PillButtonProps = {
+  ariaLabel?: string;
   children: ReactNode;
+  disabled?: boolean;
   href?: string;
+  onClick?: () => void | Promise<void>;
   size?: ButtonSize;
   variant?: ButtonVariant;
 };
 
 export function PillButton({
+  ariaLabel,
   children,
+  disabled = false,
   href,
+  onClick,
   size = "md",
   variant = "primary",
 }: PillButtonProps) {
@@ -112,24 +126,31 @@ export function PillButton({
     gap: 8,
     borderRadius: 999,
     fontWeight: 700,
-    cursor: "pointer",
+    cursor: disabled ? "not-allowed" : "pointer",
     minHeight: size === "lg" ? 56 : 40,
+    opacity: disabled ? 0.65 : 1,
     textDecoration: "none",
     transition: "transform 0.15s ease, opacity 0.15s ease",
     ...sizes[size],
     ...variants[variant],
   };
 
-  if (href) {
+  if (href && !disabled && !onClick) {
     return (
-      <a href={href} style={sharedStyle}>
+      <a aria-label={ariaLabel} href={href} style={sharedStyle}>
         {children}
       </a>
     );
   }
 
   return (
-    <button type="button" style={sharedStyle}>
+    <button
+      aria-label={ariaLabel}
+      disabled={disabled}
+      onClick={onClick}
+      style={sharedStyle}
+      type="button"
+    >
       {children}
     </button>
   );
