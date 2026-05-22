@@ -5,6 +5,10 @@
 Donkey supports a floating macOS overlay for conversational task threads and
 quick local-app actions:
 
+- On first launch, Donkey shows a Google-only Mac sign-in window before starting
+  the overlay. Until the browser returns through the `donkey://auth/callback`
+  handoff, the notch surface is not shown and double-Command activation is not
+  registered.
 - Double-tap Command and release to open a centered prompt with keyboard focus.
 - Double-tap Command and hold the second press to open the prompt in voice mode.
 - Show a top-center notch status surface for task progress, recent tasks, follow-up input, file drops, updates, and per-task pause/resume.
@@ -24,6 +28,9 @@ quick local-app actions:
 ## Technical Guidelines
 
 - `PointerPromptOverlayController` owns AppKit surfaces, placement, hover tracking, focus, keyboard shortcut recognition, dismissal, file-drop routing, and microphone level capture.
+- `DonkeyAuthCoordinator` and `DonkeyLoginWindowController` own the Mac sign-in
+  gate. App startup should create the overlay controller only after a stored
+  Google session exists or a pending sign-in callback validates its state token.
 - SwiftUI rendering lives in `DonkeyUI` and consumes state/contracts from `DonkeyContracts`. It should not perform command parsing, model calls, input execution, screen capture, or microphone capture.
 - `PointerPromptOverlayModel` owns product state. Durable task data is persisted through Core Data in Application Support.
 - Spawn display state is typed state. The model emits progress, target hints, and current selection; the overlay controller resolves hints against safe visible windows and keeps voice capture on the centered prompt; SwiftUI renders the notch cue, cursors, labels, label-to-editor transition, and selection state.
