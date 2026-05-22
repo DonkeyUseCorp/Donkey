@@ -3,9 +3,21 @@ import { prismaAdapter } from "better-auth/adapters/prisma";
 
 import { prisma } from "@/lib/prisma";
 
+function macAuthRedirectOrigins() {
+  const configuredOrigins = process.env.DONKEY_MAC_AUTH_REDIRECT_ORIGINS
+    ?.split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  return configuredOrigins && configuredOrigins.length > 0
+    ? configuredOrigins
+    : ["donkey://"];
+}
+
 export const auth = betterAuth({
   baseURL: process.env.BETTER_AUTH_URL,
   secret: process.env.BETTER_AUTH_SECRET,
+  trustedOrigins: macAuthRedirectOrigins(),
   database: prismaAdapter(prisma, {
     provider: "postgresql",
   }),
