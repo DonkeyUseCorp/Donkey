@@ -10,6 +10,8 @@ final class PointerPromptSpawnOverlayController {
     private var surfacesByID: [String: PointerPromptSpawnSurface] = [:]
     private var viewModelsByID: [String: PointerPromptSpawnOverlayViewModel] = [:]
     private var windowResolver = MacWindowResolver()
+    private var localOutsideClickMonitor: Any?
+    private var globalOutsideClickMonitor: Any?
 
     var followUpSubmitted: ((String, String, String) -> Void)? {
         didSet {
@@ -57,6 +59,7 @@ final class PointerPromptSpawnOverlayController {
     }
 
     func close() {
+        removeOutsideClickMonitoring()
         for surface in surfacesByID.values {
             surface.travelWorkItem?.cancel()
             surface.removalWorkItem?.cancel()
@@ -276,6 +279,7 @@ final class PointerPromptSpawnOverlayController {
                 surface.panel.orderFrontRegardless()
             }
             self.updateMouseEventPassthrough(for: surface)
+            self.updateOutsideClickMonitoring()
         }
         surface.viewModel.travelCompleted = { [weak self, weak surface] in
             guard let self,
@@ -454,6 +458,78 @@ final class PointerPromptSpawnOverlayController {
         }
         surface.removalWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.24, execute: workItem)
+    }
+
+    private func updateOutsideClickMonitoring() {
+        guard viewModelsByID.values.contains(where: \.isLabelEditing) else {
+            removeOutsideClickMonitoring()
+            return
+        }
+
+        installOutsideClickMonitoringIfNeeded()
+    }
+
+    private func installOutsideClickMonitoringIfNeeded() {
+        let mask: NSEvent.EventTypeMask = [
+            .leftMouseDown,
+            .rightMouseDown,
+            .otherMouseDown
+        ]
+        if localOutsideClickMonitor == nil {
+            localOutsideClickMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
+                let screenPoint = NSEvent.mouseLocation
+                Task { @MainActor [weak self] in
+                    self?.handleOutsideClickCandidate(at: screenPoint)
+                }
+                return event
+            }
+        }
+        if globalOutsideClickMonitor == nil {
+            globalOutsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
+                let screenPoint = NSEvent.mouseLocation
+                Task { @MainActor [weak self] in
+                    self?.handleOutsideClickCandidate(at: screenPoint)
+                }
+            }
+        }
+    }
+
+    private func removeOutsideClickMonitoring() {
+        if let localOutsideClickMonitor {
+            NSEvent.removeMonitor(localOutsideClickMonitor)
+            self.localOutsideClickMonitor = nil
+        }
+        if let globalOutsideClickMonitor {
+            NSEvent.removeMonitor(globalOutsideClickMonitor)
+            self.globalOutsideClickMonitor = nil
+        }
+    }
+
+    private func handleOutsideClickCandidate(at screenPoint: CGPoint) {
+        let activeSurfaces = surfacesByID.values.filter { $0.viewModel.isLabelEditing }
+        guard !activeSurfaces.isEmpty else {
+            removeOutsideClickMonitoring()
+            return
+        }
+
+        guard !activeSurfaces.contains(where: { contains(screenPoint, inInteractiveRegionOf: $0) }) else {
+            return
+        }
+
+        for surface in activeSurfaces {
+            surface.viewModel.cancelInlineInput()
+        }
+        updateOutsideClickMonitoring()
+    }
+
+    private func contains(
+        _ screenPoint: CGPoint,
+        inInteractiveRegionOf surface: PointerPromptSpawnSurface
+    ) -> Bool {
+        guard surface.panel.frame.contains(screenPoint) else { return false }
+
+        let localPoint = surface.panel.convertPoint(fromScreen: screenPoint)
+        return surface.viewModel.localHitTestFrame.contains(localPoint)
     }
 
     private func spawnOrigin(in screen: NSScreen, index: Int) -> CGPoint {

@@ -387,6 +387,7 @@ public final class PointerPromptSpawnOverlayViewModel: ObservableObject {
     fileprivate static let inlineEditorHorizontalPadding: CGFloat = 16
     fileprivate static let inlineEditorVerticalPadding: CGFloat = 14
     fileprivate static let inlineEditorSpacing: CGFloat = 12
+    fileprivate static let labelFontSize: CGFloat = 12
     public static let inlineEditorMinimumTextHeight: CGFloat = 14
     public static let inlineEditorMaximumTextHeight: CGFloat = 44
     fileprivate static let collapsedHaloSize: CGFloat = 40
@@ -418,9 +419,10 @@ public final class PointerPromptSpawnOverlayViewModel: ObservableObject {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else { return 20 }
 
-        let font = NSFont.systemFont(ofSize: 13, weight: .bold)
+        let font = NSFont.systemFont(ofSize: labelFontSize, weight: .medium)
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineBreakMode = .byWordWrapping
+        paragraphStyle.alignment = .left
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .paragraphStyle: paragraphStyle
@@ -441,10 +443,10 @@ public final class PointerPromptSpawnOverlayViewModel: ObservableObject {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else { return false }
 
-        let font = NSFont.systemFont(ofSize: 10, weight: .medium)
+        let font = NSFont.systemFont(ofSize: labelFontSize, weight: .medium)
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineBreakMode = .byWordWrapping
-        paragraphStyle.alignment = .center
+        paragraphStyle.alignment = .left
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .paragraphStyle: paragraphStyle
@@ -562,7 +564,6 @@ public struct PointerPromptSpawnOverlayView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(accentColor(for: state.accentIndex))
         }
-        .shadow(color: Color.black.opacity(0.3), radius: 3, x: 0, y: 1)
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .onTapGesture {
             viewModel.beginInlineInput()
@@ -580,14 +581,14 @@ public struct PointerPromptSpawnOverlayView: View {
                 label: state.label
             )
         )
-        .font(.system(size: 10, weight: .medium))
+        .font(.system(size: PointerPromptSpawnOverlayViewModel.labelFontSize, weight: .medium))
         .foregroundStyle(.white)
-        .multilineTextAlignment(.center)
+        .multilineTextAlignment(.leading)
         .lineLimit(viewModel.isLabelHovered ? nil : 2)
         .truncationMode(.tail)
         .frame(
             maxWidth: viewModel.isLabelHovered ? PointerPromptSpawnOverlayViewModel.expandedCollapsedLabelWidth : PointerPromptSpawnOverlayViewModel.collapsedLabelContentWidth,
-            alignment: .center
+            alignment: .leading
         )
         .padding(.horizontal, PointerPromptSpawnOverlayViewModel.labelHorizontalPadding)
         .padding(.vertical, 3)
@@ -596,7 +597,7 @@ public struct PointerPromptSpawnOverlayView: View {
     private func inlineLabelEditor(state: PointerPromptSpawnState) -> some View {
         VStack(alignment: .leading, spacing: PointerPromptSpawnOverlayViewModel.inlineEditorSpacing) {
             Text(state.label)
-                .font(.system(size: 13, weight: .bold))
+                .font(.system(size: PointerPromptSpawnOverlayViewModel.labelFontSize, weight: .medium))
                 .foregroundStyle(.white)
                 .multilineTextAlignment(.leading)
                 .lineLimit(3)
@@ -931,7 +932,7 @@ private final class SpawnLabelInlineTextView: NSTextView {
 @MainActor
 private enum SpawnLabelInlineTextStyle {
     static var font: NSFont {
-        NSFont.systemFont(ofSize: 13, weight: .medium)
+        NSFont.systemFont(ofSize: PointerPromptSpawnOverlayViewModel.labelFontSize, weight: .medium)
     }
 
     static func apply(to textView: NSTextView) {
