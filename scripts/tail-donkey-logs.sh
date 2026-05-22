@@ -154,11 +154,13 @@ if [ "$INCLUDE_DEBUG" -eq 1 ]; then
   LOG_COMMAND+=(--debug)
 fi
 
-exec "${LOG_COMMAND[@]}" 2> >(
+filter_log_tool_noise() {
   while IFS= read -r line || [ -n "$line" ]; do
     if [[ "$line" == "Filtering the log data using "* ]]; then
       continue
     fi
-    printf '%s\n' "$line" >&2
+    printf '%s\n' "$line"
   done
-)
+}
+
+exec "${LOG_COMMAND[@]}" > >(filter_log_tool_noise) 2> >(filter_log_tool_noise >&2)
