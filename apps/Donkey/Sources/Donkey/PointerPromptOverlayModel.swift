@@ -20,7 +20,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
     @Published private(set) var notchTasks: [PointerPromptNotchTask]
     @Published private(set) var spawnStates: [PointerPromptSpawnState] = []
     @Published private(set) var selectedSpawnID: String?
-    var coachGuidePresenter: ((PointerCoachCursorGuideRequest) -> Void)?
+    var agentVisualizationPresenter: ((PointerCoachCursorGuideRequest) -> Void)?
 
     private let commandHandler: any PointerPromptCommandHandling
     private let taskStore: any PointerPromptTaskStoring
@@ -421,8 +421,8 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
                 if let documentReviewRequest = result.documentReviewRequest {
                     self.documentReviewController.show(request: documentReviewRequest)
                 }
-                if let cursorGuideRequest = result.cursorGuideRequest {
-                    self.coachGuidePresenter?(cursorGuideRequest)
+                if let cursorOverlayRequest = result.cursorOverlayRequest {
+                    self.agentVisualizationPresenter?(cursorOverlayRequest)
                 }
                 self.finishSpawn(id: spawnID, result: result)
             }
@@ -714,7 +714,8 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
             assets: taskStore.loadAssets(taskID: taskID),
             isFollowUp: isFollowUp,
             turnSource: source,
-            spawnProgressChanged: spawnProgressHandler(for: spawnID)
+            spawnProgressChanged: spawnProgressHandler(for: spawnID),
+            agentVisualizationChanged: agentVisualizationHandler()
         )
     }
 
@@ -730,6 +731,13 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
                 targetHint: update.targetHint,
                 phase: update.phase
             )
+        }
+    }
+
+    private func agentVisualizationHandler() -> (@MainActor @Sendable (AgentVisualizationPlan) -> Void)? {
+        { [weak self] plan in
+            guard let request = plan.cursorOverlayRequest() else { return }
+            self?.agentVisualizationPresenter?(request)
         }
     }
 

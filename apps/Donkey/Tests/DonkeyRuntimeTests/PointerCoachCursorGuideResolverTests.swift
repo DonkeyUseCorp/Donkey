@@ -5,15 +5,15 @@ import Foundation
 import Testing
 
 @Suite
-struct PointerCoachCursorGuideResolverTests {
+struct AgentVisualizationPlanResolverTests {
     @Test
-    func localLLMResolverBuildsGuideFromStructuredModelOutput() async throws {
-        let sidecar = RecordingPointerCoachSidecarRunner(
+    func localLLMResolverBuildsPlanFromStructuredModelOutput() async throws {
+        let sidecar = RecordingAgentVisualizationSidecarRunner(
             result: LocalJSONSidecarResult(
                 status: .completed,
                 outputData: sidecarResponseData(outputText: """
                 {
-                  "shouldShowGuide": true,
+                  "shouldVisualize": true,
                   "title": "Show Export Controls",
                   "goal": "export the design",
                   "targetApp": "Design App",
@@ -28,87 +28,93 @@ struct PointerCoachCursorGuideResolverTests {
                 """)
             )
         )
-        let resolver = ProcessBackedLocalLLMPointerCoachCursorGuideResolver(
+        let resolver = ProcessBackedLocalLLMAgentVisualizationPlanResolver(
             router: AIModelRouter(registry: registry()),
             sidecarRunner: sidecar
         )
 
-        let result = await resolver.resolveGuide(
-            PointerCoachCursorGuideResolverRequest(
+        let result = await resolver.resolveVisualizationPlan(
+            AgentVisualizationPlanResolverRequest(
                 command: "please demonstrate the export flow",
                 runtimeCapabilities: ["app_open: open local item"],
                 cacheSnippets: ["local_resolution_cache: name=\"Design App\" kind=application"],
-                sourceTraceID: "trace-guide"
+                sourceTraceID: "trace-visualization"
             )
         )
 
-        let guide = try #require(result.guideRequest)
+        let cursorRequest = try #require(result.cursorRequest)
+        let visualizationPlan = try #require(result.visualizationPlan)
         #expect(result.confidence == 0.91)
-        #expect(result.trace.validationStatus == "guideDecoded")
-        #expect(guide.title == "Show Export Controls")
-        #expect(guide.metadata["source"] == "local-llm-pointer-coach")
-        #expect(guide.metadata["modelDecision"] == "coach")
-        #expect(guide.steps.map(\.label) == ["Open the export menu", "Choose the file type"])
-        #expect(guide.steps.first?.target.x == 0.82)
+        #expect(result.trace.validationStatus == "visualizationDecoded")
+        #expect(visualizationPlan.executionMode == .visualOnly)
+        #expect(visualizationPlan.usesRealPointer == false)
+        #expect(visualizationPlan.metadata["source"] == "local-llm-agent-visualization")
+        #expect(visualizationPlan.steps.map(\.label) == ["Open the export menu", "Choose the file type"])
+        #expect(cursorRequest.title == "Show Export Controls")
+        #expect(cursorRequest.metadata["source"] == "local-llm-agent-visualization")
+        #expect(cursorRequest.metadata["modelDecision"] == "coach")
+        #expect(cursorRequest.steps.map(\.label) == ["Open the export menu", "Choose the file type"])
+        #expect(cursorRequest.steps.first?.target.x == 0.82)
 
         let requests = await sidecar.requests()
         let request = try #require(requests.first)
         #expect(request.environmentVariableName == "DONKEY_LOCAL_LLM_RUNNER")
-        #expect(request.metadata["sidecar.role"] == "pointerCoachCursorGuide")
-        let input = try JSONDecoder().decode(PointerCoachSidecarInputProbe.self, from: request.inputData)
+        #expect(request.metadata["sidecar.role"] == "agentVisualizationPlan")
+        let input = try JSONDecoder().decode(AgentVisualizationSidecarInputProbe.self, from: request.inputData)
         #expect(input.command == "please demonstrate the export flow")
         #expect(input.runtimeCapabilities == ["app_open: open local item"])
         #expect(input.cacheSnippets == ["local_resolution_cache: name=\"Design App\" kind=application"])
-        #expect(input.metadata["schemaID"] == ProcessBackedLocalLLMPointerCoachCursorGuideResolver.schemaID)
+        #expect(input.metadata["schemaID"] == ProcessBackedLocalLLMAgentVisualizationPlanResolver.schemaID)
     }
 
     @Test
-    func localLLMResolverDoesNotCreateGuideWhenModelSaysNo() async throws {
-        let sidecar = RecordingPointerCoachSidecarRunner(
+    func localLLMResolverDoesNotCreatePlanWhenModelSaysNo() async throws {
+        let sidecar = RecordingAgentVisualizationSidecarRunner(
             result: LocalJSONSidecarResult(
                 status: .completed,
                 outputData: sidecarResponseData(outputText: """
                 {
-                  "shouldShowGuide": false,
+                  "shouldVisualize": false,
                   "title": null,
                   "goal": null,
                   "targetApp": null,
                   "confidence": 0.88,
-                  "reason": "This is an actionable app command, not a visual coaching request.",
+                  "reason": "This is an actionable app command, not a visual-only visualization request.",
                   "steps": []
                 }
                 """)
             )
         )
-        let resolver = ProcessBackedLocalLLMPointerCoachCursorGuideResolver(
+        let resolver = ProcessBackedLocalLLMAgentVisualizationPlanResolver(
             router: AIModelRouter(registry: registry()),
             sidecarRunner: sidecar
         )
 
-        let result = await resolver.resolveGuide(
-            PointerCoachCursorGuideResolverRequest(
+        let result = await resolver.resolveVisualizationPlan(
+            AgentVisualizationPlanResolverRequest(
                 command: "show me the weather for SF",
-                sourceTraceID: "trace-no-guide"
+                sourceTraceID: "trace-no-visualization"
             )
         )
 
-        #expect(result.guideRequest == nil)
+        #expect(result.cursorRequest == nil)
+        #expect(result.visualizationPlan == nil)
         #expect(result.confidence == 0.88)
-        #expect(result.trace.validationStatus == "notGuide")
+        #expect(result.trace.validationStatus == "notVisualization")
     }
 
     private func registry() -> AIModelRegistry {
         AIModelRegistry(
             entries: [
                 AIModelRegistryEntry(
-                    id: "local-guide-test",
+                    id: "local-visualization-test",
                     role: .taskIntent,
                     provider: .localRuntime,
-                    modelID: "local-guide-model",
-                    endpoint: URL(string: "local://guide")!,
+                    modelID: "local-visualization-model",
+                    endpoint: URL(string: "local://visualization")!,
                     capabilities: [.textInput, .structuredOutputs],
                     timeoutMS: 1_000,
-                    promptVersion: "pointer-coach-test",
+                    promptVersion: "agent-visualization-test",
                     evalStatus: .candidate,
                     docsURL: URL(string: "https://example.test/model")!
                 )
@@ -117,14 +123,14 @@ struct PointerCoachCursorGuideResolverTests {
     }
 
     private func sidecarResponseData(outputText: String) -> Data {
-        (try? JSONEncoder().encode(PointerCoachSidecarResponseProbe(
+        (try? JSONEncoder().encode(AgentVisualizationSidecarResponseProbe(
             outputText: outputText,
             metadata: ["sidecar": "test"]
         ))) ?? Data()
     }
 }
 
-private actor RecordingPointerCoachSidecarRunner: LocalJSONSidecarRunning {
+private actor RecordingAgentVisualizationSidecarRunner: LocalJSONSidecarRunning {
     private let result: LocalJSONSidecarResult
     private var recordedRequests: [LocalJSONSidecarRequest] = []
 
@@ -142,14 +148,14 @@ private actor RecordingPointerCoachSidecarRunner: LocalJSONSidecarRunning {
     }
 }
 
-private struct PointerCoachSidecarInputProbe: Decodable {
+private struct AgentVisualizationSidecarInputProbe: Decodable {
     var command: String
     var runtimeCapabilities: [String]
     var cacheSnippets: [String]
     var metadata: [String: String]
 }
 
-private struct PointerCoachSidecarResponseProbe: Encodable {
+private struct AgentVisualizationSidecarResponseProbe: Encodable {
     var outputText: String
     var metadata: [String: String]
 }

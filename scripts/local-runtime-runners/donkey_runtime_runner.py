@@ -474,13 +474,13 @@ def run_local_llm(request: dict[str, Any]) -> dict[str, Any]:
         prompt = task_followup_prompt(command, candidates)
         schema = task_followup_schema(candidates)
         max_tokens = 96
-    elif schema_id == "pointer_coach_cursor_guide_v1":
-        prompt = pointer_coach_cursor_guide_prompt(
+    elif schema_id == "agent_visualization_plan":
+        prompt = agent_visualization_plan_prompt(
             command,
             request.get("runtimeCapabilities", []),
             request.get("cacheSnippets", []),
         )
-        schema = pointer_coach_cursor_guide_schema()
+        schema = agent_visualization_plan_schema()
         max_tokens = 240
     else:
         is_task_intent_request = True
@@ -1028,7 +1028,7 @@ def task_followup_schema(candidates: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def pointer_coach_cursor_guide_prompt(
+def agent_visualization_plan_prompt(
     command: str,
     runtime_capabilities: list[Any],
     cache_snippets: list[Any],
@@ -1037,11 +1037,11 @@ def pointer_coach_cursor_guide_prompt(
     cache = "\n".join(str(item) for item in cache_snippets if str(item).strip())
     return "\n".join(
         [
-            "Classify whether the user's request should be answered by visual coaching with an on-screen cursor guide.",
-            "Use semantic intent, not command wording. Visual coaching is for teaching or demonstrating where/how to do something inside an app.",
-            "If the request is an executable local task, app/file open request, arithmetic/chat answer, or missing-detail clarification, set shouldShowGuide=false.",
-            "If shouldShowGuide=true, generate two to five cursor steps with short labels. Coordinates are normalized screen positions from 0 to 1.",
-            "The guide must explain and point only. It must not claim to click, type, submit, or perform the user's task.",
+            "Classify whether the user's request should be answered by visual-only agent action visualization.",
+            "Use semantic intent, not command wording. Visual-only visualization is for teaching or demonstrating where the agent would observe, point, focus, type, submit, or verify inside an app.",
+            "If the request is an executable local task, app/file open request, arithmetic/chat answer, or missing-detail clarification, set shouldVisualize=false. Normal executable tasks emit their own visualization from runtime traces.",
+            "If shouldVisualize=true, generate two to five cursor steps with short labels. Coordinates are normalized screen positions from 0 to 1.",
+            "The visualization must explain and point only. It must not claim to move the real mouse, click, type, submit, or perform the user's task.",
             "Do not include reasoning outside JSON.",
             f"User request: {command}",
             "Known executable runtime capabilities:",
@@ -1052,12 +1052,12 @@ def pointer_coach_cursor_guide_prompt(
     )
 
 
-def pointer_coach_cursor_guide_schema() -> dict[str, Any]:
+def agent_visualization_plan_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "additionalProperties": False,
         "required": [
-            "shouldShowGuide",
+            "shouldVisualize",
             "title",
             "goal",
             "targetApp",
@@ -1067,7 +1067,7 @@ def pointer_coach_cursor_guide_schema() -> dict[str, Any]:
             "metadata",
         ],
         "properties": {
-            "shouldShowGuide": {"type": "boolean"},
+            "shouldVisualize": {"type": "boolean"},
             "title": {"type": "string"},
             "goal": {"type": "string"},
             "targetApp": {"type": "string"},

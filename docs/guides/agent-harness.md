@@ -128,8 +128,8 @@ provider LLM call, memory helpers, and explicit metadata helpers each consume
 the bounded context packet and return typed decisions or helper artifacts.
 Observation models such as screenshot segmentation and UI understanding run
 inside the local-task branch and produce observation evidence, not direct input
-actions. Any semantic user-intent distinction, including whether a turn is an
-instructional visual-coaching request, belongs behind one of these typed model
+actions. Any semantic user-intent distinction, including whether a turn is a
+visual-only agent visualization request, belongs behind one of these typed model
 or catalog boundaries.
 
 Routing outcomes carry a structured `AppHarnessDecision`. The decision names the
@@ -176,11 +176,12 @@ lookup capability and extracts the requested item name; after that, the runtime
 may normalize that item name and resolve it through agent memory, Spotlight, and
 bounded filesystem lookup.
 
-Instructional visual coaching is the canonical example. The harness may show an
-animated guide cursor only after a model-backed resolver returns a structured
-guide decision with cursor steps. It must not use hardcoded prompt prefixes to
-decide that a turn is a coaching request, and it must not parse app names or
-goals out of text with local string slicing.
+Agent action visualization is the canonical example. The harness may show an
+animated overlay cursor after a normal local-app run emits an
+`AgentVisualizationPlan`, or after a model-backed resolver returns the same plan
+shape in `visualOnly` mode. It must not use hardcoded prompt prefixes to decide
+that a turn is visualization-only, and it must not parse app names or goals out
+of text with local string slicing.
 
 ## Context Engineering
 
@@ -255,7 +256,9 @@ or during live control.
 Local-app workflow progress is tracked outside prompt/context text. Each run
 records typed stage state for intent parsing, task/app resolution, observation,
 dry-run projection, approval/review, guarded execution, and verification. The
-model can be told about this state, but the runner owns it.
+runner can derive projected agent visualization steps before live execution and
+verified visualization steps from runtime state plus action traces. The model
+can be told about this state, but the runner owns it.
 
 Live input remains guarded. The action engine checks permission policy, target
 focus, rate limits, hold duration, and backend evidence before issuing input.
@@ -338,7 +341,7 @@ resolution, and manual capture.
 
 Manual smoke checks remain useful for window enumeration, manual capture, local
 runtime setup/status, and dry-run latency reports, but they should support the
-guide rather than becoming the guide.
+documented behavior rather than becoming the behavior definition.
 
 ## Source Entry Points
 

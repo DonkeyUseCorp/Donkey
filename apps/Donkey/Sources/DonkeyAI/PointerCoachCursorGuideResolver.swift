@@ -3,7 +3,7 @@ import DonkeyContracts
 import DonkeyRuntime
 import Foundation
 
-public struct PointerCoachCursorGuideResolverRequest: Equatable, Sendable {
+public struct AgentVisualizationPlanResolverRequest: Equatable, Sendable {
     public var command: String
     public var runtimeCapabilities: [String]
     public var cacheSnippets: [String]
@@ -29,57 +29,60 @@ public struct PointerCoachCursorGuideResolverRequest: Equatable, Sendable {
     }
 }
 
-public struct PointerCoachCursorGuideResolverResult: Equatable, Sendable {
-    public var guideRequest: PointerCoachCursorGuideRequest?
+public struct AgentVisualizationPlanResolverResult: Equatable, Sendable {
+    public var visualizationPlan: AgentVisualizationPlan?
+    public var cursorRequest: PointerCoachCursorGuideRequest?
     public var confidence: Double
     public var reason: String
     public var trace: AIModelCallTrace
 
     public init(
-        guideRequest: PointerCoachCursorGuideRequest?,
+        visualizationPlan: AgentVisualizationPlan? = nil,
+        cursorRequest: PointerCoachCursorGuideRequest?,
         confidence: Double,
         reason: String,
         trace: AIModelCallTrace
     ) {
-        self.guideRequest = guideRequest
+        self.visualizationPlan = visualizationPlan
+        self.cursorRequest = cursorRequest
         self.confidence = min(max(confidence, 0), 1)
         self.reason = reason
         self.trace = trace
     }
 }
 
-public protocol PointerCoachCursorGuideResolving: Sendable {
-    func resolveGuide(
-        _ request: PointerCoachCursorGuideResolverRequest
-    ) async -> PointerCoachCursorGuideResolverResult
+public protocol AgentVisualizationPlanResolving: Sendable {
+    func resolveVisualizationPlan(
+        _ request: AgentVisualizationPlanResolverRequest
+    ) async -> AgentVisualizationPlanResolverResult
 }
 
-public struct ProcessBackedLocalLLMPointerCoachCursorGuideResolver: PointerCoachCursorGuideResolving {
-    public static let schemaID = "pointer_coach_cursor_guide_v1"
+public struct ProcessBackedLocalLLMAgentVisualizationPlanResolver: AgentVisualizationPlanResolving {
+    public static let schemaID = "agent_visualization_plan"
 
     public var router: AIModelRouter
     public var sidecarRunner: any LocalJSONSidecarRunning
     public var encoder: JSONEncoder
     public var decoder: JSONDecoder
-    public var minimumGuideConfidence: Double
+    public var minimumConfidence: Double
 
     public init(
         router: AIModelRouter = AIModelRouter(registry: .defaultHybridPlanner),
         sidecarRunner: any LocalJSONSidecarRunning = ProcessBackedLocalJSONSidecarRunner(),
         encoder: JSONEncoder = JSONEncoder(),
         decoder: JSONDecoder = JSONDecoder(),
-        minimumGuideConfidence: Double = 0.62
+        minimumConfidence: Double = 0.62
     ) {
         self.router = router
         self.sidecarRunner = sidecarRunner
         self.encoder = encoder
         self.decoder = decoder
-        self.minimumGuideConfidence = minimumGuideConfidence
+        self.minimumConfidence = minimumConfidence
     }
 
-    public func resolveGuide(
-        _ request: PointerCoachCursorGuideResolverRequest
-    ) async -> PointerCoachCursorGuideResolverResult {
+    public func resolveVisualizationPlan(
+        _ request: AgentVisualizationPlanResolverRequest
+    ) async -> AgentVisualizationPlanResolverResult {
         let entry: AIModelRegistryEntry
         do {
             entry = try router.route(request.routeRequest.limitingProviders([.localRuntime]))
@@ -94,7 +97,7 @@ public struct ProcessBackedLocalLLMPointerCoachCursorGuideResolver: PointerCoach
             )
         }
 
-        let input = LocalLLMPointerCoachCursorGuideSidecarRequest(
+        let input = LocalLLMAgentVisualizationPlanSidecarRequest(
             command: request.command,
             runtimeCapabilities: request.runtimeCapabilities,
             cacheSnippets: request.cacheSnippets,
@@ -111,7 +114,7 @@ public struct ProcessBackedLocalLLMPointerCoachCursorGuideResolver: PointerCoach
                 inputData: (try? encoder.encode(input)) ?? Data(),
                 timeoutMS: entry.timeoutMS,
                 metadata: [
-                    "sidecar.role": "pointerCoachCursorGuide",
+                    "sidecar.role": "agentVisualizationPlan",
                     "modelID": entry.modelID
                 ]
             )
@@ -132,28 +135,31 @@ public struct ProcessBackedLocalLLMPointerCoachCursorGuideResolver: PointerCoach
 
         do {
             let response = try decoder.decode(
-                LocalLLMPointerCoachCursorGuideSidecarResponse.self,
+                LocalLLMAgentVisualizationPlanSidecarResponse.self,
                 from: sidecarResult.outputData
             )
             let decision = try decoder.decode(
-                PointerCoachCursorGuideDecision.self,
+                AgentVisualizationPlanDecision.self,
                 from: Data(response.outputText.utf8)
             )
             let confidence = min(max(decision.confidence, 0), 1)
-            let guideRequest = Self.guideRequest(
+            let visualizationPlan = Self.visualizationPlan(
                 from: decision,
                 confidence: confidence,
-                minimumGuideConfidence: minimumGuideConfidence
+                minimumConfidence: minimumConfidence,
+                sourceTraceID: request.sourceTraceID
             )
-            return PointerCoachCursorGuideResolverResult(
-                guideRequest: guideRequest,
+            let cursorRequest = visualizationPlan?.cursorOverlayRequest()
+            return AgentVisualizationPlanResolverResult(
+                visualizationPlan: visualizationPlan,
+                cursorRequest: cursorRequest,
                 confidence: confidence,
                 reason: decision.reason,
                 trace: trace(
                     entry: entry,
                     request: request,
                     status: .completed,
-                    validationStatus: guideRequest == nil ? "notGuide" : "guideDecoded",
+                    validationStatus: visualizationPlan == nil ? "notVisualization" : "visualizationDecoded",
                     latencyMS: sidecarResult.latencyMS,
                     metadata: sidecarResult.metadata.merging(response.metadata) { current, _ in current }
                 )
@@ -172,13 +178,14 @@ public struct ProcessBackedLocalLLMPointerCoachCursorGuideResolver: PointerCoach
         }
     }
 
-    private static func guideRequest(
-        from decision: PointerCoachCursorGuideDecision,
+    private static func visualizationPlan(
+        from decision: AgentVisualizationPlanDecision,
         confidence: Double,
-        minimumGuideConfidence: Double
-    ) -> PointerCoachCursorGuideRequest? {
-        guard decision.shouldShowGuide,
-              confidence >= minimumGuideConfidence,
+        minimumConfidence: Double,
+        sourceTraceID: String
+    ) -> AgentVisualizationPlan? {
+        guard decision.shouldVisualize,
+              confidence >= minimumConfidence,
               !decision.steps.isEmpty
         else {
             return nil
@@ -187,42 +194,73 @@ public struct ProcessBackedLocalLLMPointerCoachCursorGuideResolver: PointerCoach
         let title = nonEmpty(decision.title)
             ?? nonEmpty(decision.goal).map { "Show \($0)" }
             ?? "Show me"
-        let steps = decision.steps.prefix(8).compactMap { step -> PointerCoachCursorGuideStep? in
+        let steps = decision.steps.prefix(8).enumerated().compactMap { index, step -> AgentVisualizationStep? in
             guard let label = nonEmpty(step.label) else { return nil }
-            return PointerCoachCursorGuideStep(
+            return AgentVisualizationStep(
+                id: "visual-step-\(index + 1)",
+                kind: .explain,
                 label: label,
-                target: CGPoint(
-                    x: min(max(step.x, 0.04), 0.96),
-                    y: min(max(step.y, 0.06), 0.94)
+                target: AgentVisualizationStepTarget(
+                    point: HotLoopPoint(
+                        x: min(max(step.x, 0.04), 0.96),
+                        y: min(max(step.y, 0.06), 0.94),
+                        space: .normalizedTarget
+                    ),
+                    description: label,
+                    source: .modelPlan,
+                    confidence: confidence,
+                    metadata: [
+                        "targetApp": decision.targetApp ?? "",
+                        "visualOnly": "true"
+                    ]
                 ),
                 travelDuration: step.travelDuration ?? 0.9,
-                holdDuration: step.holdDuration ?? 1.8
+                holdDuration: step.holdDuration ?? 1.8,
+                metadata: [
+                    "targetApp": decision.targetApp ?? "",
+                    "model.stepIndex": String(index)
+                ]
             )
         }
         guard !steps.isEmpty else { return nil }
 
-        return PointerCoachCursorGuideRequest(
+        return AgentVisualizationPlan(
             title: title,
+            executionMode: .visualOnly,
+            sourceTraceID: sourceTraceID,
             steps: steps,
+            verification: AgentVisualizationVerificationReport(
+                status: .unverified,
+                summary: decision.reason,
+                confidence: confidence,
+                evidenceCount: steps.count,
+                metadata: [
+                    "modelDecision": "visualOnly",
+                    "targetApp": decision.targetApp ?? ""
+                ]
+            ),
             metadata: (decision.metadata ?? [:]).merging([
-                "guide": "pointer-coach-cursor",
+                "agentVisualization": "overlay-cursor",
                 "goal": decision.goal ?? "",
                 "targetApp": decision.targetApp ?? "",
-                "source": "local-llm-pointer-coach"
+                "source": "local-llm-agent-visualization",
+                "realPointerMoved": "false",
+                "visualOnly": "true"
             ]) { current, _ in current }
         )
     }
 
     private func result(
         entry: AIModelRegistryEntry?,
-        request: PointerCoachCursorGuideResolverRequest,
+        request: AgentVisualizationPlanResolverRequest,
         status: AIModelCallStatus,
         validationStatus: String,
         latencyMS: Double?,
         metadata: [String: String] = [:]
-    ) -> PointerCoachCursorGuideResolverResult {
-        PointerCoachCursorGuideResolverResult(
-            guideRequest: nil,
+    ) -> AgentVisualizationPlanResolverResult {
+        AgentVisualizationPlanResolverResult(
+            visualizationPlan: nil,
+            cursorRequest: nil,
             confidence: 0,
             reason: metadata["error"] ?? metadata["reason"] ?? "",
             trace: trace(
@@ -238,7 +276,7 @@ public struct ProcessBackedLocalLLMPointerCoachCursorGuideResolver: PointerCoach
 
     private func trace(
         entry: AIModelRegistryEntry?,
-        request: PointerCoachCursorGuideResolverRequest,
+        request: AgentVisualizationPlanResolverRequest,
         status: AIModelCallStatus,
         validationStatus: String,
         latencyMS: Double?,
@@ -270,7 +308,7 @@ public struct ProcessBackedLocalLLMPointerCoachCursorGuideResolver: PointerCoach
     }
 }
 
-private struct LocalLLMPointerCoachCursorGuideSidecarRequest: Codable, Equatable, Sendable {
+private struct LocalLLMAgentVisualizationPlanSidecarRequest: Codable, Equatable, Sendable {
     var command: String
     var runtimeCapabilities: [String]
     var cacheSnippets: [String]
@@ -279,23 +317,23 @@ private struct LocalLLMPointerCoachCursorGuideSidecarRequest: Codable, Equatable
     var metadata: [String: String]
 }
 
-private struct LocalLLMPointerCoachCursorGuideSidecarResponse: Codable, Equatable, Sendable {
+private struct LocalLLMAgentVisualizationPlanSidecarResponse: Codable, Equatable, Sendable {
     var outputText: String
     var metadata: [String: String]
 }
 
-private struct PointerCoachCursorGuideDecision: Codable, Equatable, Sendable {
-    var shouldShowGuide: Bool
+private struct AgentVisualizationPlanDecision: Codable, Equatable, Sendable {
+    var shouldVisualize: Bool
     var title: String?
     var goal: String?
     var targetApp: String?
     var confidence: Double
     var reason: String
-    var steps: [PointerCoachCursorGuideStepDecision]
+    var steps: [AgentVisualizationPlanStepDecision]
     var metadata: [String: String]?
 }
 
-private struct PointerCoachCursorGuideStepDecision: Codable, Equatable, Sendable {
+private struct AgentVisualizationPlanStepDecision: Codable, Equatable, Sendable {
     var label: String
     var x: Double
     var y: Double

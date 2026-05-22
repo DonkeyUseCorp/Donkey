@@ -23,7 +23,8 @@ struct PointerPromptCommandHandlingResult: Equatable, Sendable {
     var traceID: String
     var metadata: [String: String]
     var documentReviewRequest: DocumentFormFillReviewRequest?
-    var cursorGuideRequest: PointerCoachCursorGuideRequest?
+    var agentVisualizationPlan: AgentVisualizationPlan?
+    var cursorOverlayRequest: PointerCoachCursorGuideRequest?
 }
 
 struct DocumentFormFillReviewRequest: Equatable, Sendable {
@@ -39,6 +40,7 @@ struct PointerPromptCommandContext: Sendable {
     var isFollowUp: Bool
     var turnSource: AppHarnessTurnSource = .typedPrompt
     var spawnProgressChanged: (@MainActor @Sendable (PointerPromptSpawnProgressUpdate) -> Void)?
+    var agentVisualizationChanged: (@MainActor @Sendable (AgentVisualizationPlan) -> Void)?
 }
 
 protocol PointerPromptCommandHandling: Sendable {
@@ -65,7 +67,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
     var memoryRetriever: SemanticRunMemoryRetriever
     var coordinatorRegistry: PointerPromptRunCoordinatorRegistry
     var memoryStore: SQLiteAgentMemoryStore?
-    var pointerCoachGuideResolver: any PointerCoachCursorGuideResolving
+    var agentVisualizationPlanResolver: any AgentVisualizationPlanResolving
 
     init(
         catalog: LocalAppTaskCatalog = .defaultLocal(),
@@ -75,7 +77,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         memoryRetriever: SemanticRunMemoryRetriever = SemanticRunMemoryRetriever(),
         coordinatorRegistry: PointerPromptRunCoordinatorRegistry = PointerPromptRunCoordinatorRegistry(),
         memoryStore: SQLiteAgentMemoryStore? = .shared,
-        pointerCoachGuideResolver: any PointerCoachCursorGuideResolving = ProcessBackedLocalLLMPointerCoachCursorGuideResolver()
+        agentVisualizationPlanResolver: any AgentVisualizationPlanResolving = ProcessBackedLocalLLMAgentVisualizationPlanResolver()
     ) {
         self.catalog = catalog
         self.appHarnessRouter = AppHarnessTurnRouter(catalog: catalog)
@@ -85,7 +87,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         self.redactor = redactor
         self.memoryRetriever = memoryRetriever
         self.memoryStore = memoryStore
-        self.pointerCoachGuideResolver = pointerCoachGuideResolver
+        self.agentVisualizationPlanResolver = agentVisualizationPlanResolver
     }
 
     func handleSubmittedCommand(
@@ -95,15 +97,24 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         let traceID = "pointer-prompt-\(UUID().uuidString)"
         let taskID = context?.task.id ?? traceID
         logSubmittedCommand(command, traceID: traceID, taskID: taskID, context: context)
-        let cursorGuideResolution = await pointerCoachGuideResolver.resolveGuide(
-            PointerCoachCursorGuideResolverRequest(
+        let visualizationResolution = await agentVisualizationPlanResolver.resolveVisualizationPlan(
+            AgentVisualizationPlanResolverRequest(
                 command: command,
                 runtimeCapabilities: Self.runtimeCapabilities(for: catalog),
                 cacheSnippets: memoryStore?.contextSnippets(for: command) ?? [],
                 sourceTraceID: traceID
             )
         )
-        if let cursorGuideRequest = cursorGuideResolution.guideRequest {
+        if let resolvedVisualizationPlan = visualizationResolution.visualizationPlan {
+            let visualizationPlan = groundAgentVisualizationPlan(resolvedVisualizationPlan)
+            guard let cursorOverlayRequest = visualizationPlan.cursorOverlayRequest() else {
+                return await continueHandlingNonVisualizationCommand(
+                    command: command,
+                    context: context,
+                    traceID: traceID,
+                    taskID: taskID
+                )
+            }
             await reportSpawnProgress(
                 PointerPromptSpawnProgressUpdate(label: "Showing you"),
                 context: context
@@ -117,29 +128,44 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                     traceID: traceID,
                     metadata: [
                         "structuredDecision": "true",
-                        "router": "pointerCoachGuide"
+                        "router": "agentVisualization"
                     ]
                 ),
                 summary: "Showing you.",
-                taskLabel: cursorGuideRequest.title,
+                taskLabel: visualizationPlan.title,
                 traceID: traceID,
-                metadata: cursorGuideRequest.metadata.merging([
+                metadata: cursorOverlayRequest.metadata.merging([
                     "appHarness.decision": AppHarnessDecisionKind.respond.rawValue,
                     "appHarness.context.traceID": traceID,
-                    "cursorGuide.modelCallID": cursorGuideResolution.trace.id,
-                    "cursorGuide.modelStatus": cursorGuideResolution.trace.status.rawValue,
-                    "cursorGuide.validationStatus": cursorGuideResolution.trace.validationStatus,
-                    "cursorGuide.confidence": Self.formatLatency(cursorGuideResolution.confidence),
-                    "cursorGuide.reason": cursorGuideResolution.reason,
-                    "cursorGuide.stepCount": String(cursorGuideRequest.steps.count)
+                    "agentVisualization.modelCallID": visualizationResolution.trace.id,
+                    "agentVisualization.modelStatus": visualizationResolution.trace.status.rawValue,
+                    "agentVisualization.validationStatus": visualizationResolution.trace.validationStatus,
+                    "agentVisualization.confidence": Self.formatLatency(visualizationResolution.confidence),
+                    "agentVisualization.reason": visualizationResolution.reason,
+                    "agentVisualization.stepCount": String(visualizationPlan.steps.count)
                 ]) { current, _ in current },
                 documentReviewRequest: nil,
-                cursorGuideRequest: cursorGuideRequest
+                agentVisualizationPlan: visualizationPlan,
+                cursorOverlayRequest: cursorOverlayRequest
             )
-            logHandlingResult(result, stage: "cursorGuide", hint: "Showing an instructional cursor guide.")
+            logHandlingResult(result, stage: "agentVisualization", hint: "Showing a visual-only agent action visualization.")
             return result
         }
 
+        return await continueHandlingNonVisualizationCommand(
+            command: command,
+            context: context,
+            traceID: traceID,
+            taskID: taskID
+        )
+    }
+
+    private func continueHandlingNonVisualizationCommand(
+        command: String,
+        context: PointerPromptCommandContext?,
+        traceID: String,
+        taskID: String
+    ) async -> PointerPromptCommandHandlingResult {
         let routing = appHarnessRouter.route(
             request: Self.harnessRequest(command: command, context: context),
             traceID: traceID
@@ -160,7 +186,8 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                 traceID: traceID,
                 metadata: Self.contextPacketMetadata(routing.contextPacket, outcome: routing.outcome),
                 documentReviewRequest: nil,
-                cursorGuideRequest: nil
+                agentVisualizationPlan: nil,
+                cursorOverlayRequest: nil
             )
             logHandlingResult(result, stage: "conversation", hint: routingHint(for: routing))
             return result
@@ -178,7 +205,8 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                 traceID: traceID,
                 metadata: Self.contextPacketMetadata(routing.contextPacket, outcome: routing.outcome),
                 documentReviewRequest: nil,
-                cursorGuideRequest: nil
+                agentVisualizationPlan: nil,
+                cursorOverlayRequest: nil
             )
             logHandlingResult(result, stage: "routing", hint: routingHint(for: routing))
             return result
@@ -192,7 +220,8 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                 traceID: traceID,
                 metadata: Self.contextPacketMetadata(routing.contextPacket, outcome: routing.outcome),
                 documentReviewRequest: nil,
-                cursorGuideRequest: nil
+                agentVisualizationPlan: nil,
+                cursorOverlayRequest: nil
             )
             logHandlingResult(result, stage: "empty", hint: "Empty command; no action was run.")
             return result
@@ -241,6 +270,16 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             trace: localModelResult.trace,
             latencyMS: parseLatencyMS
         )
+        if let projectedVisualizationPlan = LocalAppTaskAgentVisualizationBuilder.projectedPlan(
+            command: modelCommand,
+            traceID: traceID,
+            resolution: resolution
+        ) {
+            await reportAgentVisualization(
+                groundAgentVisualizationPlan(projectedVisualizationPlan),
+                context: context
+            )
+        }
         let semanticMemoryResults = await retrieveSemanticMemory(
             command: modelCommand,
             resolution: resolution
@@ -310,7 +349,8 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                     Self.contextPacketMetadata(routing.contextPacket, outcome: routing.outcome)
                 ) { current, _ in current },
                 documentReviewRequest: nil,
-                cursorGuideRequest: nil
+                agentVisualizationPlan: nil,
+                cursorOverlayRequest: nil
             )
             await coordinatorRegistry.finish(taskID: taskID)
             logHandlingResult(
@@ -328,6 +368,10 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             metadata: modelMetadata
         )
 
+        let agentVisualizationPlan = LocalAppTaskAgentVisualizationBuilder.plan(
+            for: result,
+            sourceTraceID: traceID
+        ).map(groundAgentVisualizationPlan)
         let handlingResult = PointerPromptCommandHandlingResult(
             status: result.status,
             threadStatus: threadStatus(for: result),
@@ -342,7 +386,8 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                 traceID: traceID,
                 result: result
             ),
-            cursorGuideRequest: nil
+            agentVisualizationPlan: agentVisualizationPlan,
+            cursorOverlayRequest: agentVisualizationPlan?.cursorOverlayRequest()
         )
         await coordinatorRegistry.finish(taskID: taskID)
         logHandlingResult(
@@ -374,6 +419,26 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         guard let spawnProgressChanged = context?.spawnProgressChanged else { return }
 
         await spawnProgressChanged(update)
+    }
+
+    private func reportAgentVisualization(
+        _ plan: AgentVisualizationPlan,
+        context: PointerPromptCommandContext?
+    ) async {
+        guard let agentVisualizationChanged = context?.agentVisualizationChanged else { return }
+
+        await agentVisualizationChanged(plan)
+    }
+
+    private func groundAgentVisualizationPlan(_ plan: AgentVisualizationPlan) -> AgentVisualizationPlan {
+        let candidates = MacWindowResolver().enumerateCandidates()
+        guard !candidates.isEmpty else { return plan }
+
+        return AgentVisualizationGrounder().ground(
+            plan: plan,
+            targetAppName: plan.metadata["targetApp"],
+            candidates: candidates
+        )
     }
 
     private static func spawnTargetHint(for target: LocalAppTarget) -> PointerPromptSpawnTargetHint {

@@ -11,7 +11,7 @@ final class PointerPromptOverlayController {
     private let fixedPlacement: PointerPromptPlacement = .bottomRight
     private let activationShortcut: PointerPromptActivationShortcut
     private let microphoneWaveformMeter = MicrophoneWaveformMeter()
-    private let coachCursorController = PointerCoachCursorOverlayController()
+    private let agentVisualizationCursorController = PointerCoachCursorOverlayController()
     private let spawnOverlayController = PointerPromptSpawnOverlayController()
 
     private var statusPanel: NSPanel?
@@ -49,8 +49,8 @@ final class PointerPromptOverlayController {
     ) {
         self.model = model
         self.activationShortcut = activationShortcut
-        model.coachGuidePresenter = { [weak self] request in
-            self?.coachCursorController.show(request: request)
+        model.agentVisualizationPresenter = { [weak self] request in
+            self?.agentVisualizationCursorController.show(request: request)
         }
         spawnOverlayController.followUpSubmitted = { [weak self] spawnID, taskID, text in
             self?.model.submitSpawnFollowUp(spawnID: spawnID, taskID: taskID, text: text)
@@ -186,7 +186,7 @@ final class PointerPromptOverlayController {
         stopActivationMonitoring()
         stopAppDeactivationMonitoring()
         microphoneWaveformMeter.stop()
-        coachCursorController.close()
+        agentVisualizationCursorController.close()
         spawnOverlayController.close()
         inputPanel?.close()
         inputPanel = nil
