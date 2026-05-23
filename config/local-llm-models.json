@@ -1,5 +1,6 @@
 {
   "runtimeRequirements": [
+    "--no-binary llama-cpp-python",
     "llama-cpp-python>=0.3,<0.4"
   ],
   "defaultModel": {
