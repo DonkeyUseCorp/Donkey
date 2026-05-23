@@ -35,6 +35,36 @@ struct DonkeyBackendInferenceClientTests {
     }
 
     @Test
+    func createResponseUsesBackendProxyAndStoreFalse() async throws {
+        let httpClient = FixtureHTTPClient(
+            data: Data(#"{"output_text":"{\"taskType\":\"none\"}"}"#.utf8),
+            statusCode: 200
+        )
+        let client = DonkeyBackendInferenceClient(
+            configuration: configuration(),
+            httpClient: httpClient
+        )
+
+        _ = try await client.createResponse(
+            RemoteInferenceResponseCreateRequest(
+                input: .string("hello"),
+                store: false,
+                metadata: ["source_trace_id": "trace-1"]
+            )
+        )
+
+        let request = try #require(httpClient.requests.first)
+        #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+        #expect(request.value(forHTTPHeaderField: "x-donkey-client-id") == "client-1")
+        #expect(request.url?.path == "/api/inference/responses/")
+
+        let object = try #require(request.httpBodyJSONObject)
+        #expect(object["model"] == nil)
+        #expect(object["store"] as? Bool == false)
+        #expect(object["stream"] as? Bool == false)
+    }
+
+    @Test
     func decodesServerSentEvents() {
         let data = Data(
             """

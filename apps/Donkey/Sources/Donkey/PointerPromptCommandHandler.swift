@@ -82,7 +82,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         memoryRetriever: SemanticRunMemoryRetriever = SemanticRunMemoryRetriever(),
         coordinatorRegistry: PointerPromptRunCoordinatorRegistry = PointerPromptRunCoordinatorRegistry(),
         memoryStore: SQLiteAgentMemoryStore? = .shared,
-        agentVisualizationPlanResolver: any AgentVisualizationPlanResolving = ProcessBackedLocalLLMAgentVisualizationPlanResolver()
+        agentVisualizationPlanResolver: any AgentVisualizationPlanResolving = DisabledAgentVisualizationPlanResolver()
     ) {
         self.catalog = catalog
         self.appHarnessRouter = AppHarnessTurnRouter(catalog: catalog)
@@ -301,7 +301,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             "appHarness.decision": routing.outcome.decision.kind.rawValue,
             "appHarness.context.promptCharacters": String(routing.contextPacket.promptText.count),
             "appHarness.context.redactionCount": String(routing.contextPacket.redactionCount),
-            "intentParser": "localModel",
+            "intentParser": "hostedModel",
             "latency.commandParseMS": Self.formatLatency(parseLatencyMS),
             "modelCallID": localModelResult.trace.id,
             "modelCallStatus": localModelResult.trace.status.rawValue,
@@ -550,7 +550,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         case "followUpActionContext":
             return "Follow-up turn is being treated as an action for the existing task."
         case "modelIntent":
-            return "Using local model intent classification with cache-backed local lookup."
+            return "Using hosted model intent classification through the Donkey backend."
         default:
             return "Router path \(router.isEmpty ? "unknown" : router)."
         }
@@ -574,9 +574,12 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
 
     private static func shouldRespondWithoutLocalTask(_ resolution: LocalAppTaskCatalogResolution) -> Bool {
         guard resolution.status == .needsConfirmation else { return false }
-        if resolution.intent == nil,
-           resolution.metadata["reason"] == "localModelIntentUnavailable" {
-            return true
+        if resolution.intent == nil {
+            let reason = resolution.metadata["reason"]
+            if reason == "localModelIntentUnavailable"
+                || reason == "hostedModelIntentUnavailable" {
+                return true
+            }
         }
         if resolution.metadata["responseMode"] == "conversation",
            resolution.metadata["assistantResponse"]?.isEmpty == false {
@@ -596,6 +599,16 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             if modelStatus == AIModelCallStatus.providerOutage.rawValue
                 || modelStatus == AIModelCallStatus.timeout.rawValue {
                 return "The local command parser is not available right now, so I couldn't safely run that local action."
+            }
+        }
+        if resolution.metadata["reason"] == "hostedModelIntentUnavailable" {
+            let modelStatus = resolution.metadata["modelCallStatus"] ?? ""
+            if modelStatus == AIModelCallStatus.missingCredentials.rawValue {
+                return "The hosted command parser is not configured yet, so I couldn't safely run that action."
+            }
+            if modelStatus == AIModelCallStatus.providerOutage.rawValue
+                || modelStatus == AIModelCallStatus.timeout.rawValue {
+                return "The hosted command parser is not available right now, so I couldn't safely run that action."
             }
         }
         return "I couldn't find a supported local action for that yet."

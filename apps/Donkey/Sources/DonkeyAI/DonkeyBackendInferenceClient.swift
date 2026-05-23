@@ -88,6 +88,16 @@ public struct DonkeyBackendInferenceClient {
         return try JSONDecoder().decode(RemoteInferenceJSONValue.self, from: data)
     }
 
+    public func createResponse(
+        _ responseRequest: RemoteInferenceResponseCreateRequest
+    ) async throws -> RemoteInferenceJSONValue {
+        var request = makeRequest(path: "/api/inference/responses/")
+        request.httpMethod = "POST"
+        request.httpBody = try JSONEncoder().encode(responseRequest)
+        let data = try await send(request)
+        return try JSONDecoder().decode(RemoteInferenceJSONValue.self, from: data)
+    }
+
     public func makeStreamingChatRequest(
         _ completionRequest: RemoteInferenceChatCompletionRequest
     ) throws -> URLRequest {

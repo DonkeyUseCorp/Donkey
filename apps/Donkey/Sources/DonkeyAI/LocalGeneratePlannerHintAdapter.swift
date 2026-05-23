@@ -205,16 +205,16 @@ public struct LocalGeneratePlannerHintAdapter: Sendable {
 
 public struct ProviderBackedSlowPlannerHintGenerator: SlowPlannerHintGenerating {
     public var localAdapter: LocalGeneratePlannerHintAdapter
-    public var onlineAdapter: OpenAIPlannerHintAdapter
+    public var hostedAdapter: HostedPlannerHintAdapter
     public var providerOrder: [AIModelProvider]
 
     public init(
         localAdapter: LocalGeneratePlannerHintAdapter = LocalGeneratePlannerHintAdapter(),
-        onlineAdapter: OpenAIPlannerHintAdapter = OpenAIPlannerHintAdapter(),
-        providerOrder: [AIModelProvider] = [.openAI]
+        hostedAdapter: HostedPlannerHintAdapter = HostedPlannerHintAdapter(),
+        providerOrder: [AIModelProvider] = [.donkeyBackend]
     ) {
         self.localAdapter = localAdapter
-        self.onlineAdapter = onlineAdapter
+        self.hostedAdapter = hostedAdapter
         self.providerOrder = providerOrder
     }
 
@@ -240,6 +240,8 @@ public struct ProviderBackedSlowPlannerHintGenerator: SlowPlannerHintGenerating 
         for provider in providerOrder {
             let result: PlannerHintAdapterResult
             switch provider {
+            case .donkeyBackend:
+                result = await hostedAdapter.generatePlannerHint(request)
             case .localRuntime:
                 metadata["\(provider.rawValue).status"] = "unsupportedForPlanner"
                 metadata["\(provider.rawValue).validationStatus"] = "notAttempted"
@@ -247,8 +249,6 @@ public struct ProviderBackedSlowPlannerHintGenerator: SlowPlannerHintGenerating 
                 continue
             case .ollama:
                 result = await localAdapter.generatePlannerHint(request)
-            case .openAI:
-                result = await onlineAdapter.generatePlannerHint(request)
             }
 
             metadata["\(provider.rawValue).status"] = result.trace.status.rawValue

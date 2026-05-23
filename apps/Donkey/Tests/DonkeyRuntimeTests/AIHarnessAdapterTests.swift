@@ -14,8 +14,8 @@ struct AIHarnessAdapterTests {
     func routerSelectsPlannerModelFromRegistryAndSkipsFailedEntries() throws {
         let registry = AIModelRegistry(
             entries: [
-                entry(id: "failed", modelID: "gpt-5-mini", evalStatus: .passing, timeoutMS: 1_000),
-                entry(id: "selected", modelID: "gpt-5.2", evalStatus: .passing, timeoutMS: 2_000)
+                entry(id: "failed", modelID: "backend-selected-a", evalStatus: .passing, timeoutMS: 1_000),
+                entry(id: "selected", modelID: "backend-selected-b", evalStatus: .passing, timeoutMS: 2_000)
             ]
         )
         let router = AIModelRouter(registry: registry)
@@ -28,7 +28,7 @@ struct AIHarnessAdapterTests {
         )
 
         #expect(selected.id == "selected")
-        #expect(selected.modelID == "gpt-5.2")
+        #expect(selected.modelID == "backend-selected-b")
     }
 
     @Test
@@ -36,7 +36,7 @@ struct AIHarnessAdapterTests {
         let router = AIModelRouter(
             registry: AIModelRegistry(
                 entries: [
-                    entry(id: "candidate", modelID: "gpt-5.2", evalStatus: .candidate)
+                    entry(id: "candidate", modelID: "backend-selected", evalStatus: .candidate)
                 ]
             )
         )
@@ -55,7 +55,7 @@ struct AIHarnessAdapterTests {
     func privacySensitivePlannerRoutePrefersLocalProviderWhenAvailable() throws {
         let registry = AIModelRegistry(
             entries: [
-                entry(id: "online", provider: .openAI, modelID: "gpt-5.2", evalStatus: .candidate),
+                entry(id: "backend", provider: .donkeyBackend, modelID: AIModelRegistryEntry.backendSelectedModelID, evalStatus: .candidate),
                 entry(id: "local", provider: .localRuntime, modelID: defaultLocalRuntimeModelID, evalStatus: .candidate)
             ]
         )
@@ -73,7 +73,7 @@ struct AIHarnessAdapterTests {
     }
 
     @Test
-    func privacySensitiveTaskIntentRouteSelectsLocalProvider() throws {
+    func privacySensitiveTaskIntentRouteSelectsHostedBackendProvider() throws {
         let router = AIModelRouter(registry: .defaultHybridPlanner)
 
         let selected = try router.route(
@@ -83,15 +83,16 @@ struct AIHarnessAdapterTests {
             )
         )
 
-        #expect(selected.id == "local-runtime-task-intent-qwen2-5-0-5b-instruct")
+        #expect(selected.id == "backend-task-intent-default")
         #expect(selected.role == .taskIntent)
-        #expect(selected.provider == .localRuntime)
-        #expect(selected.modelID == defaultLocalRuntimeModelID)
-        #expect(selected.timeoutMS == 30_000)
+        #expect(selected.provider == .donkeyBackend)
+        #expect(selected.modelID == AIModelRegistryEntry.backendSelectedModelID)
+        #expect(selected.backendModelOverride == nil)
+        #expect(selected.timeoutMS == 12_000)
     }
 
     @Test
-    func defaultPlannerHintRouteDoesNotUseOllama() throws {
+    func defaultPlannerHintRouteUsesBackendProvider() throws {
         let router = AIModelRouter(registry: .defaultHybridPlanner)
 
         let selected = try router.route(
@@ -101,8 +102,9 @@ struct AIHarnessAdapterTests {
             )
         )
 
-        #expect(selected.id == "openai-planner-hint-default")
-        #expect(selected.provider == .openAI)
+        #expect(selected.id == "backend-planner-hint-default")
+        #expect(selected.provider == .donkeyBackend)
+        #expect(selected.modelID == AIModelRegistryEntry.backendSelectedModelID)
     }
 
     @Test
@@ -146,29 +148,18 @@ struct AIHarnessAdapterTests {
     }
 
     @Test
-    func voiceTranscriptionRouteSelectsLocalParakeetModel() throws {
+    func voiceTranscriptionRouteHasNoDefaultLocalModel() throws {
         let router = AIModelRouter(registry: .defaultHybridPlanner)
 
-        let selected = try router.route(
-            AIModelRouteRequest(
-                jobType: .voiceTranscription,
-                privacyMode: .privacySensitive,
-                requiredCapabilities: [.audioInput]
+        #expect(throws: AIModelRouteError.noMatchingModel) {
+            _ = try router.route(
+                AIModelRouteRequest(
+                    jobType: .voiceTranscription,
+                    privacyMode: .privacySensitive,
+                    requiredCapabilities: [.audioInput]
+                )
             )
-        )
-
-        #expect(selected.id == "local-voice-transcription-parakeet-tdt-0.6b-v3")
-        #expect(selected.role == .voiceTranscription)
-        #expect(selected.provider == .localRuntime)
-        #expect(selected.modelID == "nvidia/parakeet-tdt-0.6b-v3")
-        #expect(selected.endpoint.absoluteString == "local://nvidia/parakeet-tdt-0.6b-v3")
-        #expect(selected.docsURL.absoluteString == "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3")
-        #expect(selected.capabilities == [.audioInput])
-        #expect(selected.rollbackID == nil)
-        #expect(selected.metadata["runtime"] == "nvidia-nemo")
-        #expect(selected.metadata["local"] == "true")
-        #expect(selected.metadata["fallbackPolicy"] == "none")
-        #expect(selected.metadata["fallbackModelID"] == nil)
+        }
     }
 
     @Test
@@ -190,6 +181,7 @@ struct AIHarnessAdapterTests {
     @Test
     func localVoiceTranscriptionAdapterReturnsTranscriptForCommandParser() async {
         let adapter = LocalVoiceTranscriptionAdapter(
+            router: AIModelRouter(registry: localVoiceRegistry()),
             runtime: FakeVoiceRuntime(
                 transcript: LocalVoiceTranscript(
                     text: "play Coldplay",
@@ -226,6 +218,7 @@ struct AIHarnessAdapterTests {
             transcript: LocalVoiceTranscript(text: "show weather", confidence: 0.9)
         )
         let adapter = LocalVoiceTranscriptionAdapter(
+            router: AIModelRouter(registry: localVoiceRegistry()),
             runtime: runtime,
             now: fixedClock([10, 20])
         )
@@ -273,7 +266,7 @@ struct AIHarnessAdapterTests {
                 durationMS: 800,
                 data: Data([1, 2, 3])
             ),
-            model: try AIModelRouter(registry: .defaultHybridPlanner).route(
+            model: try AIModelRouter(registry: localVoiceRegistry()).route(
                 AIModelRouteRequest(
                     jobType: .voiceTranscription,
                     requiredCapabilities: [.audioInput],
@@ -301,7 +294,7 @@ struct AIHarnessAdapterTests {
         await #expect(throws: LocalVoiceTranscriptionRuntimeError.runtimeUnavailable("missingEnvironmentVariable")) {
             _ = try await runtime.transcribe(
                 audio: LocalVoiceAudioBuffer(id: "audio-missing", durationMS: 10, data: Data()),
-                model: try AIModelRouter(registry: .defaultHybridPlanner).route(
+                model: try AIModelRouter(registry: localVoiceRegistry()).route(
                     AIModelRouteRequest(
                         jobType: .voiceTranscription,
                         requiredCapabilities: [.audioInput],
@@ -498,6 +491,85 @@ struct AIHarnessAdapterTests {
         #expect(result.trace.provider == .localRuntime)
         #expect(result.trace.status == .completed)
         #expect(result.trace.metadata["local.provider"] == "donkey-local-llm-sidecar")
+    }
+
+    @Test
+    func hostedTaskIntentAdapterUsesBackendResponsesProxy() async throws {
+        let httpClient = FakeAIHTTPClient(
+            data: Data(#"{"output_text":"{\"taskType\":\"media_playback\",\"targetAppName\":\"Music\",\"entities\":{\"query\":\"cold play\"},\"normalizedEntities\":{\"query\":\"Cold Play\"},\"confidence\":0.91,\"needsConfirmation\":false,\"actionPlan\":{\"tools\":[],\"inputEntity\":\"\",\"controlID\":\"\",\"focusKey\":\"\",\"verification\":\"commandAttempted\"},\"metadata\":{\"source\":\"test\"}}"}"#.utf8),
+            statusCode: 200
+        )
+        let adapter = HostedTaskIntentParsingAdapter(
+            configuration: DonkeyBackendInferenceConfiguration(
+                baseURL: URL(string: "https://donkey.example")!,
+                clientID: "client-1"
+            ),
+            httpClient: httpClient
+        )
+
+        let result = await adapter.parseTaskIntent(
+            TaskIntentAdapterRequest(
+                command: "play cold play",
+                taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
+                sourceTraceID: "trace-hosted-intent"
+            )
+        )
+
+        #expect(result.intent?.taskType == "media_playback")
+        #expect(result.intent?.parserSource == .onlineModel)
+        #expect(result.trace.provider == .donkeyBackend)
+        #expect(result.trace.modelID == AIModelRegistryEntry.backendSelectedModelID)
+        #expect(result.trace.metadata["privacy.store"] == "false")
+
+        let request = try #require(httpClient.requests.first)
+        #expect(request.url?.path == "/api/inference/responses/")
+        let body = try #require(request.httpBodyJSONObject)
+        #expect(body["model"] == nil)
+        #expect(body["store"] as? Bool == false)
+        #expect(body["donkeyProvider"] == nil)
+    }
+
+    @Test
+    func hostedFollowUpResolverLetsBackendSelectResponsesModel() async throws {
+        let httpClient = FakeAIHTTPClient(
+            data: Data(#"{"output_text":"{\"isFollowUp\":true,\"taskID\":\"task-1\",\"confidence\":0.82,\"reason\":\"same task\"}"}"#.utf8),
+            statusCode: 200
+        )
+        let resolver = HostedTaskFollowUpResolver(
+            configuration: DonkeyBackendInferenceConfiguration(
+                baseURL: URL(string: "https://donkey.example")!,
+                clientID: "client-1"
+            ),
+            httpClient: httpClient
+        )
+
+        let result = await resolver.resolveFollowUp(
+            PointerPromptFollowUpResolverRequest(
+                text: "add that to it",
+                candidates: [
+                    PointerPromptFollowUpCandidate(
+                        taskID: "task-1",
+                        title: "Draft note",
+                        detail: "Writing a note",
+                        commandText: "write a note",
+                        status: .chatting,
+                        updatedAt: Date(timeIntervalSince1970: 0)
+                    )
+                ],
+                sourceTraceID: "trace-hosted-followup"
+            )
+        )
+
+        #expect(result.taskID == "task-1")
+        #expect(result.trace.provider == .donkeyBackend)
+        #expect(result.trace.modelID == AIModelRegistryEntry.backendSelectedModelID)
+
+        let request = try #require(httpClient.requests.first)
+        #expect(request.url?.path == "/api/inference/responses/")
+        let body = try #require(request.httpBodyJSONObject)
+        #expect(body["model"] == nil)
+        #expect(body["store"] as? Bool == false)
+        #expect(body["donkeyProvider"] == nil)
     }
 
     @Test
@@ -1234,7 +1306,7 @@ struct AIHarnessAdapterTests {
     }
 
     @Test
-    func openAIAdapterBuildsResponsesRequestWithStoreFalseAndDecodesStructuredHint() async throws {
+    func hostedPlannerAdapterBuildsResponsesRequestWithStoreFalseAndDecodesStructuredHint() async throws {
         let httpClient = FakeAIHTTPClient(
             data: responseData(
                 outputText: """
@@ -1243,10 +1315,13 @@ struct AIHarnessAdapterTests {
             ),
             statusCode: 200
         )
-        let adapter = OpenAIPlannerHintAdapter(
-            router: AIModelRouter(registry: AIModelRegistry(entries: [entry(id: "planner", modelID: "gpt-5.2")])),
-            httpClient: httpClient,
-            environment: ["OPENAI_API_KEY": "test-key"]
+        let adapter = HostedPlannerHintAdapter(
+            router: AIModelRouter(registry: AIModelRegistry(entries: [entry(id: "planner", modelID: AIModelRegistryEntry.backendSelectedModelID)])),
+            configuration: DonkeyBackendInferenceConfiguration(
+                baseURL: URL(string: "https://donkey.example")!,
+                clientID: "client-1"
+            ),
+            httpClient: httpClient
         )
 
         let result = await adapter.generatePlannerHint(adapterRequest())
@@ -1260,10 +1335,12 @@ struct AIHarnessAdapterTests {
         #expect(result.trace.metadata["privacy.store"] == "false")
 
         let request = try #require(httpClient.requests.first)
-        #expect(request.url?.absoluteString == "https://api.openai.com/v1/responses")
-        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer test-key")
+        #expect(request.url?.path == "/api/inference/responses/")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+        #expect(request.value(forHTTPHeaderField: "x-donkey-client-id") == "client-1")
         let body = try #require(request.httpBodyJSONObject)
-        #expect(body["model"] as? String == "gpt-5.2")
+        #expect(body["model"] == nil)
+        #expect(body["donkeyProvider"] == nil)
         #expect(body["store"] as? Bool == false)
         let text = try #require(body["text"] as? [String: Any])
         let formatContainer = try #require(text["format"] as? [String: Any])
@@ -1271,7 +1348,7 @@ struct AIHarnessAdapterTests {
     }
 
     @Test
-    func openAIAdapterIncludesSelectedSemanticMemoryInPrompt() async throws {
+    func hostedPlannerAdapterIncludesSelectedSemanticMemoryInPrompt() async throws {
         let httpClient = FakeAIHTTPClient(
             data: responseData(
                 outputText: """
@@ -1280,10 +1357,13 @@ struct AIHarnessAdapterTests {
             ),
             statusCode: 200
         )
-        let adapter = OpenAIPlannerHintAdapter(
-            router: AIModelRouter(registry: AIModelRegistry(entries: [entry(id: "planner", modelID: "gpt-5.2")])),
+        let adapter = HostedPlannerHintAdapter(
+            router: AIModelRouter(registry: AIModelRegistry(entries: [entry(id: "planner", modelID: AIModelRegistryEntry.backendSelectedModelID)])),
+            configuration: DonkeyBackendInferenceConfiguration(
+                baseURL: URL(string: "https://donkey.example")!,
+                clientID: "client-1"
+            ),
             httpClient: httpClient,
-            environment: ["OPENAI_API_KEY": "test-key"],
             memoryStore: nil
         )
         var request = adapterRequest()
@@ -1310,7 +1390,7 @@ struct AIHarnessAdapterTests {
     }
 
     @Test
-    func openAIAdapterPersistsProviderMemoryProposalsWithValidatedHint() async throws {
+    func hostedPlannerAdapterPersistsProviderMemoryProposalsWithValidatedHint() async throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try SQLiteAgentMemoryStore(baseDirectory: root, cleanupLegacyStores: false)
@@ -1329,10 +1409,13 @@ struct AIHarnessAdapterTests {
             ),
             statusCode: 200
         )
-        let adapter = OpenAIPlannerHintAdapter(
-            router: AIModelRouter(registry: AIModelRegistry(entries: [entry(id: "planner", modelID: "gpt-5.2")])),
+        let adapter = HostedPlannerHintAdapter(
+            router: AIModelRouter(registry: AIModelRegistry(entries: [entry(id: "planner", modelID: AIModelRegistryEntry.backendSelectedModelID)])),
+            configuration: DonkeyBackendInferenceConfiguration(
+                baseURL: URL(string: "https://donkey.example")!,
+                clientID: "client-1"
+            ),
             httpClient: httpClient,
-            environment: ["OPENAI_API_KEY": "test-key"],
             memoryStore: store
         )
 
@@ -1349,7 +1432,7 @@ struct AIHarnessAdapterTests {
     }
 
     @Test
-    func openAIAdapterKeepsHintWhenMemoryProposalPayloadIsMalformed() async {
+    func hostedPlannerAdapterKeepsHintWhenMemoryProposalPayloadIsMalformed() async {
         let httpClient = FakeAIHTTPClient(
             data: responseData(
                 outputText: """
@@ -1358,10 +1441,13 @@ struct AIHarnessAdapterTests {
             ),
             statusCode: 200
         )
-        let adapter = OpenAIPlannerHintAdapter(
-            router: AIModelRouter(registry: AIModelRegistry(entries: [entry(id: "planner", modelID: "gpt-5.2")])),
+        let adapter = HostedPlannerHintAdapter(
+            router: AIModelRouter(registry: AIModelRegistry(entries: [entry(id: "planner", modelID: AIModelRegistryEntry.backendSelectedModelID)])),
+            configuration: DonkeyBackendInferenceConfiguration(
+                baseURL: URL(string: "https://donkey.example")!,
+                clientID: "client-1"
+            ),
             httpClient: httpClient,
-            environment: ["OPENAI_API_KEY": "test-key"],
             memoryStore: nil
         )
 
@@ -1374,9 +1460,9 @@ struct AIHarnessAdapterTests {
     }
 
     @Test
-    func openAIAdapterHandlesMissingCredentialsRateLimitAndInvalidOutput() async {
-        let adapter = OpenAIPlannerHintAdapter(
-            router: AIModelRouter(registry: AIModelRegistry(entries: [entry(id: "planner", modelID: "gpt-5.2")])),
+    func hostedPlannerAdapterHandlesMissingCredentialsRateLimitAndInvalidOutput() async {
+        let adapter = HostedPlannerHintAdapter(
+            router: AIModelRouter(registry: AIModelRegistry(entries: [entry(id: "planner", modelID: AIModelRegistryEntry.backendSelectedModelID)])),
             httpClient: FakeAIHTTPClient(data: responseData(outputText: "{}"), statusCode: 200),
             environment: [:]
         )
@@ -1385,18 +1471,26 @@ struct AIHarnessAdapterTests {
         #expect(missingCredentials.hint == nil)
         #expect(missingCredentials.trace.status == .missingCredentials)
 
-        let rateLimited = await OpenAIPlannerHintAdapter(
-            router: AIModelRouter(registry: AIModelRegistry(entries: [entry(id: "planner", modelID: "gpt-5.2")])),
+        let rateLimited = await HostedPlannerHintAdapter(
+            router: AIModelRouter(registry: AIModelRegistry(entries: [entry(id: "planner", modelID: AIModelRegistryEntry.backendSelectedModelID)])),
+            configuration: DonkeyBackendInferenceConfiguration(
+                baseURL: URL(string: "https://donkey.example")!,
+                clientID: "client-1"
+            ),
             httpClient: FakeAIHTTPClient(data: Data(), statusCode: 429),
-            environment: ["OPENAI_API_KEY": "test-key"]
+            memoryStore: nil
         )
         .generatePlannerHint(adapterRequest())
         #expect(rateLimited.trace.status == .rateLimited)
 
-        let invalidOutput = await OpenAIPlannerHintAdapter(
-            router: AIModelRouter(registry: AIModelRegistry(entries: [entry(id: "planner", modelID: "gpt-5.2")])),
+        let invalidOutput = await HostedPlannerHintAdapter(
+            router: AIModelRouter(registry: AIModelRegistry(entries: [entry(id: "planner", modelID: AIModelRegistryEntry.backendSelectedModelID)])),
+            configuration: DonkeyBackendInferenceConfiguration(
+                baseURL: URL(string: "https://donkey.example")!,
+                clientID: "client-1"
+            ),
             httpClient: FakeAIHTTPClient(data: responseData(outputText: "{}"), statusCode: 200),
-            environment: ["OPENAI_API_KEY": "test-key"]
+            memoryStore: nil
         )
         .generatePlannerHint(adapterRequest())
         #expect(invalidOutput.trace.status == .invalidOutput)
@@ -1446,7 +1540,7 @@ struct AIHarnessAdapterTests {
     }
 
     @Test
-    func providerBackedSlowPlannerFallsBackFromLocalToOnlineProvider() async {
+    func providerBackedSlowPlannerFallsBackFromLocalToBackendProvider() async {
         let localAdapter = LocalGeneratePlannerHintAdapter(
             router: AIModelRouter(
                 registry: AIModelRegistry(
@@ -1462,42 +1556,45 @@ struct AIHarnessAdapterTests {
             ),
             httpClient: FakeAIHTTPClient(data: Data("{}".utf8), statusCode: 500)
         )
-        let onlineAdapter = OpenAIPlannerHintAdapter(
+        let hostedAdapter = HostedPlannerHintAdapter(
             router: AIModelRouter(
                 registry: AIModelRegistry(
-                    entries: [entry(id: "online-planner", provider: .openAI, modelID: "gpt-5.2")]
+                    entries: [entry(id: "backend-planner", provider: .donkeyBackend, modelID: AIModelRegistryEntry.backendSelectedModelID)]
                 )
+            ),
+            configuration: DonkeyBackendInferenceConfiguration(
+                baseURL: URL(string: "https://donkey.example")!,
+                clientID: "client-1"
             ),
             httpClient: FakeAIHTTPClient(
                 data: responseData(
                     outputText: """
-                    {"id":"online-hint-1","goal":"fallback online","policyName":"online-planner-policy","priorities":["recover"],"preferredActions":["wait"],"avoidActions":[],"confidence":0.81,"expiryMilliseconds":4000}
+                    {"id":"backend-hint-1","goal":"fallback backend","policyName":"backend-planner-policy","priorities":["recover"],"preferredActions":["wait"],"avoidActions":[],"confidence":0.81,"expiryMilliseconds":4000}
                     """
                 ),
                 statusCode: 200
-            ),
-            environment: ["OPENAI_API_KEY": "test-key"]
+            )
         )
         let planner = ProviderBackedSlowPlannerHintGenerator(
             localAdapter: localAdapter,
-            onlineAdapter: onlineAdapter,
-            providerOrder: [.ollama, .openAI]
+            hostedAdapter: hostedAdapter,
+            providerOrder: [.ollama, .donkeyBackend]
         )
 
         let result = await planner.generatePlannerHint(snapshot: slowPlannerSnapshot())
 
-        #expect(result.hint?.id == "online-hint-1")
+        #expect(result.hint?.id == "backend-hint-1")
         #expect(result.metadata["ollama.status"] == "providerOutage")
-        #expect(result.metadata["openAI.status"] == "completed")
-        #expect(result.metadata["selectedProvider"] == "openAI")
-        #expect(result.metadata["selectedModelID"] == "gpt-5.2")
+        #expect(result.metadata["donkeyBackend.status"] == "completed")
+        #expect(result.metadata["selectedProvider"] == "donkeyBackend")
+        #expect(result.metadata["selectedModelID"] == AIModelRegistryEntry.backendSelectedModelID)
     }
 
     @Test
     func providerBackedSlowPlannerDefaultOrderSkipsOllama() {
         let planner = ProviderBackedSlowPlannerHintGenerator()
 
-        #expect(planner.providerOrder == [.openAI])
+        #expect(planner.providerOrder == [.donkeyBackend])
     }
 
     @Test
@@ -1592,12 +1689,31 @@ struct AIHarnessAdapterTests {
         )
     }
 
+    private func localVoiceRegistry() -> AIModelRegistry {
+        AIModelRegistry(
+            entries: [
+                AIModelRegistryEntry(
+                    id: "fixture-local-voice-transcription-parakeet",
+                    role: .voiceTranscription,
+                    provider: .localRuntime,
+                    modelID: "nvidia/parakeet-tdt-0.6b-v3",
+                    endpoint: URL(string: "local://nvidia/parakeet-tdt-0.6b-v3")!,
+                    capabilities: [.audioInput],
+                    timeoutMS: 2_000,
+                    promptVersion: "voice-transcription-v1",
+                    evalStatus: .candidate,
+                    docsURL: URL(string: "local://test-voice-model")!
+                )
+            ]
+        )
+    }
+
     private func entry(
         id: String,
         role: AIModelRole = .plannerHint,
-        provider: AIModelProvider = .openAI,
+        provider: AIModelProvider = .donkeyBackend,
         modelID: String,
-        endpoint: URL = URL(string: "https://api.openai.com/v1/responses")!,
+        endpoint: URL = URL(string: "donkey://backend/api/inference/responses")!,
         evalStatus: AIModelEvalStatus = .candidate,
         timeoutMS: Int = 8_000,
         promptVersion: String = "planner-hint-v1"
@@ -1618,8 +1734,8 @@ struct AIHarnessAdapterTests {
 
     private func docsURL(for provider: AIModelProvider) -> URL {
         switch provider {
-        case .openAI:
-            return URL(string: "https://platform.openai.com/docs/api-reference/responses/create")!
+        case .donkeyBackend:
+            return URL(string: "donkey://backend/api/inference/responses")!
         case .ollama:
             return URL(string: "https://docs.ollama.com/api")!
         case .localRuntime:
@@ -1749,8 +1865,8 @@ struct AIHarnessAdapterTests {
         AIModelCallTrace(
             id: id,
             role: .plannerHint,
-            provider: .openAI,
-            modelID: "gpt-5.2",
+            provider: .donkeyBackend,
+            modelID: AIModelRegistryEntry.backendSelectedModelID,
             promptVersion: "planner-hint-v1",
             schemaID: "planner-hint-v1",
             latencyMS: latencyMS,

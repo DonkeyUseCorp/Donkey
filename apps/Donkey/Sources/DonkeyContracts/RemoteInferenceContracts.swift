@@ -68,6 +68,42 @@ public enum RemoteInferenceJSONValue: Codable, Equatable, Sendable {
 
 public typealias RemoteInferenceJSONObject = [String: RemoteInferenceJSONValue]
 
+public enum RemoteInferenceComputerUseToolType: String, Codable, Equatable, Sendable {
+    case geminiBrowserInteraction = "donkey_gemini_browser_interaction"
+    case geminiMacDesktopInteraction = "donkey_gemini_mac_desktop_interaction"
+}
+
+public struct RemoteInferenceComputerUseTool: Codable, Equatable, Sendable {
+    public var type: RemoteInferenceComputerUseToolType
+    public var excludedPredefinedFunctions: [String]
+    public var metadata: [String: String]
+
+    public init(
+        type: RemoteInferenceComputerUseToolType,
+        excludedPredefinedFunctions: [String] = [],
+        metadata: [String: String] = [:]
+    ) {
+        self.type = type
+        self.excludedPredefinedFunctions = excludedPredefinedFunctions
+        self.metadata = metadata
+    }
+
+    public var jsonObject: RemoteInferenceJSONObject {
+        var object: RemoteInferenceJSONObject = [
+            "type": .string(type.rawValue)
+        ]
+        if !excludedPredefinedFunctions.isEmpty {
+            object["excludedPredefinedFunctions"] = .array(
+                excludedPredefinedFunctions.map(RemoteInferenceJSONValue.string)
+            )
+        }
+        if !metadata.isEmpty {
+            object["metadata"] = .object(metadata.mapValues(RemoteInferenceJSONValue.string))
+        }
+        return object
+    }
+}
+
 public struct RemoteInferenceChatMessage: Codable, Equatable, Sendable {
     public var role: String
     public var content: RemoteInferenceJSONValue
@@ -118,6 +154,62 @@ public struct RemoteInferenceChatCompletionRequest: Codable, Equatable, Sendable
         try container.encode(stream, forKey: DynamicCodingKey("stream"))
         try container.encode(modalities.map(\.rawValue), forKey: DynamicCodingKey("modalities"))
         try container.encodeIfPresent(provider, forKey: DynamicCodingKey("provider"))
+        if !metadata.isEmpty {
+            try container.encode(metadata, forKey: DynamicCodingKey("metadata"))
+        }
+        for (key, value) in parameters {
+            try container.encode(value, forKey: DynamicCodingKey(key))
+        }
+    }
+}
+
+public struct RemoteInferenceResponseCreateRequest: Codable, Equatable, Sendable {
+    public var donkeyProvider: String?
+    public var model: String?
+    public var input: RemoteInferenceJSONValue
+    public var store: Bool
+    public var text: RemoteInferenceJSONObject?
+    public var tools: [RemoteInferenceJSONObject]
+    public var include: [String]
+    public var metadata: [String: String]
+    public var parameters: RemoteInferenceJSONObject
+
+    public init(
+        donkeyProvider: String? = nil,
+        model: String? = nil,
+        input: RemoteInferenceJSONValue,
+        store: Bool = false,
+        text: RemoteInferenceJSONObject? = nil,
+        tools: [RemoteInferenceJSONObject] = [],
+        include: [String] = [],
+        metadata: [String: String] = [:],
+        parameters: RemoteInferenceJSONObject = [:]
+    ) {
+        self.donkeyProvider = donkeyProvider
+        self.model = model
+        self.input = input
+        self.store = store
+        self.text = text
+        self.tools = tools
+        self.include = include
+        self.metadata = metadata
+        self.parameters = parameters
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: DynamicCodingKey.self)
+        try container.encodeIfPresent(donkeyProvider, forKey: DynamicCodingKey("donkeyProvider"))
+        try container.encodeIfPresent(model, forKey: DynamicCodingKey("model"))
+        try container.encode(input, forKey: DynamicCodingKey("input"))
+        try container.encode(store, forKey: DynamicCodingKey("store"))
+        try container.encode(false, forKey: DynamicCodingKey("stream"))
+        try container.encodeIfPresent(text, forKey: DynamicCodingKey("text"))
+        if !tools.isEmpty {
+            try container.encode(tools, forKey: DynamicCodingKey("tools"))
+        }
+        if !include.isEmpty {
+            try container.encode(include, forKey: DynamicCodingKey("include"))
+        }
         if !metadata.isEmpty {
             try container.encode(metadata, forKey: DynamicCodingKey("metadata"))
         }

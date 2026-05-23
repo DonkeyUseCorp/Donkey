@@ -2,7 +2,7 @@ import DonkeyContracts
 import Foundation
 
 public enum AIModelProvider: String, Codable, Equatable, Sendable {
-    case openAI
+    case donkeyBackend
     case ollama
     case localRuntime
 }
@@ -20,6 +20,7 @@ public enum AIModelCapability: String, Codable, Equatable, Hashable, Sendable {
     case audioInput
     case structuredOutputs
     case imageInput
+    case computerUse
 }
 
 public enum AIModelEvalStatus: String, Codable, Equatable, Sendable {
@@ -30,6 +31,8 @@ public enum AIModelEvalStatus: String, Codable, Equatable, Sendable {
 }
 
 public struct AIModelRegistryEntry: Codable, Equatable, Sendable {
+    public static let backendSelectedModelID = "backend-selected"
+
     public var id: String
     public var role: AIModelRole
     public var provider: AIModelProvider
@@ -70,6 +73,8 @@ public struct AIModelRegistryEntry: Codable, Equatable, Sendable {
         self.rollbackID = rollbackID
         self.metadata = metadata
     }
+
+    public var backendModelOverride: String? { nil }
 }
 
 public struct AIModelRegistry: Codable, Equatable, Sendable {
@@ -79,93 +84,54 @@ public struct AIModelRegistry: Codable, Equatable, Sendable {
         self.entries = entries
     }
 
-    public static let defaultOpenAIPlanner = AIModelRegistry(
+    public static let defaultBackendRoutes = AIModelRegistry(
         entries: [
             AIModelRegistryEntry(
-                id: "openai-planner-hint-default",
-                role: .plannerHint,
-                provider: .openAI,
-                modelID: "gpt-5.2",
-                endpoint: URL(string: "https://api.openai.com/v1/responses")!,
+                id: "backend-task-intent-default",
+                role: .taskIntent,
+                provider: .donkeyBackend,
+                modelID: AIModelRegistryEntry.backendSelectedModelID,
+                endpoint: URL(string: "donkey://backend/api/inference/responses")!,
                 capabilities: [.textInput, .structuredOutputs],
-                timeoutMS: 20_000,
-                promptVersion: "planner-hint-v1",
+                timeoutMS: 12_000,
+                promptVersion: "task-intent-v1",
                 evalStatus: .candidate,
-                docsURL: URL(string: "https://platform.openai.com/docs/api-reference/responses/create")!,
+                docsURL: URL(string: "donkey://docs/guides/backend-apis")!,
                 rollbackID: nil,
                 metadata: [
-                    "lastVerifiedAt": "2026-05-16",
-                    "docsSource": "official OpenAI Responses API and models docs"
+                    "hosted": "true",
+                    "backendProxy": "true",
+                    "modelSelection": "backendDefault",
+                    "privacy.store": "false",
+                    "lastVerifiedAt": "2026-05-23",
+                    "docsSource": "Donkey backend inference API"
+                ]
+            ),
+            AIModelRegistryEntry(
+                id: "backend-planner-hint-default",
+                role: .plannerHint,
+                provider: .donkeyBackend,
+                modelID: AIModelRegistryEntry.backendSelectedModelID,
+                endpoint: URL(string: "donkey://backend/api/inference/responses")!,
+                capabilities: [.textInput, .structuredOutputs],
+                timeoutMS: 8_000,
+                promptVersion: "planner-hint-v1",
+                evalStatus: .candidate,
+                docsURL: URL(string: "donkey://docs/guides/backend-apis")!,
+                rollbackID: nil,
+                metadata: [
+                    "hosted": "true",
+                    "backendProxy": "true",
+                    "modelSelection": "backendDefault",
+                    "privacy.store": "false",
+                    "lastVerifiedAt": "2026-05-23",
+                    "docsSource": "Donkey backend inference API"
                 ]
             )
         ]
     )
 
-    public static let defaultHybridPlanner = AIModelRegistry(
-        entries: [
-            AIModelRegistryEntry(
-                id: "local-runtime-task-intent-qwen2-5-0-5b-instruct",
-                role: .taskIntent,
-                provider: .localRuntime,
-                modelID: "qwen2.5-0.5b-instruct-q4_k_m",
-                endpoint: URL(string: "local://qwen2.5-0.5b-instruct-q4_k_m/task-intent")!,
-                capabilities: [.textInput, .structuredOutputs],
-                timeoutMS: 30_000,
-                promptVersion: "task-intent-v1",
-                evalStatus: .candidate,
-                docsURL: URL(string: "local://donkey/local-llm")!,
-                rollbackID: nil,
-                metadata: [
-                    "local": "true",
-                    "runtime": "donkey-local-llm-sidecar",
-                    "sidecarEnvironmentVariable": "DONKEY_LOCAL_LLM_RUNNER"
-                ]
-            ),
-            AIModelRegistryEntry(
-                id: "local-voice-transcription-parakeet-tdt-0.6b-v3",
-                role: .voiceTranscription,
-                provider: .localRuntime,
-                modelID: "nvidia/parakeet-tdt-0.6b-v3",
-                endpoint: URL(string: "local://nvidia/parakeet-tdt-0.6b-v3")!,
-                capabilities: [.audioInput],
-                timeoutMS: 2_000,
-                promptVersion: "voice-transcription-v1",
-                evalStatus: .candidate,
-                docsURL: URL(string: "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3")!,
-                rollbackID: nil,
-                metadata: [
-                    "local": "true",
-                    "runtime": "nvidia-nemo",
-                    "language": "25 languages with automatic detection",
-                    "inputFormat": "16kHz mono wav or flac",
-                    "parameters": "600M",
-                    "features": "punctuation,capitalization,wordTimestamps,segmentTimestamps",
-                    "license": "CC-BY-4.0",
-                    "selectedReason": "current Parakeet TDT 0.6B default for local ASR with punctuation, timestamps, and multilingual support",
-                    "lastVerifiedAt": "2026-05-17",
-                    "docsSource": "official NVIDIA Hugging Face model card",
-                    "fallbackPolicy": "none"
-                ]
-            ),
-            AIModelRegistryEntry(
-                id: "openai-planner-hint-default",
-                role: .plannerHint,
-                provider: .openAI,
-                modelID: "gpt-5.2",
-                endpoint: URL(string: "https://api.openai.com/v1/responses")!,
-                capabilities: [.textInput, .structuredOutputs],
-                timeoutMS: 8_000,
-                promptVersion: "planner-hint-v1",
-                evalStatus: .candidate,
-                docsURL: URL(string: "https://platform.openai.com/docs/api-reference/responses/create")!,
-                rollbackID: nil,
-                metadata: [
-                    "lastVerifiedAt": "2026-05-16",
-                    "docsSource": "official OpenAI Responses API and models docs"
-                ]
-            )
-        ]
-    )
+    public static let defaultHybridPlanner = defaultBackendRoutes
 }
 
 public enum AIModelJobType: String, Codable, Equatable, Sendable {
@@ -239,7 +205,7 @@ public enum AIModelRouteError: Error, Equatable, Sendable {
 public struct AIModelRouter: Sendable {
     public var registry: AIModelRegistry
 
-    public init(registry: AIModelRegistry = .defaultOpenAIPlanner) {
+    public init(registry: AIModelRegistry = .defaultBackendRoutes) {
         self.registry = registry
     }
 
@@ -303,8 +269,8 @@ public struct AIModelRouter: Sendable {
                 value += 4
             case .ollama:
                 value += 4
-            case .openAI:
-                value -= 1
+            case .donkeyBackend:
+                value += 2
             }
         }
         return value

@@ -38,7 +38,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         aiProvider: any AIHarnessSnapshotProviding = AIHarnessBoundary(),
         commandHandler: any PointerPromptCommandHandling = LocalAppPointerPromptCommandHandler(),
         taskStore: any PointerPromptTaskStoring = CoreDataPointerPromptTaskStore(),
-        followUpResolver: any PointerPromptFollowUpResolving = ProcessBackedLocalLLMTaskFollowUpResolver(),
+        followUpResolver: any PointerPromptFollowUpResolving = HostedTaskFollowUpResolver(),
         voiceTranscriber: LocalVoiceTranscriptionAdapter = LocalVoiceTranscriptionAdapter(
             runtime: ProcessBackedParakeetTranscriptionRuntime()
         ),

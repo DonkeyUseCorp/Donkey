@@ -54,12 +54,12 @@ struct AIReplayEvaluationTests {
     @Test
     func modelUpdateChecklistEncodesRequiredPromotionFields() throws {
         let checklist = AIModelUpdateChecklist(
-            modelEntryID: "openai-planner",
+            modelEntryID: "backend-planner",
             promptVersion: "planner-hint-v2",
             lastVerifiedAt: Date(timeIntervalSince1970: 1_000),
-            docsURLs: [URL(string: "https://platform.openai.com/docs/api-reference/responses/create")!],
+            docsURLs: [URL(string: "donkey://docs/guides/backend-apis")!],
             evalSuiteID: "planner-replay-v1",
-            rollbackModelID: "openai-planner-rollback",
+            rollbackModelID: "backend-planner-rollback",
             evalReportID: "report-1",
             notes: ["dry-run only"]
         )
@@ -111,8 +111,8 @@ struct AIReplayEvaluationTests {
         AIModelCallTrace(
             id: id,
             role: .plannerHint,
-            provider: .openAI,
-            modelID: "gpt-5.2",
+            provider: .donkeyBackend,
+            modelID: AIModelRegistryEntry.backendSelectedModelID,
             promptVersion: "planner-hint-v2",
             schemaID: "planner_hint_v1",
             latencyMS: latencyMS,

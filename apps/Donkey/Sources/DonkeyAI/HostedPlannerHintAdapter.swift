@@ -109,31 +109,34 @@ public struct URLSessionAIHTTPClient: AIHTTPClient {
     public func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
-            throw OpenAIPlannerHintAdapterError.invalidHTTPResponse
+            throw AIHTTPClientError.invalidHTTPResponse
         }
         return (data, httpResponse)
     }
 }
 
-public enum OpenAIPlannerHintAdapterError: Error, Equatable, Sendable {
+public enum AIHTTPClientError: Error, Equatable, Sendable {
     case invalidHTTPResponse
 }
 
-public struct OpenAIPlannerHintAdapter: Sendable {
+public struct HostedPlannerHintAdapter: Sendable {
     public static let schemaID = "planner_hint_v1"
 
     public var router: AIModelRouter
+    public var configuration: DonkeyBackendInferenceConfiguration?
     public var httpClient: any AIHTTPClient
     public var environment: [String: String]
     public var memoryStore: SQLiteAgentMemoryStore?
 
     public init(
-        router: AIModelRouter = AIModelRouter(),
+        router: AIModelRouter = AIModelRouter(registry: .defaultBackendRoutes),
+        configuration: DonkeyBackendInferenceConfiguration? = nil,
         httpClient: any AIHTTPClient = URLSessionAIHTTPClient(),
         environment: [String: String] = ProcessInfo.processInfo.environment,
         memoryStore: SQLiteAgentMemoryStore? = .shared
     ) {
         self.router = router
+        self.configuration = configuration
         self.httpClient = httpClient
         self.environment = environment
         self.memoryStore = memoryStore
@@ -144,7 +147,7 @@ public struct OpenAIPlannerHintAdapter: Sendable {
     ) async -> PlannerHintAdapterResult {
         let entry: AIModelRegistryEntry
         do {
-            entry = try router.route(request.routeRequest.limitingProviders([.openAI]))
+            entry = try router.route(request.routeRequest.limitingProviders([.donkeyBackend]))
         } catch {
             return result(
                 entry: nil,
@@ -156,39 +159,40 @@ public struct OpenAIPlannerHintAdapter: Sendable {
             )
         }
 
-        guard let apiKey = environment["OPENAI_API_KEY"], !apiKey.isEmpty else {
+        let backend: DonkeyBackendInferenceClient
+        do {
+            backend = DonkeyBackendInferenceClient(
+                configuration: try configuration ?? DonkeyBackendInferenceConfiguration.fromEnvironment(environment),
+                httpClient: httpClient
+            )
+        } catch {
             return result(
                 entry: entry,
                 request: request,
                 status: .missingCredentials,
                 validationStatus: "notValidated",
                 latencyMS: nil,
-                metadata: ["credential": "OPENAI_API_KEY"]
+                metadata: [
+                    "credential": "DONKEY_BACKEND_URL",
+                    "error": String(describing: error)
+                ]
             )
         }
 
         let startedAt = ProcessInfo.processInfo.systemUptime
         do {
-            let urlRequest = try makeURLRequest(
-                entry: entry,
-                adapterRequest: request,
-                apiKey: apiKey
+            let response = try await backend.createResponse(
+                responseRequest(entry: entry, adapterRequest: request)
             )
-            let (data, response) = try await httpClient.send(urlRequest)
             let latencyMS = (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
-
-            if response.statusCode == 429 {
-                return result(entry: entry, request: request, status: .rateLimited, validationStatus: "notValidated", latencyMS: latencyMS)
-            }
-
-            if response.statusCode >= 500 {
-                return result(entry: entry, request: request, status: .providerOutage, validationStatus: "notValidated", latencyMS: latencyMS)
-            }
-
-            guard (200..<300).contains(response.statusCode),
-                  let outputText = try Self.outputText(from: data)
-            else {
-                return result(entry: entry, request: request, status: .invalidOutput, validationStatus: "invalid", latencyMS: latencyMS)
+            guard let outputText = Self.outputText(from: response) else {
+                return result(
+                    entry: entry,
+                    request: request,
+                    status: .invalidOutput,
+                    validationStatus: "invalid",
+                    latencyMS: latencyMS
+                )
             }
 
             let providerOutput = try PlannerHintWireCodec.decodeProviderOutput(
@@ -218,7 +222,7 @@ public struct OpenAIPlannerHintAdapter: Sendable {
                     validationStatus: "schemaDecoded",
                     latencyMS: latencyMS,
                     metadata: [
-                        "http.status": String(response.statusCode),
+                        "provider": "donkeyBackend",
                         "privacy.store": "false"
                     ]
                     .merging(providerOutput.metadata) { current, _ in current }
@@ -230,65 +234,54 @@ public struct OpenAIPlannerHintAdapter: Sendable {
             return result(entry: entry, request: request, status: .cancelled, validationStatus: "notValidated", latencyMS: nil)
         } catch {
             let latencyMS = (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
-            let status: AIModelCallStatus = (error as NSError).code == NSURLErrorTimedOut ? .timeout : .providerOutage
             return result(
                 entry: entry,
                 request: request,
-                status: status,
+                status: Self.status(for: error),
                 validationStatus: "notValidated",
                 latencyMS: latencyMS,
-                metadata: ["error": String(describing: error)]
+                metadata: Self.errorMetadata(error)
             )
         }
     }
 
-    private func makeURLRequest(
-        entry: AIModelRegistryEntry,
-        adapterRequest: PlannerHintAdapterRequest,
-        apiKey: String
-    ) throws -> URLRequest {
-        var request = URLRequest(url: entry.endpoint)
-        request.httpMethod = "POST"
-        request.timeoutInterval = Double(entry.timeoutMS) / 1_000
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody(entry: entry, adapterRequest: adapterRequest))
-        return request
-    }
-
-    private func requestBody(
+    private func responseRequest(
         entry: AIModelRegistryEntry,
         adapterRequest: PlannerHintAdapterRequest
-    ) -> [String: Any] {
-        [
-            "model": entry.modelID,
-            "store": false,
-            "instructions": "Return strict JSON with a planner hint and memoryWriteProposals. Hints are advisory and never direct input. Leave memoryWriteProposals empty unless a source-linked target memory should be proposed.",
-            "input": [
-                [
-                    "role": "user",
-                    "content": [
-                        [
-                            "type": "input_text",
-                            "text": promptText(for: adapterRequest)
-                        ]
-                    ]
-                ]
+    ) -> RemoteInferenceResponseCreateRequest {
+        RemoteInferenceResponseCreateRequest(
+            input: .array([
+                .object([
+                    "role": .string("user"),
+                    "content": .array([
+                        .object([
+                            "type": .string("input_text"),
+                            "text": .string(promptText(for: adapterRequest))
+                        ])
+                    ])
+                ])
+            ]),
+            store: false,
+            text: [
+                "format": .object([
+                    "type": .string("json_schema"),
+                    "name": .string(Self.schemaID),
+                    "strict": .bool(true),
+                    "schema": Self.jsonValue(plannerHintJSONSchema())
+                ])
             ],
-            "text": [
-                "format": [
-                    "type": "json_schema",
-                    "name": Self.schemaID,
-                    "strict": true,
-                    "schema": plannerHintJSONSchema()
-                ]
-            ],
-            "metadata": [
+            metadata: [
                 "source_trace_id": adapterRequest.sourceTraceID,
                 "prompt_version": entry.promptVersion
+            ],
+            parameters: [
+                "instructions": .string(Self.instructions),
+                "temperature": .number(0)
             ]
-        ]
+        )
     }
+
+    private static let instructions = "Return strict JSON with a planner hint and memoryWriteProposals. Hints are advisory and never direct input. Leave memoryWriteProposals empty unless a source-linked target memory should be proposed."
 
     private func promptText(for request: PlannerHintAdapterRequest) -> String {
         [
@@ -369,7 +362,7 @@ public struct OpenAIPlannerHintAdapter: Sendable {
         AIModelCallTrace(
             id: "model-call-\(request.sourceTraceID)",
             role: entry?.role ?? .plannerHint,
-            provider: entry?.provider ?? request.routeRequest.allowedProviders?.first ?? .openAI,
+            provider: entry?.provider ?? .donkeyBackend,
             modelID: entry?.modelID ?? "unrouted",
             promptVersion: entry?.promptVersion ?? "unrouted",
             schemaID: Self.schemaID,
@@ -382,27 +375,76 @@ public struct OpenAIPlannerHintAdapter: Sendable {
             metadata: metadata
         )
     }
-}
 
-private struct OpenAIResponseEnvelope: Decodable {
-    var id: String?
-    var outputText: String?
-    var output: [OpenAIResponseOutput]?
+    private static func outputText(from value: RemoteInferenceJSONValue) -> String? {
+        if let outputText = value.objectValue?["output_text"]?.stringValue,
+           !outputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return outputText
+        }
 
-    enum CodingKeys: String, CodingKey {
-        case id
-        case outputText = "output_text"
-        case output
+        guard let output = value.objectValue?["output"]?.arrayValue else {
+            return nil
+        }
+        for item in output {
+            guard let content = item.objectValue?["content"]?.arrayValue else { continue }
+            for contentItem in content {
+                guard contentItem.objectValue?["type"]?.stringValue == "output_text",
+                      let text = contentItem.objectValue?["text"]?.stringValue,
+                      !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                else {
+                    continue
+                }
+                return text
+            }
+        }
+        return nil
     }
-}
 
-private struct OpenAIResponseOutput: Decodable {
-    var content: [OpenAIResponseContent]?
-}
+    private static func status(for error: Error) -> AIModelCallStatus {
+        if case DonkeyBackendInferenceClientError.httpStatus(let status, _) = error {
+            if status == 429 { return .rateLimited }
+            if status >= 500 { return .providerOutage }
+            return .invalidOutput
+        }
+        return (error as NSError).code == NSURLErrorTimedOut ? .timeout : .providerOutage
+    }
 
-private struct OpenAIResponseContent: Decodable {
-    var type: String?
-    var text: String?
+    private static func errorMetadata(_ error: Error) -> [String: String] {
+        if case DonkeyBackendInferenceClientError.httpStatus(let status, let message) = error {
+            return [
+                "http.status": String(status),
+                "http.bodyPreview": preview(message, maxCharacters: 240)
+            ]
+        }
+        return ["error": String(describing: error)]
+    }
+
+    private static func preview(_ value: String, maxCharacters: Int) -> String {
+        let singleLine = value
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+        guard singleLine.count > maxCharacters else { return singleLine }
+        return String(singleLine.prefix(maxCharacters))
+    }
+
+    private static func jsonValue(_ value: Any) -> RemoteInferenceJSONValue {
+        switch value {
+        case let string as String:
+            return .string(string)
+        case let bool as Bool:
+            return .bool(bool)
+        case let int as Int:
+            return .number(Double(int))
+        case let double as Double:
+            return .number(double)
+        case let array as [Any]:
+            return .array(array.map(jsonValue))
+        case let object as [String: Any]:
+            return .object(object.mapValues(jsonValue))
+        default:
+            return .null
+        }
+    }
 }
 
 struct PlannerHintWireOutput: Decodable {
@@ -682,44 +724,35 @@ enum PlannerHintWireCodec {
     }
 }
 
-private extension OpenAIPlannerHintAdapter {
-    static func outputText(from data: Data) throws -> String? {
-        let envelope = try JSONDecoder().decode(OpenAIResponseEnvelope.self, from: data)
-        if let outputText = envelope.outputText {
-            return outputText
-        }
-
-        return envelope.output?
-            .flatMap { $0.content ?? [] }
-            .first { $0.type == "output_text" }?
-            .text
-    }
-
-    static func decodeHint(
-        _ text: String,
-        sourceTraceID: String,
-        sourceFrameID: String?,
-        sourceStateID: String?,
-        modelCallID: String,
-        now: RunTraceTimestamp
-    ) throws -> StructuredPlannerHint? {
-        try PlannerHintWireCodec.decodeHint(
-            text,
-            sourceTraceID: sourceTraceID,
-            sourceFrameID: sourceFrameID,
-            sourceStateID: sourceStateID,
-            modelCallID: modelCallID,
-            now: now
-        )
-    }
-}
-
 private extension RunTraceTimestamp {
     func addingMilliseconds(_ milliseconds: UInt64) -> RunTraceTimestamp {
         RunTraceTimestamp(
             wallClock: wallClock.addingTimeInterval(Double(milliseconds) / 1_000),
             monotonicUptimeNanoseconds: monotonicUptimeNanoseconds + milliseconds * 1_000_000
         )
+    }
+}
+
+private extension RemoteInferenceJSONValue {
+    var objectValue: [String: RemoteInferenceJSONValue]? {
+        if case .object(let value) = self {
+            return value
+        }
+        return nil
+    }
+
+    var arrayValue: [RemoteInferenceJSONValue]? {
+        if case .array(let value) = self {
+            return value
+        }
+        return nil
+    }
+
+    var stringValue: String? {
+        if case .string(let value) = self {
+            return value
+        }
+        return nil
     }
 }
 
