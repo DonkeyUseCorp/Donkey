@@ -5,12 +5,16 @@ struct DonkeyAuthSession: Codable, Equatable {
     var id: String
     var provider: String
     var authenticatedAt: Date
+    var remoteSessionID: String? = nil
+    var userEmail: String? = nil
+    var userName: String? = nil
 }
 
 enum DonkeyAuthPhase: Equatable {
     case signedOut
     case openingBrowser
     case waitingForCallback
+    case exchangingSession
     case signedIn(DonkeyAuthSession)
     case failed(String)
 
@@ -91,13 +95,16 @@ final class DonkeyAuthCoordinator: ObservableObject {
 
     private let configuration: DonkeyAuthConfiguration
     private let stateStore: DonkeyAuthStateStoring
+    private let nativeSessionExchanger: any DonkeyNativeSessionExchanging
 
     init(
         configuration: DonkeyAuthConfiguration = .current(),
-        stateStore: DonkeyAuthStateStoring = DonkeyAuthStateStore()
+        stateStore: DonkeyAuthStateStoring = DonkeyAuthStateStore(),
+        nativeSessionExchanger: any DonkeyNativeSessionExchanging = DonkeyNativeSessionCookieExchanger()
     ) {
         self.configuration = configuration
         self.stateStore = stateStore
+        self.nativeSessionExchanger = nativeSessionExchanger
 
         if let session = stateStore.loadSession() {
             phase = .signedIn(session)
@@ -113,8 +120,7 @@ final class DonkeyAuthCoordinator: ObservableObject {
     func beginGoogleSignIn() {
         let state = Self.makeStateToken()
 
-        guard let callbackURL = callbackURL(state: state),
-              let signInURL = signInURL(callbackURL: callbackURL) else {
+        guard let signInURL = signInURL(state: state) else {
             phase = .failed("Sign-in could not be configured.")
             return
         }
@@ -152,15 +158,49 @@ final class DonkeyAuthCoordinator: ObservableObject {
             return true
         }
 
+        guard let code = Self.queryValue(named: "code", in: queryItems),
+              !code.isEmpty else {
+            phase = .failed("Google sign-in did not return a Mac session code.")
+            return true
+        }
+
+        phase = .exchangingSession
+        exchangeNativeSession(code: code)
+        return true
+    }
+
+    private func exchangeNativeSession(code: String) {
+        let webBaseURL = configuration.webBaseURL
+        let nativeSessionExchanger = nativeSessionExchanger
+        Task { [weak self] in
+            do {
+                let nativeSession = try await nativeSessionExchanger.exchange(
+                    code: code,
+                    webBaseURL: webBaseURL
+                )
+                await MainActor.run {
+                    self?.completeNativeSessionExchange(nativeSession)
+                }
+            } catch {
+                await MainActor.run {
+                    self?.phase = .failed("Mac session could not be created. Please try again.")
+                }
+            }
+        }
+    }
+
+    private func completeNativeSessionExchange(_ nativeSession: DonkeyNativeCookieSession) {
         let session = DonkeyAuthSession(
-            id: UUID().uuidString,
+            id: nativeSession.sessionID,
             provider: "google",
-            authenticatedAt: Date()
+            authenticatedAt: Date(),
+            remoteSessionID: nativeSession.sessionID,
+            userEmail: nativeSession.userEmail,
+            userName: nativeSession.userName
         )
         stateStore.saveSession(session)
         phase = .signedIn(session)
         authenticationCompleted?(session)
-        return true
     }
 
     func clearFailedState() {
@@ -168,18 +208,7 @@ final class DonkeyAuthCoordinator: ObservableObject {
         phase = stateStore.loadSession().map(DonkeyAuthPhase.signedIn) ?? .signedOut
     }
 
-    private func callbackURL(state: String) -> URL? {
-        var components = URLComponents()
-        components.scheme = configuration.callbackScheme
-        components.host = "auth"
-        components.path = "/callback"
-        components.queryItems = [
-            URLQueryItem(name: "state", value: state)
-        ]
-        return components.url
-    }
-
-    private func signInURL(callbackURL: URL) -> URL? {
+    private func signInURL(state: String) -> URL? {
         var components = URLComponents(
             url: configuration.webBaseURL,
             resolvingAgainstBaseURL: false
@@ -189,8 +218,7 @@ final class DonkeyAuthCoordinator: ObservableObject {
             .filter { !$0.isEmpty }
             .joined(separator: "/")
         components?.queryItems = [
-            URLQueryItem(name: "callbackURL", value: callbackURL.absoluteString),
-            URLQueryItem(name: "errorCallbackURL", value: callbackURL.absoluteString)
+            URLQueryItem(name: "state", value: state)
         ]
         return components?.url
     }

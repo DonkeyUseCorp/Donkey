@@ -6,34 +6,35 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { authClient } from "@/lib/auth-client";
 
 type Props = {
-  callbackURL: string | null;
-  errorCallbackURL: string | null;
+  state: string | null;
 };
 
-type RedirectStatus = "opening" | "failed" | "missing-callback";
+type RedirectStatus = "opening" | "failed" | "missing-state";
 
-export function MacAuthRedirector({ callbackURL, errorCallbackURL }: Props) {
+export function MacAuthRedirector({ state }: Props) {
   const [status, setStatus] = useState<RedirectStatus>("opening");
   const hasStartedRef = useRef(false);
 
   const startGoogleAuth = useCallback(async () => {
-    if (!callbackURL) {
-      setStatus("missing-callback");
+    if (!state) {
+      setStatus("missing-state");
       return;
     }
 
     setStatus("opening");
+    const encodedState = encodeURIComponent(state);
+    const callbackURL = `/mac-auth/callback?state=${encodedState}`;
 
     try {
       await authClient.signIn.social({
         callbackURL,
-        errorCallbackURL: errorCallbackURL ?? callbackURL,
+        errorCallbackURL: `${callbackURL}&error=oauth`,
         provider: "google",
       });
     } catch {
       setStatus("failed");
     }
-  }, [callbackURL, errorCallbackURL]);
+  }, [state]);
 
   useEffect(() => {
     if (hasStartedRef.current) {
@@ -160,8 +161,8 @@ function messageForStatus(status: RedirectStatus) {
   switch (status) {
     case "failed":
       return "Google sign-in could not start in this browser.";
-    case "missing-callback":
-      return "The Mac app callback was missing from this sign-in request.";
+    case "missing-state":
+      return "The Mac app state token was missing from this sign-in request.";
     case "opening":
       return "Use your Google account, then Donkey will bring you back to the Mac app.";
   }

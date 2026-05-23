@@ -18,8 +18,7 @@ export default async function Page({ searchParams }: Props) {
 
   return (
     <MacAuthRedirector
-      callbackURL={firstParam(params.callbackURL)}
-      errorCallbackURL={firstParam(params.errorCallbackURL)}
+      state={firstParam(params.state)}
     />
   );
 }

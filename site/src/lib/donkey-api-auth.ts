@@ -1,9 +1,13 @@
 import { type NextRequest, NextResponse } from "next/server";
 
+import { auth } from "@/lib/auth";
+
 export type DonkeyAuthContext = {
   platform: "api";
   app: "donkey";
+  method: "session-cookie";
   clientId: string | null;
+  userId: string;
 };
 
 export type DonkeyAuthenticatedRequest = NextRequest & {
@@ -13,39 +17,17 @@ export type DonkeyAuthenticatedRequest = NextRequest & {
 export type DonkeyAuthHandler<
   TReq extends DonkeyAuthenticatedRequest = DonkeyAuthenticatedRequest,
   TArgs extends unknown[] = [],
-> = (request: TReq, ...args: TArgs) => Promise<NextResponse> | NextResponse;
+> = (request: TReq, ...args: TArgs) => Promise<Response> | Response;
 
-const apiTokenEnvName = "DONKEY_API_TOKEN";
-const apiKeyHeader = "x-donkey-api-key";
 const clientIdHeader = "x-donkey-client-id";
 
-function getConfiguredApiToken() {
-  const token = process.env[apiTokenEnvName]?.trim();
-
-  return token ? token : null;
-}
-
-function getRequestApiToken(headers: Headers) {
-  const authorizationHeader = headers.get("authorization")?.trim();
-
-  if (authorizationHeader) {
-    const bearerMatch = authorizationHeader.match(/^Bearer\s+(.+)$/i);
-
-    if (bearerMatch?.[1]) {
-      return bearerMatch[1].trim();
-    }
-  }
-
-  const apiKey = headers.get(apiKeyHeader)?.trim();
-
-  return apiKey ? apiKey : null;
-}
-
-export function getDonkeyAuthContext(headers: Headers): DonkeyAuthContext | null {
-  const configuredToken = getConfiguredApiToken();
-  const requestToken = getRequestApiToken(headers);
-
-  if (!configuredToken || requestToken !== configuredToken) {
+export async function getDonkeyAuthContext(
+  headers: Headers,
+): Promise<DonkeyAuthContext | null> {
+  const session = await auth.api.getSession({
+    headers,
+  });
+  if (!session) {
     return null;
   }
 
@@ -54,7 +36,9 @@ export function getDonkeyAuthContext(headers: Headers): DonkeyAuthContext | null
   return {
     platform: "api",
     app: "donkey",
+    method: "session-cookie",
     clientId: clientId ? clientId : null,
+    userId: session.user.id,
   };
 }
 
@@ -62,8 +46,8 @@ export function withDonkeyAuth<
   TReq extends DonkeyAuthenticatedRequest = DonkeyAuthenticatedRequest,
   TArgs extends unknown[] = [],
 >(handler: DonkeyAuthHandler<TReq, TArgs>) {
-  return (request: NextRequest, ...args: TArgs) => {
-    const authContext = getDonkeyAuthContext(request.headers);
+  return async (request: NextRequest, ...args: TArgs) => {
+    const authContext = await getDonkeyAuthContext(request.headers);
 
     if (!authContext) {
       return NextResponse.json(
@@ -73,9 +57,6 @@ export function withDonkeyAuth<
         },
         {
           status: 401,
-          headers: {
-            "WWW-Authenticate": "Bearer",
-          },
         },
       );
     }

@@ -103,6 +103,8 @@ private struct DonkeyLoginView: View {
             return "Opening Google..."
         case .waitingForCallback:
             return "Waiting for Google..."
+        case .exchangingSession:
+            return "Signing in..."
         default:
             return "Continue with Google"
         }
@@ -110,7 +112,7 @@ private struct DonkeyLoginView: View {
 
     private var buttonIsDisabled: Bool {
         switch authCoordinator.phase {
-        case .openingBrowser, .waitingForCallback:
+        case .openingBrowser, .waitingForCallback, .exchangingSession:
             return true
         default:
             return false
@@ -122,6 +124,8 @@ private struct DonkeyLoginView: View {
         switch authCoordinator.phase {
         case .waitingForCallback:
             Text("Finish sign-in in your browser to continue.")
+        case .exchangingSession:
+            Text("Creating a secure Mac session...")
         case .failed(let message):
             Text(message)
         default:

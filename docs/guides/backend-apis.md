@@ -13,6 +13,10 @@ Backend APIs live in `site/src/app/api/**/route.ts`.
 - Keep the Mac app callback origin (`donkey://` by default) in Better Auth
   trusted origins so `/mac-auth` can return successful Google sign-in to the
   app.
+- Mac app sign-in uses Better Auth's one-time-token plugin. `/mac-auth/callback`
+  mints a short-lived code from the browser session, then the app exchanges it
+  at `/api/auth/one-time-token/verify` so `URLSession` stores the resulting
+  Better Auth cookie in the app-owned cookie jar.
 - In Vercel, configure `BETTER_AUTH_URL`, `BETTER_AUTH_SECRET`,
   `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and
   `DONKEY_MAC_AUTH_REDIRECT_ORIGINS`. Do not commit real OAuth credentials.

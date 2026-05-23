@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
+import { oneTimeToken } from "better-auth/plugins";
 
 import { prisma } from "@/lib/prisma";
 
@@ -30,4 +31,10 @@ export const auth = betterAuth({
       clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
     },
   },
+  plugins: [
+    oneTimeToken({
+      expiresIn: 3,
+      storeToken: "hashed",
+    }),
+  ],
 });
