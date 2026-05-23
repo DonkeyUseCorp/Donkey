@@ -107,6 +107,8 @@ expected_model_sha256 = (
     or str(model.get("sha256") or model.get("expectedSHA256") or "")
 )
 expected_model_filename = os.environ.get("DONKEY_LOCAL_LLM_MODEL_FILENAME") or str(model.get("filename") or "")
+expected_requirements = config.get("runtimeRequirements") if isinstance(config.get("runtimeRequirements"), list) else []
+expected_requirements_text = "\n".join(str(item) for item in expected_requirements if str(item).strip()).strip()
 if str(manifest.get("modelID") or "") != expected_model_id:
     raise SystemExit(0)
 if str(metadata.get("modelWeights.downloadURL") or "") != expected_model_url:
@@ -119,7 +121,10 @@ if not str(metadata.get("modelWeights.downloadURL") or "").strip():
     raise SystemExit(0)
 if not str(metadata.get("modelWeights.sha256") or "").strip():
     raise SystemExit(0)
-if not requirements_path.exists() or "llama-cpp-python" not in requirements_path.read_text():
+if not requirements_path.exists():
+    raise SystemExit(0)
+actual_requirements_text = requirements_path.read_text().strip()
+if actual_requirements_text != expected_requirements_text:
     raise SystemExit(0)
 if not files:
     raise SystemExit(0)

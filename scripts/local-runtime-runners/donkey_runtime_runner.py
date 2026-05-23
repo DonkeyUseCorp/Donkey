@@ -35,6 +35,7 @@ MANAGED_PYTHON_ENV = "DONKEY_RUNTIME_MANAGED_PYTHON"
 
 DEFAULT_RUNTIME_REQUIREMENTS: dict[str, list[str]] = {
     "local-llm": [
+        "--no-binary llama-cpp-python",
         "llama-cpp-python>=0.3,<0.4",
     ],
     "parakeet-transcriber": [
@@ -216,9 +217,23 @@ def create_virtualenv(venv_dir: Path) -> None:
 def install_python_requirements(venv_python: Path, requirements: list[str], state_dir: Path) -> None:
     requirements_path = state_dir / "requirements.txt"
     requirements_path.write_text("\n".join(requirements) + "\n")
-    command = [str(venv_python), "-m", "pip", "install", "-r", str(requirements_path)]
+    command = [
+        str(venv_python),
+        "-m",
+        "pip",
+        "install",
+        "--upgrade",
+        "--force-reinstall",
+        "--prefer-binary",
+        "--no-cache-dir",
+        "-r",
+        str(requirements_path),
+    ]
     environment = os.environ.copy()
     environment["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+    if RUNTIME_ID == "local-llm":
+        environment.setdefault("CMAKE_ARGS", "-DGGML_METAL=OFF")
+        environment.setdefault("FORCE_CMAKE", "1")
     completed = subprocess.run(
         command,
         stdout=subprocess.PIPE,
@@ -401,16 +416,7 @@ def health_check(request: dict[str, Any]) -> dict[str, Any]:
             provider = "donkey-managed-download"
 
     if RUNTIME_ID == "local-llm" and not os.environ.get("DONKEY_LOCAL_LLM_COMMAND"):
-        try:
-            import llama_cpp  # type: ignore # noqa: F401
-        except Exception as exc:  # noqa: BLE001
-            status = "error"
-            reason = "localLLMBackendUnavailable"
-            provider = provider or "llama-cpp-python"
-            extra_detail = str(exc)
-        else:
-            provider = provider or "llama-cpp-python"
-            extra_detail = ""
+        status, reason, provider, extra_detail = local_llm_health_status(cache_dir, provider)
     else:
         extra_detail = ""
 
@@ -431,6 +437,32 @@ def health_check(request: dict[str, Any]) -> dict[str, Any]:
         "protocolVersion": "v1",
         "metadata": metadata(extra),
     }
+
+
+def local_llm_health_status(cache_dir: Any, provider: str) -> tuple[str, str, str, str]:
+    if not isinstance(cache_dir, str) or not cache_dir:
+        return "error", "missingCacheDirectory", provider or "llama-cpp-python", ""
+
+    model_file = Path(cache_dir) / MODEL_FILENAME
+    if not model_file.exists():
+        return "error", "localLLMModelWeightsMissing", "donkey-managed-download", str(model_file)
+
+    try:
+        from llama_cpp import Llama  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        return "error", "localLLMBackendUnavailable", provider or "llama-cpp-python", str(exc)
+
+    try:
+        llm = Llama(
+            model_path=str(model_file),
+            n_ctx=local_llm_int_env("DONKEY_LOCAL_LLM_HEALTH_CONTEXT_TOKENS", 256),
+            n_threads=local_llm_int_env("DONKEY_LOCAL_LLM_THREADS", max(1, os.cpu_count() or 1)),
+            verbose=False,
+        )
+        del llm
+        return "ok", "", provider or "llama-cpp-python", ""
+    except Exception as exc:  # noqa: BLE001
+        return "error", "localLLMGenerationBackendUnavailable", provider or "llama-cpp-python", str(exc)
 
 
 def run_local_llm(request: dict[str, Any]) -> dict[str, Any]:
@@ -478,6 +510,7 @@ def run_llama_cpp_local_llm(request: dict[str, Any], model_file: Path) -> dict[s
             ),
         }
 
+    schema_id = str((request.get("metadata") or {}).get("schemaID") or "")
     prompt, max_tokens = local_llm_prompt_and_limit(request)
     started = time.monotonic()
     try:
@@ -487,6 +520,24 @@ def run_llama_cpp_local_llm(request: dict[str, Any], model_file: Path) -> dict[s
             n_threads=local_llm_int_env("DONKEY_LOCAL_LLM_THREADS", max(1, os.cpu_count() or 1)),
             verbose=False,
         )
+        if schema_id in {"", "task_intent_v1"}:
+            compact_output_text, compact_metadata = compact_task_intent_output(llm, request)
+            if compact_output_text:
+                latency_ms = (time.monotonic() - started) * 1000
+                return {
+                    "outputText": compact_output_text,
+                    "metadata": metadata(
+                        {
+                            "local.provider": "llama-cpp-python",
+                            "backend.provider": "llama-cpp-python",
+                            "latency.localLLMGenerationMS": f"{latency_ms:.3f}",
+                            "modelWeights.status": "cached",
+                            "modelWeights.path": str(model_file),
+                            "modelWeights.provider": "donkey-managed-download",
+                            **compact_metadata,
+                        }
+                    ),
+                }
         response = llm(
             prompt,
             max_tokens=max_tokens,
@@ -499,14 +550,21 @@ def run_llama_cpp_local_llm(request: dict[str, Any], model_file: Path) -> dict[s
         output_text = ""
         if choices and isinstance(choices[0], dict):
             output_text = str(choices[0].get("text") or "").strip()
-        schema_id = str((request.get("metadata") or {}).get("schemaID") or "")
+        repair_metadata: dict[str, str] = {}
         if schema_id in {"", "task_intent_v1"}:
+            output_text, compact_repair_metadata = repair_invalid_task_intent_with_compact_model(
+                llm,
+                output_text,
+                request,
+            )
+            repair_metadata.update(compact_repair_metadata)
             output_text, repair_metadata = repair_task_intent_output(
                 output_text,
                 command=str(request.get("command") or ""),
                 model_id=MODEL_ID,
                 context_snippets=request.get("contextSnippets", []),
             )
+            repair_metadata.update(compact_repair_metadata)
         else:
             repair_metadata = {}
         return {
@@ -586,6 +644,241 @@ def local_llm_int_env(name: str, default_value: int) -> int:
         return max(1, int(os.environ.get(name, str(default_value))))
     except ValueError:
         return default_value
+
+
+def repair_invalid_task_intent_with_compact_model(
+    llm: Any,
+    output_text: str,
+    request: dict[str, Any],
+) -> tuple[str, dict[str, str]]:
+    if task_intent_payload_looks_valid(decode_json_object(output_text)):
+        return output_text, {}
+
+    command = str(request.get("command") or "")
+    task_definitions = request.get("taskDefinitions", [])
+    compact_prompt_text = compact_task_intent_prompt(command, task_definitions)
+    try:
+        response = llm(
+            compact_prompt_text,
+            max_tokens=64,
+            temperature=0,
+            top_p=0.8,
+            stop=["<|im_end|>", "\n\n\n"],
+        )
+    except Exception as exc:  # noqa: BLE001
+        return output_text, {"modelPlan.compactRepair": "failed", "modelPlan.compactRepair.detail": str(exc)}
+
+    choices = response.get("choices") if isinstance(response, dict) else []
+    compact_text = ""
+    if choices and isinstance(choices[0], dict):
+        compact_text = str(choices[0].get("text") or "").strip()
+    repaired = materialize_compact_task_intent(
+        compact_text,
+        command=command,
+        task_definitions=task_definitions,
+    )
+    if repaired is None:
+        return output_text, {
+            "modelPlan.compactRepair": "failed",
+            "modelPlan.compactRepair.preview": compact_text[:160].replace("\n", "\\n"),
+        }
+
+    return json.dumps(repaired, separators=(",", ":")), {
+        "modelPlan.compactRepair": "true",
+        "modelPlan.compactRepair.preview": compact_text[:160].replace("\n", "\\n"),
+    }
+
+
+def compact_task_intent_output(llm: Any, request: dict[str, Any]) -> tuple[str, dict[str, str]]:
+    command = str(request.get("command") or "")
+    task_definitions = request.get("taskDefinitions", [])
+    compact_prompt_text = compact_task_intent_prompt(command, task_definitions)
+    try:
+        response = llm(
+            compact_prompt_text,
+            max_tokens=64,
+            temperature=0,
+            top_p=0.8,
+            stop=["<|im_end|>", "\n\n\n"],
+        )
+    except Exception as exc:  # noqa: BLE001
+        return "", {"modelPlan.compactFirst": "failed", "modelPlan.compactFirst.detail": str(exc)}
+
+    choices = response.get("choices") if isinstance(response, dict) else []
+    compact_text = ""
+    if choices and isinstance(choices[0], dict):
+        compact_text = str(choices[0].get("text") or "").strip()
+    materialized = materialize_compact_task_intent(
+        compact_text,
+        command=command,
+        task_definitions=task_definitions,
+    )
+    if materialized is None:
+        return "", {
+            "modelPlan.compactFirst": "notMaterialized",
+            "modelPlan.compactFirst.preview": compact_text[:160].replace("\n", "\\n"),
+        }
+
+    return json.dumps(materialized, separators=(",", ":")), {
+        "modelPlan.compactFirst": "true",
+        "modelPlan.compactFirst.preview": compact_text[:160].replace("\n", "\\n"),
+    }
+
+
+def task_intent_payload_looks_valid(intent: Any) -> bool:
+    if not isinstance(intent, dict):
+        return False
+    required = [
+        "taskType",
+        "targetAppName",
+        "entities",
+        "normalizedEntities",
+        "confidence",
+        "needsConfirmation",
+        "actionPlan",
+        "metadata",
+    ]
+    if any(key not in intent for key in required):
+        return False
+    if not isinstance(intent.get("entities"), dict) or not isinstance(intent.get("normalizedEntities"), dict):
+        return False
+    if not isinstance(intent.get("metadata"), dict):
+        return False
+    action_plan = intent.get("actionPlan")
+    if not isinstance(action_plan, dict):
+        return False
+    action_required = ["tools", "inputEntity", "controlID", "focusKey", "verification"]
+    return all(key in action_plan for key in action_required) and isinstance(action_plan.get("tools"), list)
+
+
+def compact_task_intent_prompt(command: str, task_definitions: list[dict[str, Any]]) -> str:
+    known_apps = ["Music", "Safari", "Notes", "Numbers"]
+    discovered_apps = [
+        str((definition.get("targetApp") or {}).get("appName") or "").strip()
+        for definition in task_definitions
+        if str((definition.get("targetApp") or {}).get("appName") or "").strip()
+    ]
+    app_names = ordered_unique(known_apps + discovered_apps + ["Local App"])
+    return "\n".join(
+        [
+            "<|im_start|>system",
+            "Return only compact JSON with string values.",
+            "<|im_end|>",
+            "<|im_start|>user",
+            "Classify this Mac command into one local app action.",
+            "Choose appName from: " + ", ".join(app_names),
+            "Prefer a concrete app name. Do not choose Local App when Music, Safari, Notes, or Numbers fits.",
+            f"Command: {command}",
+            "JSON keys: appName, goal, query, confidence.",
+            "For music playback, appName is Music and query is the artist/song.",
+            "For website navigation, appName is Safari and query is the website or URL.",
+            "For writing text, appName is Notes and query is the text to write.",
+            "For tables or spreadsheets, appName is Numbers and query is the table content or subject.",
+            "<|im_end|>",
+            "<|im_start|>assistant",
+        ]
+    )
+
+
+def ordered_unique(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = " ".join(normalized_words(value))
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(value)
+    return result
+
+
+def materialize_compact_task_intent(
+    compact_text: str,
+    *,
+    command: str,
+    task_definitions: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    compact = decode_compact_object(compact_text)
+    if not isinstance(compact, dict):
+        return None
+    if not any(str(definition.get("taskType") or "") == "local_app_interaction" for definition in task_definitions):
+        return None
+
+    app_name = str(compact.get("appName") or "").strip()
+    if not app_name or normalized_words(app_name) == ["local", "app"]:
+        return None
+    if normalized_words(app_name) != ["music"]:
+        return None
+
+    confidence = compact_confidence(compact.get("confidence"))
+    if confidence < 0.55:
+        return None
+
+    goal = str(compact.get("goal") or "").strip() or "use local app"
+    if normalized_words(app_name) == ["music"]:
+        goal = "play media"
+    query = compact_query(compact.get("query"), command)
+
+    return {
+        "taskType": "local_app_interaction",
+        "targetAppName": app_name,
+        "entities": {
+            "appName": app_name,
+            "goal": goal,
+            "query": query,
+        },
+        "normalizedEntities": {
+            "appName": app_name,
+            "goal": goal,
+            "query": query,
+        },
+        "confidence": confidence,
+        "needsConfirmation": False,
+        "actionPlan": {
+            "tools": [
+                "app.openOrFocus",
+                "app.observe",
+                "ui.focusSearch",
+                "ui.setText",
+                "ui.pressReturn",
+                "app.verifyCommand",
+            ],
+            "inputEntity": "query",
+            "controlID": "search",
+            "focusKey": "Command+F",
+            "verification": "commandAttempted",
+        },
+        "metadata": {},
+    }
+
+
+def decode_compact_object(compact_text: str) -> Any:
+    compact = decode_json_object(compact_text)
+    if isinstance(compact, dict):
+        return compact
+
+    values: dict[str, Any] = {}
+    for key in ["appName", "goal", "query", "confidence"]:
+        match = re.search(rf"(?i)(?:^|[,\n])\s*{re.escape(key)}\s*:\s*([^,\n]+)", compact_text)
+        if match:
+            values[key] = match.group(1).strip().strip("\"'")
+    return values if values else None
+
+
+def compact_confidence(value: Any) -> float:
+    try:
+        return max(0.0, min(float(value), 1.0))
+    except (TypeError, ValueError):
+        return 0.7
+
+
+def compact_query(value: Any, command: str) -> str:
+    query = str(value or "").strip()
+    query_words = normalized_words(query)
+    command_words = set(normalized_words(command))
+    if len(query_words) >= 2 and all(word in command_words for word in query_words):
+        return query
+    return command.strip()
 
 
 def repair_task_intent_output(
@@ -1051,7 +1344,9 @@ def task_intent_prompt(
             "Example malformed writing boundary: 'write a people in Notes' is not a meaningful writing form or payload, so choose conversation rather than writing a definition.",
             "entities.appName must be the human app name, such as Safari, Notes, Numbers, or Music; do not put a bundle identifier in appName.",
             "For local_app_interaction, set actionPlan.inputEntity to query when ui.setText should type the query, and set actionPlan.controlID/focusKey for the UI control strategy.",
+            "actionPlan must be one nested object containing tools, inputEntity, controlID, focusKey, and verification. Do not put inputEntity, controlID, focusKey, or verification at the top level.",
             "The examples below show output structure only. Replace every example entity value with values inferred from Command and local cache; do not copy example query text unless the user asked for that exact text.",
+            "Media playback output shape: targetAppName=Music, entities.appName=Music, entities.goal=play media, entities.query=<artist/song/album to play>, actionPlan.tools=[app.openOrFocus, app.observe, ui.focusSearch, ui.setText, ui.pressReturn, app.verifyCommand], inputEntity=query, controlID=search, focusKey=Command+F.",
             'Example website output shape: {"taskType":"local_app_interaction","targetAppName":"Safari","entities":{"appName":"Safari","goal":"open requested website","query":"https://example.org"},"normalizedEntities":{"appName":"Safari","goal":"open requested website","query":"https://example.org"},"confidence":0.9,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.focusAddressBar","ui.setText","ui.pressReturn","app.verifyCommand"],"inputEntity":"query","controlID":"addressBar","focusKey":"Command+L","verification":"commandAttempted"},"metadata":{}}',
             "Writing output shape: targetAppName=Notes, entities.appName=Notes, entities.goal=write requested text, entities.query=<the actual final text to type>, actionPlan.tools=[app.openOrFocus, app.observe, ui.newDocument, ui.setText, app.verifyCommand], inputEntity=query, controlID=editor.",
             "Table output shape: targetAppName=Numbers, entities.appName=Numbers, entities.goal=create requested table, entities.query=<tab-separated rows for the requested table>, actionPlan.tools=[app.openOrFocus, app.observe, ui.newDocument, ui.setText, app.verifyCommand], inputEntity=query, controlID=editor.",
