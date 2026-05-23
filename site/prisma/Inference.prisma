@@ -1,0 +1,25 @@
+model InferenceGeneration {
+  id                   String    @id @default(cuid())
+  clientId             String
+  kind                 String
+  status               String    @default("pending")
+  provider             String
+  model                String
+  providerJobId        String?
+  providerGenerationId String?
+  providerPollingUrl   String?
+  promptPreview        String
+  requestHash          String
+  request              Json
+  outputs              Json?
+  usage                Json?
+  error                Json?
+  metadata             Json      @default("{}")
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  completedAt          DateTime?
+
+  @@index([clientId, createdAt])
+  @@index([provider, providerJobId])
+  @@index([status, updatedAt])
+}

@@ -24,6 +24,10 @@ Backend APIs live in `site/src/app/api/**/route.ts`.
 - Verify resource ownership before reading or mutating scoped data.
 - Return explicit `NextResponse.json(...)` responses with the intended status code.
 - Keep Prisma access server-only through `@/lib/prisma`.
+- Keep Prisma table/model definitions in logically grouped sibling `.prisma`
+  files under `site/prisma/`. Never put table/model definitions in
+  `site/prisma/schema.prisma`; reserve that file for shared Prisma
+  configuration such as generator and datasource blocks.
 - Do not run database migrations as part of normal API work.
 
 ## Inference Gateway

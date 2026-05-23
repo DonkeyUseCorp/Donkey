@@ -21,7 +21,7 @@ This app is the `site` Next.js project. It is intended to run the public site an
 - Keep route-specific experiences in a dedicated component folder near the route, such as `src/app/_components/landing` for the home landing page.
 - Split route-specific UI into focused component files rather than placing every section, primitive, hook, and data object into one large component file.
 - Keep server-only helpers in `src/lib`, such as `src/lib/prisma.ts`.
-- Keep generated Prisma files out of hand edits. Update `prisma/schema.prisma`, then run `npm run db:generate`.
+- Keep generated Prisma files out of hand edits. Follow the backend guide for Prisma schema layout.
 - Use absolute imports through the `@/*` alias. Avoid barrel `index.ts` files unless a package-level public API truly needs one.
 
 ## Server and Client Components
