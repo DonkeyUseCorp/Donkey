@@ -3,7 +3,6 @@
 import { ArrowRight } from "lucide-react";
 
 import { PillButton } from "@/app/_components/landing/LandingPrimitives";
-import { GITHUB_REPO_URL } from "@/app/_components/landing/data";
 import { useMediaQuery } from "@/app/_components/landing/useMediaQuery";
 import { BLACK, CORAL } from "@/app/_components/landing/theme";
 
@@ -99,7 +98,7 @@ export function FinalCTA() {
               justifyContent: "center",
             }}
           >
-            <PillButton href={GITHUB_REPO_URL} variant="primary" size="lg">
+            <PillButton href="/install" variant="primary" size="lg">
               Download for Mac <ArrowRight size={18} />
             </PillButton>
             <PillButton href="/pricing" variant="secondary" size="lg">

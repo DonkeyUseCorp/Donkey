@@ -45,7 +45,7 @@ export function Hero() {
         you.
       </p>
       <div style={{ marginTop: 36, display: "flex", flexWrap: "wrap", gap: 12 }}>
-        <PillButton href="#download" variant="primary" size="lg">
+        <PillButton href="/install" variant="primary" size="lg">
           Download for Mac <ArrowRight size={18} />
         </PillButton>
       </div>

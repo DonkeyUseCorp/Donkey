@@ -13,7 +13,7 @@ type Props = {
 };
 
 export function TopNav({
-  ctaHref = "#download",
+  ctaHref = "/install",
   ctaLabel = "Download",
   homeHref = "/",
 }: Props) {
