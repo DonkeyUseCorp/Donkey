@@ -49,8 +49,9 @@ source of truth for behavior and boundaries remains
 ```
 
 The app shell owns entrypoints, durable task threads, setup, shared agent
-memory, and per-task runtime coordination. Capture, observation, model sidecars,
-task adaptation, and input execution stay behind narrow runtime boundaries.
+memory, and per-task runtime coordination. Capture, observation, hosted model
+adapters, task adaptation, and input execution stay behind narrow runtime
+boundaries.
 
 ## Pointer Prompt Task Threads
 
@@ -189,7 +190,7 @@ format for support and debugging. Retrieval always applies scope/kind filters,
 prompt budgets, and availability validation before a record influences planning
 or execution.
 
-## Local Stack And Model Sidecars
+## Local Stack And Hosted Models
 
 ```text
 +--------------------------------------------------------------------------------+
@@ -197,44 +198,39 @@ or execution.
 +--------------------------------------------------------------------------------+
 |                                                                                |
 |  +----------------------+      +----------------------+      +---------------+ |
-|  | Donkey Swift Runtime |----->| JSON Sidecar Runner  |----->| Runtime Store | |
-|  | contracts/controllers|      | stdin/stdout process |      | App Support   | |
+|  | Donkey Swift Runtime |----->| Donkey Backend Proxy |----->| Hosted Models | |
+|  | contracts/controllers|      | typed HTTPS requests |      | providers     | |
 |  +----------+-----------+      +----------+-----------+      +-------+-------+ |
 |             |                             |                          |         |
 |             |                             v                          |         |
 |             |                  +----------------------+              |         |
-|             |                  | App-Managed Registry |<-------------+         |
-|             |                  | executable paths     |                        |
+|             |                  | Provider Config      |<-------------+         |
+|             |                  | model selection      |                        |
 |             |                  +----------+-----------+                        |
 |             |                             |                                    |
 |             v                             v                                    |
 |  +----------------------+      +----------------------+      +---------------+ |
-|  | macOS Services       |      | Local Command LLM    |      | Parakeet ASR  | |
-|  | AX/SCK/LaunchServices|      | TaskIntent JSON      |      | transcript    | |
+|  | macOS Services       |      | TaskIntent JSON      |      | Voice Input   | |
+|  | AX/SCK/LaunchServices|      | structured outputs   |      | transcription | |
 |  +----------+-----------+      +----------------------+      +---------------+ |
 |             |                                                                  |
 |             v                                                                  |
 |  +----------------------+      +----------------------+      +---------------+ |
-|  | Target Apps          |      | YOLO Segmentation    |      | UI Understand | |
-|  | Weather/Music/docs   |      | bounded screenshots  |      | screenshot obs| |
+|  | Target Apps          |      | Computer Use         |      | UI Context    | |
+|  | Weather/Music/docs   |      | hosted decisions     |      | evidence      | |
 |  +----------------------+      +----------------------+      +---------------+ |
 |                                                                                |
 +--------------------------------------------------------------------------------+
 ```
 
-Runtime setup installs or validates sidecar packages after app install; model
-weights are not bundled in `Donkey.app`. Developer environment variables can
-override sidecar paths, while normal installs resolve through the app-managed
-runtime registry under Application Support.
-
-The supported setup boundary includes bundled runner packages, manifest,
-checksum, and configured release-key signature validation, Application Support
-registration, health checks, model-prep hooks, retryable first-run setup,
-settings access, repair/remove lifecycle helpers, support status export, and
-package-local Python wheelhouses built for the release target. The UI
-understanding backend is a packaged Swift sidecar using Apple Vision, and the
-command parser LLM uses an app-managed `local-llm` sidecar with setup-downloaded
-model weights instead of a user-managed Ollama prerequisite.
+Runtime setup does not install model sidecars or model weights after app
+install. Model-backed behavior uses authenticated backend routes; the backend
+owns provider credentials, provider selection, and concrete model selection.
+The Mac app keeps local execution, permissions, Accessibility, screenshot
+capture, and target-app control, but not local model hosting.
+Gemini computer-use support is exposed as two backend tool registrations:
+`donkey_gemini_browser_interaction` for browser control and
+`donkey_gemini_mac_desktop_interaction` for guarded macOS desktop control.
 
 ## Slower AI Harness
 

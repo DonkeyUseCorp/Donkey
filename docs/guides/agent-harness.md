@@ -49,8 +49,8 @@ The harness loop looks like this:
                   |                                |
                   v                                v
         +-------------------+         +--------------------------+
-        | user-visible turn |         | local model call        |
-        +-------------------+         | Parakeet transcription  |
+        | user-visible turn |         | hosted model call       |
+        +-------------------+         | voice transcription     |
                   |                   +--------------------------+
                   |                                |
                   |                         transcript turn
@@ -71,7 +71,7 @@ The harness loop looks like this:
           |                       |                       |
           v                       v                       v
 +--------------------+  +--------------------+  +----------------------+
-| deterministic      |  | local LLM call     |  | provider LLM call    |
+| deterministic      |  | hosted model call  |  | provider LLM call    |
 | parser/fallback    |  | intent/follow-up   |  | response/planner/    |
 |                    |  | classifier         |  | memory proposals     |
 +--------------------+  +--------------------+  +----------------------+
@@ -95,9 +95,9 @@ The harness loop looks like this:
                         |                         |
                         |                         v
                         |             +------------------------+
-                        |             | local model calls      |
-                        |             | YOLO screenshot seg    |
-                        |             | UI understanding       |
+                        |             | hosted/tool calls      |
+                        |             | screenshot/context     |
+                        |             | understanding          |
                         |             +------------------------+
                         |                         |
                         |                         v
@@ -119,18 +119,19 @@ The harness loop looks like this:
 
 The harness should make conversation feel continuous even when execution happens
 inside the thread. The user should not need to know whether a turn was answered
-by a chat response, a local model classifier, a typed runtime artifact, or a
+by a chat response, a hosted model classifier, a typed runtime artifact, or a
 guarded runtime path.
 
-Model calls live behind typed harness boundaries. Voice transcription is a local
-model call before intake and produces a transcript turn. The local LLM call,
-provider LLM call, memory helpers, and explicit metadata helpers each consume
-the bounded context packet and return typed decisions or helper artifacts.
-Observation models such as screenshot segmentation and UI understanding run
-inside the local-task branch and produce observation evidence, not direct input
-actions. Any semantic user-intent distinction, including whether a turn is a
-visual-only agent visualization request, belongs behind one of these typed model
-or catalog boundaries.
+Model calls live behind typed harness boundaries. Voice transcription,
+task-intent classification, follow-up classification, computer-use decisions,
+and planner/helper calls go through authenticated hosted model routes. The Mac
+app selects only the supported Donkey capability route and sends the typed job
+context; it must not name hosted providers, provider API endpoints, or concrete
+model ids for normal hosted calls. The backend chooses the provider and model
+for that route. Observation helpers inside the local-task branch produce
+evidence, not direct input actions. Any semantic user-intent distinction,
+including whether a turn is a visual-only agent visualization request, belongs
+behind one of these typed model or catalog boundaries.
 
 Routing outcomes carry a structured `AppHarnessDecision`. The decision names the
 next supported harness action:
@@ -148,8 +149,9 @@ model/runtime boundary first. Once structured output exists, deterministic code
 may validate and match typed fields.
 
 User intent must not be inferred with ad hoc phrase, prefix, suffix, substring,
-or regex checks against natural-language command text. Donkey has local LLMs,
-task definitions, runtime catalogs, and agent memory context for this job. Use them.
+or regex checks against natural-language command text. Donkey has hosted
+classifiers, task definitions, runtime catalogs, and agent memory context for
+this job. Use them.
 The fast classifier may know typed capability buckets such as task ids,
 capability ids, agent memory entry kinds, and model output statuses. It must not
 recover those buckets by reading natural-language words out of the user's
@@ -232,7 +234,7 @@ the harness should ask for that exact entity or invite an upload. The prompt
 should name the missing detail rather than using generic copy like "Need more
 detail".
 
-Action execution is for validated, supported tasks. The local model classifier
+Action execution is for validated, supported tasks. The hosted model classifier
 or explicit runtime metadata produces a `TaskIntent`. Execution may only
 continue after catalog validation confirms the target app/task, required
 entities, app availability, and safety policy. The default runtime
@@ -296,21 +298,29 @@ allowed backend, then execute it through the AppleScript backend. Adding a
 bug, even if the script happens to work on one machine.
 
 Observation prefers Accessibility and app/window metadata. Bounded screenshots
-and local UI understanding are fallback observation context only; they do not
-emit direct input actions. Captured screenshots, Accessibility snapshots, and
-manual capture artifacts are trace evidence, not a general live vision loop.
+are fallback observation context only; they do not emit direct input actions.
+Captured screenshots, Accessibility snapshots, and manual capture artifacts are
+trace evidence, not a general live vision loop.
 Verification and screenshot fallback behavior should be derived from task
 metadata and runtime item metadata, not one-off branches for individual apps.
 
-The fast local path must keep working without remote model calls. Local sidecars
-can classify actionable turns, transcribe voice, segment screenshots, or
-summarize UI observations. Provider-backed planners and memory proposals remain
-slow-path helpers that write through deterministic approval into agent memory
-and must fail without stopping local control on existing validated state.
+Prompt understanding is hosted by default. The Mac app sends redacted,
+bounded context to the Donkey backend Responses proxy and never stores provider
+API keys locally. Supported prompt handling must not depend on local model
+packages, local model weights, or `DONKEY_LOCAL_LLM_RUNNER`. Provider-backed
+planners and memory proposals remain helper paths that write through
+deterministic approval into agent memory and must fail without stopping local
+control on existing validated state.
 
-Local model work that shares the same runtime capacity should enter a priority
-worker. Interactive task-intent parsing runs at user-interactive priority and
-can cooperatively preempt lower-priority planner, memory, or replay jobs.
+Computer-use decisions are hosted too. Browser interaction and Mac desktop
+interaction are separate Gemini-backed tool registrations at the backend API
+boundary: `donkey_gemini_browser_interaction` for browser environments and
+`donkey_gemini_mac_desktop_interaction` for guarded macOS desktop actions.
+OpenRouter remains a hosted text and structured-output option, but it is not a
+supported computer-use provider.
+Gemini may propose normalized coordinate actions or a custom desktop function
+call, but the Mac client still owns execution, confirmation gates, focus checks,
+permission policy, screenshots, and function-response feedback.
 
 ## State And Observability
 

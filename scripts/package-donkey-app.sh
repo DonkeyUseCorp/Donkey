@@ -6,75 +6,29 @@ APP_DIR="$ROOT_DIR/dist/Donkey.app"
 DMG_PATH="$ROOT_DIR/dist/Donkey.dmg"
 DMG_ROOT="$ROOT_DIR/dist/DonkeyInstaller"
 RUNTIME_PACKAGE_DIR="$ROOT_DIR/dist/LocalRuntimePackages"
-RUNTIME_PACKAGE_VERSION="${DONKEY_RUNTIME_PACKAGE_VERSION:-0.3.0-runner}"
-RUNTIME_PACKAGE_BASE_URL="${DONKEY_RUNTIME_PACKAGE_BASE_URL:-}"
-RUNTIME_PACKAGE_MANIFEST_URLS="${DONKEY_RUNTIME_PACKAGE_MANIFEST_URLS:-}"
 APP_VERSION="${DONKEY_APP_VERSION:-0.1.0}"
 APP_BUILD="${DONKEY_APP_BUILD:-1}"
 WEB_BASE_URL="${DONKEY_WEB_BASE_URL:-https://donkeyuse.com}"
 AUTH_CALLBACK_SCHEME="${DONKEY_AUTH_CALLBACK_SCHEME:-donkey}"
 SPARKLE_FEED_URL="${DONKEY_SPARKLE_FEED_URL:-}"
 SPARKLE_PUBLIC_ED_KEY="${DONKEY_SPARKLE_PUBLIC_ED_KEY:-}"
-RUNTIME_MANIFEST_PUBLIC_KEYS="${DONKEY_RUNTIME_MANIFEST_PUBLIC_KEYS:-}"
-RUNTIME_REQUIRE_CRYPTO_SIGNATURES="${DONKEY_RUNTIME_REQUIRE_CRYPTO_SIGNATURES:-0}"
-LOCAL_LLM_MODEL_CONFIG="${DONKEY_LOCAL_LLM_MODEL_CONFIG:-$ROOT_DIR/config/local-llm-models.json}"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 BUILD_DIR="$ROOT_DIR/apps/Donkey"
 EXECUTABLE="$BUILD_DIR/.build/release/Donkey"
-UI_UNDERSTANDER_EXECUTABLE="$BUILD_DIR/.build/release/DonkeyUIUnderstandingSidecar"
 CACHE_DIR="$BUILD_DIR/.build/package-cache"
 APP_ICON_SOURCE="$BUILD_DIR/Sources/Donkey/Resources/Donkey.icns"
-RUNTIME_RUNNER_SOURCE="$ROOT_DIR/scripts/local-runtime-runners/donkey_runtime_runner.py"
 
 mkdir -p "$CACHE_DIR/clang" "$CACHE_DIR/swiftpm" "$CACHE_DIR/home"
 export CLANG_MODULE_CACHE_PATH="$CACHE_DIR/clang"
 export SWIFTPM_CACHE_PATH="$CACHE_DIR/swiftpm"
 export HOME="$CACHE_DIR/home"
 
-load_local_llm_model_defaults() {
-  local config_path="$1"
-  python3 - "$config_path" <<'PY'
-import json
-import shlex
-import sys
-from pathlib import Path
-
-config_path = Path(sys.argv[1])
-config = json.loads(config_path.read_text())
-model = config.get("defaultModel")
-if not isinstance(model, dict):
-    raise SystemExit(f"defaultModel not found in {config_path}")
-requirements = config.get("runtimeRequirements") if isinstance(config.get("runtimeRequirements"), list) else []
-requirements_text = "\n".join(str(item) for item in requirements if str(item).strip())
-values = {
-    "LOCAL_LLM_MODEL_ID_DEFAULT": str(model.get("modelID") or ""),
-    "LOCAL_LLM_MODEL_URL_DEFAULT": str(model.get("downloadURL") or ""),
-    "LOCAL_LLM_MODEL_SHA256_DEFAULT": str(model.get("sha256") or model.get("expectedSHA256") or ""),
-    "LOCAL_LLM_MODEL_FILENAME_DEFAULT": str(model.get("filename") or "model.gguf"),
-    "LOCAL_LLM_RUNTIME_REQUIREMENTS": requirements_text,
-}
-for key, value in values.items():
-    print(f"{key}={shlex.quote(value)}")
-PY
-}
-
-eval "$(load_local_llm_model_defaults "$LOCAL_LLM_MODEL_CONFIG")"
-
-manifest_download_url_entry() {
-  local runtime_id="$1"
-  local relative_path="$2"
-  if [ -n "$RUNTIME_PACKAGE_BASE_URL" ]; then
-    printf ',\n      "downloadURL" : "%s/%s/%s"' "${RUNTIME_PACKAGE_BASE_URL%/}" "$runtime_id" "$relative_path"
-  fi
-}
-
 cd "$BUILD_DIR"
 echo "Compiling Donkey for Mac ..."
 swift build -c release --product Donkey
-swift build -c release --product DonkeyUIUnderstandingSidecar
 
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$FRAMEWORKS_DIR"
@@ -87,161 +41,7 @@ if ! otool -l "$MACOS_DIR/Donkey" | grep -q "@executable_path/../Frameworks"; th
   install_name_tool -add_rpath "@executable_path/../Frameworks" "$MACOS_DIR/Donkey"
 fi
 
-make_runtime_package() {
-  local runtime_id="$1"
-  local executable_name="$2"
-  local model_id="$3"
-  local role="$4"
-  local model_url="${5:-}"
-  local model_sha256="${6:-}"
-  local model_filename="${7:-model.bin}"
-  local requirements="${8:-}"
-  local package_dir="$RUNTIME_PACKAGE_DIR/$runtime_id"
-  local bin_dir="$package_dir/bin"
-  local lib_dir="$package_dir/lib"
-  local executable_path="$bin_dir/$executable_name"
-  local runner_path="$lib_dir/donkey_runtime_runner.py"
-  local requirements_path="$package_dir/requirements.txt"
-
-  mkdir -p "$bin_dir" "$lib_dir"
-  cp "$RUNTIME_RUNNER_SOURCE" "$runner_path"
-  chmod 755 "$runner_path"
-  cat > "$executable_path" <<EOF_RUNTIME
-#!/usr/bin/env sh
-SCRIPT_DIR="\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)"
-PYTHON="\${DONKEY_RUNTIME_PYTHON:-python3}"
-PACKAGE_DIR="\$(CDPATH= cd -- "\$SCRIPT_DIR/.." && pwd)"
-export DONKEY_RUNTIME_ID="$runtime_id"
-export DONKEY_RUNTIME_VERSION="$RUNTIME_PACKAGE_VERSION"
-export DONKEY_MODEL_ID="$model_id"
-export DONKEY_RUNTIME_ROLE="$role"
-export DONKEY_MODEL_URL="$model_url"
-export DONKEY_MODEL_SHA256="$model_sha256"
-export DONKEY_MODEL_FILENAME="$model_filename"
-export DONKEY_RUNTIME_PACKAGE_DIR="\$PACKAGE_DIR"
-export DONKEY_RUNTIME_STATE_DIR="\${DONKEY_RUNTIME_STATE_DIR:-\$HOME/Library/Application Support/Donkey/LocalModelRuntimes/RuntimePython/$runtime_id}"
-if ! command -v "\$PYTHON" >/dev/null 2>&1; then
-  printf '{"status":"error","runtimeID":"%s","modelID":"%s","metadata":{"reason":"pythonRuntimeUnavailable","dependency":"python3"}}' "$runtime_id" "$model_id"
-  exit 0
-fi
-exec "\$PYTHON" "\$SCRIPT_DIR/../lib/donkey_runtime_runner.py"
-EOF_RUNTIME
-  chmod 755 "$executable_path"
-  if [ -n "$requirements" ]; then
-    printf '%s\n' "$requirements" > "$requirements_path"
-  fi
-
-  local executable_sha
-  local runner_sha
-  local requirements_sha=""
-  local requirements_manifest_entry=""
-  executable_sha="$(shasum -a 256 "$executable_path" | awk '{print $1}')"
-  runner_sha="$(shasum -a 256 "$runner_path" | awk '{print $1}')"
-  local executable_download_url_entry
-  local runner_download_url_entry
-  executable_download_url_entry="$(manifest_download_url_entry "$runtime_id" "bin/$executable_name")"
-  runner_download_url_entry="$(manifest_download_url_entry "$runtime_id" "lib/donkey_runtime_runner.py")"
-  if [ -f "$requirements_path" ]; then
-    requirements_sha="$(shasum -a 256 "$requirements_path" | awk '{print $1}')"
-    local requirements_download_url_entry
-    requirements_download_url_entry="$(manifest_download_url_entry "$runtime_id" "requirements.txt")"
-    requirements_manifest_entry=",
-    {
-      \"relativePath\" : \"requirements.txt\"$requirements_download_url_entry,
-      \"sha256\" : \"$requirements_sha\",
-      \"isExecutable\" : false
-    }"
-  fi
-  cat > "$package_dir/manifest.json" <<EOF_MANIFEST
-{
-  "runtimeID" : "$runtime_id",
-  "runtimeVersion" : "$RUNTIME_PACKAGE_VERSION",
-  "modelID" : "$model_id",
-  "platform" : "macos",
-  "architecture" : "$(uname -m | sed 's/aarch64/arm64/;s/x86_64/x86_64/')",
-  "sidecarProtocolVersion" : "v1",
-  "minimumDonkeyVersion" : "0.1.0",
-  "executableRelativePath" : "bin/$executable_name",
-  "files" : [
-    {
-      "relativePath" : "bin/$executable_name"$executable_download_url_entry,
-      "sha256" : "$executable_sha",
-      "isExecutable" : true
-    },
-    {
-      "relativePath" : "lib/donkey_runtime_runner.py"$runner_download_url_entry,
-      "sha256" : "$runner_sha",
-      "isExecutable" : true
-    }$requirements_manifest_entry
-  ],
-  "signature" : "donkey-runner-package",
-  "signingKeyID" : "donkey-runner",
-  "metadata" : {
-    "runtime.package" : "donkey-runner-package",
-    "modelWeightsBundled" : "false",
-    "modelWeights.downloadURL" : "$model_url",
-    "modelWeights.sha256" : "$model_sha256",
-    "modelWeights.filename" : "$model_filename",
-    "sidecar.role" : "$role"
-  }
-}
-EOF_MANIFEST
-}
-
-make_binary_runtime_package() {
-  local runtime_id="$1"
-  local executable_name="$2"
-  local source_executable="$3"
-  local model_id="$4"
-  local role="$5"
-  local package_dir="$RUNTIME_PACKAGE_DIR/$runtime_id"
-  local bin_dir="$package_dir/bin"
-  local executable_path="$bin_dir/$executable_name"
-
-  mkdir -p "$bin_dir"
-  cp "$source_executable" "$executable_path"
-  chmod 755 "$executable_path"
-
-  local executable_sha
-  executable_sha="$(shasum -a 256 "$executable_path" | awk '{print $1}')"
-  local executable_download_url_entry
-  executable_download_url_entry="$(manifest_download_url_entry "$runtime_id" "bin/$executable_name")"
-  cat > "$package_dir/manifest.json" <<EOF_MANIFEST
-{
-  "runtimeID" : "$runtime_id",
-  "runtimeVersion" : "$RUNTIME_PACKAGE_VERSION",
-  "modelID" : "$model_id",
-  "platform" : "macos",
-  "architecture" : "$(uname -m | sed 's/aarch64/arm64/;s/x86_64/x86_64/')",
-  "sidecarProtocolVersion" : "v1",
-  "minimumDonkeyVersion" : "0.1.0",
-  "executableRelativePath" : "bin/$executable_name",
-  "files" : [
-    {
-      "relativePath" : "bin/$executable_name"$executable_download_url_entry,
-      "sha256" : "$executable_sha",
-      "isExecutable" : true
-    }
-  ],
-  "signature" : "donkey-runner-package",
-  "signingKeyID" : "donkey-runner",
-  "metadata" : {
-    "runtime.package" : "donkey-binary-runtime-package",
-    "modelWeightsBundled" : "false",
-    "modelWeights.status" : "notRequired",
-    "modelWeights.provider" : "system",
-    "sidecar.role" : "$role"
-  }
-}
-EOF_MANIFEST
-}
-
 rm -rf "$RUNTIME_PACKAGE_DIR"
-mkdir -p "$RUNTIME_PACKAGE_DIR"
-make_runtime_package "parakeet-transcriber" "donkey-parakeet-transcriber" "nvidia/parakeet-tdt-0.6b-v3" "voiceTranscription" "${DONKEY_PARAKEET_MODEL_URL:-}" "${DONKEY_PARAKEET_MODEL_SHA256:-}" "${DONKEY_PARAKEET_MODEL_FILENAME:-parakeet-model.bin}" $'huggingface_hub>=0.25,<1'
-make_runtime_package "yolo-segmenter" "donkey-yolo-segmenter" "ultralytics/yolo26n-seg" "screenshotSegmentation" "${DONKEY_YOLO_MODEL_URL:-}" "${DONKEY_YOLO_MODEL_SHA256:-}" "${DONKEY_YOLO_MODEL_FILENAME:-yolo26n-seg.pt}" $'ultralytics>=8.3,<9\nopencv-python-headless>=4.10,<5'
-make_binary_runtime_package "ui-understander" "donkey-ui-understander" "$UI_UNDERSTANDER_EXECUTABLE" "apple-vision-text-recognition" "uiUnderstanding"
-make_runtime_package "local-llm" "donkey-local-llm" "${DONKEY_LOCAL_LLM_MODEL_ID:-$LOCAL_LLM_MODEL_ID_DEFAULT}" "localLLM" "${DONKEY_LOCAL_LLM_MODEL_URL:-$LOCAL_LLM_MODEL_URL_DEFAULT}" "${DONKEY_LOCAL_LLM_MODEL_SHA256:-$LOCAL_LLM_MODEL_SHA256_DEFAULT}" "${DONKEY_LOCAL_LLM_MODEL_FILENAME:-$LOCAL_LLM_MODEL_FILENAME_DEFAULT}" "$LOCAL_LLM_RUNTIME_REQUIREMENTS"
 
 RESOURCE_BUNDLE="$(find "$BUILD_DIR/.build" -path "*/release/Donkey_Donkey.bundle" -type d | head -n 1 || true)"
 if [ -n "$RESOURCE_BUNDLE" ]; then
@@ -271,59 +71,6 @@ if [ -n "$SPARKLE_FEED_URL" ] && [ -n "$SPARKLE_PUBLIC_ED_KEY" ]; then
   <string>$SPARKLE_FEED_URL</string>
   <key>SUPublicEDKey</key>
   <string>$SPARKLE_PUBLIC_ED_KEY</string>"
-fi
-
-RUNTIME_SIGNATURE_PLIST_KEYS=""
-if [ -n "$RUNTIME_MANIFEST_PUBLIC_KEYS" ]; then
-  RUNTIME_SIGNATURE_PLIST_KEYS="  <key>DonkeyRuntimeRequiresCryptographicManifestSignatures</key>
-  <$( [ "$RUNTIME_REQUIRE_CRYPTO_SIGNATURES" = "1" ] && printf true || printf false )/>
-  <key>DonkeyRuntimeManifestPublicKeys</key>
-  <dict>"
-  IFS=',' read -r -a runtime_key_pairs <<< "$RUNTIME_MANIFEST_PUBLIC_KEYS"
-  for pair in "${runtime_key_pairs[@]}"; do
-    key_id="${pair%%=*}"
-    public_key="${pair#*=}"
-    if [ -n "$key_id" ] && [ -n "$public_key" ] && [ "$key_id" != "$public_key" ]; then
-      RUNTIME_SIGNATURE_PLIST_KEYS="$RUNTIME_SIGNATURE_PLIST_KEYS
-    <key>$key_id</key>
-    <string>$public_key</string>"
-    fi
-  done
-  RUNTIME_SIGNATURE_PLIST_KEYS="$RUNTIME_SIGNATURE_PLIST_KEYS
-  </dict>"
-fi
-
-RUNTIME_PACKAGE_MANIFEST_PLIST_KEYS=""
-append_runtime_package_manifest_url() {
-  local runtime_id="$1"
-  local manifest_url="$2"
-  if [ -z "$runtime_id" ] || [ -z "$manifest_url" ]; then
-    return
-  fi
-  RUNTIME_PACKAGE_MANIFEST_PLIST_KEYS="$RUNTIME_PACKAGE_MANIFEST_PLIST_KEYS
-    <key>$runtime_id</key>
-    <string>$manifest_url</string>"
-}
-
-if [ -n "$RUNTIME_PACKAGE_MANIFEST_URLS" ]; then
-  IFS=',' read -r -a manifest_url_pairs <<< "$RUNTIME_PACKAGE_MANIFEST_URLS"
-  for pair in "${manifest_url_pairs[@]}"; do
-    runtime_id="${pair%%=*}"
-    manifest_url="${pair#*=}"
-    if [ "$runtime_id" != "$manifest_url" ]; then
-      append_runtime_package_manifest_url "$runtime_id" "$manifest_url"
-    fi
-  done
-fi
-append_runtime_package_manifest_url "parakeet-transcriber" "${DONKEY_PARAKEET_RUNTIME_MANIFEST_URL:-}"
-append_runtime_package_manifest_url "yolo-segmenter" "${DONKEY_YOLO_RUNTIME_MANIFEST_URL:-}"
-append_runtime_package_manifest_url "ui-understander" "${DONKEY_UI_UNDERSTANDER_RUNTIME_MANIFEST_URL:-}"
-append_runtime_package_manifest_url "local-llm" "${DONKEY_LOCAL_LLM_RUNTIME_MANIFEST_URL:-}"
-
-if [ -n "$RUNTIME_PACKAGE_MANIFEST_PLIST_KEYS" ]; then
-  RUNTIME_PACKAGE_MANIFEST_PLIST_KEYS="  <key>DonkeyRuntimePackageManifestURLs</key>
-  <dict>$RUNTIME_PACKAGE_MANIFEST_PLIST_KEYS
-  </dict>"
 fi
 
 cat > "$CONTENTS_DIR/Info.plist" <<PLIST
@@ -365,14 +112,12 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
     </dict>
   </array>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Donkey uses the microphone for local voice commands.</string>
+  <string>Donkey uses the microphone for user-requested voice input.</string>
   <key>NSScreenCaptureUsageDescription</key>
-  <string>Donkey captures bounded screenshots so local runtimes can understand app UI.</string>
+  <string>Donkey captures bounded screenshots for user-requested app context.</string>
   <key>NSAppleEventsUsageDescription</key>
   <string>Donkey uses local app automation only for user-requested actions.</string>
 $SPARKLE_PLIST_KEYS
-$RUNTIME_PACKAGE_MANIFEST_PLIST_KEYS
-$RUNTIME_SIGNATURE_PLIST_KEYS
 </dict>
 </plist>
 PLIST

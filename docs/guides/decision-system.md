@@ -17,7 +17,7 @@ For document-writing plans, Donkey also validates the model output itself: a sho
 
 ## Decision Flow
 
-The pointer prompt records the user-visible turn, builds a bounded context packet, and routes it through the harness. Empty input can be handled directly. Semantic decisions go through typed model boundaries.
+The pointer prompt records the user-visible turn, builds a bounded context packet, and routes it through the harness. Empty input can be handled directly. Semantic decisions go through typed model boundaries. By default, task-intent and follow-up decisions use the authenticated Donkey backend Responses proxy with `store=false`; the Mac app does not send a concrete hosted model, because backend configuration chooses it. Local model adapters are not part of the supported decision path.
 
 For local app work, the model receives:
 
@@ -95,6 +95,6 @@ Weather, Music, and document form-fill fixtures remain useful for tests and repl
 
 - Prompt command handling starts in `apps/Donkey/Sources/Donkey/PointerPromptCommandHandler.swift`.
 - Harness routing and context packet assembly live in `apps/Donkey/Sources/DonkeyRuntime/AppHarnessTurnRouter.swift`.
-- Task-intent parsing protocol and the process-backed local runtime adapter live in `apps/Donkey/Sources/DonkeyAI/LocalGenerateTaskIntentAdapter.swift`; the local-generate adapter in that file is an explicit adapter for Ollama-compatible providers, not the default runtime path.
+- Task-intent parsing protocol and the hosted Responses adapter live in `apps/Donkey/Sources/DonkeyAI/LocalGenerateTaskIntentAdapter.swift`.
 - Catalog validation and generic local-app interaction materialization live in `apps/Donkey/Sources/DonkeyRuntime/LocalAppTaskCatalog.swift`.
 - Guarded execution lives in `apps/Donkey/Sources/DonkeyRuntime/LocalAppTaskLiveRunner.swift` and the action-engine backends.

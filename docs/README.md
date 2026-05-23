@@ -4,7 +4,10 @@ This folder is the product and engineering source of truth for capabilities that
 
 Plans describe what we might build. Guides describe what Donkey currently supports and how to maintain it.
 
-There is an active milestone plan in `plans/master-plan.md`. It tracks the unfinished work needed before the fast local navigation and AI-harness roadmap can be considered complete: generic local-app task knowledge, local JSON/JSONL task-definition loading, installed-app/task resolution, local-model command parsing with catalog validation, local task-context intake, Accessibility control discovery and action planning, review-first document form-fill planning, Parakeet-only local voice transcription, YOLO screenshot segmentation and local UI-understanding sidecar boundaries, post-install local runtime setup without bundled model weights, setup-managed command-parser LLM weight download, semantic memory retrieval, provider memory proposals, redaction/model-observability scaffolding, local navigation, guarded input, result verification, latency reporting, and optional slow planner recovery. Weather lookup, media playback, and document form-fill are benchmark definitions for this generic system, not source-specific architectures.
+There is an active sequencing file in `plans/master-plan.md`. When its Current
+Sequence is empty, do not invent milestone work. The supported harness boundary
+uses hosted model routes for model-backed decisions; local model packages and
+local model weight setup are not part of the supported install path.
 
 ## Guides
 

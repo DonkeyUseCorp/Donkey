@@ -6,21 +6,14 @@ import Testing
 @Suite
 struct LocalModelRuntimeSetupTests {
     @Test
-    func setupInstructionsDescribeDownloadThenAppRegistration() throws {
+    func setupInstructionsAreEmptyWhenHostedModelsAreDefault() throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
 
         let manager = try LocalModelRuntimeSetupManager(baseDirectory: root)
         let instructions = manager.instructions()
 
-        #expect(instructions.count == 4)
-        #expect(instructions.map(\.spec.id).contains(.parakeetTranscriber))
-        #expect(instructions.map(\.spec.id).contains(.localLLM))
-        #expect(instructions.first { $0.spec.id == .parakeetTranscriber }?.spec.environmentVariableName == "DONKEY_PARAKEET_TRANSCRIBER")
-        #expect(instructions.first { $0.spec.id == .yoloSegmenter }?.spec.environmentVariableName == "DONKEY_YOLO_SEGMENTER")
-        #expect(instructions.first { $0.spec.id == .uiUnderstander }?.spec.environmentVariableName == "DONKEY_UI_UNDERSTANDER")
-        #expect(instructions.first { $0.spec.id == .localLLM }?.spec.environmentVariableName == "DONKEY_LOCAL_LLM_RUNNER")
-        #expect(instructions.first?.spec.installSteps.first?.contains("Set Up") == true)
+        #expect(instructions.isEmpty)
     }
 
     @Test
@@ -35,7 +28,7 @@ struct LocalModelRuntimeSetupTests {
             root: download,
             relativePath: "bin/donkey-yolo-segmenter"
         )
-        let manager = try LocalModelRuntimeSetupManager(baseDirectory: root)
+        let manager = try runtimeManager(baseDirectory: root)
 
         let installation = try manager.registerDownloadedRuntime(
             runtimeID: .yoloSegmenter,
@@ -58,7 +51,7 @@ struct LocalModelRuntimeSetupTests {
             try? FileManager.default.removeItem(at: root)
             try? FileManager.default.removeItem(at: download)
         }
-        let manager = try LocalModelRuntimeSetupManager(baseDirectory: root)
+        let manager = try runtimeManager(baseDirectory: root)
 
         #expect(throws: LocalModelRuntimeSetupError.missingDownloadedExecutable(
             runtimeID: .parakeetTranscriber,
@@ -95,14 +88,14 @@ struct LocalModelRuntimeSetupTests {
             try? FileManager.default.removeItem(at: download)
         }
         let executableURL = URL(fileURLWithPath: "/bin/cat")
-        let manager = try LocalModelRuntimeSetupManager(baseDirectory: root)
+        let manager = try runtimeManager(baseDirectory: root)
         try manager.registerExecutable(
             runtimeID: .parakeetTranscriber,
             executableURL: executableURL,
             downloadedDirectory: download
         )
         let resolver = LocalModelRuntimeExecutableResolver {
-            try LocalModelRuntimeSetupManager(baseDirectory: root)
+            try runtimeManager(baseDirectory: root)
         }
         let runner = ProcessBackedLocalJSONSidecarRunner(
             environment: [:],
@@ -151,7 +144,7 @@ struct LocalModelRuntimeSetupTests {
             signature: "signed-for-test",
             signingKeyID: "test-key"
         )
-        let manager = try LocalModelRuntimeSetupManager(baseDirectory: root)
+        let manager = try runtimeManager(baseDirectory: root)
 
         let result = try await manager.downloadAndInstall(
             manifest: manifest,
@@ -194,7 +187,7 @@ struct LocalModelRuntimeSetupTests {
         )
         let payload = try LocalModelRuntimeSetupManager.signaturePayloadData(for: manifest)
         manifest.signature = try privateKey.signature(for: payload).base64EncodedString()
-        let manager = try LocalModelRuntimeSetupManager(
+        let manager = try runtimeManager(
             baseDirectory: root,
             trustedManifestSigningKeys: [
                 LocalModelRuntimeManifestSigningKey(
@@ -238,7 +231,7 @@ struct LocalModelRuntimeSetupTests {
         )
         let payload = try LocalModelRuntimeSetupManager.signaturePayloadData(for: manifest)
         manifest.signature = try privateKey.signature(for: payload).base64EncodedString()
-        let manager = try LocalModelRuntimeSetupManager(
+        let manager = try runtimeManager(
             baseDirectory: root,
             requiresCryptographicManifestSignatures: true
         )
@@ -252,7 +245,7 @@ struct LocalModelRuntimeSetupTests {
             )
         }
 
-        let trustedManager = try LocalModelRuntimeSetupManager(
+        let trustedManager = try runtimeManager(
             baseDirectory: root,
             trustedManifestSigningKeys: [
                 LocalModelRuntimeManifestSigningKey(
@@ -280,7 +273,7 @@ struct LocalModelRuntimeSetupTests {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let data = Data("#!/bin/sh\necho ok\n".utf8)
-        let manager = try LocalModelRuntimeSetupManager(baseDirectory: root)
+        let manager = try runtimeManager(baseDirectory: root)
         let unsigned = LocalModelRuntimePackageManifest(
             runtimeID: .yoloSegmenter,
             runtimeVersion: "1.0.0",
@@ -343,7 +336,7 @@ struct LocalModelRuntimeSetupTests {
             runtimeVersion: "1.2.3",
             modelID: "nvidia/parakeet-tdt-0.6b-v3"
         )
-        let manager = try LocalModelRuntimeSetupManager(baseDirectory: root)
+        let manager = try runtimeManager(baseDirectory: root)
         try manager.registerExecutable(
             runtimeID: .parakeetTranscriber,
             executableURL: healthExecutable,
@@ -376,7 +369,7 @@ struct LocalModelRuntimeSetupTests {
             modelID: "qwen2.5-0.5b-instruct-q4_k_m",
             metadataJSON: #"{"modelWeights.status":"missing","modelWeights.provider":"donkey-managed-download"}"#
         )
-        let manager = try LocalModelRuntimeSetupManager(baseDirectory: root)
+        let manager = try runtimeManager(baseDirectory: root)
         try manager.registerExecutable(
             runtimeID: .localLLM,
             executableURL: healthExecutable,
@@ -406,7 +399,7 @@ struct LocalModelRuntimeSetupTests {
             runtimeID: "ui-understander",
             modelID: "local-ui-understander"
         )
-        let manager = try LocalModelRuntimeSetupManager(baseDirectory: root)
+        let manager = try runtimeManager(baseDirectory: root)
         try manager.registerExecutable(
             runtimeID: .uiUnderstander,
             executableURL: executable,
@@ -438,7 +431,7 @@ struct LocalModelRuntimeSetupTests {
             root: download,
             relativePath: "bin/donkey-yolo-segmenter"
         )
-        let manager = try LocalModelRuntimeSetupManager(baseDirectory: root)
+        let manager = try runtimeManager(baseDirectory: root)
         try manager.registerExecutable(
             runtimeID: .yoloSegmenter,
             executableURL: executable,
@@ -456,7 +449,7 @@ struct LocalModelRuntimeSetupTests {
     }
 
     @Test
-    func supportExportOmitsUserDataAndIncludesRuntimeStatus() throws {
+    func supportExportOmitsUserDataAndHasNoDefaultLocalModelStatus() throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let manager = try LocalModelRuntimeSetupManager(baseDirectory: root)
@@ -465,9 +458,67 @@ struct LocalModelRuntimeSetupTests {
         let exportData = try manager.supportExportData()
         let exportText = String(decoding: exportData, as: UTF8.self)
 
-        #expect(snapshot.statuses.count == 4)
-        #expect(exportText.contains("parakeet-transcriber"))
+        #expect(snapshot.statuses.isEmpty)
+        #expect(!exportText.contains("parakeet-transcriber"))
         #expect(!exportText.contains(root.path))
+    }
+
+    private func runtimeManager(
+        baseDirectory: URL,
+        trustedManifestSigningKeys: [LocalModelRuntimeManifestSigningKey] = [],
+        requiresCryptographicManifestSignatures: Bool = false
+    ) throws -> LocalModelRuntimeSetupManager {
+        try LocalModelRuntimeSetupManager(
+            baseDirectory: baseDirectory,
+            specs: fixtureRuntimeSpecs,
+            trustedManifestSigningKeys: trustedManifestSigningKeys,
+            requiresCryptographicManifestSignatures: requiresCryptographicManifestSignatures
+        )
+    }
+
+    private var fixtureRuntimeSpecs: [LocalModelRuntimeSpec] {
+        [
+            LocalModelRuntimeSpec(
+                id: .parakeetTranscriber,
+                displayName: "Parakeet voice transcription",
+                environmentVariableName: "DONKEY_PARAKEET_TRANSCRIBER",
+                expectedExecutableRelativePath: "bin/donkey-parakeet-transcriber",
+                modelName: "nvidia/parakeet-tdt-0.6b-v3",
+                downloadPageURL: nil,
+                manifestURL: nil,
+                installSteps: []
+            ),
+            LocalModelRuntimeSpec(
+                id: .yoloSegmenter,
+                displayName: "YOLO26 screenshot segmentation",
+                environmentVariableName: "DONKEY_YOLO_SEGMENTER",
+                expectedExecutableRelativePath: "bin/donkey-yolo-segmenter",
+                modelName: "ultralytics/yolo26n-seg",
+                downloadPageURL: nil,
+                manifestURL: nil,
+                installSteps: []
+            ),
+            LocalModelRuntimeSpec(
+                id: .uiUnderstander,
+                displayName: "Local UI understanding",
+                environmentVariableName: "DONKEY_UI_UNDERSTANDER",
+                expectedExecutableRelativePath: "bin/donkey-ui-understander",
+                modelName: "local-ui-understander",
+                downloadPageURL: nil,
+                manifestURL: nil,
+                installSteps: []
+            ),
+            LocalModelRuntimeSpec(
+                id: .localLLM,
+                displayName: "Local LLM",
+                environmentVariableName: "DONKEY_LOCAL_LLM_RUNNER",
+                expectedExecutableRelativePath: "bin/donkey-local-llm",
+                modelName: "qwen2.5-0.5b-instruct-q4_k_m",
+                downloadPageURL: nil,
+                manifestURL: nil,
+                installSteps: []
+            )
+        ]
     }
 
     private func makeExecutable(

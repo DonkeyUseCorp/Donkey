@@ -417,71 +417,7 @@ public struct LocalModelRuntimeSetupManager: Sendable {
         self.requiresCryptographicManifestSignatures = requiresCryptographicManifestSignatures
     }
 
-    public static let defaultSpecs: [LocalModelRuntimeSpec] = [
-        LocalModelRuntimeSpec(
-            id: .parakeetTranscriber,
-            displayName: "Parakeet voice transcription",
-            environmentVariableName: "DONKEY_PARAKEET_TRANSCRIBER",
-            expectedExecutableRelativePath: "bin/donkey-parakeet-transcriber",
-            modelName: "nvidia/parakeet-tdt-0.6b-v3",
-            downloadPageURL: URL(string: "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3"),
-            manifestURL: Self.defaultPackageManifestURL(for: .parakeetTranscriber),
-            installSteps: [
-                "Click Set Up in Donkey after installing the app.",
-                "Donkey downloads and verifies the compatible Parakeet runtime package.",
-                "Donkey records bin/donkey-parakeet-transcriber in Application Support."
-            ],
-            metadata: ["sidecar.role": "voiceTranscription"]
-        ),
-        LocalModelRuntimeSpec(
-            id: .yoloSegmenter,
-            displayName: "YOLO26 screenshot segmentation",
-            environmentVariableName: "DONKEY_YOLO_SEGMENTER",
-            expectedExecutableRelativePath: "bin/donkey-yolo-segmenter",
-            modelName: "ultralytics/yolo26n-seg",
-            downloadPageURL: URL(string: "https://docs.ultralytics.com/models/yolo26/"),
-            manifestURL: Self.defaultPackageManifestURL(for: .yoloSegmenter),
-            installSteps: [
-                "Click Set Up in Donkey after installing the app.",
-                "Donkey downloads and verifies the compatible YOLO26 segmentation runtime package.",
-                "Donkey records bin/donkey-yolo-segmenter in Application Support."
-            ],
-            metadata: ["sidecar.role": "screenshotSegmentation"]
-        ),
-        LocalModelRuntimeSpec(
-            id: .uiUnderstander,
-            displayName: "Local UI understanding",
-            environmentVariableName: "DONKEY_UI_UNDERSTANDER",
-            expectedExecutableRelativePath: "bin/donkey-ui-understander",
-            modelName: "apple-vision-text-recognition",
-            downloadPageURL: nil,
-            manifestURL: Self.defaultPackageManifestURL(for: .uiUnderstander),
-            installSteps: [
-                "Click Set Up in Donkey after installing the app.",
-                "Donkey downloads and verifies the compatible UI-understanding runtime package.",
-                "Donkey records bin/donkey-ui-understander in Application Support."
-            ],
-            metadata: ["sidecar.role": "uiUnderstanding"]
-        ),
-        LocalModelRuntimeSpec(
-            id: .localLLM,
-            displayName: "Local command parser LLM",
-            environmentVariableName: "DONKEY_LOCAL_LLM_RUNNER",
-            expectedExecutableRelativePath: "bin/donkey-local-llm",
-            modelName: "qwen2.5-0.5b-instruct-q4_k_m",
-            downloadPageURL: nil,
-            manifestURL: Self.defaultPackageManifestURL(for: .localLLM),
-            installSteps: [
-                "Click Set Up in Donkey after installing the app.",
-                "Donkey downloads and verifies the configured local command-parser model weights.",
-                "Donkey records bin/donkey-local-llm in Application Support."
-            ],
-            metadata: [
-                "sidecar.role": "localLLM",
-                "modelWeights.provider": "donkey-managed-download"
-            ]
-        )
-    ]
+    public static let defaultSpecs: [LocalModelRuntimeSpec] = []
 
     public static func defaultBaseDirectory() throws -> URL {
         try FileManager.default
