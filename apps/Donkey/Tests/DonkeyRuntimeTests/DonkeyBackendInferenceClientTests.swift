@@ -57,6 +57,32 @@ struct DonkeyBackendInferenceClientTests {
     }
 
     @Test
+    func createAssetGenerationSendsLocalGenerationID() async throws {
+        let response = generationRecord(outputs: [])
+        let httpClient = FixtureHTTPClient(
+            data: try JSONEncoder().encode(response),
+            statusCode: 201
+        )
+        let client = DonkeyBackendInferenceClient(
+            configuration: configuration(),
+            httpClient: httpClient
+        )
+
+        let record = try await client.createAssetGeneration(
+            RemoteInferenceAssetGenerationRequest(
+                kind: .image,
+                model: "image-model",
+                prompt: "make an icon"
+            )
+        )
+
+        let object = try #require(httpClient.requests.first?.httpBodyJSONObject)
+        let generationID = try #require(object["generationId"] as? String)
+        #expect(generationID.hasPrefix("generation-"))
+        #expect(record.id == response.id)
+    }
+
+    @Test
     func downloadsInlineOutputsIntoGenerationDirectory() async throws {
         let baseDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("donkey-inference-tests-\(UUID().uuidString)", isDirectory: true)
@@ -100,7 +126,7 @@ struct DonkeyBackendInferenceClientTests {
     }
 
     @Test
-    func backendOutputDownloadsUseDonkeyClientHeadersAndCookies() async throws {
+    func remoteOutputDownloadsDoNotUseDonkeyClientHeaders() async throws {
         let httpClient = FixtureHTTPClient(
             data: Data("downloaded".utf8),
             statusCode: 200,
@@ -115,7 +141,7 @@ struct DonkeyBackendInferenceClientTests {
                 RemoteInferenceOutputRef(
                     id: "video-1",
                     kind: .video,
-                    downloadUrl: "/api/inference/assets/generation-1/outputs/video-1",
+                    url: "https://cdn.example/video.mp4",
                     contentType: "video/mp4",
                     filename: "video.mp4"
                 )
@@ -135,7 +161,38 @@ struct DonkeyBackendInferenceClientTests {
         #expect(downloads.first?.contentType == "video/mp4")
         #expect(httpClient.requests.first?.value(forHTTPHeaderField: "Authorization") == nil)
         #expect(httpClient.requests.first?.httpShouldHandleCookies == true)
-        #expect(httpClient.requests.first?.value(forHTTPHeaderField: "x-donkey-client-id") == "client-1")
+        #expect(httpClient.requests.first?.value(forHTTPHeaderField: "x-donkey-client-id") == nil)
+    }
+
+    @Test
+    func downloadsDataURLOutputsLocally() async throws {
+        let client = DonkeyBackendInferenceClient(
+            configuration: configuration(),
+            httpClient: FixtureHTTPClient(data: Data(), statusCode: 200)
+        )
+        let record = generationRecord(
+            outputs: [
+                RemoteInferenceOutputRef(
+                    id: "image-1",
+                    kind: .image,
+                    url: "data:image/png;base64,\(Data("png".utf8).base64EncodedString())",
+                    filename: "image.png"
+                )
+            ]
+        )
+        let baseDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("donkey-inference-tests-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: baseDirectory)
+        }
+
+        let downloads = try await client.downloadCompletedOutputs(
+            for: record,
+            downloadsDirectory: baseDirectory
+        )
+
+        #expect(try String(contentsOf: downloads[0].fileURL, encoding: .utf8) == "png")
+        #expect(downloads[0].contentType == "image/png")
     }
 
     private func configuration() -> DonkeyBackendInferenceConfiguration {
@@ -150,23 +207,17 @@ struct DonkeyBackendInferenceClientTests {
     ) -> RemoteInferenceGenerationRecord {
         RemoteInferenceGenerationRecord(
             id: "generation-1",
-            clientId: "client-1",
-            kind: "music",
+            kind: .music,
             status: .completed,
             provider: "provider-data",
             model: "asset-model",
             providerJobId: nil,
             providerGenerationId: nil,
             providerPollingUrl: nil,
-            promptPreview: "make audio",
-            requestHash: "hash",
             outputs: outputs,
             usage: nil,
             error: nil,
-            metadata: .object([:]),
-            createdAt: "2026-05-22T00:00:00.000Z",
-            updatedAt: "2026-05-22T00:00:00.000Z",
-            completedAt: "2026-05-22T00:00:00.000Z"
+            metadata: [:]
         )
     }
 }

@@ -1,12 +1,10 @@
 import { NextResponse } from "next/server";
 
 import {
-  createGenerationRecord,
-  generationResponse,
-  listGenerationRecords,
-  markGenerationFailed,
-  updateGenerationFromProvider,
-} from "@/lib/inference/records";
+  assetGenerationResponse,
+  failedAssetGenerationResponse,
+  generationIDForRequest,
+} from "@/lib/inference/assets";
 import { createProviderRegistry } from "@/lib/inference/router";
 import {
   requireInferenceClientId,
@@ -18,18 +16,6 @@ import { InferenceProviderError } from "@/lib/inference/providers";
 import { withDonkeyAuth } from "@/lib/donkey-api-auth";
 
 export const dynamic = "force-dynamic";
-
-export const GET = withDonkeyAuth(async (request) => {
-  const client = requireInferenceClientId(request.donkey.clientId);
-  if (!client.ok) {
-    return client.response;
-  }
-
-  const records = await listGenerationRecords(client.clientId);
-  return NextResponse.json({
-    data: records.map((record) => generationResponse(record)),
-  });
-});
 
 export const POST = withDonkeyAuth(async (request) => {
   const client = requireInferenceClientId(request.donkey.clientId);
@@ -44,15 +30,15 @@ export const POST = withDonkeyAuth(async (request) => {
 
   const registry = createProviderRegistry();
   const provider = registry.assetProvider(parsed.data);
-  const record = await createGenerationRecord({
-    clientId: client.clientId,
-    provider: provider.id,
-    request: parsed.data,
-  });
+  const generationId = generationIDForRequest(parsed.data);
+  const generation = {
+    id: generationId,
+    kind: parsed.data.kind,
+  };
 
   try {
     const result = await provider.generateAsset?.({
-      generationId: record.id,
+      generationId,
       request: parsed.data,
     });
 
@@ -63,14 +49,12 @@ export const POST = withDonkeyAuth(async (request) => {
       });
     }
 
-    const updated = await updateGenerationFromProvider(record.id, result);
-    return NextResponse.json(
-      generationResponse(updated, { inlineOutputs: result.outputs }),
-      { status: 201 },
-    );
+    return NextResponse.json(assetGenerationResponse({ generation, result }), {
+      status: 201,
+    });
   } catch (error) {
-    const failed = await markGenerationFailed({
-      id: record.id,
+    const failed = failedAssetGenerationResponse({
+      generation,
       provider: provider.id,
       model: parsed.data.model,
       error: toJsonValue(
@@ -89,7 +73,7 @@ export const POST = withDonkeyAuth(async (request) => {
     if (error instanceof InferenceProviderError) {
       return NextResponse.json(
         {
-          ...generationResponse(failed),
+          ...failed,
           error: {
             code: error.code,
             message: error.message,

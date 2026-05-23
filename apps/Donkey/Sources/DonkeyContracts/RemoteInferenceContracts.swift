@@ -128,6 +128,7 @@ public struct RemoteInferenceChatCompletionRequest: Codable, Equatable, Sendable
 }
 
 public struct RemoteInferenceAssetGenerationRequest: Codable, Equatable, Sendable {
+    public var generationId: String?
     public var kind: RemoteInferenceAssetKind
     public var provider: String?
     public var model: String
@@ -137,6 +138,7 @@ public struct RemoteInferenceAssetGenerationRequest: Codable, Equatable, Sendabl
     public var metadata: [String: String]
 
     public init(
+        generationId: String? = nil,
         kind: RemoteInferenceAssetKind,
         provider: String? = nil,
         model: String,
@@ -145,6 +147,7 @@ public struct RemoteInferenceAssetGenerationRequest: Codable, Equatable, Sendabl
         parameters: RemoteInferenceJSONObject = [:],
         metadata: [String: String] = [:]
     ) {
+        self.generationId = generationId
         self.kind = kind
         self.provider = provider
         self.model = model
@@ -159,7 +162,6 @@ public struct RemoteInferenceOutputRef: Codable, Equatable, Sendable {
     public var id: String
     public var kind: RemoteInferenceModality
     public var url: String?
-    public var downloadUrl: String?
     public var dataBase64: String?
     public var contentType: String?
     public var filename: String?
@@ -170,7 +172,6 @@ public struct RemoteInferenceOutputRef: Codable, Equatable, Sendable {
         id: String,
         kind: RemoteInferenceModality,
         url: String? = nil,
-        downloadUrl: String? = nil,
         dataBase64: String? = nil,
         contentType: String? = nil,
         filename: String? = nil,
@@ -180,7 +181,6 @@ public struct RemoteInferenceOutputRef: Codable, Equatable, Sendable {
         self.id = id
         self.kind = kind
         self.url = url
-        self.downloadUrl = downloadUrl
         self.dataBase64 = dataBase64
         self.contentType = contentType
         self.filename = filename
@@ -191,46 +191,33 @@ public struct RemoteInferenceOutputRef: Codable, Equatable, Sendable {
 
 public struct RemoteInferenceGenerationRecord: Codable, Equatable, Sendable {
     public var id: String
-    public var clientId: String
-    public var kind: String
+    public var kind: RemoteInferenceAssetKind
     public var status: RemoteInferenceGenerationStatus
     public var provider: String
     public var model: String
     public var providerJobId: String?
     public var providerGenerationId: String?
     public var providerPollingUrl: String?
-    public var promptPreview: String
-    public var requestHash: String
     public var outputs: [RemoteInferenceOutputRef]
     public var usage: RemoteInferenceJSONValue?
     public var error: RemoteInferenceJSONValue?
-    public var metadata: RemoteInferenceJSONValue
-    public var createdAt: String
-    public var updatedAt: String
-    public var completedAt: String?
+    public var metadata: RemoteInferenceJSONObject
 
     public init(
         id: String,
-        clientId: String,
-        kind: String,
+        kind: RemoteInferenceAssetKind,
         status: RemoteInferenceGenerationStatus,
         provider: String,
         model: String,
         providerJobId: String? = nil,
         providerGenerationId: String? = nil,
         providerPollingUrl: String? = nil,
-        promptPreview: String,
-        requestHash: String,
         outputs: [RemoteInferenceOutputRef],
         usage: RemoteInferenceJSONValue? = nil,
         error: RemoteInferenceJSONValue? = nil,
-        metadata: RemoteInferenceJSONValue,
-        createdAt: String,
-        updatedAt: String,
-        completedAt: String? = nil
+        metadata: RemoteInferenceJSONObject = [:]
     ) {
         self.id = id
-        self.clientId = clientId
         self.kind = kind
         self.status = status
         self.provider = provider
@@ -238,23 +225,10 @@ public struct RemoteInferenceGenerationRecord: Codable, Equatable, Sendable {
         self.providerJobId = providerJobId
         self.providerGenerationId = providerGenerationId
         self.providerPollingUrl = providerPollingUrl
-        self.promptPreview = promptPreview
-        self.requestHash = requestHash
         self.outputs = outputs
         self.usage = usage
         self.error = error
         self.metadata = metadata
-        self.createdAt = createdAt
-        self.updatedAt = updatedAt
-        self.completedAt = completedAt
-    }
-}
-
-public struct RemoteInferenceGenerationList: Codable, Equatable, Sendable {
-    public var data: [RemoteInferenceGenerationRecord]
-
-    public init(data: [RemoteInferenceGenerationRecord]) {
-        self.data = data
     }
 }
 

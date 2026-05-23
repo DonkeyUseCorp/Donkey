@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { toJsonObject } from "@/lib/inference/json";
+
 const metadataSchema = z.record(z.string().min(1).max(64), z.string().max(512));
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 
@@ -39,6 +41,7 @@ export const chatCompletionRequestSchema = z
   });
 
 export const assetGenerationRequestSchema = z.object({
+  generationId: z.string().min(1).max(128).optional(),
   kind: assetGenerationKindSchema,
   provider: z.string().min(1).max(100).optional(),
   model: z.string().min(1).max(256),
@@ -48,13 +51,42 @@ export const assetGenerationRequestSchema = z.object({
   metadata: metadataSchema.optional(),
 });
 
-export const generationRouteParamsSchema = z.object({
-  generationId: z.string().min(1).max(128),
-});
+const nullableProviderStringSchema = z
+  .string()
+  .min(1)
+  .max(2048)
+  .nullable()
+  .optional()
+  .transform((value) => value ?? null);
 
-export const outputRouteParamsSchema = generationRouteParamsSchema.extend({
-  outputId: z.string().min(1).max(128),
-});
+export const generationOutputRefSchema = z.object({
+  id: z.string().min(1).max(128),
+  kind: inferenceModalitySchema,
+  url: z.string().max(4096).optional(),
+  dataBase64: z.string().optional(),
+  contentType: z.string().max(256).optional(),
+  filename: z.string().max(256).optional(),
+  byteCount: z.number().int().nonnegative().optional(),
+  metadata: jsonObjectSchema.optional(),
+}).transform((value) => ({
+  ...value,
+  metadata: value.metadata ? toJsonObject(value.metadata) : undefined,
+}));
+
+export const storedGenerationForProviderSchema = z.object({
+  id: z.string().min(1).max(128),
+  kind: assetGenerationKindSchema,
+  provider: z.string().min(1).max(100),
+  model: z.string().min(1).max(256),
+  providerJobId: nullableProviderStringSchema,
+  providerGenerationId: nullableProviderStringSchema,
+  providerPollingUrl: nullableProviderStringSchema,
+  outputs: z.array(generationOutputRefSchema).optional().default([]),
+  metadata: jsonObjectSchema.optional().default({}),
+}).transform((value) => ({
+  ...value,
+  metadata: toJsonObject(value.metadata),
+}));
 
 export function parseRequestedModalities(value: string | null) {
   if (!value) {

@@ -6,7 +6,6 @@ import {
   type InferenceModality,
   type InferenceModel,
   type InferenceProvider,
-  type OutputDownloadRequest,
   type StoredGenerationForProvider,
 } from "@/lib/inference/providers";
 
@@ -121,18 +120,6 @@ export class ProviderRegistry {
     }
 
     return provider.refreshAsset(generation);
-  }
-
-  public async downloadOutput(request: OutputDownloadRequest) {
-    const provider = this.providerForGeneration(request.generation);
-    if (!provider.downloadOutput) {
-      throw new InferenceProviderError("Generation provider cannot download outputs.", {
-        statusCode: 400,
-        code: "download_not_supported",
-      });
-    }
-
-    return provider.downloadOutput(request);
   }
 }
 

@@ -104,21 +104,23 @@ public struct DonkeyBackendInferenceClient {
     ) async throws -> RemoteInferenceGenerationRecord {
         var request = makeRequest(path: "/api/inference/assets/")
         request.httpMethod = "POST"
-        request.httpBody = try JSONEncoder().encode(assetRequest)
+        var body = assetRequest
+        if body.generationId == nil {
+            body.generationId = "generation-\(UUID().uuidString.lowercased())"
+        }
+        request.httpBody = try JSONEncoder().encode(body)
         let data = try await send(request)
         return try JSONDecoder().decode(RemoteInferenceGenerationRecord.self, from: data)
     }
 
-    public func generation(id: String) async throws -> RemoteInferenceGenerationRecord {
-        let request = makeRequest(path: "/api/inference/assets/\(urlPath(id))")
+    public func refreshAssetGeneration(
+        _ record: RemoteInferenceGenerationRecord
+    ) async throws -> RemoteInferenceGenerationRecord {
+        var request = makeRequest(path: "/api/inference/assets/refresh/")
+        request.httpMethod = "POST"
+        request.httpBody = try JSONEncoder().encode(record)
         let data = try await send(request)
         return try JSONDecoder().decode(RemoteInferenceGenerationRecord.self, from: data)
-    }
-
-    public func listGenerations() async throws -> RemoteInferenceGenerationList {
-        let request = makeRequest(path: "/api/inference/assets/")
-        let data = try await send(request)
-        return try JSONDecoder().decode(RemoteInferenceGenerationList.self, from: data)
     }
 
     public func downloadCompletedOutputs(
@@ -205,22 +207,49 @@ public struct DonkeyBackendInferenceClient {
             return (data, output.contentType ?? "application/octet-stream")
         }
 
-        let urlString = output.downloadUrl ?? output.url
-        guard let urlString else {
+        guard let urlString = output.url else {
             throw DonkeyBackendInferenceClientError.missingDownloadPayload(output.id)
+        }
+        if urlString.hasPrefix("data:") {
+            return try dataURLPayload(urlString, outputID: output.id)
         }
 
         let url = try absoluteURL(for: urlString)
         var request = URLRequest(url: url)
         request.httpShouldHandleCookies = true
-        if url.host == configuration.baseURL.host {
-            request.setValue(configuration.clientID, forHTTPHeaderField: "x-donkey-client-id")
-        }
         let (data, response) = try await httpClient.send(request)
         guard (200..<300).contains(response.statusCode) else {
             throw DonkeyBackendInferenceClientError.httpStatus(response.statusCode, String(data: data, encoding: .utf8) ?? "")
         }
         return (data, response.value(forHTTPHeaderField: "Content-Type") ?? output.contentType ?? "application/octet-stream")
+    }
+
+    private func dataURLPayload(_ value: String, outputID: String) throws -> (data: Data, contentType: String) {
+        guard let comma = value.firstIndex(of: ",") else {
+            throw DonkeyBackendInferenceClientError.invalidBase64(outputID)
+        }
+
+        let metadata = String(value[value.startIndex..<comma])
+        let payload = String(value[value.index(after: comma)...])
+        let contentType = metadata
+            .dropFirst("data:".count)
+            .split(separator: ";", maxSplits: 1)
+            .first
+            .map(String.init) ?? "application/octet-stream"
+
+        if metadata.contains(";base64") {
+            guard let data = Data(base64Encoded: payload) else {
+                throw DonkeyBackendInferenceClientError.invalidBase64(outputID)
+            }
+            return (data, contentType)
+        }
+
+        guard let decoded = payload.removingPercentEncoding,
+              let data = decoded.data(using: .utf8)
+        else {
+            throw DonkeyBackendInferenceClientError.invalidBase64(outputID)
+        }
+        return (data, contentType)
     }
 
     private func absoluteURL(for value: String) throws -> URL {
@@ -297,9 +326,4 @@ public struct DonkeyBackendInferenceClient {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return cleaned.isEmpty ? "asset" : String(cleaned.prefix(160))
     }
-
-}
-
-private func urlPath(_ value: String) -> String {
-    value.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? value
 }

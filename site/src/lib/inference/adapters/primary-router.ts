@@ -15,7 +15,6 @@ import { OpenRouterError } from "@openrouter/sdk/models/errors";
 
 import {
   ensureConfigured,
-  isSafeRemoteAssetURL,
   type FetchLike,
 } from "@/lib/inference/http";
 import { toJsonObject, toJsonValue } from "@/lib/inference/json";
@@ -31,7 +30,6 @@ import {
   type InferenceModel,
   type InferenceProvider,
   type JsonValue,
-  type OutputDownloadRequest,
   type StoredGenerationForProvider,
   type TextCompletionResult,
   type TextStreamResult,
@@ -150,40 +148,6 @@ export function createPrimaryInferenceProvider(
     }
   }
 
-  async function downloadOutput({
-    output,
-  }: OutputDownloadRequest): Promise<Response> {
-    ensureConfigured(configured);
-
-    if (!output.url) {
-      throw new InferenceProviderError("Output has no downloadable URL.", {
-        statusCode: 404,
-        code: "missing_output_url",
-      });
-    }
-
-    if (output.url.startsWith("data:")) {
-      return responseFromDataURL(output.url);
-    }
-
-    if (!isSafeRemoteAssetURL(output.url)) {
-      throw new InferenceProviderError("Output URL is not allowed.", {
-        statusCode: 400,
-        code: "unsafe_output_url",
-      });
-    }
-
-    const response = await fetcher(output.url);
-    if (!response.ok) {
-      throw new InferenceProviderError("Unable to download output.", {
-        statusCode: response.status,
-        details: await responseErrorDetails(response),
-      });
-    }
-
-    return response;
-  }
-
   async function createChatAsset({
     request,
   }: AssetGenerationProviderRequest): Promise<AssetGenerationProviderResult> {
@@ -232,7 +196,6 @@ export function createPrimaryInferenceProvider(
     streamCompletion,
     generateAsset,
     refreshAsset,
-    downloadOutput,
   };
 }
 
@@ -419,28 +382,6 @@ function mapStatus(value: string | null): GenerationStatus {
   }
 }
 
-function responseFromDataURL(value: string) {
-  const [metadata, base64] = value.split(",", 2);
-  if (!metadata || !base64) {
-    throw new InferenceProviderError("Invalid data URL output.", {
-      statusCode: 400,
-      code: "invalid_data_url",
-    });
-  }
-
-  const contentType = metadata.slice("data:".length).split(";")[0];
-  if (!contentType) {
-    throw new InferenceProviderError("Data URL output is missing a content type.", {
-      statusCode: 400,
-      code: "missing_content_type",
-    });
-  }
-
-  return new Response(Buffer.from(base64, "base64"), {
-    headers: { "Content-Type": contentType },
-  });
-}
-
 function providerError(message: string, error: unknown) {
   if (error instanceof OpenRouterError) {
     return new InferenceProviderError(message, {
@@ -457,15 +398,6 @@ function providerError(message: string, error: unknown) {
       message: error instanceof Error ? error.message : "Unknown error",
     },
   });
-}
-
-async function responseErrorDetails(response: Response): Promise<JsonValue> {
-  const text = await response.text();
-  return {
-    body: parseProviderBody(text),
-    status: response.status,
-    statusText: response.statusText,
-  };
 }
 
 function parseProviderBody(value: string): JsonValue {

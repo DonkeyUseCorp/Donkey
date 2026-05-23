@@ -38,7 +38,6 @@ export type GenerationOutputRef = {
   id: string;
   kind: InferenceModality;
   url?: string;
-  downloadUrl?: string;
   dataBase64?: string;
   contentType?: string;
   filename?: string;
@@ -90,11 +89,6 @@ export type StoredGenerationForProvider = {
   metadata: JsonObject;
 };
 
-export type OutputDownloadRequest = {
-  generation: StoredGenerationForProvider;
-  output: GenerationOutputRef;
-};
-
 export type InferenceProvider = {
   id: string;
   configured: boolean;
@@ -110,7 +104,6 @@ export type InferenceProvider = {
   refreshAsset?: (
     generation: StoredGenerationForProvider,
   ) => Promise<AssetGenerationProviderResult>;
-  downloadOutput?: (request: OutputDownloadRequest) => Promise<Response>;
 };
 
 export class InferenceProviderError extends Error {
