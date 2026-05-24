@@ -188,6 +188,30 @@ export function AuthScreen({ mode }: Props) {
                   {screenCopy.alternateLabel}
                 </PillButton>
               </div>
+              <p
+                style={{
+                  color: "#555",
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                  margin: "18px 0 0",
+                }}
+              >
+                By continuing, you agree to the{" "}
+                <a
+                  href="/terms/"
+                  style={{ color: BLACK, fontWeight: 800 }}
+                >
+                  Terms of Use
+                </a>{" "}
+                and{" "}
+                <a
+                  href="/privacy/"
+                  style={{ color: BLACK, fontWeight: 800 }}
+                >
+                  Privacy Policy
+                </a>
+                .
+              </p>
               {statusMessage ? (
                 <div
                   role="status"

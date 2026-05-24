@@ -84,6 +84,34 @@ export function Footer() {
             </div>
             <div>2026 Donkey, Inc. Made for Macs.</div>
           </div>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 16,
+            }}
+          >
+            <a
+              href="/privacy/"
+              style={{
+                color: BLACK,
+                fontWeight: 800,
+                textDecoration: "none",
+              }}
+            >
+              Privacy Policy
+            </a>
+            <a
+              href="/terms/"
+              style={{
+                color: BLACK,
+                fontWeight: 800,
+                textDecoration: "none",
+              }}
+            >
+              Terms of Use
+            </a>
+          </div>
         </div>
       </div>
     </footer>
