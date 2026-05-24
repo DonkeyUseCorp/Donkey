@@ -1,8 +1,13 @@
 import { NextResponse } from "next/server";
 
 import {
+  creditUsageHeaders,
+  inferenceUsageRoutes,
+  recordInferenceUsage,
+  requireInferenceCredits,
+} from "@/lib/credits/inference";
+import {
   assetGenerationResponse,
-  failedAssetGenerationResponse,
   generationIDForRequest,
 } from "@/lib/inference/assets";
 import { createProviderRegistry } from "@/lib/inference/router";
@@ -11,8 +16,6 @@ import {
   validationErrorResponse,
 } from "@/lib/inference/responses";
 import { assetGenerationRequestSchema } from "@/lib/inference/schemas";
-import { toJsonValue } from "@/lib/inference/json";
-import { InferenceProviderError } from "@/lib/inference/providers";
 import { withDonkeyAuth } from "@/lib/donkey-api-auth";
 
 export const dynamic = "force-dynamic";
@@ -28,65 +31,53 @@ export const POST = withDonkeyAuth(async (request) => {
     return validationErrorResponse(parsed.error);
   }
 
+  const credits = await requireInferenceCredits({
+    model: parsed.data.model,
+    provider: parsed.data.provider,
+    route: inferenceUsageRoutes.assets,
+    userId: request.donkey.userId,
+  });
+  if (!credits.ok) {
+    return credits.response;
+  }
+
   const generationId = generationIDForRequest(parsed.data);
   const generation = {
     id: generationId,
     kind: parsed.data.kind,
   };
-  let providerID = parsed.data.provider ?? "unavailable";
+  const registry = createProviderRegistry();
+  const provider = registry.assetProvider(parsed.data);
+  const result = await provider.generateAsset?.({
+    generationId,
+    request: parsed.data,
+  });
 
-  try {
-    const registry = createProviderRegistry();
-    const provider = registry.assetProvider(parsed.data);
-    providerID = provider.id;
-
-    const result = await provider.generateAsset?.({
-      generationId,
-      request: parsed.data,
-    });
-
-    if (!result) {
-      throw new InferenceProviderError("Provider cannot generate assets.", {
-        statusCode: 400,
-        code: "asset_generation_unavailable",
-      });
-    }
-
-    return NextResponse.json(assetGenerationResponse({ generation, result }), {
-      status: 201,
-    });
-  } catch (error) {
-    const failed = failedAssetGenerationResponse({
-      generation,
-      provider: providerID,
-      model: parsed.data.model,
-      error: toJsonValue(
-        error instanceof InferenceProviderError
-          ? {
-              code: error.code,
-              message: error.message,
-              details: error.details,
-            }
-          : {
-              message: error instanceof Error ? error.message : "Unknown error",
-            },
-      ),
-    });
-
-    if (error instanceof InferenceProviderError) {
-      return NextResponse.json(
-        {
-          ...failed,
-          error: {
-            code: error.code,
-            message: error.message,
-            details: error.details,
-          },
-        },
-        { status: error.statusCode },
-      );
-    }
-
-    throw error;
+  if (!result) {
+    return NextResponse.json(
+      {
+        error: "Asset generation unavailable",
+      },
+      { status: 503 },
+    );
   }
+
+  const recordedUsage = await recordInferenceUsage({
+    clientId: client.clientId,
+    metadata: {
+      assetKind: parsed.data.kind,
+    },
+    model: result.model,
+    provider: result.provider,
+    requestKind: "asset_generation",
+    route: inferenceUsageRoutes.assets,
+    status: "succeeded",
+    usage: result.usage,
+    userId: request.donkey.userId,
+  });
+
+  return NextResponse.json(assetGenerationResponse({ generation, result }), {
+    headers: creditUsageHeaders(recordedUsage),
+    status: 201,
+  });
 });

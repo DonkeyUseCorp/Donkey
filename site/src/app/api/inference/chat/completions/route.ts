@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
 
+import {
+  creditUsageHeaders,
+  inferenceUsageRoutes,
+  recordInferenceUsage,
+  requireInferenceCredits,
+} from "@/lib/credits/inference";
 import { createProviderRegistry } from "@/lib/inference/router";
 import {
   requireInferenceClientId,
@@ -34,6 +40,17 @@ export const POST = withDonkeyAuth(async (request) => {
     );
   }
 
+  const requestedModel =
+    parsed.data.model?.trim() || parsed.data.models?.[0]?.trim() || "unknown";
+  const credits = await requireInferenceCredits({
+    model: requestedModel,
+    route: inferenceUsageRoutes.chatCompletions,
+    userId: request.donkey.userId,
+  });
+  if (!credits.ok) {
+    return credits.response;
+  }
+
   const registry = createProviderRegistry();
   const provider = registry.textProvider(parsed.data.stream);
 
@@ -48,6 +65,16 @@ export const POST = withDonkeyAuth(async (request) => {
       );
     }
 
+    const recordedUsage = await recordInferenceUsage({
+      clientId: client.clientId,
+      model: result.model,
+      provider: result.provider,
+      requestKind: "chat_completions",
+      route: inferenceUsageRoutes.chatCompletions,
+      status: "succeeded",
+      userId: request.donkey.userId,
+    });
+
     return new Response(result.response.body, {
       status: result.response.status,
       headers: {
@@ -56,6 +83,8 @@ export const POST = withDonkeyAuth(async (request) => {
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
         "X-Donkey-Inference-Provider": result.provider,
+        "X-Donkey-Inference-Model": result.model,
+        ...creditUsageHeaders(recordedUsage),
       },
     });
   }
@@ -70,5 +99,22 @@ export const POST = withDonkeyAuth(async (request) => {
     );
   }
 
-  return NextResponse.json(result.body);
+  const recordedUsage = await recordInferenceUsage({
+    clientId: client.clientId,
+    model: result.model,
+    provider: result.provider,
+    requestKind: "chat_completions",
+    route: inferenceUsageRoutes.chatCompletions,
+    status: "succeeded",
+    usage: result.usage,
+    userId: request.donkey.userId,
+  });
+
+  return NextResponse.json(result.body, {
+    headers: {
+      "X-Donkey-Inference-Provider": result.provider,
+      "X-Donkey-Inference-Model": result.model,
+      ...creditUsageHeaders(recordedUsage),
+    },
+  });
 });

@@ -23,6 +23,9 @@ Backend APIs live in `site/src/app/api/**/route.ts`.
 - Validate request bodies, search params, and route params with Zod before using them.
 - Verify resource ownership before reading or mutating scoped data.
 - Return explicit `NextResponse.json(...)` responses with the intended status code.
+- Do not wrap route handlers in `try/catch` unless the handler can recover and
+  return a different intentional response. Let unexpected errors surface to the
+  framework's logging path.
 - Keep Prisma access server-only through `@/lib/prisma`.
 - Keep Prisma table/model definitions in logically grouped sibling `.prisma`
   files under `site/prisma/`. Never put table/model definitions in
@@ -65,6 +68,23 @@ provider names are configuration/data inside private adapters only.
 - The OpenAI hosted Responses adapter uses `OPENAI_API_KEY` only for macOS
   desktop computer-use. Keep that credential in the hosted deployment
   environment; the Mac app must not carry OpenAI provider credentials.
+
+## Hosted Model Credits
+
+Hosted inference usage is metered per authenticated user in the backend. The
+Mac app still sends provider-neutral inference requests; the backend owns credit
+checks, provider/model rates, debits, and audit rows.
+
+- Keep one visible balance per user, with auditable grants, expirations, usage
+  charges, and adjustments behind it.
+- Provider-invoking inference routes check credits before calling a hosted
+  model, then charge after provider success. Model listing remains uncharged.
+- Keep rates and user limits configurable through backend-owned data, not the
+  Mac app.
+- Usage records may store sanitized provider usage metadata and normalized
+  billable units. They must not store prompts, request bodies, screenshots,
+  generated assets, provider output payloads, provider output references, or
+  other user content.
 
 ## Pattern
 
