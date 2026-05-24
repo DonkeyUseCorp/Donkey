@@ -13,6 +13,7 @@ public enum DonkeyBackendInferenceClientError: Error, Equatable, Sendable {
 public struct DonkeyBackendInferenceConfiguration: Equatable, Sendable {
     public var baseURL: URL
     public var clientID: String
+    public static let baseURLConfigurationDescription = "DONKEY_BACKEND_URL, DONKEY_WEB_BASE_URL, or BETTER_AUTH_URL"
 
     public init(baseURL: URL, clientID: String) {
         self.baseURL = baseURL
@@ -20,17 +21,47 @@ public struct DonkeyBackendInferenceConfiguration: Equatable, Sendable {
     }
 
     public static func fromEnvironment(
-        _ environment: [String: String] = ProcessInfo.processInfo.environment
+        _ environment: [String: String] = ProcessInfo.processInfo.environment,
+        bundle: Bundle = .main
     ) throws -> DonkeyBackendInferenceConfiguration {
-        guard let baseURLString = environment["DONKEY_BACKEND_URL"],
+        guard let baseURLString = configuredBaseURLString(
+            environment: environment,
+            bundle: bundle
+        ),
               let baseURL = URL(string: baseURLString) else {
-            throw DonkeyBackendInferenceClientError.missingConfiguration("DONKEY_BACKEND_URL")
+            throw DonkeyBackendInferenceClientError.missingConfiguration(
+                baseURLConfigurationDescription
+            )
         }
 
         return DonkeyBackendInferenceConfiguration(
             baseURL: baseURL,
             clientID: environment["DONKEY_CLIENT_ID"] ?? stableClientID()
         )
+    }
+
+    private static func configuredBaseURLString(
+        environment: [String: String],
+        bundle: Bundle
+    ) -> String? {
+        trimmed(environment["DONKEY_BACKEND_URL"])
+            ?? trimmed(environment["DONKEY_WEB_BASE_URL"])
+            ?? trimmed(environment["BETTER_AUTH_URL"])
+            ?? configuredBundleValue("DonkeyBackendURL", bundle: bundle)
+            ?? configuredBundleValue("DonkeyWebBaseURL", bundle: bundle)
+    }
+
+    private static func configuredBundleValue(
+        _ key: String,
+        bundle: Bundle
+    ) -> String? {
+        let bundleValue = bundle.object(forInfoDictionaryKey: key) as? String
+        return trimmed(bundleValue)
+    }
+
+    private static func trimmed(_ value: String?) -> String? {
+        let trimmedValue = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedValue?.isEmpty == false ? trimmedValue : nil
     }
 
     private static func stableClientID() -> String {

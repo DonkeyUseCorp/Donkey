@@ -21,11 +21,21 @@ DONKEY_APP_VERSION="0.1.1" DONKEY_APP_BUILD="2" ./scripts/package-donkey-app.sh
 
 The app bundle registers the `donkey://auth/callback` sign-in callback and
 opens the site `/mac-auth` handoff for Google OAuth before the overlay starts.
-Packaged apps point at `https://donkeyuse.com` by default. Override the web base
-URL only for local or staging auth testing:
+Packaged apps point auth and hosted inference at `https://donkeyuse.com` by
+default. Override the web base URL only for local or staging testing:
 
 ```bash
 DONKEY_WEB_BASE_URL="http://localhost:3000" ./scripts/package-donkey-app.sh
+```
+
+If hosted inference is served from a different origin than auth, set
+`DONKEY_BACKEND_URL`; otherwise the packaged app uses `DONKEY_WEB_BASE_URL` for
+both:
+
+```bash
+DONKEY_WEB_BASE_URL="https://staging.example" \
+DONKEY_BACKEND_URL="https://api.staging.example" \
+./scripts/package-donkey-app.sh
 ```
 
 For distribution through the site, publish the disk image:

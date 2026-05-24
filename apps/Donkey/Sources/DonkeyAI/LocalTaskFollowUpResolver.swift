@@ -291,7 +291,7 @@ public struct HostedTaskFollowUpResolver: PointerPromptFollowUpResolving {
                 validationStatus: "notValidated",
                 latencyMS: nil,
                 metadata: [
-                    "credential": "DONKEY_BACKEND_URL",
+                    "credential": DonkeyBackendInferenceConfiguration.baseURLConfigurationDescription,
                     "error": String(describing: error)
                 ]
             )

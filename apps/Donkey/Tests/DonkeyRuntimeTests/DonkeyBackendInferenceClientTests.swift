@@ -65,6 +65,68 @@ struct DonkeyBackendInferenceClientTests {
     }
 
     @Test
+    func configurationPrefersDedicatedBackendEnvironmentURL() throws {
+        let configuration = try DonkeyBackendInferenceConfiguration.fromEnvironment([
+            "DONKEY_BACKEND_URL": "https://api.donkey.example",
+            "DONKEY_WEB_BASE_URL": "https://web.donkey.example",
+            "DONKEY_CLIENT_ID": "client-env"
+        ])
+
+        #expect(configuration.baseURL.absoluteString == "https://api.donkey.example")
+        #expect(configuration.clientID == "client-env")
+    }
+
+    @Test
+    func configurationFallsBackToWebBaseEnvironmentURL() throws {
+        let configuration = try DonkeyBackendInferenceConfiguration.fromEnvironment([
+            "DONKEY_WEB_BASE_URL": "https://web.donkey.example",
+            "DONKEY_CLIENT_ID": "client-env"
+        ])
+
+        #expect(configuration.baseURL.absoluteString == "https://web.donkey.example")
+        #expect(configuration.clientID == "client-env")
+    }
+
+    @Test
+    func configurationEnvironmentOverridesBundledBackendURL() throws {
+        let fixture = try temporaryBundle(info: [
+            "DonkeyBackendURL": "https://bundle-api.donkey.example"
+        ])
+        defer {
+            try? FileManager.default.removeItem(at: fixture.directory)
+        }
+
+        let configuration = try DonkeyBackendInferenceConfiguration.fromEnvironment(
+            [
+                "DONKEY_WEB_BASE_URL": "https://web.donkey.example",
+                "DONKEY_CLIENT_ID": "client-env"
+            ],
+            bundle: fixture.bundle
+        )
+
+        #expect(configuration.baseURL.absoluteString == "https://web.donkey.example")
+        #expect(configuration.clientID == "client-env")
+    }
+
+    @Test
+    func configurationFallsBackToBundledWebBaseURL() throws {
+        let fixture = try temporaryBundle(info: [
+            "DonkeyWebBaseURL": "https://bundle.donkey.example"
+        ])
+        defer {
+            try? FileManager.default.removeItem(at: fixture.directory)
+        }
+
+        let configuration = try DonkeyBackendInferenceConfiguration.fromEnvironment(
+            ["DONKEY_CLIENT_ID": "client-env"],
+            bundle: fixture.bundle
+        )
+
+        #expect(configuration.baseURL.absoluteString == "https://bundle.donkey.example")
+        #expect(configuration.clientID == "client-env")
+    }
+
+    @Test
     func decodesServerSentEvents() {
         let data = Data(
             """
@@ -229,6 +291,33 @@ struct DonkeyBackendInferenceClientTests {
         DonkeyBackendInferenceConfiguration(
             baseURL: URL(string: "https://donkey.example")!,
             clientID: "client-1"
+        )
+    }
+
+    private func temporaryBundle(info: [String: String]) throws -> (bundle: Bundle, directory: URL) {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("donkey-bundle-tests-\(UUID().uuidString)", isDirectory: true)
+        let bundleURL = directory.appendingPathComponent("DonkeyTest.bundle", isDirectory: true)
+        try FileManager.default.createDirectory(at: bundleURL, withIntermediateDirectories: true)
+
+        var plist: [String: Any] = [
+            "CFBundleIdentifier": "ai.donkey.tests.\(UUID().uuidString)",
+            "CFBundlePackageType": "BNDL"
+        ]
+        for (key, value) in info {
+            plist[key] = value
+        }
+
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: plist,
+            format: .xml,
+            options: 0
+        )
+        try data.write(to: bundleURL.appendingPathComponent("Info.plist"))
+
+        return (
+            bundle: try #require(Bundle(url: bundleURL)),
+            directory: directory
         )
     }
 
