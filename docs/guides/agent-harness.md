@@ -313,14 +313,14 @@ deterministic approval into agent memory and must fail without stopping local
 control on existing validated state.
 
 Computer-use decisions are hosted too. Browser interaction and Mac desktop
-interaction are separate Gemini-backed tool registrations at the backend API
-boundary: `donkey_gemini_browser_interaction` for browser environments and
-`donkey_gemini_mac_desktop_interaction` for guarded macOS desktop actions.
-OpenRouter remains a hosted text and structured-output option, but it is not a
-supported computer-use provider.
-Gemini may propose normalized coordinate actions or a custom desktop function
-call, but the Mac client still owns execution, confirmation gates, focus checks,
-permission policy, screenshots, and function-response feedback.
+interaction are separate backend tool registrations with different hosted
+providers: `donkey_gemini_browser_interaction` for browser environments through
+Gemini, and `donkey_openai_mac_desktop_interaction` for guarded macOS desktop
+actions through OpenAI's Responses `computer` tool. General inference and
+browser computer-use use Gemini; macOS desktop computer-use uses OpenAI. Hosted
+models may propose UI actions, but the Mac client still owns execution,
+confirmation gates, focus checks, permission policy, screenshots, and
+tool-output feedback.
 
 ## State And Observability
 

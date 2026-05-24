@@ -70,7 +70,7 @@ public typealias RemoteInferenceJSONObject = [String: RemoteInferenceJSONValue]
 
 public enum RemoteInferenceComputerUseToolType: String, Codable, Equatable, Sendable {
     case geminiBrowserInteraction = "donkey_gemini_browser_interaction"
-    case geminiMacDesktopInteraction = "donkey_gemini_mac_desktop_interaction"
+    case openAIMacDesktopInteraction = "donkey_openai_mac_desktop_interaction"
 }
 
 public struct RemoteInferenceComputerUseTool: Codable, Equatable, Sendable {

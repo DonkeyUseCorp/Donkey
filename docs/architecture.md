@@ -228,9 +228,10 @@ install. Model-backed behavior uses authenticated backend routes; the backend
 owns provider credentials, provider selection, and concrete model selection.
 The Mac app keeps local execution, permissions, Accessibility, screenshot
 capture, and target-app control, but not local model hosting.
-Gemini computer-use support is exposed as two backend tool registrations:
-`donkey_gemini_browser_interaction` for browser control and
-`donkey_gemini_mac_desktop_interaction` for guarded macOS desktop control.
+Computer-use support is exposed through backend tool registrations:
+`donkey_gemini_browser_interaction` routes browser control to Gemini, while
+`donkey_openai_mac_desktop_interaction` routes guarded macOS desktop control to
+OpenAI's Responses `computer` tool.
 
 ## Slower AI Harness
 
