@@ -81,6 +81,10 @@ checks, provider/model rates, debits, and audit rows.
   charges, and adjustments behind it.
 - Provider-invoking inference routes check credits before calling a hosted
   model, then charge after provider success. Model listing remains uncharged.
+- Manual whole-dollar credit grants are available at `POST /api/credits/grants/`.
+  The caller must be authenticated and have `user.superUser = true`; the target
+  user is addressed by internal `user.id`. The route treats `$1` as `1` hosted
+  inference credit (`1,000,000` micros), then writes the grant and ledger entry.
 - Keep rates and user limits configurable through backend-owned data, not the
   Mac app.
 - Usage records may store sanitized provider usage metadata and normalized

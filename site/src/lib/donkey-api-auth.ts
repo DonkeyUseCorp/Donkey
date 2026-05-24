@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 
 import { auth } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
 
 export type DonkeyAuthContext = {
   platform: "api";
@@ -67,4 +68,17 @@ export function withDonkeyAuth<
 
     return handler(authenticatedRequest, ...args);
   };
+}
+
+export async function isDonkeySuperUser(userId: string) {
+  const user = await prisma.user.findUnique({
+    select: {
+      superUser: true,
+    },
+    where: {
+      id: userId,
+    },
+  });
+
+  return user?.superUser === true;
 }
