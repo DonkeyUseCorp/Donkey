@@ -2,11 +2,10 @@ import {
   ApiError,
   Environment,
   GoogleGenAI,
-  Type,
 } from "@google/genai";
+import type { JWTInput } from "google-auth-library";
 import type {
   Content,
-  FunctionDeclaration,
   GenerateContentConfig,
   GenerateContentParameters,
   GoogleGenAIOptions,
@@ -38,25 +37,13 @@ type GeminiClientFactory = (options: GoogleGenAIOptions) => GeminiClient;
 
 const providerID = "gemini-computer-use";
 const geminiProviderID = "gemini";
-const defaultResponsesModel = "gemini-2.5-flash";
-const defaultComputerUseModel = "gemini-2.5-computer-use-preview-10-2025";
-type GeminiProviderService = "vertex-ai" | "gemini-api";
+const defaultVertexResponsesModel = "gemini-3.5-flash";
+const defaultComputerUseModel = "gemini-3-flash-preview";
+const vertexLocation = "global";
 
 export const geminiBrowserInteractionToolType = "donkey_gemini_browser_interaction";
-export const geminiMacDesktopInteractionToolType = "donkey_gemini_mac_desktop_interaction";
 
 const browserOnlyFunctionExclusions = [
-  "drag_and_drop",
-];
-
-const macDesktopFunctionExclusions = [
-  "open_web_browser",
-  "search",
-  "navigate",
-  "go_back",
-  "go_forward",
-  "hover_at",
-  "scroll_document",
   "drag_and_drop",
 ];
 
@@ -74,8 +61,8 @@ export function createGeminiComputerUseProvider(
     }
 
     return [
-      staticModel(geminiResponsesModel(environment), false),
-      staticModel(geminiComputerUseModel(environment), true),
+      staticModel(defaultVertexResponsesModel, false),
+      staticModel(defaultComputerUseModel, true),
     ];
   }
 
@@ -92,7 +79,6 @@ export function createGeminiComputerUseProvider(
         details: {
           supportedTools: [
             geminiBrowserInteractionToolType,
-            geminiMacDesktopInteractionToolType,
           ],
         },
       });
@@ -101,8 +87,8 @@ export function createGeminiComputerUseProvider(
     const model = requestedModel(
       request.body,
       registeredTools.length > 0
-        ? geminiComputerUseModel(environment)
-        : geminiResponsesModel(environment),
+        ? defaultComputerUseModel
+        : defaultVertexResponsesModel,
     );
     const requestParameters = geminiGenerateContentParameters(
       request.body,
@@ -139,7 +125,10 @@ export function createGeminiComputerUseProvider(
   ): Promise<TextCompletionResult> {
     ensureConfigured(configured);
 
-    const model = requestedChatModel(request, geminiResponsesModel(environment));
+    const model = requestedChatModel(
+      request,
+      defaultVertexResponsesModel,
+    );
     const body = toJsonObject(request);
     const requestParameters: GenerateContentParameters = {
       model,
@@ -192,7 +181,7 @@ function geminiGenerateContentParameters(
 ): GenerateContentParameters {
   const tools = geminiTools(registeredTools, body.tools);
   const generationConfig = generationConfigFromBody(body);
-  const systemInstruction = systemInstructionFromBody(body, registeredTools);
+  const systemInstruction = systemInstructionFromBody(body);
   const config: GenerateContentConfig = {
     ...generationConfig,
   };
@@ -213,91 +202,20 @@ function geminiGenerateContentParameters(
 function geminiTools(registeredTools: string[], rawTools: JsonValue | undefined): Tool[] {
   const tools: Tool[] = [];
   const hasBrowser = registeredTools.includes(geminiBrowserInteractionToolType);
-  const hasMacDesktop = registeredTools.includes(geminiMacDesktopInteractionToolType);
 
-  if (hasBrowser || hasMacDesktop) {
+  if (hasBrowser) {
     tools.push({
       computerUse: {
         environment: Environment.ENVIRONMENT_BROWSER,
-        excludedPredefinedFunctions: excludedPredefinedFunctions(rawTools, [
-          ...(hasBrowser ? browserOnlyFunctionExclusions : []),
-          ...(hasMacDesktop ? macDesktopFunctionExclusions : []),
-        ]),
+        excludedPredefinedFunctions: excludedPredefinedFunctions(
+          rawTools,
+          browserOnlyFunctionExclusions,
+        ),
       },
-    });
-  }
-
-  if (hasMacDesktop) {
-    tools.push({
-      functionDeclarations: [macDesktopInteractionDeclaration()],
     });
   }
 
   return tools;
-}
-
-function macDesktopInteractionDeclaration(): FunctionDeclaration {
-  return {
-    name: geminiMacDesktopInteractionToolType,
-    description: [
-      "Request a guarded macOS desktop interaction through Donkey.",
-      "Use this only for non-browser Mac desktop UI work.",
-      "Coordinates are normalized integers from 0 to 1000 relative to the latest screenshot.",
-      "The Mac client validates focus, safety, and permissions before execution.",
-    ].join(" "),
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        action: {
-          type: Type.STRING,
-          enum: [
-            "open_app",
-            "focus_app",
-            "click_at",
-            "type_text_at",
-            "key_combination",
-            "scroll_at",
-            "wait_5_seconds",
-            "observe",
-          ],
-        },
-        app_name: {
-          type: Type.STRING,
-          description: "The visible app name when the action targets a specific Mac app.",
-        },
-        x: {
-          type: Type.INTEGER,
-          description: "Normalized x coordinate from 0 to 1000.",
-        },
-        y: {
-          type: Type.INTEGER,
-          description: "Normalized y coordinate from 0 to 1000.",
-        },
-        text: {
-          type: Type.STRING,
-          description: "Text to type for type_text_at.",
-        },
-        keys: {
-          type: Type.ARRAY,
-          items: { type: Type.STRING },
-          description: "Key names for key_combination, such as COMMAND, SHIFT, A, or ENTER.",
-        },
-        direction: {
-          type: Type.STRING,
-          enum: ["up", "down", "left", "right"],
-        },
-        amount: {
-          type: Type.INTEGER,
-          description: "Scroll or movement amount in normalized units.",
-        },
-        reason: {
-          type: Type.STRING,
-          description: "Short reason for the requested desktop action.",
-        },
-      },
-      required: ["action"],
-    },
-  };
 }
 
 function contentsFromInput(input: JsonValue | undefined): Content[] {
@@ -506,18 +424,9 @@ function responseFormatFromBody(body: JsonObject): { json: boolean; schema?: Jso
   return null;
 }
 
-function systemInstructionFromBody(
-  body: JsonObject,
-  registeredTools: string[],
-): string | undefined {
+function systemInstructionFromBody(body: JsonObject): string | undefined {
   const instruction = [
     stringValue(body.instructions),
-    registeredTools.includes(geminiMacDesktopInteractionToolType)
-      ? [
-          "When operating Mac desktop apps, use the donkey_gemini_mac_desktop_interaction function.",
-          "Do not assume the action was executed; the Mac client will return function responses after guarded execution.",
-        ].join(" ")
-      : undefined,
   ].filter(Boolean).join("\n\n");
 
   if (!instruction) {
@@ -607,9 +516,6 @@ function registeredToolTypes(tools: JsonValue | undefined): string[] {
     if (tool.type === geminiBrowserInteractionToolType) {
       registered.add(geminiBrowserInteractionToolType);
     }
-    if (tool.type === geminiMacDesktopInteractionToolType) {
-      registered.add(geminiMacDesktopInteractionToolType);
-    }
   }
   return [...registered];
 }
@@ -649,78 +555,24 @@ function requestedChatModel(request: ChatCompletionRequest, fallback: string) {
   return request.model?.trim() || request.models?.[0]?.trim() || fallback;
 }
 
-function geminiResponsesModel(environment: AdapterEnvironment) {
-  return (
-    environment.GEMINI_RESPONSES_MODEL?.trim() ||
-    defaultResponsesModel
-  );
-}
-
-function geminiComputerUseModel(environment: AdapterEnvironment) {
-  return (
-    environment.GEMINI_COMPUTER_MODEL?.trim() ||
-    defaultComputerUseModel
-  );
-}
-
-function geminiAPIKey(environment: AdapterEnvironment) {
-  return (
-    environment.GEMINI_API_KEY?.trim() ||
-    environment.GOOGLE_API_KEY?.trim() ||
-    ""
-  );
-}
-
 function geminiClientConfig(environment: AdapterEnvironment): {
   configured: boolean;
   options: GoogleGenAIOptions;
-  service: GeminiProviderService;
+  service: "vertex-ai";
 } {
   const apiVersion = environment.GEMINI_API_VERSION?.trim() || undefined;
   const timeout = numberFromString(environment.GEMINI_TIMEOUT_MS);
   const httpOptions: GoogleGenAIOptions["httpOptions"] | undefined =
     timeout === undefined ? undefined : { timeout };
-  const project =
-    environment.GOOGLE_CLOUD_PROJECT?.trim() ||
-    environment.GCLOUD_PROJECT?.trim() ||
-    undefined;
-  const location =
-    environment.GOOGLE_CLOUD_LOCATION?.trim() ||
-    environment.GOOGLE_CLOUD_REGION?.trim() ||
-    undefined;
-  const apiKey = geminiAPIKey(environment);
-  const service = geminiProviderService(environment, {
-    hasAPIKey: apiKey.length > 0,
-    hasVertexSignal: Boolean(project || location),
-  });
+  const googleCredentials = googleCredentialsFromEnvironment(environment);
+  const project = googleCredentials?.project_id;
 
-  if (service === "vertex-ai") {
-    const options: GoogleGenAIOptions = {
-      vertexai: true,
-    };
-    if (project) {
-      options.project = project;
-    }
-    if (location) {
-      options.location = location;
-    }
-    if (apiVersion) {
-      options.apiVersion = apiVersion;
-    }
-    if (httpOptions) {
-      options.httpOptions = httpOptions;
-    }
-
-    return {
-      configured: Boolean(project && location),
-      options,
-      service: "vertex-ai",
-    };
-  }
-
-  const options: GoogleGenAIOptions = {};
-  if (apiKey) {
-    options.apiKey = apiKey;
+  const options: GoogleGenAIOptions = {
+    vertexai: true,
+    location: vertexLocation,
+  };
+  if (project) {
+    options.project = project;
   }
   if (apiVersion) {
     options.apiVersion = apiVersion;
@@ -728,39 +580,70 @@ function geminiClientConfig(environment: AdapterEnvironment): {
   if (httpOptions) {
     options.httpOptions = httpOptions;
   }
+  if (googleCredentials) {
+    options.googleAuthOptions = {
+      credentials: googleCredentials,
+    };
+  }
+
   return {
-    configured: apiKey.length > 0,
+    configured: Boolean(project),
     options,
-    service: "gemini-api",
+    service: "vertex-ai",
   };
 }
 
-function geminiProviderService(
+function googleCredentialsFromEnvironment(
   environment: AdapterEnvironment,
-  availability: {
-    hasAPIKey: boolean;
-    hasVertexSignal: boolean;
-  },
-): GeminiProviderService {
-  const explicitMode = environment.GEMINI_PROVIDER_MODE?.trim().toLowerCase();
-  if (
-    explicitMode === "api-key" ||
-    explicitMode === "gemini-api" ||
-    isDisabled(environment.GOOGLE_GENAI_USE_VERTEXAI)
-  ) {
-    return "gemini-api";
+): JWTInput | undefined {
+  const rawCredentials = environment.GOOGLE_APPLICATION_CREDENTIALS_JSON?.trim();
+  if (!rawCredentials) {
+    return undefined;
   }
 
-  if (
-    explicitMode === "vertex-ai" ||
-    explicitMode === "vertex" ||
-    isEnabled(environment.GOOGLE_GENAI_USE_VERTEXAI) ||
-    availability.hasVertexSignal
-  ) {
-    return "vertex-ai";
+  return serviceAccountCredentials(rawCredentials);
+}
+
+function serviceAccountCredentials(rawCredentials: string): JWTInput {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawCredentials);
+  } catch {
+    throw new InferenceProviderError("Google service account JSON is invalid.", {
+      statusCode: 500,
+      code: "invalid_google_service_account_json",
+    });
   }
 
-  return availability.hasAPIKey ? "gemini-api" : "vertex-ai";
+  const credentials = toJsonValue(parsed);
+  if (!isJsonObject(credentials)) {
+    throw new InferenceProviderError("Google service account JSON must be an object.", {
+      statusCode: 500,
+      code: "invalid_google_service_account_json",
+    });
+  }
+
+  const clientEmail = stringValue(credentials.client_email);
+  const privateKey = stringValue(credentials.private_key);
+  if (!clientEmail || !privateKey) {
+    throw new InferenceProviderError(
+      "Google service account JSON must include client_email and private_key.",
+      {
+        statusCode: 500,
+        code: "invalid_google_service_account_json",
+      },
+    );
+  }
+
+  return {
+    type: stringValue(credentials.type),
+    project_id: stringValue(credentials.project_id),
+    private_key_id: stringValue(credentials.private_key_id),
+    private_key: privateKey,
+    client_email: clientEmail,
+    client_id: stringValue(credentials.client_id),
+    universe_domain: stringValue(credentials.universe_domain),
+  };
 }
 
 function geminiProviderError(error: unknown) {
@@ -817,8 +700,7 @@ function hasExplicitUnsupportedTools(
     if (!isJsonObject(tool)) {
       return true;
     }
-    return tool.type !== geminiBrowserInteractionToolType &&
-      tool.type !== geminiMacDesktopInteractionToolType;
+    return tool.type !== geminiBrowserInteractionToolType;
   });
 }
 
@@ -839,7 +721,6 @@ function staticModel(model: string, computerUse: boolean): InferenceModel {
             computerUse,
             registeredTools: [
               geminiBrowserInteractionToolType,
-              geminiMacDesktopInteractionToolType,
             ],
           }
         : { structuredOutputs: true }),
@@ -861,12 +742,4 @@ function numberFromString(value: string | undefined): number | undefined {
   }
   const number = Number(value);
   return Number.isFinite(number) ? number : undefined;
-}
-
-function isEnabled(value: string | undefined) {
-  return value?.trim().toLowerCase() === "true";
-}
-
-function isDisabled(value: string | undefined) {
-  return value?.trim().toLowerCase() === "false";
 }

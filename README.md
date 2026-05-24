@@ -2,6 +2,16 @@
 
 Donkey is a low-latency desktop agent for macOS that sees the screen, understands local context, and controls apps quickly.
 
+## Model Strategy
+
+Donkey is focused on hosted model routes for model-backed decisions. We tested
+local model packages, but the current weights are too large to download as part
+of a practical app install and too slow for the low-latency desktop loop we want.
+
+The macOS app should keep capture, context, and local app control on-device, then
+call the Donkey backend for model decisions. The backend owns provider
+credentials, provider selection, and concrete model selection.
+
 ## More Info
 
 - `docs/README.md`: supported product behavior and engineering guidance.

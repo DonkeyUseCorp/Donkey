@@ -46,22 +46,25 @@ provider names are configuration/data inside private adapters only.
 - Keep provider-specific request mapping behind the inference provider registry.
   Route handlers should import the registry and neutral schemas, not individual
   adapters.
-- Computer-use provider tools are registered as neutral request tools and mapped
-  by adapters. The supported Gemini registrations are
-  `donkey_gemini_browser_interaction` and
-  `donkey_gemini_mac_desktop_interaction`. OpenRouter is not a supported
-  computer-use provider; it may only serve non-computer hosted Responses calls.
-  The Gemini adapter uses the official `@google/genai` Node/TypeScript SDK for
-  non-streaming chat, normal structured Responses calls, and Gemini
-  computer-use calls. It defaults to Vertex AI when Google Cloud project or
-  location settings are
-  present, or when no Gemini API key fallback is configured. For Google Cloud
-  credits, run Gemini through Vertex AI with `GOOGLE_GENAI_USE_VERTEXAI=true`,
-  `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION`; authenticate the backend
-  with Application Default Credentials or `GOOGLE_APPLICATION_CREDENTIALS`
-  rather than storing Google provider credentials in the Mac app. Direct Gemini
-  API key mode is a development fallback only; force it with
-  `GEMINI_PROVIDER_MODE=api-key` when needed.
+- Computer-use provider tools are registered as request tools and mapped by
+  adapters. Browser interaction uses Gemini through
+  `donkey_gemini_browser_interaction`; guarded macOS desktop interaction uses
+  OpenAI through `donkey_openai_mac_desktop_interaction`, which the hosted
+  Responses adapter maps to OpenAI's `computer` tool.
+- The Gemini adapter uses the official `@google/genai` Node/TypeScript SDK for
+  general non-streaming chat, normal structured Responses calls, and browser
+  computer-use calls. It uses Vertex AI's global endpoint only when
+  `GOOGLE_APPLICATION_CREDENTIALS_JSON` includes a `project_id`. If the project
+  is missing, the provider is unavailable. The adapter's defaults should track
+  Google's newest supported Gemini models: use the latest stable Flash model for
+  normal chat and Responses calls, and the latest Google-listed Computer
+  Use-capable model for browser Computer Use tool calls. Keep model selection in
+  code rather than environment overrides. For Google Cloud credits, set
+  `GOOGLE_APPLICATION_CREDENTIALS_JSON` as a hosted-deploy sensitive env var
+  rather than storing Google provider credentials in the Mac app.
+- The OpenAI hosted Responses adapter uses `OPENAI_API_KEY` only for macOS
+  desktop computer-use. Keep that credential in the hosted deployment
+  environment; the Mac app must not carry OpenAI provider credentials.
 
 ## Pattern
 
