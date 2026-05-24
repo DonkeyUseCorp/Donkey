@@ -1,6 +1,7 @@
 "use client";
 
-import { ArrowRight, LoaderCircle } from "lucide-react";
+import { ArrowRight } from "lucide-react";
+import Image from "next/image";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { authClient } from "@/lib/auth-client";
@@ -51,93 +52,28 @@ export function MacAuthRedirector({ state }: Props) {
   }, [startGoogleAuth]);
 
   return (
-    <main
-      style={{
-        alignItems: "center",
-        background: "#1f201e",
-        boxSizing: "border-box",
-        color: "#f7f4ee",
-        display: "flex",
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        justifyContent: "center",
-        minHeight: "100vh",
-        padding: 24,
-      }}
-    >
-      <section
-        style={{
-          alignItems: "center",
-          display: "grid",
-          gap: 18,
-          justifyItems: "center",
-          maxWidth: 460,
-          textAlign: "center",
-          width: "100%",
-        }}
-      >
-        <div
-          style={{
-            alignItems: "center",
-            background: "#df704a",
-            borderRadius: 18,
-            display: "flex",
-            height: 68,
-            justifyContent: "center",
-            width: 68,
-          }}
-        >
-          <LoaderCircle
-            aria-hidden="true"
-            size={34}
-            strokeWidth={2.5}
-            style={{
-              animation: status === "opening" ? "donkey-spin 1s linear infinite" : undefined,
-            }}
-          />
-        </div>
+    <main className="box-border flex min-h-screen items-center justify-center bg-[#1f201e] px-6 py-6 text-[#f7f4ee]">
+      <section className="grid w-full max-w-[460px] justify-items-center gap-[18px] text-center">
+        <Image
+          alt=""
+          className="size-[72px] rounded-[18px] shadow-[0_18px_44px_rgba(0,0,0,0.32)]"
+          height={72}
+          src="/donkey-app-icon.png"
+          width={72}
+        />
 
-        <h1
-          style={{
-            fontSize: 42,
-            fontWeight: 800,
-            letterSpacing: 0,
-            lineHeight: 1.05,
-            margin: "22px 0 0",
-          }}
-        >
-          {status === "opening" ? "Opening Google" : "Google sign-in paused"}
+        <h1 className="mt-[22px] text-[42px] leading-[1.05] font-extrabold tracking-normal">
+          {headingForStatus(status)}
         </h1>
 
-        <p
-          style={{
-            color: "rgba(247, 244, 238, 0.68)",
-            fontSize: 17,
-            lineHeight: 1.5,
-            margin: 0,
-          }}
-        >
+        <p className="m-0 max-w-[420px] text-[17px] leading-6 text-[#f7f4ee]/68">
           {messageForStatus(status)}
         </p>
 
         {status === "failed" ? (
           <button
+            className="mt-[14px] inline-flex h-12 cursor-pointer items-center justify-center gap-2.5 rounded-xl border-0 bg-[#f7f4ee] px-[22px] text-base font-extrabold text-[#222]"
             onClick={retry}
-            style={{
-              alignItems: "center",
-              background: "#f7f4ee",
-              border: 0,
-              borderRadius: 12,
-              color: "#222",
-              cursor: "pointer",
-              display: "inline-flex",
-              fontSize: 16,
-              fontWeight: 800,
-              gap: 10,
-              height: 48,
-              justifyContent: "center",
-              marginTop: 14,
-              padding: "0 22px",
-            }}
             type="button"
           >
             Try again
@@ -146,15 +82,18 @@ export function MacAuthRedirector({ state }: Props) {
         ) : null}
       </section>
 
-      <style jsx>{`
-        @keyframes donkey-spin {
-          to {
-            transform: rotate(360deg);
-          }
-        }
-      `}</style>
     </main>
   );
+}
+
+function headingForStatus(status: RedirectStatus) {
+  switch (status) {
+    case "failed":
+    case "missing-state":
+      return "Google sign-in paused";
+    case "opening":
+      return "Continuing with Google";
+  }
 }
 
 function messageForStatus(status: RedirectStatus) {

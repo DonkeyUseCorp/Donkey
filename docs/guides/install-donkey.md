@@ -112,11 +112,18 @@ hosted-model install path.
 
 ## Local Development
 
-For local development, `scripts/run-donkey-dev.sh` builds and launches the debug app:
+For local development, `scripts/run-donkey-dev.sh` starts the local site when
+`DONKEY_WEB_BASE_URL` points at localhost, builds Donkey, wraps the debug
+executable in `apps/Donkey/.build/debug/Donkey.app`, registers that app bundle
+for `donkey://auth/callback`, and launches it:
 
 ```bash
 ./scripts/run-donkey-dev.sh
 ```
+
+Use `DONKEY_START_SITE=0` to skip starting the site, `DONKEY_LAUNCH_APP=0` to
+build and register the debug app without opening it, or `DONKEY_WEB_BASE_URL` /
+`DONKEY_AUTH_CALLBACK_SCHEME` to test a different auth handoff.
 
 Development builds use the same hosted-model boundary as packaged builds. If a
 developer needs to test provider behavior, configure the site/backend

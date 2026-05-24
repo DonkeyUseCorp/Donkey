@@ -33,7 +33,7 @@ export const auth = betterAuth({
   },
   plugins: [
     oneTimeToken({
-      expiresIn: 3,
+      expiresIn: 60,
       storeToken: "hashed",
     }),
   ],
