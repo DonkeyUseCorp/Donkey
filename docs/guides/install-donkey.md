@@ -118,7 +118,10 @@ LLM packages, or local model repair steps in the hosted-model install path.
 For local development, `scripts/run-donkey-dev.sh` starts the local site when
 `DONKEY_WEB_BASE_URL` points at localhost, builds Donkey, wraps the debug
 executable in `apps/Donkey/.build/debug/Donkey.app`, registers that app bundle
-for `donkey://auth/callback`, and launches it:
+for `donkey://auth/callback`, and launches it. The debug wrapper uses the
+`Donkey Dev` display name and `ai.donkey.Donkey.dev` bundle identifier by
+default so macOS privacy settings do not collide with packaged `Donkey.app`
+builds.
 
 ```bash
 ./scripts/run-donkey-dev.sh
@@ -126,7 +129,10 @@ for `donkey://auth/callback`, and launches it:
 
 Use `DONKEY_START_SITE=0` to skip starting the site, `DONKEY_LAUNCH_APP=0` to
 build and register the debug app without opening it, or `DONKEY_WEB_BASE_URL` /
-`DONKEY_AUTH_CALLBACK_SCHEME` to test a different auth handoff.
+`DONKEY_AUTH_CALLBACK_SCHEME` to test a different auth handoff. Set
+`DONKEY_CODESIGN_IDENTITY` to a local code-signing identity when you want macOS
+privacy grants to survive debug rebuilds; without one, the script falls back to
+ad-hoc signing.
 
 Development builds use the same hosted-model boundary as packaged builds. If a
 developer needs to test provider behavior, configure the site/backend

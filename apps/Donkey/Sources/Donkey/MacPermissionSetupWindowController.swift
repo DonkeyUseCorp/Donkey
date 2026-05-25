@@ -18,7 +18,7 @@ final class MacPermissionSetupWindowController: NSWindowController {
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Enable Donkey Permissions"
         window.styleMask = [.titled, .closable, .miniaturizable]
-        window.setContentSize(NSSize(width: 640, height: 560))
+        window.setContentSize(NSSize(width: 640, height: 600))
         window.isReleasedWhenClosed = false
         super.init(window: window)
 
@@ -204,6 +204,11 @@ final class SystemMacPermissionRequester: MacPermissionRequesting {
 
 private struct MacPermissionSetupView: View {
     @ObservedObject var model: MacPermissionSetupModel
+    private let permissionRefreshTimer = Timer.publish(
+        every: 1,
+        on: .main,
+        in: .common
+    ).autoconnect()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -260,9 +265,12 @@ private struct MacPermissionSetupView: View {
                 .disabled(!model.canContinue)
             }
         }
-        .padding(28)
-        .frame(minWidth: 640, minHeight: 560)
+        .padding(EdgeInsets(top: 28, leading: 28, bottom: 44, trailing: 28))
+        .frame(minWidth: 640, minHeight: 600)
         .onAppear {
+            model.refresh()
+        }
+        .onReceive(permissionRefreshTimer) { _ in
             model.refresh()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in

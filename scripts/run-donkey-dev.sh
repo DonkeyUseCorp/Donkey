@@ -7,6 +7,8 @@ LOG_SCRIPT="$ROOT_DIR/scripts/tail-donkey-logs.sh"
 BUILD_PRODUCTS_DIR="$APP_DIR/.build/debug"
 DONKEY_BIN="$BUILD_PRODUCTS_DIR/Donkey"
 DEV_APP_DIR="$BUILD_PRODUCTS_DIR/Donkey.app"
+DEV_BUNDLE_IDENTIFIER="${DONKEY_DEV_BUNDLE_IDENTIFIER:-ai.donkey.Donkey.dev}"
+DEV_DISPLAY_NAME="${DONKEY_DEV_DISPLAY_NAME:-Donkey Dev}"
 CACHE_DIR="$APP_DIR/.build/dev-script-cache"
 CACHE_CLANG_DIR="$CACHE_DIR/clang"
 CACHE_SWIFTPM_DIR="$CACHE_DIR/swiftpm"
@@ -162,6 +164,27 @@ xml_escape() {
       -e "s/'/\&apos;/g"
 }
 
+resolve_codesign_identity() {
+  if [ -n "${DONKEY_CODESIGN_IDENTITY:-}" ]; then
+    printf '%s\n' "$DONKEY_CODESIGN_IDENTITY"
+    return
+  fi
+
+  if command -v security >/dev/null 2>&1; then
+    local identity
+    identity="$(
+      security find-identity -v -p codesigning 2>/dev/null |
+        awk -F '"' '/Apple Development/ { print $2; exit }'
+    )"
+    if [ -n "$identity" ]; then
+      printf '%s\n' "$identity"
+      return
+    fi
+  fi
+
+  printf '%s\n' "-"
+}
+
 prepare_app_icon() {
   local destination="$RESOURCES_DIR/Donkey.icns"
 
@@ -186,8 +209,12 @@ prepare_app_icon() {
 write_info_plist() {
   local escaped_web_base_url
   local escaped_callback_scheme
+  local escaped_bundle_identifier
+  local escaped_display_name
   escaped_web_base_url="$(xml_escape "$DONKEY_WEB_BASE_URL")"
   escaped_callback_scheme="$(xml_escape "$AUTH_CALLBACK_SCHEME")"
+  escaped_bundle_identifier="$(xml_escape "$DEV_BUNDLE_IDENTIFIER")"
+  escaped_display_name="$(xml_escape "$DEV_DISPLAY_NAME")"
 
   cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -197,11 +224,11 @@ write_info_plist() {
   <key>CFBundleExecutable</key>
   <string>Donkey</string>
   <key>CFBundleIdentifier</key>
-  <string>ai.donkey.Donkey</string>
+  <string>$escaped_bundle_identifier</string>
   <key>CFBundleName</key>
-  <string>Donkey</string>
+  <string>$escaped_display_name</string>
   <key>CFBundleDisplayName</key>
-  <string>Donkey</string>
+  <string>$escaped_display_name</string>
   <key>CFBundleIconFile</key>
   <string>Donkey.icns</string>
   <key>CFBundlePackageType</key>
@@ -222,7 +249,7 @@ write_info_plist() {
   <array>
     <dict>
       <key>CFBundleURLName</key>
-      <string>ai.donkey.Donkey.auth</string>
+      <string>$escaped_bundle_identifier.auth</string>
       <key>CFBundleURLSchemes</key>
       <array>
         <string>$escaped_callback_scheme</string>
@@ -249,6 +276,7 @@ PLIST
 create_debug_app_bundle() {
   local resource_bundle
   local sparkle_framework
+  local codesign_identity
 
   rm -rf "$DEV_APP_DIR"
   mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$FRAMEWORKS_DIR"
@@ -279,7 +307,13 @@ create_debug_app_bundle() {
   write_info_plist
 
   if command -v codesign >/dev/null 2>&1; then
-    codesign --force --deep --sign - "$DEV_APP_DIR" >/dev/null
+    codesign_identity="$(resolve_codesign_identity)"
+    if [ "$codesign_identity" = "-" ]; then
+      echo "Signing debug app ad-hoc. Set DONKEY_CODESIGN_IDENTITY to preserve macOS privacy permissions across rebuilds."
+    else
+      echo "Signing debug app with $codesign_identity."
+    fi
+    codesign --force --deep --sign "$codesign_identity" "$DEV_APP_DIR" >/dev/null
   fi
 
   if [ -x "$LSREGISTER" ]; then
