@@ -120,10 +120,6 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                     taskID: taskID
                 )
             }
-            await reportSpawnProgress(
-                PointerPromptSpawnProgressUpdate(label: "Showing you"),
-                context: context
-            )
             let result = PointerPromptCommandHandlingResult(
                 status: .completed,
                 threadStatus: .chatting,
@@ -178,10 +174,6 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         logRouting(command: command, traceID: traceID, taskID: taskID, routing: routing)
         switch routing.outcome.decision.kind {
         case .respond:
-            await reportSpawnProgress(
-                PointerPromptSpawnProgressUpdate(label: "Answering"),
-                context: context
-            )
             let result = PointerPromptCommandHandlingResult(
                 status: .completed,
                 threadStatus: .chatting,
@@ -197,10 +189,6 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             logHandlingResult(result, stage: "conversation", hint: routingHint(for: routing))
             return result
         case .askClarification:
-            await reportSpawnProgress(
-                PointerPromptSpawnProgressUpdate(label: "Waiting for detail"),
-                context: context
-            )
             let result = PointerPromptCommandHandlingResult(
                 status: .needsConfirmation,
                 threadStatus: .waitingForClarification,
@@ -231,10 +219,6 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             logHandlingResult(result, stage: "empty", hint: "Empty command; no action was run.")
             return result
         case .openReview, .runLocalTask:
-            await reportSpawnProgress(
-                PointerPromptSpawnProgressUpdate(label: "Finding destination"),
-                context: context
-            )
             break
         }
 
@@ -265,16 +249,6 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         )
         let resolution = localModelResult.resolution
         let parseLatencyMS = Self.uptimeMilliseconds() - parseStartedAt
-        if let definition = resolution.definition {
-            await reportSpawnProgress(
-                PointerPromptSpawnProgressUpdate(
-                    label: "Opening \(definition.targetApp.appName)",
-                    targetHint: Self.spawnTargetHint(for: definition.targetApp),
-                    phase: .holding
-                ),
-                context: context
-            )
-        }
         logModelResolution(
             command: commandRedaction.redactedText,
             traceID: traceID,
@@ -320,10 +294,6 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         )
 
         if Self.shouldRespondWithoutLocalTask(resolution) {
-            await reportSpawnProgress(
-                PointerPromptSpawnProgressUpdate(label: "Answering"),
-                context: context
-            )
             let response = Self.conversationResponse(for: resolution)
             let decision = AppHarnessDecision(
                 kind: .respond,
@@ -415,15 +385,6 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         )
     }
 
-    private func reportSpawnProgress(
-        _ update: PointerPromptSpawnProgressUpdate,
-        context: PointerPromptCommandContext?
-    ) async {
-        guard let spawnProgressChanged = context?.spawnProgressChanged else { return }
-
-        await spawnProgressChanged(update)
-    }
-
     private func groundAgentVisualizationPlan(_ plan: AgentVisualizationPlan) -> AgentVisualizationPlan {
         let candidates = MacWindowResolver().enumerateCandidates()
         guard !candidates.isEmpty else { return plan }
@@ -432,15 +393,6 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             plan: plan,
             targetAppName: plan.metadata["targetApp"],
             candidates: candidates
-        )
-    }
-
-    private static func spawnTargetHint(for target: LocalAppTarget) -> PointerPromptSpawnTargetHint {
-        PointerPromptSpawnTargetHint(
-            appName: target.appName,
-            bundleIdentifier: target.bundleIdentifier,
-            titleContains: target.titleContains,
-            metadata: target.metadata
         )
     }
 
@@ -684,7 +636,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                 return "The hosted command parser is not available right now, so I couldn't safely run that action."
             }
         }
-        return "I couldn't find a supported local action for that yet."
+        return "I can help, but I need a clearer request before opening an app."
     }
 
     private func retrieveSemanticMemory(

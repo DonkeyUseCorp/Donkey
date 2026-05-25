@@ -395,6 +395,8 @@ struct AIHarnessAdapterTests {
         #expect((body["prompt"] as? String)?.contains("set_text_input_contract=inputEntityValueIsExactTextToEnter") == true)
         #expect((body["prompt"] as? String)?.contains("action, destination or target app/item") == true)
         #expect((body["prompt"] as? String)?.contains("metadata.responseMode=conversation") == true)
+        #expect((body["prompt"] as? String)?.contains("metadata.assistantResponse") == true)
+        #expect((body["prompt"] as? String)?.contains("taskType \"none\"") == true)
         #expect((body["prompt"] as? String)?.contains("triggers=") == false)
         #expect((body["prompt"] as? String)?.contains("metadata=") == false)
     }
@@ -532,6 +534,41 @@ struct AIHarnessAdapterTests {
         let instructions = try #require(parameters["instructions"] as? String)
         #expect(instructions.contains("local_app_interaction"))
         #expect(instructions.contains("media playback"))
+        #expect(instructions.contains("metadata.assistantResponse"))
+    }
+
+    @Test
+    func hostedTaskIntentAdapterPreservesNoTaskConversationResponse() async throws {
+        let httpClient = FakeAIHTTPClient(
+            data: responseData(
+                outputText: """
+                {"taskType":"none","targetAppName":"none","entities":{},"normalizedEntities":{},"confidence":0,"needsConfirmation":false,"actionPlan":{"tools":[],"inputEntity":"","controlID":"","focusKey":"","verification":"commandAttempted"},"metadata":{"responseMode":"conversation","assistantResponse":"Hi there! What would you like to work on?"}}
+                """
+            ),
+            statusCode: 200
+        )
+        let adapter = HostedTaskIntentParsingAdapter(
+            configuration: DonkeyBackendInferenceConfiguration(
+                baseURL: URL(string: "https://donkey.example")!,
+                clientID: "client-1"
+            ),
+            httpClient: httpClient
+        )
+
+        let result = await adapter.parseTaskIntent(
+            TaskIntentAdapterRequest(
+                command: "hi there",
+                taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
+                sourceTraceID: "trace-hosted-greeting"
+            )
+        )
+
+        #expect(result.intent == nil)
+        #expect(result.trace.status == .completed)
+        #expect(result.trace.validationStatus == "noTaskIntent")
+        #expect(result.trace.metadata["responseMode"] == "conversation")
+        #expect(result.trace.metadata["assistantResponse"] == "Hi there! What would you like to work on?")
+        #expect(result.trace.metadata["provider"] == "donkeyBackend")
     }
 
     @Test
@@ -1163,6 +1200,43 @@ struct AIHarnessAdapterTests {
         #expect(result.resolution.metadata["responseMode"] == "conversation")
         #expect(result.resolution.metadata["assistantResponse"] == "Hello! How can I help?")
         #expect(result.trace.status == .completed)
+    }
+
+    @Test
+    func localModelTaskIntentResolverPreservesHostedNoTaskConversationForGreeting() async {
+        let adapter = HostedTaskIntentParsingAdapter(
+            configuration: DonkeyBackendInferenceConfiguration(
+                baseURL: URL(string: "https://donkey.example")!,
+                clientID: "client-1"
+            ),
+            httpClient: FakeAIHTTPClient(
+                data: responseData(
+                    outputText: """
+                    {"taskType":"none","targetAppName":"none","entities":{},"normalizedEntities":{},"confidence":0,"needsConfirmation":false,"actionPlan":{"tools":[],"inputEntity":"","controlID":"","focusKey":"","verification":"commandAttempted"},"metadata":{"responseMode":"conversation","assistantResponse":"Hi there! What would you like to work on?"}}
+                    """
+                ),
+                statusCode: 200
+            )
+        )
+        let resolver = LocalModelTaskIntentResolver(
+            catalog: LocalAppTaskCatalog(
+                taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
+                availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: [])
+            ),
+            adapter: adapter
+        )
+
+        let result = await resolver.resolve(
+            command: "hi there",
+            sourceTraceID: "trace-hosted-no-task-greeting"
+        )
+
+        #expect(result.resolution.status == .needsConfirmation)
+        #expect(result.resolution.intent == nil)
+        #expect(result.resolution.metadata["reason"] == "noSupportedTaskIntent")
+        #expect(result.resolution.metadata["responseMode"] == "conversation")
+        #expect(result.resolution.metadata["assistantResponse"] == "Hi there! What would you like to work on?")
+        #expect(result.trace.validationStatus == "noTaskIntent")
     }
 
     @Test

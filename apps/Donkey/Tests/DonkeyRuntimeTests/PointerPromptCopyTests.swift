@@ -20,7 +20,7 @@ struct PointerPromptCopyTests {
     @Test
     func composerPlaceholderDoesNotReuseTaskOrResultText() {
         #expect(
-            PointerPromptCopy.composerPlaceholder(for: "I couldn't find a supported local action for that yet.") ==
+            PointerPromptCopy.composerPlaceholder(for: "I can help, but I need a clearer request before opening an app.") ==
                 PointerPromptCopy.defaultPromptPlaceholder
         )
         #expect(

@@ -147,6 +147,19 @@ public struct ProcessBackedLocalLLMTaskIntentAdapter: TaskIntentParsingAdapter {
                 sourceModelCallID: "model-call-\(request.sourceTraceID)",
                 parserName: "local-llm-sidecar-v1"
             ) else {
+                if let noTaskMetadata = try? TaskIntentWireCodec.noTaskMetadata(
+                    response.outputText,
+                    parserName: "local-llm-sidecar-v1"
+                ) {
+                    return self.result(
+                        entry: entry,
+                        request: request,
+                        status: .completed,
+                        validationStatus: "noTaskIntent",
+                        latencyMS: result.latencyMS,
+                        metadata: responseMetadata.merging(noTaskMetadata) { _, new in new }
+                    )
+                }
                 return self.result(
                     entry: entry,
                     request: request,
@@ -410,15 +423,7 @@ public struct LocalGenerateTaskIntentAdapter: TaskIntentParsingAdapter {
             }
 
             guard (200..<300).contains(response.statusCode),
-                  let outputText = try Self.outputText(from: data),
-                  let intent = try TaskIntentWireCodec.decodeIntent(
-                    outputText,
-                    definitions: request.taskDefinitions,
-                    originalCommand: request.command,
-                    appFinderCatalog: request.appFinderCatalog,
-                    sourceModelCallID: "model-call-\(request.sourceTraceID)",
-                    parserName: "local-generate-task-intent-v1"
-                  )
+                  let outputText = try Self.outputText(from: data)
             else {
                 return result(
                     entry: entry,
@@ -427,6 +432,44 @@ public struct LocalGenerateTaskIntentAdapter: TaskIntentParsingAdapter {
                     validationStatus: (200..<300).contains(response.statusCode) ? "invalid" : "notValidated",
                     latencyMS: latencyMS,
                     metadata: httpMetadata(response: response, data: data, fallbackFromModelID: fallbackFromModelID)
+                )
+            }
+
+            let baseMetadata = httpMetadata(
+                response: response,
+                data: data,
+                fallbackFromModelID: fallbackFromModelID
+            )
+            guard let intent = try TaskIntentWireCodec.decodeIntent(
+                outputText,
+                definitions: request.taskDefinitions,
+                originalCommand: request.command,
+                appFinderCatalog: request.appFinderCatalog,
+                sourceModelCallID: "model-call-\(request.sourceTraceID)",
+                parserName: "local-generate-task-intent-v1"
+            ) else {
+                if let noTaskMetadata = try? TaskIntentWireCodec.noTaskMetadata(
+                    outputText,
+                    parserName: "local-generate-task-intent-v1"
+                ) {
+                    return result(
+                        entry: entry,
+                        request: request,
+                        status: .completed,
+                        validationStatus: "noTaskIntent",
+                        latencyMS: latencyMS,
+                        metadata: baseMetadata
+                            .merging(noTaskMetadata) { _, new in new }
+                            .merging(["local.provider": "ollama"]) { current, _ in current }
+                    )
+                }
+                return result(
+                    entry: entry,
+                    request: request,
+                    status: .invalidOutput,
+                    validationStatus: "invalid",
+                    latencyMS: latencyMS,
+                    metadata: baseMetadata
                 )
             }
 
@@ -626,10 +669,10 @@ public struct LocalGenerateTaskIntentAdapter: TaskIntentParsingAdapter {
             "You are Donkey's local task-intent boundary. Return strict JSON only; do not include reasoning.",
             "First decide whether Command is an executable local-app task or a conversation turn.",
             "Executable local-app task means all three are clear: action, destination or target app/item, and enough payload to execute safely.",
-            "If Command is a question, conversation, malformed request, or lacks a real executable payload, do not invent one. Return the closest supported task with confidence below 0.55, needsConfirmation=false, metadata.responseMode=conversation, and metadata.assistantResponse with a brief natural-language reply.",
+            "If Command is a question, greeting, conversation, malformed request, or lacks a real executable payload, do not invent one. Return taskType \"none\", targetAppName \"none\", empty entities and normalizedEntities, confidence 0, needsConfirmation=false, actionPlan.tools=[], and metadata.responseMode=conversation with metadata.assistantResponse containing a brief natural-language reply.",
             "If Command is an executable local task with one ordinary missing detail, set needsConfirmation=true and include missingEntity in metadata.",
-            "If Command is executable, choose by capability and target app, not exact wording. Use only provided task definitions; do not invent task types, unsupported entities, or actions.",
-            "If no capability fits, return the closest supported task with confidence below 0.55.",
+            "If Command is executable, choose by capability and target app, not exact wording. Use only the provided task definitions; do not invent task types, unsupported entities, or actions.",
+            "If no capability fits, choose conversation with taskType \"none\" and a helpful metadata.assistantResponse rather than a failed local-action message.",
             "For dynamic local-item capabilities, app/file/folder names may come from the request, relevant local cache, or default-app inference; the catalog will verify availability before execution.",
             "For write/create document requests: if the requested content is malformed or not meaningful enough to type, choose conversation; do not fabricate a document payload just to make the task executable.",
             "For local_app_interaction, select the most likely local app for the user's goal, set entities.goal, and when text must be entered set entities.query plus normalizedEntities.query.",
@@ -651,7 +694,8 @@ public struct LocalGenerateTaskIntentAdapter: TaskIntentParsingAdapter {
             "Example website output shape: {\"taskType\":\"local_app_interaction\",\"targetAppName\":\"Safari\",\"entities\":{\"appName\":\"Safari\",\"goal\":\"open requested website\",\"query\":\"https://example.org\"},\"normalizedEntities\":{\"appName\":\"Safari\",\"goal\":\"open requested website\",\"query\":\"https://example.org\"},\"confidence\":0.9,\"needsConfirmation\":false,\"actionPlan\":{\"tools\":[\"app.openOrFocus\",\"app.observe\",\"ui.focusAddressBar\",\"ui.setText\",\"ui.pressReturn\",\"app.verifyCommand\"],\"inputEntity\":\"query\",\"controlID\":\"addressBar\",\"focusKey\":\"Command+L\",\"verification\":\"commandAttempted\"},\"metadata\":{}}",
             "Writing output shape: targetAppName=Notes, entities.appName=Notes, entities.goal=write requested text, entities.query=<the actual final text to type>, actionPlan.tools=[app.openOrFocus, app.observe, ui.newDocument, ui.setText, app.verifyCommand], inputEntity=query, controlID=editor.",
             "Table output shape: targetAppName=Numbers, entities.appName=Numbers, entities.goal=create requested table, entities.query=<tab-separated rows for the requested table>, actionPlan.tools=[app.openOrFocus, app.observe, ui.newDocument, ui.setText, app.verifyCommand], inputEntity=query, controlID=editor.",
-            "Example malformed request output shape: {\"taskType\":\"local_app_interaction\",\"targetAppName\":\"Notes\",\"entities\":{\"appName\":\"Notes\",\"goal\":\"unclear local writing request\"},\"normalizedEntities\":{\"appName\":\"Notes\",\"goal\":\"unclear local writing request\"},\"confidence\":0.2,\"needsConfirmation\":false,\"actionPlan\":{\"tools\":[],\"inputEntity\":\"query\",\"controlID\":\"\",\"focusKey\":\"\",\"verification\":\"commandAttempted\"},\"metadata\":{\"responseMode\":\"conversation\",\"assistantResponse\":\"I can help, but I need a clearer thing to write before opening an app.\"}}",
+            "Conversation output shape: {\"taskType\":\"none\",\"targetAppName\":\"none\",\"entities\":{},\"normalizedEntities\":{},\"confidence\":0,\"needsConfirmation\":false,\"actionPlan\":{\"tools\":[],\"inputEntity\":\"\",\"controlID\":\"\",\"focusKey\":\"\",\"verification\":\"commandAttempted\"},\"metadata\":{\"responseMode\":\"conversation\",\"assistantResponse\":\"Hi! What would you like to work on?\"}}",
+            "Example malformed request output shape: {\"taskType\":\"none\",\"targetAppName\":\"none\",\"entities\":{},\"normalizedEntities\":{},\"confidence\":0,\"needsConfirmation\":false,\"actionPlan\":{\"tools\":[],\"inputEntity\":\"\",\"controlID\":\"\",\"focusKey\":\"\",\"verification\":\"commandAttempted\"},\"metadata\":{\"responseMode\":\"conversation\",\"assistantResponse\":\"I can help, but I need a clearer thing to write before opening an app.\"}}",
             "For every other task type, actionPlan.tools must be empty.",
             "For AppleScript-backed capabilities, include compact appleScript.source or appleScript.template metadata only when the provided action is insufficient; prefer task metadata and normalized entities for speed.",
             "App finder catalog entries are installed local apps with descriptions, support status, capabilities, and control profiles.",
@@ -800,18 +844,31 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
                 parserName: "hosted-responses-v1",
                 parserSource: .onlineModel
             ) else {
+                let baseMetadata = Self.outputDiagnostics(for: outputText)
+                    .merging([
+                        "provider": "donkeyBackend",
+                        "privacy.store": "false"
+                    ]) { current, _ in current }
+                guard let noTaskMetadata = try? TaskIntentWireCodec.noTaskMetadata(
+                    outputText,
+                    parserName: "hosted-responses-v1"
+                ) else {
+                    return result(
+                        entry: entry,
+                        request: request,
+                        status: .invalidOutput,
+                        validationStatus: "invalid",
+                        latencyMS: latencyMS,
+                        metadata: baseMetadata
+                    )
+                }
                 return result(
                     entry: entry,
                     request: request,
                     status: .completed,
                     validationStatus: "noTaskIntent",
                     latencyMS: latencyMS,
-                    metadata: Self.outputDiagnostics(for: outputText)
-                        .merging([
-                            "reason": "noSupportedTaskIntent",
-                            "responseMode": "conversation",
-                            "assistantResponse": "I couldn't find a supported local action for that yet."
-                        ]) { current, _ in current }
+                    metadata: baseMetadata.merging(noTaskMetadata) { _, new in new }
                 )
             }
 
@@ -901,7 +958,7 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
         "Return strict JSON only.",
         "First decide whether Command is an executable local-app task or a conversation turn.",
         "Executable local-app task means all three are clear: action, destination or target app/item, and enough payload to execute safely.",
-        "If Command is conversation, a question, malformed, or lacks a real executable payload, return taskType \"none\", targetAppName \"none\", empty entities, confidence 0, needsConfirmation false, an empty actionPlan, and metadata.responseMode \"conversation\".",
+        "If Command is a greeting, conversation, question, malformed request, or lacks a real executable payload, return taskType \"none\", targetAppName \"none\", empty entities and normalizedEntities, confidence 0, needsConfirmation false, actionPlan.tools empty, and metadata.responseMode \"conversation\" with metadata.assistantResponse containing a brief natural-language reply.",
         "For supported actions, choose only a provided taskType and target app. Fill entities and normalizedEntities with the concrete values needed by required entity rules.",
         "Use the generic local_app_interaction task type for executable local app requests that need a model-planned app workflow and do not have a more specific provided task type.",
         "When App finder catalog JSON is non-empty and you use local_app_interaction, choose the target app only from a catalog entry with supportStatus supported and a matching capability. Set metadata.appFinder.selectedAppID to the exact appID, metadata.appFinder.selectedCapabilityID to the capability id, and metadata.appFinder.controlProfile to one declared control profile. Never select candidate, unsupported, or denied entries for execution.",
@@ -913,6 +970,7 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
         "For writing in Notes, choose Notes, make query the complete text to type, and use ui.newDocument, ui.setText, app.verifyCommand.",
         "For spreadsheet or table creation, choose Numbers, put compact tab-separated table content in query, and use ui.newDocument, ui.setText, app.verifyCommand.",
         "For every other task type, actionPlan.tools must be empty.",
+        "If no supported capability fits, choose taskType \"none\" with a helpful conversational assistantResponse rather than a generic local-action failure.",
         "Do not invent task types, unsupported entities, unsupported tools, app scripts, or direct input outside the schema."
     ].joined(separator: " ")
 
@@ -1081,7 +1139,7 @@ public struct LocalModelTaskIntentResolver: Sendable {
             if result.trace.validationStatus == "noTaskIntent" {
                 metadata["reason"] = "noSupportedTaskIntent"
                 metadata["responseMode"] = "conversation"
-                metadata["assistantResponse"] = "I couldn't find a supported local action for that yet."
+                metadata["assistantResponse"] = TaskIntentWireCodec.defaultConversationAssistantResponse
             }
             for key in ["responseMode", "assistantResponse"] {
                 if let value = result.trace.metadata[key], !value.isEmpty {
@@ -1173,6 +1231,8 @@ private func taskIntentAppFinderCatalogJSON(_ entries: [LocalAppFinderCatalogEnt
 }
 
 private enum TaskIntentWireCodec {
+    static let defaultConversationAssistantResponse = "I'm here. What would you like to work on?"
+
     static func jsonSchema(taskDefinitions: [LocalAppTaskDefinition]) -> [String: Any] {
         let allowsDynamicTargets = taskDefinitions.contains { definition in
             definition.metadata["dynamicTarget"] == "true"
@@ -1371,6 +1431,24 @@ private enum TaskIntentWireCodec {
         )
     }
 
+    static func noTaskMetadata(
+        _ outputText: String,
+        parserName: String
+    ) throws -> [String: String]? {
+        let wire = try decodeWire(from: outputText)
+        guard wire.taskType == "none" else { return nil }
+
+        var metadata = wire.metadata
+        metadata["parser"] = parserName
+        metadata["reason"] = nonEmpty(metadata["reason"]) ?? "noSupportedTaskIntent"
+        metadata["responseMode"] = "conversation"
+        metadata["assistantResponse"] = nonEmpty(metadata["assistantResponse"])
+            ?? defaultConversationAssistantResponse
+        metadata["taskType"] = "none"
+        metadata["targetApp"] = wire.targetAppName
+        return metadata
+    }
+
     private static func decodeWire(from outputText: String) throws -> TaskIntentWire {
         var lastError: Error?
         for candidate in jsonObjectCandidates(in: outputText) {
@@ -1432,6 +1510,11 @@ private enum TaskIntentWireCodec {
 
         var seen = Set<String>()
         return candidates.filter { seen.insert($0).inserted }
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private static func normalizedEntities(

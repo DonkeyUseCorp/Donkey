@@ -138,7 +138,7 @@ struct PointerPromptSpawnGeometryTests {
     }
 
     @Test @MainActor
-    func spawnOverlayRunsTerminalTailAnimationBeforeWorkingPulse() async throws {
+    func spawnOverlayWagsTailUntilResponseLabelArrives() async throws {
         let viewModel = PointerPromptSpawnOverlayViewModel()
         let origin = CGPoint(x: 600, y: -24)
         let destination = CGPoint(x: 420, y: 282)
@@ -169,6 +169,20 @@ struct PointerPromptSpawnGeometryTests {
             (PointerPromptSpawnOverlayViewModel.terminalTailAnimationDuration + 0.2) * 1_000_000_000
         )
         try await Task.sleep(nanoseconds: workingDelay)
+
+        #expect(!viewModel.isWorking)
+
+        viewModel.update(
+            state: PointerPromptSpawnState(
+                id: "spawn-1",
+                commandText: "hi there",
+                label: "Hi! What would you like to work on?",
+                accentIndex: 1,
+                phase: .holding
+            ),
+            destination: destination,
+            screenSize: CGSize(width: 1200, height: 800)
+        )
 
         #expect(viewModel.isWorking)
         #expect(abs(viewModel.terminalTailAngleDegrees) < 0.0001)

@@ -32,6 +32,10 @@ The model returns strict JSON, not free-form instructions. The result is decoded
 For dynamic local-item capabilities, the app or item name comes from the typed model output. For dynamic local-app interactions, the app name is accepted only when it can be matched to a supplied app-finder catalog entry with `supportStatus=supported` and a selected declared capability. Catalog and memory matching happen after typed output exists, so lookup is scoped to structured fields such as `targetAppName`, `entities.appName`, `metadata.appFinder.selectedAppID`, or a resolved target id. That inference is not execution authority; the catalog still resolves and verifies the target before any action runs.
 
 The `TaskIntent` wire format always includes an `actionPlan` object. Non-planned task types must return an empty `actionPlan.tools` array; non-empty action plans are accepted only for task definitions that explicitly opt into model-planned local-app interaction.
+Conversational turns use `taskType: "none"` with an empty action plan,
+`metadata.responseMode=conversation`, and `metadata.assistantResponse`; the
+resolver preserves that response instead of turning it into an unsupported local
+action failure.
 
 ## Generic Local-App Interaction
 

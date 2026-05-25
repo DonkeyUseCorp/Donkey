@@ -85,6 +85,14 @@ public final class PointerPromptSpawnOverlayViewModel: ObservableObject {
         isLabelEditing || !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var isAwaitingResponse: Bool {
+        guard let state else { return false }
+
+        return state.phase != .fading &&
+            state.label.trimmingCharacters(in: .whitespacesAndNewlines) ==
+            state.commandText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     public var hasScreenSize: Bool {
         screenSize.width > 0 && screenSize.height > 0
     }
@@ -270,6 +278,7 @@ public final class PointerPromptSpawnOverlayViewModel: ObservableObject {
         let previousLabel = self.state?.label
         let previousLabelSize = labelSize()
         let previousScreenSize = self.screenSize
+        let wasAwaitingResponse = isAwaitingResponse
         self.state = state
         self.screenSize = screenSize
         if isHolding,
@@ -283,6 +292,15 @@ public final class PointerPromptSpawnOverlayViewModel: ObservableObject {
         guard state.phase != .fading else {
             fadeOut()
             return
+        }
+        if isHolding,
+           wasAwaitingResponse,
+           !isAwaitingResponse {
+            animationGeneration += 1
+            terminalTailAngleDegrees = 0
+            withAnimation(.easeOut(duration: 0.12)) {
+                isWorking = true
+            }
         }
 
         guard !freezesMovement else { return }
@@ -458,6 +476,10 @@ public final class PointerPromptSpawnOverlayViewModel: ObservableObject {
 
             withAnimation(.easeOut(duration: 0.12)) {
                 self.terminalTailAngleDegrees = 0
+            }
+            if self.isAwaitingResponse {
+                self.playTerminalTailAnimation(generation: generation)
+            } else {
                 self.isWorking = true
             }
         }
