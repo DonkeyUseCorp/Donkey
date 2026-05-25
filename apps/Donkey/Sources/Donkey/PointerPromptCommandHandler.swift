@@ -489,22 +489,35 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
 
         let taskType = resolution.definition?.taskType ?? resolution.intent?.taskType ?? ""
         let reason = resolution.metadata["reason"] ?? ""
-        let modelReason = resolution.metadata["model.reason"]
-            ?? resolution.metadata["model.fallback.reason"]
-            ?? trace.metadata["reason"]
-            ?? trace.metadata["fallback.reason"]
-            ?? trace.metadata["modelFallback.reason"]
+        let modelReason = Self.metadataValue(
+            in: resolution.metadata,
+            keys: ["model.reason", "model.fallback.reason"]
+        )
+            ?? Self.metadataValue(
+                in: trace.metadata,
+                keys: ["reason", "fallback.reason", "modelFallback.reason"]
+            )
             ?? ""
-        let modelDetail = resolution.metadata["model.detail"]
-            ?? resolution.metadata["model.error"]
-            ?? resolution.metadata["model.http.bodyPreview"]
-            ?? resolution.metadata["model.fallback.http.bodyPreview"]
-            ?? resolution.metadata["model.sidecar.outputPreview"]
-            ?? trace.metadata["detail"]
-            ?? trace.metadata["error"]
-            ?? trace.metadata["http.bodyPreview"]
-            ?? trace.metadata["fallback.http.bodyPreview"]
-            ?? trace.metadata["sidecar.outputPreview"]
+        let modelDetail = Self.metadataValue(
+            in: resolution.metadata,
+            keys: [
+                "model.detail",
+                "model.error",
+                "model.http.bodyPreview",
+                "model.fallback.http.bodyPreview",
+                "model.sidecar.outputPreview"
+            ]
+        )
+            ?? Self.metadataValue(
+                in: trace.metadata,
+                keys: [
+                    "detail",
+                    "error",
+                    "http.bodyPreview",
+                    "fallback.http.bodyPreview",
+                    "sidecar.outputPreview"
+                ]
+            )
             ?? ""
         let fallbackStatus = trace.metadata["fallback.status"] ?? ""
         let latency = Self.formatLatency(latencyMS)
@@ -548,6 +561,15 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                 "local action traceID=\(result.traceID, privacy: .public) commandID=\(command.id, privacy: .public) workflowStepID=\(workflowStepID, privacy: .public) kind=\(command.kind.rawValue, privacy: .public) backend=\(backend, privacy: .public) inputMode=\(inputMode, privacy: .public) executed=\(String(trace.executed), privacy: .public) decision=\(decisionDescription(trace.decision), privacy: .public) elementClick=\(String(elementClick), privacy: .public) controlID=\(controlID, privacy: .public) target=\(target, privacy: .public) overlayPointer=visualOnly appleScriptAction=\(appleScriptAction, privacy: .public) appleScriptOutput=\(appleScriptOutput, privacy: .public) accessibilityResult=\(accessibilityResult, privacy: .public)"
             )
         }
+    }
+
+    private static func metadataValue(in metadata: [String: String], keys: [String]) -> String? {
+        for key in keys {
+            if let value = metadata[key] {
+                return value
+            }
+        }
+        return nil
     }
 
     private func routingHint(for routing: AppHarnessRoutingResult) -> String {
