@@ -117,8 +117,8 @@ LLM packages, or local model repair steps in the hosted-model install path.
 
 For local development, `scripts/run-donkey-dev.sh` starts the local site when
 `DONKEY_WEB_BASE_URL` points at localhost, builds Donkey, wraps the debug
-executable in `apps/Donkey/.build/debug/Donkey.app`, registers that app bundle
-for `donkey://auth/callback`, and launches it. The debug wrapper uses the
+executable in `apps/Donkey/.build/debug/Donkey Dev.app`, registers that app
+bundle for `donkey://auth/callback`, and launches it. The debug wrapper uses the
 `Donkey Dev` display name and `ai.donkey.Donkey.dev` bundle identifier by
 default so macOS privacy settings do not collide with packaged `Donkey.app`
 builds.
@@ -131,8 +131,14 @@ Use `DONKEY_START_SITE=0` to skip starting the site, `DONKEY_LAUNCH_APP=0` to
 build and register the debug app without opening it, or `DONKEY_WEB_BASE_URL` /
 `DONKEY_AUTH_CALLBACK_SCHEME` to test a different auth handoff. Set
 `DONKEY_CODESIGN_IDENTITY` to a local code-signing identity when you want macOS
-privacy grants to survive debug rebuilds; without one, the script falls back to
-ad-hoc signing.
+privacy grants to use that identity; without one, the script falls back to
+ad-hoc signing with a stable dev designated requirement. When the dev script
+exits or receives `SIGINT`, `SIGTERM`, or hangup, it stops running `Donkey`,
+`Donkey Dev`, and bundled Donkey sidecar processes unless
+`DONKEY_KEEP_APP_ON_EXIT=1` is set. Before rebuilding the dev app bundle, it
+also stops running Donkey app processes by default; set
+`DONKEY_STOP_APPS_BEFORE_BUILD=0` only when intentionally inspecting a running
+build.
 
 Development builds use the same hosted-model boundary as packaged builds. If a
 developer needs to test provider behavior, configure the site/backend

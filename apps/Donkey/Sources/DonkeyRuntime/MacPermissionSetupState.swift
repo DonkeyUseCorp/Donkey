@@ -109,7 +109,7 @@ public struct MacPermissionSetupStateResolver: Sendable {
         case .granted:
             action = .ready
         case .notDetermined:
-            action = requestedKinds.contains(kind) ? .openSystemSettings : .enable
+            action = .enable
         case .denied:
             action = .openSystemSettings
         }

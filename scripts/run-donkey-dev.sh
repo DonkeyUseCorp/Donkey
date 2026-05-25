@@ -6,9 +6,10 @@ APP_DIR="$ROOT_DIR/apps/Donkey"
 LOG_SCRIPT="$ROOT_DIR/scripts/tail-donkey-logs.sh"
 BUILD_PRODUCTS_DIR="$APP_DIR/.build/debug"
 DONKEY_BIN="$BUILD_PRODUCTS_DIR/Donkey"
-DEV_APP_DIR="$BUILD_PRODUCTS_DIR/Donkey.app"
 DEV_BUNDLE_IDENTIFIER="${DONKEY_DEV_BUNDLE_IDENTIFIER:-ai.donkey.Donkey.dev}"
 DEV_DISPLAY_NAME="${DONKEY_DEV_DISPLAY_NAME:-Donkey Dev}"
+DEV_EXECUTABLE_NAME="${DONKEY_DEV_EXECUTABLE_NAME:-$DEV_DISPLAY_NAME}"
+DEV_APP_DIR="$BUILD_PRODUCTS_DIR/$DEV_DISPLAY_NAME.app"
 CACHE_DIR="$APP_DIR/.build/dev-script-cache"
 CACHE_CLANG_DIR="$CACHE_DIR/clang"
 CACHE_SWIFTPM_DIR="$CACHE_DIR/swiftpm"
@@ -28,9 +29,23 @@ LOG_PID=""
 
 export DONKEY_WEB_BASE_URL="${DONKEY_WEB_BASE_URL:-http://localhost:3000}"
 
-cleanup() {
+stop_running_donkey_apps() {
+  killall Donkey >/dev/null 2>&1 || true
+  if [ "$DEV_DISPLAY_NAME" != "Donkey" ]; then
+    killall "$DEV_DISPLAY_NAME" >/dev/null 2>&1 || true
+  fi
+  killall DonkeyUIUnderstandingSidecar >/dev/null 2>&1 || true
+
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -f '/Donkey\.app/Contents/MacOS/Donkey([[:space:]]|$)' >/dev/null 2>&1 || true
+    pkill -f '/Donkey Dev\.app/Contents/MacOS/Donkey([[:space:]]|$)' >/dev/null 2>&1 || true
+    pkill -f '/Donkey Dev\.app/Contents/MacOS/Donkey Dev([[:space:]]|$)' >/dev/null 2>&1 || true
+  fi
+}
+
+cleanup_child_processes() {
   if [ "$LAUNCH_APP" != "0" ] && [ "${DONKEY_KEEP_APP_ON_EXIT:-0}" != "1" ]; then
-    killall Donkey >/dev/null 2>&1 || true
+    stop_running_donkey_apps
   fi
   if [ -n "$LOG_PID" ] && kill -0 "$LOG_PID" >/dev/null 2>&1; then
     kill "$LOG_PID" >/dev/null 2>&1 || true
@@ -40,6 +55,20 @@ cleanup() {
     kill "$SITE_PID" >/dev/null 2>&1 || true
     wait "$SITE_PID" >/dev/null 2>&1 || true
   fi
+}
+
+cleanup_on_exit() {
+  local exit_code=$?
+  trap - EXIT INT TERM HUP
+  cleanup_child_processes
+  exit "$exit_code"
+}
+
+cleanup_on_signal() {
+  local exit_code="$1"
+  trap - EXIT INT TERM HUP
+  cleanup_child_processes
+  exit "$exit_code"
 }
 
 start_logger() {
@@ -54,6 +83,7 @@ start_logger() {
   fi
 
   local log_args=()
+  log_args+=(--process "$DEV_EXECUTABLE_NAME")
   if [ "${DONKEY_LOG_ERRORS_ONLY:-0}" = "1" ]; then
     log_args+=(--errors)
   fi
@@ -211,10 +241,12 @@ write_info_plist() {
   local escaped_callback_scheme
   local escaped_bundle_identifier
   local escaped_display_name
+  local escaped_executable_name
   escaped_web_base_url="$(xml_escape "$DONKEY_WEB_BASE_URL")"
   escaped_callback_scheme="$(xml_escape "$AUTH_CALLBACK_SCHEME")"
   escaped_bundle_identifier="$(xml_escape "$DEV_BUNDLE_IDENTIFIER")"
   escaped_display_name="$(xml_escape "$DEV_DISPLAY_NAME")"
+  escaped_executable_name="$(xml_escape "$DEV_EXECUTABLE_NAME")"
 
   cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -222,7 +254,7 @@ write_info_plist() {
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key>
-  <string>Donkey</string>
+  <string>$escaped_executable_name</string>
   <key>CFBundleIdentifier</key>
   <string>$escaped_bundle_identifier</string>
   <key>CFBundleName</key>
@@ -278,16 +310,16 @@ create_debug_app_bundle() {
   local sparkle_framework
   local codesign_identity
 
-  rm -rf "$DEV_APP_DIR"
+  rm -rf "$DEV_APP_DIR" "$BUILD_PRODUCTS_DIR/Donkey.app"
   mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$FRAMEWORKS_DIR"
 
-  cp "$DONKEY_BIN" "$MACOS_DIR/Donkey"
-  if ! otool -l "$MACOS_DIR/Donkey" | grep -q "@executable_path/../Frameworks"; then
+  cp "$DONKEY_BIN" "$MACOS_DIR/$DEV_EXECUTABLE_NAME"
+  if ! otool -l "$MACOS_DIR/$DEV_EXECUTABLE_NAME" | grep -q "@executable_path/../Frameworks"; then
     if ! command -v install_name_tool >/dev/null 2>&1; then
       echo "install_name_tool is required to package the Donkey debug app." >&2
       exit 1
     fi
-    install_name_tool -add_rpath "@executable_path/../Frameworks" "$MACOS_DIR/Donkey"
+    install_name_tool -add_rpath "@executable_path/../Frameworks" "$MACOS_DIR/$DEV_EXECUTABLE_NAME"
   fi
 
   resource_bundle="$(find "$APP_DIR/.build" -path "*/debug/Donkey_Donkey.bundle" -type d | head -n 1 || true)"
@@ -309,11 +341,23 @@ create_debug_app_bundle() {
   if command -v codesign >/dev/null 2>&1; then
     codesign_identity="$(resolve_codesign_identity)"
     if [ "$codesign_identity" = "-" ]; then
-      echo "Signing debug app ad-hoc. Set DONKEY_CODESIGN_IDENTITY to preserve macOS privacy permissions across rebuilds."
+      echo "Signing debug app ad-hoc with a stable dev requirement."
+      codesign \
+        --force \
+        --deep \
+        --sign - \
+        --identifier "$DEV_BUNDLE_IDENTIFIER" \
+        --requirements "=designated => identifier \"$DEV_BUNDLE_IDENTIFIER\"" \
+        "$DEV_APP_DIR" >/dev/null
     else
       echo "Signing debug app with $codesign_identity."
+      codesign \
+        --force \
+        --deep \
+        --sign "$codesign_identity" \
+        --identifier "$DEV_BUNDLE_IDENTIFIER" \
+        "$DEV_APP_DIR" >/dev/null
     fi
-    codesign --force --deep --sign "$codesign_identity" "$DEV_APP_DIR" >/dev/null
   fi
 
   if [ -x "$LSREGISTER" ]; then
@@ -329,13 +373,16 @@ swift_build() {
     swift build --quiet
 }
 
-trap cleanup EXIT
+trap cleanup_on_exit EXIT
+trap 'cleanup_on_signal 130' INT
+trap 'cleanup_on_signal 143' TERM
+trap 'cleanup_on_signal 129' HUP
 
 ensure_site_server
 
-if [ "$LAUNCH_APP" != "0" ]; then
+if [ "${DONKEY_STOP_APPS_BEFORE_BUILD:-1}" = "1" ]; then
   echo "Stopping any running Donkey app..."
-  killall Donkey >/dev/null 2>&1 || true
+  stop_running_donkey_apps
 fi
 
 cd "$APP_DIR"

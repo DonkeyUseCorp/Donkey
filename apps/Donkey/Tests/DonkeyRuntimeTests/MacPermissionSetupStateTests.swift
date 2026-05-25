@@ -14,12 +14,12 @@ struct MacPermissionSetupStateTests {
     }
 
     @Test
-    func requestedUnresolvedPermissionOpensSystemSettings() {
+    func requestedUnresolvedPermissionCanRequestAgain() {
         let resolver = MacPermissionSetupStateResolver(requestedKinds: [.screenRecording])
 
         let row = resolver.row(kind: .screenRecording, status: .notDetermined)
 
-        #expect(row.action == .openSystemSettings)
+        #expect(row.action == .enable)
     }
 
     @Test
