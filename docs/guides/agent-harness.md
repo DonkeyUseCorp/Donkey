@@ -241,7 +241,9 @@ continue after catalog validation confirms the target app/task, required
 entities, app availability, and safety policy. The default runtime
 capabilities are generic local-item open plus generic model-planned local-app
 interaction; the latter materializes a transient task definition from an
-allowlisted typed `actionPlan` before execution. Weather lookup, media
+allowlisted typed `actionPlan` before execution. Typed focus-control steps with
+declared keyboard shortcuts may execute after the target app is focused;
+pointer/control targeting still requires grounded bounds. Weather lookup, media
 playback, and document form-fill are benchmark fixtures for tests and replay
 evaluation, not runtime defaults. Runtime defaults come from the SQLite-backed
 agent memory store, which is seeded with generic capabilities and enriched by

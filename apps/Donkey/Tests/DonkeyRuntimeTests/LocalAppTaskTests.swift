@@ -352,6 +352,44 @@ struct LocalAppTaskTests {
     }
 
     @Test
+    func genericInteractionShortcutFocusDoesNotRequireControlBounds() throws {
+        let catalog = LocalAppTaskCatalog(
+            taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
+            availabilityProvider: StaticLocalAppAvailabilityProvider(
+                installedBundleIdentifiers: ["com.apple.Music"]
+            )
+        )
+        let resolution = catalog.resolve(intent: genericLocalAppInteractionIntent(
+            appName: "Music",
+            query: "Coldplay",
+            planTools: [
+                .openOrFocusApp,
+                .observeApp,
+                .focusSearch,
+                .setText,
+                .pressReturn,
+                .verifyCommand
+            ]
+        ))
+        let intent = try #require(resolution.intent)
+        let definition = try #require(resolution.definition)
+        let plan = catalog.adapter(for: definition).evidenceBackedActionPlan(
+            for: intent,
+            observation: LocalAppTaskObservation(
+                appIsRunning: true,
+                appIsFocused: true,
+                availableControls: [:],
+                confidence: 0.7
+            )
+        )
+
+        #expect(resolution.status == .resolved)
+        #expect(plan.canExecuteGuardedActions == true)
+        #expect(plan.terminalState == .completed)
+        #expect(plan.steps.first(where: { $0.role == .focusControl })?.status == .verified)
+    }
+
+    @Test
     func staticProviderBuildsAppFinderCatalogWithSupportAndDenyMetadata() throws {
         let provider = StaticLocalAppAvailabilityProvider(
             installedBundleIdentifiers: [
@@ -1048,6 +1086,143 @@ struct LocalAppTaskTests {
         #expect(result.metadata["action.overlayPointer"] == "visualOnly")
         #expect(result.workflowProgress.state(for: .execute)?.status == .completed)
         #expect(result.workflowProgress.state(for: .verify)?.status == .completed)
+    }
+
+    @Test @MainActor
+    func liveRunnerExecutesGenericShortcutFocusPlanWithoutControlBounds() async throws {
+        let backend = RecordingLocalAppTaskInputBackend()
+        let controller = FakeLocalAppTaskAppController(
+            launchObservation: LocalAppTaskObservation(
+                appIsRunning: true,
+                appIsFocused: true,
+                availableControls: [:],
+                confidence: 0.7
+            ),
+            finalObservation: LocalAppTaskObservation(
+                appIsRunning: true,
+                appIsFocused: true,
+                availableControls: [:],
+                confidence: 0.74
+            )
+        )
+        let catalog = LocalAppTaskCatalog(
+            taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
+            availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.Music"])
+        )
+        let runner = LocalAppTaskLiveRunner(
+            catalog: catalog,
+            appController: controller,
+            actionEngineFactory: { _ in
+                ActionEngineGuardrail(
+                    configuration: ActionEngineConfiguration(liveInputEnabled: true),
+                    inputBackend: backend
+                )
+            },
+            permissionPolicy: ToolCallPolicy(deniedCapabilities: [])
+        )
+        let intent = genericLocalAppInteractionIntent(
+            appName: "Music",
+            query: "Coldplay",
+            planTools: [
+                .openOrFocusApp,
+                .observeApp,
+                .focusSearch,
+                .setText,
+                .pressReturn,
+                .verifyCommand
+            ]
+        )
+
+        let result = await runner.run(
+            command: "play some cold play",
+            traceID: "trace-generic-shortcut-focus",
+            resolution: catalog.resolve(intent: intent),
+            metadata: ["intentParser": "test-model"]
+        )
+
+        #expect(result.status == .completed)
+        #expect(result.metadata["reason"] != "evidencePlanBlocked")
+        #expect(result.workflowProgress.state(for: .evidencePlan)?.status == .completed)
+        #expect(result.workflowProgress.state(for: .execute)?.status == .completed)
+        #expect(await backend.executedKeys() == ["Command+F", "Coldplay", "Return"])
+    }
+
+    @Test @MainActor
+    func liveRunnerDoesNotReportCompletedWhenEvidencePlanBlocks() async throws {
+        let backend = RecordingLocalAppTaskInputBackend()
+        let controller = FakeLocalAppTaskAppController(
+            launchObservation: LocalAppTaskObservation(
+                appIsRunning: true,
+                appIsFocused: true,
+                availableControls: [:],
+                confidence: 0.7
+            ),
+            finalObservation: LocalAppTaskObservation(
+                appIsRunning: true,
+                appIsFocused: true,
+                availableControls: [:],
+                confidence: 0.74
+            )
+        )
+        let catalog = LocalAppTaskCatalog(
+            taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
+            availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.Music"])
+        )
+        let runner = LocalAppTaskLiveRunner(
+            catalog: catalog,
+            appController: controller,
+            actionEngineFactory: { _ in
+                ActionEngineGuardrail(
+                    configuration: ActionEngineConfiguration(liveInputEnabled: true),
+                    inputBackend: backend
+                )
+            },
+            permissionPolicy: ToolCallPolicy(deniedCapabilities: [])
+        )
+        let intent = TaskIntent(
+            intentID: "local_app_interaction-no-focus-evidence",
+            taskType: "local_app_interaction",
+            targetApp: LocalAppTarget(appName: "Music", titleContains: "Music"),
+            entities: [
+                "appName": "Music",
+                "goal": "play media",
+                "query": "Coldplay"
+            ],
+            normalizedEntities: [
+                "appName": "Music",
+                "goal": "play media",
+                "query": "Coldplay"
+            ],
+            confidence: 0.93,
+            parserSource: .localModel,
+            actionPlan: LocalAppActionPlan(
+                tools: [
+                    .openOrFocusApp,
+                    .observeApp,
+                    .focusSearch,
+                    .setText,
+                    .pressReturn,
+                    .verifyCommand
+                ],
+                inputEntity: "query",
+                controlID: "search",
+                focusKey: "",
+                verification: .commandAttempted
+            ),
+            metadata: ["requestedItemName": "Music"]
+        )
+
+        let result = await runner.run(
+            command: "play some cold play",
+            traceID: "trace-blocked-evidence-plan",
+            resolution: catalog.resolve(intent: intent),
+            metadata: ["intentParser": "test-model"]
+        )
+
+        #expect(result.status == .needsUserReview)
+        #expect(result.metadata["reason"] == "evidencePlanBlocked")
+        #expect(result.workflowProgress.state(for: .evidencePlan)?.status == .blocked)
+        #expect(await backend.executedKeys() == [])
     }
 
     @Test @MainActor

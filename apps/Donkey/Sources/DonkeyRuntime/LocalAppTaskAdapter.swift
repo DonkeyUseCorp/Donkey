@@ -262,6 +262,9 @@ public struct LocalAppTaskAdapter: Sendable {
         case .observeApp:
             return observation == nil ? .needsEvidence : .verified
         case .focusControl:
+            if Self.hasKeyboardFocusShortcut(step), observation?.appIsFocused == true {
+                return .verified
+            }
             if let controlID = step.metadata["controlID"],
                let observation,
                LocalAppObservationGeometry.hasNormalizedControlBounds(
@@ -336,6 +339,11 @@ public struct LocalAppTaskAdapter: Sendable {
         case .enterText, .submit, .verifyResult, .custom:
             return true
         }
+    }
+
+    private static func hasKeyboardFocusShortcut(_ step: LocalAppTaskWorkflowStepDefinition) -> Bool {
+        let key = step.metadata["key"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !key.isEmpty
     }
 
     private func verificationStatus(

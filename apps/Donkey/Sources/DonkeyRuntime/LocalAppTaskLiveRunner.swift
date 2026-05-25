@@ -332,7 +332,7 @@ public struct LocalAppTaskLiveRunner: Sendable {
             return LocalAppTaskLiveRunResult(
                 command: command,
                 traceID: traceID,
-                status: status(for: initialActionPlan.terminalState),
+                status: blockedEvidencePlanStatus(for: initialActionPlan.terminalState),
                 resolution: resolution,
                 initialActionPlan: initialActionPlan,
                 observation: launchObservation,
@@ -759,6 +759,17 @@ public struct LocalAppTaskLiveRunner: Sendable {
         case .completed:
             return .completed
         case .needsUserReview:
+            return .needsUserReview
+        case .failedSafe, .timedOut:
+            return .failedSafe
+        }
+    }
+
+    private func blockedEvidencePlanStatus(
+        for terminalState: LocalAppTaskTerminalState
+    ) -> LocalAppTaskLiveRunStatus {
+        switch terminalState {
+        case .completed, .needsUserReview:
             return .needsUserReview
         case .failedSafe, .timedOut:
             return .failedSafe

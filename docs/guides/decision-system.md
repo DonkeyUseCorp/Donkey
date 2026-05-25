@@ -93,6 +93,9 @@ The catalog resolves dynamic targets through the agent memory store, Spotlight/a
 The live runner then owns launch/focus, observation, evidence-backed action
 planning, guarded execution, verification, and agent visualization evidence.
 Accessibility and keyboard input run through action-engine guardrails.
+Focus-control steps that name a keyboard shortcut, such as `Command+F` or
+`Command+L`, may execute once the target app is focused; pointer-style focus
+still requires grounded control bounds.
 AppleScript may be used only when supplied by typed task metadata or validated
 generated artifacts; free-form planner text is never direct input.
 

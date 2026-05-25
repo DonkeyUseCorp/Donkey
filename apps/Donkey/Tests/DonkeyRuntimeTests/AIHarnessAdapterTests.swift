@@ -390,6 +390,7 @@ struct AIHarnessAdapterTests {
         #expect((body["prompt"] as? String)?.contains("Use only the provided task definitions") == true)
         #expect((body["prompt"] as? String)?.contains("choose by capability and target app") == true)
         #expect((body["prompt"] as? String)?.contains("Do not include reasoning") == true)
+        #expect((body["prompt"] as? String)?.contains("play/listen media requests") == true)
         #expect((body["prompt"] as? String)?.contains("For website navigation") == true)
         #expect((body["prompt"] as? String)?.contains("ui.newDocument") == true)
         #expect((body["prompt"] as? String)?.contains("set_text_input_contract=inputEntityValueIsExactTextToEnter") == true)
@@ -534,6 +535,7 @@ struct AIHarnessAdapterTests {
         let instructions = try #require(parameters["instructions"] as? String)
         #expect(instructions.contains("local_app_interaction"))
         #expect(instructions.contains("media playback"))
+        #expect(instructions.contains("play/listen media requests"))
         #expect(instructions.contains("metadata.assistantResponse"))
     }
 
