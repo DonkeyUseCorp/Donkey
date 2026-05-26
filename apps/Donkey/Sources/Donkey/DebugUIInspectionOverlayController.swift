@@ -67,7 +67,7 @@ final class DebugUIInspectionOverlayController {
             .ignoresCycle,
             .stationary
         ]
-        panel.sharingType = .none
+        panel.sharingType = .readOnly
         panel.orderFrontRegardless()
 
         return DebugUIInspectionSurface(panel: panel, rootView: rootView)
@@ -127,7 +127,7 @@ private final class DebugUIInspectionSurface {
     private func makeLayers(for element: DebugUIElement) -> DebugUIInspectionElementLayers {
         let boxLayer = CAShapeLayer()
         boxLayer.name = "debug-ui-box-\(element.id)"
-        boxLayer.fillColor = nsColor(hex: element.visualStyle.overlayColor, alpha: 0.14).cgColor
+        boxLayer.fillColor = fillColor(for: element)
         boxLayer.strokeColor = nsColor(hex: element.visualStyle.borderColor, alpha: 0.95).cgColor
         boxLayer.lineWidth = 2
         boxLayer.opacity = 0
@@ -167,7 +167,7 @@ private final class DebugUIInspectionSurface {
         let path = CGPath(rect: CGRect(origin: .zero, size: boxFrame.size), transform: nil)
         layers.box.frame = boxFrame
         layers.box.path = path
-        layers.box.fillColor = nsColor(hex: element.visualStyle.overlayColor, alpha: 0.14).cgColor
+        layers.box.fillColor = fillColor(for: element)
         layers.box.strokeColor = nsColor(hex: element.visualStyle.borderColor, alpha: 0.95).cgColor
 
         let title = labelText(for: element)
@@ -199,6 +199,13 @@ private final class DebugUIInspectionSurface {
             max(64, Double(rootView.bounds.width - max(0, boxFrame.minX)))
         )
         return CGSize(width: width, height: 18)
+    }
+
+    private func fillColor(for element: DebugUIElement) -> CGColor {
+        if element.id.hasPrefix("window-") {
+            return NSColor.clear.cgColor
+        }
+        return nsColor(hex: element.visualStyle.overlayColor, alpha: 0.14).cgColor
     }
 
     private func fadeIn(_ layers: DebugUIInspectionElementLayers) {

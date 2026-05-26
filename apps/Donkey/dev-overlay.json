@@ -1,6 +1,6 @@
 {
-  "enabled": false,
-  "provider": "openai",
+  "enabled": true,
+  "provider": "accessibility",
   "cadenceSeconds": 1.0,
   "screenScope": "main",
   "minConfidence": 0.25

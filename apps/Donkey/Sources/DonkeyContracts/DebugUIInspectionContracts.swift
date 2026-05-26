@@ -1,6 +1,7 @@
 import Foundation
 
 public enum DebugUIInspectionProvider: String, Codable, Equatable, Sendable {
+    case accessibility
     case openai
     case gemini
 }

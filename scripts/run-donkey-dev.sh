@@ -108,6 +108,43 @@ start_logger() {
   LOG_PID="$!"
 }
 
+print_dev_overlay_status() {
+  local overlay_config="$APP_DIR/dev-overlay.json"
+  if [ ! -f "$overlay_config" ]; then
+    echo "Dev overlay config: missing at $overlay_config"
+    return
+  fi
+
+  local summary
+  summary="$(
+    python3 - "$overlay_config" <<'PY' 2>/dev/null || true
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    config = json.load(handle)
+
+print(
+    "enabled={enabled} provider={provider} cadenceSeconds={cadence} "
+    "screenScope={scope} minConfidence={confidence}".format(
+        enabled=config.get("enabled", False),
+        provider=config.get("provider", "accessibility"),
+        cadence=config.get("cadenceSeconds", 1.0),
+        scope=config.get("screenScope", "main"),
+        confidence=config.get("minConfidence", 0.25),
+    )
+)
+PY
+  )"
+
+  if [ -n "$summary" ]; then
+    echo "Dev overlay config: $summary"
+    echo "Dev overlay logs: look for 'debug inspection rendering ... elements=N' below."
+  else
+    echo "Dev overlay config: invalid JSON at $overlay_config"
+  fi
+}
+
 is_local_web_base_url() {
   case "$DONKEY_WEB_BASE_URL" in
     http://localhost|http://localhost:*|http://127.0.0.1|http://127.0.0.1:*|http://[::1]|http://[::1]:*)
@@ -405,5 +442,6 @@ if [ "$LAUNCH_APP" = "0" ]; then
 fi
 
 echo "Starting Donkey..."
+print_dev_overlay_status
 start_logger
 open -W -n "$DEV_APP_DIR"

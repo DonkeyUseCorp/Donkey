@@ -15,7 +15,7 @@ public struct DebugUIOverlayConfiguration: Equatable, Sendable {
 
     public init(
         enabled: Bool = false,
-        provider: DebugUIInspectionProvider = .openai,
+        provider: DebugUIInspectionProvider = .accessibility,
         cadenceSeconds: TimeInterval = 1.0,
         screenScope: DebugUIInspectionScreenScope = .main,
         minConfidence: Double = 0.25
@@ -68,7 +68,7 @@ public struct DebugUIOverlayConfiguration: Equatable, Sendable {
 
         return DebugUIOverlayConfiguration(
             enabled: raw.enabled ?? false,
-            provider: raw.provider.flatMap(DebugUIInspectionProvider.init(rawValue:)) ?? .openai,
+            provider: raw.provider.flatMap(DebugUIInspectionProvider.init(rawValue:)) ?? .accessibility,
             cadenceSeconds: raw.cadenceSeconds ?? 1.0,
             screenScope: raw.screenScope.flatMap(DebugUIInspectionScreenScope.init(rawValue:)) ?? .main,
             minConfidence: raw.minConfidence ?? 0.25
@@ -248,7 +248,7 @@ public enum DebugUIOverlayGeometry {
         let scaleY = screenPointSize.height / screenshotPixelSize.height
         return CGRect(
             x: bbox.x * scaleX,
-            y: bbox.y * scaleY,
+            y: screenPointSize.height - (bbox.y + bbox.height) * scaleY,
             width: bbox.width * scaleX,
             height: bbox.height * scaleY
         )
@@ -258,6 +258,8 @@ public enum DebugUIOverlayGeometry {
 public enum DebugUIScreenCaptureError: Error, Equatable, Sendable {
     case noScreenAvailable
     case missingDisplayIdentifier
+    case screenCapturePermissionDenied
+    case blankCapture(displayID: UInt32)
     case captureFailed(displayID: UInt32)
     case pngEncodingFailed(displayID: UInt32)
 }
@@ -289,11 +291,17 @@ public struct DebugUIScreenCaptureSnapshot: Equatable, Sendable {
 }
 
 public struct DebugUIScreenCaptureService: Sendable {
+    private static let maxInspectionPixelDimension = 1_600
+
     public init() {}
 
     public func captureScreens(
         scope: DebugUIInspectionScreenScope
     ) throws -> [DebugUIScreenCaptureSnapshot] {
+        guard Self.screenCaptureAccessGranted() else {
+            throw DebugUIScreenCaptureError.screenCapturePermissionDenied
+        }
+
         let screens: [NSScreen]
         switch scope {
         case .main:
@@ -308,12 +316,23 @@ public struct DebugUIScreenCaptureService: Sendable {
         return try screens.map(capture)
     }
 
+    private static func screenCaptureAccessGranted() -> Bool {
+        if CGPreflightScreenCaptureAccess() {
+            return true
+        }
+        return CGRequestScreenCaptureAccess()
+    }
+
     private func capture(screen: NSScreen) throws -> DebugUIScreenCaptureSnapshot {
         let displayID = try Self.displayID(for: screen)
         guard let image = CGDisplayCreateImage(displayID) else {
             throw DebugUIScreenCaptureError.captureFailed(displayID: displayID)
         }
-        guard let pngData = Self.pngData(from: image) else {
+        let inspectionImage = Self.inspectionImage(from: image)
+        guard !Self.isLikelyBlank(inspectionImage) else {
+            throw DebugUIScreenCaptureError.blankCapture(displayID: displayID)
+        }
+        guard let pngData = Self.pngData(from: inspectionImage) else {
             throw DebugUIScreenCaptureError.pngEncodingFailed(displayID: displayID)
         }
 
@@ -328,8 +347,8 @@ public struct DebugUIScreenCaptureService: Sendable {
                 space: .screen
             ),
             pixelSize: HotLoopSize(
-                width: Double(image.width),
-                height: Double(image.height),
+                width: Double(inspectionImage.width),
+                height: Double(inspectionImage.height),
                 space: .screen
             ),
             pngData: pngData,
@@ -360,6 +379,80 @@ public struct DebugUIScreenCaptureService: Sendable {
             return nil
         }
         return data as Data
+    }
+
+    private static func inspectionImage(from image: CGImage) -> CGImage {
+        let longestEdge = max(image.width, image.height)
+        guard longestEdge > maxInspectionPixelDimension else {
+            return image
+        }
+
+        let scale = Double(maxInspectionPixelDimension) / Double(longestEdge)
+        let width = max(1, Int((Double(image.width) * scale).rounded()))
+        let height = max(1, Int((Double(image.height) * scale).rounded()))
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ) else {
+            return image
+        }
+
+        context.interpolationQuality = .medium
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage() ?? image
+    }
+
+    private static func isLikelyBlank(_ image: CGImage) -> Bool {
+        let width = 32
+        let height = 32
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+
+        return pixels.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(
+                data: buffer.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: colorSpace,
+                bitmapInfo: bitmapInfo
+            ) else {
+                return false
+            }
+
+            context.interpolationQuality = .low
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+            let bytes = buffer.bindMemory(to: UInt8.self)
+            var luminanceTotal = 0
+            var brightPixels = 0
+            for offset in stride(from: 0, to: bytes.count, by: bytesPerPixel) {
+                let red = Int(bytes[offset])
+                let green = Int(bytes[offset + 1])
+                let blue = Int(bytes[offset + 2])
+                let luminance = (red + green + blue) / 3
+                luminanceTotal += luminance
+                if luminance > 24 {
+                    brightPixels += 1
+                }
+            }
+
+            let pixelCount = width * height
+            let averageLuminance = Double(luminanceTotal) / Double(pixelCount * 255)
+            let brightFraction = Double(brightPixels) / Double(pixelCount)
+            return averageLuminance < 0.02 && brightFraction < 0.01
+        }
     }
 
     private static func fingerprint(for data: Data) -> String {

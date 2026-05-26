@@ -50,6 +50,7 @@ public struct HostedDebugUIInspectionAnalyzer: DebugUIInspectionAnalyzing {
         return try DebugUIInspectionResponseDecoder.decode(
             response,
             decoder: decoder,
+            screenshotPixelSize: request.pixelSize,
             minConfidence: request.minConfidence
         )
     }
@@ -65,11 +66,12 @@ public struct HostedDebugUIInspectionAnalyzer: DebugUIInspectionAnalyzing {
                     "content": .array([
                         .object([
                             "type": .string("input_text"),
-                            "text": .string(Self.prompt)
+                            "text": .string(Self.prompt(for: request.pixelSize))
                         ]),
                         .object([
                             "type": .string("input_image"),
-                            "image_url": .string("data:image/png;base64,\(request.screenshotBase64)")
+                            "image_url": .string("data:image/png;base64,\(request.screenshotBase64)"),
+                            "detail": .string("original")
                         ])
                     ])
                 ])
@@ -94,26 +96,36 @@ public struct HostedDebugUIInspectionAnalyzer: DebugUIInspectionAnalyzing {
                 "screenshot.height": String(request.pixelSize.height)
             ]) { current, _ in current },
             parameters: [
-                "temperature": .number(0),
+                "reasoning": .object([
+                    "effort": .string("low")
+                ]),
                 "max_output_tokens": .number(8_000)
             ]
         )
     }
 
-    private static let prompt = """
-    You are a read-only macOS UI inspection model. Analyze the screenshot and return ONLY valid JSON.
+    private static func prompt(for pixelSize: HotLoopSize) -> String {
+        let width = max(1, Int(pixelSize.width.rounded()))
+        let height = max(1, Int(pixelSize.height.rounded()))
+        return """
+    You are a read-only macOS UI inspection model. Return bounding boxes for visible visual controls that are likely clickable or otherwise user-interactable. Return ONLY valid JSON.
 
-    Detect visible user-interactable UI elements. Include window controls, buttons, links, tabs, menu items, dropdowns, text inputs, search fields, checkboxes, radios, toggles, sliders, toolbar icons, sidebar items, Dock items, menu bar items, table rows, list items, tree items, clickable cards, draggable handles, resize handles, scrollbars, split panes, canvas interaction regions, floating action buttons, and icon-only controls. Prefer over-detecting interactable elements over missing them.
+    The attached screenshot coordinate space is exactly \(width) pixels wide by \(height) pixels high.
+
+    Find every visible control candidate a person could click, focus, drag, select, or activate. Include macOS window controls, browser toolbar controls, app sidebars, buttons, links, tabs, menu items, dropdowns, text inputs, search fields, checkboxes, radios, toggles, sliders, toolbar icons, sidebar rows, list rows, clickable cards, draggable handles, resize handles, scrollbars, split panes, canvas interaction regions, floating action buttons, and icon-only controls. Prefer over-detecting likely controls over missing them.
 
     Do not include static text, decorative graphics, separators, backgrounds, or non-interactable containers unless they are clearly interactive.
 
-    Coordinates must be screenshot pixel coordinates with origin at top-left. Bounding boxes must tightly fit the clickable region. If an element is partially obscured, include it with lower confidence. Infer labels for icon-only controls when possible.
+    Coordinates must be screenshot pixel coordinates in that \(width)x\(height) coordinate space with origin at top-left. Bounding boxes must tightly fit the clickable region. If you can only report coordinates in a resized internal image coordinate space, set coordinate_space to that image width and height so the client can scale the boxes. If an element is partially obscured, include it with lower confidence. Infer labels for icon-only controls when possible.
+
+    Do not return an empty elements array unless the screenshot is blank or contains no visible UI. For a normal macOS desktop screenshot, return the visible controls you can identify.
 
     Do not click, type, scroll, drag, navigate, call tools, or propose actions. This is visual inspection only.
 
     Return exactly:
-    {"elements":[{"id":"stable_unique_id","type":"button","label":"Save","description":"Saves current document","bbox":{"x":120,"y":340,"width":88,"height":32},"confidence":0.98,"visual_style":{"overlay_color":"#3B82F6","border_color":"#60A5FA","label_color":"#FFFFFF"}}]}
+    {"coordinate_space":{"width":\(width),"height":\(height)},"elements":[{"id":"stable_unique_id","type":"button","label":"Save","description":"Saves current document","bbox":{"x":120,"y":340,"width":88,"height":32},"confidence":0.98,"visual_style":{"overlay_color":"#3B82F6","border_color":"#60A5FA","label_color":"#FFFFFF"}}]}
     """
+    }
 
     private static let excludedActionNames = [
         "click",
@@ -137,6 +149,7 @@ public struct HostedDebugUIInspectionAnalyzer: DebugUIInspectionAnalyzing {
     ]
 
     private static let responseFormat: RemoteInferenceJSONObject = [
+        "verbosity": .string("low"),
         "format": .object([
             "type": .string("json_schema"),
             "name": .string("debug_ui_inspection_v1"),
@@ -144,8 +157,29 @@ public struct HostedDebugUIInspectionAnalyzer: DebugUIInspectionAnalyzing {
             "schema": .object([
                 "type": .string("object"),
                 "additionalProperties": .bool(false),
-                "required": .array([.string("elements")]),
+                "required": .array([
+                    .string("coordinate_space"),
+                    .string("elements")
+                ]),
                 "properties": .object([
+                    "coordinate_space": .object([
+                        "type": .string("object"),
+                        "additionalProperties": .bool(false),
+                        "required": .array([
+                            .string("width"),
+                            .string("height")
+                        ]),
+                        "properties": .object([
+                            "width": .object([
+                                "type": .string("number"),
+                                "minimum": .number(1)
+                            ]),
+                            "height": .object([
+                                "type": .string("number"),
+                                "minimum": .number(1)
+                            ])
+                        ])
+                    ]),
                     "elements": .object([
                         "type": .string("array"),
                         "items": .object([
@@ -216,6 +250,7 @@ public enum DebugUIInspectionResponseDecoder {
     public static func decode(
         _ response: RemoteInferenceJSONValue,
         decoder: JSONDecoder = JSONDecoder(),
+        screenshotPixelSize: HotLoopSize? = nil,
         minConfidence: Double = 0.25
     ) throws -> DebugUIInspectionFrame {
         guard containsActionOutput(response) == false else {
@@ -236,7 +271,8 @@ public enum DebugUIInspectionResponseDecoder {
         }
 
         do {
-            return try decoder.decode(DebugUIInspectionFrame.self, from: frameData)
+            let rawFrame = try decoder.decode(RawDebugUIInspectionFrame.self, from: frameData)
+            return normalizedFrame(rawFrame, screenshotPixelSize: screenshotPixelSize)
                 .validated(minConfidence: minConfidence)
         } catch {
             throw DebugUIInspectionHostedAdapterError.invalidJSON(String(describing: error))
@@ -306,4 +342,49 @@ public enum DebugUIInspectionResponseDecoder {
         "\"functionCall\"",
         "\"function_call\""
     ]
+
+    private static func normalizedFrame(
+        _ frame: RawDebugUIInspectionFrame,
+        screenshotPixelSize: HotLoopSize?
+    ) -> DebugUIInspectionFrame {
+        guard let screenshotPixelSize,
+              screenshotPixelSize.width > 0,
+              screenshotPixelSize.height > 0,
+              let coordinateSpace = frame.coordinateSpace,
+              coordinateSpace.width > 0,
+              coordinateSpace.height > 0
+        else {
+            return DebugUIInspectionFrame(elements: frame.elements)
+        }
+
+        let scaleX = screenshotPixelSize.width / coordinateSpace.width
+        let scaleY = screenshotPixelSize.height / coordinateSpace.height
+        return DebugUIInspectionFrame(
+            elements: frame.elements.map { element in
+                var adjusted = element
+                adjusted.bbox = DebugUIBoundingBox(
+                    x: adjusted.bbox.x * scaleX,
+                    y: adjusted.bbox.y * scaleY,
+                    width: adjusted.bbox.width * scaleX,
+                    height: adjusted.bbox.height * scaleY
+                )
+                return adjusted
+            }
+        )
+    }
+}
+
+private struct RawDebugUIInspectionFrame: Decodable {
+    var coordinateSpace: RawDebugUICoordinateSpace?
+    var elements: [DebugUIElement]
+
+    enum CodingKeys: String, CodingKey {
+        case coordinateSpace = "coordinate_space"
+        case elements
+    }
+}
+
+private struct RawDebugUICoordinateSpace: Decodable {
+    var width: Double
+    var height: Double
 }
