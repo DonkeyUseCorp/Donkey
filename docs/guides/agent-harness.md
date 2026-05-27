@@ -246,8 +246,9 @@ plugins, skills, catalogs, or memory, not in core harness conditionals.
 Computer use is one tool family inside the harness.
 
 Accessibility is the primary source for actionable UI elements. Screenshots,
-vision, OCR, and hover evidence can enrich the world model, labels, and layout,
-but they must not authorize live input by themselves.
+vision, OCR, and hover evidence enrich the world model, labels, and layout. When
+Accessibility cannot resolve the target, scoped AI screenshot boxes may become a
+secondary actionable target for a guarded coordinate click.
 
 Element actions execute only after the harness validates:
 
@@ -259,9 +260,10 @@ Element actions execute only after the harness validates:
 - safety class
 - verification criteria
 
-Models choose semantic targets and tool calls. They do not micromanage pixels.
-Coordinate input is fallback evidence only and must pass the same guarded
-execution checks as other input.
+Models choose semantic targets and tool calls. They may choose an observed AI
+visual target when no Accessibility target is available. Coordinate input is a
+fallback execution path and must pass the same guarded execution checks as other
+input.
 
 Verification must be backed by task evidence. A local-app command attempt is not
 verified merely because the target app is focused or running after execution;

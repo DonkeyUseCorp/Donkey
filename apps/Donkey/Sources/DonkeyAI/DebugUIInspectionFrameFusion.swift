@@ -60,8 +60,8 @@ public enum DebugUIInspectionFrameFusion {
             visualStyle: element.visualStyle,
             metadata: element.metadata.merging([
                 "debugUIFusion.source": "gemini",
-                "localUIElement.actionEligibility": "readOnlyEvidence",
-                "directInputActionsAllowed": "false"
+                "localUIElement.actionEligibility": "guardedAction",
+                "directInputActionsAllowed": "true"
             ]) { current, _ in current }
         )
     }

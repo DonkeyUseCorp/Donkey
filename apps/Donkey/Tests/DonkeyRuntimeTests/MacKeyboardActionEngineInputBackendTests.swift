@@ -1,5 +1,6 @@
 @testable import DonkeyRuntime
 import DonkeyContracts
+import CoreGraphics
 import Foundation
 import Testing
 
@@ -65,6 +66,40 @@ struct MacKeyboardActionEngineInputBackendTests {
         #expect(recorder.commands() == ["Command+F"])
     }
 
+    @Test
+    func tapCommandsClickCenterOfScreenTargetBounds() async {
+        let recorder = MouseClickRecorder()
+        let backend = MacKeyboardActionEngineInputBackend(
+            keyCommandPoster: { _ in false },
+            mouseClickPoster: { point in
+                recorder.append(point)
+                return true
+            },
+            textEntryExecutor: { _, _ in
+                MacKeyboardTextEntryExecution(executed: false, inputMode: "pasteboardText")
+            }
+        )
+
+        let result = await backend.execute(ActionEngineCommand(
+            id: "tap-visual-send",
+            traceID: "trace-coordinate-click",
+            targetID: "local-app-task-test",
+            kind: .tap,
+            issuedAt: RunTraceTimestamp(
+                wallClock: Date(timeIntervalSince1970: 0),
+                monotonicUptimeNanoseconds: 0
+            ),
+            targetBounds: HotLoopRect(x: 100, y: 200, width: 80, height: 40, space: .screen),
+            metadata: ["controlID": "send", "visualFallback": "aiOrObservedBounds"]
+        ))
+
+        #expect(result.executed == true)
+        #expect(result.metadata["inputMode"] == "coordinateClick")
+        #expect(result.metadata["elementClick"] == "true")
+        #expect(result.metadata["controlID"] == "send")
+        #expect(recorder.points() == [CGPoint(x: 140, y: 220)])
+    }
+
     private func command(
         key: String,
         metadata: [String: String] = [:]
@@ -99,5 +134,23 @@ private final class KeyboardCommandRecorder: @unchecked Sendable {
         let commands = recordedCommands
         lock.unlock()
         return commands
+    }
+}
+
+private final class MouseClickRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedPoints: [CGPoint] = []
+
+    func append(_ point: CGPoint) {
+        lock.lock()
+        recordedPoints.append(point)
+        lock.unlock()
+    }
+
+    func points() -> [CGPoint] {
+        lock.lock()
+        let points = recordedPoints
+        lock.unlock()
+        return points
     }
 }

@@ -1,4 +1,5 @@
 import DonkeyContracts
+import DonkeyHarness
 @testable import DonkeyRuntime
 import Foundation
 import Testing
@@ -994,6 +995,92 @@ struct LocalAppTaskTests {
     }
 
     @Test @MainActor
+    func visualObservationBoundsCanDriveModelPlannedClickTarget() async throws {
+        let catalog = LocalAppTaskCatalog(
+            taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
+            availabilityProvider: StaticLocalAppAvailabilityProvider(
+                installedBundleIdentifiers: ["com.apple.Music"]
+            )
+        )
+        let intent = genericLocalAppInteractionIntent(
+            appName: "Music",
+            query: "Sample Track",
+            planTools: [.openOrFocusApp, .observeApp, .clickTarget, .verifyCommand]
+        )
+        let resolution = catalog.resolve(intent: intent)
+        let definition = try #require(resolution.definition)
+        var metadata = LocalAppObservationGeometry.targetBoundsMetadata(
+            WindowTargetBounds(x: 100, y: 200, width: 500, height: 300)
+        )
+        metadata.merge(LocalAppObservationGeometry.controlMetadata(
+            controlID: "search",
+            frame: HotLoopRect(x: 50, y: 60, width: 100, height: 40, space: .window),
+            source: .localUIUnderstanding,
+            label: "Search",
+            kind: .button,
+            confidence: 0.82,
+            extra: [
+                "localUIElement.actionEligibility": "guardedAction",
+                "directInputActionsAllowed": "true"
+            ]
+        )) { current, _ in current }
+        let observation = LocalAppTaskObservation(
+            appIsRunning: true,
+            appIsFocused: true,
+            availableControls: ["search": true],
+            visibleText: ["visibleText": "Search"],
+            confidence: 0.82,
+            metadata: metadata
+        )
+        let backend = RecordingLocalAppTaskInputBackend()
+        let executor = LocalAppHarnessStepExecutor(
+            command: "click the visible search target",
+            traceID: "trace-visual-click",
+            resolution: resolution,
+            appController: FakeLocalAppTaskAppController(
+                launchObservation: observation,
+                finalObservation: observation
+            ),
+            actionEngineFactory: { _ in
+                ActionEngineGuardrail(
+                    configuration: ActionEngineConfiguration(liveInputEnabled: true),
+                    inputBackend: backend
+                )
+            }
+        )
+        let registry = HarnessToolRegistry()
+        await executor.registerTools(in: registry)
+
+        _ = await registry.execute(
+            HarnessToolCall(id: "observe", name: LocalAppActionPlanTool.observeApp.rawValue),
+            taskID: "task-visual-click",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: [.screenCapture, .accessibility, .input]
+        )
+        let clickResult = await registry.execute(
+            HarnessToolCall(
+                id: "click",
+                name: LocalAppActionPlanTool.clickTarget.rawValue,
+                input: [
+                    "controlID": "search",
+                    "modelStepID": "click-search"
+                ]
+            ),
+            taskID: "task-visual-click",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: [.screenCapture, .accessibility, .input]
+        )
+
+        let command = try #require(await backend.executedCommands().first)
+        #expect(clickResult.status == .succeeded)
+        #expect(command.kind == .tap)
+        #expect(command.metadata["inputStrategy"] == "visual-coordinate")
+        #expect(command.metadata["visualFallback"] == "aiOrObservedBounds")
+        #expect(command.targetBounds == HotLoopRect(x: 150, y: 260, width: 100, height: 40, space: .screen))
+        #expect(definition.workflowSteps.contains { $0.metadata["plan.tool"] == "ui.clickTarget" })
+    }
+
+    @Test @MainActor
     func documentApprovalRunnerExecutesOnlyApprovedFields() async throws {
         let backend = RecordingLocalAppTaskInputBackend()
         let controller = FakeLocalAppTaskAppController(
@@ -1264,17 +1351,28 @@ private final class FakeLocalAppTaskAppController: LocalAppTaskAppControlling {
 
 private actor RecordingLocalAppTaskInputBackend: ActionEngineInputBackend {
     private var keys: [String] = []
+    private var commands: [ActionEngineCommand] = []
 
     func execute(_ command: ActionEngineCommand) async -> ActionEngineInputBackendResult {
+        commands.append(command)
         keys.append(command.key ?? "")
         return ActionEngineInputBackendResult(
             executed: true,
             completedAt: command.issuedAt,
-            metadata: ["liveInputBackend": "recording-local-app-task"]
+            metadata: [
+                "liveInputBackend": "recording-local-app-task",
+                "inputMode": command.kind == .tap ? "coordinateClick" : "keyCommand",
+                "elementClick": String(command.kind == .tap),
+                "controlID": command.metadata["controlID"] ?? ""
+            ]
         )
     }
 
     func executedKeys() -> [String] {
         keys
+    }
+
+    func executedCommands() -> [ActionEngineCommand] {
+        commands
     }
 }

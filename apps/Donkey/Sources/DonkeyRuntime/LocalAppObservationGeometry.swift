@@ -106,6 +106,27 @@ enum LocalAppObservationGeometry {
         normalizedControlBounds(controlID: controlID, metadata: metadata) != nil
     }
 
+    static func screenControlBounds(
+        controlID: String,
+        metadata: [String: String]
+    ) -> HotLoopRect? {
+        guard let rect = metadataRect(prefix: "\(controlPrefix(controlID))bounds.", metadata: metadata),
+              rect.hasPositiveArea
+        else {
+            return nil
+        }
+        if rect.space == .screen {
+            return rect
+        }
+        guard let mapper = coordinateMapper(metadata: metadata),
+              let screenRect = mapper.convert(rect, to: .screen),
+              screenRect.hasPositiveArea
+        else {
+            return nil
+        }
+        return screenRect
+    }
+
     static func normalizedStepBounds(metadata: [String: String]) -> HotLoopRect? {
         metadataRect(prefix: "control.bounds.", metadata: metadata).flatMap { rect in
             normalizedBounds(rect, metadata: metadata)

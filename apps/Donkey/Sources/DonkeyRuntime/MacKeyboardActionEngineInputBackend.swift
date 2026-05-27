@@ -21,6 +21,7 @@ struct MacKeyboardTextEntryExecution: Equatable, Sendable {
 
 public struct MacKeyboardActionEngineInputBackend: ActionEngineInputBackend {
     private let keyCommandPoster: @Sendable (String) -> Bool
+    private let mouseClickPoster: @Sendable (CGPoint) -> Bool
     private let textEntryExecutor: @Sendable (
         String,
         @escaping @Sendable (String) -> Bool
@@ -28,21 +29,28 @@ public struct MacKeyboardActionEngineInputBackend: ActionEngineInputBackend {
 
     public init() {
         self.keyCommandPoster = Self.postKeyCommand
+        self.mouseClickPoster = Self.postMouseClick
         self.textEntryExecutor = Self.pasteText
     }
 
     init(
         keyCommandPoster: @escaping @Sendable (String) -> Bool,
+        mouseClickPoster: @escaping @Sendable (CGPoint) -> Bool = Self.postMouseClick,
         textEntryExecutor: @escaping @Sendable (
             String,
             @escaping @Sendable (String) -> Bool
         ) async -> MacKeyboardTextEntryExecution
     ) {
         self.keyCommandPoster = keyCommandPoster
+        self.mouseClickPoster = mouseClickPoster
         self.textEntryExecutor = textEntryExecutor
     }
 
     public func execute(_ command: ActionEngineCommand) async -> ActionEngineInputBackendResult {
+        if command.kind == .tap {
+            return await executeTap(command)
+        }
+
         guard command.kind == .key, let key = command.key else {
             return result(
                 command: command,
@@ -82,6 +90,52 @@ public struct MacKeyboardActionEngineInputBackend: ActionEngineInputBackend {
                 "elementClick": "false",
                 "key": key
             ].merging(inputMetadata) { current, _ in current }
+        )
+    }
+
+    private func executeTap(_ command: ActionEngineCommand) async -> ActionEngineInputBackendResult {
+        guard let point = screenCenter(of: command.targetBounds) else {
+            return result(
+                command: command,
+                executed: false,
+                metadata: [
+                    "liveInputBackend": "mac-keyboard",
+                    "inputMode": "coordinateClick",
+                    "elementClick": "true",
+                    "reason": "missingScreenTargetBounds"
+                ]
+            )
+        }
+
+        let executed = mouseClickPoster(point)
+        if executed {
+            try? await Task.sleep(nanoseconds: 80_000_000)
+        }
+        return result(
+            command: command,
+            executed: executed,
+            metadata: [
+                "liveInputBackend": "mac-keyboard",
+                "inputMode": "coordinateClick",
+                "elementClick": "true",
+                "targetPoint.x": String(Double(point.x)),
+                "targetPoint.y": String(Double(point.y)),
+                "controlID": command.metadata["controlID"] ?? "",
+                "visualFallback": command.metadata["visualFallback"] ?? ""
+            ]
+        )
+    }
+
+    private func screenCenter(of rect: HotLoopRect?) -> CGPoint? {
+        guard let rect,
+              rect.hasPositiveArea,
+              rect.space == .screen
+        else {
+            return nil
+        }
+        return CGPoint(
+            x: rect.origin.x + rect.size.width / 2,
+            y: rect.origin.y + rect.size.height / 2
         )
     }
 
@@ -163,6 +217,28 @@ public struct MacKeyboardActionEngineInputBackend: ActionEngineInputBackend {
         keyUp.flags = flags
         keyDown.post(tap: .cghidEventTap)
         keyUp.post(tap: .cghidEventTap)
+        return true
+    }
+
+    private static func postMouseClick(at point: CGPoint) -> Bool {
+        guard let source = CGEventSource(stateID: .hidSystemState),
+              let mouseDown = CGEvent(
+                mouseEventSource: source,
+                mouseType: .leftMouseDown,
+                mouseCursorPosition: point,
+                mouseButton: .left
+              ),
+              let mouseUp = CGEvent(
+                mouseEventSource: source,
+                mouseType: .leftMouseUp,
+                mouseCursorPosition: point,
+                mouseButton: .left
+              )
+        else {
+            return false
+        }
+        mouseDown.post(tap: .cghidEventTap)
+        mouseUp.post(tap: .cghidEventTap)
         return true
     }
 

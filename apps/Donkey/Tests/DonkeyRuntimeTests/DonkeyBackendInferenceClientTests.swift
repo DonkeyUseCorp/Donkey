@@ -201,8 +201,8 @@ struct DonkeyBackendInferenceClientTests {
         #expect(element.id == "gemini-42-review")
         #expect(element.type == .button)
         #expect(element.bbox == DebugUIBoundingBox(x: 150, y: 425, width: 100, height: 50))
-        #expect(element.metadata["directInputActionsAllowed"] == "false")
-        #expect(element.metadata["localUIElement.actionEligibility"] == "readOnlyEvidence")
+        #expect(element.metadata["directInputActionsAllowed"] == "true")
+        #expect(element.metadata["localUIElement.actionEligibility"] == "guardedAction")
     }
 
     @Test
@@ -307,8 +307,8 @@ struct DonkeyBackendInferenceClientTests {
         #expect(ids.contains("gemini-voice"))
         let geminiElement = try #require(fused.elements.first { $0.id == "gemini-voice" })
         #expect(geminiElement.metadata["debugUIFusion.source"] == "gemini")
-        #expect(geminiElement.metadata["directInputActionsAllowed"] == "false")
-        #expect(geminiElement.metadata["localUIElement.actionEligibility"] == "readOnlyEvidence")
+        #expect(geminiElement.metadata["directInputActionsAllowed"] == "true")
+        #expect(geminiElement.metadata["localUIElement.actionEligibility"] == "guardedAction")
     }
 
     @Test

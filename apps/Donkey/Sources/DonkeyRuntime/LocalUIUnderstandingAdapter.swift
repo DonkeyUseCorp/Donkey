@@ -87,15 +87,19 @@ public struct LocalUIUnderstandingResult: Codable, Equatable, Sendable {
     }
 
     public func observation(for request: LocalUIUnderstandingRequest) -> LocalAppTaskObservation {
+        let controlsAllowDirectInput = controls.contains {
+            $0.metadata["directInputActionsAllowed"] == "true"
+                || $0.metadata["localUIElement.actionEligibility"] == "guardedAction"
+        }
         var observationMetadata = request.metadata.merging(metadata) { _, new in new }
         observationMetadata.merge([
             "observer": "local-ui-understanding",
             "traceID": request.traceID,
             "targetID": request.targetID,
             "controlCount": String(controls.count),
-            "formFieldCount": String(formFields.count),
-            "directInputActionsAllowed": "false"
+            "formFieldCount": String(formFields.count)
         ]) { current, _ in current }
+        observationMetadata["directInputActionsAllowed"] = String(controlsAllowDirectInput)
         if let cropBounds = request.cropBounds {
             observationMetadata.merge(
                 LocalAppObservationGeometry.cropBoundsMetadata(cropBounds)

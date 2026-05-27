@@ -1211,6 +1211,17 @@ public struct LocalAppTaskCatalog: Sendable {
                         "plan.tool": tool.rawValue
                     ]
                 ))
+            case .clickTarget:
+                steps.append(LocalAppTaskWorkflowStepDefinition(
+                    id: "model-plan-click-target-\(submitIndex)",
+                    role: .submit,
+                    summary: "Click the model-selected visual or Accessibility target",
+                    metadata: [
+                        "controlID": plan.controlID,
+                        "plan.tool": tool.rawValue
+                    ]
+                ))
+                submitIndex += 1
             case .pressReturn:
                 steps.append(LocalAppTaskWorkflowStepDefinition(
                     id: "model-plan-press-return-\(submitIndex)",

@@ -33,8 +33,9 @@ quick local-app actions:
   not bundle the repo config and only honor the Application Support path. When
   no config exists, the config is invalid, or `"enabled": false`, the debug
   overlay is fully disabled. When enabled, Donkey Vision fuses Accessibility and
-  hosted AI screenshot parsing. Local geometry wins; AI boxes are read-only
-  evidence and are visually marked as `AI`. The overlay never sends a full
+  hosted AI screenshot parsing. Local geometry wins; AI boxes can be
+  interactable through guarded coordinate fallback and are visually marked as
+  `AI`. The overlay never sends a full
   desktop screenshot to hosted AI: it captures safe app/window or
   system-navigation surfaces only. See
   `docs/guides/donkey-vision.md`.
@@ -67,16 +68,17 @@ quick local-app actions:
 - The centered composer keeps text and voice modes on the same input surface. Double-Command release opens focused text input, double-Command hold opens the same input with voice active, and typed text promotes the send button while the microphone affordance becomes secondary.
 - Voice capture and transcription remain separate. The controller records bounded local audio and publishes levels; transcription is model-backed through the hosted agent-harness boundary before transcript text enters the turn path.
 - Local item prewarming must run off the main actor and must not eagerly scan protected user folders. Agent memory is stored in SQLite under Application Support and uses FTS5 plus deterministic local embeddings for retrieval; JSONL is only an explicit export/debug format. Cached local-item hits must still point to an existing path or bundle before they are used as an execution target. Runtime task definitions are the generic open/local-app interaction seeds plus generated or user-reviewed definitions loaded from memory.
-- For scriptable apps, prefer app-native AppleScript task commands before falling back to Accessibility or keyboard input. Submit steps with an explicit structured `controlID` may execute as an Accessibility `AXPress` against button-like controls, with the control bounds carried into action traces. Bounded screenshots may supplement observation/verification according to task metadata, but screenshots remain context evidence and do not directly drive input.
+- For scriptable apps, prefer app-native AppleScript task commands before falling back to Accessibility, AI visual targets, or keyboard input. Submit steps with an explicit structured `controlID` may execute as an Accessibility `AXPress` against button-like controls, or as a guarded coordinate click against an AI visual target when Accessibility is unavailable. Control bounds are carried into action traces.
 - Agent visualization overlays are non-interactive, non-activating panels. They may point, explain, and replay what the agent is doing or would do, but they do not synthesize mouse movement. Live keyboard or Accessibility actions remain separate guarded runtime actions. When a local-app action plan is based on an observation, preserve target-window geometry and control bounds on the evidence-backed steps so cursor replay can use pixel-grounded element positions instead of invented coordinates.
 - The developer UI inspection overlay is separate from agent visualization. It
   is a transparent, non-activating, click-through, keyboard-pass-through AppKit
   panel at a lower window level than Donkey's interactive UI. It renders
   CALayer rectangles and labels from local Accessibility or hover-probe detector
   output only. Provider action calls such as click, type, scroll, drag,
-  navigation, `computer_call`, or `function_call` are rejected instead of
-  executed. Hover-only detections are visualization/read-only evidence and must
-  not become live input authority.
+  navigation, `computer_call`, or `function_call` are rejected by the overlay
+  itself. Live input is executed only by the guarded local-app runtime.
+  Hover-only detections are visualization/read-only evidence and must not
+  become live input authority.
 - Task actions in the notch, including follow-up submission and pause/resume, must cross the model/controller command boundary with the selected task ID.
 - User-query command handling should emit actionable `com.donkey.app` route/result logs for submitted commands, routing decisions, intent resolution, local action traces, unsupported requests, unavailable apps, and final task status. Action trace logs should state the backend, input mode, whether an element click happened, the control or bounds target, and that the overlay pointer is visual-only.
 

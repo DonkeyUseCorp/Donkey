@@ -117,6 +117,7 @@ export function normalizedScreenshotResult(
 
   const controls = output.controls.map((control, index) => {
     const id = control.id?.trim() || `gemini-control-${index + 1}`;
+    const controlID = normalizedControlID(control.label, control.kind, id);
     return {
       id,
       label: control.label,
@@ -124,9 +125,12 @@ export function normalizedScreenshotResult(
       frame: rectFromGeminiBox(control.box_2d, request.pixelSize.width, request.pixelSize.height),
       confidence: clamp01(control.confidence),
       metadata: {
-        controlID: id,
+        controlID,
+        segmentID: id,
         source: "gemini-screenshot-parser",
         boxFormat: "ymin,xmin,ymax,xmax/1000",
+        "localUIElement.actionEligibility": "guardedAction",
+        directInputActionsAllowed: "true",
       },
     };
   });
@@ -156,11 +160,23 @@ export function normalizedScreenshotResult(
     metadata: toJsonObject({
       ...metadata,
       "runtime.backend": "gemini-screenshot-parser",
-      "directInputActionsAllowed": "false",
+      "directInputActionsAllowed": "true",
       "screenshotParser.controlCount": String(controls.length),
       "screenshotParser.formFieldCount": String(formFields.length),
     }),
   };
+}
+
+function normalizedControlID(label: string, kind: string, fallbackID: string) {
+  const normalized = label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (kind === "searchField") {
+    return "search";
+  }
+  return normalized || fallbackID;
 }
 
 function geminiRequestParameters(

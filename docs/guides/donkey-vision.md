@@ -63,17 +63,21 @@ that the position came from the model.
 
 ## Safety Boundary
 
-Donkey Vision is observation. It does not authorize live input by itself.
+Donkey Vision is observation first, and it can now supply a secondary live-input
+target when Accessibility cannot provide a better element.
 
-Vision evidence can help Donkey plan, explain, debug, and decide where to look
-next. Live input still has to pass through the guarded action boundary: target
-validation, focus checks, permission policy, action eligibility, and runtime
-verification.
+Vision evidence can help Donkey plan, explain, debug, decide where to look next,
+and choose a coordinate click target. Live input still has to pass through the
+guarded action boundary: target validation, focus checks, permission policy,
+action eligibility, and runtime verification.
 
 AI-derived evidence is especially constrained:
 
-- AI boxes are read-only evidence.
-- AI output must not enable direct clicks, typing, scrolling, or dragging.
+- AI boxes may be interactable when they come from a scoped app/window or
+  system-navigation screenshot and are marked `guardedAction`.
+- AI output may provide a coordinate click target after the Accessibility path
+  fails or is unavailable. The executor clicks the guarded target center, not an
+  unbounded desktop coordinate.
 - Screenshots sent to hosted AI must be scoped to an app/window or a
   system-navigation surface, never the full desktop.
 - Screenshots are not persisted or logged as general product data.
@@ -90,7 +94,8 @@ The distinction matters. If an `AI` box is visibly off, that is expected model
 localization error and should not be fixed by adding arbitrary coordinate
 offsets. Prefer improving local geometry, fusion, or the screenshot scope. If an
 `AX` box is off, that is a local coordinate mapping bug and should be fixed in
-the Mac geometry path.
+the Mac geometry path. Live input tries Accessibility first, then AI visual
+targets, then guarded coordinate click fallback.
 
 The debug config uses Donkey Vision as the mode:
 
@@ -128,4 +133,5 @@ High-signal entry points:
 - Do not make provider selection the UI or config model for Donkey Vision.
 - Prefer app/window-scoped screenshots and local geometry.
 - Keep AI evidence marked and visually distinct.
-- Keep live input authorization separate from visual evidence.
+- Allow AI visual targets to drive guarded coordinate clicks only after focus,
+  permission, target-window, and action-eligibility checks pass.

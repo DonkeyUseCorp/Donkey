@@ -31,7 +31,7 @@ enum LocalAppTaskVerificationPolicy {
         case .verifyVisibleText:
             return .visibleText
         case .openOrFocusApp, .observeApp, .newDocument, .focusSearch, .focusAddressBar,
-             .focusTextEntry, .setText, .pressReturn, nil:
+             .focusTextEntry, .setText, .clickTarget, .pressReturn, nil:
             break
         }
 

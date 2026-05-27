@@ -45,7 +45,7 @@ public enum ScreenshotParseDebugUIOverlayMapper {
                     confidence: control.confidence,
                     metadata: control.metadata.merging([
                         "localUIElement.sources": "gemini-screenshot-parser",
-                        "localUIElement.actionEligibility": LocalUIElementActionEligibility.readOnlyEvidence.rawValue,
+                        "localUIElement.actionEligibility": LocalUIElementActionEligibility.guardedAction.rawValue,
                         "remoteScreenshotParsing.status": result.metadata["remoteScreenshotParsing.status"] ?? "used",
                         "remoteScreenshotParsing.provider": result.metadata["parserProvider"] ?? result.metadata["runtime.backend"] ?? "gemini-screenshot-parser",
                         "target.windowID": String(target.windowID),
@@ -53,7 +53,7 @@ public enum ScreenshotParseDebugUIOverlayMapper {
                         "target.bundleIdentifier": target.bundleIdentifier ?? "",
                         "target.title": target.title ?? "",
                         "coordinate.sourceSpace": frame.space.rawValue,
-                        "directInputActionsAllowed": "false"
+                        "directInputActionsAllowed": "true"
                     ]) { current, _ in current }
                 )
             }
@@ -98,13 +98,13 @@ public enum ScreenshotParseDebugUIOverlayMapper {
                 confidence: 1,
                 metadata: [
                     "localUIElement.sources": "window-chrome-geometry",
-                    "localUIElement.actionEligibility": LocalUIElementActionEligibility.readOnlyEvidence.rawValue,
+                    "localUIElement.actionEligibility": LocalUIElementActionEligibility.guardedAction.rawValue,
                     "target.windowID": String(target.windowID),
                     "target.appName": target.appName ?? "",
                     "target.bundleIdentifier": target.bundleIdentifier ?? "",
                     "target.title": target.title ?? "",
                     "coordinate.sourceSpace": "windowChromeGeometry",
-                    "directInputActionsAllowed": "false"
+                    "directInputActionsAllowed": "true"
                 ]
             )
         }

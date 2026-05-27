@@ -100,6 +100,13 @@ public actor LocalAppHarnessStepExecutor {
                 safety: .guardedInput
             ),
             descriptor(
+                .clickTarget,
+                summary: "Click one model-selected Accessibility or AI visual target.",
+                input: ["controlID": "Model-selected Accessibility control id or AI visual segment id."],
+                permissions: [.input],
+                safety: .guardedInput
+            ),
+            descriptor(
                 .pressReturn,
                 summary: "Run one guarded model-planned Return submit action.",
                 input: ["focusKey": "Optional model-selected key."],
@@ -166,7 +173,7 @@ public actor LocalAppHarnessStepExecutor {
             return await openOrFocus(context, definition: definition, intent: intent, availability: availability)
         case .observeApp:
             return await observe(context, definition: definition, intent: intent, reason: "observe")
-        case .newDocument, .focusSearch, .focusAddressBar, .focusTextEntry, .setText, .pressReturn:
+        case .newDocument, .focusSearch, .focusAddressBar, .focusTextEntry, .setText, .clickTarget, .pressReturn:
             return await executeAction(context, tool: tool, definition: definition, intent: intent, availability: availability)
         case .verifyCommand, .verifyVisibleText:
             return await verify(context, tool: tool, definition: definition, intent: intent)
@@ -443,6 +450,13 @@ public actor LocalAppHarnessStepExecutor {
                 )
         }
         return candidates.first?.withHarnessIssuedAt(Self.now())
+            ?? visualClickCommand(
+                tool: tool,
+                context: context,
+                adapter: adapter,
+                intent: intent,
+                controlID: controlID
+            )
     }
 
     private func matchesStructuredInputs(
@@ -468,6 +482,49 @@ public actor LocalAppHarnessStepExecutor {
             return false
         }
         return true
+    }
+
+    private func visualClickCommand(
+        tool: LocalAppActionPlanTool,
+        context: HarnessToolExecutionContext,
+        adapter: LocalAppTaskAdapter,
+        intent: TaskIntent,
+        controlID: String?
+    ) -> ActionEngineCommand? {
+        guard [.focusSearch, .focusAddressBar, .focusTextEntry, .clickTarget].contains(tool),
+              let controlID,
+              let observation = latestObservation,
+              let targetBounds = LocalAppObservationGeometry.screenControlBounds(
+                controlID: controlID,
+                metadata: observation.metadata
+              )
+        else {
+            return nil
+        }
+
+        return ActionEngineCommand(
+            id: "\(intent.intentID)-visual-click-\(Self.slug(controlID))",
+            traceID: intent.metadata["traceID"] ?? intent.intentID,
+            targetID: adapter.targetID,
+            kind: .tap,
+            issuedAt: Self.now(),
+            targetBounds: targetBounds,
+            metadata: LocalAppObservationGeometry.groundedMetadata(
+                controlID: controlID,
+                observation: observation
+            ).merging([
+                "taskIntentID": intent.intentID,
+                "taskType": intent.taskType,
+                "targetApp": adapter.definition.targetApp.appName,
+                "bundleIdentifier": adapter.definition.targetApp.bundleIdentifier ?? "",
+                "workflowStepID": context.call.input["modelStepID"] ?? "visual-click-\(Self.slug(controlID))",
+                "workflowStepRole": role(for: tool),
+                "controlID": controlID,
+                "inputStrategy": "visual-coordinate",
+                "visualFallback": "aiOrObservedBounds",
+                "plan.tool": tool.rawValue
+            ]) { current, _ in current }
+        )
     }
 
     private func observationWithActionEvidence(_ observation: LocalAppTaskObservation?) -> LocalAppTaskObservation? {
@@ -673,7 +730,7 @@ public actor LocalAppHarnessStepExecutor {
 
     private func role(for tool: LocalAppActionPlanTool) -> String {
         switch tool {
-        case .newDocument, .pressReturn:
+        case .newDocument, .clickTarget, .pressReturn:
             return LocalAppTaskStepRole.submit.rawValue
         case .focusSearch, .focusAddressBar, .focusTextEntry:
             return LocalAppTaskStepRole.focusControl.rawValue
@@ -717,6 +774,12 @@ public actor LocalAppHarnessStepExecutor {
             "action.lastBackend": lastTrace.metadata["liveInputBackend"] ?? "",
             "action.overlayPointer": "visualOnly"
         ]
+    }
+
+    private static func slug(_ value: String) -> String {
+        LocalAppTextNormalizer.normalizedPhrase(value)
+            .split(separator: " ")
+            .joined(separator: "-")
     }
 
     private static func descriptor(

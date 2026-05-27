@@ -89,6 +89,7 @@ public enum LocalAppActionPlanTool: String, Codable, CaseIterable, Equatable, Se
     case focusAddressBar = "ui.focusAddressBar"
     case focusTextEntry = "ui.focusTextEntry"
     case setText = "ui.setText"
+    case clickTarget = "ui.clickTarget"
     case pressReturn = "ui.pressReturn"
     case verifyCommand = "app.verifyCommand"
     case verifyVisibleText = "app.verifyVisibleText"
