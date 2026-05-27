@@ -21,6 +21,11 @@ struct GenericHarnessTests {
         #expect(names.contains("skill.script.execute"))
         #expect(names.contains("automation.applescript.generate"))
         #expect(names.contains("automation.applescript.execute"))
+        #expect(names.contains("application.learning.start"))
+        #expect(names.contains("application.learning.captureState"))
+        #expect(names.contains("application.learning.proposeExploration"))
+        #expect(names.contains("application.learning.distill"))
+        #expect(names.contains("application.learning.saveSkillPack"))
 
         let generate = descriptors.first { $0.name == "automation.applescript.generate" }
         #expect(generate?.metadata["modelBoundary"] == "required")
@@ -42,6 +47,14 @@ struct GenericHarnessTests {
         let scriptExecute = descriptors.first { $0.name == "skill.script.execute" }
         #expect(scriptExecute?.metadata["requiresValidatedScript"] == "true")
         #expect(scriptExecute?.requiredPermissions == [.appControl, .input])
+
+        let learningCapture = descriptors.first { $0.name == "application.learning.captureState" }
+        #expect(learningCapture?.requiredPermissions == [.screenCapture, .accessibility])
+        #expect(learningCapture?.verificationHints.contains { $0.contains("bounded artifacts") } == true)
+
+        let learningExplore = descriptors.first { $0.name == "application.learning.proposeExploration" }
+        #expect(learningExplore?.requiredPermissions == [.accessibility])
+        #expect(learningExplore?.verificationHints.contains { $0.contains("technical roles/actions") } == true)
     }
 
     @Test
@@ -399,6 +412,217 @@ struct GenericHarnessTests {
         #expect(generatedSkillScript.metadata["scriptArtifactID"] == "prepare-workspace")
         #expect(executedSkillScript.status == .succeeded)
         #expect(executedSkillScript.observations.facts["script.executed.output"] == "prepared")
+    }
+
+    @Test
+    func applicationLearningFlowSavesSearchableSkillPackWithValidatedScripts() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("donkey-learned-skill-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        let skillRegistry = HarnessSkillRegistry()
+        let scriptStore = HarnessGeneratedScriptStore()
+        let learningStore = HarnessApplicationLearningStore()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(
+                skillRegistry: skillRegistry,
+                generatedScripts: scriptStore,
+                applicationLearningStore: learningStore,
+                applicationSkillPackWriter: HarnessApplicationSkillPackWriter(rootDirectory: root)
+            )
+        )
+        let baseWorld = HarnessWorldModel(
+            focusedApp: "DraftPad",
+            focusedWindowTitle: "DraftPad - Untitled",
+            visibleText: ["main": "Untitled document"],
+            elements: [
+                HarnessWorldElement(
+                    id: "toolbar-new",
+                    label: "New Document",
+                    role: "AXButton",
+                    isActionEligible: true,
+                    actions: ["AXPress"],
+                    metadata: ["scope": "toolbar"]
+                ),
+                HarnessWorldElement(
+                    id: "editor",
+                    label: "Editor",
+                    role: "AXTextArea",
+                    isActionEligible: true,
+                    actions: ["AXSetValue"],
+                    metadata: ["scope": "main"]
+                )
+            ],
+            facts: [
+                "screen.observe.screenshotArtifactURL": "file:///tmp/draftpad-main.png",
+                "screen.observe.accessibilityArtifactURL": "file:///tmp/draftpad-main-accessibility.json"
+            ]
+        )
+
+        let started = await registry.execute(
+            HarnessToolCall(
+                id: "learn-start",
+                name: "application.learning.start",
+                input: [
+                    "appName": "DraftPad",
+                    "bundleIdentifier": "com.example.DraftPad",
+                    "goal": "Learn safe writing workflows.",
+                    "skillID": "learned-draftpad"
+                ]
+            ),
+            taskID: "task-learn-draftpad",
+            worldModel: baseWorld,
+            grantedPermissions: [.appLookup, .skillLookup]
+        )
+        let capturedMain = await registry.execute(
+            HarnessToolCall(
+                id: "learn-capture-main",
+                name: "application.learning.captureState",
+                input: [
+                    "draftID": "task-learn-draftpad-learned-draftpad",
+                    "stateID": "main-editor",
+                    "title": "Main editor",
+                    "navigationPath": "launch",
+                    "changedFromPrevious": "Initial focused window",
+                    "safetyNotes": "Typing requires explicit user content"
+                ]
+            ),
+            taskID: "task-learn-draftpad",
+            worldModel: baseWorld,
+            grantedPermissions: [.screenCapture, .accessibility]
+        )
+        let menuWorld = HarnessWorldModel(
+            focusedApp: "DraftPad",
+            focusedWindowTitle: "DraftPad - File Menu",
+            visibleText: ["menu": "New Open Save Export"],
+            elements: [
+                HarnessWorldElement(
+                    id: "file-new",
+                    label: "New",
+                    role: "AXMenuItem",
+                    isActionEligible: true,
+                    actions: ["AXPress"]
+                )
+            ],
+            facts: [
+                "screen.observe.screenshotArtifactURL": "file:///tmp/draftpad-menu.png",
+                "screen.observe.accessibilityArtifactURL": "file:///tmp/draftpad-menu-accessibility.json"
+            ]
+        )
+        let capturedMenu = await registry.execute(
+            HarnessToolCall(
+                id: "learn-capture-menu",
+                name: "application.learning.captureState",
+                input: [
+                    "draftID": "task-learn-draftpad-learned-draftpad",
+                    "stateID": "file-menu",
+                    "title": "File menu",
+                    "navigationPath": "launch, menu:file",
+                    "changedFromPrevious": "Opened File menu"
+                ]
+            ),
+            taskID: "task-learn-draftpad",
+            worldModel: menuWorld,
+            grantedPermissions: [.screenCapture, .accessibility]
+        )
+        let proposedExploration = await registry.execute(
+            HarnessToolCall(
+                id: "learn-propose-exploration",
+                name: "application.learning.proposeExploration",
+                input: ["draftID": "task-learn-draftpad-learned-draftpad"]
+            ),
+            taskID: "task-learn-draftpad",
+            worldModel: menuWorld,
+            grantedPermissions: [.accessibility]
+        )
+        let generatedScript = await registry.execute(
+            HarnessToolCall(
+                id: "learn-script-generate",
+                name: "skill.script.generate",
+                input: [
+                    "skillID": "learned-draftpad",
+                    "scriptID": "focus-editor",
+                    "language": "applescript",
+                    "purpose": "Focus the DraftPad editor",
+                    "scriptSource": #"tell application "DraftPad" to activate"#
+                ]
+            ),
+            taskID: "task-learn-draftpad",
+            worldModel: baseWorld,
+            grantedPermissions: [.skillLookup]
+        )
+        let validatedScript = await registry.execute(
+            HarnessToolCall(
+                id: "learn-script-validate",
+                name: "skill.script.validate",
+                input: [
+                    "scriptID": "focus-editor",
+                    "validationPolicy": "activate-only app automation"
+                ]
+            ),
+            taskID: "task-learn-draftpad",
+            worldModel: baseWorld,
+            grantedPermissions: [.skillLookup]
+        )
+        let distilled = await registry.execute(
+            HarnessToolCall(
+                id: "learn-distill",
+                name: "application.learning.distill",
+                input: [
+                    "draftID": "task-learn-draftpad-learned-draftpad",
+                    "workflowName": "Write a draft",
+                    "workflowSummary": "Focus the editor, enter user-provided text, and verify the text is visible.",
+                    "verificationCriteria": "editor visible, text visible",
+                    "scriptIDs": "focus-editor"
+                ]
+            ),
+            taskID: "task-learn-draftpad",
+            worldModel: menuWorld,
+            grantedPermissions: [.skillLookup]
+        )
+        let saved = await registry.execute(
+            HarnessToolCall(
+                id: "learn-save",
+                name: "application.learning.saveSkillPack",
+                input: ["draftID": "task-learn-draftpad-learned-draftpad"]
+            ),
+            taskID: "task-learn-draftpad",
+            worldModel: menuWorld,
+            grantedPermissions: [.skillLookup]
+        )
+
+        #expect(started.status == .succeeded)
+        #expect(capturedMain.metadata["observationCount"] == "1")
+        #expect(capturedMenu.metadata["observationCount"] == "2")
+        #expect(proposedExploration.metadata["safeCandidates"] == "file-new:press")
+        #expect(generatedScript.metadata["validationStatus"] == HarnessSkillScriptValidationStatus.pendingValidation.rawValue)
+        #expect(validatedScript.metadata["validationStatus"] == HarnessSkillScriptValidationStatus.validated.rawValue)
+        #expect(distilled.metadata["workflowCount"] == "1")
+        #expect(saved.status == .succeeded)
+        #expect(saved.metadata["skillID"] == "learned-draftpad")
+        #expect(saved.metadata["scriptCount"] == "1")
+
+        let savedDirectory = root.appendingPathComponent("learned-draftpad", isDirectory: true)
+        let skillMarkdown = try String(
+            contentsOf: savedDirectory.appendingPathComponent("SKILL.md"),
+            encoding: .utf8
+        )
+        let profileData = try Data(contentsOf: savedDirectory.appendingPathComponent("app-profile.json"))
+        let profile = try JSONDecoder().decode(HarnessApplicationProfile.self, from: profileData)
+        let scriptSource = try String(
+            contentsOf: savedDirectory.appendingPathComponent("scripts/focus-editor.applescript"),
+            encoding: .utf8
+        )
+        let results = await skillRegistry.search(query: "DraftPad learned app")
+
+        #expect(skillMarkdown.contains("DraftPad Learned Application"))
+        #expect(profile.observations.map(\.id) == ["main-editor", "file-menu"])
+        #expect(profile.generatedScriptIDs == ["focus-editor"])
+        #expect(scriptSource.contains("DraftPad"))
+        #expect(results.first?.descriptor.id == "learned-draftpad")
+        #expect(results.first?.descriptor.scripts.first?.validationStatus == .validated)
     }
 
     @Test

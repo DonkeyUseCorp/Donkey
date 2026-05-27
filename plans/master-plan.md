@@ -21,13 +21,10 @@ even when there are no active tasks.
 
 ## Current Sequence
 
-1. Build the application-learning task. It should safely explore an app, capture
-   screenshots and Accessibility trees, distill surfaces/workflows, generate
-   scripts where useful, validate them, and save a reusable skill pack.
-2. Wire interruption and permission gates into the UI. The notch/task UI should
+1. Wire interruption and permission gates into the UI. The notch/task UI should
    control generic harness tasks and show the exact pending approval or
    changed-course state.
-3. Delete old app-specific paths once the generic path covers them. Remove
+2. Delete old app-specific paths once the generic path covers them. Remove
    hardcoded Music/Notes/Numbers/media/weather-style prompt rules, catalog
    special cases, repair logic, and demo-only workflow branches.
 

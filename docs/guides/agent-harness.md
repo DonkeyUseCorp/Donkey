@@ -274,9 +274,14 @@ workflow recipes, evidence notes, and generated scripts together.
 
 ## Learning Applications
 
-"Learn an application" should be implemented as a skill-producing harness task.
-It explores an app safely, observes each state, distills durable knowledge, and
-saves a reusable application skill pack.
+"Learn an application" is supported as a skill-producing harness task. The
+generic built-in tools `application.learning.start`,
+`application.learning.captureState`,
+`application.learning.proposeExploration`, `application.learning.distill`, and
+`application.learning.saveSkillPack` coordinate the flow: start a safe learning
+draft, record bounded screenshot and Accessibility evidence, propose reversible
+exploration candidates from technical Accessibility roles/actions, distill an
+app profile and workflow recipes, and save a reusable skill pack.
 
 For each meaningful state, the learner should gather:
 
@@ -303,9 +308,11 @@ The reusable output should be distilled, not just raw captures:
 - safety notes
 - optional redacted evidence artifacts
 
-Future agents use the learned app skill by searching for the relevant skill,
-loading its bounded instructions, and then using any validated scripts or
-workflow tools exposed by that skill.
+Validated generated scripts owned by the learned skill are copied into the
+skill-local `scripts/` directory when the pack is saved. Future agents use the
+learned app skill by searching for the relevant skill, loading its bounded
+instructions, and then using any validated scripts or workflow tools exposed by
+that skill.
 
 ## Intent Rules
 

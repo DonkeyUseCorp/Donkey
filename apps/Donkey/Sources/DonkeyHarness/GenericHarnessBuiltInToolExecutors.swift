@@ -115,6 +115,15 @@ public actor HarnessGeneratedScriptStore {
         artifactsByID[id]
     }
 
+    public func artifacts(ownerSkillID: String? = nil) -> [HarnessGeneratedScriptArtifact] {
+        artifactsByID.values
+            .filter { artifact in
+                guard let ownerSkillID else { return true }
+                return artifact.ownerSkillID == ownerSkillID
+            }
+            .sorted { $0.id < $1.id }
+    }
+
     public func validate(
         id: String,
         metadata: [String: String] = [:]
@@ -143,6 +152,8 @@ public struct HarnessBuiltInToolServices: Sendable {
     public var appEntries: [HarnessAppLookupEntry]
     public var skillRegistry: HarnessSkillRegistry?
     public var generatedScripts: HarnessGeneratedScriptStore
+    public var applicationLearningStore: HarnessApplicationLearningStore
+    public var applicationSkillPackWriter: HarnessApplicationSkillPackWriter?
     public var appleScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)?
     public var skillScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)?
 
@@ -151,6 +162,8 @@ public struct HarnessBuiltInToolServices: Sendable {
         appEntries: [HarnessAppLookupEntry] = [],
         skillRegistry: HarnessSkillRegistry? = nil,
         generatedScripts: HarnessGeneratedScriptStore = HarnessGeneratedScriptStore(),
+        applicationLearningStore: HarnessApplicationLearningStore = HarnessApplicationLearningStore(),
+        applicationSkillPackWriter: HarnessApplicationSkillPackWriter? = nil,
         appleScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)? = nil,
         skillScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)? = nil
     ) {
@@ -158,6 +171,8 @@ public struct HarnessBuiltInToolServices: Sendable {
         self.appEntries = appEntries
         self.skillRegistry = skillRegistry
         self.generatedScripts = generatedScripts
+        self.applicationLearningStore = applicationLearningStore
+        self.applicationSkillPackWriter = applicationSkillPackWriter
         self.appleScriptExecutor = appleScriptExecutor
         self.skillScriptExecutor = skillScriptExecutor
     }
@@ -216,6 +231,16 @@ public enum BuiltInHarnessToolExecutors {
             return await appleScriptGenerate(context, services: services)
         case "automation.applescript.execute":
             return await scriptExecute(context, services: services, executor: services.appleScriptExecutor)
+        case "application.learning.start":
+            return await applicationLearningStart(context, services: services)
+        case "application.learning.captureState":
+            return await applicationLearningCaptureState(context, services: services)
+        case "application.learning.proposeExploration":
+            return applicationLearningProposeExploration(context)
+        case "application.learning.distill":
+            return await applicationLearningDistill(context, services: services)
+        case "application.learning.saveSkillPack":
+            return await applicationLearningSaveSkillPack(context, services: services)
         case "state.verify":
             return stateVerify(context)
         case "run.pause", "run.resume", "run.recover", "run.cancel", "run.complete", "run.failSafe":
@@ -724,6 +749,267 @@ public enum BuiltInHarnessToolExecutors {
         return await scriptGenerate(generatedContext, services: services, ownerSkillID: nil)
     }
 
+    private static func applicationLearningStart(
+        _ context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices
+    ) async -> HarnessToolResult {
+        guard let appName = trimmed(context.call.input["appName"] ?? context.call.input["targetApp"] ?? context.worldModel.focusedApp) else {
+            return invalidInput(context, "application.learning.start requires a target app.")
+        }
+        let skillID = trimmed(context.call.input["skillID"]) ?? "learned-\(stableIDSeed(from: appName))"
+        let draftID = trimmed(context.call.input["draftID"]) ?? "\(context.taskID)-\(skillID)"
+        let learningGoal = trimmed(context.call.input["goal"]) ?? "Learn \(appName)."
+        let policy = trimmed(context.call.input["explorationPolicy"])
+            ?? "Safe exploration only: observe, inspect Accessibility elements, open reversible menus/tabs/fields, and ask before destructive, send, purchase, or save-overwrite actions."
+
+        let draft = await services.applicationLearningStore.begin(
+            draftID: draftID,
+            taskID: context.taskID,
+            skillID: skillID,
+            appName: appName,
+            bundleIdentifier: trimmed(context.call.input["bundleIdentifier"]),
+            learningGoal: learningGoal,
+            explorationPolicy: policy,
+            metadata: [
+                "createdBy": context.call.name,
+                "safeExploration": "true"
+            ]
+        )
+
+        return success(
+            context,
+            summary: "Started application learning draft for \(appName).",
+            facts: [
+                "application.learning.draftID": draft.id,
+                "application.learning.skillID": draft.skillID,
+                "application.learning.appName": draft.appName,
+                "application.learning.explorationPolicy": draft.explorationPolicy,
+                "lastAcceptedTool": context.call.name
+            ],
+            metadata: [
+                "draftID": draft.id,
+                "skillID": draft.skillID,
+                "appName": draft.appName,
+                "bundleIdentifier": draft.bundleIdentifier ?? ""
+            ]
+        )
+    }
+
+    private static func applicationLearningCaptureState(
+        _ context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices
+    ) async -> HarnessToolResult {
+        guard let draftID = trimmed(context.call.input["draftID"] ?? context.worldModel.facts["application.learning.draftID"]) else {
+            return invalidInput(context, "application.learning.captureState requires a learning draftID.")
+        }
+        guard await services.applicationLearningStore.draft(id: draftID) != nil else {
+            return failed(context, "Application learning draft was not found: \(draftID)", reason: "learningDraftNotFound")
+        }
+
+        let stateID = trimmed(context.call.input["stateID"])
+            ?? "state-\(stableIDSeed(from: context.call.input["title"] ?? context.worldModel.focusedWindowTitle ?? UUID().uuidString))"
+        let title = trimmed(context.call.input["title"])
+            ?? context.worldModel.focusedWindowTitle
+            ?? context.worldModel.focusedApp
+            ?? stateID
+        let observation = HarnessApplicationLearningObservation(
+            id: stateID,
+            title: title,
+            focusedApp: context.worldModel.focusedApp,
+            focusedWindowTitle: context.worldModel.focusedWindowTitle,
+            screenshotArtifactURL: trimmed(
+                context.call.input["screenshotArtifactURL"]
+                    ?? context.worldModel.facts["screenshotArtifactURL"]
+                    ?? context.worldModel.facts["screen.observe.screenshotArtifactURL"]
+            ),
+            accessibilityArtifactURL: trimmed(
+                context.call.input["accessibilityArtifactURL"]
+                    ?? context.worldModel.facts["accessibilityArtifactURL"]
+                    ?? context.worldModel.facts["screen.observe.accessibilityArtifactURL"]
+            ),
+            visibleText: context.worldModel.visibleText,
+            elements: context.worldModel.elements,
+            navigationPath: listValues(context.call.input["navigationPath"]),
+            changedFromPrevious: context.call.input["changedFromPrevious"] ?? "",
+            safetyNotes: listValues(context.call.input["safetyNotes"]),
+            metadata: [
+                "capturedBy": context.call.name,
+                "elementCount": String(context.worldModel.elements.count),
+                "visibleTextRegionCount": String(context.worldModel.visibleText.count)
+            ]
+        )
+
+        guard let draft = await services.applicationLearningStore.record(
+            draftID: draftID,
+            observation: observation
+        ) else {
+            return failed(context, "Application learning draft was not found: \(draftID)", reason: "learningDraftNotFound")
+        }
+
+        return success(
+            context,
+            summary: "Captured learned app state \(observation.title).",
+            facts: [
+                "application.learning.draftID": draft.id,
+                "application.learning.lastStateID": observation.id,
+                "application.learning.observationCount": String(draft.observations.count),
+                "application.learning.lastStateElementCount": String(observation.elements.count),
+                "lastAcceptedTool": context.call.name
+            ],
+            metadata: [
+                "draftID": draft.id,
+                "stateID": observation.id,
+                "observationCount": String(draft.observations.count),
+                "screenshotArtifactURL": observation.screenshotArtifactURL ?? "",
+                "accessibilityArtifactURL": observation.accessibilityArtifactURL ?? ""
+            ]
+        )
+    }
+
+    private static func applicationLearningProposeExploration(
+        _ context: HarnessToolExecutionContext
+    ) -> HarnessToolResult {
+        let candidates = context.worldModel.elements.compactMap { element -> String? in
+            guard element.isActionEligible,
+                  let action = safeExplorationAction(for: element)
+            else {
+                return nil
+            }
+            return "\(element.id):\(action)"
+        }
+        let approvalCandidates = context.worldModel.elements.compactMap { element -> String? in
+            guard element.isActionEligible,
+                  safeExplorationAction(for: element) == nil,
+                  !element.actions.isEmpty
+            else {
+                return nil
+            }
+            return element.id
+        }
+
+        return success(
+            context,
+            summary: "Proposed \(candidates.count) safe exploration candidate(s).",
+            facts: [
+                "application.learning.safeExplorationCandidateCount": String(candidates.count),
+                "application.learning.safeExplorationCandidates": candidates.joined(separator: ","),
+                "application.learning.requiresApprovalCandidateIDs": approvalCandidates.joined(separator: ","),
+                "lastAcceptedTool": context.call.name
+            ],
+            metadata: [
+                "safeCandidateCount": String(candidates.count),
+                "safeCandidates": candidates.joined(separator: ","),
+                "requiresApprovalCandidateIDs": approvalCandidates.joined(separator: ",")
+            ]
+        )
+    }
+
+    private static func applicationLearningDistill(
+        _ context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices
+    ) async -> HarnessToolResult {
+        guard let draftID = trimmed(context.call.input["draftID"] ?? context.worldModel.facts["application.learning.draftID"]) else {
+            return invalidInput(context, "application.learning.distill requires a learning draftID.")
+        }
+        let workflowName = trimmed(context.call.input["workflowName"]) ?? "Safe inspection"
+        let workflowSummary = trimmed(context.call.input["workflowSummary"])
+            ?? "Use learned observations to inspect the application before taking guarded action."
+        let recipe = HarnessApplicationWorkflowRecipe(
+            id: stableIDSeed(from: workflowName),
+            name: workflowName,
+            summary: workflowSummary,
+            verificationCriteria: listValues(context.call.input["verificationCriteria"]),
+            metadata: ["createdBy": context.call.name]
+        )
+        let scriptIDs = listValues(context.call.input["scriptIDs"])
+        guard let profile = await services.applicationLearningStore.distill(
+            draftID: draftID,
+            workflowRecipes: [recipe],
+            generatedScriptIDs: scriptIDs,
+            safetyNotes: listValues(context.call.input["safetyNotes"]),
+            metadata: ["distilledBy": context.call.name]
+        ) else {
+            return failed(context, "Application learning draft has no observations to distill.", reason: "learningDraftNotReady")
+        }
+
+        return success(
+            context,
+            summary: "Distilled learned app profile for \(profile.appName).",
+            facts: [
+                "application.learning.draftID": draftID,
+                "application.learning.skillID": profile.skillID,
+                "application.learning.profile.appName": profile.appName,
+                "application.learning.profile.observationCount": String(profile.observations.count),
+                "application.learning.profile.workflowCount": String(profile.workflowRecipes.count),
+                "lastAcceptedTool": context.call.name
+            ],
+            metadata: [
+                "draftID": draftID,
+                "skillID": profile.skillID,
+                "observationCount": String(profile.observations.count),
+                "workflowCount": String(profile.workflowRecipes.count)
+            ]
+        )
+    }
+
+    private static func applicationLearningSaveSkillPack(
+        _ context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices
+    ) async -> HarnessToolResult {
+        guard let draftID = trimmed(context.call.input["draftID"] ?? context.worldModel.facts["application.learning.draftID"]) else {
+            return invalidInput(context, "application.learning.saveSkillPack requires a learning draftID.")
+        }
+        guard let draft = await services.applicationLearningStore.draft(id: draftID) else {
+            return failed(context, "Application learning draft was not found: \(draftID)", reason: "learningDraftNotFound")
+        }
+        let profile: HarnessApplicationProfile
+        if let existingProfile = draft.profile {
+            profile = existingProfile
+        } else if let distilledProfile = await services.applicationLearningStore.distill(draftID: draftID) {
+            profile = distilledProfile
+        } else {
+            return failed(context, "Application learning draft has no observations to save.", reason: "learningDraftNotReady")
+        }
+
+        let requestedScriptIDs = Set(listValues(context.call.input["scriptIDs"]))
+        let ownerScripts = await services.generatedScripts.artifacts(ownerSkillID: profile.skillID)
+        let extraScripts = requestedScriptIDs.isEmpty
+            ? []
+            : await services.generatedScripts.artifacts().filter { requestedScriptIDs.contains($0.id) }
+        let scripts = Array(
+            Dictionary(uniqueKeysWithValues: (ownerScripts + extraScripts).map { ($0.id, $0) })
+                .values
+        )
+        .sorted { $0.id < $1.id }
+        let writer = services.applicationSkillPackWriter
+            ?? HarnessApplicationSkillPackWriter(rootDirectory: HarnessApplicationSkillPackWriter.defaultRootDirectory())
+
+        do {
+            let result = try writer.save(profile: profile, scripts: scripts)
+            await services.skillRegistry?.register(result.skill)
+
+            return success(
+                context,
+                summary: "Saved learned application skill pack for \(profile.appName).",
+                facts: [
+                    "application.learning.skillID": result.skill.id,
+                    "application.learning.skillDirectory": result.directoryPath,
+                    "application.learning.writtenFileCount": String(result.writtenFiles.count),
+                    "application.learning.validatedScriptCount": String(result.scriptCount),
+                    "lastAcceptedTool": context.call.name
+                ],
+                metadata: [
+                    "skillID": result.skill.id,
+                    "directory": result.directoryPath,
+                    "writtenFiles": result.writtenFiles.joined(separator: "\n"),
+                    "scriptCount": String(result.scriptCount)
+                ]
+            )
+        } catch {
+            return failed(context, "Failed to save learned application skill pack: \(error)", reason: "skillPackWriteFailed")
+        }
+    }
+
     private static func stateVerify(_ context: HarnessToolExecutionContext) -> HarnessToolResult {
         guard let criteria = trimmed(context.call.input["criteria"]) else {
             return invalidInput(context, "state.verify requires criteria.")
@@ -843,6 +1129,41 @@ public enum BuiltInHarnessToolExecutors {
         return !accepted.isDisjoint(with: available)
     }
 
+    private static func safeExplorationAction(for element: HarnessWorldElement) -> String? {
+        let safety = normalized(element.metadata["learning.explorationSafety"] ?? element.metadata["safetyClass"] ?? "")
+        if ["destructive", "sensitive", "requiresapproval"].contains(safety) {
+            return nil
+        }
+        let actions = Set(element.actions.map(normalized))
+        if safety == "safe" || safety == "reversible" || safety == "readonly" {
+            if !actions.isDisjoint(with: ["focus", "axraise"]) { return "focus" }
+            if !actions.isDisjoint(with: ["press", "axpress"]) { return "press" }
+            if !actions.isDisjoint(with: ["scroll", "axscroll"]) { return "scroll" }
+        }
+
+        let role = normalized(element.role)
+        let reversibleRoles: Set<String> = [
+            "axmenu",
+            "axmenubaritem",
+            "axmenuitem",
+            "axpopupbutton",
+            "axtab",
+            "axtabgroup",
+            "axdisclosuretriangle"
+        ]
+        if reversibleRoles.contains(role),
+           !actions.isDisjoint(with: ["press", "axpress"]) {
+            return "press"
+        }
+        if !actions.isDisjoint(with: ["focus", "axraise"]) {
+            return "focus"
+        }
+        if !actions.isDisjoint(with: ["scroll", "axscroll"]) {
+            return "scroll"
+        }
+        return nil
+    }
+
     private static func evidenceMatches(criteria: String, evidence: String) -> Bool {
         let normalizedCriteria = normalized(criteria)
         let normalizedEvidence = normalized(evidence)
@@ -882,6 +1203,16 @@ public enum BuiltInHarnessToolExecutors {
             .prefix(6)
             .joined(separator: "-")
         return slug.isEmpty ? UUID().uuidString : slug
+    }
+
+    private static func listValues(_ value: String?) -> [String] {
+        guard let value else { return [] }
+        return value
+            .split { character in
+                character == "," || character == "\n" || character == ";"
+            }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 
     private static func tokens(in value: String) -> [String] {

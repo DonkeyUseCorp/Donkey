@@ -365,6 +365,95 @@ public enum BuiltInHarnessToolCatalog {
                 ]
             ),
             descriptor(
+                "application.learning.start",
+                pluginID: "core.application-learning",
+                summary: "Start a reusable skill-producing application learning draft for a resolved app.",
+                input: [
+                    "appName": "Resolved application display name.",
+                    "bundleIdentifier": "Optional resolved bundle identifier.",
+                    "goal": "Learning goal or scope.",
+                    "skillID": "Optional stable learned skill identifier.",
+                    "explorationPolicy": "Safe exploration constraints."
+                ],
+                output: [
+                    "draftID": "Learning draft identifier.",
+                    "skillID": "Skill identifier that generated scripts can target."
+                ],
+                permissions: [.appLookup, .skillLookup],
+                safety: .readOnly,
+                requiredContext: ["structured intent", "resolved target app"],
+                verification: ["draft records safe exploration policy before any app interaction"]
+            ),
+            descriptor(
+                "application.learning.captureState",
+                pluginID: "core.application-learning",
+                summary: "Record a meaningful app state from screenshot, Accessibility, visible text, elements, and navigation evidence.",
+                input: [
+                    "draftID": "Learning draft identifier.",
+                    "stateID": "Stable state identifier.",
+                    "title": "Human-readable state title.",
+                    "screenshotArtifactURL": "Optional persisted screenshot artifact URL.",
+                    "accessibilityArtifactURL": "Optional persisted Accessibility tree artifact URL.",
+                    "navigationPath": "Comma-separated path used to reach this state.",
+                    "changedFromPrevious": "Short description of the state transition.",
+                    "safetyNotes": "Comma-separated state safety notes."
+                ],
+                output: ["observationCount": "Number of captured states in the draft."],
+                permissions: [.screenCapture, .accessibility],
+                safety: .readOnly,
+                requiredContext: ["focused target", "screen or Accessibility evidence"],
+                verification: ["captured state references bounded artifacts instead of embedding raw screenshots or trees"]
+            ),
+            descriptor(
+                "application.learning.proposeExploration",
+                pluginID: "core.application-learning",
+                summary: "Propose reversible Accessibility-backed exploration candidates and separate actions that need approval.",
+                input: ["draftID": "Optional learning draft identifier for traceability."],
+                output: [
+                    "safeCandidates": "Element/action pairs that can be explored through guarded element.perform.",
+                    "requiresApprovalCandidateIDs": "Action-eligible element IDs that need user approval or richer safety evidence."
+                ],
+                permissions: [.accessibility],
+                safety: .readOnly,
+                requiredContext: ["Accessibility element evidence"],
+                verification: ["safe candidates come from technical roles/actions or explicit element safety metadata, not raw command text"]
+            ),
+            descriptor(
+                "application.learning.distill",
+                pluginID: "core.application-learning",
+                summary: "Distill captured application states into an app profile and workflow recipes.",
+                input: [
+                    "draftID": "Learning draft identifier.",
+                    "workflowName": "Workflow recipe name.",
+                    "workflowSummary": "Workflow recipe summary.",
+                    "verificationCriteria": "Comma-separated verification criteria.",
+                    "scriptIDs": "Optional generated script artifact identifiers.",
+                    "safetyNotes": "Comma-separated durable safety notes."
+                ],
+                output: ["profile": "Distilled app profile summary and workflow counts."],
+                permissions: [.skillLookup],
+                safety: .readOnly,
+                requiredContext: ["captured learning observations"],
+                verification: ["profile contains at least one captured state before it can be saved"]
+            ),
+            descriptor(
+                "application.learning.saveSkillPack",
+                pluginID: "core.application-learning",
+                summary: "Save the distilled application profile as a reusable filesystem skill pack.",
+                input: [
+                    "draftID": "Learning draft identifier.",
+                    "scriptIDs": "Optional validated script artifact identifiers to include."
+                ],
+                output: [
+                    "skillID": "Registered learned skill identifier.",
+                    "directory": "Filesystem directory containing SKILL.md, profile, workflows, evidence index, and scripts."
+                ],
+                permissions: [.skillLookup],
+                safety: .sensitive,
+                requiredContext: ["distilled application profile", "validated generated scripts when included"],
+                verification: ["skill pack includes SKILL.md, app-profile.json, workflows.json, evidence index, and only validated scripts"]
+            ),
+            descriptor(
                 "state.verify",
                 pluginID: "core.verification",
                 summary: "Verify the expected outcome using world-model evidence and task-specific success criteria.",
