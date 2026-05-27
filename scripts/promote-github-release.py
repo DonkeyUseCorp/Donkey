@@ -64,6 +64,42 @@ def run(command: Sequence[str], *, dry_run: bool = False, mutate: bool = False) 
     return completed.stdout.strip()
 
 
+def current_branch() -> str:
+    branch = run(["git", "branch", "--show-current"])
+    if not branch:
+        raise ValueError("cannot push promoted files from a detached HEAD")
+
+    return branch
+
+
+def push_current_branch(branch: str, dry_run: bool) -> None:
+    if dry_run:
+        print(f"dry-run: git fetch origin {branch}:refs/remotes/origin/{branch}")
+        print(f"dry-run: git rebase origin/{branch}")
+        print(f"dry-run: git push origin HEAD:{branch}")
+        return
+
+    run(["git", "fetch", "origin", f"{branch}:refs/remotes/origin/{branch}"])
+    run(["git", "rebase", f"origin/{branch}"])
+
+    try:
+        run(["git", "push", "origin", f"HEAD:{branch}"])
+    except subprocess.CalledProcessError:
+        run(["git", "fetch", "origin", f"{branch}:refs/remotes/origin/{branch}"])
+        run(["git", "rebase", f"origin/{branch}"])
+        run(["git", "push", "origin", f"HEAD:{branch}"])
+
+
+def subprocess_error_message(exc: subprocess.CalledProcessError) -> str:
+    lines = [f"command {exc.cmd!r} exited with status {exc.returncode}"]
+    if exc.stdout:
+        lines.append(f"stdout:\n{exc.stdout.strip()}")
+    if exc.stderr:
+        lines.append(f"stderr:\n{exc.stderr.strip()}")
+
+    return "\n".join(lines)
+
+
 def parse_version(raw_version: str) -> Version:
     match = SEMVER_RE.match(raw_version.strip())
     if not match:
@@ -167,7 +203,7 @@ def commit_promoted_files(paths: Sequence[Path], version: Version, dry_run: bool
     if dry_run:
         print(f"dry-run: git add {' '.join(string_paths)}")
         print(f"dry-run: git commit -m Promote Donkey {version.tag}")
-        print("dry-run: git push")
+        push_current_branch(current_branch(), dry_run=True)
         return
 
     run(["git", "add", *string_paths])
@@ -179,7 +215,7 @@ def commit_promoted_files(paths: Sequence[Path], version: Version, dry_run: bool
         diff.check_returncode()
 
     run(["git", "commit", "-m", f"Promote Donkey {version.tag}"])
-    run(["git", "push"])
+    push_current_branch(current_branch(), dry_run=False)
 
 
 def mark_release_latest(repo: str, release: Release, dry_run: bool) -> None:
@@ -243,6 +279,9 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (subprocess.CalledProcessError, ValueError, KeyError, json.JSONDecodeError) as exc:
+    except subprocess.CalledProcessError as exc:
+        print(f"promote-github-release: {subprocess_error_message(exc)}", file=sys.stderr)
+        raise SystemExit(1)
+    except (ValueError, KeyError, json.JSONDecodeError) as exc:
         print(f"promote-github-release: {exc}", file=sys.stderr)
         raise SystemExit(1)
