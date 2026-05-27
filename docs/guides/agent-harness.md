@@ -1,5 +1,50 @@
 # Agent Harness
 
+```text
++-----------+       +----------------+       +---------------------------+
+| User turn | ----> | Pointer prompt | ----> | Generic harness lifecycle |
++-----------+       +----------------+       +-------------+-------------+
+                                                            |
+                                                            v
+                         +----------------------------------+----------------------------------+
+                         |                                                                     |
+                         v                                                                     v
+        +----------------+----------------+                              +----------------------+----------------------+
+        | Thread/task storage             |                              | Compacted model context                    |
+        | - conversation events           |                              | - active/waiting tasks                      |
+        | - task snapshots                |                              | - summaries, memory, recent tool evidence   |
+        | - compaction metadata           |                              | - bounded assets and world state            |
+        +----------------+----------------+                              +----------------------+----------------------+
+                         ^                                                                     |
+                         |                                                                     v
+                         |                                                +--------------------+--------------------+
+                         |                                                | Hosted model/runtime boundary             |
+                         |                                                | - structured intent                       |
+                         |                                                | - ambiguity and risk                      |
+                         |                                                | - plan, next step, verification criteria  |
+                         |                                                +--------------------+--------------------+
+                         |                                                                     |
+                         |                                                                     v
+                         |                                                +--------------------+--------------------+
+                         |                                                | Tool registry                            |
+                         |                                                | - permissions and schemas                 |
+                         |                                                | - skills, plugins, catalogs, memory       |
+                         |                                                | - app discovery, observation, actions     |
+                         |                                                +--------------------+--------------------+
+                         |                                                                     |
+                         |                                                                     v
+                         |                                                +--------------------+--------------------+
+                         |                                                | Guarded executors                         |
+                         |                                                | - validate focus, safety, permissions     |
+                         |                                                | - execute one tool step                   |
+                         |                                                | - return structured observations          |
+                         |                                                +--------------------+--------------------+
+                         |                                                                     |
+                         +---------------------------------------------------------------------+
+                                                     verify, recover, clarify,
+                                                     pause, resume, or complete
+```
+
 ## What It Is
 
 The agent harness is Donkey's app-agnostic runtime boundary for turning a user
