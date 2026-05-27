@@ -3,30 +3,15 @@ name: Release Donkey
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: Numeric version to build and release, for example 0.1.0.
+      bump:
+        description: Version component to bump from the latest numeric release. Starts at 0.1.0 when no release exists.
         required: true
-        type: string
-      build:
-        description: Optional CFBundleVersion build number. Defaults to the GitHub Actions run number.
-        required: false
-        default: ""
-        type: string
-      promote_major:
-        description: Move the vMAJOR alias tag to this version.
-        required: true
-        default: true
-        type: boolean
-      promote_minor:
-        description: Move the vMAJOR.MINOR alias tag to this version.
-        required: true
-        default: true
-        type: boolean
-      promote_latest:
-        description: Move the latest alias tag to this version.
-        required: true
-        default: true
-        type: boolean
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
 
 permissions:
   contents: write
@@ -60,17 +45,41 @@ jobs:
       - name: Prepare release values
         id: release
         run: |
-          version="${{ inputs.version }}"
-          version="${version#v}"
-          if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo "Version must be numeric SemVer, for example 0.1.0 or v0.1.0." >&2
-            exit 1
-          fi
+          version="$(python3 - "${{ inputs.bump }}" <<'PY'
+          from __future__ import annotations
 
-          build="${{ inputs.build }}"
-          if [[ -z "$build" ]]; then
-            build="${GITHUB_RUN_NUMBER}"
-          fi
+          import re
+          import subprocess
+          import sys
+
+          bump = sys.argv[1]
+          if bump not in {"major", "minor", "patch"}:
+              raise SystemExit(f"Unsupported version bump: {bump}")
+
+          tag_re = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+          tags = subprocess.check_output(["git", "tag", "--list"], text=True).splitlines()
+          versions = [
+              tuple(int(part) for part in match.groups())
+              for tag in tags
+              if (match := tag_re.match(tag.strip()))
+          ]
+
+          if versions:
+              major, minor, patch = max(versions)
+              if bump == "major":
+                  major, minor, patch = major + 1, 0, 0
+              elif bump == "minor":
+                  minor, patch = minor + 1, 0
+              else:
+                  patch += 1
+          else:
+              major, minor, patch = 0, 1, 0
+
+          print(f"{major}.{minor}.{patch}")
+          PY
+          )"
+
+          build="${GITHUB_RUN_NUMBER}"
           if [[ ! "$build" =~ ^[0-9]+$ ]]; then
             echo "Build must be numeric for CFBundleVersion." >&2
             exit 1
@@ -159,15 +168,5 @@ jobs:
             --asset-name "Donkey.dmg"
             --commit
           )
-
-          if [[ "${{ inputs.promote_major }}" != "true" ]]; then
-            args+=(--no-promote-major)
-          fi
-          if [[ "${{ inputs.promote_minor }}" != "true" ]]; then
-            args+=(--no-promote-minor)
-          fi
-          if [[ "${{ inputs.promote_latest }}" != "true" ]]; then
-            args+=(--no-promote-latest)
-          fi
 
           python3 scripts/promote-github-release.py "${args[@]}"

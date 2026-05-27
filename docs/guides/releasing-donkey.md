@@ -4,8 +4,9 @@ Donkey production releases are distributed through GitHub Releases. The
 Supabase Storage `/release` bucket is not part of the release path.
 
 The release entrypoint is the `Release Donkey` GitHub Actions workflow. A
-maintainer chooses a new numeric version in the GitHub UI, and the workflow
-builds the latest default-branch code into the release artifact.
+maintainer chooses whether to bump the major, minor, or patch version in the
+GitHub UI, and the workflow builds the latest default-branch code into the
+release artifact.
 
 ## Release Boundaries
 
@@ -62,21 +63,21 @@ at packaging time and reject future updates signed by a different private key.
 1. Open GitHub Actions for the repository.
 2. Select `Release Donkey`.
 3. Click `Run workflow`.
-4. Enter the new numeric version, such as `0.1.1`.
-5. Leave `build` blank unless a specific `CFBundleVersion` is required.
-6. Keep major, minor, and latest promotion enabled for normal releases.
-7. Run the workflow.
+4. Choose `patch`, `minor`, or `major`.
+5. Run the workflow.
 
-The workflow checks out the latest default branch, validates the version, builds
-the macOS app, packages `dist/Donkey.dmg`, signs the DMG with the Sparkle
-private key, creates or updates the numeric GitHub Release, uploads the DMG and
-checksum, updates `site/public/appcast.xml`, updates the website download
-constant, commits those site/appcast changes, marks the numeric release as
-GitHub's latest release, and moves the optional alias tags.
+The workflow checks out the latest default branch, fetches existing numeric
+release tags, derives the next version from the selected bump, builds the macOS
+app, packages `dist/Donkey.dmg`, signs the DMG with the Sparkle private key,
+creates or updates the numeric GitHub Release, uploads the DMG and checksum,
+updates `site/public/appcast.xml`, updates the website download constant,
+commits those site/appcast changes, marks the numeric release as GitHub's latest
+release, and moves the alias tags. When no numeric release tag exists yet, the
+workflow starts at `0.1.0`.
 
 ## Alias Tags
 
-The workflow can move these alias tags to the released commit:
+The workflow moves these alias tags to the released commit:
 
 - `vMAJOR`
 - `vMAJOR.MINOR`
