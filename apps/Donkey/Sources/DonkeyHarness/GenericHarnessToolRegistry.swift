@@ -393,26 +393,42 @@ public enum BuiltInHarnessToolCatalog {
                 summary: "Recover from a failed verification by re-observing, replanning, or falling back.",
                 permissions: [.lifecycle],
                 safety: .readOnly
+            ),
+            descriptor(
+                "run.cancel",
+                pluginID: "core.lifecycle",
+                summary: "Cancel the selected task and clear its pending continuation.",
+                input: ["reason": "Reason the task is being cancelled."],
+                permissions: [.lifecycle],
+                safety: .readOnly
+            ),
+            descriptor(
+                "run.complete",
+                pluginID: "core.lifecycle",
+                summary: "Mark the selected task complete after verification evidence is recorded.",
+                input: ["reason": "Completion summary."],
+                permissions: [.lifecycle],
+                safety: .readOnly
+            ),
+            descriptor(
+                "run.failSafe",
+                pluginID: "core.lifecycle",
+                summary: "Stop the selected task in a safe failed state with a reason.",
+                input: ["reason": "Reason the task cannot safely continue."],
+                permissions: [.lifecycle],
+                safety: .readOnly
             )
         ]
     }
 
-    public static func registryWithStubExecutors() -> HarnessToolRegistry {
+    public static func registryWithBuiltInExecutors(
+        services: HarnessBuiltInToolServices = HarnessBuiltInToolServices()
+    ) -> HarnessToolRegistry {
         HarnessToolRegistry(
-            tools: descriptors.map { descriptor in
-                HarnessTool(descriptor: descriptor) { context in
-                    HarnessToolResult(
-                        callID: context.call.id,
-                        toolName: context.call.name,
-                        status: .succeeded,
-                        summary: "\(context.call.name) accepted by generic harness stub executor.",
-                        observations: HarnessObservationDelta(
-                            facts: ["lastAcceptedTool": context.call.name]
-                        ),
-                        metadata: ["executor": "stub"]
-                    )
-                }
-            }
+            tools: BuiltInHarnessToolExecutors.tools(
+                descriptors: descriptors,
+                services: services
+            )
         )
     }
 

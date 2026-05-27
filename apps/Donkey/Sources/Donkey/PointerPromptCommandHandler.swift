@@ -379,7 +379,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             traceID: traceID
         )
         let localRunResults = PointerPromptHarnessLocalRunResultStore()
-        let registry = BuiltInHarnessToolCatalog.registryWithStubExecutors()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
         let harnessTaskLiveRunner = taskLiveRunner
         await registry.register(
             HarnessTool(

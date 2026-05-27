@@ -154,7 +154,7 @@ struct GenericHarnessTests {
 
     @Test
     func unknownToolIsRejectedByRegistry() async {
-        let registry = BuiltInHarnessToolCatalog.registryWithStubExecutors()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
         let result = await registry.execute(
             HarnessToolCall(id: "call-1", name: "missing.tool"),
             taskID: "task-1",
@@ -167,11 +167,231 @@ struct GenericHarnessTests {
     }
 
     @Test
+    func builtInExecutorsRetrieveMemoryAndResolveApps() async {
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(
+                memoryEntries: [
+                    HarnessMemoryEntry(
+                        id: "memory-calendar",
+                        summary: "Calendar is the preferred scheduling app.",
+                        value: "Use Calendar for schedule lookups."
+                    )
+                ],
+                appEntries: [
+                    HarnessAppLookupEntry(
+                        id: "com.apple.iCal",
+                        name: "Calendar",
+                        bundleIdentifier: "com.apple.iCal",
+                        path: "/System/Applications/Calendar.app"
+                    )
+                ]
+            )
+        )
+
+        let memory = await registry.execute(
+            HarnessToolCall(id: "memory-call", name: "memory.retrieve", input: ["query": "scheduling app"]),
+            taskID: "task-tools",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: [.memory]
+        )
+        let appSearch = await registry.execute(
+            HarnessToolCall(id: "app-search-call", name: "app.search", input: ["query": "calendar"]),
+            taskID: "task-tools",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: [.appLookup]
+        )
+        let open = await registry.execute(
+            HarnessToolCall(id: "app-open-call", name: "app.openOrFocus", input: ["targetID": "com.apple.iCal"]),
+            taskID: "task-tools",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: [.appControl]
+        )
+
+        #expect(memory.status == .succeeded)
+        #expect(memory.observations.facts["memory.retrieve.count"] == "1")
+        #expect(appSearch.metadata["targetIDs"] == "com.apple.iCal")
+        #expect(open.observations.focusedApp == "Calendar")
+        #expect(open.observations.facts["focusedApp.bundleIdentifier"] == "com.apple.iCal")
+    }
+
+    @Test
+    func builtInExecutorsObserveElementsInputAndVerification() async {
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        let worldModel = HarnessWorldModel(
+            focusedApp: "TextEdit",
+            focusedWindowTitle: "Notes",
+            visibleText: ["main": "Ready to search"],
+            elements: [
+                HarnessWorldElement(
+                    id: "search-field",
+                    label: "Search",
+                    role: "AXTextField",
+                    isActionEligible: true,
+                    actions: ["AXPress", "AXSetValue"],
+                    metadata: ["scope": "toolbar"]
+                )
+            ]
+        )
+
+        let observed = await registry.execute(
+            HarnessToolCall(id: "observe-call", name: "screen.observe"),
+            taskID: "task-elements",
+            worldModel: worldModel,
+            grantedPermissions: [.screenCapture]
+        )
+        let elements = await registry.execute(
+            HarnessToolCall(id: "elements-call", name: "elements.get", input: ["scope": "toolbar"]),
+            taskID: "task-elements",
+            worldModel: worldModel,
+            grantedPermissions: [.accessibility]
+        )
+        let performed = await registry.execute(
+            HarnessToolCall(id: "perform-call", name: "element.perform", input: ["elementID": "search-field", "action": "press"]),
+            taskID: "task-elements",
+            worldModel: worldModel,
+            grantedPermissions: [.accessibility, .input]
+        )
+        let text = await registry.execute(
+            HarnessToolCall(id: "text-call", name: "text.enter", input: ["elementID": "search-field", "text": "Quarterly notes"]),
+            taskID: "task-elements",
+            worldModel: worldModel,
+            grantedPermissions: [.input]
+        )
+        let key = await registry.execute(
+            HarnessToolCall(id: "key-call", name: "keyboard.press", input: ["key": "Return"]),
+            taskID: "task-elements",
+            worldModel: worldModel,
+            grantedPermissions: [.input]
+        )
+        let verified = await registry.execute(
+            HarnessToolCall(id: "verify-call", name: "state.verify", input: ["criteria": "Ready to search"]),
+            taskID: "task-elements",
+            worldModel: worldModel,
+            grantedPermissions: [.verification]
+        )
+
+        #expect(observed.observations.focusedApp == "TextEdit")
+        #expect(elements.observations.elements.map(\.id) == ["search-field"])
+        #expect(performed.status == .succeeded)
+        #expect(performed.observations.facts["element.perform.action"] == "press")
+        #expect(text.observations.facts["text.enter.characterCount"] == "15")
+        #expect(key.observations.facts["keyboard.press.key"] == "Return")
+        #expect(verified.status == .succeeded)
+        #expect(verified.metadata["verified"] == "true")
+    }
+
+    @Test
+    func builtInExecutorsGateScriptGenerationValidationAndExecution() async {
+        let scriptStore = HarnessGeneratedScriptStore()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(
+                generatedScripts: scriptStore,
+                appleScriptExecutor: { artifact, _ in
+                    HarnessScriptExecutionOutcome(
+                        succeeded: artifact.language == .appleScript,
+                        summary: "AppleScript backend executed artifact.",
+                        output: "ok",
+                        metadata: ["backend": "test-applescript"]
+                    )
+                },
+                skillScriptExecutor: { artifact, _ in
+                    HarnessScriptExecutionOutcome(
+                        succeeded: artifact.language == .shell,
+                        summary: "Skill script backend executed artifact.",
+                        output: "prepared",
+                        metadata: ["backend": "test-skill-script"]
+                    )
+                }
+            )
+        )
+
+        let generatedAppleScript = await registry.execute(
+            HarnessToolCall(
+                id: "as-generate",
+                name: "automation.applescript.generate",
+                input: [
+                    "scriptArtifactID": "script-open-notes",
+                    "targetApp": "Notes",
+                    "goal": "Open a note",
+                    "scriptSource": #"tell application "Notes" to activate"#
+                ]
+            ),
+            taskID: "task-scripts",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: [.appLookup]
+        )
+        let validatedAppleScript = await registry.execute(
+            HarnessToolCall(
+                id: "as-validate",
+                name: "skill.script.validate",
+                input: ["scriptArtifactID": "script-open-notes", "validationPolicy": "static safe subset"]
+            ),
+            taskID: "task-scripts",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: [.skillLookup]
+        )
+        let executedAppleScript = await registry.execute(
+            HarnessToolCall(
+                id: "as-execute",
+                name: "automation.applescript.execute",
+                input: ["scriptArtifactID": "script-open-notes", "targetApp": "Notes"]
+            ),
+            taskID: "task-scripts",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: [.appControl, .input]
+        )
+        let generatedSkillScript = await registry.execute(
+            HarnessToolCall(
+                id: "skill-generate",
+                name: "skill.script.generate",
+                input: [
+                    "skillID": "desktop-helper",
+                    "scriptID": "prepare-workspace",
+                    "language": "shell",
+                    "purpose": "Prepare workspace",
+                    "scriptSource": "echo prepared"
+                ]
+            ),
+            taskID: "task-scripts",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: [.skillLookup]
+        )
+        _ = await registry.execute(
+            HarnessToolCall(
+                id: "skill-validate",
+                name: "skill.script.validate",
+                input: ["scriptID": "prepare-workspace", "validationPolicy": "static safe subset"]
+            ),
+            taskID: "task-scripts",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: [.skillLookup]
+        )
+        let executedSkillScript = await registry.execute(
+            HarnessToolCall(
+                id: "skill-execute",
+                name: "skill.script.execute",
+                input: ["scriptID": "prepare-workspace"]
+            ),
+            taskID: "task-scripts",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: [.appControl, .input]
+        )
+
+        #expect(generatedAppleScript.metadata["validationStatus"] == HarnessSkillScriptValidationStatus.pendingValidation.rawValue)
+        #expect(validatedAppleScript.metadata["validationStatus"] == HarnessSkillScriptValidationStatus.validated.rawValue)
+        #expect(executedAppleScript.status == .succeeded)
+        #expect(executedAppleScript.observations.facts["script.executed.output"] == "ok")
+        #expect(generatedSkillScript.metadata["scriptArtifactID"] == "prepare-workspace")
+        #expect(executedSkillScript.status == .succeeded)
+        #expect(executedSkillScript.observations.facts["script.executed.output"] == "prepared")
+    }
+
+    @Test
     func missingPermissionStopsTaskAndStoresContinuation() async {
         let coordinator = HarnessTaskCoordinator()
         let runtime = GenericHarnessRuntime(
             coordinator: coordinator,
-            registry: BuiltInHarnessToolCatalog.registryWithStubExecutors()
+            registry: BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
         )
         let task = await coordinator.createTask(
             id: "task-permission",
@@ -199,7 +419,7 @@ struct GenericHarnessTests {
         let coordinator = HarnessTaskCoordinator()
         let runtime = GenericHarnessRuntime(
             coordinator: coordinator,
-            registry: BuiltInHarnessToolCatalog.registryWithStubExecutors()
+            registry: BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
         )
         let task = await coordinator.createTask(
             id: "task-resume-permission",
@@ -232,7 +452,7 @@ struct GenericHarnessTests {
         let coordinator = HarnessTaskCoordinator()
         let runtime = GenericHarnessRuntime(
             coordinator: coordinator,
-            registry: BuiltInHarnessToolCatalog.registryWithStubExecutors()
+            registry: BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
         )
         let task = await coordinator.createTask(
             id: "task-clarify",
@@ -265,7 +485,7 @@ struct GenericHarnessTests {
         let coordinator = HarnessTaskCoordinator()
         let runtime = GenericHarnessRuntime(
             coordinator: coordinator,
-            registry: BuiltInHarnessToolCatalog.registryWithStubExecutors()
+            registry: BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
         )
         let first = await coordinator.createTask(
             id: "task-a",
@@ -329,7 +549,7 @@ struct GenericHarnessTests {
         let coordinator = HarnessTaskCoordinator()
         let runtime = GenericHarnessRuntime(
             coordinator: coordinator,
-            registry: BuiltInHarnessToolCatalog.registryWithStubExecutors()
+            registry: BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
         )
         let task = await coordinator.createTask(
             id: "task-loop",
@@ -360,6 +580,39 @@ struct GenericHarnessTests {
         #expect(first?.toolResult?.toolName == "screen.observe")
         #expect(second?.toolResult?.toolName == "state.verify")
         #expect(second?.task.toolHistory.map(\.call.id) == ["observe-call", "verify-call"])
+    }
+
+    @Test
+    func lifecycleToolsMutateTaskStatusThroughGenericRuntime() async {
+        let coordinator = HarnessTaskCoordinator()
+        let runtime = GenericHarnessRuntime(
+            coordinator: coordinator,
+            registry: BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        )
+        let task = await coordinator.createTask(
+            id: "task-lifecycle-tools",
+            threadID: "thread-lifecycle-tools",
+            goal: "pause and resume",
+            grantedPermissions: [.lifecycle]
+        )
+
+        let paused = await runtime.executeToolCall(
+            taskID: task.id,
+            call: HarnessToolCall(id: "pause-call", name: "run.pause", input: ["reason": "Need a break"])
+        )
+        let resumed = await runtime.executeToolCall(
+            taskID: task.id,
+            call: HarnessToolCall(id: "resume-call", name: "run.resume", input: ["reason": "Continue"])
+        )
+        let completed = await runtime.executeToolCall(
+            taskID: task.id,
+            call: HarnessToolCall(id: "complete-call", name: "run.complete", input: ["reason": "Done"])
+        )
+
+        #expect(paused?.task.status == .paused)
+        #expect(resumed?.task.status == .resuming)
+        #expect(completed?.task.status == .completed)
+        #expect(completed?.task.toolHistory.map(\.call.name) == ["run.pause", "run.resume", "run.complete"])
     }
 
     @Test
@@ -457,7 +710,7 @@ struct GenericHarnessTests {
             fallbackGoal: "send a message",
             traceID: "trace-gate"
         )
-        let registry = BuiltInHarnessToolCatalog.registryWithStubExecutors()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
         await registry.register(
             HarnessTool(descriptor: AppHarnessGenericLifecycle.localTaskRunDescriptor()) { context in
                 HarnessToolResult(
@@ -637,7 +890,7 @@ struct GenericHarnessTests {
         )
         let runtime = GenericHarnessRuntime(
             coordinator: coordinator,
-            registry: BuiltInHarnessToolCatalog.registryWithStubExecutors()
+            registry: BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
         )
 
         let result = await runtime.executeNextPlannedStep(taskID: task.id)

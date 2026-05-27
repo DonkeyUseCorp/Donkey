@@ -15,15 +15,16 @@ phrase lists, or one-off workflow conditionals to the core harness.
 
 The existing pointer-prompt and local-app runner code still exists while the
 product migrates onto the generic harness. New work should build toward the
-generic contracts and avoid expanding the older app-specific paths.
+generic registry and avoid expanding the older app-specific paths.
 
 Pointer-prompt local-app execution now enters the generic lifecycle before it
 uses the older live-runner backend. The hosted planning boundary emits the
 `generic_harness_planning` packet: structured intent, ambiguity/risk,
 context needs, plan steps, verification criteria, fallbacks, and clarification
 policy. The bridge stores that packet in generic task intent/plan state, then
-delegates concrete desktop work to the older runner until generic executors
-cover it. Keep new lifecycle behavior on the generic side of that bridge.
+uses registry-backed executors for generic validation, state updates, gates,
+and lifecycle behavior. The older runner remains as the pointer-prompt bridge
+for legacy concrete desktop workflows.
 
 ## Core Model
 
@@ -147,9 +148,10 @@ declares:
 - metadata
 
 The planner sees tool descriptors and schemas, not Swift implementation
-details. The executor validates every tool call against the registry before
-dispatch. Tool results return structured observations that update the task's
-world model.
+details. Built-in registry executors validate inputs and permissions for memory
+lookup, skills, app lookup, observation, element actions, text/keyboard input,
+script generation/validation/execution, verification, and lifecycle changes.
+Tool results return structured observations that update the task's world model.
 
 Core built-in tools cover conversation, user clarification, permission
 requests, memory lookup, skill lookup, skill-script lifecycle, app discovery,

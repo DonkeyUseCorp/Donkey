@@ -33,7 +33,7 @@ public struct GenericHarnessRuntime: Sendable {
         call: HarnessToolCall
     ) async -> HarnessStepExecutionResult? {
         guard let task = await coordinator.task(id: taskID) else { return nil }
-        guard task.status.canExecuteTools else {
+        guard task.status.canExecuteTools || Self.canExecuteLifecycleCall(call, when: task.status) else {
             let result = HarnessToolResult(
                 callID: call.id,
                 toolName: call.name,
@@ -160,6 +160,18 @@ public struct GenericHarnessRuntime: Sendable {
             return nil
         }
 
+        if let lifecycleTask = await applyLifecycleResult(
+            taskID: taskID,
+            call: call,
+            result: result
+        ) {
+            return HarnessStepExecutionResult(
+                task: lifecycleTask,
+                toolResult: result,
+                stoppedForGate: false
+            )
+        }
+
         return HarnessStepExecutionResult(
             task: updatedTask,
             toolResult: result,
@@ -179,5 +191,50 @@ public struct GenericHarnessRuntime: Sendable {
         }
 
         return await executeToolCall(taskID: taskID, call: call)
+    }
+
+    private func applyLifecycleResult(
+        taskID: String,
+        call: HarnessToolCall,
+        result: HarnessToolResult
+    ) async -> HarnessTaskState? {
+        guard result.status == .succeeded else { return nil }
+        switch call.name {
+        case "run.pause":
+            return await coordinator.pause(
+                taskID: taskID,
+                reason: call.input["reason"] ?? "Task paused by lifecycle tool"
+            )
+        case "run.resume":
+            return await coordinator.resume(
+                taskID: taskID,
+                reason: call.input["reason"] ?? "Task resumed by lifecycle tool"
+            )
+        case "run.cancel":
+            return await coordinator.cancel(
+                taskID: taskID,
+                reason: call.input["reason"] ?? "Task cancelled by lifecycle tool"
+            )
+        case "run.complete":
+            return await coordinator.complete(
+                taskID: taskID,
+                reason: call.input["reason"] ?? "Task completed by lifecycle tool"
+            )
+        case "run.failSafe":
+            return await coordinator.failSafe(
+                taskID: taskID,
+                reason: call.input["reason"] ?? "Task failed safe by lifecycle tool"
+            )
+        default:
+            return nil
+        }
+    }
+
+    private static func canExecuteLifecycleCall(
+        _ call: HarnessToolCall,
+        when status: HarnessTaskStatus
+    ) -> Bool {
+        guard call.name == "run.resume" else { return false }
+        return [.paused, .interrupted].contains(status)
     }
 }

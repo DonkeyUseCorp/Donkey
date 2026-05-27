@@ -21,25 +21,21 @@ even when there are no active tasks.
 
 ## Current Sequence
 
-1. Implement real generic tool executors. Cover memory lookup, app lookup,
-   screen observation, element discovery, guarded element actions, text and
-   keyboard input, AppleScript generation/execution, verification, and lifecycle
-   operations behind the registry.
-2. Make smart compaction central for every model and planner call. Preserve the
+1. Make smart compaction central for every model and planner call. Preserve the
    current turn, active task state, pending gates, summaries, recent useful
    events, assets, and tool traces while storing bulky screenshots, full
    Accessibility trees, script source, and long outputs as artifacts.
-3. Move app-specific behavior into skills. Music, Notes, Numbers, browser
+2. Move app-specific behavior into skills. Music, Notes, Numbers, browser
    workflows, app knowledge, and future app-specific behavior should live in
    skill packs, plugin/catalog data, generated artifacts, or memory instead of
    core Swift prompt branches.
-4. Build the application-learning task. It should safely explore an app, capture
+3. Build the application-learning task. It should safely explore an app, capture
    screenshots and Accessibility trees, distill surfaces/workflows, generate
    scripts where useful, validate them, and save a reusable skill pack.
-5. Wire interruption and permission gates into the UI. The notch/task UI should
+4. Wire interruption and permission gates into the UI. The notch/task UI should
    control generic harness tasks and show the exact pending approval or
    changed-course state.
-6. Delete old app-specific paths once the generic path covers them. Remove
+5. Delete old app-specific paths once the generic path covers them. Remove
    hardcoded Music/Notes/Numbers/media/weather-style prompt rules, catalog
    special cases, repair logic, and demo-only workflow branches.
 
