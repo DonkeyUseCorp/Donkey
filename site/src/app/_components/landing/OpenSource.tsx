@@ -86,7 +86,7 @@ export function OpenSource() {
                   }}
                 />
                 <span style={{ marginLeft: 8, fontSize: 12 }}>
-                  ~/ - DonkeyUse-com/Donkey
+                  ~/ - DonkeyUseCorp/Donkey
                 </span>
               </div>
               <div style={{ color: "#b7b7b7", whiteSpace: "nowrap" }}>

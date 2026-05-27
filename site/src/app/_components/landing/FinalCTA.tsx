@@ -3,7 +3,7 @@
 import { ArrowRight } from "lucide-react";
 
 import { PillButton } from "@/app/_components/landing/LandingPrimitives";
-import { DONKEY_DOWNLOAD_URL } from "@/app/_components/landing/data";
+import { DONKEY_INSTALL_URL } from "@/app/_components/landing/data";
 import { useMediaQuery } from "@/app/_components/landing/useMediaQuery";
 import { BLACK, CORAL } from "@/app/_components/landing/theme";
 
@@ -99,7 +99,7 @@ export function FinalCTA() {
               justifyContent: "center",
             }}
           >
-            <PillButton href={DONKEY_DOWNLOAD_URL} variant="primary" size="lg">
+            <PillButton href={DONKEY_INSTALL_URL} variant="primary" size="lg">
               Download for Mac <ArrowRight size={18} />
             </PillButton>
             <PillButton href="/pricing" variant="secondary" size="lg">
