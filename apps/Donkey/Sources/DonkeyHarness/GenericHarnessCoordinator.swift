@@ -304,9 +304,10 @@ public actor HarnessTaskCoordinator {
 
     public func grantPermissions(
         taskID: String,
-        permissions: Set<HarnessPermission>
+        permissions: Set<HarnessPermission>,
+        reason: String = "Permission granted"
     ) async -> HarnessTaskState? {
-        await mutate(taskID: taskID, status: .resuming, summary: "Permission granted") { task in
+        await mutate(taskID: taskID, status: .resuming, summary: reason) { task in
             task.grantedPermissions.formUnion(permissions)
             task.pendingContinuation = nil
         }

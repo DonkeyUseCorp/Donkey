@@ -56,6 +56,7 @@ protocol PointerPromptCommandHandling: Sendable {
     ) async -> PointerPromptCommandHandlingResult
     func pauseCommand(taskID: String) async -> Bool
     func resumeCommand(taskID: String) async -> Bool
+    func approvePermissionGate(taskID: String) async -> Bool
 }
 
 extension PointerPromptCommandHandling {
@@ -406,15 +407,11 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             registry: registry
         )
         let runStep = await genericRuntime.executeNextPlannedStep(taskID: taskID)
-        let result = await localRunResults.firstResult() ?? LocalAppTaskLiveRunResult(
+        let result = await localRunResults.firstResult() ?? Self.syntheticLocalRunResult(
             command: commandRedaction.redactedText,
             traceID: traceID,
-            status: .failedSafe,
             resolution: resolution,
-            metadata: [
-                "reason": "genericHarnessMissingLocalRunResult",
-                "genericHarness.stoppedForGate": String(runStep?.stoppedForGate ?? false)
-            ]
+            runStep: runStep
         )
         let finalized = await finalizeGenericHarnessTask(
             taskID: taskID,
@@ -430,12 +427,12 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         ).map(groundAgentVisualizationPlan)
         let handlingResult = PointerPromptCommandHandlingResult(
             status: result.status,
-            threadStatus: threadStatus(for: result),
+            threadStatus: threadStatus(for: result, runStep: runStep),
             decision: routing.outcome.decision,
             summary: summary(for: result, runStep: runStep),
             taskLabel: taskLabel(for: result),
             traceID: traceID,
-            metadata: result.metadata.merging(
+            metadata: Self.genericHarnessTaskMetadata(runStep?.task).merging(result.metadata) { current, _ in current }.merging(
                 Self.contextPacketMetadata(routing.contextPacket, outcome: routing.outcome)
             ) { current, _ in current }
             .merging(Self.genericHarnessMetadata(
@@ -482,6 +479,13 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             reason: "Pointer prompt resumed task"
         )
         return genericResumed || oldRunnerResumed
+    }
+
+    func approvePermissionGate(taskID: String) async -> Bool {
+        await genericHarnessLifecycle.approvePermissionGate(
+            taskID: taskID,
+            reason: "Pointer prompt approved pending permissions"
+        ) != nil
     }
 
     private func finalizeGenericHarnessTask(
@@ -882,6 +886,16 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         for result: LocalAppTaskLiveRunResult,
         runStep: HarnessStepExecutionResult?
     ) -> String {
+        if let task = runStep?.task,
+           task.status == .waitingForPermission {
+            return Self.permissionGateSummary(for: task)
+        }
+
+        if let task = runStep?.task,
+           task.status == .interrupted {
+            return Self.interruptionSummary(for: task)
+        }
+
         if let question = runStep?.task.pendingContinuation?.question,
            !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return question
@@ -890,7 +904,14 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         return summary(for: result)
     }
 
-    private func threadStatus(for result: LocalAppTaskLiveRunResult) -> PointerPromptTaskStatus {
+    private func threadStatus(
+        for result: LocalAppTaskLiveRunResult,
+        runStep: HarnessStepExecutionResult? = nil
+    ) -> PointerPromptTaskStatus {
+        if let status = Self.pointerPromptStatus(for: runStep?.task) {
+            return status
+        }
+
         switch result.status {
         case .completed:
             return .completed
@@ -1063,6 +1084,101 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                 "traceID": result.traceID
             ]
         )
+    }
+
+    private static func syntheticLocalRunResult(
+        command: String,
+        traceID: String,
+        resolution: LocalAppTaskCatalogResolution,
+        runStep: HarnessStepExecutionResult?
+    ) -> LocalAppTaskLiveRunResult {
+        if let task = runStep?.task,
+           task.status == .waitingForPermission {
+            return LocalAppTaskLiveRunResult(
+                command: command,
+                traceID: traceID,
+                status: .needsConfirmation,
+                resolution: resolution,
+                metadata: [
+                    "reason": "genericHarnessPermissionGate",
+                    "genericHarness.stoppedForGate": String(runStep?.stoppedForGate ?? false)
+                ].merging(genericHarnessTaskMetadata(task)) { current, _ in current }
+            )
+        }
+
+        return LocalAppTaskLiveRunResult(
+            command: command,
+            traceID: traceID,
+            status: .failedSafe,
+            resolution: resolution,
+            metadata: [
+                "reason": "genericHarnessMissingLocalRunResult",
+                "genericHarness.stoppedForGate": String(runStep?.stoppedForGate ?? false)
+            ]
+        )
+    }
+
+    private static func pointerPromptStatus(for task: HarnessTaskState?) -> PointerPromptTaskStatus? {
+        guard let task else { return nil }
+
+        switch task.status {
+        case .running, .resuming:
+            return nil
+        case .paused:
+            return .paused
+        case .waitingForUser:
+            return .waitingForClarification
+        case .waitingForPermission:
+            return .waitingForPermission
+        case .interrupted:
+            return .interrupted
+        case .completed:
+            return .completed
+        case .failedSafe, .cancelled:
+            return .failed
+        }
+    }
+
+    private static func genericHarnessTaskMetadata(_ task: HarnessTaskState?) -> [String: String] {
+        guard let task else { return [:] }
+
+        var metadata: [String: String] = [
+            "genericHarness.taskStatus": task.status.rawValue
+        ]
+        if let continuation = task.pendingContinuation {
+            metadata["genericHarness.pendingReason"] = continuation.reason
+            metadata["genericHarness.pendingStage"] = continuation.stage.rawValue
+            metadata["genericHarness.pendingToolName"] = continuation.pendingToolCall?.name ?? ""
+            metadata["genericHarness.pendingToolCallID"] = continuation.pendingToolCall?.id ?? ""
+            metadata["genericHarness.pendingQuestion"] = continuation.question ?? ""
+            metadata["genericHarness.missingPermissions"] = continuation.missingPermissions
+                .map(\.rawValue)
+                .joined(separator: ",")
+            metadata["genericHarness.newGoal"] = continuation.metadata["newGoal"] ?? ""
+        }
+        return metadata
+    }
+
+    private static func permissionGateSummary(for task: HarnessTaskState) -> String {
+        let permissions = task.pendingContinuation?.missingPermissions ?? []
+        let permissionText = permissions.isEmpty
+            ? "permission"
+            : permissions.map(\.rawValue).joined(separator: ", ")
+        let pendingTool = task.pendingContinuation?.pendingToolCall?.name
+        if let pendingTool, !pendingTool.isEmpty {
+            return "Approve \(permissionText) for \(pendingTool)"
+        }
+
+        return "Approve \(permissionText)"
+    }
+
+    private static func interruptionSummary(for task: HarnessTaskState) -> String {
+        if let newGoal = task.pendingContinuation?.metadata["newGoal"],
+           !newGoal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Changed course: \(newGoal)"
+        }
+
+        return "Changed course"
     }
 
     private static func harnessRequest(

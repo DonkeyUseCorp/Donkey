@@ -266,6 +266,22 @@ public struct AppHarnessGenericLifecycle: Sendable {
         await coordinator.resume(taskID: taskID, reason: reason)
     }
 
+    @discardableResult
+    public func approvePermissionGate(taskID: String, reason: String) async -> HarnessTaskState? {
+        guard let task = await coordinator.task(id: taskID),
+              task.status == .waitingForPermission,
+              let continuation = task.pendingContinuation,
+              !continuation.missingPermissions.isEmpty else {
+            return nil
+        }
+
+        return await coordinator.grantPermissions(
+            taskID: taskID,
+            permissions: Set(continuation.missingPermissions),
+            reason: reason
+        )
+    }
+
     public static func localTaskRunDescriptor() -> HarnessToolDescriptor {
         HarnessToolDescriptor(
             name: AppHarnessGenericLifecycleToolNames.localAppRun,

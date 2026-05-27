@@ -1112,6 +1112,38 @@ struct GenericHarnessTests {
     }
 
     @Test
+    func pointerPromptLifecycleApprovesExactGenericPermissionGate() async {
+        let store = InMemoryHarnessThreadStore()
+        let coordinator = HarnessTaskCoordinator()
+        let lifecycle = AppHarnessGenericLifecycle(threadStore: store, coordinator: coordinator)
+        let task = await coordinator.createTask(
+            id: "pointer-task-permission",
+            threadID: "thread-permission",
+            goal: "click a button"
+        )
+        _ = await coordinator.waitForPermission(
+            taskID: task.id,
+            missingPermissions: [.accessibility, .input],
+            pendingToolCall: HarnessToolCall(
+                id: "pending-click",
+                name: "element.perform"
+            ),
+            reason: "Input needs approval"
+        )
+
+        let approved = await lifecycle.approvePermissionGate(
+            taskID: task.id,
+            reason: "Approved from notch"
+        )
+        let reloaded = await coordinator.task(id: task.id)
+
+        #expect(approved?.status == .resuming)
+        #expect(approved?.grantedPermissions == [.accessibility, .input])
+        #expect(approved?.pendingContinuation == nil)
+        #expect(reloaded?.grantedPermissions == [.accessibility, .input])
+    }
+
+    @Test
     func pointerPromptLifecyclePlansRecoveryAsGenericToolStep() async {
         let store = InMemoryHarnessThreadStore()
         let coordinator = HarnessTaskCoordinator()

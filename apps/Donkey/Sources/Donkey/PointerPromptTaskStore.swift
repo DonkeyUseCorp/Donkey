@@ -92,6 +92,7 @@ final class CoreDataPointerPromptTaskStore: PointerPromptTaskStoring {
         managedTask.setValue(Int64(task.accentIndex), forKey: Self.accentIndexKey)
         managedTask.setValue(task.createdAt, forKey: Self.createdAtKey)
         managedTask.setValue(task.updatedAt, forKey: Self.updatedAtKey)
+        managedTask.setValue(Self.metadataJSONString(task.metadata), forKey: Self.metadataJSONKey)
 
         try? context.save()
     }
@@ -211,7 +212,8 @@ final class CoreDataPointerPromptTaskStore: PointerPromptTaskStoring {
             attribute(statusKey, type: .stringAttributeType, isOptional: false),
             attribute(accentIndexKey, type: .integer64AttributeType, isOptional: false),
             attribute(createdAtKey, type: .dateAttributeType, isOptional: false),
-            attribute(updatedAtKey, type: .dateAttributeType, isOptional: false)
+            attribute(updatedAtKey, type: .dateAttributeType, isOptional: false),
+            attribute(metadataJSONKey, type: .stringAttributeType, isOptional: true)
         ]
         taskEntity.uniquenessConstraints = [[idKey]]
 
@@ -329,8 +331,28 @@ final class CoreDataPointerPromptTaskStore: PointerPromptTaskStoring {
             status: status,
             accentIndex: accentIndex,
             createdAt: createdAt,
-            updatedAt: updatedAt
+            updatedAt: updatedAt,
+            metadata: metadata(fromJSONString: managedTask.value(forKey: metadataJSONKey) as? String)
         )
+    }
+
+    private static func metadataJSONString(_ metadata: [String: String]) -> String? {
+        guard !metadata.isEmpty,
+              let data = try? JSONEncoder().encode(metadata) else {
+            return nil
+        }
+
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func metadata(fromJSONString string: String?) -> [String: String] {
+        guard let string,
+              let data = string.data(using: .utf8),
+              let metadata = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return [:]
+        }
+
+        return metadata
     }
 
     private static func event(from managedEvent: NSManagedObject) -> PointerPromptTaskEvent? {
@@ -390,6 +412,7 @@ final class CoreDataPointerPromptTaskStore: PointerPromptTaskStoring {
     private static let accentIndexKey = "accentIndex"
     private static let createdAtKey = "createdAt"
     private static let updatedAtKey = "updatedAt"
+    private static let metadataJSONKey = "metadataJSON"
     private static let eventIDKey = "id"
     private static let eventTaskIDKey = "taskID"
     private static let eventRoleKey = "role"

@@ -609,6 +609,9 @@ final class PointerPromptOverlayController {
             resumeRequested: { [weak self] taskID in
                 self?.model.resumeTask(id: taskID)
             },
+            approvePermissionRequested: { [weak self] taskID in
+                self?.model.approvePermissionGate(id: taskID)
+            },
             updateRequested: { [weak self] in
                 self?.openAvailableUpdate()
             }

@@ -342,7 +342,8 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
                     id: task.id,
                     title: isFollowUp ? nil : result.taskLabel,
                     detail: result.summary,
-                    status: Self.taskStatus(for: result)
+                    status: Self.taskStatus(for: result),
+                    metadata: result.metadata
                 )
                 self.appendTaskEvent(taskID: task.id, role: .assistant, text: result.summary)
                 self.activeTaskIDs.remove(task.id)
@@ -380,14 +381,17 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
     }
 
     func resumeTask(id taskID: String) {
-        guard task(withID: taskID)?.status == .paused else { return }
+        guard let task = task(withID: taskID),
+              task.status == .paused || task.status == .interrupted else {
+            return
+        }
 
         activeTaskIDs.insert(taskID)
         lastActiveTaskID = taskID
         updateTask(id: taskID, detail: "Running", status: .running)
         appendTaskEvent(taskID: taskID, role: .system, text: "Resumed")
         promptState.leadingSignalLevel = .thinking
-        promptState.promptText = task(withID: taskID)?.title ?? "Working"
+        promptState.promptText = task.title
         syncPrimaryTaskPausedFlag()
         Task { [weak self, commandHandler] in
             let resumedInMemory = await commandHandler.resumeCommand(taskID: taskID)
@@ -395,6 +399,35 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
 
             await MainActor.run {
                 self?.startCommandRun(text: "Continue", matchedTaskID: taskID)
+            }
+        }
+    }
+
+    func approvePermissionGate(id taskID: String) {
+        guard let task = task(withID: taskID),
+              task.status == .waitingForPermission else {
+            return
+        }
+
+        activeTaskIDs.insert(taskID)
+        lastActiveTaskID = taskID
+        let detail = Self.permissionApprovalDetail(for: task)
+        updateTask(id: taskID, detail: detail, status: .running)
+        appendTaskEvent(taskID: taskID, role: .system, text: detail)
+        promptState.leadingSignalLevel = .thinking
+        promptState.promptText = task.title
+        syncPrimaryTaskPausedFlag()
+        Task { [weak self, commandHandler] in
+            let approved = await commandHandler.approvePermissionGate(taskID: taskID)
+            await MainActor.run {
+                guard let self else { return }
+                if approved {
+                    self.updateTask(id: taskID, detail: "Permission approved", status: .running)
+                } else {
+                    self.updateTask(id: taskID, detail: "Approval unavailable", status: .needsAttention)
+                    self.activeTaskIDs.remove(taskID)
+                }
+                self.syncPrimaryTaskPausedFlag()
             }
         }
     }
@@ -616,8 +649,15 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
             if let reservedAccentIndex {
                 task.accentIndex = PointerPromptAccentPalette.normalizedIndex(reservedAccentIndex)
             }
-            task.detail = "Running"
-            task.status = .running
+            if Self.shouldShowChangedCourseState(for: task) {
+                task.detail = "Changed course: \(Self.collapsedDisplayText(for: text))"
+                task.status = .interrupted
+                task.metadata["genericHarness.taskStatus"] = "interrupted"
+                task.metadata["genericHarness.newGoal"] = text
+            } else {
+                task.detail = "Running"
+                task.status = .running
+            }
             task.updatedAt = Date()
             notchAccentIndex = PointerPromptAccentPalette.normalizedIndex(task.accentIndex)
             prependTask(task)
@@ -772,7 +812,8 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         id: String,
         title: String? = nil,
         detail: String? = nil,
-        status: PointerPromptTaskStatus? = nil
+        status: PointerPromptTaskStatus? = nil,
+        metadata: [String: String]? = nil
     ) {
         guard let index = notchTasks.firstIndex(where: { $0.id == id }) else { return }
 
@@ -785,6 +826,9 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         }
         if let status {
             task.status = status
+        }
+        if let metadata {
+            task.metadata = metadata
         }
         task.updatedAt = Date()
         notchTasks[index] = task
@@ -847,8 +891,12 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         switch result.threadStatus {
         case .waitingForClarification:
             return "Waiting for detail"
+        case .waitingForPermission:
+            return "Waiting for approval"
         case .waitingForReview:
             return "Waiting for your review"
+        case .interrupted:
+            return "Changed course"
         case .needsAttention:
             return "Needs your attention"
         case .running:
@@ -897,6 +945,34 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         guard !displayNames.isEmpty else { return "Uploaded assets" }
 
         return "Uploaded assets: \(displayNames)"
+    }
+
+    private static func permissionApprovalDetail(for task: PointerPromptNotchTask) -> String {
+        let permissions = task.metadata["genericHarness.missingPermissions"]?
+            .split(separator: ",")
+            .map(String.init)
+            .filter { !$0.isEmpty } ?? []
+        guard !permissions.isEmpty else {
+            return "Approving permission"
+        }
+
+        return "Approving \(permissions.joined(separator: ", "))"
+    }
+
+    private static func shouldShowChangedCourseState(for task: PointerPromptNotchTask) -> Bool {
+        switch task.status {
+        case .running, .interrupted:
+            return true
+        case .chatting,
+             .paused,
+             .completed,
+             .waitingForClarification,
+             .waitingForPermission,
+             .waitingForReview,
+             .needsAttention,
+             .failed:
+            return false
+        }
     }
 
     private static func persistedAsset(

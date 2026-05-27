@@ -21,10 +21,7 @@ even when there are no active tasks.
 
 ## Current Sequence
 
-1. Wire interruption and permission gates into the UI. The notch/task UI should
-   control generic harness tasks and show the exact pending approval or
-   changed-course state.
-2. Delete old app-specific paths once the generic path covers them. Remove
+1. Delete old app-specific paths once the generic path covers them. Remove
    hardcoded Music/Notes/Numbers/media/weather-style prompt rules, catalog
    special cases, repair logic, and demo-only workflow branches.
 

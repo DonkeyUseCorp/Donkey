@@ -6,7 +6,9 @@ public enum PointerPromptTaskStatus: String, Codable, Equatable, Sendable {
     case paused
     case completed
     case waitingForClarification
+    case waitingForPermission
     case waitingForReview
+    case interrupted
     case needsAttention
     case failed
 }
@@ -20,6 +22,7 @@ public struct PointerPromptNotchTask: Codable, Equatable, Identifiable, Sendable
     public var accentIndex: Int
     public var createdAt: Date
     public var updatedAt: Date
+    public var metadata: [String: String]
 
     public init(
         id: String,
@@ -29,7 +32,8 @@ public struct PointerPromptNotchTask: Codable, Equatable, Identifiable, Sendable
         status: PointerPromptTaskStatus,
         accentIndex: Int,
         createdAt: Date = Date(),
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        metadata: [String: String] = [:]
     ) {
         self.id = id
         self.title = title
@@ -39,6 +43,7 @@ public struct PointerPromptNotchTask: Codable, Equatable, Identifiable, Sendable
         self.accentIndex = accentIndex
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.metadata = metadata
     }
 }
 

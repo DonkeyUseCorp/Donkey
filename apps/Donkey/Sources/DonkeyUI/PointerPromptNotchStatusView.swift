@@ -26,6 +26,7 @@ public struct PointerPromptNotchStatusView: View {
     private let assetsDropped: @MainActor ([PointerPromptTaskAssetDraft]) -> Void
     private let pauseRequested: @MainActor (String) -> Void
     private let resumeRequested: @MainActor (String) -> Void
+    private let approvePermissionRequested: @MainActor (String) -> Void
     private let updateRequested: @MainActor () -> Void
 
     public init(
@@ -48,6 +49,7 @@ public struct PointerPromptNotchStatusView: View {
         assetsDropped: @escaping @MainActor ([PointerPromptTaskAssetDraft]) -> Void,
         pauseRequested: @escaping @MainActor (String) -> Void,
         resumeRequested: @escaping @MainActor (String) -> Void,
+        approvePermissionRequested: @escaping @MainActor (String) -> Void,
         updateRequested: @escaping @MainActor () -> Void
     ) {
         self.state = state
@@ -69,6 +71,7 @@ public struct PointerPromptNotchStatusView: View {
         self.assetsDropped = assetsDropped
         self.pauseRequested = pauseRequested
         self.resumeRequested = resumeRequested
+        self.approvePermissionRequested = approvePermissionRequested
         self.updateRequested = updateRequested
     }
 
@@ -483,7 +486,7 @@ public struct PointerPromptNotchStatusView: View {
 
             Spacer()
 
-            if task.status == .running || task.status == .paused {
+            if task.status == .running || task.status == .paused || task.status == .waitingForPermission || task.status == .interrupted {
                 activeTaskControls(for: task)
             } else {
                 taskStatusAccessory(task)
@@ -562,25 +565,47 @@ public struct PointerPromptNotchStatusView: View {
         )
     }
 
+    @ViewBuilder
     private func activeTaskControls(for task: PointerPromptNotchTask) -> some View {
-        HStack(spacing: 6) {
+        switch task.status {
+        case .waitingForPermission:
             statusControlButton(
-                systemName: "play.fill",
-                label: "Resume",
-                isEnabled: task.status == .paused,
+                systemName: "checkmark.shield",
+                label: "Approve Permission",
+                isEnabled: true,
+                action: {
+                    approvePermissionRequested(task.id)
+                }
+            )
+        case .interrupted:
+            statusControlButton(
+                systemName: "arrow.triangle.2.circlepath",
+                label: "Resume Changed Task",
+                isEnabled: true,
                 action: {
                     resumeRequested(task.id)
                 }
             )
+        default:
+            HStack(spacing: 6) {
+                statusControlButton(
+                    systemName: "play.fill",
+                    label: "Resume",
+                    isEnabled: task.status == .paused,
+                    action: {
+                        resumeRequested(task.id)
+                    }
+                )
 
-            statusControlButton(
-                systemName: "pause.fill",
-                label: "Pause",
-                isEnabled: task.status == .running,
-                action: {
-                    pauseRequested(task.id)
-                }
-            )
+                statusControlButton(
+                    systemName: "pause.fill",
+                    label: "Pause",
+                    isEnabled: task.status == .running,
+                    action: {
+                        pauseRequested(task.id)
+                    }
+                )
+            }
         }
     }
 
@@ -639,8 +664,18 @@ public struct PointerPromptNotchStatusView: View {
                 .font(.system(size: 12, weight: .regular))
                 .foregroundStyle(Color.white.opacity(0.62))
                 .frame(width: 18, height: 18)
+        case .waitingForPermission:
+            Image(systemName: "lock.shield")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.62))
+                .frame(width: 18, height: 18)
         case .waitingForReview:
             Image(systemName: "doc.text.magnifyingglass")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.62))
+                .frame(width: 18, height: 18)
+        case .interrupted:
+            Image(systemName: "arrow.triangle.branch")
                 .font(.system(size: 11, weight: .regular))
                 .foregroundStyle(Color.white.opacity(0.62))
                 .frame(width: 18, height: 18)
@@ -708,8 +743,12 @@ public struct PointerPromptNotchStatusView: View {
                 return "Done"
             case .waitingForClarification:
                 return "Ask"
+            case .waitingForPermission:
+                return "Perm"
             case .waitingForReview:
                 return "Rev"
+            case .interrupted:
+                return "Chg"
             case .needsAttention:
                 return "Ask"
             case .failed:
@@ -780,8 +819,12 @@ public struct PointerPromptNotchStatusView: View {
             return task.detail.isEmpty ? "Done" : task.detail
         case .waitingForClarification:
             return task.detail.isEmpty ? "Waiting for detail" : task.detail
+        case .waitingForPermission:
+            return task.detail.isEmpty ? "Waiting for approval" : task.detail
         case .waitingForReview:
             return task.detail.isEmpty ? "Waiting for review" : task.detail
+        case .interrupted:
+            return task.detail.isEmpty ? "Changed course" : task.detail
         case .needsAttention:
             return task.detail.isEmpty ? "Needs attention" : task.detail
         case .failed:

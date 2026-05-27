@@ -100,6 +100,12 @@ rather than ad hoc thread snippets. Slow planner calls consume a compacted run
 context, including bounded world-state, failure, hint, memory, and semantic
 memory summaries.
 
+The pointer-prompt notch mirrors generic task stop states. Permission gates
+show the pending tool and missing permissions, and the approval control grants
+those exact permissions through the generic lifecycle. Follow-up course changes
+surface as typed interrupted/changed-course task state instead of generic
+attention text.
+
 ## Turn Flow
 
 The desired loop is:

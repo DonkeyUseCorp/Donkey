@@ -89,7 +89,9 @@ public enum PointerPromptSpawnLifecycle {
              .running,
              .paused,
              .waitingForClarification,
+             .waitingForPermission,
              .waitingForReview,
+             .interrupted,
              .needsAttention,
              .failed:
             true
