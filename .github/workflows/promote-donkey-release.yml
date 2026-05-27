@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: Version component to bump from the latest numeric release. Starts at 0.1.0 when no release exists.
+        description: Version bump
         required: true
         default: patch
         type: choice
