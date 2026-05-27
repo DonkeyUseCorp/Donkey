@@ -1,5 +1,6 @@
 import DonkeyContracts
 import DonkeyHarness
+import DonkeyRuntime
 import Foundation
 import Testing
 
@@ -359,6 +360,225 @@ struct GenericHarnessTests {
         #expect(first?.toolResult?.toolName == "screen.observe")
         #expect(second?.toolResult?.toolName == "state.verify")
         #expect(second?.task.toolHistory.map(\.call.id) == ["observe-call", "verify-call"])
+    }
+
+    @Test
+    func pointerPromptLifecycleMirrorsThreadAndCreatesGenericTask() async {
+        let store = InMemoryHarnessThreadStore()
+        let coordinator = HarnessTaskCoordinator()
+        let lifecycle = AppHarnessGenericLifecycle(
+            threadStore: store,
+            coordinator: coordinator
+        )
+        let task = PointerPromptNotchTask(
+            id: "pointer-task-1",
+            title: "Open Calendar",
+            detail: "Running",
+            commandText: "open calendar",
+            status: .running,
+            accentIndex: 0
+        )
+        let request = AppHarnessTurnRequest(
+            turn: AppHarnessTurn(
+                id: "turn-1",
+                text: "open calendar",
+                source: .typedPrompt,
+                taskID: task.id
+            ),
+            recentEvents: [
+                PointerPromptTaskEvent(
+                    id: "event-1",
+                    taskID: task.id,
+                    role: .user,
+                    text: "open calendar",
+                    sequence: 0
+                )
+            ],
+            assets: [
+                PointerPromptTaskAsset(
+                    id: "asset-1",
+                    taskID: task.id,
+                    source: .userUploaded,
+                    displayName: "brief.txt",
+                    contentType: "text/plain",
+                    urlString: "file:///tmp/brief.txt"
+                )
+            ],
+            policy: ["localInput": "guarded"]
+        )
+
+        let prepared = await lifecycle.preparePointerPromptTurn(
+            request: request,
+            pointerTask: task,
+            traceID: "trace-1",
+            availableToolNames: [AppHarnessGenericLifecycleToolNames.localAppRun],
+            grantedPermissions: [.verification]
+        )
+
+        #expect(prepared.thread.id == task.id)
+        #expect(prepared.thread.activeTaskIDs == [task.id])
+        #expect(prepared.task.id == task.id)
+        #expect(prepared.task.context.turn?.id == "turn-1")
+        #expect(prepared.task.context.availableToolNames == [AppHarnessGenericLifecycleToolNames.localAppRun])
+        #expect(prepared.task.grantedPermissions == [.verification])
+        #expect(prepared.compactedContext.events.map(\.id) == ["event-1"])
+        #expect(prepared.compactedContext.assets.map(\.id) == ["asset-1"])
+        #expect(prepared.compactedContext.promptText.contains("Current turn: open calendar"))
+    }
+
+    @Test
+    func pointerPromptLifecyclePlansLocalRunAndStopsForExecutorUserGate() async {
+        let coordinator = HarnessTaskCoordinator()
+        let lifecycle = AppHarnessGenericLifecycle(coordinator: coordinator)
+        let task = await coordinator.createTask(
+            id: "pointer-task-gate",
+            threadID: "thread-gate",
+            goal: "send a message",
+            grantedPermissions: [.verification]
+        )
+        let intent = TaskIntent(
+            intentID: "intent-1",
+            taskType: "local_app_interaction",
+            targetApp: LocalAppTarget(appName: "Messages"),
+            entities: ["recipient": "Alex"],
+            normalizedEntities: ["recipient": "Alex"],
+            confidence: 0.8,
+            parserSource: .onlineModel
+        )
+        let resolution = LocalAppTaskCatalogResolution(
+            status: .needsConfirmation,
+            intent: intent,
+            metadata: ["reason": "missing message"]
+        )
+        _ = await lifecycle.planLocalTaskRun(
+            taskID: task.id,
+            resolution: resolution,
+            fallbackGoal: "send a message",
+            traceID: "trace-gate"
+        )
+        let registry = BuiltInHarnessToolCatalog.registryWithStubExecutors()
+        await registry.register(
+            HarnessTool(descriptor: AppHarnessGenericLifecycle.localTaskRunDescriptor()) { context in
+                HarnessToolResult(
+                    callID: context.call.id,
+                    toolName: context.call.name,
+                    status: .waitingForUser,
+                    summary: "Need the message text.",
+                    question: "What should I send?"
+                )
+            }
+        )
+        let runtime = GenericHarnessRuntime(
+            coordinator: coordinator,
+            registry: registry
+        )
+
+        let result = await runtime.executeNextPlannedStep(taskID: task.id)
+
+        #expect(result?.stoppedForGate == true)
+        #expect(result?.task.status == .waitingForUser)
+        #expect(result?.task.pendingContinuation?.question == "What should I send?")
+        #expect(result?.task.pendingContinuation?.pendingToolCall?.name == AppHarnessGenericLifecycleToolNames.localAppRun)
+        #expect(result?.toolResult?.status == .waitingForUser)
+    }
+
+    @Test
+    func pointerPromptLifecycleConsumesPendingContinuationOnFollowUpTurn() async {
+        let coordinator = HarnessTaskCoordinator()
+        let lifecycle = AppHarnessGenericLifecycle(coordinator: coordinator)
+        let task = await coordinator.createTask(
+            id: "pointer-task-answer",
+            threadID: "pointer-task-answer",
+            goal: "send a message"
+        )
+        _ = await coordinator.waitForUser(
+            taskID: task.id,
+            question: "What should I send?",
+            pendingToolCall: HarnessToolCall(
+                id: "pending-run",
+                name: AppHarnessGenericLifecycleToolNames.localAppRun
+            )
+        )
+        let pointerTask = PointerPromptNotchTask(
+            id: task.id,
+            title: "Send Message",
+            detail: "Waiting",
+            status: .waitingForClarification,
+            accentIndex: 0
+        )
+        let request = AppHarnessTurnRequest(
+            turn: AppHarnessTurn(
+                id: "turn-answer",
+                text: "Tell Alex I am running late",
+                source: .followUp,
+                taskID: task.id,
+                isFollowUp: true
+            )
+        )
+
+        let prepared = await lifecycle.preparePointerPromptTurn(
+            request: request,
+            pointerTask: pointerTask,
+            traceID: "trace-answer",
+            availableToolNames: [AppHarnessGenericLifecycleToolNames.localAppRun]
+        )
+
+        #expect(prepared.task.status == .resuming)
+        #expect(prepared.task.pendingContinuation == nil)
+        #expect(prepared.task.worldModel.facts["lastUserClarification"] == "Tell Alex I am running late")
+        #expect(prepared.compactedContext.activeTasks.first?.status == .resuming)
+    }
+
+    @Test
+    func pointerPromptLifecyclePauseResumeUsesGenericTaskState() async {
+        let coordinator = HarnessTaskCoordinator()
+        let lifecycle = AppHarnessGenericLifecycle(coordinator: coordinator)
+        let task = await coordinator.createTask(
+            id: "pointer-task-pause",
+            threadID: "thread-pause",
+            goal: "open an app"
+        )
+
+        let paused = await lifecycle.pauseTask(
+            taskID: task.id,
+            reason: "User paused from notch"
+        )
+        let resumed = await lifecycle.resumeTask(
+            taskID: task.id,
+            reason: "User resumed from notch"
+        )
+
+        #expect(paused?.status == .paused)
+        #expect(resumed?.status == .resuming)
+        #expect(resumed?.pendingContinuation == nil)
+    }
+
+    @Test
+    func pointerPromptLifecyclePlansRecoveryAsGenericToolStep() async {
+        let coordinator = HarnessTaskCoordinator()
+        let lifecycle = AppHarnessGenericLifecycle(coordinator: coordinator)
+        let task = await coordinator.createTask(
+            id: "pointer-task-recover",
+            threadID: "thread-recover",
+            goal: "open an app",
+            grantedPermissions: [.lifecycle]
+        )
+        _ = await lifecycle.planRecovery(
+            taskID: task.id,
+            reason: "App not found",
+            traceID: "trace-recover"
+        )
+        let runtime = GenericHarnessRuntime(
+            coordinator: coordinator,
+            registry: BuiltInHarnessToolCatalog.registryWithStubExecutors()
+        )
+
+        let result = await runtime.executeNextPlannedStep(taskID: task.id)
+
+        #expect(result?.toolResult?.toolName == "run.recover")
+        #expect(result?.toolResult?.status == .succeeded)
+        #expect(result?.task.toolHistory.map(\.call.name) == ["run.recover"])
+        #expect(result?.task.plan?.metadata["planner"] == "genericHarnessPointerPromptRecovery")
     }
 
     @Test

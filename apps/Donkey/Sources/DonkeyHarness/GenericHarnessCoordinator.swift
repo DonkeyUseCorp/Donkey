@@ -158,6 +158,15 @@ public actor HarnessTaskCoordinator {
         }
     }
 
+    public func updateContext(
+        taskID: String,
+        context: HarnessContextSnapshot
+    ) -> HarnessTaskState? {
+        mutate(taskID: taskID, summary: "Context updated") { task in
+            task.context = context
+        }
+    }
+
     public func updatePlan(
         taskID: String,
         plan: HarnessPlan
@@ -182,6 +191,12 @@ public actor HarnessTaskCoordinator {
 
     public func resume(taskID: String, reason: String = "Task resumed") -> HarnessTaskState? {
         mutate(taskID: taskID, status: .resuming, summary: reason) { task in
+            task.pendingContinuation = nil
+        }
+    }
+
+    public func startRunning(taskID: String, reason: String = "Task running") -> HarnessTaskState? {
+        mutate(taskID: taskID, status: .running, summary: reason) { task in
             task.pendingContinuation = nil
         }
     }
@@ -343,4 +358,3 @@ public actor HarnessTaskCoordinator {
         eventsByTaskID[taskID] = events
     }
 }
-

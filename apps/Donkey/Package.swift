@@ -38,7 +38,10 @@ let package = Package(
         ),
         .target(
             name: "DonkeyRuntime",
-            dependencies: ["DonkeyContracts"],
+            dependencies: [
+                "DonkeyContracts",
+                "DonkeyHarness"
+            ],
             resources: [
                 .process("Resources")
             ],
@@ -62,6 +65,7 @@ let package = Package(
             dependencies: [
                 "DonkeyAI",
                 "DonkeyContracts",
+                "DonkeyHarness",
                 "DonkeyRuntime",
                 "DonkeyUI",
                 .product(name: "Sparkle", package: "Sparkle")

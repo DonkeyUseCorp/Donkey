@@ -122,6 +122,36 @@ public struct GenericHarnessRuntime: Sendable {
             )
         }
 
+        if result.status == .waitingForUser {
+            guard let stoppedTask = await coordinator.waitForUser(
+                taskID: taskID,
+                question: result.question ?? "What detail should I use?",
+                pendingToolCall: call
+            ) else {
+                return nil
+            }
+            return HarnessStepExecutionResult(
+                task: stoppedTask,
+                toolResult: result,
+                stoppedForGate: true
+            )
+        }
+
+        if result.status == .waitingForPermission {
+            guard let stoppedTask = await coordinator.waitForPermission(
+                taskID: taskID,
+                missingPermissions: result.missingPermissions,
+                pendingToolCall: call
+            ) else {
+                return nil
+            }
+            return HarnessStepExecutionResult(
+                task: stoppedTask,
+                toolResult: result,
+                stoppedForGate: true
+            )
+        }
+
         guard let updatedTask = await coordinator.recordToolResult(
             taskID: taskID,
             call: call,
@@ -151,4 +181,3 @@ public struct GenericHarnessRuntime: Sendable {
         return await executeToolCall(taskID: taskID, call: call)
     }
 }
-

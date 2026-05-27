@@ -1,5 +1,6 @@
 import DonkeyAI
 import DonkeyContracts
+import DonkeyHarness
 import DonkeyRuntime
 import Foundation
 import OSLog
@@ -71,6 +72,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
     var redactor: AIHarnessRedactor
     var memoryRetriever: SemanticRunMemoryRetriever
     var coordinatorRegistry: PointerPromptRunCoordinatorRegistry
+    var genericHarnessLifecycle: AppHarnessGenericLifecycle
     var memoryStore: SQLiteAgentMemoryStore?
     var agentVisualizationPlanResolver: any AgentVisualizationPlanResolving
 
@@ -81,6 +83,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         redactor: AIHarnessRedactor = AIHarnessRedactor(),
         memoryRetriever: SemanticRunMemoryRetriever = SemanticRunMemoryRetriever(),
         coordinatorRegistry: PointerPromptRunCoordinatorRegistry = PointerPromptRunCoordinatorRegistry(),
+        genericHarnessLifecycle: AppHarnessGenericLifecycle = AppHarnessGenericLifecycle(),
         memoryStore: SQLiteAgentMemoryStore? = .shared,
         agentVisualizationPlanResolver: any AgentVisualizationPlanResolving = DisabledAgentVisualizationPlanResolver()
     ) {
@@ -96,6 +99,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         )
         self.redactor = redactor
         self.memoryRetriever = memoryRetriever
+        self.genericHarnessLifecycle = genericHarnessLifecycle
         self.memoryStore = memoryStore
         self.agentVisualizationPlanResolver = agentVisualizationPlanResolver
     }
@@ -172,9 +176,17 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         traceID: String,
         taskID: String
     ) async -> PointerPromptCommandHandlingResult {
+        let harnessRequest = Self.harnessRequest(command: command, context: context)
         let routing = appHarnessRouter.route(
-            request: Self.harnessRequest(command: command, context: context),
+            request: harnessRequest,
             traceID: traceID
+        )
+        let genericPreparedTurn = await genericHarnessLifecycle.preparePointerPromptTurn(
+            request: harnessRequest,
+            pointerTask: context?.task,
+            traceID: traceID,
+            availableToolNames: Self.genericHarnessToolNames(),
+            grantedPermissions: Self.pointerPromptGrantedPermissions
         )
         logRouting(command: command, traceID: traceID, taskID: taskID, routing: routing)
         switch routing.outcome.decision.kind {
@@ -186,10 +198,15 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                 summary: routing.outcome.assistantResponse ?? "Tell me what local app task you want to work on.",
                 taskLabel: nil,
                 traceID: traceID,
-                metadata: Self.contextPacketMetadata(routing.contextPacket, outcome: routing.outcome),
+                metadata: Self.contextPacketMetadata(routing.contextPacket, outcome: routing.outcome)
+                    .merging(Self.genericHarnessMetadata(preparedTurn: genericPreparedTurn)) { current, _ in current },
                 documentReviewRequest: nil,
                 agentVisualizationPlan: nil,
                 cursorOverlayRequest: nil
+            )
+            _ = await genericHarnessLifecycle.coordinator.complete(
+                taskID: genericPreparedTurn.task.id,
+                reason: "Pointer prompt routed to conversation response"
             )
             logHandlingResult(result, stage: "conversation", hint: routingHint(for: routing))
             return result
@@ -201,10 +218,16 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                 summary: routing.outcome.assistantResponse ?? "What detail should I use?",
                 taskLabel: nil,
                 traceID: traceID,
-                metadata: Self.contextPacketMetadata(routing.contextPacket, outcome: routing.outcome),
+                metadata: Self.contextPacketMetadata(routing.contextPacket, outcome: routing.outcome)
+                    .merging(Self.genericHarnessMetadata(preparedTurn: genericPreparedTurn)) { current, _ in current },
                 documentReviewRequest: nil,
                 agentVisualizationPlan: nil,
                 cursorOverlayRequest: nil
+            )
+            _ = await genericHarnessLifecycle.coordinator.waitForUser(
+                taskID: genericPreparedTurn.task.id,
+                question: result.summary,
+                reason: "Pointer prompt routing needs clarification"
             )
             logHandlingResult(result, stage: "routing", hint: routingHint(for: routing))
             return result
@@ -216,10 +239,15 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                 summary: "",
                 taskLabel: nil,
                 traceID: traceID,
-                metadata: Self.contextPacketMetadata(routing.contextPacket, outcome: routing.outcome),
+                metadata: Self.contextPacketMetadata(routing.contextPacket, outcome: routing.outcome)
+                    .merging(Self.genericHarnessMetadata(preparedTurn: genericPreparedTurn)) { current, _ in current },
                 documentReviewRequest: nil,
                 agentVisualizationPlan: nil,
                 cursorOverlayRequest: nil
+            )
+            _ = await genericHarnessLifecycle.coordinator.complete(
+                taskID: genericPreparedTurn.task.id,
+                reason: "Pointer prompt empty turn"
             )
             logHandlingResult(result, stage: "empty", hint: "Empty command; no action was run.")
             return result
@@ -283,7 +311,9 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             "semanticMemory.recordIDs": semanticMemoryResults.map(\.record.id).joined(separator: ","),
             "semanticMemory.targetID": semanticMemoryTargetID(for: resolution) ?? "",
             "memoryProposal.decisionCount": String(memoryProposalDecisions.count)
-        ].merging(Self.contextMetadata(context)) { current, _ in current }
+        ]
+        .merging(Self.contextMetadata(context)) { current, _ in current }
+        .merging(Self.genericHarnessMetadata(preparedTurn: genericPreparedTurn)) { current, _ in current }
 
         await coordinator.recordToolEvent(
             capability: .model,
@@ -329,6 +359,10 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                 agentVisualizationPlan: nil,
                 cursorOverlayRequest: nil
             )
+            _ = await genericHarnessLifecycle.coordinator.complete(
+                taskID: taskID,
+                reason: "Pointer prompt conversation response"
+            )
             await coordinatorRegistry.finish(taskID: taskID)
             logHandlingResult(
                 handlingResult,
@@ -338,11 +372,55 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             return handlingResult
         }
 
-        let result = await taskLiveRunner.run(
+        _ = await genericHarnessLifecycle.planLocalTaskRun(
+            taskID: taskID,
+            resolution: resolution,
+            fallbackGoal: commandRedaction.redactedText,
+            traceID: traceID
+        )
+        let localRunResults = PointerPromptHarnessLocalRunResultStore()
+        let registry = BuiltInHarnessToolCatalog.registryWithStubExecutors()
+        let harnessTaskLiveRunner = taskLiveRunner
+        await registry.register(
+            HarnessTool(
+                descriptor: AppHarnessGenericLifecycle.localTaskRunDescriptor()
+            ) { toolContext in
+                let localResult = await harnessTaskLiveRunner.run(
+                    command: commandRedaction.redactedText,
+                    traceID: traceID,
+                    resolution: resolution,
+                    metadata: modelMetadata.merging([
+                        "genericHarness.taskID": toolContext.taskID,
+                        "genericHarness.toolCallID": toolContext.call.id
+                    ]) { current, _ in current }
+                )
+                await localRunResults.store(localResult, callID: toolContext.call.id)
+                return Self.harnessToolResult(
+                    for: localResult,
+                    call: toolContext.call
+                )
+            }
+        )
+        let genericRuntime = GenericHarnessRuntime(
+            coordinator: genericHarnessLifecycle.coordinator,
+            registry: registry
+        )
+        let runStep = await genericRuntime.executeNextPlannedStep(taskID: taskID)
+        let result = await localRunResults.firstResult() ?? LocalAppTaskLiveRunResult(
             command: commandRedaction.redactedText,
             traceID: traceID,
+            status: .failedSafe,
             resolution: resolution,
-            metadata: modelMetadata
+            metadata: [
+                "reason": "genericHarnessMissingLocalRunResult",
+                "genericHarness.stoppedForGate": String(runStep?.stoppedForGate ?? false)
+            ]
+        )
+        let finalized = await finalizeGenericHarnessTask(
+            taskID: taskID,
+            result: result,
+            runStep: runStep,
+            runtime: genericRuntime
         )
         logActionTraces(for: result)
 
@@ -354,12 +432,18 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             status: result.status,
             threadStatus: threadStatus(for: result),
             decision: routing.outcome.decision,
-            summary: summary(for: result),
+            summary: summary(for: result, runStep: runStep),
             taskLabel: taskLabel(for: result),
             traceID: traceID,
             metadata: result.metadata.merging(
                 Self.contextPacketMetadata(routing.contextPacket, outcome: routing.outcome)
-            ) { current, _ in current },
+            ) { current, _ in current }
+            .merging(Self.genericHarnessMetadata(
+                preparedTurn: genericPreparedTurn,
+                runStep: runStep,
+                verificationStep: finalized.verificationStep,
+                recoveryStep: finalized.recoveryStep
+            )) { current, _ in current },
             documentReviewRequest: documentReviewRequest(
                 traceID: traceID,
                 result: result
@@ -377,17 +461,91 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
     }
 
     func pauseCommand(taskID: String) async -> Bool {
-        await coordinatorRegistry.pause(
+        let genericPaused = await genericHarnessLifecycle.pauseTask(
+            taskID: taskID,
+            reason: "Pointer prompt paused task"
+        ) != nil
+        let oldRunnerPaused = await coordinatorRegistry.pause(
             taskID: taskID,
             reason: "Pointer prompt paused task"
         )
+        return genericPaused || oldRunnerPaused
     }
 
     func resumeCommand(taskID: String) async -> Bool {
-        await coordinatorRegistry.resume(
+        let genericResumed = await genericHarnessLifecycle.resumeTask(
+            taskID: taskID,
+            reason: "Pointer prompt resumed task"
+        ) != nil
+        let oldRunnerResumed = await coordinatorRegistry.resume(
             taskID: taskID,
             reason: "Pointer prompt resumed task"
         )
+        return genericResumed || oldRunnerResumed
+    }
+
+    private func finalizeGenericHarnessTask(
+        taskID: String,
+        result: LocalAppTaskLiveRunResult,
+        runStep: HarnessStepExecutionResult?,
+        runtime: GenericHarnessRuntime
+    ) async -> PointerPromptGenericFinalizeResult {
+        switch result.status {
+        case .completed:
+            let verificationStep = await runtime.executeNextPlannedStep(taskID: taskID)
+            if verificationStep?.toolResult?.status == .failed {
+                let recoveryStep = await recoverGenericHarnessTask(
+                    taskID: taskID,
+                    reason: verificationStep?.toolResult?.summary ?? "Verification failed",
+                    traceID: result.traceID,
+                    runtime: runtime
+                )
+                _ = await genericHarnessLifecycle.coordinator.failSafe(
+                    taskID: taskID,
+                    reason: "Pointer prompt verification failed"
+                )
+                return PointerPromptGenericFinalizeResult(
+                    verificationStep: verificationStep,
+                    recoveryStep: recoveryStep
+                )
+            }
+
+            _ = await genericHarnessLifecycle.coordinator.complete(
+                taskID: taskID,
+                reason: "Pointer prompt local task completed"
+            )
+            return PointerPromptGenericFinalizeResult(verificationStep: verificationStep)
+        case .needsUserReview, .needsConfirmation, .unsupportedCommand:
+            return PointerPromptGenericFinalizeResult()
+        case .appUnavailable, .failedSafe:
+            let recoveryStep = await recoverGenericHarnessTask(
+                taskID: taskID,
+                reason: summary(for: result, runStep: runStep),
+                traceID: result.traceID,
+                runtime: runtime
+            )
+            _ = await genericHarnessLifecycle.coordinator.failSafe(
+                taskID: taskID,
+                reason: summary(for: result, runStep: runStep)
+            )
+            return PointerPromptGenericFinalizeResult(
+                recoveryStep: recoveryStep
+            )
+        }
+    }
+
+    private func recoverGenericHarnessTask(
+        taskID: String,
+        reason: String,
+        traceID: String,
+        runtime: GenericHarnessRuntime
+    ) async -> HarnessStepExecutionResult? {
+        _ = await genericHarnessLifecycle.planRecovery(
+            taskID: taskID,
+            reason: reason,
+            traceID: traceID
+        )
+        return await runtime.executeNextPlannedStep(taskID: taskID)
     }
 
     private func groundAgentVisualizationPlan(_ plan: AgentVisualizationPlan) -> AgentVisualizationPlan {
@@ -720,6 +878,18 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         }
     }
 
+    private func summary(
+        for result: LocalAppTaskLiveRunResult,
+        runStep: HarnessStepExecutionResult?
+    ) -> String {
+        if let question = runStep?.task.pendingContinuation?.question,
+           !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return question
+        }
+
+        return summary(for: result)
+    }
+
     private func threadStatus(for result: LocalAppTaskLiveRunResult) -> PointerPromptTaskStatus {
         switch result.status {
         case .completed:
@@ -831,6 +1001,69 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             .sorted()
     }
 
+    private static var pointerPromptGrantedPermissions: Set<HarnessPermission> {
+        [.conversation, .userPrompt, .verification, .lifecycle]
+    }
+
+    private static func genericHarnessToolNames() -> [String] {
+        (BuiltInHarnessToolCatalog.descriptors.map(\.name) + [
+            AppHarnessGenericLifecycleToolNames.localAppRun
+        ]).sorted()
+    }
+
+    private static func harnessToolResult(
+        for result: LocalAppTaskLiveRunResult,
+        call: HarnessToolCall
+    ) -> HarnessToolResult {
+        let toolStatus: HarnessToolResultStatus
+        let question: String?
+        switch result.status {
+        case .completed:
+            toolStatus = .succeeded
+            question = nil
+        case .needsUserReview:
+            toolStatus = .waitingForUser
+            question = "Review the proposed changes before I continue."
+        case .needsConfirmation:
+            toolStatus = .waitingForUser
+            question = "What detail should I use?"
+        case .unsupportedCommand:
+            toolStatus = .waitingForUser
+            question = "What local app task should I run?"
+        case .appUnavailable, .failedSafe:
+            toolStatus = .failed
+            question = nil
+        }
+
+        return HarnessToolResult(
+            callID: call.id,
+            toolName: call.name,
+            status: toolStatus,
+            summary: "Local app task \(result.status.rawValue).",
+            observations: HarnessObservationDelta(
+                focusedApp: result.resolution.availability?.target.appName,
+                facts: [
+                    "localApp.status": result.status.rawValue,
+                    "localApp.resolutionStatus": result.resolution.status.rawValue,
+                    "localApp.taskType": result.resolution.intent?.taskType
+                        ?? result.resolution.definition?.taskType
+                        ?? "",
+                    "localApp.targetApp": result.resolution.intent?.targetApp.appName
+                        ?? result.resolution.definition?.targetApp.appName
+                        ?? result.resolution.availability?.target.appName
+                        ?? ""
+                ].merging(result.metadata) { current, _ in current },
+                uncertainty: result.status == .completed ? [] : [result.status.rawValue]
+            ),
+            question: question,
+            metadata: [
+                "executor": "LocalAppTaskLiveRunner",
+                "localApp.status": result.status.rawValue,
+                "traceID": result.traceID
+            ]
+        )
+    }
+
     private static func harnessRequest(
         command: String,
         context: PointerPromptCommandContext?
@@ -865,6 +1098,29 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         ]
     }
 
+    private static func genericHarnessMetadata(
+        preparedTurn: AppHarnessGenericLifecyclePreparedTurn,
+        runStep: HarnessStepExecutionResult? = nil,
+        verificationStep: HarnessStepExecutionResult? = nil,
+        recoveryStep: HarnessStepExecutionResult? = nil
+    ) -> [String: String] {
+        [
+            "genericHarness.threadID": preparedTurn.thread.id,
+            "genericHarness.taskID": preparedTurn.task.id,
+            "genericHarness.taskStatus": (runStep?.task.status ?? preparedTurn.task.status).rawValue,
+            "genericHarness.context.promptCharacters": String(preparedTurn.compactedContext.promptText.count),
+            "genericHarness.context.eventCount": String(preparedTurn.compactedContext.events.count),
+            "genericHarness.context.assetCount": String(preparedTurn.compactedContext.assets.count),
+            "genericHarness.context.activeTaskCount": String(preparedTurn.compactedContext.activeTasks.count),
+            "genericHarness.context.compactionRecordCount": String(preparedTurn.compactedContext.compactionRecords.count),
+            "genericHarness.runToolStatus": runStep?.toolResult?.status.rawValue ?? "",
+            "genericHarness.runStoppedForGate": runStep.map { String($0.stoppedForGate) } ?? "",
+            "genericHarness.verificationToolStatus": verificationStep?.toolResult?.status.rawValue ?? "",
+            "genericHarness.recoveryToolStatus": recoveryStep?.toolResult?.status.rawValue ?? "",
+            "genericHarness.pendingQuestion": runStep?.task.pendingContinuation?.question ?? ""
+        ]
+    }
+
     private static func contextMetadata(_ context: PointerPromptCommandContext?) -> [String: String] {
         guard let context else { return [:] }
 
@@ -874,6 +1130,31 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             "taskContext.eventCount": String(context.recentEvents.count),
             "taskContext.assetCount": String(context.assets.count)
         ]
+    }
+}
+
+private struct PointerPromptGenericFinalizeResult: Equatable, Sendable {
+    var verificationStep: HarnessStepExecutionResult?
+    var recoveryStep: HarnessStepExecutionResult?
+
+    init(
+        verificationStep: HarnessStepExecutionResult? = nil,
+        recoveryStep: HarnessStepExecutionResult? = nil
+    ) {
+        self.verificationStep = verificationStep
+        self.recoveryStep = recoveryStep
+    }
+}
+
+private actor PointerPromptHarnessLocalRunResultStore {
+    private var resultsByCallID: [String: LocalAppTaskLiveRunResult] = [:]
+
+    func store(_ result: LocalAppTaskLiveRunResult, callID: String) {
+        resultsByCallID[callID] = result
+    }
+
+    func firstResult() -> LocalAppTaskLiveRunResult? {
+        resultsByCallID.values.first
     }
 }
 
