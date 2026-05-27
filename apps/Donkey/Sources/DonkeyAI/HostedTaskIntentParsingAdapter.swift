@@ -1,0 +1,374 @@
+import DonkeyContracts
+import DonkeyRuntime
+import Foundation
+
+public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
+    public static let schemaID = "generic_harness_planning"
+
+    public var router: AIModelRouter
+    public var configuration: DonkeyBackendInferenceConfiguration?
+    public var httpClient: any AIHTTPClient
+    public var environment: [String: String]
+
+    public init(
+        router: AIModelRouter = AIModelRouter(registry: .defaultHybridPlanner),
+        configuration: DonkeyBackendInferenceConfiguration? = nil,
+        httpClient: any AIHTTPClient = URLSessionAIHTTPClient(),
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) {
+        self.router = router
+        self.configuration = configuration
+        self.httpClient = httpClient
+        self.environment = environment
+    }
+
+    public func parseTaskIntent(
+        _ request: TaskIntentAdapterRequest
+    ) async -> TaskIntentAdapterResult {
+        let entry: AIModelRegistryEntry
+        do {
+            entry = try router.route(request.routeRequest.limitingProviders([.donkeyBackend]))
+        } catch {
+            return result(
+                entry: nil,
+                request: request,
+                status: .invalidOutput,
+                validationStatus: "routingFailed",
+                latencyMS: nil,
+                metadata: ["error": String(describing: error)]
+            )
+        }
+
+        let backend: DonkeyBackendInferenceClient
+        do {
+            backend = DonkeyBackendInferenceClient(
+                configuration: try configuration ?? DonkeyBackendInferenceConfiguration.fromEnvironment(environment),
+                httpClient: httpClient
+            )
+        } catch {
+            return result(
+                entry: entry,
+                request: request,
+                status: .missingCredentials,
+                validationStatus: "notValidated",
+                latencyMS: nil,
+                metadata: [
+                    "credential": DonkeyBackendInferenceConfiguration.baseURLConfigurationDescription,
+                    "error": String(describing: error)
+                ]
+            )
+        }
+
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        do {
+            let response = try await backend.createResponse(
+                responseRequest(entry: entry, adapterRequest: request)
+            )
+            let latencyMS = (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
+            guard let outputText = Self.outputText(from: response) else {
+                return result(
+                    entry: entry,
+                    request: request,
+                    status: .invalidOutput,
+                    validationStatus: "invalid",
+                    latencyMS: latencyMS,
+                    metadata: ["modelOutput.empty": "true"]
+                )
+            }
+
+            guard let intent = try TaskIntentWireCodec.decodeHostedPlanningIntent(
+                outputText,
+                definitions: request.taskDefinitions,
+                originalCommand: request.command,
+                appFinderCatalog: request.appFinderCatalog,
+                sourceModelCallID: "model-call-\(request.sourceTraceID)",
+                parserName: "hosted-responses-v1",
+                parserSource: .onlineModel
+            ) else {
+                let baseMetadata = Self.outputDiagnostics(for: outputText)
+                    .merging([
+                        "provider": "donkeyBackend",
+                        "privacy.store": "false"
+                    ]) { current, _ in current }
+                guard let noTaskMetadata = try? TaskIntentWireCodec.hostedPlanningNoTaskMetadata(
+                    outputText,
+                    parserName: "hosted-responses-v1"
+                ) else {
+                    return result(
+                        entry: entry,
+                        request: request,
+                        status: .invalidOutput,
+                        validationStatus: "invalid",
+                        latencyMS: latencyMS,
+                        metadata: baseMetadata
+                    )
+                }
+                return result(
+                    entry: entry,
+                    request: request,
+                    status: .completed,
+                    validationStatus: "noTaskIntent",
+                    latencyMS: latencyMS,
+                    metadata: baseMetadata.merging(noTaskMetadata) { _, new in new }
+                )
+            }
+
+            return TaskIntentAdapterResult(
+                intent: intent,
+                trace: trace(
+                    entry: entry,
+                    request: request,
+                    status: .completed,
+                    validationStatus: "schemaDecoded",
+                    latencyMS: latencyMS,
+                    metadata: Self.outputDiagnostics(for: outputText).merging([
+                        "provider": "donkeyBackend",
+                        "privacy.store": "false"
+                    ]) { current, _ in current }
+                )
+            )
+        } catch is CancellationError {
+            return result(entry: entry, request: request, status: .cancelled, validationStatus: "notValidated", latencyMS: nil)
+        } catch {
+            let latencyMS = (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
+            let status = Self.status(for: error)
+            return result(
+                entry: entry,
+                request: request,
+                status: status,
+                validationStatus: "notValidated",
+                latencyMS: latencyMS,
+                metadata: Self.errorMetadata(error)
+            )
+        }
+    }
+
+    private func responseRequest(
+        entry: AIModelRegistryEntry,
+        adapterRequest: TaskIntentAdapterRequest
+    ) -> RemoteInferenceResponseCreateRequest {
+        RemoteInferenceResponseCreateRequest(
+            input: .array([
+                .object([
+                    "role": .string("user"),
+                    "content": .array([
+                        .object([
+                            "type": .string("input_text"),
+                            "text": .string(promptText(for: adapterRequest))
+                        ])
+                    ])
+                ])
+            ]),
+            store: false,
+            text: [
+                "format": .object([
+                    "type": .string("json_schema"),
+                    "name": .string(Self.schemaID),
+                    "strict": .bool(true),
+                    "schema": Self.jsonValue(TaskIntentWireCodec.genericHarnessPlanningJsonSchema(taskDefinitions: adapterRequest.taskDefinitions))
+                ])
+            ],
+            metadata: [
+                "source_trace_id": adapterRequest.sourceTraceID,
+                "prompt_version": entry.promptVersion
+            ],
+            parameters: [
+                "instructions": .string(Self.instructions),
+                "temperature": .number(0)
+            ]
+        )
+    }
+
+    private func promptText(for request: TaskIntentAdapterRequest) -> String {
+        let definitions = (try? JSONEncoder().encode(request.taskDefinitions))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+        let appFinderCatalog = taskIntentAppFinderCatalogJSON(request.appFinderCatalog)
+        let skillGuidance = request.skillSnippets
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .prefix(8)
+            .joined(separator: "\n\n")
+        return [
+            "Command: \(request.command)",
+            "Relevant local cache:",
+            request.contextSnippets.joined(separator: "\n"),
+            "App skill guidance:",
+            skillGuidance,
+            "App finder catalog JSON:",
+            appFinderCatalog,
+            "Supported task definitions JSON:",
+            definitions
+        ].joined(separator: "\n")
+    }
+
+    private static let instructions = [
+        "Decide whether the user is asking Donkey to run one of the provided local app task definitions.",
+        "Return strict JSON only using the generic harness planning schema.",
+        "First decide whether Command is an executable local-app task or a conversation turn.",
+        "Executable local-app task means all three are clear: action, destination or target app/item, and enough payload to execute safely.",
+        "Always fill structuredIntent, ambiguityRisk, contextNeeds, planSteps, verificationCriteria, fallbacks, clarificationPolicy, and metadata.",
+        "If Command is a greeting, conversation, question, malformed request, or lacks a real executable payload, set structuredIntent.route conversation, taskType \"none\", targetAppName \"none\", empty entities and normalizedEntities, confidence 0, needsConfirmation false, no planSteps with toolName values, and metadata.responseMode \"conversation\" with metadata.assistantResponse containing a brief natural-language reply.",
+        "For supported actions, set structuredIntent.route localAppTask, choose only a provided taskType and target app, and fill entities and normalizedEntities with the concrete values needed by required entity rules.",
+        "Use the generic local_app_interaction task type for executable local app requests that need a model-planned app workflow and do not have a more specific provided task type.",
+        "Use ambiguityRisk for safe, recoverable, or dangerous ambiguity. Dangerous ambiguity and missing required details must set structuredIntent.needsConfirmation true, ambiguityRisk.shouldAskBeforeActing true, and clarificationPolicy.shouldAsk true with a specific question.",
+        "Use contextNeeds for app lookup, memory lookup, screen observation, element discovery, or skill lookup needed before or during execution.",
+        "Use planSteps for the generic harness plan. Each executable step must name one allowed toolName, with inputEntity/controlID/focusKey filled when that tool needs them. Non-executable reasoning steps should use an empty toolName.",
+        "Use verificationCriteria for what proves success, fallbacks for safe recovery choices, and clarificationPolicy for when Donkey should stop and ask.",
+        "Apply App skill guidance for app-specific workflows, control strategies, required metadata, and output shapes. Do not invent app-specific behavior that is absent from task definitions, catalog data, memory, or loaded skill guidance.",
+        "When App finder catalog JSON is non-empty and you use local_app_interaction, choose the target app only from a catalog entry with supportStatus supported and a matching capability. Set metadata.appFinder.selectedAppID to the exact appID, metadata.appFinder.selectedCapabilityID to the capability id, and metadata.appFinder.controlProfile to one declared control profile. Never select candidate, unsupported, or denied entries for execution.",
+        "For local_app_interaction, select the most likely local app, set targetAppName and entities.appName to the human app name, set entities.goal, and when text must be entered set entities.query plus normalizedEntities.query.",
+        "For local_app_interaction, fill planSteps with allowed toolName values only: app.openOrFocus, app.observe, ui.newDocument, ui.focusSearch, ui.focusAddressBar, ui.focusTextEntry, ui.setText, ui.pressReturn, app.verifyCommand, app.verifyVisibleText.",
+        "When ui.setText is present, entities.query and normalizedEntities.query must be non-empty, the step inputEntity should usually be query, and controlID/focusKey should describe the guarded UI strategy.",
+        "For every other task type, planSteps should not contain executable toolName values.",
+        "If no supported capability fits, set structuredIntent.route conversation and taskType \"none\" with a helpful conversational assistantResponse rather than a generic local-action failure.",
+        "Do not invent task types, unsupported entities, unsupported tools, app scripts, or direct input outside the schema."
+    ].joined(separator: " ")
+
+    private static func outputDiagnostics(for outputText: String) -> [String: String] {
+        let trimmed = outputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return ["modelOutput.empty": "true"]
+        }
+        return [
+            "modelOutput.empty": "false",
+            "modelOutput.preview": preview(trimmed, maxCharacters: 240)
+        ]
+    }
+
+    private static func outputText(from value: RemoteInferenceJSONValue) -> String? {
+        if let outputText = value.objectValue?["output_text"]?.stringValue,
+           !outputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return outputText
+        }
+
+        guard let output = value.objectValue?["output"]?.arrayValue else {
+            return nil
+        }
+        for item in output {
+            guard let content = item.objectValue?["content"]?.arrayValue else { continue }
+            for contentItem in content {
+                guard contentItem.objectValue?["type"]?.stringValue == "output_text",
+                      let text = contentItem.objectValue?["text"]?.stringValue,
+                      !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                else {
+                    continue
+                }
+                return text
+            }
+        }
+        return nil
+    }
+
+    private static func status(for error: Error) -> AIModelCallStatus {
+        if case DonkeyBackendInferenceClientError.httpStatus(let status, _) = error {
+            if status == 429 { return .rateLimited }
+            if status >= 500 { return .providerOutage }
+            return .invalidOutput
+        }
+        return (error as NSError).code == NSURLErrorTimedOut ? .timeout : .providerOutage
+    }
+
+    private static func errorMetadata(_ error: Error) -> [String: String] {
+        if case DonkeyBackendInferenceClientError.httpStatus(let status, let message) = error {
+            return [
+                "http.status": String(status),
+                "http.bodyPreview": preview(message, maxCharacters: 240)
+            ]
+        }
+        return ["error": String(describing: error)]
+    }
+
+    private static func preview(_ value: String, maxCharacters: Int) -> String {
+        let singleLine = value
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+        guard singleLine.count > maxCharacters else { return singleLine }
+        return String(singleLine.prefix(maxCharacters))
+    }
+
+    private static func jsonValue(_ value: Any) -> RemoteInferenceJSONValue {
+        switch value {
+        case let string as String:
+            return .string(string)
+        case let bool as Bool:
+            return .bool(bool)
+        case let int as Int:
+            return .number(Double(int))
+        case let double as Double:
+            return .number(double)
+        case let array as [Any]:
+            return .array(array.map(jsonValue))
+        case let object as [String: Any]:
+            return .object(object.mapValues(jsonValue))
+        default:
+            return .null
+        }
+    }
+
+    private func result(
+        entry: AIModelRegistryEntry?,
+        request: TaskIntentAdapterRequest,
+        status: AIModelCallStatus,
+        validationStatus: String,
+        latencyMS: Double?,
+        metadata: [String: String] = [:]
+    ) -> TaskIntentAdapterResult {
+        TaskIntentAdapterResult(
+            intent: nil,
+            trace: trace(
+                entry: entry,
+                request: request,
+                status: status,
+                validationStatus: validationStatus,
+                latencyMS: latencyMS,
+                metadata: metadata
+            )
+        )
+    }
+
+    private func trace(
+        entry: AIModelRegistryEntry?,
+        request: TaskIntentAdapterRequest,
+        status: AIModelCallStatus,
+        validationStatus: String,
+        latencyMS: Double?,
+        metadata: [String: String] = [:]
+    ) -> AIModelCallTrace {
+        AIModelCallTrace(
+            id: "model-call-\(request.sourceTraceID)",
+            role: entry?.role ?? .taskIntent,
+            provider: entry?.provider ?? .donkeyBackend,
+            modelID: entry?.modelID ?? "unrouted",
+            promptVersion: entry?.promptVersion ?? "unrouted",
+            schemaID: Self.schemaID,
+            latencyMS: latencyMS,
+            timeoutMS: entry?.timeoutMS ?? 0,
+            status: status,
+            validationStatus: validationStatus,
+            sourceTraceID: request.sourceTraceID,
+            metadata: metadata
+        )
+    }
+}
+
+private extension RemoteInferenceJSONValue {
+    var objectValue: [String: RemoteInferenceJSONValue]? {
+        if case .object(let value) = self {
+            return value
+        }
+        return nil
+    }
+
+    var arrayValue: [RemoteInferenceJSONValue]? {
+        if case .array(let value) = self {
+            return value
+        }
+        return nil
+    }
+
+    var stringValue: String? {
+        if case .string(let value) = self {
+            return value
+        }
+        return nil
+    }
+}

@@ -599,6 +599,7 @@ def local_llm_prompt_and_limit(request: dict[str, Any]) -> tuple[str, int]:
             command,
             task_definitions,
             request.get("contextSnippets", []),
+            request.get("skillSnippets", []),
             request.get("appFinderCatalog", []),
         ),
         task_intent_schema(task_definitions),
@@ -642,6 +643,7 @@ def repair_invalid_task_intent_with_compact_model(
     compact_prompt_text = compact_task_intent_prompt(
         command,
         task_definitions,
+        request.get("skillSnippets", []),
         request.get("appFinderCatalog", []),
     )
     try:
@@ -663,6 +665,7 @@ def repair_invalid_task_intent_with_compact_model(
         compact_text,
         command=command,
         task_definitions=task_definitions,
+        app_finder_catalog=request.get("appFinderCatalog", []),
     )
     if repaired is None:
         return output_text, {
@@ -682,6 +685,7 @@ def compact_task_intent_output(llm: Any, request: dict[str, Any]) -> tuple[str, 
     compact_prompt_text = compact_task_intent_prompt(
         command,
         task_definitions,
+        request.get("skillSnippets", []),
         request.get("appFinderCatalog", []),
     )
     try:
@@ -703,6 +707,7 @@ def compact_task_intent_output(llm: Any, request: dict[str, Any]) -> tuple[str, 
         compact_text,
         command=command,
         task_definitions=task_definitions,
+        app_finder_catalog=request.get("appFinderCatalog", []),
     )
     if materialized is None:
         return "", {
@@ -745,9 +750,9 @@ def task_intent_payload_looks_valid(intent: Any) -> bool:
 def compact_task_intent_prompt(
     command: str,
     task_definitions: list[dict[str, Any]],
+    skill_snippets: list[Any] | None = None,
     app_finder_catalog: list[dict[str, Any]] | None = None,
 ) -> str:
-    known_apps = ["Music", "Safari", "Notes", "Numbers"]
     catalog_apps = [
         str(entry.get("appName") or "").strip()
         for entry in (app_finder_catalog or [])
@@ -759,7 +764,8 @@ def compact_task_intent_prompt(
         for definition in task_definitions
         if str((definition.get("targetApp") or {}).get("appName") or "").strip()
     ]
-    app_names = ordered_unique(catalog_apps + known_apps + discovered_apps + ["Local App"])
+    app_names = ordered_unique(catalog_apps + discovered_apps + ["Local App"])
+    skill_guidance = "\n\n".join(str(item) for item in (skill_snippets or [])[:8] if str(item).strip())
     return "\n".join(
         [
             "<|im_start|>system",
@@ -768,15 +774,13 @@ def compact_task_intent_prompt(
             "<|im_start|>user",
             "Classify this Mac command into an executable local app action or no action.",
             "Choose appName from: " + ", ".join(app_names),
-            "Prefer a concrete app name. Do not choose Local App when Music, Safari, Notes, or Numbers fits.",
+            "Prefer a concrete app name from supported catalog or skill guidance. Do not choose Local App when a supported named app fits.",
             "If this is not an executable local app action, set appName to none, query to empty, and confidence to 0.",
-            "For play/listen media requests, choose Music when available. If the request is vague like play some <artist>, pick a concrete playable song or album first and put '<selected title> <artist>' in query; do not use an artist-only query unless the user explicitly asks for the artist page/station.",
+            "Apply App skill guidance for app-specific workflows and control strategies.",
             f"Command: {command}",
-            "JSON keys: appName, goal, query, confidence.",
-            "For music playback, appName is Music and query is the artist/song.",
-            "For website navigation, appName is Safari and query is the website or URL.",
-            "For writing text, appName is Notes and query is the text to write.",
-            "For tables or spreadsheets, appName is Numbers and query is the table content or subject.",
+            "App skill guidance:",
+            skill_guidance,
+            "JSON keys: appName, goal, query, confidence, capabilityID, controlID, focusKey, tools.",
             "<|im_end|>",
             "<|im_start|>assistant",
         ]
@@ -833,6 +837,7 @@ def materialize_compact_task_intent(
     *,
     command: str,
     task_definitions: list[dict[str, Any]],
+    app_finder_catalog: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     compact = decode_compact_object(compact_text)
     if not isinstance(compact, dict):
@@ -843,17 +848,46 @@ def materialize_compact_task_intent(
     app_name = str(compact.get("appName") or "").strip()
     if not app_name or normalized_words(app_name) == ["local", "app"]:
         return None
-    if normalized_words(app_name) != ["music"]:
-        return None
 
     confidence = compact_confidence(compact.get("confidence"))
     if confidence < 0.55:
         return None
 
     goal = str(compact.get("goal") or "").strip() or "use local app"
-    if normalized_words(app_name) == ["music"]:
-        goal = "play media"
     query = compact_query(compact.get("query"), command)
+    if not query:
+        return None
+
+    selection = compact_app_finder_selection(compact, app_name, app_finder_catalog or [])
+    if app_finder_catalog and selection is None:
+        return None
+    tools = compact_tools(compact.get("tools"))
+    capability_id = ""
+    control_profile = ""
+    if selection is not None:
+        entry, capability = selection
+        app_name = str(entry.get("appName") or app_name)
+        capability_id = str(capability.get("id") or "")
+        profiles = capability.get("controlProfiles") if isinstance(capability.get("controlProfiles"), list) else []
+        control_profile = str(compact.get("controlProfile") or (profiles[0] if profiles else "") or "")
+        if not tools:
+            tools = compact_tools_for_control_profile(control_profile)
+    if not tools:
+        tools = ["app.openOrFocus", "app.observe", "ui.focusTextEntry", "ui.setText", "app.verifyCommand"]
+
+    control_id = str(compact.get("controlID") or "").strip() or compact_control_id_for_tools(tools)
+    focus_key = str(compact.get("focusKey") or "").strip() or compact_focus_key_for_tools(tools)
+    metadata: dict[str, Any] = {}
+    if selection is not None:
+        entry, _ = selection
+        metadata.update(
+            {
+                "appFinder.selectedAppID": str(entry.get("appID") or ""),
+                "appFinder.selectedCapabilityID": capability_id,
+                "appFinder.controlProfile": control_profile,
+                "appFinder.supportStatus": str(entry.get("supportStatus") or ""),
+            }
+        )
 
     return {
         "taskType": "local_app_interaction",
@@ -871,21 +905,97 @@ def materialize_compact_task_intent(
         "confidence": confidence,
         "needsConfirmation": False,
         "actionPlan": {
-            "tools": [
-                "app.openOrFocus",
-                "app.observe",
-                "ui.focusSearch",
-                "ui.setText",
-                "ui.pressReturn",
-                "app.verifyCommand",
-            ],
+            "tools": tools,
             "inputEntity": "query",
-            "controlID": "search",
-            "focusKey": "Command+F",
+            "controlID": control_id,
+            "focusKey": focus_key,
             "verification": "commandAttempted",
         },
-        "metadata": {},
+        "metadata": metadata,
     }
+
+
+def compact_app_finder_selection(
+    compact: dict[str, Any],
+    app_name: str,
+    app_finder_catalog: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    if not app_finder_catalog:
+        return None
+    requested_id = str(compact.get("appID") or "").strip()
+    requested_capability_id = str(compact.get("capabilityID") or compact.get("selectedCapabilityID") or "").strip()
+    app_words = normalized_words(app_name)
+    for entry in app_finder_catalog:
+        if not isinstance(entry, dict) or str(entry.get("supportStatus") or "") != "supported":
+            continue
+        entry_matches = requested_id and requested_id == str(entry.get("appID") or "")
+        entry_matches = entry_matches or normalized_words(str(entry.get("appName") or "")) == app_words
+        if not entry_matches:
+            continue
+        capabilities = entry.get("capabilities") if isinstance(entry.get("capabilities"), list) else []
+        for capability in capabilities:
+            if not isinstance(capability, dict):
+                continue
+            if not requested_capability_id or requested_capability_id == str(capability.get("id") or ""):
+                return entry, capability
+    return None
+
+
+def compact_tools(value: Any) -> list[str]:
+    allowed = {
+        "app.openOrFocus",
+        "app.observe",
+        "ui.newDocument",
+        "ui.focusSearch",
+        "ui.focusAddressBar",
+        "ui.focusTextEntry",
+        "ui.setText",
+        "ui.pressReturn",
+        "app.verifyCommand",
+        "app.verifyVisibleText",
+    }
+    raw_items: list[Any]
+    if isinstance(value, list):
+        raw_items = value
+    elif isinstance(value, str):
+        raw_items = [item.strip() for item in re.split(r"[,|]", value)]
+    else:
+        raw_items = []
+    result: list[str] = []
+    for item in raw_items:
+        tool = str(item).strip()
+        if tool in allowed and tool not in result:
+            result.append(tool)
+    return result
+
+
+def compact_tools_for_control_profile(control_profile: str) -> list[str]:
+    normalized = "_".join(normalized_words(control_profile))
+    if "address" in normalized or "url" in normalized:
+        return ["app.openOrFocus", "app.observe", "ui.focusAddressBar", "ui.setText", "ui.pressReturn", "app.verifyCommand"]
+    if "new" in normalized or "document" in normalized or "editor" in normalized:
+        return ["app.openOrFocus", "app.observe", "ui.newDocument", "ui.setText", "app.verifyCommand"]
+    if "search" in normalized:
+        return ["app.openOrFocus", "app.observe", "ui.focusSearch", "ui.setText", "ui.pressReturn", "app.verifyCommand"]
+    return []
+
+
+def compact_control_id_for_tools(tools: list[str]) -> str:
+    if "ui.focusAddressBar" in tools:
+        return "addressBar"
+    if "ui.focusSearch" in tools:
+        return "search"
+    if "ui.newDocument" in tools or "ui.focusTextEntry" in tools:
+        return "editor"
+    return ""
+
+
+def compact_focus_key_for_tools(tools: list[str]) -> str:
+    if "ui.focusAddressBar" in tools:
+        return "Command+L"
+    if "ui.focusSearch" in tools:
+        return "Command+F"
+    return ""
 
 
 def decode_compact_object(compact_text: str) -> Any:
@@ -894,7 +1004,19 @@ def decode_compact_object(compact_text: str) -> Any:
         return compact
 
     values: dict[str, Any] = {}
-    for key in ["appName", "goal", "query", "confidence"]:
+    for key in [
+        "appName",
+        "goal",
+        "query",
+        "confidence",
+        "appID",
+        "capabilityID",
+        "selectedCapabilityID",
+        "controlProfile",
+        "controlID",
+        "focusKey",
+        "tools",
+    ]:
         match = re.search(rf"(?i)(?:^|[,\n])\s*{re.escape(key)}\s*:\s*([^,\n]+)", compact_text)
         if match:
             values[key] = match.group(1).strip().strip("\"'")
@@ -910,9 +1032,7 @@ def compact_confidence(value: Any) -> float:
 
 def compact_query(value: Any, command: str) -> str:
     query = str(value or "").strip()
-    query_words = normalized_words(query)
-    command_words = set(normalized_words(command))
-    if len(query_words) >= 2 and all(word in command_words for word in query_words):
+    if query:
         return query
     return command.strip()
 
@@ -1018,7 +1138,7 @@ def app_chain_repair_prompt(command: str, intent: dict[str, Any], context_snippe
             "If the command asks for fresh/current/reference data that should be found in another local app before creating the destination artifact, set needsChain=true.",
             "When needsChain=true, appChain must be ordered source apps first and final destination app last.",
             "Use only app names that appear in Available local apps when possible.",
-            "Examples: market data or market-cap tables use Stocks before Numbers; forecast tables use Weather before Numbers; place/distance tables use Maps before Numbers.",
+            "Use app-chain examples or source-app preferences only when they appear in skill guidance, app catalog data, or memory context.",
             f"Command: {command}",
             f"Destination app: {target_app}",
             "Current intent:",
@@ -1089,11 +1209,11 @@ def document_text_payload_prompt(command: str) -> str:
     return "\n".join(
         [
             "You repair missing document text for Donkey. Return strict JSON only.",
-            "Decide whether Command clearly asks to write or generate a meaningful finished text payload for Notes.",
+            "Decide whether Command clearly asks to write or generate a meaningful finished text payload for the selected text app.",
             "If it does, set canWrite=true and text to the final text to type. Text must be the content itself, not a label, not a restatement, and not instructions.",
             "If details are sparse but the requested writing form is clear, write a short generic finished piece for that form.",
             "If the requested object is malformed, nonsensical, or not a writing task, set canWrite=false, text=\"\", and assistantResponse to a brief clarification.",
-            "Example: Command 'write a people in notes' is malformed because 'a people' is not a meaningful writing form or payload; return canWrite=false.",
+            "A malformed requested object is not a meaningful writing form or payload; return canWrite=false.",
             f"Command: {command}",
         ]
     )
@@ -1319,6 +1439,7 @@ def task_intent_prompt(
     command: str,
     task_definitions: list[dict[str, Any]],
     context_snippets: list[Any] | None = None,
+    skill_snippets: list[Any] | None = None,
     app_finder_catalog: list[dict[str, Any]] | None = None,
 ) -> str:
     task_lines: list[str] = []
@@ -1356,6 +1477,7 @@ def task_intent_prompt(
         ]
         task_lines.append(" | ".join(item for item in parts if item))
     context = "\n".join(str(item) for item in (context_snippets or [])[:8] if str(item).strip())
+    skill_guidance = "\n\n".join(str(item) for item in (skill_snippets or [])[:8] if str(item).strip())
     app_finder_catalog_json = json.dumps(
         compact_app_finder_catalog(app_finder_catalog),
         separators=(",", ":"),
@@ -1369,34 +1491,20 @@ def task_intent_prompt(
             "If Command is a question, greeting, conversation, malformed request, or lacks a real executable payload, do not invent one. Return taskType \"none\", targetAppName \"none\", empty entities and normalizedEntities, confidence 0, needsConfirmation=false, actionPlan.tools=[], and metadata.responseMode=conversation with metadata.assistantResponse containing a brief natural-language reply.",
             "If Command is an executable local task with one ordinary missing detail, set needsConfirmation=true and include missingEntity in metadata.",
             "If Command is executable, choose by capability and target app, not exact wording. Use only the provided task definitions; do not invent task types, unsupported entities, or actions.",
-            "For play/listen media requests, treat the turn as executable when a supported play_media capability or media_playback task is available; choose Music or another supported media app, set query to the requested artist/song/album, and do not downgrade it to conversation.",
-            "For every media playback request, include metadata.mediaSelection.kind. For explicit playable requests use explicit_song, explicit_album, or explicit_playlist. For vague artist-level media requests such as 'play some <artist>', do media-selection planning before returning JSON: pick one concrete playable song or album by that artist using model knowledge, set query to '<selected title> <artist>', and include metadata.mediaSelection.kind=representative_song or representative_album, metadata.mediaSelection.seed=<artist>, metadata.mediaSelection.selectedTitle=<title>, and metadata.mediaSelection.reason. Do not use an artist-only query unless the user explicitly asks to open the artist page, play an artist radio/station, or browse the artist.",
-            "If visible search results are provided in context for a media request, choose the highest-confidence playable Song row whose artist matches the requested seed; skip Artist, Playlist, category, and different-artist rows.",
             "If no capability fits, choose conversation with taskType \"none\" and a helpful metadata.assistantResponse rather than a failed local-action message.",
             "For dynamic local-item capabilities, app/file/folder names may come from the request, relevant local cache, or default-app inference; the catalog will verify availability before execution.",
+            "Apply App skill guidance for app-specific workflows, control strategies, required metadata, and output shapes. Do not invent app-specific behavior that is absent from task definitions, catalog data, memory, or loaded skill guidance.",
             "For write/create document requests: if the requested content is malformed or not meaningful enough to type, choose conversation; do not fabricate a document payload just to make the task executable.",
             "For local_app_interaction, select the most likely local app for the user's goal, set entities.goal, and when text must be entered set entities.query plus normalizedEntities.query.",
             "For local_app_interaction, fill actionPlan.tools with allowed tools only: app.openOrFocus, app.observe, ui.newDocument, ui.focusSearch, ui.focusAddressBar, ui.focusTextEntry, ui.setText, ui.pressReturn, app.verifyCommand, app.verifyVisibleText.",
-            "For website navigation, choose Safari or the user's browser, set query to the URL, use ui.focusAddressBar with controlID=addressBar and focusKey=Command+L, then ui.setText and ui.pressReturn.",
-            "For writing in Notes, choose Notes, create the requested prose in query, and use ui.newDocument followed by ui.setText.",
             "For generative writing requests, query must be the complete final text to type, not a single category label, restatement of the request, or placeholder copied from these instructions.",
             "If the writing type is clear but topic/details are sparse, compose a short generic piece that satisfies the requested writing type and put that complete text in query.",
-            "For spreadsheet or table creation, choose Numbers, put compact tab-separated table content in query, and use ui.newDocument followed by ui.setText. If exact live data is unavailable, make a table-shaped brief with a data-needed note; do not output a single sentence.",
-            "For spreadsheet/table requests that require fresh data from another local app, set targetAppName to the final destination app and include the source-to-destination chain in metadata.appChain as a JSON string array of app names. Example: a market-cap table should use metadata.appChain=[\"Stocks\",\"Numbers\"] and targetAppName=Numbers.",
             "When ui.setText is present, entities.query and normalizedEntities.query must be non-empty.",
             "If you cannot produce non-empty text for ui.setText, choose conversation; never return ui.setText with an empty query.",
-            "For sparse writing requests such as 'write a [form] in Notes', infer the requested form and write a short finished piece. If the requested object is malformed or nonsensical, choose conversation.",
-            "Example malformed writing boundary: 'write a people in Notes' is not a meaningful writing form or payload, so choose conversation rather than writing a definition.",
-            "entities.appName must be the human app name, such as Safari, Notes, Numbers, or Music; do not put a bundle identifier in appName.",
+            "entities.appName must be the human app name, not a bundle identifier.",
             "For local_app_interaction, set actionPlan.inputEntity to query when ui.setText should type the query, and set actionPlan.controlID/focusKey for the UI control strategy.",
             "actionPlan must be one nested object containing tools, inputEntity, controlID, focusKey, and verification. Do not put inputEntity, controlID, focusKey, or verification at the top level.",
-            "The examples below show output structure only. Replace every example entity value with values inferred from Command and local cache; do not copy example query text unless the user asked for that exact text.",
-            "Media playback output shape when media_playback is provided: taskType=media_playback, targetAppName=Music, entities.query=<concrete playable title plus artist>, normalizedEntities.query=<concrete playable title plus artist>, metadata.mediaSelection.* when the user gave only an artist/genre/seed.",
-            "Media playback output shape for generic local_app_interaction: targetAppName=Music, entities.appName=Music, entities.goal=play media, entities.query=<concrete playable title plus artist>, actionPlan.tools=[app.openOrFocus, app.observe, ui.focusSearch, ui.setText, ui.pressReturn, app.verifyCommand], inputEntity=query, controlID=search, focusKey=Command+F, metadata.appFinder.selectedCapabilityID=play_media when selected from the app finder catalog, metadata.mediaSelection.* when the user gave only an artist/genre/seed.",
-            'Example vague artist request output shape: {"taskType":"local_app_interaction","targetAppName":"Music","entities":{"appName":"Music","goal":"play media","query":"Viva La Vida Coldplay"},"normalizedEntities":{"appName":"Music","goal":"play media","query":"Viva La Vida Coldplay"},"confidence":0.9,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.focusSearch","ui.setText","ui.pressReturn","app.verifyCommand"],"inputEntity":"query","controlID":"search","focusKey":"Command+F","verification":"commandAttempted"},"metadata":{"appFinder.selectedCapabilityID":"play_media","mediaSelection.kind":"representative_song","mediaSelection.seed":"Coldplay","mediaSelection.selectedTitle":"Viva La Vida","mediaSelection.reason":"User asked for some Coldplay, so choose a concrete well-known song instead of an artist-only search."}}',
-            'Example website output shape: {"taskType":"local_app_interaction","targetAppName":"Safari","entities":{"appName":"Safari","goal":"open requested website","query":"https://example.org"},"normalizedEntities":{"appName":"Safari","goal":"open requested website","query":"https://example.org"},"confidence":0.9,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.focusAddressBar","ui.setText","ui.pressReturn","app.verifyCommand"],"inputEntity":"query","controlID":"addressBar","focusKey":"Command+L","verification":"commandAttempted"},"metadata":{}}',
-            "Writing output shape: targetAppName=Notes, entities.appName=Notes, entities.goal=write requested text, entities.query=<the actual final text to type>, actionPlan.tools=[app.openOrFocus, app.observe, ui.newDocument, ui.setText, app.verifyCommand], inputEntity=query, controlID=editor.",
-            "Table output shape: targetAppName=Numbers, entities.appName=Numbers, entities.goal=create requested table, entities.query=<tab-separated rows for the requested table>, actionPlan.tools=[app.openOrFocus, app.observe, ui.newDocument, ui.setText, app.verifyCommand], inputEntity=query, controlID=editor.",
+            "Use examples only when they are supplied by bounded skill guidance or task definitions. Replace every example entity value with values inferred from Command and local cache; do not copy example query text unless the user asked for that exact text.",
             'Conversation output shape: {"taskType":"none","targetAppName":"none","entities":{},"normalizedEntities":{},"confidence":0,"needsConfirmation":false,"actionPlan":{"tools":[],"inputEntity":"","controlID":"","focusKey":"","verification":"commandAttempted"},"metadata":{"responseMode":"conversation","assistantResponse":"Hi! What would you like to work on?"}}',
             'Example malformed request output shape: {"taskType":"none","targetAppName":"none","entities":{},"normalizedEntities":{},"confidence":0,"needsConfirmation":false,"actionPlan":{"tools":[],"inputEntity":"","controlID":"","focusKey":"","verification":"commandAttempted"},"metadata":{"responseMode":"conversation","assistantResponse":"I can help, but I need a clearer thing to write before opening an app."}}',
             "For every other task type, actionPlan.tools must be empty.",
@@ -1407,6 +1515,8 @@ def task_intent_prompt(
             f"Command: {command}",
             "Relevant local cache:",
             context,
+            "App skill guidance:",
+            skill_guidance,
             "App finder catalog JSON:",
             app_finder_catalog_json,
             "Supported task capabilities:",

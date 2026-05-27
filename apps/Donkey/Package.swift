@@ -43,7 +43,8 @@ let package = Package(
                 "DonkeyHarness"
             ],
             resources: [
-                .process("Resources")
+                .process("Resources/local-app-finder-profiles.json"),
+                .copy("Resources/BuiltInSkills")
             ],
             linkerSettings: [
                 .linkedLibrary("sqlite3")

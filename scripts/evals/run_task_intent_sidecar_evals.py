@@ -29,6 +29,7 @@ DEFAULT_COMPARISON_REPORT_PATH = DEFAULT_COMPARISON_DIR / "comparison.latest.jso
 DEFAULT_MODEL_CONFIG_PATH = Path("config/local-llm-models.json")
 DEFAULT_CANDIDATE_CONFIG_PATH = Path("evals/task-intent/local-llm-model-candidates.json")
 DEFAULT_SIDECAR = Path("scripts/local-runtime-runners/donkey_runtime_runner.py")
+DEFAULT_SKILL_ROOT = Path("apps/Donkey/Sources/DonkeyRuntime/Resources/BuiltInSkills")
 SCHEMA_ID = "task_intent_v1"
 
 
@@ -235,10 +236,22 @@ def context_snippets(cases: list[dict[str, Any]]) -> dict[str, str]:
     return snippets
 
 
+def skill_snippets(root: Path = DEFAULT_SKILL_ROOT) -> list[str]:
+    if not root.exists():
+        return []
+    snippets: list[str] = []
+    for path in sorted(root.glob("*/SKILL.md")):
+        text = path.read_text(encoding="utf-8").strip()
+        if text:
+            snippets.append(text[:1200])
+    return snippets
+
+
 def build_request(
     case: dict[str, Any],
     model_id: str,
     snippets: dict[str, str],
+    skills: list[str],
     cache_directory: Path | None = None,
 ) -> dict[str, Any]:
     app_info = case.get("app") or {}
@@ -260,6 +273,7 @@ def build_request(
         "command": case["command"],
         "taskDefinitions": TASK_DEFINITIONS,
         "contextSnippets": (local_context + fallback_context)[:8],
+        "skillSnippets": skills[:8],
         "sourceTraceID": case["id"].replace("/", "-"),
         "modelID": model_id,
         "metadata": {
@@ -720,6 +734,7 @@ def run_eval_suite(
     runtime_state_dir: Path | None = None,
 ) -> tuple[dict[str, Any], list[EvalResult]]:
     snippets = context_snippets(all_cases)
+    skills = skill_snippets()
     results: list[EvalResult] = []
     extra_env = {"DONKEY_LOCAL_LLM_TIMEOUT_SECONDS": str(timeout_seconds)}
     if model_path is not None:
@@ -731,7 +746,7 @@ def run_eval_suite(
         extra_env["DONKEY_RUNTIME_STATE_DIR"] = str(runtime_state_dir)
 
     for index, case in enumerate(cases, start=1):
-        request = build_request(case, model_id, snippets, cache_directory)
+        request = build_request(case, model_id, snippets, skills, cache_directory)
         if dry_run:
             response, stderr, latency_ms = dry_run_response(case)
         else:

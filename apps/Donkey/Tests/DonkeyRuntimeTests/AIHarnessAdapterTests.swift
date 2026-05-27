@@ -5,7 +5,7 @@ import Foundation
 import Testing
 
 private let defaultLocalRuntimeModelID = "qwen2.5-0.5b-instruct-q4_k_m"
-// Only used in explicit local-generate adapter unit tests; it is not a default runtime dependency.
+// Only used in explicit local-generate planner-hint unit tests; it is not a default runtime dependency.
 private let explicitLocalGenerateFixtureModelID = "qwen3:8b"
 
 @Suite
@@ -333,140 +333,6 @@ struct AIHarnessAdapterTests {
     }
 
     @Test
-    func localGenerateTaskIntentAdapterBuildsLocalRequestAndDecodesValidatedIntent() async throws {
-        let httpClient = FakeAIHTTPClient(
-            data: localGenerateResponseData(
-                response: """
-                {"taskType":"weather_lookup","targetAppName":"Weather","entities":{"city":"SF"},"normalizedEntities":{"city":"San Francisco"},"confidence":0.93,"needsConfirmation":false,"actionPlan":{"tools":[],"inputEntity":"","controlID":"","focusKey":"","verification":"commandAttempted"},"metadata":{"source":"test"}}
-                """
-            ),
-            statusCode: 200
-        )
-        let adapter = LocalGenerateTaskIntentAdapter(
-            router: AIModelRouter(
-                registry: AIModelRegistry(
-                    entries: [
-                        entry(
-                            id: "local-intent",
-                            role: .taskIntent,
-                            provider: .ollama,
-                            modelID: explicitLocalGenerateFixtureModelID,
-                            endpoint: URL(string: "http://127.0.0.1:11434/api/generate")!,
-                            promptVersion: "task-intent-v1"
-                        )
-                    ]
-                )
-            ),
-            httpClient: httpClient
-        )
-
-        let result = await adapter.parseTaskIntent(
-            TaskIntentAdapterRequest(
-                command: "show me the weather for SF",
-                taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
-                sourceTraceID: "trace-intent"
-            )
-        )
-
-        #expect(result.intent?.taskType == "weather_lookup")
-        #expect(result.intent?.targetApp.appName == "Weather")
-        #expect(result.intent?.normalizedEntities["city"] == "San Francisco")
-        #expect(result.intent?.parserSource == .localModel)
-        #expect(result.intent?.sourceModelCallID == "model-call-trace-intent")
-        #expect(result.trace.status == .completed)
-        #expect(result.trace.role == .taskIntent)
-        #expect(result.trace.provider == .ollama)
-
-        let request = try #require(httpClient.requests.first)
-        #expect(request.url?.absoluteString == "http://127.0.0.1:11434/api/generate")
-        let body = try #require(request.httpBodyJSONObject)
-        #expect(body["model"] as? String == explicitLocalGenerateFixtureModelID)
-        #expect(body["stream"] as? Bool == false)
-        #expect(body["format"] as? [String: Any] != nil)
-        #expect(body["keep_alive"] as? String == "10m")
-        let options = try #require(body["options"] as? [String: Any])
-        #expect(options["num_predict"] as? Int == 512)
-        #expect(options["num_ctx"] as? Int == 2048)
-        #expect((body["prompt"] as? String)?.contains("Use only the provided task definitions") == true)
-        #expect((body["prompt"] as? String)?.contains("choose by capability and target app") == true)
-        #expect((body["prompt"] as? String)?.contains("Do not include reasoning") == true)
-        #expect((body["prompt"] as? String)?.contains("play/listen media requests") == true)
-        #expect((body["prompt"] as? String)?.contains("media-selection planning") == true)
-        #expect((body["prompt"] as? String)?.contains("mediaSelection.selectedTitle") == true)
-        #expect((body["prompt"] as? String)?.contains("For website navigation") == true)
-        #expect((body["prompt"] as? String)?.contains("ui.newDocument") == true)
-        #expect((body["prompt"] as? String)?.contains("set_text_input_contract=inputEntityValueIsExactTextToEnter") == true)
-        #expect((body["prompt"] as? String)?.contains("action, destination or target app/item") == true)
-        #expect((body["prompt"] as? String)?.contains("metadata.responseMode=conversation") == true)
-        #expect((body["prompt"] as? String)?.contains("metadata.assistantResponse") == true)
-        #expect((body["prompt"] as? String)?.contains("taskType \"none\"") == true)
-        #expect((body["prompt"] as? String)?.contains("triggers=") == false)
-        #expect((body["prompt"] as? String)?.contains("metadata=") == false)
-    }
-
-    @Test
-    func localGenerateTaskIntentAdapterUsesInstalledLocalModelWhenConfiguredModelIsMissing() async throws {
-        let httpClient = SequencedFakeAIHTTPClient(
-            responses: [
-                HTTPStub(
-                    data: Data("{\"error\":\"model '\(explicitLocalGenerateFixtureModelID)' not found\"}".utf8),
-                    statusCode: 404
-                ),
-                HTTPStub(
-                    data: Data(#"{"models":[{"name":"kimi-k2.5:cloud","size":0},{"name":"llama3:latest","size":4700000000}]}"#.utf8),
-                    statusCode: 200
-                ),
-                HTTPStub(
-                    data: localGenerateResponseData(
-                        response: """
-                        {"taskType":"local_app_interaction","targetAppName":"Music","entities":{"appName":"Music","goal":"play media","query":"justin bieber"},"normalizedEntities":{"appName":"Music","goal":"play media","query":"Justin Bieber"},"confidence":0.91,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.focusSearch","ui.setText","ui.pressReturn","app.verifyCommand"],"inputEntity":"query","controlID":"search","focusKey":"Command+F","verification":"commandAttempted"},"metadata":{}}
-                        """
-                    ),
-                    statusCode: 200
-                )
-            ]
-        )
-        let adapter = LocalGenerateTaskIntentAdapter(
-            router: AIModelRouter(
-                registry: AIModelRegistry(
-                    entries: [
-                        entry(
-                            id: "local-intent",
-                            role: .taskIntent,
-                            provider: .ollama,
-                            modelID: explicitLocalGenerateFixtureModelID,
-                            endpoint: URL(string: "http://127.0.0.1:11434/api/generate")!,
-                            promptVersion: "task-intent-v1"
-                        )
-                    ]
-                )
-            ),
-            httpClient: httpClient
-        )
-
-        let result = await adapter.parseTaskIntent(
-            TaskIntentAdapterRequest(
-                command: "play some justin bieber",
-                taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
-                contextSnippets: ["Music application com.apple.Music"],
-                sourceTraceID: "trace-local-generate-model-fallback"
-            )
-        )
-
-        #expect(result.intent?.taskType == "local_app_interaction")
-        #expect(result.intent?.targetApp.appName == "Music")
-        #expect(result.intent?.normalizedEntities["query"] == "Justin Bieber")
-        #expect(result.trace.status == .completed)
-        #expect(result.trace.modelID == "llama3:latest")
-        #expect(result.trace.metadata["modelFallback.originalModelID"] == explicitLocalGenerateFixtureModelID)
-        #expect(result.trace.metadata["modelFallback.selectedModelID"] == "llama3:latest")
-        #expect(httpClient.requests.map { $0.url?.path } == ["/api/generate", "/api/tags", "/api/generate"])
-        let fallbackRequest = try #require(httpClient.requests.last)
-        let fallbackBody = try #require(fallbackRequest.httpBodyJSONObject)
-        #expect(fallbackBody["model"] as? String == "llama3:latest")
-    }
-
-    @Test
     func processBackedLocalLLMTaskIntentAdapterDecodesValidatedIntent() async throws {
         let adapter = ProcessBackedLocalLLMTaskIntentAdapter(
             router: AIModelRouter(registry: .defaultHybridPlanner),
@@ -563,11 +429,15 @@ struct AIHarnessAdapterTests {
         #expect(result.intent?.metadata["genericHarness.schemaVersion"] == "generic_harness_planning")
         #expect(result.intent?.metadata["genericHarness.intent.goal"] == "play Viva La Vida by Coldplay")
         #expect(instructions.contains("local_app_interaction"))
-        #expect(instructions.contains("media playback"))
-        #expect(instructions.contains("play/listen media requests"))
-        #expect(instructions.contains("media-selection planning"))
-        #expect(instructions.contains("mediaSelection.selectedTitle"))
+        #expect(instructions.contains("App skill guidance"))
         #expect(instructions.contains("metadata.assistantResponse"))
+        #expect(instructions.contains("play/listen media requests") == false)
+        let input = try #require(body["input"] as? [[String: Any]])
+        let firstInput = try #require(input.first)
+        let content = try #require(firstInput["content"] as? [[String: Any]])
+        let prompt = try #require(content.first?["text"] as? String)
+        #expect(prompt.contains("Skill ID: music-media"))
+        #expect(prompt.contains("mediaSelection.selectedTitle"))
     }
 
     @Test
@@ -1195,35 +1065,25 @@ struct AIHarnessAdapterTests {
 
     @Test
     func localModelTaskIntentResolverValidatesAgainstCatalogAvailability() async {
-        let httpClient = FakeAIHTTPClient(
-            data: localGenerateResponseData(
-                response: """
-                {"taskType":"weather_lookup","targetAppName":"Weather","entities":{"city":"SF"},"normalizedEntities":{"city":"San Francisco"},"confidence":0.93,"needsConfirmation":false,"actionPlan":{"tools":[],"inputEntity":"","controlID":"","focusKey":"","verification":"commandAttempted"},"metadata":{}}
-                """
-            ),
-            statusCode: 200
-        )
         let resolver = LocalModelTaskIntentResolver(
             catalog: LocalAppTaskCatalog(
                 taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
                 availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.weather"])
             ),
-            adapter: LocalGenerateTaskIntentAdapter(
-                router: AIModelRouter(
-                    registry: AIModelRegistry(
-                        entries: [
-                            entry(
-                                id: "local-intent",
-                                role: .taskIntent,
-                                provider: .ollama,
-                                modelID: explicitLocalGenerateFixtureModelID,
-                                endpoint: URL(string: "http://127.0.0.1:11434/api/generate")!,
-                                promptVersion: "task-intent-v1"
-                            )
-                        ]
-                    )
-                ),
-                httpClient: httpClient
+            adapter: FixedTaskIntentAdapter(
+                intent: TaskIntent(
+                    intentID: "weather_lookup-san-francisco",
+                    taskType: "weather_lookup",
+                    targetApp: LocalAppTarget(
+                        appName: "Weather",
+                        bundleIdentifier: "com.apple.weather",
+                        titleContains: "Weather"
+                    ),
+                    entities: ["city": "SF"],
+                    normalizedEntities: ["city": "San Francisco"],
+                    confidence: 0.93,
+                    parserSource: .onlineModel
+                )
             )
         )
 
@@ -1233,21 +1093,13 @@ struct AIHarnessAdapterTests {
         )
 
         #expect(result.resolution.status == .resolved)
-        #expect(result.resolution.intent?.parserSource == .localModel)
+        #expect(result.resolution.intent?.parserSource == .onlineModel)
         #expect(result.resolution.availability?.isInstalled == true)
         #expect(result.trace.status == .completed)
     }
 
     @Test
     func localModelTaskIntentResolverResolvesDynamicLocalItemLookup() async {
-        let httpClient = FakeAIHTTPClient(
-            data: localGenerateResponseData(
-                response: """
-                {"taskType":"app_open","targetAppName":"Figma","entities":{"appName":"figma"},"normalizedEntities":{"appName":"Figma"},"confidence":0.94,"needsConfirmation":false,"actionPlan":{"tools":[],"inputEntity":"","controlID":"","focusKey":"","verification":"commandAttempted"},"metadata":{}}
-                """
-            ),
-            statusCode: 200
-        )
         let resolver = LocalModelTaskIntentResolver(
             catalog: LocalAppTaskCatalog(
                 taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
@@ -1256,22 +1108,16 @@ struct AIHarnessAdapterTests {
                     installedApplicationNames: ["Figma": "com.figma.Desktop"]
                 )
             ),
-            adapter: LocalGenerateTaskIntentAdapter(
-                router: AIModelRouter(
-                    registry: AIModelRegistry(
-                        entries: [
-                            entry(
-                                id: "local-intent",
-                                role: .taskIntent,
-                                provider: .ollama,
-                                modelID: explicitLocalGenerateFixtureModelID,
-                                endpoint: URL(string: "http://127.0.0.1:11434/api/generate")!,
-                                promptVersion: "task-intent-v1"
-                            )
-                        ]
-                    )
-                ),
-                httpClient: httpClient
+            adapter: FixedTaskIntentAdapter(
+                intent: TaskIntent(
+                    intentID: "app_open-figma",
+                    taskType: "app_open",
+                    targetApp: LocalAppTarget(appName: "Figma"),
+                    entities: ["appName": "figma"],
+                    normalizedEntities: ["appName": "Figma"],
+                    confidence: 0.94,
+                    parserSource: .onlineModel
+                )
             )
         )
 
@@ -1434,35 +1280,23 @@ struct AIHarnessAdapterTests {
 
     @Test
     func localModelTaskIntentResolverAcceptsClosestLowConfidenceClassification() async {
-        let httpClient = FakeAIHTTPClient(
-            data: localGenerateResponseData(
-                response: """
-                {"taskType":"weather_lookup","targetAppName":"Weather","entities":{},"normalizedEntities":{},"confidence":0.2,"needsConfirmation":false,"actionPlan":{"tools":[],"inputEntity":"","controlID":"","focusKey":"","verification":"commandAttempted"},"metadata":{}}
-                """
-            ),
-            statusCode: 200
-        )
         let resolver = LocalModelTaskIntentResolver(
             catalog: LocalAppTaskCatalog(
                 taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
                 availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.weather"])
             ),
-            adapter: LocalGenerateTaskIntentAdapter(
-                router: AIModelRouter(
-                    registry: AIModelRegistry(
-                        entries: [
-                            entry(
-                                id: "local-intent",
-                                role: .taskIntent,
-                                provider: .ollama,
-                                modelID: explicitLocalGenerateFixtureModelID,
-                                endpoint: URL(string: "http://127.0.0.1:11434/api/generate")!,
-                                promptVersion: "task-intent-v1"
-                            )
-                        ]
-                    )
-                ),
-                httpClient: httpClient
+            adapter: FixedTaskIntentAdapter(
+                intent: TaskIntent(
+                    intentID: "weather_lookup-weather",
+                    taskType: "weather_lookup",
+                    targetApp: LocalAppTarget(
+                        appName: "Weather",
+                        bundleIdentifier: "com.apple.weather",
+                        titleContains: "Weather"
+                    ),
+                    confidence: 0.2,
+                    parserSource: .onlineModel
+                )
             )
         )
 
@@ -1478,35 +1312,31 @@ struct AIHarnessAdapterTests {
 
     @Test
     func localModelTaskIntentResolverPreservesConversationResponseForMalformedTask() async {
-        let httpClient = FakeAIHTTPClient(
-            data: localGenerateResponseData(
-                response: """
-                {"taskType":"local_app_interaction","targetAppName":"Notes","entities":{"appName":"Notes","goal":"unclear writing request"},"normalizedEntities":{"appName":"Notes","goal":"unclear writing request"},"confidence":0.2,"needsConfirmation":false,"actionPlan":{"tools":[],"inputEntity":"query","controlID":"","focusKey":"","verification":"commandAttempted"},"metadata":{"responseMode":"conversation","assistantResponse":"I can help with that, but I need a clearer thing to write before opening Notes."}}
-                """
-            ),
-            statusCode: 200
-        )
         let resolver = LocalModelTaskIntentResolver(
             catalog: LocalAppTaskCatalog(
                 taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
                 availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.Notes"])
             ),
-            adapter: LocalGenerateTaskIntentAdapter(
-                router: AIModelRouter(
-                    registry: AIModelRegistry(
-                        entries: [
-                            entry(
-                                id: "local-intent",
-                                role: .taskIntent,
-                                provider: .ollama,
-                                modelID: explicitLocalGenerateFixtureModelID,
-                                endpoint: URL(string: "http://127.0.0.1:11434/api/generate")!,
-                                promptVersion: "task-intent-v1"
-                            )
-                        ]
-                    )
-                ),
-                httpClient: httpClient
+            adapter: FixedTaskIntentAdapter(
+                intent: TaskIntent(
+                    intentID: "local_app_interaction-notes",
+                    taskType: "local_app_interaction",
+                    targetApp: LocalAppTarget(appName: "Notes", bundleIdentifier: "com.apple.Notes"),
+                    entities: [
+                        "appName": "Notes",
+                        "goal": "unclear writing request"
+                    ],
+                    normalizedEntities: [
+                        "appName": "Notes",
+                        "goal": "unclear writing request"
+                    ],
+                    confidence: 0.2,
+                    parserSource: .onlineModel,
+                    metadata: [
+                        "responseMode": "conversation",
+                        "assistantResponse": "I can help with that, but I need a clearer thing to write before opening Notes."
+                    ]
+                )
             )
         )
 
@@ -2431,6 +2261,39 @@ private struct RecordingTaskIntentAdapter: TaskIntentParsingAdapter {
                 validationStatus: "notValidated",
                 sourceTraceID: request.sourceTraceID,
                 metadata: ["reason": "recordingAdapter"]
+            )
+        )
+    }
+}
+
+private struct FixedTaskIntentAdapter: TaskIntentParsingAdapter {
+    var intent: TaskIntent?
+    var provider: AIModelProvider = .donkeyBackend
+    var status: AIModelCallStatus = .completed
+    var validationStatus = "schemaDecoded"
+    var metadata: [String: String] = [:]
+
+    func parseTaskIntent(_ request: TaskIntentAdapterRequest) async -> TaskIntentAdapterResult {
+        var returnedIntent = intent
+        if returnedIntent?.sourceModelCallID == nil {
+            returnedIntent?.sourceModelCallID = "model-call-\(request.sourceTraceID)"
+        }
+
+        return TaskIntentAdapterResult(
+            intent: returnedIntent,
+            trace: AIModelCallTrace(
+                id: "model-call-\(request.sourceTraceID)",
+                role: .taskIntent,
+                provider: provider,
+                modelID: AIModelRegistryEntry.backendSelectedModelID,
+                promptVersion: "task-intent-v1",
+                schemaID: "generic_harness_planning",
+                latencyMS: 12,
+                timeoutMS: 12_000,
+                status: status,
+                validationStatus: validationStatus,
+                sourceTraceID: request.sourceTraceID,
+                metadata: metadata
             )
         )
     }

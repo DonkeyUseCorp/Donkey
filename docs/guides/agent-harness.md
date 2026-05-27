@@ -13,6 +13,11 @@ New agent capabilities should plug into that module through tools, skills,
 scripts, plugins, catalogs, or memory. Do not add app-specific branches,
 phrase lists, or one-off workflow conditionals to the core harness.
 
+Bundled local-app skills now carry the app-specific planning guidance for
+Music/media, browser navigation, notes/text writing, spreadsheet tables, and
+weather lookup. Task-intent model calls receive those skills as bounded skill
+context alongside task definitions, app catalog data, and memory.
+
 The existing pointer-prompt and local-app runner code still exists while the
 product migrates onto the generic harness. New work should build toward the
 generic registry and avoid expanding the older app-specific paths.
@@ -204,6 +209,10 @@ AppleScript execution may run only a validated, generated, or user-reviewed
 artifact through the guarded automation backend, with target app, permissions,
 action metadata, and verification evidence attached.
 
+App-specific AppleScript belongs in skill-local scripts or generated artifacts.
+The guarded backend renders explicit `appleScript.source` or
+`appleScript.template` metadata; it should not grow app-named script helpers.
+
 Do not add app-named Swift helpers such as `musicPlaybackScript` or
 `openFooScript`. If an app needs automation knowledge, put it in a skill,
 plugin, catalog entry, generated artifact, or user-reviewed definition.
@@ -230,6 +239,11 @@ need. Loading a skill adds selected instructions to bounded planning context.
 
 Skills are shared infrastructure. They should be reusable by any future agent
 or task, not private scratch memory for one run.
+
+Built-in app skills live as resource skill packs under
+`apps/Donkey/Sources/DonkeyRuntime/Resources/BuiltInSkills/`. They are loaded
+through the same skill descriptor shape as user/plugin skills and compacted
+before being sent to model boundaries.
 
 ## Skill Scripts
 

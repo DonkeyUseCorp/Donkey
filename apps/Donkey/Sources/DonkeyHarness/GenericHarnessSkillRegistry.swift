@@ -233,13 +233,16 @@ public actor HarnessSkillRegistry {
 public struct HarnessSkillFileSystemSource: Sendable {
     public var roots: [URL]
     public var maxDepth: Int
+    public var sourceKind: HarnessSkillSourceKind
 
     public init(
         roots: [URL],
-        maxDepth: Int = 4
+        maxDepth: Int = 4,
+        sourceKind: HarnessSkillSourceKind = .userDirectory
     ) {
         self.roots = roots
         self.maxDepth = max(0, maxDepth)
+        self.sourceKind = sourceKind
     }
 
     public func discover() -> [HarnessSkillDescriptor] {
@@ -318,13 +321,13 @@ public struct HarnessSkillFileSystemSource: Sendable {
             name: name,
             summary: summary,
             description: contents,
-            sourceKind: .userDirectory,
+            sourceKind: sourceKind,
             instructionPath: url.path,
             tags: tags,
             providedToolNames: toolNames,
             scripts: scriptDescriptors(in: directory),
             metadata: [
-                "source": "filesystem",
+                "source": sourceKind == .builtIn ? "builtInFilesystem" : "filesystem",
                 "directory": directory.path
             ]
         )

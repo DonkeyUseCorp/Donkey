@@ -7,6 +7,10 @@ import Testing
 struct MacAppleScriptActionEngineInputBackendTests {
     @Test
     func musicPlaybackCommandRunsEscapedAppleScript() async throws {
+        let template = try #require(BuiltInLocalAppSkillPacks.scriptSource(
+            skillID: "music-media",
+            relativePath: "scripts/play-media-query.applescript"
+        ))
         let runner = RecordingAppleScriptRunner(
             result: AppleScriptExecutionResult(
                 succeeded: true,
@@ -25,7 +29,9 @@ struct MacAppleScriptActionEngineInputBackendTests {
                 metadata: [
                     "automationBackend": "appleScript",
                     "appleScript.action": "music.playMediaQuery",
-                    "appleScript.query": "Justin \"JB\" Bieber"
+                    "appleScript.query": "Justin \"JB\" Bieber",
+                    "appleScript.template": template,
+                    "appleScript.successOutputs": "played-library-track,searched-ui-first-result"
                 ]
             )
         )
@@ -38,6 +44,7 @@ struct MacAppleScriptActionEngineInputBackendTests {
         #expect(scripts.first?.contains(#"set donkeyQuery to "Justin \"JB\" Bieber""#) == true)
         #expect(scripts.first?.contains("tell application \"Music\"") == true)
         #expect(scripts.first?.contains("tell application \"System Events\"") == true)
+        #expect(result.metadata["appleScript.scriptKind"] == "template")
     }
 
     @Test

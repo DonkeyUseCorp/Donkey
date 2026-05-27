@@ -1170,7 +1170,7 @@ public struct LocalAppTaskCatalog: Sendable {
     }
 
     public static func genericAppOpenDefinition(target: LocalAppTarget) -> LocalAppTaskDefinition {
-        LocalAppTaskDefinition(
+        return LocalAppTaskDefinition(
             taskType: genericAppOpenTaskType,
             targetApp: target,
             triggerTerms: [],
@@ -1400,7 +1400,7 @@ public enum BuiltInLocalAppTaskDefinitions {
     }
 
     public static var weatherLookup: LocalAppTaskDefinition {
-        LocalAppTaskDefinition(
+        return LocalAppTaskDefinition(
             taskType: "weather_lookup",
             targetApp: LocalAppTarget(
                 appName: "Weather",
@@ -1462,7 +1462,31 @@ public enum BuiltInLocalAppTaskDefinitions {
     }
 
     public static var mediaPlayback: LocalAppTaskDefinition {
-        LocalAppTaskDefinition(
+        var metadata: [String: String] = [
+            "catalogEntry": "built-in-media-playback",
+            "displayTitle": "media playback",
+            "taskLabelTemplate": "Play {query}",
+            "verificationTextKey": "query",
+            "verificationMode": "playbackCommandAttempted",
+            "automationBackend": "appleScript",
+            "appleScript.action": "music.playMediaQuery",
+            "appleScript.entityName": "query",
+            "appleScript.successOutputs": "played-library-track,searched-ui-first-result",
+            "screenshotFallback": "missingVerificationOrControls",
+            "domain": "media",
+            "visualFallback": "localModel",
+            "ocrFallbackDefault": "false",
+            "skillID": "music-media",
+            "skillScriptID": "scripts-play-media-query-applescript"
+        ]
+        if let template = BuiltInLocalAppSkillPacks.scriptSource(
+            skillID: "music-media",
+            relativePath: "scripts/play-media-query.applescript"
+        ) {
+            metadata["appleScript.template"] = template
+        }
+
+        return LocalAppTaskDefinition(
             taskType: "media_playback",
             targetApp: LocalAppTarget(
                 appName: "Music",
@@ -1511,20 +1535,7 @@ public enum BuiltInLocalAppTaskDefinitions {
             ],
             observationStrategies: [.accessibility, .windowMetadata, .screenshotForLocalModel],
             verificationEntityName: "query",
-            metadata: [
-                "catalogEntry": "built-in-media-playback",
-                "displayTitle": "media playback",
-                "taskLabelTemplate": "Play {query}",
-                "verificationTextKey": "query",
-                "verificationMode": "playbackCommandAttempted",
-                "automationBackend": "appleScript",
-                "appleScript.action": "music.playMediaQuery",
-                "appleScript.entityName": "query",
-                "screenshotFallback": "missingVerificationOrControls",
-                "domain": "media",
-                "visualFallback": "localModel",
-                "ocrFallbackDefault": "false"
-            ]
+            metadata: metadata
         )
     }
 

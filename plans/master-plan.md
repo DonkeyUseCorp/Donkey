@@ -21,17 +21,13 @@ even when there are no active tasks.
 
 ## Current Sequence
 
-1. Move app-specific behavior into skills. Music, Notes, Numbers, browser
-   workflows, app knowledge, and future app-specific behavior should live in
-   skill packs, plugin/catalog data, generated artifacts, or memory instead of
-   core Swift prompt branches.
-2. Build the application-learning task. It should safely explore an app, capture
+1. Build the application-learning task. It should safely explore an app, capture
    screenshots and Accessibility trees, distill surfaces/workflows, generate
    scripts where useful, validate them, and save a reusable skill pack.
-3. Wire interruption and permission gates into the UI. The notch/task UI should
+2. Wire interruption and permission gates into the UI. The notch/task UI should
    control generic harness tasks and show the exact pending approval or
    changed-course state.
-4. Delete old app-specific paths once the generic path covers them. Remove
+3. Delete old app-specific paths once the generic path covers them. Remove
    hardcoded Music/Notes/Numbers/media/weather-style prompt rules, catalog
    special cases, repair logic, and demo-only workflow branches.
 

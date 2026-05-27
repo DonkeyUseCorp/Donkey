@@ -610,7 +610,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         )
             ?? Self.metadataValue(
                 in: trace.metadata,
-                keys: ["reason", "fallback.reason", "modelFallback.reason"]
+                keys: ["reason", "fallback.reason"]
             )
             ?? ""
         let modelDetail = Self.metadataValue(

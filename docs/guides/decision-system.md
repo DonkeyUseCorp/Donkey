@@ -94,6 +94,6 @@ control profiles before they can influence executable planning.
 ## Source Entry Points
 
 - Prompt handling: `apps/Donkey/Sources/Donkey/PointerPromptCommandHandler.swift`
-- Hosted decision adapter: `apps/Donkey/Sources/DonkeyAI/LocalGenerateTaskIntentAdapter.swift`
+- Hosted decision adapter: `apps/Donkey/Sources/DonkeyAI/HostedTaskIntentParsingAdapter.swift`
 - Catalog validation: `apps/Donkey/Sources/DonkeyRuntime/LocalAppTaskCatalog.swift`
 - Generic lifecycle bridge: `apps/Donkey/Sources/DonkeyRuntime/AppHarnessGenericLifecycle.swift`
