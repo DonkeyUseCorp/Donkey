@@ -9,9 +9,9 @@ recovery, permission gates, clarification, pause/resume, interruption, and
 multi-task coordination.
 
 The generic harness contracts live in `apps/Donkey/Sources/DonkeyHarness/`.
-New agent capabilities should plug into that module through tools, skills,
-scripts, plugins, catalogs, or memory. Do not add app-specific branches,
-phrase lists, or one-off workflow conditionals to the core harness.
+Agent capabilities plug into that module through tools, skills, scripts,
+plugins, catalogs, or memory. Core harness code does not contain app-specific
+branches, phrase lists, or one-off workflow conditionals.
 
 Bundled and learned local-app skills carry app-specific planning guidance.
 Task-intent model calls receive relevant skills as bounded context alongside
@@ -19,18 +19,19 @@ the generic task definitions, generated or user-reviewed app catalog data, and
 memory. The core runtime does not ship app-specific Weather, Music, Notes, or
 Numbers task branches.
 
-The existing pointer-prompt and local-app runner code still bridges concrete
-desktop workflows while the product migrates onto the generic harness. New work
-should build toward the generic registry and avoid app-specific runtime paths.
+Pointer prompt uses the generic harness as the entrypoint for conversation,
+clarification, planning, and tool selection. Local desktop actions are
+registered harness tools rather than a separate default path.
 
-Pointer-prompt local-app execution now enters the generic lifecycle before it
-uses the older live-runner backend. The hosted planning boundary emits the
-`generic_harness_planning` packet: structured intent, ambiguity/risk,
-context needs, plan steps, verification criteria, fallbacks, and clarification
-policy. The bridge stores that packet in generic task intent/plan state, then
-uses registry-backed executors for generic validation, state updates, gates,
-and lifecycle behavior. The older runner remains as the pointer-prompt bridge
-for legacy concrete desktop workflows.
+Pointer-prompt turns enter the generic lifecycle before any local-app executor
+is selected. The hosted planning boundary emits the
+`generic_harness_planning` packet: structured intent, ambiguity/risk, context
+needs, plan steps, verification criteria, fallbacks, and clarification policy.
+Conversation and clarification routes stop in the harness. A structured
+local-app route registers the Mac local-app execution tool, and the harness
+stores the model packet in generic task intent/plan state before using
+registry-backed executors for validation, state updates, gates, and lifecycle
+behavior.
 
 ## Core Model
 
@@ -70,8 +71,8 @@ Threads are the durable conversation record. The generic harness defines a
 thread-store boundary for threads, events, assets, task snapshots, task events,
 and compaction snapshots. In tests this can be backed by an in-memory store; in
 the app the default generic lifecycle uses a file-backed local store under the
-user's Application Support directory. Harness code should depend on this
-generic store contract rather than reaching into UI-specific persistence.
+user's Application Support directory. Harness code depends on this generic
+store contract rather than reaching into UI-specific persistence.
 
 A thread record stores the user-visible conversation and the active task ids.
 Task state stores execution details such as world model, plan, permissions,
@@ -92,14 +93,14 @@ the most recent useful events, recent tool summaries, memory summaries, and a
 bounded asset list.
 
 Large event bodies are truncated. Raw screenshots, full Accessibility trees,
-script source, and long tool outputs should be saved as artifacts or structured
+script source, and long tool outputs are saved as artifacts or structured
 records and summarized into the prompt. Compaction metadata records what was
 included, dropped, or truncated so the decision remains inspectable.
 
-Pointer-prompt hosted intent calls consume the generic compacted thread context
-rather than ad hoc thread snippets. Slow planner calls consume a compacted run
-context, including bounded world-state, failure, hint, memory, and semantic
-memory summaries.
+Hosted planning calls consume the generic compacted thread context rather than
+ad hoc thread snippets. Slow planner calls consume a compacted run context,
+including bounded world-state, failure, hint, memory, and semantic memory
+summaries.
 
 The pointer-prompt notch mirrors generic task stop states. Permission gates
 show the pending tool and missing permissions, and the approval control grants
@@ -109,7 +110,7 @@ attention text.
 
 ## Turn Flow
 
-The desired loop is:
+The loop is:
 
 ```text
 intake
@@ -122,8 +123,8 @@ intake
 -> recover, continue, clarify, or complete
 ```
 
-The harness should not treat desktop work as a single model completion. It
-should observe, act, verify, and replan. The planner may propose the next tool
+The harness does not treat desktop work as a single model completion. It
+observes, acts, verifies, and replans. The planner may propose the next tool
 step, but deterministic Swift owns task state, tool validation, permissions,
 focus checks, execution, and result recording.
 
@@ -146,8 +147,8 @@ the pending continuation, asks a specific question, and resumes only after the
 answer is attached.
 
 Dangerous ambiguity must ask before acting. Safe ambiguity may be inferred.
-Recoverable ambiguity should use available tools first, such as memory, app
-search, screen observation, or skill lookup, and ask only if uncertainty remains
+Recoverable ambiguity uses available tools first, such as memory, app search,
+screen observation, or skill lookup, and asks only if uncertainty remains
 material.
 
 ## Tools And Plugins
@@ -177,9 +178,8 @@ screen observation, UI element discovery and action, text and keyboard input,
 AppleScript generation/execution, state verification, and task lifecycle
 control.
 
-Additional plugins should register tools through the same interface. App
-knowledge belongs in plugins, skills, catalogs, or memory, not in core harness
-conditionals.
+Plugins register tools through the same interface. App knowledge belongs in
+plugins, skills, catalogs, or memory, not in core harness conditionals.
 
 ## Computer Use
 
@@ -199,9 +199,9 @@ Element actions execute only after the harness validates:
 - safety class
 - verification criteria
 
-Models should choose semantic targets and tool calls. They should not
-micromanage pixels. Coordinate input is fallback evidence only and must pass the
-same guarded execution checks as other input.
+Models choose semantic targets and tool calls. They do not micromanage pixels.
+Coordinate input is fallback evidence only and must pass the same guarded
+execution checks as other input.
 
 ## AppleScript And Scripts
 
@@ -218,7 +218,7 @@ action metadata, and verification evidence attached.
 
 App-specific AppleScript belongs in skill-local scripts or generated artifacts.
 The guarded backend renders explicit `appleScript.source` or
-`appleScript.template` metadata; it should not grow app-named script helpers.
+`appleScript.template` metadata; it does not contain app-named script helpers.
 
 Do not add app-named Swift helpers such as `musicPlaybackScript` or
 `openFooScript`. If an app needs automation knowledge, put it in a skill,
@@ -244,8 +244,8 @@ registry indexes:
 Skill lookup lets the planner find relevant instructions by structured task
 need. Loading a skill adds selected instructions to bounded planning context.
 
-Skills are shared infrastructure. They should be reusable by any future agent
-or task, not private scratch memory for one run.
+Skills are shared infrastructure. They are reusable by any agent or task, not
+private scratch memory for one run.
 
 Built-in app skills live as resource skill packs under
 `apps/Donkey/Sources/DonkeyRuntime/Resources/BuiltInSkills/`. They are loaded
@@ -256,7 +256,7 @@ before being sent to model boundaries.
 
 Skill packs may include generated scripts under a skill-local `scripts/`
 directory. Supported script descriptors include AppleScript, shell/Bash,
-Python, JavaScript, Swift, and future language types.
+Python, JavaScript, Swift, and additional language types.
 
 Each script descriptor records:
 
@@ -290,7 +290,7 @@ draft, record bounded screenshot and Accessibility evidence, propose reversible
 exploration candidates from technical Accessibility roles/actions, distill an
 app profile and workflow recipes, and save a reusable skill pack.
 
-For each meaningful state, the learner should gather:
+For each meaningful state, the learner gathers:
 
 - screenshot evidence
 - Accessibility tree
@@ -301,11 +301,11 @@ For each meaningful state, the learner should gather:
 - navigation path
 - what changed from the previous state
 
-The learner should default to safe exploration: open menus, inspect tabs,
-focus fields, navigate panels, and avoid destructive/send/purchase/save-overwrite
+The learner defaults to safe exploration: open menus, inspect tabs, focus
+fields, navigate panels, and avoid destructive/send/purchase/save-overwrite
 actions unless the user explicitly approves.
 
-The reusable output should be distilled, not just raw captures:
+The reusable output is distilled, not just raw captures:
 
 - `SKILL.md` for human/model instructions
 - structured app profile JSON
@@ -316,8 +316,8 @@ The reusable output should be distilled, not just raw captures:
 - optional redacted evidence artifacts
 
 Validated generated scripts owned by the learned skill are copied into the
-skill-local `scripts/` directory when the pack is saved. Future agents use the
-learned app skill by searching for the relevant skill, loading its bounded
+skill-local `scripts/` directory when the pack is saved. Agents use the learned
+app skill by searching for the relevant skill, loading its bounded
 instructions, and then using any validated scripts or workflow tools exposed by
 that skill.
 
@@ -337,7 +337,7 @@ Accessibility constants, and other non-semantic technical data.
 
 Use `swift test` from `apps/Donkey/`.
 
-Generic harness tests should cover:
+Generic harness tests cover:
 
 - tool registration and unknown-tool rejection
 - permission stop/resume
@@ -348,9 +348,9 @@ Generic harness tests should cover:
 - skill registration, search, loading, and filesystem discovery
 - script discovery, generation metadata, validation gates, and execution gates
 
-Computer-use tests should cover app search, element retrieval, guarded element
-actions, screenshot/Accessibility evidence boundaries, and verification failure
-recovery.
+Computer-use tests cover app search, element retrieval, guarded element
+actions, screenshot/Accessibility evidence boundaries, and verification
+failure recovery.
 
 ## Source Entry Points
 

@@ -17,6 +17,7 @@ public struct LocalModelTaskIntentResolver: Sendable {
     public func resolve(
         command: String,
         contextSnippets: [String] = [],
+        availableToolNames: [String] = [],
         sourceTraceID: String
     ) async -> (resolution: LocalAppTaskCatalogResolution, trace: AIModelCallTrace) {
         let request = TaskIntentAdapterRequest(
@@ -24,6 +25,7 @@ public struct LocalModelTaskIntentResolver: Sendable {
             taskDefinitions: catalog.taskDefinitions,
             contextSnippets: contextSnippets,
             appFinderCatalog: catalog.appFinderCatalogEntries(),
+            availableToolNames: availableToolNames,
             sourceTraceID: sourceTraceID
         )
         let result = await adapter.parseTaskIntent(request)

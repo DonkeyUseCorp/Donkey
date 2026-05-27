@@ -391,9 +391,9 @@ enum TaskIntentWireCodec {
             metadata["missingEntity"] = missingRequiredEntity.name
         }
 
-        var confidence = wire.confidence
-        var needsConfirmation = wire.needsConfirmation || missingRequiredEntity != nil
-        var actionPlan = wire.actionPlan.tools.isEmpty ? nil : wire.actionPlan
+        let confidence = wire.confidence
+        let needsConfirmation = wire.needsConfirmation || missingRequiredEntity != nil
+        let actionPlan = wire.actionPlan.tools.isEmpty ? nil : wire.actionPlan
         let primaryEntity = definition.verificationEntityName
             .flatMap { normalizedEntities[$0] }
             ?? normalizedEntities.values.sorted().first
@@ -429,10 +429,19 @@ enum TaskIntentWireCodec {
 
         var metadata = hostedPlanningMetadata(from: wire)
         metadata["parser"] = parserName
-        metadata["reason"] = nonEmpty(metadata["reason"]) ?? "noSupportedTaskIntent"
-        metadata["responseMode"] = "conversation"
-        metadata["assistantResponse"] = nonEmpty(metadata["assistantResponse"])
-            ?? defaultConversationAssistantResponse
+        let route = wire.structuredIntent.route
+        if route == "clarification" || wire.clarificationPolicy.shouldAsk {
+            metadata["reason"] = nonEmpty(metadata["reason"]) ?? "clarificationRequired"
+            metadata["responseMode"] = "clarification"
+            metadata["assistantResponse"] = nonEmpty(metadata["assistantResponse"])
+                ?? wire.clarificationPolicy.questions.first(where: { nonEmpty($0) != nil })
+                ?? defaultConversationAssistantResponse
+        } else {
+            metadata["reason"] = nonEmpty(metadata["reason"]) ?? "noSupportedTaskIntent"
+            metadata["responseMode"] = "conversation"
+            metadata["assistantResponse"] = nonEmpty(metadata["assistantResponse"])
+                ?? defaultConversationAssistantResponse
+        }
         metadata["taskType"] = "none"
         metadata["targetApp"] = wire.structuredIntent.targetAppName
         return metadata

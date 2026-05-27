@@ -8,6 +8,7 @@ public struct TaskIntentAdapterRequest: Equatable, Sendable {
     public var contextSnippets: [String]
     public var skillSnippets: [String]
     public var appFinderCatalog: [LocalAppFinderCatalogEntry]
+    public var availableToolNames: [String]
     public var sourceTraceID: String
     public var routeRequest: AIModelRouteRequest
 
@@ -17,6 +18,7 @@ public struct TaskIntentAdapterRequest: Equatable, Sendable {
         contextSnippets: [String] = [],
         skillSnippets: [String]? = nil,
         appFinderCatalog: [LocalAppFinderCatalogEntry] = [],
+        availableToolNames: [String] = [],
         sourceTraceID: String,
         routeRequest: AIModelRouteRequest = AIModelRouteRequest(
             jobType: .taskIntent,
@@ -28,6 +30,7 @@ public struct TaskIntentAdapterRequest: Equatable, Sendable {
         self.taskDefinitions = taskDefinitions
         self.contextSnippets = TaskIntentModelContextCompactor.compact(contextSnippets)
         self.appFinderCatalog = appFinderCatalog
+        self.availableToolNames = availableToolNames
         self.skillSnippets = TaskIntentModelContextCompactor(
             maxSnippets: 8,
             maxSnippetCharacters: 1_200,

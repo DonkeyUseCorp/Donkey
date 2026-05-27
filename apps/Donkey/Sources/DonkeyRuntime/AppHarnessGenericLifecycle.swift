@@ -195,7 +195,7 @@ public struct AppHarnessGenericLifecycle: Sendable {
             clarificationPolicy: Self.clarificationPolicy(from: plannedStepMetadata),
             confidence: intent.confidence,
             metadata: [
-                "planner": "genericHarnessPointerPromptBridge",
+                "planner": "genericHarnessLocalAppPlan",
                 "traceID": traceID,
                 "resolution.status": resolution.status.rawValue,
                 "modelPlan.stepCount": String(modelPlanSteps.count),
@@ -285,8 +285,8 @@ public struct AppHarnessGenericLifecycle: Sendable {
     public static func localTaskRunDescriptor() -> HarnessToolDescriptor {
         HarnessToolDescriptor(
             name: AppHarnessGenericLifecycleToolNames.localAppRun,
-            pluginID: "pointer-prompt.migration",
-            summary: "Execute a resolved pointer-prompt local app task as one generic harness step.",
+            pluginID: "pointer-prompt.local-app",
+            summary: "Execute a resolved pointer-prompt local app task through the Mac local-app executor.",
             inputSchema: [
                 "resolutionStatus": "Resolved, waiting, unsupported, or unavailable local app task status.",
                 "taskType": "Resolved local app task type.",
@@ -298,8 +298,7 @@ public struct AppHarnessGenericLifecycle: Sendable {
             requiredContext: ["structured intent", "local app task resolution", "generic harness task"],
             verificationHints: ["Run state.verify after this step records its terminal evidence."],
             metadata: [
-                "migrationBridge": "true",
-                "legacyBackend": "LocalAppTaskLiveRunner"
+                "executor": "LocalAppTaskLiveRunner"
             ]
         )
     }
