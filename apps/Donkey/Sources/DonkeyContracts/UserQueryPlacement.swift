@@ -1,4 +1,4 @@
-public enum PointerPromptPlacement: Equatable, Sendable {
+public enum UserQueryPlacement: Equatable, Sendable {
     case bottomRight
     case bottomLeft
     case topLeft

@@ -1,17 +1,6 @@
-import DonkeyContracts
 import Foundation
 
-public struct LocalAppTaskIntentParser: Sendable {
-    public var taskDefinitions: [LocalAppTaskDefinition]
-
-    public init(taskDefinitions: [LocalAppTaskDefinition]) {
-        self.taskDefinitions = taskDefinitions
-    }
-
-    public func parse(_: String) -> TaskIntent? {
-        nil
-    }
-
+public enum LocalAppTextNormalizer {
     public static func normalizedPhrase(_ value: String) -> String {
         let folded = value.folding(
             options: [.diacriticInsensitive, .caseInsensitive],

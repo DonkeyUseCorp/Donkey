@@ -124,21 +124,21 @@ struct AppHarnessTurnRouterTests {
                     isFollowUp: true
                 ),
                 recentEvents: [
-                    PointerPromptTaskEvent(
+                    UserQueryTaskEvent(
                         id: "event-1",
                         taskID: "task-1",
                         role: .user,
                         text: "older event should be excluded",
                         sequence: 0
                     ),
-                    PointerPromptTaskEvent(
+                    UserQueryTaskEvent(
                         id: "event-2",
                         taskID: "task-1",
                         role: .assistant,
                         text: "contact me at helper@example.com",
                         sequence: 1
                     ),
-                    PointerPromptTaskEvent(
+                    UserQueryTaskEvent(
                         id: "event-3",
                         taskID: "task-1",
                         role: .user,
@@ -147,7 +147,7 @@ struct AppHarnessTurnRouterTests {
                     )
                 ],
                 assets: [
-                    PointerPromptTaskAsset(
+                    UserQueryTaskAsset(
                         id: "asset-1",
                         taskID: "task-1",
                         source: .userUploaded,
@@ -155,7 +155,7 @@ struct AppHarnessTurnRouterTests {
                         contentType: "application/pdf",
                         urlString: "file:///tmp/old.pdf"
                     ),
-                    PointerPromptTaskAsset(
+                    UserQueryTaskAsset(
                         id: "asset-2",
                         taskID: "task-1",
                         source: .userUploaded,
@@ -193,21 +193,21 @@ struct AppHarnessTurnRouterTests {
             request: AppHarnessTurnRequest(
                 turn: AppHarnessTurn(text: "thanks", source: .typedPrompt),
                 recentEvents: [
-                    PointerPromptTaskEvent(
+                    UserQueryTaskEvent(
                         id: "event-1",
                         taskID: "task-1",
                         role: .assistant,
                         text: "Retry nudge: invalid output, try again.",
                         sequence: 1
                     ),
-                    PointerPromptTaskEvent(
+                    UserQueryTaskEvent(
                         id: "event-2",
                         taskID: "task-1",
                         role: .user,
                         text: "show me the weather for SF",
                         sequence: 2
                     ),
-                    PointerPromptTaskEvent(
+                    UserQueryTaskEvent(
                         id: "event-3",
                         taskID: "task-1",
                         role: .assistant,

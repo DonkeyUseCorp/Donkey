@@ -102,11 +102,11 @@ public struct AppHarnessTurn: Codable, Equatable, Sendable {
 }
 
 public struct AppHarnessContextEvent: Codable, Equatable, Sendable {
-    public var role: PointerPromptTaskEventRole
+    public var role: UserQueryTaskEventRole
     public var text: String
     public var sequence: Int
 
-    public init(role: PointerPromptTaskEventRole, text: String, sequence: Int) {
+    public init(role: UserQueryTaskEventRole, text: String, sequence: Int) {
         self.role = role
         self.text = text
         self.sequence = sequence

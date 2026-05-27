@@ -5,26 +5,26 @@ import Foundation
 import SwiftUI
 
 @MainActor
-final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink {
-    @Published private(set) var promptState: PointerPromptState
+final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
+    @Published private(set) var promptState: UserQueryState
     @Published var messageText = ""
-    @Published var placement: PointerPromptPlacement = .bottomRight
-    @Published var inputTextHeight = PointerPromptLayout.composerInputTextMinimumHeight
+    @Published var placement: UserQueryPlacement = .bottomRight
+    @Published var inputTextHeight = UserQueryLayout.composerInputTextMinimumHeight
     @Published var isInputExpanded = false
     @Published var notchCommandText = ""
-    @Published private(set) var notchCommandInputTextHeight = PointerPromptLayout.composerInputTextMinimumHeight
+    @Published private(set) var notchCommandInputTextHeight = UserQueryLayout.composerInputTextMinimumHeight
     @Published private(set) var isNotchCommandInputExpanded = true
     @Published private(set) var notchAccentIndex = 0
     @Published private(set) var isCurrentTaskPaused = false
-    @Published private(set) var updateState: PointerPromptUpdateState
-    @Published private(set) var notchTasks: [PointerPromptNotchTask]
-    @Published private(set) var spawnStates: [PointerPromptSpawnState] = []
+    @Published private(set) var updateState: UserQueryUpdateState
+    @Published private(set) var notchTasks: [UserQueryNotchTask]
+    @Published private(set) var spawnStates: [UserQuerySpawnState] = []
     @Published private(set) var selectedSpawnID: String?
     var agentVisualizationPresenter: ((PointerCoachCursorGuideRequest, String?) -> Void)?
 
-    private let commandHandler: any PointerPromptCommandHandling
-    private let taskStore: any PointerPromptTaskStoring
-    private let followUpResolver: any PointerPromptFollowUpResolving
+    private let commandHandler: any UserQueryCommandHandling
+    private let taskStore: any UserQueryTaskStoring
+    private let followUpResolver: any UserQueryFollowUpResolving
     private let voiceTranscriber: LocalVoiceTranscriptionAdapter
     private var updateChecker: any DonkeyUpdateChecking
     private let documentReviewController: DocumentFormFillReviewWindowController
@@ -37,15 +37,15 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
 
     init(
         aiProvider: any AIHarnessSnapshotProviding = AIHarnessBoundary(),
-        commandHandler: any PointerPromptCommandHandling = LocalAppPointerPromptCommandHandler(),
-        taskStore: any PointerPromptTaskStoring = CoreDataPointerPromptTaskStore(),
-        followUpResolver: any PointerPromptFollowUpResolving = HostedTaskFollowUpResolver(),
+        commandHandler: any UserQueryCommandHandling = LocalAppUserQueryCommandHandler(),
+        taskStore: any UserQueryTaskStoring = CoreDataUserQueryTaskStore(),
+        followUpResolver: any UserQueryFollowUpResolving = HostedTaskFollowUpResolver(),
         voiceTranscriber: LocalVoiceTranscriptionAdapter = LocalVoiceTranscriptionAdapter(
             runtime: ProcessBackedParakeetTranscriptionRuntime()
         ),
         updateChecker: any DonkeyUpdateChecking = SparkleUpdateController(),
         documentReviewController: DocumentFormFillReviewWindowController = DocumentFormFillReviewWindowController(),
-        theme: PointerPromptTheme = PointerPromptOverlayModel.bundledTheme()
+        theme: UserQueryTheme = UserQueryOverlayModel.bundledTheme()
     ) {
         self.commandHandler = commandHandler
         self.taskStore = taskStore
@@ -58,14 +58,14 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         )
         let restoredTasks = Self.restoredTasks(from: taskStore.loadRecentTasks(limit: Self.notchTaskDisplayLimit))
         notchTasks = restoredTasks
-        notchAccentIndex = restoredTasks.first.map { PointerPromptAccentPalette.normalizedIndex($0.accentIndex) }
-            ?? PointerPromptAccentPalette.firstIndex
+        notchAccentIndex = restoredTasks.first.map { UserQueryAccentPalette.normalizedIndex($0.accentIndex) }
+            ?? UserQueryAccentPalette.firstIndex
         isCurrentTaskPaused = restoredTasks.first?.status == .paused
-        updateState = PointerPromptUpdateState(
+        updateState = UserQueryUpdateState(
             currentVersion: updateChecker.currentVersion
         )
         let aiSnapshot = aiProvider.snapshot()
-        promptState = PointerPromptState(
+        promptState = UserQueryState(
             promptText: aiSnapshot.suggestedPromptText,
             isPrimaryActionEnabled: true,
             leadingSignalLevel: .idle,
@@ -86,7 +86,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         promptState.isPrimaryActionEnabled = true
         promptState.isVoiceInputActive = false
         promptState.leadingSignalLevel = .ready
-        promptState.promptText = PointerPromptCopy.defaultPromptPlaceholder
+        promptState.promptText = UserQueryCopy.defaultPromptPlaceholder
     }
 
     func updateVoiceWaveformLevels(_ levels: [Double]) {
@@ -104,7 +104,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         updateChecker.showUpdateUI()
     }
 
-    func handle(_ intent: PointerPromptIntent) {
+    func handle(_ intent: UserQueryIntent) {
         switch intent {
         case .addContextRequested:
             promptState.leadingSignalLevel = .ready
@@ -123,7 +123,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
 
             submitCommand(trimmedText)
         case .inputTextHeightChanged(let height):
-            let clampedHeight = PointerPromptLayout.clampedComposerInputTextHeight(height)
+            let clampedHeight = UserQueryLayout.clampedComposerInputTextHeight(height)
             guard abs(inputTextHeight - clampedHeight) > 0.5 else { return }
             inputTextHeight = clampedHeight
         case .inputExpansionChanged(let isExpanded):
@@ -146,7 +146,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
             return
         }
 
-        let sourceTraceID = "pointer-prompt-voice-\(UUID().uuidString)"
+        let sourceTraceID = "user-query-voice-\(UUID().uuidString)"
         promptState.leadingSignalLevel = .thinking
         promptState.promptText = "Transcribing..."
         Task { [weak self, voiceTranscriber] in
@@ -191,7 +191,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         promptState.isVoiceInputActive = false
         promptState.leadingSignalLevel = .thinking
         promptState.promptText = "Routing task"
-        let sourceTraceID = "pointer-prompt-followup-\(UUID().uuidString)"
+        let sourceTraceID = "user-query-followup-\(UUID().uuidString)"
         let confidenceThreshold = Self.followUpMatchConfidenceThreshold
         Task { [weak self, followUpResolver] in
             let matchedTaskID: String?
@@ -201,7 +201,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
                 matchedTaskID = nil
             } else {
                 let resolution = await followUpResolver.resolveFollowUp(
-                    PointerPromptFollowUpResolverRequest(
+                    UserQueryFollowUpResolverRequest(
                         text: text,
                         candidates: candidates,
                         sourceTraceID: sourceTraceID
@@ -226,7 +226,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         }
     }
 
-    func handleDroppedAssets(_ drafts: [PointerPromptTaskAssetDraft]) {
+    func handleDroppedAssets(_ drafts: [UserQueryTaskAssetDraft]) {
         guard !drafts.isEmpty else { return }
 
         let targetTask = taskForDroppedAssets()
@@ -318,10 +318,10 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         lastActiveTaskID = task.id
         appendTaskEvent(taskID: task.id, role: .user, text: text)
         messageText = ""
-        inputTextHeight = PointerPromptLayout.composerInputTextMinimumHeight
+        inputTextHeight = UserQueryLayout.composerInputTextMinimumHeight
         isInputExpanded = false
         notchCommandText = ""
-        notchCommandInputTextHeight = PointerPromptLayout.composerInputTextMinimumHeight
+        notchCommandInputTextHeight = UserQueryLayout.composerInputTextMinimumHeight
         isNotchCommandInputExpanded = true
         promptState.isActive = false
         promptState.isVoiceInputActive = false
@@ -433,7 +433,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
     }
 
     func updateNotchCommandInputTextHeight(_ height: CGFloat) {
-        let clampedHeight = PointerPromptLayout.clampedComposerInputTextHeight(height)
+        let clampedHeight = UserQueryLayout.clampedComposerInputTextHeight(height)
         guard abs(notchCommandInputTextHeight - clampedHeight) > 0.5 else { return }
 
         notchCommandInputTextHeight = clampedHeight
@@ -461,12 +461,12 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         let labelText = label ?? Self.collapsedDisplayText(for: text)
         let spawnAccentIndex: Int
         if let accentIndex {
-            spawnAccentIndex = PointerPromptAccentPalette.normalizedIndex(accentIndex)
+            spawnAccentIndex = UserQueryAccentPalette.normalizedIndex(accentIndex)
         } else {
             spawnAccentIndex = nextRoundRobinAccentIndex()
         }
         notchAccentIndex = spawnAccentIndex
-        let spawnState = PointerPromptSpawnState(
+        let spawnState = UserQuerySpawnState(
             id: spawnID,
             taskID: taskID,
             commandText: text,
@@ -487,8 +487,8 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         commandText: String? = nil,
         label: String? = nil,
         accentIndex: Int? = nil,
-        targetHint: PointerPromptSpawnTargetHint? = nil,
-        phase: PointerPromptSpawnPhase? = nil
+        targetHint: UserQuerySpawnTargetHint? = nil,
+        phase: UserQuerySpawnPhase? = nil
     ) {
         guard let spawnID,
               let index = spawnIndex(id: spawnID) else {
@@ -523,7 +523,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
 
     private func finishSpawn(
         id spawnID: String?,
-        result: PointerPromptCommandHandlingResult,
+        result: UserQueryCommandHandlingResult,
         minimumFadeDelay: TimeInterval? = nil
     ) {
         guard let spawnID,
@@ -535,7 +535,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         spawnState.label = Self.spawnCompletionLabel(for: result)
         spawnState.updatedAt = Date()
 
-        if PointerPromptSpawnLifecycle.keepsVisibleResult(for: result.threadStatus) {
+        if UserQuerySpawnLifecycle.keepsVisibleResult(for: result.threadStatus) {
             spawnState.phase = .holding
             spawnStates[index] = spawnState
         } else {
@@ -569,7 +569,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         }
     }
 
-    var notchSpawnCue: PointerPromptSpawnState? {
+    var notchSpawnCue: UserQuerySpawnState? {
         spawnStates.last { $0.phase == .notchCue }
     }
 
@@ -577,7 +577,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         spawnStates.firstIndex { $0.id == spawnID }
     }
 
-    private func spawn(withID spawnID: String) -> PointerPromptSpawnState? {
+    private func spawn(withID spawnID: String) -> UserQuerySpawnState? {
         spawnStates.first { $0.id == spawnID }
     }
 
@@ -620,7 +620,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         }
     }
 
-    private func prependTask(_ task: PointerPromptNotchTask) {
+    private func prependTask(_ task: UserQueryNotchTask) {
         notchTasks.removeAll { $0.id == task.id }
         notchTasks.insert(task, at: 0)
         if notchTasks.count > Self.notchTaskDisplayLimit {
@@ -631,10 +631,10 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
 
     private func clearSubmissionInputs() {
         messageText = ""
-        inputTextHeight = PointerPromptLayout.composerInputTextMinimumHeight
+        inputTextHeight = UserQueryLayout.composerInputTextMinimumHeight
         isInputExpanded = false
         notchCommandText = ""
-        notchCommandInputTextHeight = PointerPromptLayout.composerInputTextMinimumHeight
+        notchCommandInputTextHeight = UserQueryLayout.composerInputTextMinimumHeight
         isNotchCommandInputExpanded = true
         promptState.isVoiceInputActive = false
     }
@@ -643,11 +643,11 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         text: String,
         matchedTaskID: String?,
         reservedAccentIndex: Int? = nil
-    ) -> PointerPromptNotchTask {
+    ) -> UserQueryNotchTask {
         if let matchedTaskID,
            var task = task(withID: matchedTaskID) {
             if let reservedAccentIndex {
-                task.accentIndex = PointerPromptAccentPalette.normalizedIndex(reservedAccentIndex)
+                task.accentIndex = UserQueryAccentPalette.normalizedIndex(reservedAccentIndex)
             }
             if Self.shouldShowChangedCourseState(for: task) {
                 task.detail = "Changed course: \(Self.collapsedDisplayText(for: text))"
@@ -659,16 +659,16 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
                 task.status = .running
             }
             task.updatedAt = Date()
-            notchAccentIndex = PointerPromptAccentPalette.normalizedIndex(task.accentIndex)
+            notchAccentIndex = UserQueryAccentPalette.normalizedIndex(task.accentIndex)
             prependTask(task)
             return task
         }
 
         let taskLabel = Self.taskLabel(for: text)
-        let nextAccentIndex = reservedAccentIndex.map(PointerPromptAccentPalette.normalizedIndex)
+        let nextAccentIndex = reservedAccentIndex.map(UserQueryAccentPalette.normalizedIndex)
             ?? nextRoundRobinAccentIndex()
         notchAccentIndex = nextAccentIndex
-        let task = PointerPromptNotchTask(
+        let task = UserQueryNotchTask(
             id: UUID().uuidString,
             title: taskLabel,
             detail: "Running",
@@ -680,7 +680,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         return task
     }
 
-    private func taskForDroppedAssets() -> PointerPromptNotchTask {
+    private func taskForDroppedAssets() -> UserQueryNotchTask {
         if let lastActiveTaskID,
            activeTaskIDs.contains(lastActiveTaskID),
            let task = task(withID: lastActiveTaskID) {
@@ -697,7 +697,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
 
         let nextAccentIndex = nextRoundRobinAccentIndex()
         notchAccentIndex = nextAccentIndex
-        let task = PointerPromptNotchTask(
+        let task = UserQueryNotchTask(
             id: UUID().uuidString,
             title: "Uploaded assets",
             detail: "Assets attached",
@@ -709,7 +709,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         return task
     }
 
-    private func task(withID taskID: String) -> PointerPromptNotchTask? {
+    private func task(withID taskID: String) -> UserQueryNotchTask? {
         if let task = notchTasks.first(where: { $0.id == taskID }) {
             return task
         }
@@ -724,10 +724,10 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         isFollowUp: Bool,
         source: AppHarnessTurnSource = .typedPrompt,
         spawnID: String? = nil
-    ) -> PointerPromptCommandContext? {
+    ) -> UserQueryCommandContext? {
         guard let task = task(withID: taskID) else { return nil }
 
-        return PointerPromptCommandContext(
+        return UserQueryCommandContext(
             task: task,
             recentEvents: Array(taskStore.loadEvents(taskID: taskID).suffix(10)),
             assets: taskStore.loadAssets(taskID: taskID),
@@ -740,7 +740,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
 
     private func spawnProgressHandler(
         for spawnID: String?
-    ) -> (@MainActor @Sendable (PointerPromptSpawnProgressUpdate) -> Void)? {
+    ) -> (@MainActor @Sendable (UserQuerySpawnProgressUpdate) -> Void)? {
         guard let spawnID else { return nil }
 
         return { [weak self] update in
@@ -762,7 +762,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         }
     }
 
-    private func followUpCandidates() -> [PointerPromptFollowUpCandidate] {
+    private func followUpCandidates() -> [UserQueryFollowUpCandidate] {
         taskStore
             .loadRecentTasks(limit: Self.followUpCandidateLimit)
             .map { task in
@@ -776,7 +776,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
                     .loadAssets(taskID: task.id)
                     .suffix(8)
                     .map(\.displayName)
-                return PointerPromptFollowUpCandidate(
+                return UserQueryFollowUpCandidate(
                     taskID: task.id,
                     title: task.title,
                     detail: task.detail,
@@ -790,14 +790,14 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
     }
 
     @discardableResult
-    private func appendTaskEvent(taskID: String, role: PointerPromptTaskEventRole, text: String) -> String? {
+    private func appendTaskEvent(taskID: String, role: UserQueryTaskEventRole, text: String) -> String? {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else { return nil }
 
         let sequence = taskStore.loadEvents(taskID: taskID).count
         let eventID = UUID().uuidString
         taskStore.appendEvent(
-            PointerPromptTaskEvent(
+            UserQueryTaskEvent(
                 id: eventID,
                 taskID: taskID,
                 role: role,
@@ -812,7 +812,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         id: String,
         title: String? = nil,
         detail: String? = nil,
-        status: PointerPromptTaskStatus? = nil,
+        status: UserQueryTaskStatus? = nil,
         metadata: [String: String]? = nil
     ) {
         guard let index = notchTasks.firstIndex(where: { $0.id == id }) else { return }
@@ -836,7 +836,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         syncPrimaryTaskPausedFlag()
     }
 
-    private static func restoredTasks(from tasks: [PointerPromptNotchTask]) -> [PointerPromptNotchTask] {
+    private static func restoredTasks(from tasks: [UserQueryNotchTask]) -> [UserQueryNotchTask] {
         tasks.map { task in
             guard task.status == .running else { return task }
 
@@ -850,7 +850,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
 
     private func refreshPromptStateAfterRunResult(
         taskID: String,
-        result: PointerPromptCommandHandlingResult
+        result: UserQueryCommandHandlingResult
     ) {
         syncPrimaryTaskPausedFlag()
         if promptState.isActive {
@@ -883,11 +883,11 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         isCurrentTaskPaused = notchTasks.first?.status == .paused
     }
 
-    private static func taskStatus(for result: PointerPromptCommandHandlingResult) -> PointerPromptTaskStatus {
+    private static func taskStatus(for result: UserQueryCommandHandlingResult) -> UserQueryTaskStatus {
         result.threadStatus
     }
 
-    private static func spawnCompletionLabel(for result: PointerPromptCommandHandlingResult) -> String {
+    private static func spawnCompletionLabel(for result: UserQueryCommandHandlingResult) -> String {
         switch result.threadStatus {
         case .waitingForClarification:
             return "Waiting for detail"
@@ -914,10 +914,10 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
 
     private func nextRoundRobinAccentIndex() -> Int {
         guard let mostRecentAccentIndex = spawnStates.last?.accentIndex ?? notchTasks.first?.accentIndex else {
-            return PointerPromptAccentPalette.firstIndex
+            return UserQueryAccentPalette.firstIndex
         }
 
-        return PointerPromptAccentPalette.index(after: mostRecentAccentIndex)
+        return UserQueryAccentPalette.index(after: mostRecentAccentIndex)
     }
 
     private static func taskLabel(for text: String) -> String {
@@ -947,7 +947,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         return "Uploaded assets: \(displayNames)"
     }
 
-    private static func permissionApprovalDetail(for task: PointerPromptNotchTask) -> String {
+    private static func permissionApprovalDetail(for task: UserQueryNotchTask) -> String {
         let permissions = task.metadata["genericHarness.missingPermissions"]?
             .split(separator: ",")
             .map(String.init)
@@ -959,7 +959,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         return "Approving \(permissions.joined(separator: ", "))"
     }
 
-    private static func shouldShowChangedCourseState(for task: PointerPromptNotchTask) -> Bool {
+    private static func shouldShowChangedCourseState(for task: UserQueryNotchTask) -> Bool {
         switch task.status {
         case .running, .interrupted:
             return true
@@ -976,11 +976,11 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
     }
 
     private static func persistedAsset(
-        from draft: PointerPromptTaskAssetDraft,
+        from draft: UserQueryTaskAssetDraft,
         assetID: String,
         taskID: String,
         eventID: String?
-    ) -> PointerPromptTaskAsset {
+    ) -> UserQueryTaskAsset {
         var storedURLString = draft.urlString
         if let sourceURL = URL(string: draft.urlString),
            sourceURL.isFileURL,
@@ -993,7 +993,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
             storedURLString = destinationURL.absoluteString
         }
 
-        return PointerPromptTaskAsset(
+        return UserQueryTaskAsset(
             id: assetID,
             taskID: taskID,
             eventID: eventID,
@@ -1043,7 +1043,7 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
 
         return applicationSupportURL
             .appendingPathComponent("Donkey", isDirectory: true)
-            .appendingPathComponent("PointerPromptAssets", isDirectory: true)
+            .appendingPathComponent("UserQueryAssets", isDirectory: true)
             .appendingPathComponent(safeAssetFileName(taskID), isDirectory: true)
     }
 
@@ -1066,11 +1066,11 @@ final class PointerPromptOverlayModel: ObservableObject, PointerPromptIntentSink
         return String(text[..<endIndex]).trimmingCharacters(in: .whitespacesAndNewlines) + "..."
     }
 
-    private static func bundledTheme() -> PointerPromptTheme {
+    private static func bundledTheme() -> UserQueryTheme {
         guard let themeURL = Bundle.module.url(forResource: "theme", withExtension: "json"),
               let themeData = try? Data(contentsOf: themeURL),
-              let themeConfig = try? JSONDecoder().decode(PointerPromptThemeConfig.self, from: themeData),
-              let theme = PointerPromptTheme.fromConfig(themeConfig) else {
+              let themeConfig = try? JSONDecoder().decode(UserQueryThemeConfig.self, from: themeData),
+              let theme = UserQueryTheme.fromConfig(themeConfig) else {
             return .defaultBlue
         }
 

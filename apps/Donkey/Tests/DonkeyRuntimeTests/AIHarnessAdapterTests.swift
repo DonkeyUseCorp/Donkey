@@ -499,6 +499,138 @@ struct AIHarnessAdapterTests {
     }
 
     @Test
+    func hostedTaskIntentAdapterGroundsMusicPlaybackInSupportedAppFinderProfile() async throws {
+        let httpClient = FakeAIHTTPClient(
+            data: responseData(
+                outputText: hostedPlanningOutput(
+                    goal: "play media",
+                    taskType: "local_app_interaction",
+                    targetAppName: "Music",
+                    entitiesJSON: #"{"appName":"Music","goal":"play media","query":"Yellow - Coldplay"}"#,
+                    normalizedEntitiesJSON: #"{"appName":"Music","goal":"play media","query":"Yellow - Coldplay"}"#,
+                    confidence: 0.93,
+                    planStepsJSON: #"[{"id":"launch","summary":"Open Music.","toolName":"app.openOrFocus","inputEntity":"","controlID":"","focusKey":"","expectedObservation":"Music is focused."},{"id":"observe","summary":"Observe Music.","toolName":"app.observe","inputEntity":"","controlID":"","focusKey":"","expectedObservation":"Music controls are visible."},{"id":"focus-search","summary":"Focus search.","toolName":"ui.focusSearch","inputEntity":"","controlID":"search","focusKey":"Command+F","expectedObservation":"Search is focused."},{"id":"set-query","summary":"Enter playable media query.","toolName":"ui.setText","inputEntity":"query","controlID":"search","focusKey":"","expectedObservation":"Query is entered."},{"id":"submit","summary":"Submit playback search.","toolName":"ui.pressReturn","inputEntity":"","controlID":"","focusKey":"","expectedObservation":"Playback query is submitted."},{"id":"verify-command","summary":"Verify command.","toolName":"app.verifyCommand","inputEntity":"","controlID":"","focusKey":"","expectedObservation":"Playback command is attempted."},{"id":"verify-visible","summary":"Verify visible media.","toolName":"app.verifyVisibleText","inputEntity":"","controlID":"","focusKey":"","expectedObservation":"Requested media is visible."}]"#,
+                    verificationCriteriaJSON: #"["Playback command is attempted."]"#,
+                    fallbacksJSON: #"["Ask before using an artist-only query."]"#,
+                    metadataJSON: #"{"appFinder.selectedAppID":"com.apple.Music","appFinder.selectedCapabilityID":"play_media","appFinder.controlProfile":"search_then_enter","mediaSelection.kind":"representative_song","mediaSelection.seed":"Coldplay","mediaSelection.selectedTitle":"Yellow","mediaSelection.reason":"Popular representative Coldplay song."}"#
+                )
+            ),
+            statusCode: 200
+        )
+        let adapter = HostedTaskIntentParsingAdapter(
+            configuration: DonkeyBackendInferenceConfiguration(
+                baseURL: URL(string: "https://donkey.example")!,
+                clientID: "client-1"
+            ),
+            httpClient: httpClient
+        )
+        let appFinderCatalog = StaticLocalAppAvailabilityProvider(
+            installedBundleIdentifiers: ["com.apple.Music"]
+        ).appFinderCatalogEntries()
+
+        let result = await adapter.parseTaskIntent(
+            TaskIntentAdapterRequest(
+                command: "Play some cold play",
+                taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
+                appFinderCatalog: appFinderCatalog,
+                sourceTraceID: "trace-hosted-music-playback"
+            )
+        )
+
+        #expect(result.intent?.taskType == "local_app_interaction")
+        #expect(result.intent?.targetApp.bundleIdentifier == "com.apple.Music")
+        #expect(result.intent?.normalizedEntities["query"] == "Yellow - Coldplay")
+        #expect(result.intent?.metadata["appFinder.validated"] == "true")
+        #expect(result.intent?.metadata["appFinder.selectedCapabilityID"] == "play_media")
+        #expect(result.intent?.metadata["mediaSelection.kind"] == "representative_song")
+        #expect(result.intent?.actionPlan?.tools == [
+            .openOrFocusApp,
+            .observeApp,
+            .focusSearch,
+            .setText,
+            .pressReturn,
+            .verifyCommand,
+            .verifyVisibleText
+        ])
+    }
+
+    @Test
+    func hostedTaskIntentAdapterRepairsInvalidMusicPlaybackPlan() async throws {
+        let httpClient = SequencedFakeAIHTTPClient(
+            responses: [
+                HTTPStub(
+                    data: responseData(
+                        outputText: hostedPlanningOutput(
+                            goal: "play media",
+                            taskType: "local_app_interaction",
+                            targetAppName: "Music",
+                            entitiesJSON: #"{"appName":"Music","goal":"play media","query":"Coldplay"}"#,
+                            normalizedEntitiesJSON: #"{"appName":"Music","goal":"play media","query":"Coldplay"}"#,
+                            confidence: 0.91,
+                            planStepsJSON: #"[{"id":"launch","summary":"Open Music.","toolName":"app.openOrFocus","inputEntity":"","controlID":"","focusKey":"","expectedObservation":"Music is focused."},{"id":"focus-search","summary":"Focus search.","toolName":"ui.focusSearch","inputEntity":"","controlID":"search","focusKey":"Command+F","expectedObservation":"Search is focused."},{"id":"set-query","summary":"Enter playable media query.","toolName":"ui.setText","inputEntity":"query","controlID":"search","focusKey":"","expectedObservation":"Query is entered."},{"id":"submit","summary":"Submit playback search.","toolName":"ui.pressReturn","inputEntity":"","controlID":"","focusKey":"","expectedObservation":"Playback query is submitted."},{"id":"verify-command","summary":"Verify command.","toolName":"app.verifyCommand","inputEntity":"","controlID":"","focusKey":"","expectedObservation":"Playback command is attempted."},{"id":"verify-visible","summary":"Verify visible media.","toolName":"app.verifyVisibleText","inputEntity":"","controlID":"","focusKey":"","expectedObservation":"Requested media is visible."}]"#,
+                            verificationCriteriaJSON: #"["Playback command is attempted."]"#,
+                            fallbacksJSON: #"["Ask before using an artist-only query."]"#,
+                            metadataJSON: #"{"appFinder.selectedAppID":"com.apple.Music","appFinder.selectedCapabilityID":"play_media","appFinder.controlProfile":"search_then_enter"}"#
+                        )
+                    ),
+                    statusCode: 200
+                ),
+                HTTPStub(
+                    data: responseData(
+                        outputText: hostedPlanningOutput(
+                            goal: "play media",
+                            taskType: "local_app_interaction",
+                            targetAppName: "Music",
+                            entitiesJSON: #"{"appName":"Music","goal":"play media","query":"Yellow - Coldplay"}"#,
+                            normalizedEntitiesJSON: #"{"appName":"Music","goal":"play media","query":"Yellow - Coldplay"}"#,
+                            confidence: 0.93,
+                            planStepsJSON: #"[{"id":"launch","summary":"Open Music.","toolName":"app.openOrFocus","inputEntity":"","controlID":"","focusKey":"","expectedObservation":"Music is focused."},{"id":"focus-search","summary":"Focus search.","toolName":"ui.focusSearch","inputEntity":"","controlID":"search","focusKey":"Command+F","expectedObservation":"Search is focused."},{"id":"set-query","summary":"Enter playable media query.","toolName":"ui.setText","inputEntity":"query","controlID":"search","focusKey":"","expectedObservation":"Query is entered."},{"id":"submit","summary":"Submit playback search.","toolName":"ui.pressReturn","inputEntity":"","controlID":"","focusKey":"","expectedObservation":"Playback query is submitted."},{"id":"verify-command","summary":"Verify command.","toolName":"app.verifyCommand","inputEntity":"","controlID":"","focusKey":"","expectedObservation":"Playback command is attempted."},{"id":"verify-visible","summary":"Verify visible media.","toolName":"app.verifyVisibleText","inputEntity":"","controlID":"","focusKey":"","expectedObservation":"Requested media is visible."}]"#,
+                            verificationCriteriaJSON: #"["Playback command is attempted."]"#,
+                            fallbacksJSON: #"["Ask before using an artist-only query."]"#,
+                            metadataJSON: #"{"appFinder.selectedAppID":"com.apple.Music","appFinder.selectedCapabilityID":"play_media","appFinder.controlProfile":"search_then_enter","mediaSelection.kind":"representative_song","mediaSelection.seed":"Coldplay","mediaSelection.selectedTitle":"Yellow","mediaSelection.reason":"Popular representative Coldplay song."}"#
+                        )
+                    ),
+                    statusCode: 200
+                )
+            ]
+        )
+        let adapter = HostedTaskIntentParsingAdapter(
+            configuration: DonkeyBackendInferenceConfiguration(
+                baseURL: URL(string: "https://donkey.example")!,
+                clientID: "client-1"
+            ),
+            httpClient: httpClient
+        )
+        let appFinderCatalog = StaticLocalAppAvailabilityProvider(
+            installedBundleIdentifiers: ["com.apple.Music"]
+        ).appFinderCatalogEntries()
+
+        let result = await adapter.parseTaskIntent(
+            TaskIntentAdapterRequest(
+                command: "Play some cold play",
+                taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
+                appFinderCatalog: appFinderCatalog,
+                sourceTraceID: "trace-hosted-music-repair"
+            )
+        )
+
+        #expect(result.intent?.taskType == "local_app_interaction")
+        #expect(result.intent?.normalizedEntities["query"] == "Yellow - Coldplay")
+        #expect(result.intent?.metadata["mediaSelection.kind"] == "representative_song")
+        #expect(result.trace.status == .completed)
+        #expect(result.trace.validationStatus == "schemaDecoded")
+        #expect(result.trace.metadata["planner.repairAttempted"] == "true")
+        #expect(result.trace.metadata["planner.repairStatus"] == "schemaDecoded")
+        #expect(httpClient.requests.count == 2)
+        let repairBody = try #require(httpClient.requests.last?.httpBodyJSONObject)
+        let input = try #require(repairBody["input"] as? [[String: Any]])
+        let content = try #require(input.first?["content"] as? [[String: Any]])
+        let repairPrompt = try #require(content.first?["text"] as? String)
+        #expect(repairPrompt.contains("Runtime validation feedback:"))
+        #expect(repairPrompt.contains("Previous invalid planner JSON:"))
+    }
+
+    @Test
     func hostedFollowUpResolverLetsBackendSelectResponsesModel() async throws {
         let httpClient = FakeAIHTTPClient(
             data: Data(#"{"output_text":"{\"isFollowUp\":true,\"taskID\":\"task-1\",\"confidence\":0.82,\"reason\":\"same task\"}"}"#.utf8),
@@ -513,10 +645,10 @@ struct AIHarnessAdapterTests {
         )
 
         let result = await resolver.resolveFollowUp(
-            PointerPromptFollowUpResolverRequest(
+            UserQueryFollowUpResolverRequest(
                 text: "add that to it",
                 candidates: [
-                    PointerPromptFollowUpCandidate(
+                    UserQueryFollowUpCandidate(
                         taskID: "task-1",
                         title: "Draft note",
                         detail: "Writing a note",
@@ -586,7 +718,7 @@ struct AIHarnessAdapterTests {
                     status: .completed,
                     outputData: try localLLMSidecarOutputData(
                         outputText: """
-                        {"taskType":"local_app_interaction","targetAppName":"Music","entities":{"appName":"Music","goal":"play media","query":"Sample Track"},"normalizedEntities":{"appName":"Music","goal":"play media","query":"Sample Track"},"confidence":0.91,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.focusSearch","ui.setText","ui.pressReturn","app.verifyCommand"],"inputEntity":"query","controlID":"search","focusKey":"Command+F","verification":"commandAttempted"},"metadata":{"appFinder.selectedAppID":"com.apple.Music","appFinder.selectedCapabilityID":"play_media","appFinder.controlProfile":"search_then_enter"}}
+                        {"taskType":"local_app_interaction","targetAppName":"Music","entities":{"appName":"Music","goal":"play media","query":"Sample Track"},"normalizedEntities":{"appName":"Music","goal":"play media","query":"Sample Track"},"confidence":0.91,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.focusSearch","ui.setText","ui.pressReturn","app.verifyCommand","app.verifyVisibleText"],"inputEntity":"query","controlID":"search","focusKey":"Command+F","verificationTools":["app.verifyCommand","app.verifyVisibleText"]},"metadata":{"appFinder.selectedAppID":"com.apple.Music","appFinder.selectedCapabilityID":"play_media","appFinder.controlProfile":"search_then_enter","mediaSelection.kind":"explicit_song"}}
                         """,
                         metadata: ["local.provider": "donkey-local-llm-sidecar"]
                     ),
@@ -615,6 +747,42 @@ struct AIHarnessAdapterTests {
     }
 
     @Test
+    func taskIntentDecoderRejectsMediaPlaybackWithoutConcreteSelectionMetadata() async throws {
+        let appFinderCatalog = StaticLocalAppAvailabilityProvider(
+            installedBundleIdentifiers: ["com.apple.Music"]
+        ).appFinderCatalogEntries()
+        let adapter = ProcessBackedLocalLLMTaskIntentAdapter(
+            router: AIModelRouter(registry: .defaultHybridPlanner),
+            sidecarRunner: FakeSidecarRunner(
+                result: LocalJSONSidecarResult(
+                    status: .completed,
+                    outputData: try localLLMSidecarOutputData(
+                        outputText: """
+                        {"taskType":"local_app_interaction","targetAppName":"Music","entities":{"appName":"Music","goal":"play media","query":"Coldplay"},"normalizedEntities":{"appName":"Music","goal":"play media","query":"Coldplay"},"confidence":0.91,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.focusSearch","ui.setText","ui.pressReturn","app.verifyCommand"],"inputEntity":"query","controlID":"search","focusKey":"Command+F","verificationTools":["app.verifyCommand"]},"metadata":{"appFinder.selectedAppID":"com.apple.Music","appFinder.selectedCapabilityID":"play_media","appFinder.controlProfile":"search_then_enter"}}
+                        """,
+                        metadata: ["local.provider": "donkey-local-llm-sidecar"]
+                    ),
+                    latencyMS: 14,
+                    metadata: ["sidecar.role": "taskIntent"]
+                )
+            )
+        )
+
+        let result = await adapter.parseTaskIntent(
+            TaskIntentAdapterRequest(
+                command: "play some cold play",
+                taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
+                appFinderCatalog: appFinderCatalog,
+                sourceTraceID: "trace-app-finder-reject-vague-media"
+            )
+        )
+
+        #expect(result.intent == nil)
+        #expect(result.trace.status == .invalidOutput)
+        #expect(result.trace.validationStatus == "invalid")
+    }
+
+    @Test
     func taskIntentDecoderRejectsGenericInteractionOutsideAppFinderCatalog() async throws {
         let appFinderCatalog = StaticLocalAppAvailabilityProvider(
             installedBundleIdentifiers: ["com.apple.Music"]
@@ -626,7 +794,7 @@ struct AIHarnessAdapterTests {
                     status: .completed,
                     outputData: try localLLMSidecarOutputData(
                         outputText: """
-                        {"taskType":"local_app_interaction","targetAppName":"GarageBand","entities":{"appName":"GarageBand","goal":"play media","query":"Sample Track"},"normalizedEntities":{"appName":"GarageBand","goal":"play media","query":"Sample Track"},"confidence":0.91,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.focusSearch","ui.setText","ui.pressReturn","app.verifyCommand"],"inputEntity":"query","controlID":"search","focusKey":"Command+F","verification":"commandAttempted"},"metadata":{"appFinder.selectedAppID":"com.apple.garageband10","appFinder.selectedCapabilityID":"play_media","appFinder.controlProfile":"search_then_enter"}}
+                        {"taskType":"local_app_interaction","targetAppName":"GarageBand","entities":{"appName":"GarageBand","goal":"play media","query":"Sample Track"},"normalizedEntities":{"appName":"GarageBand","goal":"play media","query":"Sample Track"},"confidence":0.91,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.focusSearch","ui.setText","ui.pressReturn","app.verifyCommand"],"inputEntity":"query","controlID":"search","focusKey":"Command+F","verificationTools":["app.verifyCommand"]},"metadata":{"appFinder.selectedAppID":"com.apple.garageband10","appFinder.selectedCapabilityID":"play_media","appFinder.controlProfile":"search_then_enter"}}
                         """,
                         metadata: ["local.provider": "donkey-local-llm-sidecar"]
                     ),
@@ -662,7 +830,7 @@ struct AIHarnessAdapterTests {
                     status: .completed,
                     outputData: try localLLMSidecarOutputData(
                         outputText: """
-                        {"taskType":"local_app_interaction","targetAppName":"Terminal","entities":{"appName":"Terminal","goal":"run command","query":"ls"},"normalizedEntities":{"appName":"Terminal","goal":"run command","query":"ls"},"confidence":0.91,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.focusTextEntry","ui.setText","ui.pressReturn","app.verifyCommand"],"inputEntity":"query","controlID":"editor","focusKey":"","verification":"commandAttempted"},"metadata":{"appFinder.selectedAppID":"com.apple.Terminal","appFinder.selectedCapabilityID":"run_command","appFinder.controlProfile":"text_entry_submit"}}
+                        {"taskType":"local_app_interaction","targetAppName":"Terminal","entities":{"appName":"Terminal","goal":"run command","query":"ls"},"normalizedEntities":{"appName":"Terminal","goal":"run command","query":"ls"},"confidence":0.91,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.focusTextEntry","ui.setText","ui.pressReturn","app.verifyCommand"],"inputEntity":"query","controlID":"editor","focusKey":"","verificationTools":["app.verifyCommand"]},"metadata":{"appFinder.selectedAppID":"com.apple.Terminal","appFinder.selectedCapabilityID":"run_command","appFinder.controlProfile":"text_entry_submit"}}
                         """,
                         metadata: ["local.provider": "donkey-local-llm-sidecar"]
                     ),
@@ -777,7 +945,7 @@ struct AIHarnessAdapterTests {
                         outputText: """
                         <think>I should choose the generic app interaction.</think>
                         ```json
-                        {"taskType":"local_app_interaction","targetAppName":"Music","entities":{"appName":"Music","goal":"play media","query":"sample track"},"normalizedEntities":{"appName":"Music","goal":"play media","query":"Sample Track"},"confidence":0.91,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.focusSearch","ui.setText","ui.pressReturn","app.verifyCommand"],"inputEntity":"query","controlID":"search","focusKey":"Command+F","verification":"commandAttempted"},"metadata":{}}
+                        {"taskType":"local_app_interaction","targetAppName":"Music","entities":{"appName":"Music","goal":"play media","query":"sample track"},"normalizedEntities":{"appName":"Music","goal":"play media","query":"Sample Track"},"confidence":0.91,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.focusSearch","ui.setText","ui.pressReturn","app.verifyCommand"],"inputEntity":"query","controlID":"search","focusKey":"Command+F","verificationTools":["app.verifyCommand"]},"metadata":{}}
                         ```
                         """,
                         metadata: ["local.provider": "donkey-local-llm-sidecar"]
@@ -848,7 +1016,7 @@ struct AIHarnessAdapterTests {
                     status: .completed,
                     outputData: try localLLMSidecarOutputData(
                         outputText: """
-                        {"taskType":"local_app_interaction","targetAppName":"com.apple.Music","entities":{"appName":"Music","goal":"play sample track"},"normalizedEntities":{"query":"Sample Track"},"confidence":1.0,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","ui.focusSearch"],"inputEntity":"query","controlID":"","focusKey":"","verification":"commandAttempted"},"metadata":{}}
+                        {"taskType":"local_app_interaction","targetAppName":"com.apple.Music","entities":{"appName":"Music","goal":"play sample track"},"normalizedEntities":{"query":"Sample Track"},"confidence":1.0,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","ui.focusSearch"],"inputEntity":"query","controlID":"","focusKey":"","verificationTools":["app.verifyCommand"]},"metadata":{}}
                         """,
                         metadata: [
                             "local.provider": "donkey-local-llm-sidecar"
@@ -885,7 +1053,7 @@ struct AIHarnessAdapterTests {
             (
                 command: "go to cnn.com",
                 outputText: """
-                {"taskType":"local_app_interaction","targetAppName":"Safari","entities":{"appName":"Safari","goal":"open website","query":"https://cnn.com"},"normalizedEntities":{"appName":"Safari","goal":"open website","query":"https://cnn.com"},"confidence":0.94,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.focusAddressBar","ui.setText","ui.pressReturn","app.verifyCommand"],"inputEntity":"query","controlID":"addressBar","focusKey":"Command+L","verification":"commandAttempted"},"metadata":{}}
+                {"taskType":"local_app_interaction","targetAppName":"Safari","entities":{"appName":"Safari","goal":"open website","query":"https://cnn.com"},"normalizedEntities":{"appName":"Safari","goal":"open website","query":"https://cnn.com"},"confidence":0.94,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.focusAddressBar","ui.setText","ui.pressReturn","app.verifyCommand"],"inputEntity":"query","controlID":"addressBar","focusKey":"Command+L","verificationTools":["app.verifyCommand"]},"metadata":{}}
                 """,
                 appName: "Safari",
                 requiredTools: [.focusAddressBar, .setText, .pressReturn],
@@ -894,7 +1062,7 @@ struct AIHarnessAdapterTests {
             (
                 command: "write poem in notes",
                 outputText: """
-                {"taskType":"local_app_interaction","targetAppName":"Notes","entities":{"appName":"Notes","goal":"write a poem","query":"Morning light spills softly across the page,\\nA quiet thought wakes up and learns to sing."},"normalizedEntities":{"appName":"Notes","goal":"write a poem","query":"Morning light spills softly across the page,\\nA quiet thought wakes up and learns to sing."},"confidence":0.9,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.newDocument","ui.setText","app.verifyCommand"],"inputEntity":"query","controlID":"editor","focusKey":"","verification":"commandAttempted"},"metadata":{}}
+                {"taskType":"local_app_interaction","targetAppName":"Notes","entities":{"appName":"Notes","goal":"write a poem","query":"Morning light spills softly across the page,\\nA quiet thought wakes up and learns to sing."},"normalizedEntities":{"appName":"Notes","goal":"write a poem","query":"Morning light spills softly across the page,\\nA quiet thought wakes up and learns to sing."},"confidence":0.9,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.newDocument","ui.setText","app.verifyCommand"],"inputEntity":"query","controlID":"editor","focusKey":"","verificationTools":["app.verifyCommand"]},"metadata":{}}
                 """,
                 appName: "Notes",
                 requiredTools: [.newDocument, .setText],
@@ -903,7 +1071,7 @@ struct AIHarnessAdapterTests {
             (
                 command: "create a table in numbers with the marketcap of the 10 largest companies in s&p",
                 outputText: """
-                {"taskType":"local_app_interaction","targetAppName":"Numbers","entities":{"appName":"Numbers","goal":"create spreadsheet table","query":"Company\\tMarket Cap\\nLargest S&P 500 companies\\tNeeds current market-cap data"},"normalizedEntities":{"appName":"Numbers","goal":"create spreadsheet table","query":"Company\\tMarket Cap\\nLargest S&P 500 companies\\tNeeds current market-cap data"},"confidence":0.86,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.newDocument","ui.setText","app.verifyCommand"],"inputEntity":"query","controlID":"editor","focusKey":"","verification":"commandAttempted"},"metadata":{}}
+                {"taskType":"local_app_interaction","targetAppName":"Numbers","entities":{"appName":"Numbers","goal":"create spreadsheet table","query":"Company\\tMarket Cap\\nLargest S&P 500 companies\\tNeeds current market-cap data"},"normalizedEntities":{"appName":"Numbers","goal":"create spreadsheet table","query":"Company\\tMarket Cap\\nLargest S&P 500 companies\\tNeeds current market-cap data"},"confidence":0.86,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.newDocument","ui.setText","app.verifyCommand"],"inputEntity":"query","controlID":"editor","focusKey":"","verificationTools":["app.verifyCommand"]},"metadata":{}}
                 """,
                 appName: "Numbers",
                 requiredTools: [.newDocument, .setText],
@@ -1095,7 +1263,7 @@ struct AIHarnessAdapterTests {
                     status: .completed,
                     outputData: try localLLMSidecarOutputData(
                         outputText: """
-                        {"taskType":"local_app_interaction","targetAppName":"Local App","entities":{},"normalizedEntities":{},"confidence":0.2,"needsConfirmation":false,"actionPlan":{"tools":[],"inputEntity":"","controlID":"","focusKey":"","verification":"commandAttempted"},"metadata":{"responseMode":"conversation","assistantResponse":"Hello! How can I help?"}}
+                        {"taskType":"local_app_interaction","targetAppName":"Local App","entities":{},"normalizedEntities":{},"confidence":0.2,"needsConfirmation":false,"actionPlan":{"tools":[],"inputEntity":"","controlID":"","focusKey":"","verificationTools":["app.verifyCommand"]},"metadata":{"responseMode":"conversation","assistantResponse":"Hello! How can I help?"}}
                         """,
                         metadata: ["local.provider": "donkey-local-llm"]
                     ),
@@ -1249,7 +1417,7 @@ struct AIHarnessAdapterTests {
                     status: .completed,
                     outputData: try localLLMSidecarOutputData(
                         outputText: """
-                        {"taskType":"local_app_interaction","targetAppName":"Notes","entities":{"appName":"Notes","goal":"write requested text","query":"a people"},"normalizedEntities":{"appName":"Notes","goal":"write requested text","query":"a people"},"confidence":0.9,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","ui.newDocument","ui.setText"],"inputEntity":"query","controlID":"editor","focusKey":"","verification":"commandAttempted"},"metadata":{}}
+                        {"taskType":"local_app_interaction","targetAppName":"Notes","entities":{"appName":"Notes","goal":"write requested text","query":"a people"},"normalizedEntities":{"appName":"Notes","goal":"write requested text","query":"a people"},"confidence":0.9,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","ui.newDocument","ui.setText"],"inputEntity":"query","controlID":"editor","focusKey":"","verificationTools":["app.verifyCommand"]},"metadata":{}}
                         """,
                         metadata: ["local.provider": "donkey-local-llm-sidecar"]
                     ),
@@ -1283,7 +1451,7 @@ struct AIHarnessAdapterTests {
                     status: .completed,
                     outputData: try localLLMSidecarOutputData(
                         outputText: """
-                        {"taskType":"local_app_interaction","targetAppName":"Notes","entities":{"appName":"Notes","goal":"write requested text","query":"hello"},"normalizedEntities":{"appName":"Notes","goal":"write requested text","query":"hello"},"confidence":0.9,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","ui.newDocument","ui.setText"],"inputEntity":"query","controlID":"editor","focusKey":"","verification":"commandAttempted"},"metadata":{}}
+                        {"taskType":"local_app_interaction","targetAppName":"Notes","entities":{"appName":"Notes","goal":"write requested text","query":"hello"},"normalizedEntities":{"appName":"Notes","goal":"write requested text","query":"hello"},"confidence":0.9,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","ui.newDocument","ui.setText"],"inputEntity":"query","controlID":"editor","focusKey":"","verificationTools":["app.verifyCommand"]},"metadata":{}}
                         """,
                         metadata: ["local.provider": "donkey-local-llm-sidecar"]
                     ),
@@ -1316,7 +1484,7 @@ struct AIHarnessAdapterTests {
                     status: .completed,
                     outputData: try localLLMSidecarOutputData(
                         outputText: """
-                        {"taskType":"local_app_interaction","targetAppName":"Notes","entities":{"appName":"Notes","goal":"write requested text","query":"A complete piece of text generated for the user writing request."},"normalizedEntities":{"appName":"Notes","goal":"write requested text","query":"A complete piece of text generated for the user writing request."},"confidence":0.9,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","ui.newDocument","ui.setText"],"inputEntity":"query","controlID":"editor","focusKey":"","verification":"commandAttempted"},"metadata":{}}
+                        {"taskType":"local_app_interaction","targetAppName":"Notes","entities":{"appName":"Notes","goal":"write requested text","query":"A complete piece of text generated for the user writing request."},"normalizedEntities":{"appName":"Notes","goal":"write requested text","query":"A complete piece of text generated for the user writing request."},"confidence":0.9,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","ui.newDocument","ui.setText"],"inputEntity":"query","controlID":"editor","focusKey":"","verificationTools":["app.verifyCommand"]},"metadata":{}}
                         """,
                         metadata: ["local.provider": "donkey-local-llm-sidecar"]
                     ),
@@ -1350,7 +1518,7 @@ struct AIHarnessAdapterTests {
                     status: .completed,
                     outputData: try localLLMSidecarOutputData(
                         outputText: """
-                        {"taskType":"local_app_interaction","targetAppName":"Notes","entities":{"appName":"Notes","goal":"write requested text","query":""},"normalizedEntities":{"appName":"Notes","goal":"write requested text","query":""},"confidence":0.9,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","ui.newDocument","ui.setText"],"inputEntity":"query","controlID":"editor","focusKey":"","verification":"commandAttempted"},"metadata":{}}
+                        {"taskType":"local_app_interaction","targetAppName":"Notes","entities":{"appName":"Notes","goal":"write requested text","query":""},"normalizedEntities":{"appName":"Notes","goal":"write requested text","query":""},"confidence":0.9,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","ui.newDocument","ui.setText"],"inputEntity":"query","controlID":"editor","focusKey":"","verificationTools":["app.verifyCommand"]},"metadata":{}}
                         """,
                         metadata: ["local.provider": "donkey-local-llm-sidecar"]
                     ),
@@ -1384,7 +1552,7 @@ struct AIHarnessAdapterTests {
                     status: .completed,
                     outputData: try localLLMSidecarOutputData(
                         outputText: """
-                        {"taskType":"local_app_interaction","targetAppName":"Numbers","entities":{"appName":"Numbers","goal":"create requested table","query":"Market capital of the 10 largest companies in S&P"},"normalizedEntities":{"appName":"Numbers","goal":"create requested table","query":"Market capital of the 10 largest companies in S&P"},"confidence":0.9,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.newDocument","ui.setText"],"inputEntity":"query","controlID":"editor","focusKey":"","verification":"commandAttempted"},"metadata":{}}
+                        {"taskType":"local_app_interaction","targetAppName":"Numbers","entities":{"appName":"Numbers","goal":"create requested table","query":"Market capital of the 10 largest companies in S&P"},"normalizedEntities":{"appName":"Numbers","goal":"create requested table","query":"Market capital of the 10 largest companies in S&P"},"confidence":0.9,"needsConfirmation":false,"actionPlan":{"tools":["app.openOrFocus","app.observe","ui.newDocument","ui.setText"],"inputEntity":"query","controlID":"editor","focusKey":"","verificationTools":["app.verifyCommand"]},"metadata":{}}
                         """,
                         metadata: ["local.provider": "donkey-local-llm-sidecar"]
                     ),
@@ -2200,7 +2368,7 @@ private func localLLMSidecarOutputData(
 }
 
 private func slug(_ value: String) -> String {
-    LocalAppTaskIntentParser.normalizedPhrase(value)
+    LocalAppTextNormalizer.normalizedPhrase(value)
         .split(separator: " ")
         .joined(separator: "-")
 }

@@ -76,7 +76,7 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
                 )
             }
 
-            guard let intent = try TaskIntentWireCodec.decodeHostedPlanningIntent(
+            if let intent = try TaskIntentWireCodec.decodeHostedPlanningIntent(
                 outputText,
                 definitions: request.taskDefinitions,
                 originalCommand: request.command,
@@ -84,25 +84,32 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
                 sourceModelCallID: "model-call-\(request.sourceTraceID)",
                 parserName: "hosted-responses-v1",
                 parserSource: .onlineModel
-            ) else {
-                let baseMetadata = Self.outputDiagnostics(for: outputText)
-                    .merging([
-                        "provider": "donkeyBackend",
-                        "privacy.store": "false"
-                    ]) { current, _ in current }
-                guard let noTaskMetadata = try? TaskIntentWireCodec.hostedPlanningNoTaskMetadata(
-                    outputText,
-                    parserName: "hosted-responses-v1"
-                ) else {
-                    return result(
+            ) {
+                return TaskIntentAdapterResult(
+                    intent: intent,
+                    trace: trace(
                         entry: entry,
                         request: request,
-                        status: .invalidOutput,
-                        validationStatus: "invalid",
+                        status: .completed,
+                        validationStatus: "schemaDecoded",
                         latencyMS: latencyMS,
-                        metadata: baseMetadata
+                        metadata: Self.outputDiagnostics(for: outputText).merging([
+                            "provider": "donkeyBackend",
+                            "privacy.store": "false"
+                        ]) { current, _ in current }
                     )
-                }
+                )
+            }
+
+            let baseMetadata = Self.outputDiagnostics(for: outputText)
+                .merging([
+                    "provider": "donkeyBackend",
+                    "privacy.store": "false"
+                ]) { current, _ in current }
+            if let noTaskMetadata = try? TaskIntentWireCodec.hostedPlanningNoTaskMetadata(
+                outputText,
+                parserName: "hosted-responses-v1"
+            ) {
                 return result(
                     entry: entry,
                     request: request,
@@ -113,19 +120,27 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
                 )
             }
 
-            return TaskIntentAdapterResult(
-                intent: intent,
-                trace: trace(
+            if let repairSeed = try? TaskIntentWireCodec.hostedPlanningInvalidLocalTaskMetadata(
+                outputText,
+                parserName: "hosted-responses-v1"
+            ) {
+                return await repairHostedPlanningIntent(
                     entry: entry,
+                    backend: backend,
                     request: request,
-                    status: .completed,
-                    validationStatus: "schemaDecoded",
-                    latencyMS: latencyMS,
-                    metadata: Self.outputDiagnostics(for: outputText).merging([
-                        "provider": "donkeyBackend",
-                        "privacy.store": "false"
-                    ]) { current, _ in current }
+                    previousOutputText: outputText,
+                    previousMetadata: baseMetadata.merging(repairSeed) { current, _ in current },
+                    startedAt: startedAt
                 )
+            }
+
+            return result(
+                entry: entry,
+                request: request,
+                status: .invalidOutput,
+                validationStatus: "invalid",
+                latencyMS: latencyMS,
+                metadata: baseMetadata
             )
         } catch is CancellationError {
             return result(entry: entry, request: request, status: .cancelled, validationStatus: "notValidated", latencyMS: nil)
@@ -145,7 +160,8 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
 
     private func responseRequest(
         entry: AIModelRegistryEntry,
-        adapterRequest: TaskIntentAdapterRequest
+        adapterRequest: TaskIntentAdapterRequest,
+        repairContext: HostedPlanningRepairContext? = nil
     ) -> RemoteInferenceResponseCreateRequest {
         RemoteInferenceResponseCreateRequest(
             input: .array([
@@ -154,7 +170,7 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
                     "content": .array([
                         .object([
                             "type": .string("input_text"),
-                            "text": .string(promptText(for: adapterRequest))
+                            "text": .string(promptText(for: adapterRequest, repairContext: repairContext))
                         ])
                     ])
                 ])
@@ -170,7 +186,8 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
             ],
             metadata: [
                 "source_trace_id": adapterRequest.sourceTraceID,
-                "prompt_version": entry.promptVersion
+                "prompt_version": entry.promptVersion,
+                "repair_attempt": repairContext == nil ? "false" : "true"
             ],
             parameters: [
                 "instructions": .string(Self.instructions),
@@ -179,7 +196,10 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
         )
     }
 
-    private func promptText(for request: TaskIntentAdapterRequest) -> String {
+    private func promptText(
+        for request: TaskIntentAdapterRequest,
+        repairContext: HostedPlanningRepairContext? = nil
+    ) -> String {
         let definitions = (try? JSONEncoder().encode(request.taskDefinitions))
             .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
         let appFinderCatalog = taskIntentAppFinderCatalogJSON(request.appFinderCatalog)
@@ -187,7 +207,7 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .prefix(8)
             .joined(separator: "\n\n")
-        return [
+        var sections = [
             "Command: \(request.command)",
             "Relevant local cache:",
             request.contextSnippets.joined(separator: "\n"),
@@ -199,7 +219,123 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
             appFinderCatalog,
             "Supported task definitions JSON:",
             definitions
-        ].joined(separator: "\n")
+        ]
+        if let repairContext {
+            sections.append(contentsOf: [
+                "Runtime validation feedback:",
+                repairContext.feedback,
+                "Previous invalid planner JSON:",
+                repairContext.previousOutputText
+            ])
+        }
+        return sections.joined(separator: "\n")
+    }
+
+    private func repairHostedPlanningIntent(
+        entry: AIModelRegistryEntry,
+        backend: DonkeyBackendInferenceClient,
+        request: TaskIntentAdapterRequest,
+        previousOutputText: String,
+        previousMetadata: [String: String],
+        startedAt: TimeInterval
+    ) async -> TaskIntentAdapterResult {
+        do {
+            let response = try await backend.createResponse(
+                responseRequest(
+                    entry: entry,
+                    adapterRequest: request,
+                    repairContext: HostedPlanningRepairContext(previousOutputText: previousOutputText)
+                )
+            )
+            let latencyMS = (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
+            guard let repairOutputText = Self.outputText(from: response) else {
+                return result(
+                    entry: entry,
+                    request: request,
+                    status: .invalidOutput,
+                    validationStatus: "invalid",
+                    latencyMS: latencyMS,
+                    metadata: Self.repairMetadata(
+                        previousMetadata: previousMetadata,
+                        repairOutputText: nil,
+                        status: "empty"
+                    )
+                )
+            }
+
+            if let intent = try TaskIntentWireCodec.decodeHostedPlanningIntent(
+                repairOutputText,
+                definitions: request.taskDefinitions,
+                originalCommand: request.command,
+                appFinderCatalog: request.appFinderCatalog,
+                sourceModelCallID: "model-call-\(request.sourceTraceID)-repair",
+                parserName: "hosted-responses-v1",
+                parserSource: .onlineModel
+            ) {
+                return TaskIntentAdapterResult(
+                    intent: intent,
+                    trace: trace(
+                        entry: entry,
+                        request: request,
+                        status: .completed,
+                        validationStatus: "schemaDecoded",
+                        latencyMS: latencyMS,
+                        metadata: Self.repairMetadata(
+                            previousMetadata: previousMetadata,
+                            repairOutputText: repairOutputText,
+                            status: "schemaDecoded"
+                        )
+                    )
+                )
+            }
+
+            if let noTaskMetadata = try? TaskIntentWireCodec.hostedPlanningNoTaskMetadata(
+                repairOutputText,
+                parserName: "hosted-responses-v1"
+            ) {
+                return result(
+                    entry: entry,
+                    request: request,
+                    status: .completed,
+                    validationStatus: "noTaskIntent",
+                    latencyMS: latencyMS,
+                    metadata: Self.repairMetadata(
+                        previousMetadata: previousMetadata,
+                        repairOutputText: repairOutputText,
+                        status: "noTaskIntent"
+                    ).merging(noTaskMetadata) { _, new in new }
+                )
+            }
+
+            return result(
+                entry: entry,
+                request: request,
+                status: .invalidOutput,
+                validationStatus: "invalid",
+                latencyMS: latencyMS,
+                metadata: Self.repairMetadata(
+                    previousMetadata: previousMetadata,
+                    repairOutputText: repairOutputText,
+                    status: "invalid"
+                )
+            )
+        } catch is CancellationError {
+            return result(entry: entry, request: request, status: .cancelled, validationStatus: "notValidated", latencyMS: nil)
+        } catch {
+            let latencyMS = (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
+            return result(
+                entry: entry,
+                request: request,
+                status: Self.status(for: error),
+                validationStatus: "notValidated",
+                latencyMS: latencyMS,
+                metadata: Self.repairMetadata(
+                    previousMetadata: previousMetadata,
+                    repairOutputText: nil,
+                    status: "requestFailed"
+                ).merging(Self.errorMetadata(error)) { current, _ in current }
+            )
+        }
     }
 
     private static let instructions = [
@@ -222,11 +358,36 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
         "When App finder catalog JSON is non-empty and you use local_app_interaction, choose the target app only from a catalog entry with supportStatus supported and a matching capability. Set metadata.appFinder.selectedAppID to the exact appID, metadata.appFinder.selectedCapabilityID to the capability id, and metadata.appFinder.controlProfile to one declared control profile. Never select candidate, unsupported, or denied entries for execution.",
         "For local_app_interaction, select the most likely local app, set targetAppName and entities.appName to the human app name, set entities.goal, and when text must be entered set entities.query plus normalizedEntities.query.",
         "For local_app_interaction, fill planSteps with allowed toolName values only: app.openOrFocus, app.observe, ui.newDocument, ui.focusSearch, ui.focusAddressBar, ui.focusTextEntry, ui.setText, ui.pressReturn, app.verifyCommand, app.verifyVisibleText.",
+        "Verification may be a set of verifier steps. Use app.verifyCommand for guarded command evidence, app.verifyVisibleText for observed result text, and include both when both kinds of evidence are needed.",
         "When ui.setText is present, entities.query and normalizedEntities.query must be non-empty, the step inputEntity should usually be query, and controlID/focusKey should describe the guarded UI strategy.",
         "For every other task type, planSteps should not contain executable toolName values.",
         "If no supported capability fits, set structuredIntent.route conversation and taskType \"none\" with a helpful conversational assistantResponse rather than a generic local-action failure.",
         "Do not invent task types, unsupported entities, unsupported tools, app scripts, or direct input outside the schema."
     ].joined(separator: " ")
+
+    private static func repairMetadata(
+        previousMetadata: [String: String],
+        repairOutputText: String?,
+        status: String
+    ) -> [String: String] {
+        var metadata = previousMetadata.merging([
+            "provider": "donkeyBackend",
+            "privacy.store": "false",
+            "planner.repairAttempted": "true",
+            "planner.repairStatus": status
+        ]) { _, new in new }
+        if let repairOutputText {
+            let repairDiagnostics = Dictionary(
+                uniqueKeysWithValues: Self.outputDiagnostics(for: repairOutputText).map {
+                    ("repair.\($0.key)", $0.value)
+                }
+            )
+            metadata = metadata.merging(repairDiagnostics) { _, new in new }
+        } else {
+            metadata["repair.modelOutput.empty"] = "true"
+        }
+        return metadata
+    }
 
     private static func outputDiagnostics(for outputText: String) -> [String: String] {
         let trimmed = outputText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -352,6 +513,20 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
             sourceTraceID: request.sourceTraceID,
             metadata: metadata
         )
+    }
+}
+
+private struct HostedPlanningRepairContext {
+    var previousOutputText: String
+    var feedback: String {
+        [
+            "The previous localAppTask JSON decoded but failed runtime validation, so it cannot be executed.",
+            "Return one corrected strict JSON object using the same schema.",
+            "If no supported executable action is possible, return a conversation or clarification route.",
+            "For play_media, entities.query and normalizedEntities.query must be a concrete playable search string, not only an artist or genre seed.",
+            "For play_media, include both app.verifyCommand and app.verifyVisibleText verification steps.",
+            "For play_media representative selections, include metadata.mediaSelection.kind, metadata.mediaSelection.seed, metadata.mediaSelection.selectedTitle, and metadata.mediaSelection.reason."
+        ].joined(separator: " ")
     }
 }
 

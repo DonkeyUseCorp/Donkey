@@ -38,9 +38,16 @@ public struct MacLocalAppAvailabilityProvider: LocalAppAvailabilityProviding {
     public init() {}
 
     public func appFinderCatalogEntries() -> [LocalAppFinderCatalogEntry] {
-        let snapshotEntries = LocalAppFinderProfileStore.defaultStore.resolvedCatalogEntries()
+        let store = LocalAppFinderProfileStore.defaultStore
+        let snapshotEntries = store.resolvedCatalogEntries()
         if !snapshotEntries.isEmpty {
-            return snapshotEntries
+            return snapshotEntries.map { entry in
+                store.entry(
+                    appName: entry.appName,
+                    bundleIdentifier: entry.bundleIdentifier,
+                    path: entry.metadata["localItem.path"]
+                )
+            }
         }
         return Self.cachedInstalledApplicationCatalogEntries
     }
@@ -707,7 +714,7 @@ enum LocalAppLookup {
     }
 
     static func normalized(_ value: String) -> String {
-        LocalAppTaskIntentParser.normalizedPhrase(value)
+        LocalAppTextNormalizer.normalizedPhrase(value)
     }
 
     static func titleCased(_ value: String) -> String {
@@ -802,8 +809,7 @@ public struct LocalAppTaskCatalog: Sendable {
     }
 
     public func resolve(intent: TaskIntent) -> LocalAppTaskCatalogResolution {
-        if intent.parserSource != .deterministic,
-           intent.confidence < Self.minimumModelIntentConfidence {
+        if intent.confidence < Self.minimumModelIntentConfidence {
             var metadata = [
                 "reason": "lowConfidenceIntent",
                 "taskType": intent.taskType,
@@ -1120,11 +1126,12 @@ public struct LocalAppTaskCatalog: Sendable {
             "dynamicTarget": target.metadata["dynamicTarget"] ?? "false",
             "modelPlanned": "true",
             "plan.tools": plan.tools.map(\.rawValue).joined(separator: ","),
+            "plan.verificationTools": plan.verificationTools.map(\.rawValue).joined(separator: ","),
             "plan.inputEntity": inputEntity,
             "plan.allowedTools": LocalAppActionPlanTool.allCases.map(\.rawValue).joined(separator: ","),
             "plan.setTextInputContract": "inputEntityValueIsExactTextToEnter"
         ]
-        metadata["verificationMode"] = plan.verification == .visibleText
+        metadata["verificationMode"] = plan.requiresVisibleTextVerification
             ? "visibleText"
             : "commandAttempted"
 
@@ -1217,7 +1224,7 @@ public struct LocalAppTaskCatalog: Sendable {
                 submitIndex += 1
             case .verifyCommand, .verifyVisibleText:
                 steps.append(LocalAppTaskWorkflowStepDefinition(
-                    id: "model-plan-verify",
+                    id: "model-plan-\(Self.toolSlug(tool.rawValue))",
                     role: .verifyResult,
                     summary: "Verify the model-planned action",
                     metadata: ["plan.tool": tool.rawValue]
@@ -1247,7 +1254,7 @@ public struct LocalAppTaskCatalog: Sendable {
     }
 
     private func slug(_ value: String) -> String {
-        LocalAppTaskIntentParser.normalizedPhrase(value)
+        LocalAppTextNormalizer.normalizedPhrase(value)
             .split(separator: " ")
             .joined(separator: "-")
     }

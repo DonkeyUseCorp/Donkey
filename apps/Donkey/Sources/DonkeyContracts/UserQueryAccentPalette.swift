@@ -1,4 +1,4 @@
-public enum PointerPromptAccentPalette {
+public enum UserQueryAccentPalette {
     public static let supportedIndexes = [0, 1, 2, 3, 4, 5, 6, 7]
     public static let firstIndex = supportedIndexes[0]
 

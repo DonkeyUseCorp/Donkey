@@ -345,8 +345,9 @@ struct LocalAppTaskTests {
         let terminal = try #require(entries.first { $0.appID == "com.apple.Terminal" })
         let draftPad = try #require(entries.first { $0.appID == "com.example.DraftPad" })
 
-        #expect(music.supportStatus == .candidate)
-        #expect(music.capabilities.isEmpty)
+        #expect(music.supportStatus == .supported)
+        #expect(music.capabilities.map(\.id) == ["play_media"])
+        #expect(music.capabilities.first?.controlProfiles == ["search_then_enter"])
         #expect(terminal.supportStatus == .denied)
         #expect(terminal.capabilities.isEmpty)
         #expect(terminal.denyReason?.contains("shell") == true)
@@ -390,8 +391,7 @@ struct LocalAppTaskTests {
                 ],
                 inputEntity: "query",
                 controlID: "editor",
-                focusKey: "",
-                verification: .commandAttempted
+                focusKey: ""
             ),
             metadata: ["requestedItemName": "DraftPad"]
         )
@@ -1085,8 +1085,7 @@ struct LocalAppTaskTests {
                 tools: $0,
                 inputEntity: "query",
                 controlID: "search",
-                focusKey: "Command+F",
-                verification: .commandAttempted
+                focusKey: "Command+F"
             )
         }
         return TaskIntent(
@@ -1137,7 +1136,7 @@ struct LocalAppTaskTests {
     }
 
     private func slug(_ value: String) -> String {
-        LocalAppTaskIntentParser.normalizedPhrase(value)
+        LocalAppTextNormalizer.normalizedPhrase(value)
             .split(separator: " ")
             .joined(separator: "-")
     }

@@ -1,6 +1,6 @@
 import Foundation
 
-public enum PointerPromptUpdateStatus: String, Equatable, Sendable {
+public enum UserQueryUpdateStatus: String, Equatable, Sendable {
     case notChecked
     case checking
     case upToDate
@@ -9,14 +9,14 @@ public enum PointerPromptUpdateStatus: String, Equatable, Sendable {
     case failed
 }
 
-public struct PointerPromptUpdateState: Equatable, Sendable {
-    public var status: PointerPromptUpdateStatus
+public struct UserQueryUpdateState: Equatable, Sendable {
+    public var status: UserQueryUpdateStatus
     public var currentVersion: String
     public var latestVersion: String?
     public var message: String?
 
     public init(
-        status: PointerPromptUpdateStatus = .notChecked,
+        status: UserQueryUpdateStatus = .notChecked,
         currentVersion: String,
         latestVersion: String? = nil,
         message: String? = nil

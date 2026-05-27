@@ -68,17 +68,17 @@ public struct LocalAppAccessibilityControlIndex: Codable, Equatable, Sendable {
         matching controlID: String,
         acceptedKinds: Set<LocalAppControlKind> = []
     ) -> LocalAppDiscoveredControl? {
-        let normalizedID = LocalAppTaskIntentParser.normalizedPhrase(controlID)
+        let normalizedID = LocalAppTextNormalizer.normalizedPhrase(controlID)
         return controls.first { control in
-            let normalizedLabel = LocalAppTaskIntentParser.normalizedPhrase(control.label)
+            let normalizedLabel = LocalAppTextNormalizer.normalizedPhrase(control.label)
             let normalizedMetadataID = control.metadata["controlID"]
-                .map(LocalAppTaskIntentParser.normalizedPhrase)
+                .map(LocalAppTextNormalizer.normalizedPhrase)
             let kindMatches = acceptedKinds.isEmpty || acceptedKinds.contains(control.kind)
             return kindMatches
                 && (
                     normalizedLabel == normalizedID
                         || normalizedMetadataID == normalizedID
-                        || LocalAppTaskIntentParser.normalizedPhrase(control.id) == normalizedID
+                        || LocalAppTextNormalizer.normalizedPhrase(control.id) == normalizedID
                 )
         }
     }
@@ -228,7 +228,7 @@ public struct LocalAppAccessibilityControlDiscovery: Sendable {
     }
 
     private func inferredControlID(label: String, kind: LocalAppControlKind) -> String {
-        let normalized = LocalAppTaskIntentParser.normalizedPhrase(label)
+        let normalized = LocalAppTextNormalizer.normalizedPhrase(label)
         if kind == .searchField {
             return "search"
         }

@@ -8,7 +8,7 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     private var authCoordinator: DonkeyAuthCoordinator?
     private var loginWindowController: DonkeyLoginWindowController?
     private var permissionSetupController: MacPermissionSetupWindowController?
-    private var overlayController: PointerPromptOverlayController?
+    private var overlayController: UserQueryOverlayController?
     private var debugInspectionCoordinator: DebugUIInspectionCoordinator?
     private var runtimeOnboardingController: LocalRuntimeOnboardingWindowController?
 
@@ -109,8 +109,8 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
 
         NSApp.setActivationPolicy(.accessory)
 
-        let model = PointerPromptOverlayModel()
-        let controller = PointerPromptOverlayController(model: model)
+        let model = UserQueryOverlayModel()
+        let controller = UserQueryOverlayController(model: model)
         overlayController = controller
         controller.show()
 

@@ -55,7 +55,7 @@ enum TaskIntentWireCodec {
                 "inputEntity",
                 "controlID",
                 "focusKey",
-                "verification"
+                "verificationTools"
             ],
             "properties": [
                 "tools": [
@@ -69,9 +69,16 @@ enum TaskIntentWireCodec {
                 "inputEntity": ["type": "string"],
                 "controlID": ["type": "string"],
                 "focusKey": ["type": "string"],
-                "verification": [
-                    "type": "string",
-                    "enum": LocalAppActionPlanVerification.allCases.map(\.rawValue)
+                "verificationTools": [
+                    "type": "array",
+                    "maxItems": 4,
+                    "items": [
+                        "type": "string",
+                        "enum": [
+                            LocalAppActionPlanTool.verifyCommand.rawValue,
+                            LocalAppActionPlanTool.verifyVisibleText.rawValue
+                        ]
+                    ]
                 ]
             ]
         ]
@@ -447,6 +454,27 @@ enum TaskIntentWireCodec {
         return metadata
     }
 
+    static func hostedPlanningInvalidLocalTaskMetadata(
+        _ outputText: String,
+        parserName: String
+    ) throws -> [String: String]? {
+        let wire = try decodeHostedPlanningWire(from: outputText)
+        guard wire.structuredIntent.route == "localAppTask",
+              wire.structuredIntent.taskType != "none"
+        else {
+            return nil
+        }
+
+        var metadata = hostedPlanningMetadata(from: wire)
+        metadata["parser"] = parserName
+        metadata["reason"] = nonEmpty(metadata["reason"]) ?? "localAppTaskValidationFailed"
+        metadata["validation.failure"] = "localAppTaskValidationFailed"
+        metadata["taskType"] = wire.structuredIntent.taskType
+        metadata["targetApp"] = wire.structuredIntent.targetAppName
+        metadata["planner.repairable"] = "true"
+        return metadata
+    }
+
     static func noTaskMetadata(
         _ outputText: String,
         parserName: String
@@ -558,18 +586,19 @@ enum TaskIntentWireCodec {
         let inputEntity = firstNonEmpty(wire.planSteps.map(\.inputEntity)) ?? ""
         let controlID = firstNonEmpty(wire.planSteps.map(\.controlID)) ?? ""
         let focusKey = firstNonEmpty(wire.planSteps.map(\.focusKey)) ?? ""
-        let verification: LocalAppActionPlanVerification = wire.planSteps.contains { step in
-            step.toolName == LocalAppActionPlanTool.verifyVisibleText.rawValue
-        } || wire.verificationCriteria.contains { criterion in
-            criterion.localizedCaseInsensitiveContains("visible")
-        } ? .visibleText : .commandAttempted
+        var verificationTools = tools.filter(LocalAppActionPlan.isVerificationTool)
+        if verificationTools.isEmpty {
+            verificationTools = wire.verificationCriteria.contains { criterion in
+                criterion.localizedCaseInsensitiveContains("visible")
+            } ? [.verifyVisibleText] : [.verifyCommand]
+        }
 
         return LocalAppActionPlan(
             tools: tools,
             inputEntity: inputEntity,
             controlID: controlID,
             focusKey: focusKey,
-            verification: verification
+            verificationTools: verificationTools
         )
     }
 
@@ -635,7 +664,7 @@ enum TaskIntentWireCodec {
         var normalized = wire.normalizedEntities
         for rule in definition.entityRules {
             guard let rawValue = wire.entities[rule.name] ?? normalized[rule.name] else { continue }
-            if let alias = rule.aliases[rawValue] ?? rule.aliases[LocalAppTaskIntentParser.normalizedPhrase(rawValue)] {
+            if let alias = rule.aliases[rawValue] ?? rule.aliases[LocalAppTextNormalizer.normalizedPhrase(rawValue)] {
                 normalized[rule.name] = alias
             }
         }
@@ -717,6 +746,9 @@ enum TaskIntentWireCodec {
         guard let capability else {
             return nil
         }
+        guard capabilityMetadataIsValid(wire: wire, capability: capability) else {
+            return nil
+        }
 
         let requestedControlProfile = appFinderMetadataValue(
             "appFinder.controlProfile",
@@ -763,12 +795,63 @@ enum TaskIntentWireCodec {
 
         return appFinderCatalog.first { entry in
             appNameCandidates.contains { candidate in
-                LocalAppTaskIntentParser.normalizedPhrase(candidate)
-                    == LocalAppTaskIntentParser.normalizedPhrase(entry.appName)
+                LocalAppTextNormalizer.normalizedPhrase(candidate)
+                    == LocalAppTextNormalizer.normalizedPhrase(entry.appName)
                     || candidate == entry.appID
                     || candidate == entry.bundleIdentifier
             }
         }
+    }
+
+    private static func capabilityMetadataIsValid(
+        wire: TaskIntentWire,
+        capability: LocalAppFinderCapability
+    ) -> Bool {
+        switch capability.id {
+        case "play_media":
+            return playMediaMetadataIsValid(wire)
+        default:
+            return true
+        }
+    }
+
+    private static func playMediaMetadataIsValid(_ wire: TaskIntentWire) -> Bool {
+        guard wire.actionPlan.verificationTools.contains(.verifyVisibleText) else {
+            return false
+        }
+
+        let kind = nonEmpty(wire.metadata["mediaSelection.kind"]) ?? ""
+        let allowedKinds: Set<String> = [
+            "explicit_song",
+            "explicit_album",
+            "explicit_playlist",
+            "representative_song",
+            "representative_album"
+        ]
+        guard allowedKinds.contains(kind) else {
+            return false
+        }
+
+        guard kind.hasPrefix("representative_") else {
+            return true
+        }
+
+        guard let seed = nonEmpty(wire.metadata["mediaSelection.seed"]),
+              let selectedTitle = nonEmpty(wire.metadata["mediaSelection.selectedTitle"]),
+              nonEmpty(wire.metadata["mediaSelection.reason"]) != nil
+        else {
+            return false
+        }
+
+        let query = nonEmpty(wire.normalizedEntities["query"])
+            ?? nonEmpty(wire.entities["query"])
+            ?? ""
+        let normalizedQuery = LocalAppTextNormalizer.normalizedPhrase(query)
+        let normalizedSeed = LocalAppTextNormalizer.normalizedPhrase(seed)
+        let normalizedSelectedTitle = LocalAppTextNormalizer.normalizedPhrase(selectedTitle)
+        return !normalizedQuery.isEmpty
+            && normalizedQuery != normalizedSeed
+            && normalizedQuery.contains(normalizedSelectedTitle)
     }
 
     private static func appFinderMetadataValue(
@@ -782,7 +865,7 @@ enum TaskIntentWireCodec {
     }
 
     private static func slug(_ value: String) -> String {
-        LocalAppTaskIntentParser.normalizedPhrase(value)
+        LocalAppTextNormalizer.normalizedPhrase(value)
             .split(separator: " ")
             .joined(separator: "-")
     }

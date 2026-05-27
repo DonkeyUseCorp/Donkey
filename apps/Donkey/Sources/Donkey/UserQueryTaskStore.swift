@@ -3,18 +3,18 @@ import CoreData
 import Foundation
 
 @MainActor
-protocol PointerPromptTaskStoring {
-    func loadRecentTasks(limit: Int) -> [PointerPromptNotchTask]
-    func searchTasks(matching query: String, limit: Int) -> [PointerPromptNotchTask]
-    func upsertTask(_ task: PointerPromptNotchTask)
-    func loadEvents(taskID: String) -> [PointerPromptTaskEvent]
-    func appendEvent(_ event: PointerPromptTaskEvent)
-    func loadAssets(taskID: String) -> [PointerPromptTaskAsset]
-    func appendAsset(_ asset: PointerPromptTaskAsset)
+protocol UserQueryTaskStoring {
+    func loadRecentTasks(limit: Int) -> [UserQueryNotchTask]
+    func searchTasks(matching query: String, limit: Int) -> [UserQueryNotchTask]
+    func upsertTask(_ task: UserQueryNotchTask)
+    func loadEvents(taskID: String) -> [UserQueryTaskEvent]
+    func appendEvent(_ event: UserQueryTaskEvent)
+    func loadAssets(taskID: String) -> [UserQueryTaskAsset]
+    func appendAsset(_ asset: UserQueryTaskAsset)
 }
 
 @MainActor
-final class CoreDataPointerPromptTaskStore: PointerPromptTaskStoring {
+final class CoreDataUserQueryTaskStore: UserQueryTaskStoring {
     private let context: NSManagedObjectContext?
 
     init(
@@ -23,7 +23,7 @@ final class CoreDataPointerPromptTaskStore: PointerPromptTaskStoring {
         context = Self.makeContext(storeURL: storeURL ?? Self.defaultStoreURL())
     }
 
-    func loadRecentTasks(limit: Int) -> [PointerPromptNotchTask] {
+    func loadRecentTasks(limit: Int) -> [UserQueryNotchTask] {
         guard let context else {
             return []
         }
@@ -41,7 +41,7 @@ final class CoreDataPointerPromptTaskStore: PointerPromptTaskStoring {
         return managedTasks.compactMap(Self.task(from:))
     }
 
-    func searchTasks(matching query: String, limit: Int) -> [PointerPromptNotchTask] {
+    func searchTasks(matching query: String, limit: Int) -> [UserQueryNotchTask] {
         guard let context else {
             return []
         }
@@ -78,7 +78,7 @@ final class CoreDataPointerPromptTaskStore: PointerPromptTaskStoring {
         return managedTasks.compactMap(Self.task(from:))
     }
 
-    func upsertTask(_ task: PointerPromptNotchTask) {
+    func upsertTask(_ task: UserQueryNotchTask) {
         guard let context else { return }
 
         let managedTask = Self.existingTask(id: task.id, in: context)
@@ -97,7 +97,7 @@ final class CoreDataPointerPromptTaskStore: PointerPromptTaskStoring {
         try? context.save()
     }
 
-    func loadAssets(taskID: String) -> [PointerPromptTaskAsset] {
+    func loadAssets(taskID: String) -> [UserQueryTaskAsset] {
         guard let context else { return [] }
 
         let request = NSFetchRequest<NSManagedObject>(entityName: Self.assetEntityName)
@@ -113,7 +113,7 @@ final class CoreDataPointerPromptTaskStore: PointerPromptTaskStoring {
         return managedAssets.compactMap(Self.asset(from:))
     }
 
-    func appendAsset(_ asset: PointerPromptTaskAsset) {
+    func appendAsset(_ asset: UserQueryTaskAsset) {
         guard let context else { return }
 
         let managedAsset = NSManagedObject(
@@ -133,7 +133,7 @@ final class CoreDataPointerPromptTaskStore: PointerPromptTaskStoring {
         try? context.save()
     }
 
-    func loadEvents(taskID: String) -> [PointerPromptTaskEvent] {
+    func loadEvents(taskID: String) -> [UserQueryTaskEvent] {
         guard let context else { return [] }
 
         let request = NSFetchRequest<NSManagedObject>(entityName: Self.eventEntityName)
@@ -150,7 +150,7 @@ final class CoreDataPointerPromptTaskStore: PointerPromptTaskStoring {
         return managedEvents.compactMap(Self.event(from:))
     }
 
-    func appendEvent(_ event: PointerPromptTaskEvent) {
+    func appendEvent(_ event: UserQueryTaskEvent) {
         guard let context else { return }
 
         let managedEvent = NSManagedObject(
@@ -196,7 +196,7 @@ final class CoreDataPointerPromptTaskStore: PointerPromptTaskStoring {
     private static func defaultStoreURL() -> URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Donkey", isDirectory: true)
-            .appendingPathComponent("PointerPromptTasks.sqlite")
+            .appendingPathComponent("UserQueryTasks.sqlite")
     }
 
     private static func model() -> NSManagedObjectModel {
@@ -311,19 +311,19 @@ final class CoreDataPointerPromptTaskStore: PointerPromptTaskStoring {
         return Array(Set(managedAssets.compactMap { $0.value(forKey: Self.assetTaskIDKey) as? String }))
     }
 
-    private static func task(from managedTask: NSManagedObject) -> PointerPromptNotchTask? {
+    private static func task(from managedTask: NSManagedObject) -> UserQueryNotchTask? {
         guard let id = managedTask.value(forKey: idKey) as? String,
               let title = managedTask.value(forKey: titleKey) as? String,
               let detail = managedTask.value(forKey: detailKey) as? String,
               let rawStatus = managedTask.value(forKey: statusKey) as? String,
-              let status = PointerPromptTaskStatus(rawValue: rawStatus),
+              let status = UserQueryTaskStatus(rawValue: rawStatus),
               let createdAt = managedTask.value(forKey: createdAtKey) as? Date,
               let updatedAt = managedTask.value(forKey: updatedAtKey) as? Date else {
             return nil
         }
 
         let accentIndex = (managedTask.value(forKey: accentIndexKey) as? NSNumber)?.intValue ?? 0
-        return PointerPromptNotchTask(
+        return UserQueryNotchTask(
             id: id,
             title: title,
             detail: detail,
@@ -355,18 +355,18 @@ final class CoreDataPointerPromptTaskStore: PointerPromptTaskStoring {
         return metadata
     }
 
-    private static func event(from managedEvent: NSManagedObject) -> PointerPromptTaskEvent? {
+    private static func event(from managedEvent: NSManagedObject) -> UserQueryTaskEvent? {
         guard let id = managedEvent.value(forKey: eventIDKey) as? String,
               let taskID = managedEvent.value(forKey: eventTaskIDKey) as? String,
               let rawRole = managedEvent.value(forKey: eventRoleKey) as? String,
-              let role = PointerPromptTaskEventRole(rawValue: rawRole),
+              let role = UserQueryTaskEventRole(rawValue: rawRole),
               let text = managedEvent.value(forKey: eventTextKey) as? String,
               let createdAt = managedEvent.value(forKey: eventCreatedAtKey) as? Date else {
             return nil
         }
 
         let sequence = (managedEvent.value(forKey: eventSequenceKey) as? NSNumber)?.intValue ?? 0
-        return PointerPromptTaskEvent(
+        return UserQueryTaskEvent(
             id: id,
             taskID: taskID,
             role: role,
@@ -376,11 +376,11 @@ final class CoreDataPointerPromptTaskStore: PointerPromptTaskStoring {
         )
     }
 
-    private static func asset(from managedAsset: NSManagedObject) -> PointerPromptTaskAsset? {
+    private static func asset(from managedAsset: NSManagedObject) -> UserQueryTaskAsset? {
         guard let id = managedAsset.value(forKey: assetIDKey) as? String,
               let taskID = managedAsset.value(forKey: assetTaskIDKey) as? String,
               let rawSource = managedAsset.value(forKey: assetSourceKey) as? String,
-              let source = PointerPromptTaskAssetSource(rawValue: rawSource),
+              let source = UserQueryTaskAssetSource(rawValue: rawSource),
               let displayName = managedAsset.value(forKey: assetDisplayNameKey) as? String,
               let contentType = managedAsset.value(forKey: assetContentTypeKey) as? String,
               let urlString = managedAsset.value(forKey: assetURLStringKey) as? String,
@@ -388,7 +388,7 @@ final class CoreDataPointerPromptTaskStore: PointerPromptTaskStoring {
             return nil
         }
 
-        return PointerPromptTaskAsset(
+        return UserQueryTaskAsset(
             id: id,
             taskID: taskID,
             eventID: managedAsset.value(forKey: assetEventIDKey) as? String,
@@ -401,9 +401,9 @@ final class CoreDataPointerPromptTaskStore: PointerPromptTaskStoring {
         )
     }
 
-    private static let taskEntityName = "PointerPromptStoredTask"
-    private static let eventEntityName = "PointerPromptStoredTaskEvent"
-    private static let assetEntityName = "PointerPromptStoredTaskAsset"
+    private static let taskEntityName = "UserQueryStoredTask"
+    private static let eventEntityName = "UserQueryStoredTaskEvent"
+    private static let assetEntityName = "UserQueryStoredTaskAsset"
     private static let idKey = "id"
     private static let titleKey = "title"
     private static let detailKey = "detail"

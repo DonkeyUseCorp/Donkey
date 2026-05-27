@@ -11,7 +11,7 @@ public struct AIHarnessBoundary: AIHarnessSnapshotProviding {
     public func snapshot() -> AIHarnessSnapshot {
         AIHarnessSnapshot(
             isPlannerAvailable: false,
-            suggestedPromptText: PointerPromptCopy.defaultPromptPlaceholder
+            suggestedPromptText: UserQueryCopy.defaultPromptPlaceholder
         )
     }
 }

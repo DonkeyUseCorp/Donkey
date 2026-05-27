@@ -1,6 +1,6 @@
 import Foundation
 
-public enum PointerPromptTaskStatus: String, Codable, Equatable, Sendable {
+public enum UserQueryTaskStatus: String, Codable, Equatable, Sendable {
     case chatting
     case running
     case paused
@@ -13,12 +13,12 @@ public enum PointerPromptTaskStatus: String, Codable, Equatable, Sendable {
     case failed
 }
 
-public struct PointerPromptNotchTask: Codable, Equatable, Identifiable, Sendable {
+public struct UserQueryNotchTask: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var title: String
     public var detail: String
     public var commandText: String
-    public var status: PointerPromptTaskStatus
+    public var status: UserQueryTaskStatus
     public var accentIndex: Int
     public var createdAt: Date
     public var updatedAt: Date
@@ -29,7 +29,7 @@ public struct PointerPromptNotchTask: Codable, Equatable, Identifiable, Sendable
         title: String,
         detail: String,
         commandText: String = "",
-        status: PointerPromptTaskStatus,
+        status: UserQueryTaskStatus,
         accentIndex: Int,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
@@ -47,17 +47,17 @@ public struct PointerPromptNotchTask: Codable, Equatable, Identifiable, Sendable
     }
 }
 
-public enum PointerPromptTaskEventRole: String, Codable, Equatable, Sendable {
+public enum UserQueryTaskEventRole: String, Codable, Equatable, Sendable {
     case user
     case assistant
     case system
     case tool
 }
 
-public struct PointerPromptTaskEvent: Codable, Equatable, Identifiable, Sendable {
+public struct UserQueryTaskEvent: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var taskID: String
-    public var role: PointerPromptTaskEventRole
+    public var role: UserQueryTaskEventRole
     public var text: String
     public var sequence: Int
     public var createdAt: Date
@@ -65,7 +65,7 @@ public struct PointerPromptTaskEvent: Codable, Equatable, Identifiable, Sendable
     public init(
         id: String,
         taskID: String,
-        role: PointerPromptTaskEventRole,
+        role: UserQueryTaskEventRole,
         text: String,
         sequence: Int,
         createdAt: Date = Date()
@@ -79,16 +79,16 @@ public struct PointerPromptTaskEvent: Codable, Equatable, Identifiable, Sendable
     }
 }
 
-public enum PointerPromptTaskAssetSource: String, Codable, Equatable, Sendable {
+public enum UserQueryTaskAssetSource: String, Codable, Equatable, Sendable {
     case userUploaded
     case agentReturned
 }
 
-public struct PointerPromptTaskAsset: Codable, Equatable, Identifiable, Sendable {
+public struct UserQueryTaskAsset: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var taskID: String
     public var eventID: String?
-    public var source: PointerPromptTaskAssetSource
+    public var source: UserQueryTaskAssetSource
     public var displayName: String
     public var contentType: String
     public var urlString: String
@@ -99,7 +99,7 @@ public struct PointerPromptTaskAsset: Codable, Equatable, Identifiable, Sendable
         id: String,
         taskID: String,
         eventID: String? = nil,
-        source: PointerPromptTaskAssetSource,
+        source: UserQueryTaskAssetSource,
         displayName: String,
         contentType: String,
         urlString: String,
@@ -118,15 +118,15 @@ public struct PointerPromptTaskAsset: Codable, Equatable, Identifiable, Sendable
     }
 }
 
-public struct PointerPromptTaskAssetDraft: Codable, Equatable, Sendable {
-    public var source: PointerPromptTaskAssetSource
+public struct UserQueryTaskAssetDraft: Codable, Equatable, Sendable {
+    public var source: UserQueryTaskAssetSource
     public var displayName: String
     public var contentType: String
     public var urlString: String
     public var byteCount: Int64?
 
     public init(
-        source: PointerPromptTaskAssetSource = .userUploaded,
+        source: UserQueryTaskAssetSource = .userUploaded,
         displayName: String,
         contentType: String,
         urlString: String,

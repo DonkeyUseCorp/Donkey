@@ -246,6 +246,6 @@ public struct DocumentFormFillPlanner: Sendable {
     }
 
     private func normalized(_ value: String) -> String {
-        LocalAppTaskIntentParser.normalizedPhrase(value)
+        LocalAppTextNormalizer.normalizedPhrase(value)
     }
 }

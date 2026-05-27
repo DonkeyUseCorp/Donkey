@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-public enum PointerPromptCopy {
+public enum UserQueryCopy {
     public static let defaultPromptPlaceholder = "What can donkey do for you?"
     private static let transientComposerPlaceholders: Set<String> = [
         "Listening...",
@@ -33,7 +33,7 @@ public enum PointerPromptCopy {
     }
 }
 
-public struct PointerPromptState: Equatable, Sendable {
+public struct UserQueryState: Equatable, Sendable {
     public static let defaultVoiceWaveformLevels: [Double] = [
         0.12,
         0.2,
@@ -48,7 +48,7 @@ public struct PointerPromptState: Equatable, Sendable {
     public var isPrimaryActionEnabled: Bool
     public var leadingSignalLevel: SignalLevel
     public var isActive: Bool
-    public var theme: PointerPromptTheme
+    public var theme: UserQueryTheme
     public var voiceWaveformLevels: [Double]
     public var isVoiceInputActive: Bool
 
@@ -57,8 +57,8 @@ public struct PointerPromptState: Equatable, Sendable {
         isPrimaryActionEnabled: Bool = true,
         leadingSignalLevel: SignalLevel = .idle,
         isActive: Bool = false,
-        theme: PointerPromptTheme = .defaultBlue,
-        voiceWaveformLevels: [Double] = PointerPromptState.defaultVoiceWaveformLevels,
+        theme: UserQueryTheme = .defaultBlue,
+        voiceWaveformLevels: [Double] = UserQueryState.defaultVoiceWaveformLevels,
         isVoiceInputActive: Bool = false
     ) {
         self.promptText = promptText
@@ -70,24 +70,24 @@ public struct PointerPromptState: Equatable, Sendable {
         self.isVoiceInputActive = isVoiceInputActive
     }
 
-    public static let productionDefault = PointerPromptState(
-        promptText: PointerPromptCopy.defaultPromptPlaceholder,
+    public static let productionDefault = UserQueryState(
+        promptText: UserQueryCopy.defaultPromptPlaceholder,
         leadingSignalLevel: .ready,
         isActive: true
     )
 }
 
-public struct PointerPromptTheme: Equatable, Sendable {
-    public var accent: PointerPromptColor
-    public var fill: PointerPromptColor
-    public var pointerFill: PointerPromptColor
-    public var activeShadow: PointerPromptColor
+public struct UserQueryTheme: Equatable, Sendable {
+    public var accent: UserQueryColor
+    public var fill: UserQueryColor
+    public var pointerFill: UserQueryColor
+    public var activeShadow: UserQueryColor
 
     public init(
-        accent: PointerPromptColor,
-        fill: PointerPromptColor,
-        pointerFill: PointerPromptColor,
-        activeShadow: PointerPromptColor
+        accent: UserQueryColor,
+        fill: UserQueryColor,
+        pointerFill: UserQueryColor,
+        activeShadow: UserQueryColor
     ) {
         self.accent = accent
         self.fill = fill
@@ -95,38 +95,38 @@ public struct PointerPromptTheme: Equatable, Sendable {
         self.activeShadow = activeShadow
     }
 
-    public static let defaultBlue = PointerPromptTheme(
-        accent: PointerPromptColor(
+    public static let defaultBlue = UserQueryTheme(
+        accent: UserQueryColor(
             red: 13.0 / 255.0,
             green: 108.0 / 255.0,
             blue: 216.0 / 255.0,
             alpha: 1
         ),
-        fill: PointerPromptColor(red: 0.88, green: 0.94, blue: 1.0, alpha: 1),
+        fill: UserQueryColor(red: 0.88, green: 0.94, blue: 1.0, alpha: 1),
         pointerFill: .white,
-        activeShadow: PointerPromptColor(red: 0.0, green: 0.14, blue: 0.32, alpha: 0.26)
+        activeShadow: UserQueryColor(red: 0.0, green: 0.14, blue: 0.32, alpha: 0.26)
     )
 
-    public static func fromConfig(_ config: PointerPromptThemeConfig) -> PointerPromptTheme? {
-        guard let accent = PointerPromptColor(cssString: config.accent) else {
+    public static func fromConfig(_ config: UserQueryThemeConfig) -> UserQueryTheme? {
+        guard let accent = UserQueryColor(cssString: config.accent) else {
             return nil
         }
 
-        let baseTheme = PointerPromptTheme.accent(accent)
-        return PointerPromptTheme(
+        let baseTheme = UserQueryTheme.accent(accent)
+        return UserQueryTheme(
             accent: accent,
-            fill: PointerPromptColor(cssString: config.fill) ?? baseTheme.fill,
-            pointerFill: PointerPromptColor(cssString: config.pointerFill) ?? baseTheme.pointerFill,
-            activeShadow: PointerPromptColor(cssString: config.activeShadow) ?? baseTheme.activeShadow
+            fill: UserQueryColor(cssString: config.fill) ?? baseTheme.fill,
+            pointerFill: UserQueryColor(cssString: config.pointerFill) ?? baseTheme.pointerFill,
+            activeShadow: UserQueryColor(cssString: config.activeShadow) ?? baseTheme.activeShadow
         )
     }
 
-    public static func accent(_ accent: PointerPromptColor) -> PointerPromptTheme {
-        PointerPromptTheme(
+    public static func accent(_ accent: UserQueryColor) -> UserQueryTheme {
+        UserQueryTheme(
             accent: accent,
             fill: accent.mixed(with: .white, accentWeight: 0.13, alpha: 1),
             pointerFill: accent.mixed(with: .white, accentWeight: 0.24, alpha: 1),
-            activeShadow: PointerPromptColor(
+            activeShadow: UserQueryColor(
                 red: accent.red,
                 green: accent.green,
                 blue: accent.blue,
@@ -136,7 +136,7 @@ public struct PointerPromptTheme: Equatable, Sendable {
     }
 }
 
-public struct PointerPromptThemeConfig: Codable, Equatable, Sendable {
+public struct UserQueryThemeConfig: Codable, Equatable, Sendable {
     public var accent: String
     public var fill: String?
     public var pointerFill: String?
@@ -155,7 +155,7 @@ public struct PointerPromptThemeConfig: Codable, Equatable, Sendable {
     }
 }
 
-public struct PointerPromptColor: Equatable, Sendable {
+public struct UserQueryColor: Equatable, Sendable {
     public var red: Double
     public var green: Double
     public var blue: Double
@@ -168,7 +168,7 @@ public struct PointerPromptColor: Equatable, Sendable {
         self.alpha = alpha
     }
 
-    public static let white = PointerPromptColor(red: 1, green: 1, blue: 1, alpha: 1)
+    public static let white = UserQueryColor(red: 1, green: 1, blue: 1, alpha: 1)
 
     public init?(cssString: String?) {
         guard let cssString else { return nil }
@@ -212,12 +212,12 @@ public struct PointerPromptColor: Equatable, Sendable {
     }
 
     public func mixed(
-        with other: PointerPromptColor,
+        with other: UserQueryColor,
         accentWeight: Double,
         alpha: Double
-    ) -> PointerPromptColor {
+    ) -> UserQueryColor {
         let baseWeight = 1 - accentWeight
-        return PointerPromptColor(
+        return UserQueryColor(
             red: red * accentWeight + other.red * baseWeight,
             green: green * accentWeight + other.green * baseWeight,
             blue: blue * accentWeight + other.blue * baseWeight,
@@ -232,7 +232,7 @@ public enum SignalLevel: String, Equatable, Sendable {
     case thinking
 }
 
-public enum PointerPromptIntent: Equatable, Sendable {
+public enum UserQueryIntent: Equatable, Sendable {
     case addContextRequested
     case voiceInputRequested
     case primaryActionRequested(promptText: String)
@@ -243,15 +243,15 @@ public enum PointerPromptIntent: Equatable, Sendable {
 }
 
 @MainActor
-public protocol PointerPromptIntentSink: AnyObject {
-    func handle(_ intent: PointerPromptIntent)
+public protocol UserQueryIntentSink: AnyObject {
+    func handle(_ intent: UserQueryIntent)
 }
 
 @MainActor
-public final class NoopPointerPromptIntentSink: PointerPromptIntentSink {
+public final class NoopUserQueryIntentSink: UserQueryIntentSink {
     public init() {}
 
-    public func handle(_ intent: PointerPromptIntent) {}
+    public func handle(_ intent: UserQueryIntent) {}
 }
 
 public struct PointerCoachCursorGuideRequest: Equatable, Sendable {

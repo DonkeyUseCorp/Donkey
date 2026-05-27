@@ -6,16 +6,16 @@ import QuartzCore
 import SwiftUI
 
 @MainActor
-final class PointerPromptOverlayController {
-    private let model: PointerPromptOverlayModel
-    private let fixedPlacement: PointerPromptPlacement = .bottomRight
-    private let activationShortcut: PointerPromptActivationShortcut
+final class UserQueryOverlayController {
+    private let model: UserQueryOverlayModel
+    private let fixedPlacement: UserQueryPlacement = .bottomRight
+    private let activationShortcut: UserQueryActivationShortcut
     private let microphoneWaveformMeter = MicrophoneWaveformMeter()
     private let agentVisualizationCursorController = PointerCoachCursorOverlayController()
-    private let spawnOverlayController = PointerPromptSpawnOverlayController()
+    private let spawnOverlayController = UserQuerySpawnOverlayController()
 
     private var statusPanel: NSPanel?
-    private var statusHostingView: PointerPromptHostingView<PointerPromptNotchStatusView>?
+    private var statusHostingView: UserQueryHostingView<UserQueryNotchStatusView>?
     private var inputPanel: NSPanel?
     private var timer: Timer?
     private var globalActivationMonitor: Any?
@@ -42,8 +42,8 @@ final class PointerPromptOverlayController {
     private var lastStatusViewSnapshot: StatusPanelViewSnapshot?
 
     init(
-        model: PointerPromptOverlayModel,
-        activationShortcut: PointerPromptActivationShortcut = .doubleCommand
+        model: UserQueryOverlayModel,
+        activationShortcut: UserQueryActivationShortcut = .doubleCommand
     ) {
         self.model = model
         self.activationShortcut = activationShortcut
@@ -83,8 +83,8 @@ final class PointerPromptOverlayController {
         startTimer()
     }
 
-    private func makeInputHostingView(size: CGSize) -> NSHostingView<PointerPromptOverlayRootView> {
-        let hostingView = NSHostingView(rootView: PointerPromptOverlayRootView(model: model))
+    private func makeInputHostingView(size: CGSize) -> NSHostingView<UserQueryOverlayRootView> {
+        let hostingView = NSHostingView(rootView: UserQueryOverlayRootView(model: model))
         hostingView.frame = CGRect(origin: .zero, size: size)
         hostingView.autoresizingMask = [.width, .height]
         hostingView.wantsLayer = true
@@ -95,9 +95,9 @@ final class PointerPromptOverlayController {
 
     private func makeInputPanel(
         size: CGSize,
-        hostingView: NSHostingView<PointerPromptOverlayRootView>
-    ) -> PointerPromptPanel {
-        let panel = PointerPromptPanel(
+        hostingView: NSHostingView<UserQueryOverlayRootView>
+    ) -> UserQueryPanel {
+        let panel = UserQueryPanel(
             contentRect: CGRect(origin: .zero, size: size),
             styleMask: [.borderless],
             backing: .buffered,
@@ -119,7 +119,7 @@ final class PointerPromptOverlayController {
         panel.escapeKeyHandler = { [weak self] in
             self?.dismissActivePromptFromKeyboard()
         }
-        panel.level = DonkeyOverlayWindowLevel.pointerPrompt
+        panel.level = DonkeyOverlayWindowLevel.userQuery
         panel.collectionBehavior = [
             .canJoinAllSpaces,
             .fullScreenAuxiliary,
@@ -132,7 +132,7 @@ final class PointerPromptOverlayController {
 
     private func makeStatusPanel() -> NSPanel {
         let metrics = notchMetrics()
-        let hostingView = PointerPromptHostingView(rootView: notchStatusView(metrics: metrics))
+        let hostingView = UserQueryHostingView(rootView: notchStatusView(metrics: metrics))
         hostingView.frame = CGRect(origin: .zero, size: metrics.surfaceSize)
         hostingView.autoresizingMask = [.width, .height]
         hostingView.wantsLayer = true
@@ -143,7 +143,7 @@ final class PointerPromptOverlayController {
         statusHostingView = hostingView
         lastStatusViewSnapshot = statusViewSnapshot(metrics: metrics)
 
-        let panel = PointerPromptPanel(
+        let panel = UserQueryPanel(
             contentRect: CGRect(origin: .zero, size: metrics.surfaceSize),
             styleMask: [.borderless],
             backing: .buffered,
@@ -162,7 +162,7 @@ final class PointerPromptOverlayController {
         panel.mouseDownHandler = { [weak self] in
             self?.focusStatusComposerTextInputIfAvailable()
         }
-        panel.level = DonkeyOverlayWindowLevel.pointerPrompt
+        panel.level = DonkeyOverlayWindowLevel.userQuery
         panel.collectionBehavior = [
             .canJoinAllSpaces,
             .fullScreenAuxiliary,
@@ -534,7 +534,7 @@ final class PointerPromptOverlayController {
     }
 
     private func configureStatusHostingLayer(
-        _ hostingView: PointerPromptHostingView<PointerPromptNotchStatusView>,
+        _ hostingView: UserQueryHostingView<UserQueryNotchStatusView>,
         metrics: NotchMetrics
     ) {
         hostingView.layer?.backgroundColor = statusHostDebugBackgroundColor?.cgColor
@@ -568,9 +568,9 @@ final class PointerPromptOverlayController {
         )
     }
 
-    private func notchStatusView(metrics: NotchMetrics) -> PointerPromptNotchStatusView {
+    private func notchStatusView(metrics: NotchMetrics) -> UserQueryNotchStatusView {
         let spawnCue = notchSpawnCue(metrics: metrics)
-        return PointerPromptNotchStatusView(
+        return UserQueryNotchStatusView(
             state: model.promptState,
             updateState: model.updateState,
             layout: metrics.layout,
@@ -618,7 +618,7 @@ final class PointerPromptOverlayController {
         )
     }
 
-    private func notchSpawnCue(metrics: NotchMetrics) -> PointerPromptSpawnState? {
+    private func notchSpawnCue(metrics: NotchMetrics) -> UserQuerySpawnState? {
         spawnOverlayController.cueState(
             for: model.notchSpawnCue,
             screen: activeScreen(),
@@ -930,7 +930,7 @@ final class PointerPromptOverlayController {
     }
 
     private var hasStatusTaskDisplayText: Bool {
-        PointerPromptCopy.isTaskDisplayText(model.promptState.promptText)
+        UserQueryCopy.isTaskDisplayText(model.promptState.promptText)
     }
 
     private func inferredVoidWidth(for screen: NSScreen, safeTop: CGFloat) -> CGFloat {
@@ -951,12 +951,12 @@ final class PointerPromptOverlayController {
     }
 
     private var stageContentWidth: CGFloat {
-        PointerPromptLayout.stageHorizontalPadding * 2 +
-            PointerPromptLayout.composerWidth
+        UserQueryLayout.stageHorizontalPadding * 2 +
+            UserQueryLayout.composerWidth
     }
 
     private var stageContentHeight: CGFloat {
-        PointerPromptLayout.stageVerticalPadding * 2 +
+        UserQueryLayout.stageVerticalPadding * 2 +
             currentComposerHeight
     }
 
@@ -974,29 +974,29 @@ final class PointerPromptOverlayController {
         return regions
     }
 
-    private func composerFrame(for placement: PointerPromptPlacement) -> CGRect {
-        let x = stageHorizontalInset + PointerPromptLayout.stageHorizontalPadding
+    private func composerFrame(for placement: UserQueryPlacement) -> CGRect {
+        let x = stageHorizontalInset + UserQueryLayout.stageHorizontalPadding
 
         return CGRect(
             x: x,
             y: currentContentSize.height -
                 composerTopFromPanelTop -
                 currentComposerHeight,
-            width: PointerPromptLayout.composerWidth,
+            width: UserQueryLayout.composerWidth,
             height: currentComposerHeight
         )
     }
 
     private var composerTopFromPanelTop: CGFloat {
-        stageVerticalInset + PointerPromptLayout.stageVerticalPadding
+        stageVerticalInset + UserQueryLayout.stageVerticalPadding
     }
 
     private func composerInputSurfaceFrame(in composerFrame: CGRect) -> CGRect {
         return CGRect(
             x: composerFrame.minX,
             y: composerFrame.minY,
-            width: PointerPromptLayout.composerInputSurfaceWidth,
-            height: PointerPromptLayout.composerInputHeight(
+            width: UserQueryLayout.composerInputSurfaceWidth,
+            height: UserQueryLayout.composerInputHeight(
                 inputTextHeight: model.inputTextHeight,
                 isExpanded: model.isInputExpanded
             )
@@ -1007,17 +1007,17 @@ final class PointerPromptOverlayController {
         if model.isInputExpanded {
             return CGRect(
                 x: inputSurfaceFrame.minX +
-                    PointerPromptLayout.composerExpandedTextHorizontalPadding,
+                    UserQueryLayout.composerExpandedTextHorizontalPadding,
                 y: inputSurfaceFrame.maxY -
-                    PointerPromptLayout.composerExpandedTextTopPadding -
+                    UserQueryLayout.composerExpandedTextTopPadding -
                     model.inputTextHeight,
-                width: PointerPromptLayout.composerExpandedTextWidth,
+                width: UserQueryLayout.composerExpandedTextWidth,
                 height: model.inputTextHeight
             )
         }
 
-        let x = inputSurfaceFrame.minX + PointerPromptLayout.composerInputLeadingContentPadding
-        let width = PointerPromptLayout.composerWrappingTextWidth
+        let x = inputSurfaceFrame.minX + UserQueryLayout.composerInputLeadingContentPadding
+        let width = UserQueryLayout.composerWrappingTextWidth
         let height = model.inputTextHeight
 
         return CGRect(
@@ -1039,20 +1039,20 @@ final class PointerPromptOverlayController {
         if model.isInputExpanded {
             return CGRect(
                 x: inputSurfaceFrame.maxX -
-                    PointerPromptLayout.composerExpandedTextHorizontalPadding -
-                    PointerPromptLayout.composerTrailingControlsWidth,
+                    UserQueryLayout.composerExpandedTextHorizontalPadding -
+                    UserQueryLayout.composerTrailingControlsWidth,
                 y: inputSurfaceFrame.minY,
-                width: PointerPromptLayout.composerTrailingControlsWidth,
-                height: PointerPromptLayout.composerExpandedToolbarHeight
+                width: UserQueryLayout.composerTrailingControlsWidth,
+                height: UserQueryLayout.composerExpandedToolbarHeight
             )
         }
 
         return CGRect(
             x: inputSurfaceFrame.maxX -
-                PointerPromptLayout.composerInputTrailingContentPadding -
-                PointerPromptLayout.composerTrailingControlsWidth,
+                UserQueryLayout.composerInputTrailingContentPadding -
+                UserQueryLayout.composerTrailingControlsWidth,
             y: inputSurfaceFrame.minY,
-            width: PointerPromptLayout.composerTrailingControlsWidth,
+            width: UserQueryLayout.composerTrailingControlsWidth,
             height: inputSurfaceFrame.height
         )
     }
@@ -1158,14 +1158,14 @@ final class PointerPromptOverlayController {
     }
 
     private var currentContentSize: CGSize {
-        PointerPromptLayout.contentSize(
+        UserQueryLayout.contentSize(
             inputTextHeight: model.inputTextHeight,
             isExpanded: model.isInputExpanded
         )
     }
 
     private var currentComposerHeight: CGFloat {
-        PointerPromptLayout.composerHeight(
+        UserQueryLayout.composerHeight(
             inputTextHeight: model.inputTextHeight,
             isExpanded: model.isInputExpanded
         )
@@ -1281,7 +1281,7 @@ final class PointerPromptOverlayController {
     }
 }
 
-private final class PointerPromptPanel: NSPanel {
+private final class UserQueryPanel: NSPanel {
     var dragRegionProvider: (() -> [CGRect])?
     var escapeKeyHandler: (() -> Void)?
     var mouseDownHandler: (() -> Void)?
@@ -1315,7 +1315,7 @@ private final class PointerPromptPanel: NSPanel {
     }
 }
 
-private final class PointerPromptHostingView<Content: View>: NSHostingView<Content> {
+private final class UserQueryHostingView<Content: View>: NSHostingView<Content> {
     var hitTestRegionProvider: (() -> [CGRect])?
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -1328,12 +1328,12 @@ private final class PointerPromptHostingView<Content: View>: NSHostingView<Conte
     }
 }
 
-private typealias NotchMetrics = PointerPromptNotchMetrics
+private typealias NotchMetrics = UserQueryNotchMetrics
 
 private struct StatusPanelViewSnapshot: Equatable {
-    var state: PointerPromptState
-    var updateState: PointerPromptUpdateState
-    var layout: PointerPromptNotchLayout
+    var state: UserQueryState
+    var updateState: UserQueryUpdateState
+    var layout: UserQueryNotchLayout
     var surfaceSize: CGSize
     var isExpanded: Bool
     var isHostExpanded: Bool
@@ -1341,10 +1341,10 @@ private struct StatusPanelViewSnapshot: Equatable {
     var notchCommandText: String
     var notchCommandInputTextHeight: CGFloat
     var isNotchCommandInputExpanded: Bool
-    var notchTasks: [PointerPromptNotchTask]
+    var notchTasks: [UserQueryNotchTask]
     var accentIndex: Int
-    var spawnState: PointerPromptSpawnState?
-    var spawnStates: [PointerPromptSpawnState]
+    var spawnState: UserQuerySpawnState?
+    var spawnStates: [UserQuerySpawnState]
     var selectedSpawnID: String?
 }
 
@@ -1358,7 +1358,7 @@ private enum StatusHoverPhase {
     case closing
 }
 
-private extension PointerPromptActivationModifier {
+private extension UserQueryActivationModifier {
     var eventModifierFlag: NSEvent.ModifierFlags {
         switch self {
         case .command:

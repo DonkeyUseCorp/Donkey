@@ -624,7 +624,7 @@ struct DonkeyBackendInferenceClientTests {
         #expect(try String(contentsOf: downloads[0].fileURL, encoding: .utf8) == "first")
         #expect(try String(contentsOf: downloads[1].fileURL, encoding: .utf8) == "second")
         #expect(downloads[0].fileURL.path.contains("/Donkey/generation-1/"))
-        #expect(downloads[0].pointerPromptAssetDraft().source == .agentReturned)
+        #expect(downloads[0].userQueryAssetDraft().source == .agentReturned)
     }
 
     @Test

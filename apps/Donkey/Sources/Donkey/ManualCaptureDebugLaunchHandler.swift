@@ -113,7 +113,7 @@ struct ManualCaptureDebugLaunchHandler {
                 ])
                 return 0
             case .localAppTask(let options):
-                let result = await LocalAppPointerPromptCommandHandler()
+                let result = await LocalAppUserQueryCommandHandler()
                     .handleSubmittedCommand(options.command)
                 printLines(
                     ManualCaptureDebugCommandFormatter.lines(

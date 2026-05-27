@@ -6,9 +6,9 @@ import QuartzCore
 import SwiftUI
 
 @MainActor
-final class PointerPromptSpawnOverlayController {
-    private var surfacesByID: [String: PointerPromptSpawnSurface] = [:]
-    private var viewModelsByID: [String: PointerPromptSpawnOverlayViewModel] = [:]
+final class UserQuerySpawnOverlayController {
+    private var surfacesByID: [String: UserQuerySpawnSurface] = [:]
+    private var viewModelsByID: [String: UserQuerySpawnOverlayViewModel] = [:]
     private var pendingGuideRequestsBySpawnID: [String: PointerCoachCursorGuideRequest] = [:]
     private var windowResolver = MacWindowResolver()
     private var localOutsideClickMonitor: Any?
@@ -31,10 +31,10 @@ final class PointerPromptSpawnOverlayController {
     }
 
     func update(
-        spawnStates: [PointerPromptSpawnState],
+        spawnStates: [UserQuerySpawnState],
         selectedSpawnID: String?,
         screen: NSScreen?,
-        notchMetrics: PointerPromptNotchMetrics
+        notchMetrics: UserQueryNotchMetrics
     ) {
         guard let screen else { return }
 
@@ -99,16 +99,16 @@ final class PointerPromptSpawnOverlayController {
             request: request,
             on: surface,
             screen: screen,
-            startDelay: surface.isTraveling ? PointerPromptSpawnOverlayViewModel.travelDuration + 0.04 : 0
+            startDelay: surface.isTraveling ? UserQuerySpawnOverlayViewModel.travelDuration + 0.04 : 0
         )
         return true
     }
 
     private func updateSurface(
-        for spawnState: PointerPromptSpawnState,
+        for spawnState: UserQuerySpawnState,
         selectedSpawnID: String?,
         screen: NSScreen,
-        notchMetrics: PointerPromptNotchMetrics
+        notchMetrics: UserQueryNotchMetrics
     ) {
         let destination = destinationPoint(
             for: spawnState.targetHint,
@@ -136,12 +136,12 @@ final class PointerPromptSpawnOverlayController {
     }
 
     private func createSurface(
-        for spawnState: PointerPromptSpawnState,
+        for spawnState: UserQuerySpawnState,
         selectedSpawnID: String?,
         destination: CGPoint,
         screen: NSScreen
     ) {
-        let viewModel = PointerPromptSpawnOverlayViewModel()
+        let viewModel = UserQuerySpawnOverlayViewModel()
         viewModel.followUpSubmitted = followUpSubmitted
         viewModel.selected = selected
         viewModel.setSelected(spawnState.id == selectedSpawnID)
@@ -179,13 +179,13 @@ final class PointerPromptSpawnOverlayController {
         startPendingGuideIfNeeded(
             for: surface,
             screen: screen,
-            startDelay: PointerPromptSpawnOverlayViewModel.travelDuration + 0.04
+            startDelay: UserQuerySpawnOverlayViewModel.travelDuration + 0.04
         )
     }
 
     private func updateExistingSurface(
-        _ surface: PointerPromptSpawnSurface,
-        spawnState: PointerPromptSpawnState,
+        _ surface: UserQuerySpawnSurface,
+        spawnState: UserQuerySpawnState,
         selectedSpawnID: String?,
         destination: CGPoint,
         screen: NSScreen
@@ -204,7 +204,7 @@ final class PointerPromptSpawnOverlayController {
         startPendingGuideIfNeeded(
             for: surface,
             screen: screen,
-            startDelay: surface.isTraveling ? PointerPromptSpawnOverlayViewModel.travelDuration + 0.04 : 0
+            startDelay: surface.isTraveling ? UserQuerySpawnOverlayViewModel.travelDuration + 0.04 : 0
         )
         if surface.isPlayingGuide {
             updateMouseEventPassthrough(for: surface)
@@ -243,16 +243,16 @@ final class PointerPromptSpawnOverlayController {
 
     private func makeSurface(
         id: String,
-        viewModel: PointerPromptSpawnOverlayViewModel,
+        viewModel: UserQuerySpawnOverlayViewModel,
         localFrame: CGRect,
         screen: NSScreen
-    ) -> PointerPromptSpawnSurface {
+    ) -> UserQuerySpawnSurface {
         let globalFrame = panelFrame(
             for: localFrame,
             on: screen
         )
-        let hostingView = PointerPromptSpawnHostingView(
-            rootView: PointerPromptSpawnOverlayView(viewModel: viewModel)
+        let hostingView = UserQuerySpawnHostingView(
+            rootView: UserQuerySpawnOverlayView(viewModel: viewModel)
         )
         hostingView.frame = CGRect(origin: .zero, size: globalFrame.size)
         hostingView.autoresizingMask = [.width, .height]
@@ -265,7 +265,7 @@ final class PointerPromptSpawnOverlayController {
             return frame.isNull || frame.isEmpty ? [] : [frame]
         }
 
-        let panel = PointerPromptSpawnPanel(
+        let panel = UserQuerySpawnPanel(
             contentRect: globalFrame,
             styleMask: [.borderless],
             backing: .buffered,
@@ -280,7 +280,7 @@ final class PointerPromptSpawnOverlayController {
         panel.isReleasedWhenClosed = false
         panel.becomesKeyOnlyIfNeeded = false
         panel.ignoresMouseEvents = true
-        panel.level = DonkeyOverlayWindowLevel.pointerPrompt
+        panel.level = DonkeyOverlayWindowLevel.userQuery
         panel.collectionBehavior = [
             .canJoinAllSpaces,
             .fullScreenAuxiliary,
@@ -290,7 +290,7 @@ final class PointerPromptSpawnOverlayController {
         panel.setFrame(globalFrame, display: true)
         panel.orderFrontRegardless()
 
-        return PointerPromptSpawnSurface(
+        return UserQuerySpawnSurface(
             id: id,
             viewModel: viewModel,
             panel: panel,
@@ -300,7 +300,7 @@ final class PointerPromptSpawnOverlayController {
         )
     }
 
-    private func configureCallbacks(for surface: PointerPromptSpawnSurface) {
+    private func configureCallbacks(for surface: UserQuerySpawnSurface) {
         surface.viewModel.labelLayoutChanged = { [weak self, weak surface] in
             guard let self,
                   let surface else {
@@ -350,7 +350,7 @@ final class PointerPromptSpawnOverlayController {
     }
 
     private func animateSurfaceTravel(
-        _ surface: PointerPromptSpawnSurface,
+        _ surface: UserQuerySpawnSurface,
         to destination: CGPoint,
         on screen: NSScreen
     ) {
@@ -381,7 +381,7 @@ final class PointerPromptSpawnOverlayController {
         )
 
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = PointerPromptSpawnOverlayViewModel.travelDuration
+            context.duration = UserQuerySpawnOverlayViewModel.travelDuration
             context.timingFunction = CAMediaTimingFunction(controlPoints: 0.45, 0.05, 0.3, 1)
             surface.panel.animator().setFrame(destinationGlobalFrame, display: true)
         }
@@ -402,7 +402,7 @@ final class PointerPromptSpawnOverlayController {
         }
         surface.travelWorkItem = workItem
         DispatchQueue.main.asyncAfter(
-            deadline: .now() + PointerPromptSpawnOverlayViewModel.travelDuration + 0.03,
+            deadline: .now() + UserQuerySpawnOverlayViewModel.travelDuration + 0.03,
             execute: workItem
         )
         updateMouseEventPassthrough(for: surface)
@@ -410,7 +410,7 @@ final class PointerPromptSpawnOverlayController {
 
     private func startGuide(
         request: PointerCoachCursorGuideRequest,
-        on surface: PointerPromptSpawnSurface,
+        on surface: UserQuerySpawnSurface,
         screen: NSScreen,
         startDelay: TimeInterval
     ) {
@@ -436,7 +436,7 @@ final class PointerPromptSpawnOverlayController {
             }
             surface.guideWorkItems.append(workItem)
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
-            delay += PointerPromptSpawnOverlayViewModel.travelDuration + step.holdDuration
+            delay += UserQuerySpawnOverlayViewModel.travelDuration + step.holdDuration
         }
 
         let completionWorkItem = DispatchWorkItem { [weak self, weak surface] in
@@ -457,7 +457,7 @@ final class PointerPromptSpawnOverlayController {
     private func applyGuideStep(
         _ step: PointerCoachCursorGuideStep,
         request: PointerCoachCursorGuideRequest,
-        to surface: PointerPromptSpawnSurface,
+        to surface: UserQuerySpawnSurface,
         screen: NSScreen
     ) {
         guard var state = surface.viewModel.state else { return }
@@ -465,7 +465,7 @@ final class PointerPromptSpawnOverlayController {
         state.label = step.label
         state.phase = .traveling
         state.updatedAt = Date()
-        state.targetHint = PointerPromptSpawnTargetHint(
+        state.targetHint = UserQuerySpawnTargetHint(
             metadata: [
                 "agentVisualization.planID": request.id,
                 "agentVisualization.stepID": step.id,
@@ -496,7 +496,7 @@ final class PointerPromptSpawnOverlayController {
         )
     }
 
-    private func cancelGuide(for surface: PointerPromptSpawnSurface) {
+    private func cancelGuide(for surface: UserQuerySpawnSurface) {
         for workItem in surface.guideWorkItems {
             workItem.cancel()
         }
@@ -507,7 +507,7 @@ final class PointerPromptSpawnOverlayController {
     }
 
     private func startPendingGuideIfNeeded(
-        for surface: PointerPromptSpawnSurface,
+        for surface: UserQuerySpawnSurface,
         screen: NSScreen,
         startDelay: TimeInterval
     ) {
@@ -524,7 +524,7 @@ final class PointerPromptSpawnOverlayController {
     }
 
     private func layoutSurface(
-        _ surface: PointerPromptSpawnSurface,
+        _ surface: UserQuerySpawnSurface,
         on screen: NSScreen,
         animated: Bool
     ) {
@@ -552,7 +552,7 @@ final class PointerPromptSpawnOverlayController {
 
     private func applyViewport(
         _ localFrame: CGRect,
-        to surface: PointerPromptSpawnSurface,
+        to surface: UserQuerySpawnSurface,
         on screen: NSScreen
     ) {
         surface.viewModel.updateViewport(
@@ -563,7 +563,7 @@ final class PointerPromptSpawnOverlayController {
         surface.screen = screen
     }
 
-    private func updateMouseEventPassthrough(for surface: PointerPromptSpawnSurface) {
+    private func updateMouseEventPassthrough(for surface: UserQuerySpawnSurface) {
         let hitTestFrame = surface.viewModel.localHitTestFrame
         guard !hitTestFrame.isNull, !hitTestFrame.isEmpty else {
             surface.panel.ignoresMouseEvents = true
@@ -575,10 +575,10 @@ final class PointerPromptSpawnOverlayController {
     }
 
     func cueState(
-        for spawnState: PointerPromptSpawnState?,
+        for spawnState: UserQuerySpawnState?,
         screen: NSScreen?,
-        notchMetrics: PointerPromptNotchMetrics
-    ) -> PointerPromptSpawnState? {
+        notchMetrics: UserQueryNotchMetrics
+    ) -> UserQuerySpawnState? {
         guard var spawnState,
               spawnState.phase == .notchCue,
               let screen else {
@@ -595,7 +595,7 @@ final class PointerPromptSpawnOverlayController {
             screen: screen,
             notchMetrics: notchMetrics
         )
-        spawnState.notchCueAngleDegrees = PointerPromptSpawnGeometry.angleDegrees(
+        spawnState.notchCueAngleDegrees = UserQuerySpawnGeometry.angleDegrees(
             from: origin,
             to: destination
         )
@@ -694,7 +694,7 @@ final class PointerPromptSpawnOverlayController {
 
     private func contains(
         _ screenPoint: CGPoint,
-        inInteractiveRegionOf surface: PointerPromptSpawnSurface
+        inInteractiveRegionOf surface: UserQuerySpawnSurface
     ) -> Bool {
         guard surface.panel.frame.contains(screenPoint) else { return false }
 
@@ -708,12 +708,12 @@ final class PointerPromptSpawnOverlayController {
     }
 
     private func destinationPoint(
-        for hint: PointerPromptSpawnTargetHint?,
+        for hint: UserQuerySpawnTargetHint?,
         screen: NSScreen,
-        notchMetrics: PointerPromptNotchMetrics
+        notchMetrics: UserQueryNotchMetrics
     ) -> CGPoint {
         let screenSize = screen.frame.size
-        let fallback = PointerPromptSpawnGeometry.fallbackPoint(
+        let fallback = UserQuerySpawnGeometry.fallbackPoint(
             screenSize: screenSize,
             notchBottomY: max(
                 notchMetrics.layout.collapsedVisibleHeight,
@@ -734,7 +734,7 @@ final class PointerPromptSpawnOverlayController {
         return point(for: target.bounds, on: screen) ?? fallback
     }
 
-    private func resolvedWindowTarget(for hint: PointerPromptSpawnTargetHint) -> MacWindowTargetCandidate? {
+    private func resolvedWindowTarget(for hint: UserQuerySpawnTargetHint) -> MacWindowTargetCandidate? {
         let candidates = windowResolver.enumerateCandidates()
             .filter {
                 $0.isVisible &&
@@ -758,7 +758,7 @@ final class PointerPromptSpawnOverlayController {
 
     private func matches(
         _ candidate: MacWindowTargetCandidate,
-        hint: PointerPromptSpawnTargetHint
+        hint: UserQuerySpawnTargetHint
     ) -> Bool {
         if let bundleIdentifier = hint.bundleIdentifier,
            candidate.bundleIdentifier != bundleIdentifier {
@@ -790,7 +790,7 @@ final class PointerPromptSpawnOverlayController {
             x: CGFloat(bounds.x) - screen.frame.minX + CGFloat(bounds.width) / 2,
             y: CGFloat(bounds.y) + CGFloat(bounds.height) / 2
         )
-        return PointerPromptSpawnGeometry.clampedPoint(
+        return UserQuerySpawnGeometry.clampedPoint(
             localPoint,
             in: screen.frame.size
         )
@@ -813,11 +813,11 @@ final class PointerPromptSpawnOverlayController {
     }
 }
 
-private final class PointerPromptSpawnSurface {
+private final class UserQuerySpawnSurface {
     let id: String
-    let viewModel: PointerPromptSpawnOverlayViewModel
-    let panel: PointerPromptSpawnPanel
-    let hostingView: PointerPromptSpawnHostingView<PointerPromptSpawnOverlayView>
+    let viewModel: UserQuerySpawnOverlayViewModel
+    let panel: UserQuerySpawnPanel
+    let hostingView: UserQuerySpawnHostingView<UserQuerySpawnOverlayView>
     var screen: NSScreen
     var destination: CGPoint
     var isTraveling = false
@@ -829,9 +829,9 @@ private final class PointerPromptSpawnSurface {
 
     init(
         id: String,
-        viewModel: PointerPromptSpawnOverlayViewModel,
-        panel: PointerPromptSpawnPanel,
-        hostingView: PointerPromptSpawnHostingView<PointerPromptSpawnOverlayView>,
+        viewModel: UserQuerySpawnOverlayViewModel,
+        panel: UserQuerySpawnPanel,
+        hostingView: UserQuerySpawnHostingView<UserQuerySpawnOverlayView>,
         screen: NSScreen,
         destination: CGPoint
     ) {
@@ -844,7 +844,7 @@ private final class PointerPromptSpawnSurface {
     }
 }
 
-private final class PointerPromptSpawnPanel: NSPanel {
+private final class UserQuerySpawnPanel: NSPanel {
     override var canBecomeKey: Bool {
         true
     }
@@ -854,7 +854,7 @@ private final class PointerPromptSpawnPanel: NSPanel {
     }
 }
 
-private final class PointerPromptSpawnHostingView<Content: View>: NSHostingView<Content> {
+private final class UserQuerySpawnHostingView<Content: View>: NSHostingView<Content> {
     var hitTestRegionProvider: (() -> [CGRect])?
 
     override func hitTest(_ point: NSPoint) -> NSView? {

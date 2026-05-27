@@ -169,7 +169,7 @@ public actor LocalAppHarnessStepExecutor {
         case .newDocument, .focusSearch, .focusAddressBar, .focusTextEntry, .setText, .pressReturn:
             return await executeAction(context, tool: tool, definition: definition, intent: intent, availability: availability)
         case .verifyCommand, .verifyVisibleText:
-            return await verify(context, definition: definition, intent: intent)
+            return await verify(context, tool: tool, definition: definition, intent: intent)
         }
     }
 
@@ -346,6 +346,7 @@ public actor LocalAppHarnessStepExecutor {
 
     private func verify(
         _ context: HarnessToolExecutionContext,
+        tool: LocalAppActionPlanTool,
         definition: LocalAppTaskDefinition,
         intent: TaskIntent
     ) async -> HarnessToolResult {
@@ -362,11 +363,16 @@ public actor LocalAppHarnessStepExecutor {
         latestObservation = observationWithActionEvidence(observation)
         let plan = LocalAppTaskAdapter(definition: definition)
             .evidenceBackedActionPlan(for: intent, observation: latestObservation)
+        let verification = LocalAppTaskVerificationPolicy.verify(
+            intent: intent,
+            definition: definition,
+            observation: latestObservation,
+            tool: tool
+        )
         finalActionPlan = plan
-        let verificationStep = plan.steps.first { $0.role == .verifyResult }
-        latestStatus = status(for: plan.terminalState)
-        latestStatusReason = verificationStep?.metadata["reason"] ?? plan.terminalState.rawValue
-        let verified = plan.terminalState == .completed
+        latestStatus = status(for: verification.terminalState)
+        latestStatusReason = verification.metadata["reason"] ?? verification.terminalState.rawValue
+        let verified = verification.terminalState == .completed
         if verified {
             await coordinator?.complete(reason: "Local app task completed")
         } else {
@@ -375,12 +381,12 @@ public actor LocalAppHarnessStepExecutor {
         var facts = [
             "localApp.status": latestStatus.rawValue,
             "localApp.reason": latestStatusReason,
-            "verification.status": verificationStep?.status.rawValue ?? "",
-            "verification.summary": verificationStep?.summary ?? "",
+            "verification.status": verification.status.rawValue,
+            "verification.summary": verification.summary,
             "verification.verified": String(verified),
             "lastAcceptedTool": context.call.name
         ]
-        for (key, value) in verificationStep?.metadata ?? [:] {
+        for (key, value) in verification.metadata {
             facts["verification.\(key)"] = value
         }
         return HarnessToolResult(
@@ -723,7 +729,7 @@ public actor LocalAppHarnessStepExecutor {
     ) -> HarnessToolDescriptor {
         HarnessToolDescriptor(
             name: tool.rawValue,
-            pluginID: "pointer-prompt.local-app",
+            pluginID: "user-query.local-app",
             summary: summary,
             inputSchema: input,
             outputSchema: output,

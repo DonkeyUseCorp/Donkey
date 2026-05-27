@@ -377,8 +377,8 @@ public struct RemoteInferenceDownloadedAsset: Codable, Equatable, Sendable {
         self.byteCount = byteCount
     }
 
-    public func pointerPromptAssetDraft(displayName: String? = nil) -> PointerPromptTaskAssetDraft {
-        PointerPromptTaskAssetDraft(
+    public func userQueryAssetDraft(displayName: String? = nil) -> UserQueryTaskAssetDraft {
+        UserQueryTaskAssetDraft(
             source: .agentReturned,
             displayName: displayName ?? fileURL.lastPathComponent,
             contentType: contentType,

@@ -3,9 +3,9 @@ import DonkeyContracts
 import SwiftUI
 
 @MainActor
-public final class PointerPromptSpawnOverlayViewModel: ObservableObject {
+public final class UserQuerySpawnOverlayViewModel: ObservableObject {
     public let objectID = UUID().uuidString
-    @Published public private(set) var state: PointerPromptSpawnState?
+    @Published public private(set) var state: UserQuerySpawnState?
     @Published public private(set) var position: CGPoint = .zero
     @Published public private(set) var destination: CGPoint = .zero
     @Published public private(set) var screenSize: CGSize = .zero
@@ -15,13 +15,13 @@ public final class PointerPromptSpawnOverlayViewModel: ObservableObject {
     @Published public private(set) var isHolding = false
     @Published public private(set) var isSelected = false
     @Published public private(set) var cursorAngleDegrees =
-        PointerPromptSpawnGeometry.defaultExitAngleDegrees
+        UserQuerySpawnGeometry.defaultExitAngleDegrees
     @Published public private(set) var terminalTailAngleDegrees = 0.0
     @Published public private(set) var isWorking = false
     @Published public private(set) var isLabelHovered = false
     @Published public private(set) var isLabelEditing = false
     @Published public var draftText = ""
-    @Published public private(set) var draftTextHeight: CGFloat = PointerPromptSpawnOverlayViewModel.inlineEditorMinimumTextHeight
+    @Published public private(set) var draftTextHeight: CGFloat = UserQuerySpawnOverlayViewModel.inlineEditorMinimumTextHeight
 
     public var labelLayoutChanged: (() -> Void)?
     public var labelEditingChanged: ((Bool) -> Void)?
@@ -227,7 +227,7 @@ public final class PointerPromptSpawnOverlayViewModel: ObservableObject {
     }
 
     public func show(
-        state: PointerPromptSpawnState,
+        state: UserQuerySpawnState,
         origin: CGPoint,
         destination: CGPoint,
         screenSize: CGSize
@@ -239,7 +239,7 @@ public final class PointerPromptSpawnOverlayViewModel: ObservableObject {
         self.screenSize = screenSize
         self.opacity = 0
         self.isHolding = false
-        self.cursorAngleDegrees = PointerPromptSpawnGeometry.angleDegrees(
+        self.cursorAngleDegrees = UserQuerySpawnGeometry.angleDegrees(
             from: origin,
             to: destination
         )
@@ -266,7 +266,7 @@ public final class PointerPromptSpawnOverlayViewModel: ObservableObject {
     }
 
     public func update(
-        state: PointerPromptSpawnState,
+        state: UserQuerySpawnState,
         destination: CGPoint,
         screenSize: CGSize
     ) {
@@ -308,7 +308,7 @@ public final class PointerPromptSpawnOverlayViewModel: ObservableObject {
 
         animationGeneration += 1
         let generation = animationGeneration
-        cursorAngleDegrees = PointerPromptSpawnGeometry.angleDegrees(
+        cursorAngleDegrees = UserQuerySpawnGeometry.angleDegrees(
             from: position,
             to: destination
         )
@@ -672,11 +672,11 @@ public final class PointerPromptSpawnOverlayViewModel: ObservableObject {
     }
 }
 
-public struct PointerPromptSpawnOverlayView: View {
-    @ObservedObject private var viewModel: PointerPromptSpawnOverlayViewModel
+public struct UserQuerySpawnOverlayView: View {
+    @ObservedObject private var viewModel: UserQuerySpawnOverlayViewModel
     @State private var haloPulseActive = false
 
-    public init(viewModel: PointerPromptSpawnOverlayViewModel) {
+    public init(viewModel: UserQuerySpawnOverlayViewModel) {
         self.viewModel = viewModel
     }
 
@@ -698,7 +698,7 @@ public struct PointerPromptSpawnOverlayView: View {
     }
 
     private func spawnSurface(
-        state: PointerPromptSpawnState,
+        state: UserQuerySpawnState,
         screenSize: CGSize
     ) -> some View {
         ZStack(alignment: .topLeading) {
@@ -706,8 +706,8 @@ public struct PointerPromptSpawnOverlayView: View {
                 Circle()
                     .stroke(accentColor(for: state.accentIndex), lineWidth: 1.5)
                     .frame(
-                        width: PointerPromptSpawnOverlayViewModel.collapsedHaloSize,
-                        height: PointerPromptSpawnOverlayViewModel.collapsedHaloSize
+                        width: UserQuerySpawnOverlayViewModel.collapsedHaloSize,
+                        height: UserQuerySpawnOverlayViewModel.collapsedHaloSize
                     )
                     .scaleEffect(haloPulseScale)
                     .opacity(haloPulseOpacity)
@@ -739,7 +739,7 @@ public struct PointerPromptSpawnOverlayView: View {
         }
     }
 
-    private func cursor(state: PointerPromptSpawnState) -> some View {
+    private func cursor(state: UserQuerySpawnState) -> some View {
         SpawnPointerShape()
             .fill(accentColor(for: state.accentIndex))
             .overlay {
@@ -757,7 +757,7 @@ public struct PointerPromptSpawnOverlayView: View {
             )
     }
 
-    private func stationaryLabel(state: PointerPromptSpawnState) -> some View {
+    private func stationaryLabel(state: UserQuerySpawnState) -> some View {
         Group {
             if viewModel.isLabelEditing {
                 inlineLabelEditor(state: state)
@@ -778,9 +778,9 @@ public struct PointerPromptSpawnOverlayView: View {
         }
     }
 
-    private func displayLabel(state: PointerPromptSpawnState) -> some View {
+    private func displayLabel(state: UserQuerySpawnState) -> some View {
         Text(state.label)
-        .font(.system(size: PointerPromptSpawnOverlayViewModel.labelFontSize, weight: .medium))
+        .font(.system(size: UserQuerySpawnOverlayViewModel.labelFontSize, weight: .medium))
         .foregroundStyle(.white)
         .multilineTextAlignment(.leading)
         .lineLimit(nil)
@@ -789,20 +789,20 @@ public struct PointerPromptSpawnOverlayView: View {
             width: viewModel.displayLabelContentWidth,
             alignment: .leading
         )
-        .padding(.horizontal, PointerPromptSpawnOverlayViewModel.labelHorizontalPadding)
-        .padding(.vertical, PointerPromptSpawnOverlayViewModel.labelVerticalPadding)
+        .padding(.horizontal, UserQuerySpawnOverlayViewModel.labelHorizontalPadding)
+        .padding(.vertical, UserQuerySpawnOverlayViewModel.labelVerticalPadding)
     }
 
-    private func inlineLabelEditor(state: PointerPromptSpawnState) -> some View {
-        VStack(alignment: .leading, spacing: PointerPromptSpawnOverlayViewModel.inlineEditorSpacing) {
+    private func inlineLabelEditor(state: UserQuerySpawnState) -> some View {
+        VStack(alignment: .leading, spacing: UserQuerySpawnOverlayViewModel.inlineEditorSpacing) {
             Text(state.label)
-                .font(.system(size: PointerPromptSpawnOverlayViewModel.labelFontSize, weight: .medium))
+                .font(.system(size: UserQuerySpawnOverlayViewModel.labelFontSize, weight: .medium))
                 .foregroundStyle(.white)
                 .multilineTextAlignment(.leading)
                 .lineLimit(nil)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(
-                    width: PointerPromptSpawnOverlayViewModel.inlineEditorContentWidth,
+                    width: UserQuerySpawnOverlayViewModel.inlineEditorContentWidth,
                     alignment: .leading
                 )
 
@@ -815,15 +815,15 @@ public struct PointerPromptSpawnOverlayView: View {
                 focusLost: viewModel.closeInlineInputIfIdle
             )
             .frame(
-                width: PointerPromptSpawnOverlayViewModel.inlineEditorContentWidth - 24,
-                height: max(viewModel.draftTextHeight, PointerPromptSpawnOverlayViewModel.inlineEditorMinimumTextHeight),
+                width: UserQuerySpawnOverlayViewModel.inlineEditorContentWidth - 24,
+                height: max(viewModel.draftTextHeight, UserQuerySpawnOverlayViewModel.inlineEditorMinimumTextHeight),
                 alignment: .topLeading
             )
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .frame(
-                width: PointerPromptSpawnOverlayViewModel.inlineEditorContentWidth,
-                height: PointerPromptSpawnOverlayViewModel.inlineEditorInputHeight,
+                width: UserQuerySpawnOverlayViewModel.inlineEditorContentWidth,
+                height: UserQuerySpawnOverlayViewModel.inlineEditorInputHeight,
                 alignment: .topLeading
             )
             .background {
@@ -832,11 +832,11 @@ public struct PointerPromptSpawnOverlayView: View {
             }
         }
         .frame(
-            width: PointerPromptSpawnOverlayViewModel.inlineEditorContentWidth,
+            width: UserQuerySpawnOverlayViewModel.inlineEditorContentWidth,
             alignment: .center
         )
-        .padding(.horizontal, PointerPromptSpawnOverlayViewModel.inlineEditorHorizontalPadding)
-        .padding(.vertical, PointerPromptSpawnOverlayViewModel.inlineEditorVerticalPadding)
+        .padding(.horizontal, UserQuerySpawnOverlayViewModel.inlineEditorHorizontalPadding)
+        .padding(.vertical, UserQuerySpawnOverlayViewModel.inlineEditorVerticalPadding)
         .transition(.opacity.combined(with: .scale(scale: 0.98)))
         .animation(.easeOut(duration: 0.12), value: viewModel.isLabelEditing)
     }
@@ -858,11 +858,11 @@ public struct PointerPromptSpawnOverlayView: View {
     }
 
     private func accentColor(for index: Int) -> Color {
-        Self.accentColors[PointerPromptAccentPalette.normalizedIndex(index)]
+        Self.accentColors[UserQueryAccentPalette.normalizedIndex(index)]
     }
 
     private func inputAccentColor(for index: Int) -> Color {
-        Self.inputAccentColors[PointerPromptAccentPalette.normalizedIndex(index)]
+        Self.inputAccentColors[UserQueryAccentPalette.normalizedIndex(index)]
     }
 
     private static let accentColors: [Color] = [
@@ -934,7 +934,7 @@ private struct SpawnLabelInlineTextInput: NSViewRepresentable {
         textView.isSelectable = true
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true
-        textView.minSize = CGSize(width: 0, height: PointerPromptSpawnOverlayViewModel.inlineEditorMinimumTextHeight)
+        textView.minSize = CGSize(width: 0, height: UserQuerySpawnOverlayViewModel.inlineEditorMinimumTextHeight)
         textView.maxSize = CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.autoresizingMask = [.width]
         textView.textContainerInset = .zero
@@ -1013,7 +1013,7 @@ private struct SpawnLabelInlineTextInput: NSViewRepresentable {
             let width = max(1, scrollView.contentView.bounds.width)
             textView.textContainer?.containerSize = CGSize(width: width, height: .greatestFiniteMagnitude)
             let documentHeight = max(
-                PointerPromptSpawnOverlayViewModel.inlineEditorMinimumTextHeight,
+                UserQuerySpawnOverlayViewModel.inlineEditorMinimumTextHeight,
                 measuredTextHeight(for: textView)
             )
             textView.frame = CGRect(x: 0, y: 0, width: width, height: documentHeight)
@@ -1026,13 +1026,13 @@ private struct SpawnLabelInlineTextInput: NSViewRepresentable {
         private func measuredTextHeight(for textView: NSTextView) -> CGFloat {
             guard let layoutManager = textView.layoutManager,
                   let textContainer = textView.textContainer else {
-                return PointerPromptSpawnOverlayViewModel.inlineEditorMinimumTextHeight
+                return UserQuerySpawnOverlayViewModel.inlineEditorMinimumTextHeight
             }
 
             layoutManager.ensureLayout(for: textContainer)
             let usedRect = layoutManager.usedRect(for: textContainer)
             return ceil(max(
-                PointerPromptSpawnOverlayViewModel.inlineEditorMinimumTextHeight,
+                UserQuerySpawnOverlayViewModel.inlineEditorMinimumTextHeight,
                 usedRect.height
             ))
         }
@@ -1094,7 +1094,7 @@ private final class SpawnLabelInlineTextView: NSTextView {
 @MainActor
 private enum SpawnLabelInlineTextStyle {
     static var font: NSFont {
-        NSFont.systemFont(ofSize: PointerPromptSpawnOverlayViewModel.labelFontSize, weight: .medium)
+        NSFont.systemFont(ofSize: UserQuerySpawnOverlayViewModel.labelFontSize, weight: .medium)
     }
 
     static func apply(to textView: NSTextView) {

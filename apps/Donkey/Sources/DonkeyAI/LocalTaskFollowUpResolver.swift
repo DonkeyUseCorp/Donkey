@@ -2,12 +2,12 @@ import DonkeyContracts
 import DonkeyRuntime
 import Foundation
 
-public struct PointerPromptFollowUpCandidate: Codable, Equatable, Sendable {
+public struct UserQueryFollowUpCandidate: Codable, Equatable, Sendable {
     public var taskID: String
     public var title: String
     public var detail: String
     public var commandText: String
-    public var status: PointerPromptTaskStatus
+    public var status: UserQueryTaskStatus
     public var updatedAt: Date
     public var recentEvents: [String]
     public var assetNames: [String]
@@ -17,7 +17,7 @@ public struct PointerPromptFollowUpCandidate: Codable, Equatable, Sendable {
         title: String,
         detail: String,
         commandText: String,
-        status: PointerPromptTaskStatus,
+        status: UserQueryTaskStatus,
         updatedAt: Date,
         recentEvents: [String] = [],
         assetNames: [String] = []
@@ -33,15 +33,15 @@ public struct PointerPromptFollowUpCandidate: Codable, Equatable, Sendable {
     }
 }
 
-public struct PointerPromptFollowUpResolverRequest: Equatable, Sendable {
+public struct UserQueryFollowUpResolverRequest: Equatable, Sendable {
     public var text: String
-    public var candidates: [PointerPromptFollowUpCandidate]
+    public var candidates: [UserQueryFollowUpCandidate]
     public var sourceTraceID: String
     public var routeRequest: AIModelRouteRequest
 
     public init(
         text: String,
-        candidates: [PointerPromptFollowUpCandidate],
+        candidates: [UserQueryFollowUpCandidate],
         sourceTraceID: String,
         routeRequest: AIModelRouteRequest = AIModelRouteRequest(
             jobType: .taskIntent,
@@ -56,7 +56,7 @@ public struct PointerPromptFollowUpResolverRequest: Equatable, Sendable {
     }
 }
 
-public struct PointerPromptFollowUpResolverResult: Equatable, Sendable {
+public struct UserQueryFollowUpResolverResult: Equatable, Sendable {
     public var taskID: String?
     public var confidence: Double
     public var reason: String
@@ -70,11 +70,11 @@ public struct PointerPromptFollowUpResolverResult: Equatable, Sendable {
     }
 }
 
-public protocol PointerPromptFollowUpResolving: Sendable {
-    func resolveFollowUp(_ request: PointerPromptFollowUpResolverRequest) async -> PointerPromptFollowUpResolverResult
+public protocol UserQueryFollowUpResolving: Sendable {
+    func resolveFollowUp(_ request: UserQueryFollowUpResolverRequest) async -> UserQueryFollowUpResolverResult
 }
 
-public struct ProcessBackedLocalLLMTaskFollowUpResolver: PointerPromptFollowUpResolving {
+public struct ProcessBackedLocalLLMTaskFollowUpResolver: UserQueryFollowUpResolving {
     public static let schemaID = "task_followup_resolution_v1"
 
     public var router: AIModelRouter
@@ -95,8 +95,8 @@ public struct ProcessBackedLocalLLMTaskFollowUpResolver: PointerPromptFollowUpRe
     }
 
     public func resolveFollowUp(
-        _ request: PointerPromptFollowUpResolverRequest
-    ) async -> PointerPromptFollowUpResolverResult {
+        _ request: UserQueryFollowUpResolverRequest
+    ) async -> UserQueryFollowUpResolverResult {
         let entry: AIModelRegistryEntry
         do {
             entry = try router.route(request.routeRequest.limitingProviders([.localRuntime]))
@@ -155,7 +155,7 @@ public struct ProcessBackedLocalLLMTaskFollowUpResolver: PointerPromptFollowUpRe
             let decision = try decoder.decode(LocalLLMTaskFollowUpDecision.self, from: decisionData)
             let validCandidateIDs = Set(request.candidates.map(\.taskID))
             let taskID = decision.isFollowUp && validCandidateIDs.contains(decision.taskID) ? decision.taskID : nil
-            return PointerPromptFollowUpResolverResult(
+            return UserQueryFollowUpResolverResult(
                 taskID: taskID,
                 confidence: min(max(decision.confidence, 0), 1),
                 reason: decision.reason,
@@ -184,13 +184,13 @@ public struct ProcessBackedLocalLLMTaskFollowUpResolver: PointerPromptFollowUpRe
 
     private func result(
         entry: AIModelRegistryEntry?,
-        request: PointerPromptFollowUpResolverRequest,
+        request: UserQueryFollowUpResolverRequest,
         status: AIModelCallStatus,
         validationStatus: String,
         latencyMS: Double?,
         metadata: [String: String] = [:]
-    ) -> PointerPromptFollowUpResolverResult {
-        PointerPromptFollowUpResolverResult(
+    ) -> UserQueryFollowUpResolverResult {
+        UserQueryFollowUpResolverResult(
             taskID: nil,
             confidence: 0,
             reason: metadata["error"] ?? metadata["reason"] ?? "",
@@ -207,7 +207,7 @@ public struct ProcessBackedLocalLLMTaskFollowUpResolver: PointerPromptFollowUpRe
 
     private func trace(
         entry: AIModelRegistryEntry?,
-        request: PointerPromptFollowUpResolverRequest,
+        request: UserQueryFollowUpResolverRequest,
         status: AIModelCallStatus,
         validationStatus: String,
         latencyMS: Double?,
@@ -230,7 +230,7 @@ public struct ProcessBackedLocalLLMTaskFollowUpResolver: PointerPromptFollowUpRe
     }
 }
 
-public struct HostedTaskFollowUpResolver: PointerPromptFollowUpResolving {
+public struct HostedTaskFollowUpResolver: UserQueryFollowUpResolving {
     public static let schemaID = "task_followup_resolution_v1"
 
     public var router: AIModelRouter
@@ -251,8 +251,8 @@ public struct HostedTaskFollowUpResolver: PointerPromptFollowUpResolving {
     }
 
     public func resolveFollowUp(
-        _ request: PointerPromptFollowUpResolverRequest
-    ) async -> PointerPromptFollowUpResolverResult {
+        _ request: UserQueryFollowUpResolverRequest
+    ) async -> UserQueryFollowUpResolverResult {
         guard !request.candidates.isEmpty else {
             return result(
                 entry: nil,
@@ -312,7 +312,7 @@ public struct HostedTaskFollowUpResolver: PointerPromptFollowUpResolving {
             let decision = try JSONDecoder().decode(LocalLLMTaskFollowUpDecision.self, from: decisionData)
             let validCandidateIDs = Set(request.candidates.map(\.taskID))
             let taskID = decision.isFollowUp && validCandidateIDs.contains(decision.taskID) ? decision.taskID : nil
-            return PointerPromptFollowUpResolverResult(
+            return UserQueryFollowUpResolverResult(
                 taskID: taskID,
                 confidence: min(max(decision.confidence, 0), 1),
                 reason: decision.reason,
@@ -345,7 +345,7 @@ public struct HostedTaskFollowUpResolver: PointerPromptFollowUpResolving {
 
     private func responseRequest(
         entry: AIModelRegistryEntry,
-        resolverRequest request: PointerPromptFollowUpResolverRequest
+        resolverRequest request: UserQueryFollowUpResolverRequest
     ) -> RemoteInferenceResponseCreateRequest {
         let candidates = (try? JSONEncoder().encode(request.candidates))
             .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
@@ -388,7 +388,7 @@ public struct HostedTaskFollowUpResolver: PointerPromptFollowUpResolving {
 
     private static let instructions = "Decide whether the current turn continues one of the candidate Donkey task threads. Return strict JSON only. Set isFollowUp false and taskID empty when the turn should start a new task."
 
-    private static func schema(for candidates: [PointerPromptFollowUpCandidate]) -> RemoteInferenceJSONValue {
+    private static func schema(for candidates: [UserQueryFollowUpCandidate]) -> RemoteInferenceJSONValue {
         .object([
             "type": .string("object"),
             "additionalProperties": .bool(false),
@@ -467,13 +467,13 @@ public struct HostedTaskFollowUpResolver: PointerPromptFollowUpResolving {
 
     private func result(
         entry: AIModelRegistryEntry?,
-        request: PointerPromptFollowUpResolverRequest,
+        request: UserQueryFollowUpResolverRequest,
         status: AIModelCallStatus,
         validationStatus: String,
         latencyMS: Double?,
         metadata: [String: String] = [:]
-    ) -> PointerPromptFollowUpResolverResult {
-        PointerPromptFollowUpResolverResult(
+    ) -> UserQueryFollowUpResolverResult {
+        UserQueryFollowUpResolverResult(
             taskID: nil,
             confidence: 0,
             reason: metadata["error"] ?? metadata["reason"] ?? "",
@@ -490,7 +490,7 @@ public struct HostedTaskFollowUpResolver: PointerPromptFollowUpResolving {
 
     private func trace(
         entry: AIModelRegistryEntry?,
-        request: PointerPromptFollowUpResolverRequest,
+        request: UserQueryFollowUpResolverRequest,
         status: AIModelCallStatus,
         validationStatus: String,
         latencyMS: Double?,
@@ -515,7 +515,7 @@ public struct HostedTaskFollowUpResolver: PointerPromptFollowUpResolving {
 
 private struct LocalLLMTaskFollowUpSidecarRequest: Codable, Equatable, Sendable {
     var command: String
-    var candidates: [PointerPromptFollowUpCandidate]
+    var candidates: [UserQueryFollowUpCandidate]
     var sourceTraceID: String
     var modelID: String
     var cacheDirectory: String?

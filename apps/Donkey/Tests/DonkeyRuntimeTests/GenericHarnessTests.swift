@@ -855,14 +855,14 @@ struct GenericHarnessTests {
     }
 
     @Test
-    func pointerPromptLifecycleMirrorsThreadAndCreatesGenericTask() async {
+    func userQueryLifecycleMirrorsThreadAndCreatesGenericTask() async {
         let store = InMemoryHarnessThreadStore()
         let coordinator = HarnessTaskCoordinator()
         let lifecycle = AppHarnessGenericLifecycle(
             threadStore: store,
             coordinator: coordinator
         )
-        let task = PointerPromptNotchTask(
+        let task = UserQueryNotchTask(
             id: "pointer-task-1",
             title: "Open Calendar",
             detail: "Running",
@@ -878,7 +878,7 @@ struct GenericHarnessTests {
                 taskID: task.id
             ),
             recentEvents: [
-                PointerPromptTaskEvent(
+                UserQueryTaskEvent(
                     id: "event-1",
                     taskID: task.id,
                     role: .user,
@@ -887,7 +887,7 @@ struct GenericHarnessTests {
                 )
             ],
             assets: [
-                PointerPromptTaskAsset(
+                UserQueryTaskAsset(
                     id: "asset-1",
                     taskID: task.id,
                     source: .userUploaded,
@@ -899,7 +899,7 @@ struct GenericHarnessTests {
             policy: ["localInput": "guarded"]
         )
 
-        let prepared = await lifecycle.preparePointerPromptTurn(
+        let prepared = await lifecycle.prepareUserQueryTurn(
             request: request,
             pointerTask: task,
             traceID: "trace-1",
@@ -919,7 +919,7 @@ struct GenericHarnessTests {
     }
 
     @Test
-    func pointerPromptLifecyclePlansLocalAppStepAndStopsForExecutorUserGate() async {
+    func userQueryLifecyclePlansLocalAppStepAndStopsForExecutorUserGate() async {
         let store = InMemoryHarnessThreadStore()
         let coordinator = HarnessTaskCoordinator()
         let lifecycle = AppHarnessGenericLifecycle(threadStore: store, coordinator: coordinator)
@@ -985,7 +985,7 @@ struct GenericHarnessTests {
     }
 
     @Test
-    func pointerPromptLifecycleUsesHostedGenericPlanningMetadata() async {
+    func userQueryLifecycleUsesHostedGenericPlanningMetadata() async {
         let store = InMemoryHarnessThreadStore()
         let coordinator = HarnessTaskCoordinator()
         let lifecycle = AppHarnessGenericLifecycle(threadStore: store, coordinator: coordinator)
@@ -1048,7 +1048,7 @@ struct GenericHarnessTests {
     }
 
     @Test
-    func pointerPromptLifecycleConsumesPendingContinuationOnFollowUpTurn() async {
+    func userQueryLifecycleConsumesPendingContinuationOnFollowUpTurn() async {
         let store = InMemoryHarnessThreadStore()
         let coordinator = HarnessTaskCoordinator()
         let lifecycle = AppHarnessGenericLifecycle(threadStore: store, coordinator: coordinator)
@@ -1065,7 +1065,7 @@ struct GenericHarnessTests {
                 name: LocalAppActionPlanTool.setText.rawValue
             )
         )
-        let pointerTask = PointerPromptNotchTask(
+        let pointerTask = UserQueryNotchTask(
             id: task.id,
             title: "Send Message",
             detail: "Waiting",
@@ -1082,7 +1082,7 @@ struct GenericHarnessTests {
             )
         )
 
-        let prepared = await lifecycle.preparePointerPromptTurn(
+        let prepared = await lifecycle.prepareUserQueryTurn(
             request: request,
             pointerTask: pointerTask,
             traceID: "trace-answer",
@@ -1096,7 +1096,7 @@ struct GenericHarnessTests {
     }
 
     @Test
-    func pointerPromptLifecyclePauseResumeUsesGenericTaskState() async {
+    func userQueryLifecyclePauseResumeUsesGenericTaskState() async {
         let store = InMemoryHarnessThreadStore()
         let coordinator = HarnessTaskCoordinator()
         let lifecycle = AppHarnessGenericLifecycle(threadStore: store, coordinator: coordinator)
@@ -1121,7 +1121,7 @@ struct GenericHarnessTests {
     }
 
     @Test
-    func pointerPromptLifecycleApprovesExactGenericPermissionGate() async {
+    func userQueryLifecycleApprovesExactGenericPermissionGate() async {
         let store = InMemoryHarnessThreadStore()
         let coordinator = HarnessTaskCoordinator()
         let lifecycle = AppHarnessGenericLifecycle(threadStore: store, coordinator: coordinator)
@@ -1153,7 +1153,7 @@ struct GenericHarnessTests {
     }
 
     @Test
-    func pointerPromptLifecyclePlansRecoveryAsGenericToolStep() async {
+    func userQueryLifecyclePlansRecoveryAsGenericToolStep() async {
         let store = InMemoryHarnessThreadStore()
         let coordinator = HarnessTaskCoordinator()
         let lifecycle = AppHarnessGenericLifecycle(threadStore: store, coordinator: coordinator)
@@ -1178,7 +1178,7 @@ struct GenericHarnessTests {
         #expect(result?.toolResult?.toolName == "run.recover")
         #expect(result?.toolResult?.status == .succeeded)
         #expect(result?.task.toolHistory.map(\.call.name) == ["run.recover"])
-        #expect(result?.task.plan?.metadata["planner"] == "genericHarnessPointerPromptRecovery")
+        #expect(result?.task.plan?.metadata["planner"] == "genericHarnessUserQueryRecovery")
     }
 
     @Test

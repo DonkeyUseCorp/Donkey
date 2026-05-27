@@ -1,14 +1,14 @@
 import CoreGraphics
 import Foundation
 
-public enum PointerPromptSpawnPhase: String, Codable, Equatable, Sendable {
+public enum UserQuerySpawnPhase: String, Codable, Equatable, Sendable {
     case notchCue
     case traveling
     case holding
     case fading
 }
 
-public struct PointerPromptSpawnTargetHint: Codable, Equatable, Sendable {
+public struct UserQuerySpawnTargetHint: Codable, Equatable, Sendable {
     public var appName: String?
     public var bundleIdentifier: String?
     public var titleContains: String?
@@ -30,15 +30,15 @@ public struct PointerPromptSpawnTargetHint: Codable, Equatable, Sendable {
     }
 }
 
-public struct PointerPromptSpawnState: Codable, Equatable, Identifiable, Sendable {
+public struct UserQuerySpawnState: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var taskID: String?
     public var commandText: String
     public var label: String
     public var accentIndex: Int
-    public var phase: PointerPromptSpawnPhase
+    public var phase: UserQuerySpawnPhase
     public var notchCueAngleDegrees: Double
-    public var targetHint: PointerPromptSpawnTargetHint?
+    public var targetHint: UserQuerySpawnTargetHint?
     public var updatedAt: Date
 
     public init(
@@ -47,9 +47,9 @@ public struct PointerPromptSpawnState: Codable, Equatable, Identifiable, Sendabl
         commandText: String,
         label: String,
         accentIndex: Int,
-        phase: PointerPromptSpawnPhase = .notchCue,
-        notchCueAngleDegrees: Double = PointerPromptSpawnGeometry.defaultExitAngleDegrees,
-        targetHint: PointerPromptSpawnTargetHint? = nil,
+        phase: UserQuerySpawnPhase = .notchCue,
+        notchCueAngleDegrees: Double = UserQuerySpawnGeometry.defaultExitAngleDegrees,
+        targetHint: UserQuerySpawnTargetHint? = nil,
         updatedAt: Date = Date()
     ) {
         self.id = id
@@ -64,15 +64,15 @@ public struct PointerPromptSpawnState: Codable, Equatable, Identifiable, Sendabl
     }
 }
 
-public struct PointerPromptSpawnProgressUpdate: Equatable, Sendable {
+public struct UserQuerySpawnProgressUpdate: Equatable, Sendable {
     public var label: String?
-    public var targetHint: PointerPromptSpawnTargetHint?
-    public var phase: PointerPromptSpawnPhase?
+    public var targetHint: UserQuerySpawnTargetHint?
+    public var phase: UserQuerySpawnPhase?
 
     public init(
         label: String? = nil,
-        targetHint: PointerPromptSpawnTargetHint? = nil,
-        phase: PointerPromptSpawnPhase? = nil
+        targetHint: UserQuerySpawnTargetHint? = nil,
+        phase: UserQuerySpawnPhase? = nil
     ) {
         self.label = label
         self.targetHint = targetHint
@@ -80,9 +80,9 @@ public struct PointerPromptSpawnProgressUpdate: Equatable, Sendable {
     }
 }
 
-public enum PointerPromptSpawnLifecycle {
+public enum UserQuerySpawnLifecycle {
     public static func keepsVisibleResult(
-        for threadStatus: PointerPromptTaskStatus
+        for threadStatus: UserQueryTaskStatus
     ) -> Bool {
         switch threadStatus {
         case .chatting,
@@ -102,7 +102,7 @@ public enum PointerPromptSpawnLifecycle {
 
 }
 
-public enum PointerPromptSpawnGeometry {
+public enum UserQuerySpawnGeometry {
     public static let defaultExitAngleDegrees: Double = 90
     public static let fallbackVerticalOffset: CGFloat = 250
     public static let minimumScreenInset: CGFloat = 36

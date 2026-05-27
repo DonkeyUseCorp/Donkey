@@ -1,7 +1,6 @@
 import Foundation
 
 public enum TaskIntentParserSource: String, Codable, Equatable, Sendable {
-    case deterministic
     case localModel = "local_model"
     case onlineModel = "online_model"
 }
@@ -95,30 +94,28 @@ public enum LocalAppActionPlanTool: String, Codable, CaseIterable, Equatable, Se
     case verifyVisibleText = "app.verifyVisibleText"
 }
 
-public enum LocalAppActionPlanVerification: String, Codable, CaseIterable, Equatable, Sendable {
-    case commandAttempted
-    case visibleText
-}
-
 public struct LocalAppActionPlan: Codable, Equatable, Sendable {
     public var tools: [LocalAppActionPlanTool]
     public var inputEntity: String
     public var controlID: String
     public var focusKey: String
-    public var verification: LocalAppActionPlanVerification
+    public var verificationTools: [LocalAppActionPlanTool]
 
     public init(
         tools: [LocalAppActionPlanTool],
         inputEntity: String = "query",
         controlID: String = "search",
         focusKey: String = "Command+F",
-        verification: LocalAppActionPlanVerification = .commandAttempted
+        verificationTools: [LocalAppActionPlanTool] = [.verifyCommand]
     ) {
         self.tools = tools
         self.inputEntity = inputEntity
         self.controlID = controlID
         self.focusKey = focusKey
-        self.verification = verification
+        let normalizedVerificationTools = verificationTools.filter(Self.isVerificationTool)
+        self.verificationTools = normalizedVerificationTools.isEmpty
+            ? tools.filter(Self.isVerificationTool)
+            : normalizedVerificationTools
     }
 
     public static var defaultSearchSubmitPlan: LocalAppActionPlan {
@@ -141,6 +138,45 @@ public struct LocalAppActionPlan: Codable, Equatable, Sendable {
 
     public var requiresTextInput: Bool {
         tools.contains(.setText)
+    }
+
+    public var requiresVisibleTextVerification: Bool {
+        verificationTools.contains(.verifyVisibleText)
+    }
+
+    public static func isVerificationTool(_ tool: LocalAppActionPlanTool) -> Bool {
+        tool == .verifyCommand || tool == .verifyVisibleText
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case tools
+        case inputEntity
+        case controlID
+        case focusKey
+        case verificationTools
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let tools = try container.decode([LocalAppActionPlanTool].self, forKey: .tools)
+        let verificationTools = try container.decodeIfPresent([LocalAppActionPlanTool].self, forKey: .verificationTools)
+            ?? tools.filter(Self.isVerificationTool)
+        self.init(
+            tools: tools,
+            inputEntity: try container.decode(String.self, forKey: .inputEntity),
+            controlID: try container.decode(String.self, forKey: .controlID),
+            focusKey: try container.decode(String.self, forKey: .focusKey),
+            verificationTools: verificationTools
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(tools, forKey: .tools)
+        try container.encode(inputEntity, forKey: .inputEntity)
+        try container.encode(controlID, forKey: .controlID)
+        try container.encode(focusKey, forKey: .focusKey)
+        try container.encode(verificationTools, forKey: .verificationTools)
     }
 }
 

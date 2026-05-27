@@ -1,6 +1,6 @@
 import CoreGraphics
 
-public enum PointerPromptLayout {
+public enum UserQueryLayout {
     public static let contentWidth: CGFloat = 592
     public static let contentExtraHeight: CGFloat = 8
     public static let stageHorizontalPadding: CGFloat = 8

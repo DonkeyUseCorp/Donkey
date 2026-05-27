@@ -2,6 +2,23 @@
   "schemaVersion": 1,
   "entries": [
     {
+      "appID": "com.apple.Music",
+      "appName": "Music",
+      "bundleIdentifier": "com.apple.Music",
+      "description": "Apple Music supports low-risk media playback through search and submit.",
+      "supportStatus": "supported",
+      "capabilities": [
+        {
+          "id": "play_media",
+          "summary": "Search for a concrete playable song, album, or playlist and submit it. Artist or genre playback must choose a representative playable query, include mediaSelection metadata, and verify visible media text.",
+          "controlProfiles": ["search_then_enter"],
+          "requiredEntities": ["query"]
+        }
+      ],
+      "denyReason": null,
+      "metadata": {}
+    },
+    {
       "appID": "com.apple.Terminal",
       "appName": "Terminal",
       "bundleIdentifier": "com.apple.Terminal",

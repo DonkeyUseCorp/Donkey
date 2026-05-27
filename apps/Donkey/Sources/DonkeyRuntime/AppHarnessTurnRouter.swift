@@ -31,16 +31,16 @@ public struct AppHarnessContextPacketLimits: Equatable, Sendable {
 
 public struct AppHarnessTurnRequest: Equatable, Sendable {
     public var turn: AppHarnessTurn
-    public var recentEvents: [PointerPromptTaskEvent]
-    public var assets: [PointerPromptTaskAsset]
+    public var recentEvents: [UserQueryTaskEvent]
+    public var assets: [UserQueryTaskAsset]
     public var targetState: [String: String]
     public var memory: [String]
     public var policy: [String: String]
 
     public init(
         turn: AppHarnessTurn,
-        recentEvents: [PointerPromptTaskEvent] = [],
-        assets: [PointerPromptTaskAsset] = [],
+        recentEvents: [UserQueryTaskEvent] = [],
+        assets: [UserQueryTaskAsset] = [],
         targetState: [String: String] = [:],
         memory: [String] = [],
         policy: [String: String] = [:]
@@ -402,7 +402,7 @@ public struct AppHarnessContextPacketBuilder: Sendable {
         )
     }
 
-    private static func isTransientCorrection(_: PointerPromptTaskEvent) -> Bool {
+    private static func isTransientCorrection(_: UserQueryTaskEvent) -> Bool {
         false
     }
 }

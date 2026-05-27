@@ -5,7 +5,7 @@ import Sparkle
 @MainActor
 protocol DonkeyUpdateChecking: AnyObject {
     var currentVersion: String { get }
-    var updateStateChanged: ((PointerPromptUpdateState) -> Void)? { get set }
+    var updateStateChanged: ((UserQueryUpdateState) -> Void)? { get set }
 
     func start()
     func checkForUpdatesInBackground()
@@ -16,7 +16,7 @@ protocol DonkeyUpdateChecking: AnyObject {
 final class SparkleUpdateController: NSObject, DonkeyUpdateChecking, SPUUpdaterDelegate {
     private var updaterController: SPUStandardUpdaterController?
 
-    var updateStateChanged: ((PointerPromptUpdateState) -> Void)?
+    var updateStateChanged: ((UserQueryUpdateState) -> Void)?
 
     var currentVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ??
@@ -27,7 +27,7 @@ final class SparkleUpdateController: NSObject, DonkeyUpdateChecking, SPUUpdaterD
         guard updaterController == nil else { return }
         guard isSparkleConfigured else {
             updateStateChanged?(
-                PointerPromptUpdateState(
+                UserQueryUpdateState(
                     status: .unavailable,
                     currentVersion: currentVersion,
                     message: "Sparkle feed not configured"
@@ -46,7 +46,7 @@ final class SparkleUpdateController: NSObject, DonkeyUpdateChecking, SPUUpdaterD
     func checkForUpdatesInBackground() {
         guard let updaterController else {
             updateStateChanged?(
-                PointerPromptUpdateState(
+                UserQueryUpdateState(
                     status: .unavailable,
                     currentVersion: currentVersion,
                     message: "Updater unavailable"
@@ -56,7 +56,7 @@ final class SparkleUpdateController: NSObject, DonkeyUpdateChecking, SPUUpdaterD
         }
 
         updateStateChanged?(
-            PointerPromptUpdateState(
+            UserQueryUpdateState(
                 status: .checking,
                 currentVersion: currentVersion
             )
@@ -82,7 +82,7 @@ final class SparkleUpdateController: NSObject, DonkeyUpdateChecking, SPUUpdaterD
 
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
         updateStateChanged?(
-            PointerPromptUpdateState(
+            UserQueryUpdateState(
                 status: .available,
                 currentVersion: currentVersion,
                 latestVersion: item.displayVersionString
@@ -92,7 +92,7 @@ final class SparkleUpdateController: NSObject, DonkeyUpdateChecking, SPUUpdaterD
 
     func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: any Error) {
         updateStateChanged?(
-            PointerPromptUpdateState(
+            UserQueryUpdateState(
                 status: .upToDate,
                 currentVersion: currentVersion,
                 message: error.localizedDescription

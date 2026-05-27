@@ -5,19 +5,19 @@ import DonkeyRuntime
 import Foundation
 import OSLog
 
-private enum PointerPromptLog {
+private enum UserQueryLog {
     #if DEBUG
     static let isEnabled = true
     #else
     static let isEnabled = false
     #endif
 
-    static let commands = Logger(subsystem: "com.donkey.app", category: "pointer-prompt")
+    static let commands = Logger(subsystem: "com.donkey.app", category: "user-query")
 }
 
-struct PointerPromptCommandHandlingResult: Equatable, Sendable {
+struct UserQueryCommandHandlingResult: Equatable, Sendable {
     var status: LocalAppTaskLiveRunStatus
-    var threadStatus: PointerPromptTaskStatus
+    var threadStatus: UserQueryTaskStatus
     var decision: AppHarnessDecision
     var summary: String
     var taskLabel: String?
@@ -34,38 +34,38 @@ struct DocumentFormFillReviewRequest: Equatable, Sendable {
     var traceID: String
 }
 
-private struct PointerPromptModelIntentInput: Equatable, Sendable {
+private struct UserQueryModelIntentInput: Equatable, Sendable {
     var command: String
     var contextSnippets: [String]
 }
 
-struct PointerPromptCommandContext: Sendable {
-    var task: PointerPromptNotchTask
-    var recentEvents: [PointerPromptTaskEvent]
-    var assets: [PointerPromptTaskAsset]
+struct UserQueryCommandContext: Sendable {
+    var task: UserQueryNotchTask
+    var recentEvents: [UserQueryTaskEvent]
+    var assets: [UserQueryTaskAsset]
     var isFollowUp: Bool
     var turnSource: AppHarnessTurnSource = .typedPrompt
-    var spawnProgressChanged: (@MainActor @Sendable (PointerPromptSpawnProgressUpdate) -> Void)?
+    var spawnProgressChanged: (@MainActor @Sendable (UserQuerySpawnProgressUpdate) -> Void)?
     var agentVisualizationChanged: (@MainActor @Sendable (AgentVisualizationPlan) -> Void)?
 }
 
-protocol PointerPromptCommandHandling: Sendable {
+protocol UserQueryCommandHandling: Sendable {
     func handleSubmittedCommand(
         _ command: String,
-        context: PointerPromptCommandContext?
-    ) async -> PointerPromptCommandHandlingResult
+        context: UserQueryCommandContext?
+    ) async -> UserQueryCommandHandlingResult
     func pauseCommand(taskID: String) async -> Bool
     func resumeCommand(taskID: String) async -> Bool
     func approvePermissionGate(taskID: String) async -> Bool
 }
 
-extension PointerPromptCommandHandling {
-    func handleSubmittedCommand(_ command: String) async -> PointerPromptCommandHandlingResult {
+extension UserQueryCommandHandling {
+    func handleSubmittedCommand(_ command: String) async -> UserQueryCommandHandlingResult {
         await handleSubmittedCommand(command, context: nil)
     }
 }
 
-struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
+struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
     var catalog: LocalAppTaskCatalog
     var localModelResolver: LocalModelTaskIntentResolver
     var appController: any LocalAppTaskAppControlling
@@ -73,7 +73,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
     var permissionPolicy: ToolCallPolicy
     var redactor: AIHarnessRedactor
     var memoryRetriever: SemanticRunMemoryRetriever
-    var coordinatorRegistry: PointerPromptRunCoordinatorRegistry
+    var coordinatorRegistry: UserQueryRunCoordinatorRegistry
     var genericHarnessLifecycle: AppHarnessGenericLifecycle
     var memoryStore: SQLiteAgentMemoryStore?
 
@@ -90,7 +90,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         ),
         redactor: AIHarnessRedactor = AIHarnessRedactor(),
         memoryRetriever: SemanticRunMemoryRetriever = SemanticRunMemoryRetriever(),
-        coordinatorRegistry: PointerPromptRunCoordinatorRegistry = PointerPromptRunCoordinatorRegistry(),
+        coordinatorRegistry: UserQueryRunCoordinatorRegistry = UserQueryRunCoordinatorRegistry(),
         genericHarnessLifecycle: AppHarnessGenericLifecycle = AppHarnessGenericLifecycle(),
         memoryStore: SQLiteAgentMemoryStore? = .shared
     ) {
@@ -108,9 +108,9 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
 
     func handleSubmittedCommand(
         _ command: String,
-        context: PointerPromptCommandContext?
-    ) async -> PointerPromptCommandHandlingResult {
-        let traceID = "pointer-prompt-\(UUID().uuidString)"
+        context: UserQueryCommandContext?
+    ) async -> UserQueryCommandHandlingResult {
+        let traceID = "user-query-\(UUID().uuidString)"
         let taskID = context?.task.id ?? traceID
         logSubmittedCommand(command, traceID: traceID, taskID: taskID, context: context)
         return await continueHandlingNonVisualizationCommand(
@@ -123,17 +123,17 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
 
     private func continueHandlingNonVisualizationCommand(
         command: String,
-        context: PointerPromptCommandContext?,
+        context: UserQueryCommandContext?,
         traceID: String,
         taskID: String
-    ) async -> PointerPromptCommandHandlingResult {
+    ) async -> UserQueryCommandHandlingResult {
         let harnessRequest = Self.harnessRequest(command: command, context: context)
-        let genericPreparedTurn = await genericHarnessLifecycle.preparePointerPromptTurn(
+        let genericPreparedTurn = await genericHarnessLifecycle.prepareUserQueryTurn(
             request: harnessRequest,
             pointerTask: context?.task,
             traceID: traceID,
             availableToolNames: Self.genericHarnessToolNames(),
-            grantedPermissions: Self.pointerPromptGrantedPermissions
+            grantedPermissions: Self.userQueryGrantedPermissions
         )
 
         if command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -145,7 +145,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                     "router": "emptyTurn"
                 ]
             )
-            let result = PointerPromptCommandHandlingResult(
+            let result = UserQueryCommandHandlingResult(
                 status: .completed,
                 threadStatus: .chatting,
                 decision: decision,
@@ -163,7 +163,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             )
             _ = await genericHarnessLifecycle.coordinator.complete(
                 taskID: genericPreparedTurn.task.id,
-                reason: "Pointer prompt empty turn"
+                reason: "User query empty turn"
             )
             logHandlingResult(result, stage: "empty", hint: "Empty command; no action was run.")
             return result
@@ -232,7 +232,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             capability: .model,
             decision: .allow,
             toolName: "generic-harness-planner",
-            summary: "Planned pointer prompt turn",
+            summary: "Planned user query turn",
             traceID: traceID,
             metadata: [
                 "modelCallID": localModelResult.trace.id,
@@ -254,7 +254,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                     "resolution.status": resolution.status.rawValue
                 ]
             )
-            let handlingResult = PointerPromptCommandHandlingResult(
+            let handlingResult = UserQueryCommandHandlingResult(
                 status: .needsConfirmation,
                 threadStatus: .waitingForClarification,
                 decision: decision,
@@ -297,7 +297,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                     "resolution.status": resolution.status.rawValue
                 ]
             )
-            let handlingResult = PointerPromptCommandHandlingResult(
+            let handlingResult = UserQueryCommandHandlingResult(
                 status: .completed,
                 threadStatus: .chatting,
                 decision: decision,
@@ -316,7 +316,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             )
             _ = await genericHarnessLifecycle.coordinator.complete(
                 taskID: taskID,
-                reason: "Pointer prompt conversation response"
+                reason: "User query conversation response"
             )
             await coordinatorRegistry.finish(taskID: taskID)
             logHandlingResult(
@@ -386,9 +386,9 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             for: result,
             sourceTraceID: traceID
         ).map(groundAgentVisualizationPlan)
-        let handlingResult = PointerPromptCommandHandlingResult(
+        let handlingResult = UserQueryCommandHandlingResult(
             status: result.status,
-            threadStatus: Self.pointerPromptStatus(for: finalizedTask)
+            threadStatus: Self.userQueryStatus(for: finalizedTask)
                 ?? threadStatus(for: result, runStep: runStep),
             decision: decision,
             summary: summary(for: result, task: finalizedTask, runStep: runStep),
@@ -423,21 +423,21 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
     func pauseCommand(taskID: String) async -> Bool {
         await genericHarnessLifecycle.pauseTask(
             taskID: taskID,
-            reason: "Pointer prompt paused task"
+            reason: "User query paused task"
         ) != nil
     }
 
     func resumeCommand(taskID: String) async -> Bool {
         await genericHarnessLifecycle.resumeTask(
             taskID: taskID,
-            reason: "Pointer prompt resumed task"
+            reason: "User query resumed task"
         ) != nil
     }
 
     func approvePermissionGate(taskID: String) async -> Bool {
         await genericHarnessLifecycle.approvePermissionGate(
             taskID: taskID,
-            reason: "Pointer prompt approved pending permissions"
+            reason: "User query approved pending permissions"
         ) != nil
     }
 
@@ -447,7 +447,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         runStep: HarnessStepExecutionResult?,
         verificationStep: HarnessStepExecutionResult?,
         runtime: GenericHarnessRuntime
-    ) async -> PointerPromptGenericFinalizeResult {
+    ) async -> UserQueryGenericFinalizeResult {
         switch result.status {
         case .completed:
             if verificationStep?.toolResult?.status == .failed {
@@ -459,9 +459,9 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                 )
                 _ = await genericHarnessLifecycle.coordinator.failSafe(
                     taskID: taskID,
-                    reason: "Pointer prompt verification failed"
+                    reason: "User query verification failed"
                 )
-                return PointerPromptGenericFinalizeResult(
+                return UserQueryGenericFinalizeResult(
                     verificationStep: verificationStep,
                     recoveryStep: recoveryStep
                 )
@@ -469,23 +469,23 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
 
             _ = await genericHarnessLifecycle.coordinator.complete(
                 taskID: taskID,
-                reason: "Pointer prompt local task completed"
+                reason: "User query local task completed"
             )
-            return PointerPromptGenericFinalizeResult(verificationStep: verificationStep)
+            return UserQueryGenericFinalizeResult(verificationStep: verificationStep)
         case .needsUserReview:
             _ = await genericHarnessLifecycle.coordinator.waitForUser(
                 taskID: taskID,
                 question: "Review the local app result before I continue.",
-                reason: "Pointer prompt local app verification needs review"
+                reason: "User query local app verification needs review"
             )
-            return PointerPromptGenericFinalizeResult(verificationStep: verificationStep)
+            return UserQueryGenericFinalizeResult(verificationStep: verificationStep)
         case .needsConfirmation, .unsupportedCommand:
             _ = await genericHarnessLifecycle.coordinator.waitForUser(
                 taskID: taskID,
                 question: summary(for: result, runStep: runStep),
-                reason: "Pointer prompt local app task needs clarification"
+                reason: "User query local app task needs clarification"
             )
-            return PointerPromptGenericFinalizeResult()
+            return UserQueryGenericFinalizeResult()
         case .appUnavailable, .failedSafe:
             let recoveryStep = await recoverGenericHarnessTask(
                 taskID: taskID,
@@ -497,7 +497,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                 taskID: taskID,
                 reason: summary(for: result, runStep: runStep)
             )
-            return PointerPromptGenericFinalizeResult(
+            return UserQueryGenericFinalizeResult(
                 recoveryStep: recoveryStep
             )
         }
@@ -559,13 +559,13 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         _ command: String,
         traceID: String,
         taskID: String,
-        context: PointerPromptCommandContext?
+        context: UserQueryCommandContext?
     ) {
-        guard PointerPromptLog.isEnabled else { return }
+        guard UserQueryLog.isEnabled else { return }
 
         let source = context?.turnSource.rawValue ?? AppHarnessTurnSource.typedPrompt.rawValue
         let isFollowUp = context?.isFollowUp ?? false
-        PointerPromptLog.commands.notice(
+        UserQueryLog.commands.notice(
             "command submitted traceID=\(traceID, privacy: .public) taskID=\(taskID, privacy: .public) source=\(source, privacy: .public) followUp=\(String(isFollowUp), privacy: .public) command=\(command, privacy: .public)"
         )
     }
@@ -577,7 +577,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         trace: AIModelCallTrace,
         latencyMS: Double
     ) {
-        guard PointerPromptLog.isEnabled else { return }
+        guard UserQueryLog.isEnabled else { return }
 
         let taskType = resolution.definition?.taskType ?? resolution.intent?.taskType ?? ""
         let reason = resolution.metadata["reason"] ?? ""
@@ -613,26 +613,26 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             ?? ""
         let fallbackStatus = trace.metadata["fallback.status"] ?? ""
         let latency = Self.formatLatency(latencyMS)
-        PointerPromptLog.commands.notice(
+        UserQueryLog.commands.notice(
             "intent resolved traceID=\(traceID, privacy: .public) resolution=\(resolution.status.rawValue, privacy: .public) taskType=\(taskType, privacy: .public) reason=\(reason, privacy: .public) modelStatus=\(trace.status.rawValue, privacy: .public) validation=\(trace.validationStatus, privacy: .public) modelReason=\(modelReason, privacy: .public) modelDetail=\(modelDetail, privacy: .public) fallbackStatus=\(fallbackStatus, privacy: .public) latencyMS=\(latency, privacy: .public) command=\(command, privacy: .public)"
         )
     }
 
     private func logHandlingResult(
-        _ result: PointerPromptCommandHandlingResult,
+        _ result: UserQueryCommandHandlingResult,
         stage: String,
         hint: String
     ) {
-        guard PointerPromptLog.isEnabled else { return }
+        guard UserQueryLog.isEnabled else { return }
 
         let taskLabel = result.taskLabel ?? ""
-        PointerPromptLog.commands.notice(
+        UserQueryLog.commands.notice(
             "command finished traceID=\(result.traceID, privacy: .public) stage=\(stage, privacy: .public) status=\(result.status.rawValue, privacy: .public) threadStatus=\(result.threadStatus.rawValue, privacy: .public) summary=\(result.summary, privacy: .public) taskLabel=\(taskLabel, privacy: .public) hint=\(hint, privacy: .public)"
         )
     }
 
     private func logActionTraces(for result: LocalAppTaskLiveRunResult) {
-        guard PointerPromptLog.isEnabled else { return }
+        guard UserQueryLog.isEnabled else { return }
 
         for trace in result.actionTraces {
             let command = trace.command
@@ -649,7 +649,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             let appleScriptOutput = trace.metadata["appleScript.output"] ?? ""
             let accessibilityResult = trace.metadata["accessibility.result"] ?? ""
 
-            PointerPromptLog.commands.notice(
+            UserQueryLog.commands.notice(
                 "local action traceID=\(result.traceID, privacy: .public) commandID=\(command.id, privacy: .public) workflowStepID=\(workflowStepID, privacy: .public) kind=\(command.kind.rawValue, privacy: .public) backend=\(backend, privacy: .public) inputMode=\(inputMode, privacy: .public) executed=\(String(trace.executed), privacy: .public) decision=\(decisionDescription(trace.decision), privacy: .public) elementClick=\(String(elementClick), privacy: .public) controlID=\(controlID, privacy: .public) target=\(target, privacy: .public) overlayPointer=visualOnly appleScriptAction=\(appleScriptAction, privacy: .public) appleScriptOutput=\(appleScriptOutput, privacy: .public) accessibilityResult=\(accessibilityResult, privacy: .public)"
             )
         }
@@ -917,8 +917,8 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
     private func threadStatus(
         for result: LocalAppTaskLiveRunResult,
         runStep: HarnessStepExecutionResult? = nil
-    ) -> PointerPromptTaskStatus {
-        if let status = Self.pointerPromptStatus(for: runStep?.task) {
+    ) -> UserQueryTaskStatus {
+        if let status = Self.userQueryStatus(for: runStep?.task) {
             return status
         }
 
@@ -994,13 +994,13 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
 
     private static func modelInput(
         for command: String,
-        context: PointerPromptCommandContext?,
+        context: UserQueryCommandContext?,
         compactedContext: HarnessCompactedThreadContext
-    ) -> PointerPromptModelIntentInput {
+    ) -> UserQueryModelIntentInput {
         let modelCommand = compactedContext.currentTurn?.text ?? command
         let compactedPrompt = compactedContext.promptText
         guard let context, context.isFollowUp else {
-            return PointerPromptModelIntentInput(
+            return UserQueryModelIntentInput(
                 command: modelCommand,
                 contextSnippets: [compactedPrompt].filter { !$0.isEmpty }
             )
@@ -1014,7 +1014,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         .compactMap(\.self)
         .joined(separator: "\n\n")
 
-        return PointerPromptModelIntentInput(
+        return UserQueryModelIntentInput(
             command: modelCommand,
             contextSnippets: [
                 taskContext,
@@ -1033,7 +1033,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             .sorted()
     }
 
-    private static var pointerPromptGrantedPermissions: Set<HarnessPermission> {
+    private static var userQueryGrantedPermissions: Set<HarnessPermission> {
         [
             .conversation,
             .userPrompt,
@@ -1054,7 +1054,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         )).sorted()
     }
 
-    private static func pointerPromptStatus(for task: HarnessTaskState?) -> PointerPromptTaskStatus? {
+    private static func userQueryStatus(for task: HarnessTaskState?) -> UserQueryTaskStatus? {
         guard let task else { return nil }
 
         switch task.status {
@@ -1119,7 +1119,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
 
     private static func harnessRequest(
         command: String,
-        context: PointerPromptCommandContext?
+        context: UserQueryCommandContext?
     ) -> AppHarnessTurnRequest {
         AppHarnessTurnRequest(
             turn: AppHarnessTurn(
@@ -1158,7 +1158,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         ]
     }
 
-    private static func contextMetadata(_ context: PointerPromptCommandContext?) -> [String: String] {
+    private static func contextMetadata(_ context: UserQueryCommandContext?) -> [String: String] {
         guard let context else { return [:] }
 
         return [
@@ -1170,7 +1170,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
     }
 }
 
-private struct PointerPromptGenericFinalizeResult: Equatable, Sendable {
+private struct UserQueryGenericFinalizeResult: Equatable, Sendable {
     var verificationStep: HarnessStepExecutionResult?
     var recoveryStep: HarnessStepExecutionResult?
 
@@ -1183,7 +1183,7 @@ private struct PointerPromptGenericFinalizeResult: Equatable, Sendable {
     }
 }
 
-actor PointerPromptRunCoordinatorRegistry {
+actor UserQueryRunCoordinatorRegistry {
     private var coordinators: [String: RunCoordinator] = [:]
 
     func coordinator(for taskID: String) -> RunCoordinator {

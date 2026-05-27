@@ -3,13 +3,13 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
-public struct PointerPromptNotchStatusView: View {
-    @State private var renderedSpawnCue: PointerPromptSpawnState?
+public struct UserQueryNotchStatusView: View {
+    @State private var renderedSpawnCue: UserQuerySpawnState?
     @State private var spawnCueIsExiting = false
 
-    private let state: PointerPromptState
-    private let updateState: PointerPromptUpdateState
-    private let layout: PointerPromptNotchLayout
+    private let state: UserQueryState
+    private let updateState: UserQueryUpdateState
+    private let layout: UserQueryNotchLayout
     private let surfaceWidth: CGFloat
     private let surfaceHeight: CGFloat
     private let isExpanded: Bool
@@ -17,22 +17,22 @@ public struct PointerPromptNotchStatusView: View {
     @Binding private var commandText: String
     private let commandInputTextHeight: CGFloat
     private let isCommandInputExpanded: Bool
-    private let tasks: [PointerPromptNotchTask]
+    private let tasks: [UserQueryNotchTask]
     private let accentIndex: Int
-    private let spawnState: PointerPromptSpawnState?
+    private let spawnState: UserQuerySpawnState?
     private let commandSubmitted: @MainActor (String) -> Void
     private let commandInputTextHeightChanged: @MainActor (CGFloat) -> Void
     private let commandInputExpansionChanged: @MainActor (Bool) -> Void
-    private let assetsDropped: @MainActor ([PointerPromptTaskAssetDraft]) -> Void
+    private let assetsDropped: @MainActor ([UserQueryTaskAssetDraft]) -> Void
     private let pauseRequested: @MainActor (String) -> Void
     private let resumeRequested: @MainActor (String) -> Void
     private let approvePermissionRequested: @MainActor (String) -> Void
     private let updateRequested: @MainActor () -> Void
 
     public init(
-        state: PointerPromptState,
-        updateState: PointerPromptUpdateState,
-        layout: PointerPromptNotchLayout,
+        state: UserQueryState,
+        updateState: UserQueryUpdateState,
+        layout: UserQueryNotchLayout,
         surfaceWidth: CGFloat,
         surfaceHeight: CGFloat,
         isExpanded: Bool,
@@ -40,13 +40,13 @@ public struct PointerPromptNotchStatusView: View {
         commandText: Binding<String>,
         commandInputTextHeight: CGFloat,
         isCommandInputExpanded: Bool,
-        tasks: [PointerPromptNotchTask] = [],
+        tasks: [UserQueryNotchTask] = [],
         accentIndex: Int,
-        spawnState: PointerPromptSpawnState? = nil,
+        spawnState: UserQuerySpawnState? = nil,
         commandSubmitted: @escaping @MainActor (String) -> Void,
         commandInputTextHeightChanged: @escaping @MainActor (CGFloat) -> Void,
         commandInputExpansionChanged: @escaping @MainActor (Bool) -> Void,
-        assetsDropped: @escaping @MainActor ([PointerPromptTaskAssetDraft]) -> Void,
+        assetsDropped: @escaping @MainActor ([UserQueryTaskAssetDraft]) -> Void,
         pauseRequested: @escaping @MainActor (String) -> Void,
         resumeRequested: @escaping @MainActor (String) -> Void,
         approvePermissionRequested: @escaping @MainActor (String) -> Void,
@@ -313,7 +313,7 @@ public struct PointerPromptNotchStatusView: View {
             .position(x: expandedNotchArrowX, y: expandedNotchArrowY)
     }
 
-    private func spawnCueArrow(_ cue: PointerPromptSpawnState) -> some View {
+    private func spawnCueArrow(_ cue: UserQuerySpawnState) -> some View {
         let exitOffset = spawnCueExitOffset(for: cue.notchCueAngleDegrees)
 
         return TaskArrowMark(
@@ -467,7 +467,7 @@ public struct PointerPromptNotchStatusView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
-    private func taskRow(_ task: PointerPromptNotchTask) -> some View {
+    private func taskRow(_ task: UserQueryNotchTask) -> some View {
         HStack(spacing: 12) {
             TaskArrowMark(color: accentColor(for: task.accentIndex))
                 .frame(width: 14, height: 14)
@@ -499,7 +499,7 @@ public struct PointerPromptNotchStatusView: View {
     }
 
     private var commandRow: some View {
-        PointerPromptComposer(
+        UserQueryComposer(
             state: commandInputState,
             messageText: $commandText,
             inputTextHeight: commandInputTextHeight,
@@ -553,9 +553,9 @@ public struct PointerPromptNotchStatusView: View {
         return true
     }
 
-    private var commandInputState: PointerPromptState {
-        PointerPromptState(
-            promptText: PointerPromptCopy.defaultPromptPlaceholder,
+    private var commandInputState: UserQueryState {
+        UserQueryState(
+            promptText: UserQueryCopy.defaultPromptPlaceholder,
             isPrimaryActionEnabled: true,
             leadingSignalLevel: .ready,
             isActive: isExpanded,
@@ -566,7 +566,7 @@ public struct PointerPromptNotchStatusView: View {
     }
 
     @ViewBuilder
-    private func activeTaskControls(for task: PointerPromptNotchTask) -> some View {
+    private func activeTaskControls(for task: UserQueryNotchTask) -> some View {
         switch task.status {
         case .waitingForPermission:
             statusControlButton(
@@ -640,7 +640,7 @@ public struct PointerPromptNotchStatusView: View {
     }
 
     @ViewBuilder
-    private func taskStatusAccessory(_ task: PointerPromptNotchTask) -> some View {
+    private func taskStatusAccessory(_ task: UserQueryNotchTask) -> some View {
         switch task.status {
         case .chatting:
             Image(systemName: "text.bubble")
@@ -783,8 +783,8 @@ public struct PointerPromptNotchStatusView: View {
     }
 
     private var taskDisplayText: String? {
-        let text = PointerPromptCopy.normalizedDisplayText(state.promptText)
-        guard PointerPromptCopy.isTaskDisplayText(text) else {
+        let text = UserQueryCopy.normalizedDisplayText(state.promptText)
+        guard UserQueryCopy.isTaskDisplayText(text) else {
             return nil
         }
 
@@ -799,15 +799,15 @@ public struct PointerPromptNotchStatusView: View {
         accentColor(for: primaryTask?.accentIndex ?? accentIndex)
     }
 
-    private var primaryTask: PointerPromptNotchTask? {
+    private var primaryTask: UserQueryNotchTask? {
         tasks.first
     }
 
-    private func isPrimaryTask(_ task: PointerPromptNotchTask) -> Bool {
+    private func isPrimaryTask(_ task: UserQueryNotchTask) -> Bool {
         task.id == primaryTask?.id
     }
 
-    private func taskStatusDescription(_ task: PointerPromptNotchTask) -> String {
+    private func taskStatusDescription(_ task: UserQueryNotchTask) -> String {
         switch task.status {
         case .chatting:
             return task.detail.isEmpty ? "Conversation" : task.detail
@@ -833,7 +833,7 @@ public struct PointerPromptNotchStatusView: View {
     }
 
     private func accentColor(for index: Int) -> Color {
-        Self.accentColors[PointerPromptAccentPalette.normalizedIndex(index)]
+        Self.accentColors[UserQueryAccentPalette.normalizedIndex(index)]
     }
 
     private static let accentColors: [Color] = [
@@ -891,15 +891,15 @@ private struct TaskArrowMark: View {
 
 private final class DroppedAssetCollector: @unchecked Sendable {
     private let lock = NSLock()
-    private var drafts: [PointerPromptTaskAssetDraft] = []
+    private var drafts: [UserQueryTaskAssetDraft] = []
 
-    func append(_ draft: PointerPromptTaskAssetDraft) {
+    func append(_ draft: UserQueryTaskAssetDraft) {
         lock.lock()
         drafts.append(draft)
         lock.unlock()
     }
 
-    func values() -> [PointerPromptTaskAssetDraft] {
+    func values() -> [UserQueryTaskAssetDraft] {
         lock.lock()
         let snapshot = drafts
         lock.unlock()
@@ -928,7 +928,7 @@ private enum DroppedAssetUtilities {
         return nil
     }
 
-    static func assetDraft(for url: URL) -> PointerPromptTaskAssetDraft? {
+    static func assetDraft(for url: URL) -> UserQueryTaskAssetDraft? {
         guard url.isFileURL else { return nil }
 
         let contentType = (try? url.resourceValues(forKeys: [.contentTypeKey]).contentType?.preferredMIMEType)
@@ -936,7 +936,7 @@ private enum DroppedAssetUtilities {
             ?? "application/octet-stream"
         let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
         let byteCount = (attributes?[.size] as? NSNumber)?.int64Value
-        return PointerPromptTaskAssetDraft(
+        return UserQueryTaskAssetDraft(
             displayName: url.lastPathComponent,
             contentType: contentType,
             urlString: url.absoluteString,

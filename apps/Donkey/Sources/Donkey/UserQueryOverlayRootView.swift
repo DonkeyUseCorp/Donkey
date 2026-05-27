@@ -2,11 +2,11 @@ import DonkeyContracts
 import DonkeyUI
 import SwiftUI
 
-struct PointerPromptOverlayRootView: View {
-    @ObservedObject var model: PointerPromptOverlayModel
+struct UserQueryOverlayRootView: View {
+    @ObservedObject var model: UserQueryOverlayModel
 
     var body: some View {
-        PointerPromptStageView(
+        UserQueryStageView(
             state: model.promptState,
             messageText: $model.messageText,
             inputTextHeight: model.inputTextHeight,
@@ -21,7 +21,7 @@ struct PointerPromptOverlayRootView: View {
     }
 
     private var contentSize: CGSize {
-        PointerPromptLayout.contentSize(
+        UserQueryLayout.contentSize(
             inputTextHeight: model.inputTextHeight,
             isExpanded: model.isInputExpanded
         )

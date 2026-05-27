@@ -1,18 +1,18 @@
 import Foundation
 
-public enum PointerPromptActivationModifier: String, Equatable, Sendable {
+public enum UserQueryActivationModifier: String, Equatable, Sendable {
     case command
 }
 
-public struct PointerPromptActivationShortcut: Equatable, Sendable {
-    public var modifier: PointerPromptActivationModifier
+public struct UserQueryActivationShortcut: Equatable, Sendable {
+    public var modifier: UserQueryActivationModifier
     public var tapCount: Int
     public var maximumTapDuration: TimeInterval
     public var maximumTapInterval: TimeInterval
     public var holdToVoiceInputDuration: TimeInterval?
 
     public init(
-        modifier: PointerPromptActivationModifier,
+        modifier: UserQueryActivationModifier,
         tapCount: Int,
         maximumTapDuration: TimeInterval,
         maximumTapInterval: TimeInterval,
@@ -25,7 +25,7 @@ public struct PointerPromptActivationShortcut: Equatable, Sendable {
         self.holdToVoiceInputDuration = holdToVoiceInputDuration.map { max(0, $0) }
     }
 
-    public static let doubleCommand = PointerPromptActivationShortcut(
+    public static let doubleCommand = UserQueryActivationShortcut(
         modifier: .command,
         tapCount: 2,
         maximumTapDuration: 0.45,

@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-public struct PointerPromptNotchLayout: Equatable, Sendable {
+public struct UserQueryNotchLayout: Equatable, Sendable {
     public static let expandedCommandOnlyTopPaddingBelowPhysicalVoid: CGFloat = 16
 
     public var voidWidth: CGFloat
@@ -57,7 +57,7 @@ public struct PointerPromptNotchLayout: Equatable, Sendable {
     }
 }
 
-public struct PointerPromptNotchMetrics: Equatable, Sendable {
+public struct UserQueryNotchMetrics: Equatable, Sendable {
     public static let fallbackVoidWidth: CGFloat = 180
     public static let fallbackVoidHeight: CGFloat = 32
     public static let maximumInferredVoidWidth: CGFloat = 220
@@ -109,8 +109,8 @@ public struct PointerPromptNotchMetrics: Equatable, Sendable {
         return [visibleSurfaceFrameInPanel.insetBy(dx: -tolerance, dy: -tolerance)]
     }
 
-    public var layout: PointerPromptNotchLayout {
-        PointerPromptNotchLayout(
+    public var layout: UserQueryNotchLayout {
+        UserQueryNotchLayout(
             voidWidth: voidWidth,
             voidHeight: voidHeight,
             collapsedVisibleHeight: collapsedVisibleHeight,
@@ -228,7 +228,7 @@ public struct PointerPromptNotchMetrics: Equatable, Sendable {
     private static let expandedContentDesignFrame = CGRect(
         x: 0,
         y: 0,
-        width: PointerPromptLayout.composerInputSurfaceWidth + Self.inputHorizontalMargin * 2,
+        width: UserQueryLayout.composerInputSurfaceWidth + Self.inputHorizontalMargin * 2,
         height: 280
     )
     private static let collapsedSideLaneWidth: CGFloat = 34

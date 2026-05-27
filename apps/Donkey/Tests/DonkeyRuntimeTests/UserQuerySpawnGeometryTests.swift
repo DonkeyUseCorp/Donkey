@@ -4,10 +4,10 @@ import DonkeyUI
 import Testing
 
 @Suite
-struct PointerPromptSpawnGeometryTests {
+struct UserQuerySpawnGeometryTests {
     @Test
     func fallbackPointSitsBelowNotchAndClampsInsideScreen() {
-        let point = PointerPromptSpawnGeometry.fallbackPoint(
+        let point = UserQuerySpawnGeometry.fallbackPoint(
             screenSize: CGSize(width: 1200, height: 800),
             notchBottomY: 32
         )
@@ -15,7 +15,7 @@ struct PointerPromptSpawnGeometryTests {
         #expect(point.x == 600)
         #expect(point.y == 282)
 
-        let shortScreenPoint = PointerPromptSpawnGeometry.fallbackPoint(
+        let shortScreenPoint = UserQuerySpawnGeometry.fallbackPoint(
             screenSize: CGSize(width: 360, height: 260),
             notchBottomY: 40
         )
@@ -26,7 +26,7 @@ struct PointerPromptSpawnGeometryTests {
 
     @Test
     func clampedPointRespectsMinimumInset() {
-        let point = PointerPromptSpawnGeometry.clampedPoint(
+        let point = UserQuerySpawnGeometry.clampedPoint(
             CGPoint(x: -20, y: 1000),
             in: CGSize(width: 500, height: 400),
             inset: 40
@@ -39,13 +39,13 @@ struct PointerPromptSpawnGeometryTests {
     @Test
     func cueAngleUsesTopLeftCoordinateSpace() {
         #expect(
-            PointerPromptSpawnGeometry.angleDegrees(
+            UserQuerySpawnGeometry.angleDegrees(
                 from: CGPoint(x: 100, y: 100),
                 to: CGPoint(x: 100, y: 200)
             ) == 90
         )
         #expect(
-            PointerPromptSpawnGeometry.angleDegrees(
+            UserQuerySpawnGeometry.angleDegrees(
                 from: CGPoint(x: 100, y: 100),
                 to: CGPoint(x: 0, y: 100)
             ) == 180
@@ -54,18 +54,18 @@ struct PointerPromptSpawnGeometryTests {
 
     @Test
     func labelTypingIdentityChangesWhenLabelChanges() {
-        let first = PointerPromptSpawnGeometry.labelTypingIdentity(
+        let first = UserQuerySpawnGeometry.labelTypingIdentity(
             spawnID: "spawn-1",
             label: "Routing task"
         )
-        let second = PointerPromptSpawnGeometry.labelTypingIdentity(
+        let second = UserQuerySpawnGeometry.labelTypingIdentity(
             spawnID: "spawn-1",
             label: "Opening Music"
         )
 
         #expect(first != second)
         #expect(
-            first == PointerPromptSpawnGeometry.labelTypingIdentity(
+            first == UserQuerySpawnGeometry.labelTypingIdentity(
                 spawnID: "spawn-1",
                 label: "Routing task"
             )
@@ -74,10 +74,10 @@ struct PointerPromptSpawnGeometryTests {
 
     @Test @MainActor
     func spawnOverlayPlacesCursorInsideViewportAndLabelAboveIt() {
-        let viewModel = PointerPromptSpawnOverlayViewModel()
+        let viewModel = UserQuerySpawnOverlayViewModel()
         let cursorPoint = CGPoint(x: 600, y: 282)
         let screenSize = CGSize(width: 1200, height: 800)
-        let state = PointerPromptSpawnState(
+        let state = UserQuerySpawnState(
             id: "spawn-1",
             commandText: "hi there",
             label: "hi there",
@@ -105,18 +105,18 @@ struct PointerPromptSpawnGeometryTests {
 
     @Test @MainActor
     func spawnOverlayKeepsTravelAngleAfterCursorArrives() async throws {
-        let viewModel = PointerPromptSpawnOverlayViewModel()
+        let viewModel = UserQuerySpawnOverlayViewModel()
         let origin = CGPoint(x: 600, y: -24)
         let destination = CGPoint(x: 420, y: 282)
         let screenSize = CGSize(width: 1200, height: 800)
-        let state = PointerPromptSpawnState(
+        let state = UserQuerySpawnState(
             id: "spawn-1",
             commandText: "hi there",
             label: "hi there",
             accentIndex: 1,
             phase: .traveling
         )
-        let expectedAngle = PointerPromptSpawnGeometry.angleDegrees(
+        let expectedAngle = UserQuerySpawnGeometry.angleDegrees(
             from: origin,
             to: destination
         )
@@ -139,10 +139,10 @@ struct PointerPromptSpawnGeometryTests {
 
     @Test @MainActor
     func spawnOverlayWagsTailUntilResponseLabelArrives() async throws {
-        let viewModel = PointerPromptSpawnOverlayViewModel()
+        let viewModel = UserQuerySpawnOverlayViewModel()
         let origin = CGPoint(x: 600, y: -24)
         let destination = CGPoint(x: 420, y: 282)
-        let state = PointerPromptSpawnState(
+        let state = UserQuerySpawnState(
             id: "spawn-1",
             commandText: "hi there",
             label: "hi there",
@@ -158,7 +158,7 @@ struct PointerPromptSpawnGeometryTests {
         )
 
         let landedBeforeWorkingDelay = UInt64(
-            (PointerPromptSpawnOverlayViewModel.travelDuration + 0.15) * 1_000_000_000
+            (UserQuerySpawnOverlayViewModel.travelDuration + 0.15) * 1_000_000_000
         )
         try await Task.sleep(nanoseconds: landedBeforeWorkingDelay)
 
@@ -166,14 +166,14 @@ struct PointerPromptSpawnGeometryTests {
         #expect(!viewModel.isWorking)
 
         let workingDelay = UInt64(
-            (PointerPromptSpawnOverlayViewModel.terminalTailAnimationDuration + 0.2) * 1_000_000_000
+            (UserQuerySpawnOverlayViewModel.terminalTailAnimationDuration + 0.2) * 1_000_000_000
         )
         try await Task.sleep(nanoseconds: workingDelay)
 
         #expect(!viewModel.isWorking)
 
         viewModel.update(
-            state: PointerPromptSpawnState(
+            state: UserQuerySpawnState(
                 id: "spawn-1",
                 commandText: "hi there",
                 label: "Hi! What would you like to work on?",
@@ -190,8 +190,8 @@ struct PointerPromptSpawnGeometryTests {
 
     @Test @MainActor
     func spawnLabelOnlyExpandsOnHoverWhenCollapsedTextOverflows() {
-        let viewModel = PointerPromptSpawnOverlayViewModel()
-        let shortState = PointerPromptSpawnState(
+        let viewModel = UserQuerySpawnOverlayViewModel()
+        let shortState = UserQuerySpawnState(
             id: "spawn-1",
             commandText: "hi there",
             label: "hi there",
@@ -208,7 +208,7 @@ struct PointerPromptSpawnGeometryTests {
         viewModel.setLabelHovered(true)
         #expect(!viewModel.isLabelHovered)
 
-        let longState = PointerPromptSpawnState(
+        let longState = UserQuerySpawnState(
             id: "spawn-1",
             commandText: "long",
             label: Array(repeating: "details", count: 30).joined(separator: " "),
@@ -226,8 +226,8 @@ struct PointerPromptSpawnGeometryTests {
 
     @Test @MainActor
     func spawnOverlayReservesPanelDrawingRoomWithoutExpandingHitArea() async throws {
-        let viewModel = PointerPromptSpawnOverlayViewModel()
-        let state = PointerPromptSpawnState(
+        let viewModel = UserQuerySpawnOverlayViewModel()
+        let state = UserQuerySpawnState(
             id: "spawn-1",
             taskID: "task-1",
             commandText: "plan",
@@ -243,7 +243,7 @@ struct PointerPromptSpawnGeometryTests {
             screenSize: CGSize(width: 1200, height: 800)
         )
         let landedDelay = UInt64(
-            (PointerPromptSpawnOverlayViewModel.travelDuration + 0.05) * 1_000_000_000
+            (UserQuerySpawnOverlayViewModel.travelDuration + 0.05) * 1_000_000_000
         )
         try await Task.sleep(nanoseconds: landedDelay)
 
@@ -263,7 +263,7 @@ struct PointerPromptSpawnGeometryTests {
 
     @Test @MainActor
     func spawnOverlayUsesPaddedPanelFrameForTravelingCursor() {
-        let viewModel = PointerPromptSpawnOverlayViewModel()
+        let viewModel = UserQuerySpawnOverlayViewModel()
         let point = CGPoint(x: 420, y: 282)
         let cursorFrame = viewModel.cursorOnlyVisualFrame(at: point)
         let panelFrame = viewModel.cursorPanelFrame(at: point)
@@ -275,8 +275,8 @@ struct PointerPromptSpawnGeometryTests {
 
     @Test @MainActor
     func inlineSpawnLabelEditorSubmitsTrimmedFollowUpForTask() {
-        let viewModel = PointerPromptSpawnOverlayViewModel()
-        let state = PointerPromptSpawnState(
+        let viewModel = UserQuerySpawnOverlayViewModel()
+        let state = UserQuerySpawnState(
             id: "spawn-1",
             taskID: "task-1",
             commandText: "hi there",
@@ -315,8 +315,8 @@ struct PointerPromptSpawnGeometryTests {
 
     @Test @MainActor
     func inlineSpawnLabelEditorClosesWhenIdleFocusIsLost() {
-        let viewModel = PointerPromptSpawnOverlayViewModel()
-        let state = PointerPromptSpawnState(
+        let viewModel = UserQuerySpawnOverlayViewModel()
+        let state = UserQuerySpawnState(
             id: "spawn-1",
             taskID: "task-1",
             commandText: "hi there",

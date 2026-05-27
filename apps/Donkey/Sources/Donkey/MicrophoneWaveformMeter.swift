@@ -6,8 +6,8 @@ import Foundation
 @MainActor
 final class MicrophoneWaveformMeter {
     private let engine = AVAudioEngine()
-    private let barCount = PointerPromptState.defaultVoiceWaveformLevels.count
-    private var levels = PointerPromptState.defaultVoiceWaveformLevels
+    private let barCount = UserQueryState.defaultVoiceWaveformLevels.count
+    private var levels = UserQueryState.defaultVoiceWaveformLevels
     private var isRunning = false
     private var isStarting = false
     private var isRecordingAudio = false
@@ -71,14 +71,14 @@ final class MicrophoneWaveformMeter {
         let durationMS = startedAt.map { Date().timeIntervalSince($0) * 1_000 }
             ?? (Double(samples.count) / Double(sampleRateHz) * 1_000)
         return LocalVoiceAudioBuffer(
-            id: "pointer-prompt-audio-\(UUID().uuidString)",
+            id: "user-query-audio-\(UUID().uuidString)",
             format: "pcm_f32le",
             sampleRateHz: sampleRateHz,
             channelCount: 1,
             durationMS: durationMS,
             data: Self.float32LittleEndianData(from: samples),
             metadata: [
-                "source": "pointer-prompt",
+                "source": "user-query",
                 "encoding": "pcm_f32le",
                 "sampleLayout": "mono"
             ]
@@ -93,7 +93,7 @@ final class MicrophoneWaveformMeter {
 
         let inputNode = engine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
-        levels = PointerPromptState.defaultVoiceWaveformLevels
+        levels = UserQueryState.defaultVoiceWaveformLevels
         publishLevels()
 
         inputNode.removeTap(onBus: 0)

@@ -396,6 +396,6 @@ public struct LocalAppTaskAdapter: Sendable {
     }
 
     private static func normalizedText(_ value: String) -> String {
-        LocalAppTaskIntentParser.normalizedPhrase(value)
+        LocalAppTextNormalizer.normalizedPhrase(value)
     }
 }

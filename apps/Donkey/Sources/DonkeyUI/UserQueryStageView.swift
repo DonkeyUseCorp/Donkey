@@ -2,23 +2,23 @@ import AppKit
 import DonkeyContracts
 import SwiftUI
 
-public struct PointerPromptStageView: View {
+public struct UserQueryStageView: View {
     private static let rendersAgentPointer = false
 
-    private let state: PointerPromptState
+    private let state: UserQueryState
     @Binding private var messageText: String
     private let inputTextHeight: CGFloat
     private let isInputExpanded: Bool
-    private let placement: PointerPromptPlacement
-    private weak var intentSink: (any PointerPromptIntentSink)?
+    private let placement: UserQueryPlacement
+    private weak var intentSink: (any UserQueryIntentSink)?
 
     public init(
-        state: PointerPromptState,
+        state: UserQueryState,
         messageText: Binding<String>,
-        inputTextHeight: CGFloat = PointerPromptLayout.composerInputTextMinimumHeight,
+        inputTextHeight: CGFloat = UserQueryLayout.composerInputTextMinimumHeight,
         isInputExpanded: Bool = false,
-        placement: PointerPromptPlacement = .bottomRight,
-        intentSink: any PointerPromptIntentSink
+        placement: UserQueryPlacement = .bottomRight,
+        intentSink: any UserQueryIntentSink
     ) {
         self.state = state
         self._messageText = messageText
@@ -30,8 +30,8 @@ public struct PointerPromptStageView: View {
 
     public var body: some View {
         activeComposer
-            .padding(.horizontal, PointerPromptLayout.stageHorizontalPadding)
-            .padding(.vertical, PointerPromptLayout.stageVerticalPadding)
+            .padding(.horizontal, UserQueryLayout.stageHorizontalPadding)
+            .padding(.vertical, UserQueryLayout.stageVerticalPadding)
             .background(Color.clear)
             .accessibilityElement(children: .contain)
     }
@@ -48,8 +48,8 @@ public struct PointerPromptStageView: View {
     private var hiddenPointerSlot: some View {
         Color.clear
             .frame(
-                width: PointerPromptLayout.pointerSlotSize.width,
-                height: PointerPromptLayout.pointerSlotSize.height
+                width: UserQueryLayout.pointerSlotSize.width,
+                height: UserQueryLayout.pointerSlotSize.height
             )
             .accessibilityHidden(true)
     }
@@ -61,13 +61,13 @@ public struct PointerPromptStageView: View {
             isActive: state.isActive
         )
         .frame(
-            width: PointerPromptLayout.pointerSlotSize.width,
-            height: PointerPromptLayout.pointerSlotSize.height
+            width: UserQueryLayout.pointerSlotSize.width,
+            height: UserQueryLayout.pointerSlotSize.height
         )
     }
 
     private var composer: some View {
-        PointerPromptComposer(
+        UserQueryComposer(
             state: state,
             messageText: $messageText,
             inputTextHeight: inputTextHeight,
@@ -83,8 +83,8 @@ public struct PointerPromptStageView: View {
             }
         )
         .frame(
-            width: PointerPromptLayout.composerWidth,
-            height: PointerPromptLayout.composerHeight(
+            width: UserQueryLayout.composerWidth,
+            height: UserQueryLayout.composerHeight(
                 inputTextHeight: inputTextHeight,
                 isExpanded: isInputExpanded
             )
@@ -99,28 +99,28 @@ public struct PointerPromptStageView: View {
     }
 }
 
-struct PointerPromptComposer: View {
-    let state: PointerPromptState
+struct UserQueryComposer: View {
+    let state: UserQueryState
     @Binding var messageText: String
     let inputTextHeight: CGFloat
     let isInputExpanded: Bool
     let surfaceFill: Color
     let forceExpandedSurface: Bool
-    let toolbarStyle: PointerPromptComposerToolbarStyle
-    let sizeProfile: PointerPromptComposerSizeProfile
+    let toolbarStyle: UserQueryComposerToolbarStyle
+    let sizeProfile: UserQueryComposerSizeProfile
     let submit: @MainActor () -> Void
     let inputTextHeightChanged: @MainActor (CGFloat) -> Void
     let inputExpansionChanged: @MainActor (Bool) -> Void
 
     init(
-        state: PointerPromptState,
+        state: UserQueryState,
         messageText: Binding<String>,
         inputTextHeight: CGFloat,
         isInputExpanded: Bool,
         surfaceFill: Color = .black,
         forceExpandedSurface: Bool = false,
-        toolbarStyle: PointerPromptComposerToolbarStyle = .waveformOnly,
-        sizeProfile: PointerPromptComposerSizeProfile = .standard,
+        toolbarStyle: UserQueryComposerToolbarStyle = .waveformOnly,
+        sizeProfile: UserQueryComposerSizeProfile = .standard,
         submit: @escaping @MainActor () -> Void,
         inputTextHeightChanged: @escaping @MainActor (CGFloat) -> Void,
         inputExpansionChanged: @escaping @MainActor (Bool) -> Void
@@ -141,7 +141,7 @@ struct PointerPromptComposer: View {
     var body: some View {
         promptSurface
         .frame(
-            width: PointerPromptLayout.composerInputSurfaceWidth,
+            width: UserQueryLayout.composerInputSurfaceWidth,
             height: composerHeight,
             alignment: .topLeading
         )
@@ -158,16 +158,16 @@ struct PointerPromptComposer: View {
     }
 
     private var promptCapsule: some View {
-        HStack(spacing: PointerPromptLayout.composerTextWaveformSpacing) {
+        HStack(spacing: UserQueryLayout.composerTextWaveformSpacing) {
             textInput
-                .frame(width: PointerPromptLayout.composerWrappingTextWidth)
+                .frame(width: UserQueryLayout.composerWrappingTextWidth)
 
             composerTrailingControls
         }
-        .padding(.leading, PointerPromptLayout.composerInputLeadingContentPadding)
-        .padding(.trailing, PointerPromptLayout.composerInputTrailingContentPadding)
+        .padding(.leading, UserQueryLayout.composerInputLeadingContentPadding)
+        .padding(.trailing, UserQueryLayout.composerInputTrailingContentPadding)
         .frame(
-            width: PointerPromptLayout.composerInputSurfaceWidth,
+            width: UserQueryLayout.composerInputSurfaceWidth,
             height: composerHeight
         )
         .background {
@@ -190,11 +190,11 @@ struct PointerPromptComposer: View {
     private var expandedPromptSurface: some View {
         VStack(spacing: 0) {
             textInput
-                .frame(width: PointerPromptLayout.composerExpandedTextWidth)
+                .frame(width: UserQueryLayout.composerExpandedTextWidth)
                 .padding(.top, sizeProfile.expandedTextTopPadding)
-                .padding(.horizontal, PointerPromptLayout.composerExpandedTextHorizontalPadding)
+                .padding(.horizontal, UserQueryLayout.composerExpandedTextHorizontalPadding)
                 .frame(
-                    width: PointerPromptLayout.composerInputSurfaceWidth,
+                    width: UserQueryLayout.composerInputSurfaceWidth,
                     height: expandedTextAreaHeight,
                     alignment: .top
                 )
@@ -202,12 +202,12 @@ struct PointerPromptComposer: View {
             promptToolbar
         }
         .frame(
-            width: PointerPromptLayout.composerInputSurfaceWidth,
+            width: UserQueryLayout.composerInputSurfaceWidth,
             height: composerHeight
         )
         .background {
             RoundedRectangle(
-                cornerRadius: PointerPromptLayout.composerCornerRadius,
+                cornerRadius: UserQueryLayout.composerCornerRadius,
                 style: .continuous
             )
             .fill(surfaceFill)
@@ -215,7 +215,7 @@ struct PointerPromptComposer: View {
         .overlay {
             if showsSurfaceStroke {
                 RoundedRectangle(
-                    cornerRadius: PointerPromptLayout.composerCornerRadius,
+                    cornerRadius: UserQueryLayout.composerCornerRadius,
                     style: .continuous
                 )
                 .stroke(Color.white.opacity(0.28), lineWidth: 1)
@@ -244,27 +244,27 @@ struct PointerPromptComposer: View {
         .padding(.horizontal, toolbarHorizontalPadding)
         .padding(.bottom, toolbarBottomPadding)
         .frame(
-            width: PointerPromptLayout.composerInputSurfaceWidth,
+            width: UserQueryLayout.composerInputSurfaceWidth,
             height: sizeProfile.toolbarHeight
         )
     }
 
     private var composerTrailingControls: some View {
-        HStack(spacing: PointerPromptLayout.composerTrailingControlsSpacing) {
+        HStack(spacing: UserQueryLayout.composerTrailingControlsSpacing) {
             if state.isVoiceInputActive {
                 VoiceWaveformView(levels: state.voiceWaveformLevels)
                     .frame(
-                        width: PointerPromptLayout.composerWaveformSize.width,
-                        height: PointerPromptLayout.composerWaveformSize.height
+                        width: UserQueryLayout.composerWaveformSize.width,
+                        height: UserQueryLayout.composerWaveformSize.height
                     )
             } else {
                 microphoneIcon
-                sendButton(size: PointerPromptLayout.composerSendButtonSize)
+                sendButton(size: UserQueryLayout.composerSendButtonSize)
             }
         }
         .frame(
-            width: PointerPromptLayout.composerTrailingControlsWidth,
-            height: PointerPromptLayout.composerSendButtonSize,
+            width: UserQueryLayout.composerTrailingControlsWidth,
+            height: UserQueryLayout.composerSendButtonSize,
             alignment: .trailing
         )
     }
@@ -275,8 +275,8 @@ struct PointerPromptComposer: View {
             .symbolRenderingMode(.monochrome)
             .foregroundStyle(Color.white.opacity(microphoneOpacity))
             .frame(
-                width: PointerPromptLayout.composerMicrophoneIconSize,
-                height: PointerPromptLayout.composerMicrophoneIconSize
+                width: UserQueryLayout.composerMicrophoneIconSize,
+                height: UserQueryLayout.composerMicrophoneIconSize
             )
             .background {
                 if isMicrophoneEmphasized {
@@ -316,7 +316,7 @@ struct PointerPromptComposer: View {
     private var textInput: some View {
         ComposerMultilineTextInput(
             text: $messageText,
-            placeholder: PointerPromptCopy.composerPlaceholder(for: state.promptText),
+            placeholder: UserQueryCopy.composerPlaceholder(for: state.promptText),
             isActive: state.isActive,
             textHeightChanged: inputTextHeightChanged,
             expansionChanged: inputExpansionChanged,
@@ -340,7 +340,7 @@ struct PointerPromptComposer: View {
     private var toolbarHorizontalPadding: CGFloat {
         switch toolbarStyle {
         case .waveformOnly:
-            PointerPromptLayout.composerExpandedTextHorizontalPadding
+            UserQueryLayout.composerExpandedTextHorizontalPadding
         case .followUp:
             16
         }
@@ -411,23 +411,23 @@ struct PointerPromptComposer: View {
             )
         }
 
-        return PointerPromptLayout.composerInputMinimumHeight
+        return UserQueryLayout.composerInputMinimumHeight
     }
 }
 
-enum PointerPromptComposerToolbarStyle {
+enum UserQueryComposerToolbarStyle {
     case waveformOnly
     case followUp
 }
 
-enum PointerPromptComposerSizeProfile {
+enum UserQueryComposerSizeProfile {
     case standard
     case compact
 
     var expandedTextTopPadding: CGFloat {
         switch self {
         case .standard:
-            PointerPromptLayout.composerExpandedTextTopPadding
+            UserQueryLayout.composerExpandedTextTopPadding
         case .compact:
             12
         }
@@ -436,7 +436,7 @@ enum PointerPromptComposerSizeProfile {
     var toolbarHeight: CGFloat {
         switch self {
         case .standard:
-            PointerPromptLayout.composerExpandedToolbarHeight
+            UserQueryLayout.composerExpandedToolbarHeight
         case .compact:
             48
         }
@@ -445,7 +445,7 @@ enum PointerPromptComposerSizeProfile {
     var expandedMinimumHeight: CGFloat {
         switch self {
         case .standard:
-            PointerPromptLayout.composerExpandedMinimumHeight
+            UserQueryLayout.composerExpandedMinimumHeight
         case .compact:
             92
         }
@@ -472,7 +472,7 @@ private struct VoiceWaveformView: View {
     private var displayLevels: [Double] {
         let clampedLevels = levels.map { min(max($0, 0), 1) }
         guard clampedLevels.count >= 7 else {
-            return PointerPromptState.defaultVoiceWaveformLevels
+            return UserQueryState.defaultVoiceWaveformLevels
         }
 
         return Array(clampedLevels.suffix(7))
@@ -522,7 +522,7 @@ private struct ComposerMultilineTextInput: NSViewRepresentable {
         textView.isVerticallyResizable = true
         textView.minSize = CGSize(
             width: 0,
-            height: PointerPromptLayout.composerInputTextMinimumHeight
+            height: UserQueryLayout.composerInputTextMinimumHeight
         )
         textView.maxSize = CGSize(
             width: CGFloat.greatestFiniteMagnitude,
@@ -600,7 +600,7 @@ private struct ComposerMultilineTextInput: NSViewRepresentable {
         ) {
             let width = max(1, scrollView.contentView.bounds.width)
             let visibleHeight = max(
-                PointerPromptLayout.composerInputTextMinimumHeight,
+                UserQueryLayout.composerInputTextMinimumHeight,
                 scrollView.contentView.bounds.height
             )
             textView.textContainer?.containerSize = CGSize(
@@ -630,9 +630,9 @@ private struct ComposerMultilineTextInput: NSViewRepresentable {
         func reportExpansionState(for textView: NSTextView) {
             let wrappedHeight = measuredTextHeight(
                 for: textView.string,
-                width: PointerPromptLayout.composerWrappingTextWidth
+                width: UserQueryLayout.composerWrappingTextWidth
             )
-            let shouldExpand = PointerPromptLayout.isComposerInputExpanded(
+            let shouldExpand = UserQueryLayout.isComposerInputExpanded(
                 inputTextHeight: wrappedHeight
             )
             parent.expansionChanged(shouldExpand)
@@ -641,20 +641,20 @@ private struct ComposerMultilineTextInput: NSViewRepresentable {
         private func measuredTextHeight(for textView: NSTextView) -> CGFloat {
             guard let layoutManager = textView.layoutManager,
                   let textContainer = textView.textContainer else {
-                return PointerPromptLayout.composerInputTextMinimumHeight
+                return UserQueryLayout.composerInputTextMinimumHeight
             }
 
             layoutManager.ensureLayout(for: textContainer)
             let usedRect = layoutManager.usedRect(for: textContainer)
             return ceil(max(
-                PointerPromptLayout.composerInputTextMinimumHeight,
+                UserQueryLayout.composerInputTextMinimumHeight,
                 usedRect.height
             ))
         }
 
         private func measuredTextHeight(for string: String, width: CGFloat) -> CGFloat {
             guard !string.isEmpty else {
-                return PointerPromptLayout.composerInputTextMinimumHeight
+                return UserQueryLayout.composerInputTextMinimumHeight
             }
 
             let textStorage = NSTextStorage(
@@ -674,7 +674,7 @@ private struct ComposerMultilineTextInput: NSViewRepresentable {
             let usedRect = layoutManager.usedRect(for: textContainer)
 
             return ceil(max(
-                PointerPromptLayout.composerInputTextMinimumHeight,
+                UserQueryLayout.composerInputTextMinimumHeight,
                 usedRect.height
             ))
         }
@@ -758,8 +758,8 @@ private enum ComposerTextStyle {
 }
 
 private struct AgentPointerView: View {
-    let placement: PointerPromptPlacement
-    let theme: PointerPromptTheme
+    let placement: UserQueryPlacement
+    let theme: UserQueryTheme
     let isActive: Bool
 
     var body: some View {
@@ -779,7 +779,7 @@ private struct AgentPointerView: View {
                         .stroke(
                             Color(promptColor: theme.accent),
                             style: StrokeStyle(
-                                lineWidth: PointerPromptLayout.pointerStrokeWidth,
+                                lineWidth: UserQueryLayout.pointerStrokeWidth,
                                 lineCap: .round,
                                 lineJoin: .round
                             )
@@ -792,8 +792,8 @@ private struct AgentPointerView: View {
                     y: isActive ? 2 : 0
                 )
                 .frame(
-                    width: PointerPromptLayout.pointerVisualSize.width,
-                    height: PointerPromptLayout.pointerVisualSize.height
+                    width: UserQueryLayout.pointerVisualSize.width,
+                    height: UserQueryLayout.pointerVisualSize.height
                 )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: shapeAlignment)
@@ -853,7 +853,7 @@ private struct AgentPointerShape: Shape {
 }
 
 private extension Color {
-    init(promptColor: PointerPromptColor) {
+    init(promptColor: UserQueryColor) {
         self.init(
             red: promptColor.red,
             green: promptColor.green,

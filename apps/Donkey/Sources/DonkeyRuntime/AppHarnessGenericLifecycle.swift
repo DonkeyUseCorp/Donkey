@@ -38,9 +38,9 @@ public struct AppHarnessGenericLifecycle: Sendable {
         self.compactor = compactor
     }
 
-    public func preparePointerPromptTurn(
+    public func prepareUserQueryTurn(
         request: AppHarnessTurnRequest,
-        pointerTask: PointerPromptNotchTask?,
+        pointerTask: UserQueryNotchTask?,
         traceID: String,
         availableToolNames: [String],
         grantedPermissions: Set<HarnessPermission> = []
@@ -59,17 +59,17 @@ public struct AppHarnessGenericLifecycle: Sendable {
             createdAt: existingThread?.createdAt ?? now,
             updatedAt: now,
             metadata: (existingThread?.metadata ?? [:]).merging([
-                "source": "pointerPrompt",
+                "source": "userQuery",
                 "traceID": traceID
             ]) { current, _ in current }
         )
         await threadStore.upsertThread(thread)
-        await mirrorPointerPromptEvents(
+        await mirrorUserQueryEvents(
             request.recentEvents,
             threadID: threadID,
             taskID: taskID
         )
-        await mirrorPointerPromptAssets(
+        await mirrorUserQueryAssets(
             request.assets,
             threadID: threadID,
             taskID: taskID
@@ -88,7 +88,7 @@ public struct AppHarnessGenericLifecycle: Sendable {
             policy: request.policy,
             metadata: [
                 "traceID": traceID,
-                "source": "pointerPrompt"
+                "source": "userQuery"
             ]
         )
         let task = await loadOrCreateTask(
@@ -118,7 +118,7 @@ public struct AppHarnessGenericLifecycle: Sendable {
                 promptCharacterCount: compactedContext.promptText.count,
                 records: compactedContext.compactionRecords,
                 metadata: compactedContext.metadata.merging([
-                    "source": "pointerPrompt",
+                    "source": "userQuery",
                     "traceID": traceID
                 ]) { current, _ in current }
             )
@@ -172,7 +172,7 @@ public struct AppHarnessGenericLifecycle: Sendable {
         _ = await coordinator.updatePlan(taskID: taskID, plan: plan)
         return await coordinator.startRunning(
             taskID: taskID,
-            reason: "Pointer prompt task planned through generic harness"
+            reason: "User query task planned through generic harness"
         )
     }
 
@@ -189,13 +189,13 @@ public struct AppHarnessGenericLifecycle: Sendable {
             steps: [
                 HarnessPlanStep(
                     id: "recover-local-app-task",
-                    summary: "Recover from an unsuccessful pointer-prompt local app task.",
+                    summary: "Recover from an unsuccessful user-query local app task.",
                     toolCall: HarnessToolCall(
                         id: "local-app-recover-\(traceID)",
                         name: "run.recover",
                         input: ["reason": reason],
                         metadata: [
-                            "adapter": "pointerPrompt",
+                            "adapter": "userQuery",
                             "traceID": traceID
                         ]
                     ),
@@ -207,7 +207,7 @@ public struct AppHarnessGenericLifecycle: Sendable {
             clarificationPolicy: ["Ask only if a specific missing user detail would let the task continue."],
             confidence: task.intent?.confidence ?? 0,
             metadata: [
-                "planner": "genericHarnessPointerPromptRecovery",
+                "planner": "genericHarnessUserQueryRecovery",
                 "traceID": traceID,
                 "recovery.reason": reason
             ]
@@ -215,7 +215,7 @@ public struct AppHarnessGenericLifecycle: Sendable {
         _ = await coordinator.updatePlan(taskID: taskID, plan: plan)
         return await coordinator.startRunning(
             taskID: taskID,
-            reason: "Pointer prompt recovery planned through generic harness"
+            reason: "User query recovery planned through generic harness"
         )
     }
 
@@ -278,16 +278,16 @@ public struct AppHarnessGenericLifecycle: Sendable {
                 taskID: taskID,
                 newGoal: goal,
                 turn: context.turn,
-                reason: "Pointer prompt follow-up changed course"
+                reason: "User query follow-up changed course"
             )
             _ = await coordinator.resume(
                 taskID: taskID,
-                reason: "Pointer prompt follow-up resumed task"
+                reason: "User query follow-up resumed task"
             )
         } else if !existing.status.canExecuteTools {
             _ = await coordinator.resume(
                 taskID: taskID,
-                reason: "Pointer prompt resumed task"
+                reason: "User query resumed task"
             )
         }
 
@@ -297,8 +297,8 @@ public struct AppHarnessGenericLifecycle: Sendable {
         ) ?? existing
     }
 
-    private func mirrorPointerPromptEvents(
-        _ pointerEvents: [PointerPromptTaskEvent],
+    private func mirrorUserQueryEvents(
+        _ pointerEvents: [UserQueryTaskEvent],
         threadID: String,
         taskID: String
     ) async {
@@ -309,18 +309,18 @@ public struct AppHarnessGenericLifecycle: Sendable {
                     id: event.id,
                     threadID: threadID,
                     taskID: taskID,
-                    role: HarnessThreadEventRole(pointerPromptRole: event.role),
+                    role: HarnessThreadEventRole(userQueryRole: event.role),
                     text: event.text,
                     sequence: event.sequence,
                     createdAt: event.createdAt,
-                    metadata: ["source": "pointerPromptTaskStore"]
+                    metadata: ["source": "userQueryTaskStore"]
                 )
             )
         }
     }
 
-    private func mirrorPointerPromptAssets(
-        _ pointerAssets: [PointerPromptTaskAsset],
+    private func mirrorUserQueryAssets(
+        _ pointerAssets: [UserQueryTaskAsset],
         threadID: String,
         taskID: String
     ) async {
@@ -338,7 +338,7 @@ public struct AppHarnessGenericLifecycle: Sendable {
                     byteCount: asset.byteCount,
                     createdAt: asset.createdAt,
                     metadata: [
-                        "source": "pointerPromptTaskStore",
+                        "source": "userQueryTaskStore",
                         "assetSource": asset.source.rawValue
                     ]
                 )
@@ -453,7 +453,7 @@ public struct AppHarnessGenericLifecycle: Sendable {
                         "modelStepIndex": String(index)
                     ],
                     metadata: [
-                        "adapter": "pointerPrompt",
+                        "adapter": "userQuery",
                         "traceID": traceID,
                         "source": "hostedGenericHarnessPlanning"
                     ]
@@ -509,8 +509,8 @@ public struct AppHarnessGenericLifecycle: Sendable {
 }
 
 private extension HarnessThreadEventRole {
-    init(pointerPromptRole: PointerPromptTaskEventRole) {
-        switch pointerPromptRole {
+    init(userQueryRole: UserQueryTaskEventRole) {
+        switch userQueryRole {
         case .user:
             self = .user
         case .assistant:

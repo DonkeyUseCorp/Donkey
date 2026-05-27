@@ -18,6 +18,23 @@ struct LocalAppTaskVerificationResult: Equatable, Sendable {
 
 enum LocalAppTaskVerificationPolicy {
     static func mode(for definition: LocalAppTaskDefinition) -> LocalAppTaskVerificationMode {
+        mode(for: definition, tool: nil)
+    }
+
+    static func mode(
+        for definition: LocalAppTaskDefinition,
+        tool: LocalAppActionPlanTool?
+    ) -> LocalAppTaskVerificationMode {
+        switch tool {
+        case .verifyCommand:
+            return .commandAttempted
+        case .verifyVisibleText:
+            return .visibleText
+        case .openOrFocusApp, .observeApp, .newDocument, .focusSearch, .focusAddressBar,
+             .focusTextEntry, .setText, .pressReturn, nil:
+            break
+        }
+
         switch definition.metadata["verificationMode"] {
         case "focusedApp":
             return .focusedApp
@@ -41,23 +58,25 @@ enum LocalAppTaskVerificationPolicy {
     static func verify(
         intent: TaskIntent,
         definition: LocalAppTaskDefinition,
-        observation: LocalAppTaskObservation?
+        observation: LocalAppTaskObservation?,
+        tool: LocalAppActionPlanTool? = nil
     ) -> LocalAppTaskVerificationResult {
-        switch mode(for: definition) {
+        switch mode(for: definition, tool: tool) {
         case .focusedApp:
-            return verifyFocusedApp(definition: definition, observation: observation)
+            return verifyFocusedApp(definition: definition, observation: observation, tool: tool)
         case .openedLocalItem:
-            return verifyOpenedLocalItem(definition: definition, observation: observation)
+            return verifyOpenedLocalItem(definition: definition, observation: observation, tool: tool)
         case .commandAttempted:
-            return verifyCommandAttempted(definition: definition, observation: observation)
+            return verifyCommandAttempted(definition: definition, observation: observation, tool: tool)
         case .visibleText:
-            return verifyVisibleText(intent: intent, definition: definition, observation: observation)
+            return verifyVisibleText(intent: intent, definition: definition, observation: observation, tool: tool)
         }
     }
 
     private static func verifyFocusedApp(
         definition: LocalAppTaskDefinition,
-        observation: LocalAppTaskObservation?
+        observation: LocalAppTaskObservation?,
+        tool: LocalAppActionPlanTool?
     ) -> LocalAppTaskVerificationResult {
         guard let observation else {
             return blocked(
@@ -71,7 +90,8 @@ enum LocalAppTaskVerificationPolicy {
                 confidence: max(observation.confidence, 0.8),
                 summary: "Target app is focused",
                 metadata: [
-                    "verificationMode": modeName(for: definition),
+                    "verificationMode": modeName(for: definition, tool: tool),
+                    "verificationTool": tool?.rawValue ?? "",
                     "targetApp": definition.targetApp.appName
                 ]
             )
@@ -82,7 +102,8 @@ enum LocalAppTaskVerificationPolicy {
             summary: "Target app is not focused",
             metadata: [
                 "reason": "targetAppNotFocused",
-                "verificationMode": modeName(for: definition),
+                "verificationMode": modeName(for: definition, tool: tool),
+                "verificationTool": tool?.rawValue ?? "",
                 "targetApp": definition.targetApp.appName
             ]
         )
@@ -90,7 +111,8 @@ enum LocalAppTaskVerificationPolicy {
 
     private static func verifyOpenedLocalItem(
         definition: LocalAppTaskDefinition,
-        observation: LocalAppTaskObservation?
+        observation: LocalAppTaskObservation?,
+        tool: LocalAppActionPlanTool?
     ) -> LocalAppTaskVerificationResult {
         guard let observation else {
             return blocked(
@@ -104,7 +126,8 @@ enum LocalAppTaskVerificationPolicy {
                 confidence: max(observation.confidence, 0.72),
                 summary: "Local item was opened",
                 metadata: [
-                    "verificationMode": modeName(for: definition),
+                    "verificationMode": modeName(for: definition, tool: tool),
+                    "verificationTool": tool?.rawValue ?? "",
                     "targetItem": definition.targetApp.appName,
                     "localItem.kind": definition.metadata["localItem.kind"] ?? ""
                 ]
@@ -116,7 +139,8 @@ enum LocalAppTaskVerificationPolicy {
             summary: "Local item could not be confirmed open",
             metadata: [
                 "reason": "localItemOpenUnconfirmed",
-                "verificationMode": modeName(for: definition),
+                "verificationMode": modeName(for: definition, tool: tool),
+                "verificationTool": tool?.rawValue ?? "",
                 "targetItem": definition.targetApp.appName
             ]
         )
@@ -124,7 +148,8 @@ enum LocalAppTaskVerificationPolicy {
 
     private static func verifyCommandAttempted(
         definition: LocalAppTaskDefinition,
-        observation: LocalAppTaskObservation?
+        observation: LocalAppTaskObservation?,
+        tool: LocalAppActionPlanTool?
     ) -> LocalAppTaskVerificationResult {
         guard let observation else {
             return blocked(
@@ -139,7 +164,8 @@ enum LocalAppTaskVerificationPolicy {
                 summary: "No post-action observation has been recorded for \(definition.targetApp.appName)",
                 metadata: [
                     "reason": "missingPostActionObservation",
-                    "verificationMode": modeName(for: definition),
+                    "verificationMode": modeName(for: definition, tool: tool),
+                    "verificationTool": tool?.rawValue ?? "",
                     "targetApp": definition.targetApp.appName
                 ]
             )
@@ -152,7 +178,8 @@ enum LocalAppTaskVerificationPolicy {
                 summary: "No guarded command execution has been recorded for \(definition.targetApp.appName)",
                 metadata: [
                     "reason": "missingCommandExecutionEvidence",
-                    "verificationMode": modeName(for: definition),
+                    "verificationMode": modeName(for: definition, tool: tool),
+                    "verificationTool": tool?.rawValue ?? "",
                     "targetApp": definition.targetApp.appName
                 ]
             )
@@ -163,7 +190,8 @@ enum LocalAppTaskVerificationPolicy {
                 confidence: max(observation.confidence, 0.72),
                 summary: "Command was sent to \(definition.targetApp.appName)",
                 metadata: [
-                    "verificationMode": modeName(for: definition),
+                    "verificationMode": modeName(for: definition, tool: tool),
+                    "verificationTool": tool?.rawValue ?? "",
                     "targetApp": definition.targetApp.appName,
                     "executedCommandCount": observation.metadata["executedCommandCount"] ?? "",
                     "submittedCommandCount": observation.metadata["submittedCommandCount"] ?? ""
@@ -176,7 +204,8 @@ enum LocalAppTaskVerificationPolicy {
             summary: "\(definition.targetApp.appName) is not running for command verification",
             metadata: [
                 "reason": "targetAppNotRunning",
-                "verificationMode": modeName(for: definition),
+                "verificationMode": modeName(for: definition, tool: tool),
+                "verificationTool": tool?.rawValue ?? "",
                 "targetApp": definition.targetApp.appName
             ]
         )
@@ -185,7 +214,8 @@ enum LocalAppTaskVerificationPolicy {
     private static func verifyVisibleText(
         intent: TaskIntent,
         definition: LocalAppTaskDefinition,
-        observation: LocalAppTaskObservation?
+        observation: LocalAppTaskObservation?,
+        tool: LocalAppActionPlanTool?
     ) -> LocalAppTaskVerificationResult {
         guard let entityName = definition.verificationEntityName,
               let expected = intent.normalizedEntities[entityName]
@@ -201,6 +231,7 @@ enum LocalAppTaskVerificationPolicy {
                 summary: "Visible app result has not been observed yet",
                 metadata: [
                     "reason": "missingObservation",
+                    "verificationTool": tool?.rawValue ?? "",
                     "expectedEntityName": entityName,
                     "expectedEntityValue": expected
                 ]
@@ -214,6 +245,7 @@ enum LocalAppTaskVerificationPolicy {
                 summary: "Verification text is not available yet",
                 metadata: [
                     "reason": "missingVisibleText",
+                    "verificationTool": tool?.rawValue ?? "",
                     "visibleTextKey": visibleTextKey,
                     "expectedEntityValue": expected
                 ]
@@ -226,6 +258,7 @@ enum LocalAppTaskVerificationPolicy {
                 summary: "Visible app result matches the requested entity",
                 metadata: [
                     "visibleText": visibleText,
+                    "verificationTool": tool?.rawValue ?? "",
                     "expectedEntityName": entityName,
                     "expectedEntityValue": expected
                 ]
@@ -238,6 +271,7 @@ enum LocalAppTaskVerificationPolicy {
             metadata: [
                 "reason": "resultMismatch",
                 "visibleText": visibleText,
+                "verificationTool": tool?.rawValue ?? "",
                 "expectedEntityName": entityName,
                 "expectedEntityValue": expected
             ]
@@ -272,11 +306,14 @@ enum LocalAppTaskVerificationPolicy {
         )
     }
 
-    private static func modeName(for definition: LocalAppTaskDefinition) -> String {
-        definition.metadata["verificationMode"] ?? mode(for: definition).rawValue
+    private static func modeName(
+        for definition: LocalAppTaskDefinition,
+        tool: LocalAppActionPlanTool?
+    ) -> String {
+        mode(for: definition, tool: tool).rawValue
     }
 
     private static func normalized(_ value: String) -> String {
-        LocalAppTaskIntentParser.normalizedPhrase(value)
+        LocalAppTextNormalizer.normalizedPhrase(value)
     }
 }
