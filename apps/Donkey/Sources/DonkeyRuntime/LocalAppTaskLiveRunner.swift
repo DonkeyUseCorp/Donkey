@@ -566,7 +566,11 @@ public struct LocalAppTaskLiveRunner: Sendable {
             summary: "Observing local app for result verification",
             traceID: traceID
         )
-        let finalObservation = await appController.observe(definition: definition)
+        var finalObservation = await appController.observe(definition: definition)
+        finalObservation = observationWithActionEvidence(
+            finalObservation,
+            actionTraces: actionTraces
+        )
         runMetadata["latency.observationMS"] = Self.formatLatency(Self.uptimeMilliseconds() - observationStartedAt)
         let verificationStartedAt = Self.uptimeMilliseconds()
         let finalActionPlan = adapter.evidenceBackedActionPlan(for: intent, observation: finalObservation)
@@ -752,6 +756,26 @@ public struct LocalAppTaskLiveRunner: Sendable {
             index: index,
             issuedAt: Self.now()
         )
+    }
+
+    private func observationWithActionEvidence(
+        _ observation: LocalAppTaskObservation,
+        actionTraces: [ActionEngineCommandTrace]
+    ) -> LocalAppTaskObservation {
+        var enriched = observation
+        let executed = actionTraces.filter(\.executed)
+        let submitCount = executed.filter { Self.isReturnSubmitCommand($0.command) }.count
+        enriched.metadata.merge([
+            "postActionObservation": "true",
+            "executedCommandCount": String(executed.count),
+            "submittedCommandCount": String(submitCount)
+        ]) { current, _ in current }
+        return enriched
+    }
+
+    private static func isReturnSubmitCommand(_ command: ActionEngineCommand) -> Bool {
+        command.metadata["workflowStepRole"] == LocalAppTaskStepRole.submit.rawValue
+            && command.key == "Return"
     }
 
     private func status(for terminalState: LocalAppTaskTerminalState) -> LocalAppTaskLiveRunStatus {

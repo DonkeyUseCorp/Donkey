@@ -339,47 +339,43 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             fallbackGoal: commandRedaction.redactedText,
             traceID: traceID
         )
-        let localRunResults = PointerPromptHarnessLocalRunResultStore()
         let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
-        let harnessTaskLiveRunner = taskLiveRunner
-        await registry.register(
-            HarnessTool(
-                descriptor: AppHarnessGenericLifecycle.localTaskRunDescriptor()
-            ) { toolContext in
-                let localResult = await harnessTaskLiveRunner.run(
-                    command: commandRedaction.redactedText,
-                    traceID: traceID,
-                    resolution: resolution,
-                    metadata: modelMetadata.merging([
-                        "appHarness.decision": AppHarnessDecisionKind.runLocalTask.rawValue,
-                        "genericHarness.taskID": toolContext.taskID,
-                        "genericHarness.toolCallID": toolContext.call.id
-                    ]) { current, _ in current }
-                )
-                await localRunResults.store(localResult, callID: toolContext.call.id)
-                return Self.harnessToolResult(
-                    for: localResult,
-                    call: toolContext.call
-                )
-            }
+        let localStepExecutor = LocalAppHarnessStepExecutor(
+            command: commandRedaction.redactedText,
+            traceID: traceID,
+            resolution: resolution,
+            metadata: modelMetadata.merging([
+                "appHarness.decision": AppHarnessDecisionKind.runLocalTask.rawValue,
+                "genericHarness.taskID": taskID
+            ]) { current, _ in current },
+            appController: taskLiveRunner.appController,
+            actionEngineFactory: taskLiveRunner.actionEngineFactory,
+            permissionPolicy: taskLiveRunner.permissionPolicy,
+            coordinator: coordinator
         )
+        await localStepExecutor.registerTools(in: registry)
         let genericRuntime = GenericHarnessRuntime(
             coordinator: genericHarnessLifecycle.coordinator,
             registry: registry
         )
-        let runStep = await genericRuntime.executeNextPlannedStep(taskID: taskID)
-        let result = await localRunResults.firstResult() ?? Self.syntheticLocalRunResult(
-            command: commandRedaction.redactedText,
-            traceID: traceID,
-            resolution: resolution,
-            runStep: runStep
+        let runSteps = await executeGenericHarnessLoop(
+            taskID: taskID,
+            runtime: genericRuntime
         )
+        let runStep = runSteps.last
+        let verificationStep = runSteps.last { step in
+            step.toolResult?.toolName == LocalAppActionPlanTool.verifyCommand.rawValue
+                || step.toolResult?.toolName == LocalAppActionPlanTool.verifyVisibleText.rawValue
+        }
+        let result = await localStepExecutor.currentResult()
         let finalized = await finalizeGenericHarnessTask(
             taskID: taskID,
             result: result,
             runStep: runStep,
+            verificationStep: verificationStep,
             runtime: genericRuntime
         )
+        let finalizedTask = await genericHarnessLifecycle.taskState(taskID: taskID)
         logActionTraces(for: result)
 
         let agentVisualizationPlan = LocalAppTaskAgentVisualizationBuilder.plan(
@@ -388,12 +384,13 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         ).map(groundAgentVisualizationPlan)
         let handlingResult = PointerPromptCommandHandlingResult(
             status: result.status,
-            threadStatus: threadStatus(for: result, runStep: runStep),
+            threadStatus: Self.pointerPromptStatus(for: finalizedTask)
+                ?? threadStatus(for: result, runStep: runStep),
             decision: decision,
-            summary: summary(for: result, runStep: runStep),
+            summary: summary(for: result, task: finalizedTask, runStep: runStep),
             taskLabel: taskLabel(for: result),
             traceID: traceID,
-            metadata: Self.genericHarnessTaskMetadata(runStep?.task).merging(result.metadata) { current, _ in current }.merging([
+            metadata: Self.genericHarnessTaskMetadata(finalizedTask ?? runStep?.task).merging(result.metadata) { current, _ in current }.merging([
                 "appHarness.decision": AppHarnessDecisionKind.runLocalTask.rawValue,
                 "appHarness.router": "modelLocalAppTask"
             ]) { current, _ in current }
@@ -454,11 +451,11 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         taskID: String,
         result: LocalAppTaskLiveRunResult,
         runStep: HarnessStepExecutionResult?,
+        verificationStep: HarnessStepExecutionResult?,
         runtime: GenericHarnessRuntime
     ) async -> PointerPromptGenericFinalizeResult {
         switch result.status {
         case .completed:
-            let verificationStep = await runtime.executeNextPlannedStep(taskID: taskID)
             if verificationStep?.toolResult?.status == .failed {
                 let recoveryStep = await recoverGenericHarnessTask(
                     taskID: taskID,
@@ -481,7 +478,19 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
                 reason: "Pointer prompt local task completed"
             )
             return PointerPromptGenericFinalizeResult(verificationStep: verificationStep)
-        case .needsUserReview, .needsConfirmation, .unsupportedCommand:
+        case .needsUserReview:
+            _ = await genericHarnessLifecycle.coordinator.waitForUser(
+                taskID: taskID,
+                question: "Review the local app result before I continue.",
+                reason: "Pointer prompt local app verification needs review"
+            )
+            return PointerPromptGenericFinalizeResult(verificationStep: verificationStep)
+        case .needsConfirmation, .unsupportedCommand:
+            _ = await genericHarnessLifecycle.coordinator.waitForUser(
+                taskID: taskID,
+                question: summary(for: result, runStep: runStep),
+                reason: "Pointer prompt local app task needs clarification"
+            )
             return PointerPromptGenericFinalizeResult()
         case .appUnavailable, .failedSafe:
             let recoveryStep = await recoverGenericHarnessTask(
@@ -512,6 +521,33 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             traceID: traceID
         )
         return await runtime.executeNextPlannedStep(taskID: taskID)
+    }
+
+    private func executeGenericHarnessLoop(
+        taskID: String,
+        runtime: GenericHarnessRuntime,
+        maxSteps: Int = 16
+    ) async -> [HarnessStepExecutionResult] {
+        var results: [HarnessStepExecutionResult] = []
+        for _ in 0..<maxSteps {
+            guard let result = await runtime.executeNextPlannedStep(taskID: taskID) else {
+                break
+            }
+            results.append(result)
+            if result.stoppedForGate || Self.shouldStopHarnessLoop(after: result.toolResult) {
+                break
+            }
+        }
+        return results
+    }
+
+    private static func shouldStopHarnessLoop(after result: HarnessToolResult?) -> Bool {
+        switch result?.status {
+        case .failed, .unknownTool, .invalidInput, .permissionDenied, .waitingForUser, .waitingForPermission:
+            return true
+        case .succeeded, nil:
+            return false
+        }
     }
 
     private func groundAgentVisualizationPlan(_ plan: AgentVisualizationPlan) -> AgentVisualizationPlan {
@@ -843,6 +879,29 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         for result: LocalAppTaskLiveRunResult,
         runStep: HarnessStepExecutionResult?
     ) -> String {
+        summary(for: result, task: runStep?.task, runStep: runStep)
+    }
+
+    private func summary(
+        for result: LocalAppTaskLiveRunResult,
+        task: HarnessTaskState?,
+        runStep: HarnessStepExecutionResult?
+    ) -> String {
+        if let task,
+           task.status == .waitingForPermission {
+            return Self.permissionGateSummary(for: task)
+        }
+
+        if let task,
+           task.status == .interrupted {
+            return Self.interruptionSummary(for: task)
+        }
+
+        if let question = task?.pendingContinuation?.question,
+           !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return question
+        }
+
         if let task = runStep?.task,
            task.status == .waitingForPermission {
             return Self.permissionGateSummary(for: task)
@@ -981,98 +1040,24 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
     }
 
     private static var pointerPromptGrantedPermissions: Set<HarnessPermission> {
-        [.conversation, .userPrompt, .verification, .lifecycle]
+        [
+            .conversation,
+            .userPrompt,
+            .verification,
+            .lifecycle,
+            .appLookup,
+            .appControl,
+            .screenCapture,
+            .accessibility,
+            .input
+        ]
     }
 
     private static func genericHarnessToolNames() -> [String] {
-        (BuiltInHarnessToolCatalog.descriptors.map(\.name) + [
-            AppHarnessGenericLifecycleToolNames.localAppRun
-        ]).sorted()
-    }
-
-    private static func harnessToolResult(
-        for result: LocalAppTaskLiveRunResult,
-        call: HarnessToolCall
-    ) -> HarnessToolResult {
-        let toolStatus: HarnessToolResultStatus
-        let question: String?
-        switch result.status {
-        case .completed:
-            toolStatus = .succeeded
-            question = nil
-        case .needsUserReview:
-            toolStatus = .waitingForUser
-            question = "Review the proposed changes before I continue."
-        case .needsConfirmation:
-            toolStatus = .waitingForUser
-            question = "What detail should I use?"
-        case .unsupportedCommand:
-            toolStatus = .waitingForUser
-            question = "What local app task should I run?"
-        case .appUnavailable, .failedSafe:
-            toolStatus = .failed
-            question = nil
-        }
-
-        return HarnessToolResult(
-            callID: call.id,
-            toolName: call.name,
-            status: toolStatus,
-            summary: "Local app task \(result.status.rawValue).",
-            observations: HarnessObservationDelta(
-                focusedApp: result.resolution.availability?.target.appName,
-                facts: [
-                    "localApp.status": result.status.rawValue,
-                    "localApp.resolutionStatus": result.resolution.status.rawValue,
-                    "localApp.taskType": result.resolution.intent?.taskType
-                        ?? result.resolution.definition?.taskType
-                        ?? "",
-                    "localApp.targetApp": result.resolution.intent?.targetApp.appName
-                        ?? result.resolution.definition?.targetApp.appName
-                        ?? result.resolution.availability?.target.appName
-                        ?? ""
-                ].merging(result.metadata) { current, _ in current },
-                uncertainty: result.status == .completed ? [] : [result.status.rawValue]
-            ),
-            question: question,
-            metadata: [
-                "executor": "LocalAppTaskLiveRunner",
-                "localApp.status": result.status.rawValue,
-                "traceID": result.traceID
-            ]
-        )
-    }
-
-    private static func syntheticLocalRunResult(
-        command: String,
-        traceID: String,
-        resolution: LocalAppTaskCatalogResolution,
-        runStep: HarnessStepExecutionResult?
-    ) -> LocalAppTaskLiveRunResult {
-        if let task = runStep?.task,
-           task.status == .waitingForPermission {
-            return LocalAppTaskLiveRunResult(
-                command: command,
-                traceID: traceID,
-                status: .needsConfirmation,
-                resolution: resolution,
-                metadata: [
-                    "reason": "genericHarnessPermissionGate",
-                    "genericHarness.stoppedForGate": String(runStep?.stoppedForGate ?? false)
-                ].merging(genericHarnessTaskMetadata(task)) { current, _ in current }
-            )
-        }
-
-        return LocalAppTaskLiveRunResult(
-            command: command,
-            traceID: traceID,
-            status: .failedSafe,
-            resolution: resolution,
-            metadata: [
-                "reason": "genericHarnessMissingLocalRunResult",
-                "genericHarness.stoppedForGate": String(runStep?.stoppedForGate ?? false)
-            ]
-        )
+        Array(Set(
+            BuiltInHarnessToolCatalog.descriptors.map(\.name)
+                + LocalAppHarnessStepExecutor.descriptors.map(\.name)
+        )).sorted()
     }
 
     private static func pointerPromptStatus(for task: HarnessTaskState?) -> PointerPromptTaskStatus? {
@@ -1201,18 +1186,6 @@ private struct PointerPromptGenericFinalizeResult: Equatable, Sendable {
     ) {
         self.verificationStep = verificationStep
         self.recoveryStep = recoveryStep
-    }
-}
-
-private actor PointerPromptHarnessLocalRunResultStore {
-    private var resultsByCallID: [String: LocalAppTaskLiveRunResult] = [:]
-
-    func store(_ result: LocalAppTaskLiveRunResult, callID: String) {
-        resultsByCallID[callID] = result
-    }
-
-    func firstResult() -> LocalAppTaskLiveRunResult? {
-        resultsByCallID.values.first
     }
 }
 

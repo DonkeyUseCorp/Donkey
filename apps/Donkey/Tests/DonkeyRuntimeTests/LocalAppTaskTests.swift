@@ -21,18 +21,6 @@ struct LocalAppTaskTests {
     }
 
     @Test
-    func structuredMediaPlaybackIntentCarriesModelSelectedEntities() throws {
-        let intent = mediaPlaybackIntent(rawQuery: "cold play", query: "Coldplay")
-
-        #expect(intent.taskType == "media_playback")
-        #expect(intent.targetApp.appName == "Music")
-        #expect(intent.targetApp.bundleIdentifier == "com.apple.Music")
-        #expect(intent.entities["query"] == "cold play")
-        #expect(intent.normalizedEntities["query"] == "Coldplay")
-        #expect(intent.metadata["catalogEntry"] == "built-in-media-playback")
-    }
-
-    @Test
     func catalogResolvesGenericAppOpenIntentFromModelSelectedLocalItem() throws {
         let catalog = LocalAppTaskCatalog(
             taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
@@ -240,53 +228,6 @@ struct LocalAppTaskTests {
         #expect(plan.terminalState == .completed)
         #expect(plan.verificationConfidence == 0.8)
         #expect(plan.steps.first(where: { $0.role == .verifyResult })?.status == .verified)
-    }
-
-    @Test
-    func mediaPlaybackAdapterPlaysFirstSearchResultAndDoesNotRequireVisibleText() throws {
-        let intent = mediaPlaybackIntent(rawQuery: "justin bieber", query: "justin bieber")
-        let localAdapter = LocalAppTaskAdapter(definition: BuiltInLocalAppTaskDefinitions.mediaPlayback)
-        let plan = localAdapter.evidenceBackedActionPlan(
-            for: intent,
-            observation: LocalAppTaskObservation(
-                appIsRunning: true,
-                appIsFocused: true,
-                availableControls: ["search": true],
-                visibleText: [:],
-                confidence: 0.68,
-                metadata: groundedControlMetadata()
-            )
-        )
-
-        #expect(plan.terminalState == .completed)
-        #expect(plan.metadata["defaultOSInputBackend"] == "mac-apple-script")
-        #expect(plan.metadata["automationBackend"] == "appleScript")
-        #expect(plan.steps.map(\.role) == [
-            .parseIntent,
-            .launchOrFocusApp,
-            .observeApp,
-            .focusControl,
-            .enterText,
-            .submit,
-            .submit,
-            .verifyResult
-        ])
-        #expect(plan.steps.first(where: { $0.role == .verifyResult })?.summary == "Command was sent to Music")
-
-        let commands = localAdapter.guardedKeyboardCommandTemplates(
-            for: intent,
-            issuedAt: timestamp(100)
-        )
-        #expect(commands.map(\.key) == ["Command+F", "justin bieber", "Return", "Return"])
-
-        let automationCommands = localAdapter.guardedAutomationCommandTemplates(
-            for: intent,
-            issuedAt: timestamp(100)
-        )
-        #expect(automationCommands.map(\.kind) == [.controller])
-        #expect(automationCommands.first?.key == "justin bieber")
-        #expect(automationCommands.first?.metadata["automationBackend"] == "appleScript")
-        #expect(automationCommands.first?.metadata["appleScript.action"] == "music.playMediaQuery")
     }
 
     @Test
@@ -576,10 +517,6 @@ struct LocalAppTaskTests {
         let intent = try #require(resolution.intent)
         let plan = catalog.adapter(for: definition).evidenceBackedActionPlan(for: intent)
         #expect(plan.steps.map(\.role).contains(.verifyResult))
-
-        let mediaResolution = catalog.resolve(intent: mediaPlaybackIntent(rawQuery: "Coldplay", query: "Coldplay"))
-        #expect(mediaResolution.status == .resolved)
-        #expect(mediaResolution.definition?.taskType == "media_playback")
 
         let documentResolution = catalog.resolve(intent: documentFormFillIntent())
         #expect(documentResolution.status == .resolved)
@@ -1079,63 +1016,7 @@ struct LocalAppTaskTests {
     }
 
     @Test @MainActor
-    func liveRunnerUsesAppleScriptAutomationForMediaPlayback() async throws {
-        let backend = RecordingLocalAppTaskInputBackend()
-        let controller = FakeLocalAppTaskAppController(
-            launchObservation: LocalAppTaskObservation(
-                appIsRunning: true,
-                appIsFocused: true,
-                availableControls: ["search": true],
-                confidence: 0.5,
-                metadata: groundedControlMetadata()
-            ),
-            finalObservation: LocalAppTaskObservation(
-                appIsRunning: true,
-                appIsFocused: true,
-                availableControls: ["search": true],
-                visibleText: [:],
-                confidence: 0.72,
-                metadata: groundedControlMetadata()
-            )
-        )
-        let catalog = LocalAppTaskCatalog(
-            taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
-            availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.Music"])
-        )
-        let runner = LocalAppTaskLiveRunner(
-            catalog: catalog,
-            appController: controller,
-            actionEngineFactory: { _ in
-                ActionEngineGuardrail(
-                    configuration: ActionEngineConfiguration(liveInputEnabled: true),
-                    inputBackend: backend
-                )
-            },
-            permissionPolicy: ToolCallPolicy(deniedCapabilities: [])
-        )
-        let intent = mediaPlaybackIntent(rawQuery: "justin bieber", query: "justin bieber")
-
-        let result = await runner.run(
-            command: "play justin bieber",
-            traceID: "trace-live-media",
-            resolution: catalog.resolve(intent: intent),
-            metadata: ["intentParser": "test-model"]
-        )
-
-        #expect(result.status == .completed)
-        #expect(result.actionTraces.map(\.command.kind) == [.controller])
-        #expect(await backend.executedKeys() == ["justin bieber"])
-        #expect(result.metadata["automation.backend"] == "appleScript")
-        #expect(result.metadata["automation.action"] == "music.playMediaQuery")
-        #expect(result.metadata["action.elementClickCount"] == "0")
-        #expect(result.metadata["action.lastTarget"] == "none")
-        #expect(result.metadata["action.overlayPointer"] == "visualOnly")
-        #expect(result.workflowProgress.state(for: .execute)?.status == .completed)
-        #expect(result.workflowProgress.state(for: .verify)?.status == .completed)
-    }
-
-    @Test @MainActor
-    func liveRunnerExecutesValidatedGenericPlayMediaThroughAutomation() async throws {
+    func liveRunnerExecutesOnlyModelPlannedGenericPlayMediaSteps() async throws {
         let backend = RecordingLocalAppTaskInputBackend()
         let controller = FakeLocalAppTaskAppController(
             launchObservation: LocalAppTaskObservation(
@@ -1201,6 +1082,7 @@ struct LocalAppTaskTests {
         #expect(result.metadata["automation.action"] == nil)
         #expect(result.workflowProgress.state(for: .evidencePlan)?.status == .completed)
         #expect(result.workflowProgress.state(for: .execute)?.status == .completed)
+        #expect(result.metadata["verification.executedCommandCount"] == "3")
         #expect(await backend.executedKeys() == ["Command+F", "Viva La Vida Coldplay", "Return"])
     }
 
@@ -1600,24 +1482,6 @@ struct LocalAppTaskTests {
             metadata: definition.metadata.merging(
                 needsConfirmation ? ["missingEntity": "city"] : [:]
             ) { current, _ in current }
-        )
-    }
-
-    private func mediaPlaybackIntent(
-        rawQuery: String,
-        query: String,
-        confidence: Double = 0.93
-    ) -> TaskIntent {
-        let definition = BuiltInLocalAppTaskDefinitions.mediaPlayback
-        return TaskIntent(
-            intentID: "media_playback-\(slug(query))",
-            taskType: definition.taskType,
-            targetApp: definition.targetApp,
-            entities: ["query": rawQuery],
-            normalizedEntities: ["query": query],
-            confidence: confidence,
-            parserSource: .localModel,
-            metadata: definition.metadata
         )
     }
 

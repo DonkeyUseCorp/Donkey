@@ -903,7 +903,7 @@ struct GenericHarnessTests {
             request: request,
             pointerTask: task,
             traceID: "trace-1",
-            availableToolNames: [AppHarnessGenericLifecycleToolNames.localAppRun],
+            availableToolNames: AppHarnessGenericLifecycleToolNames.localAppTools,
             grantedPermissions: [.verification]
         )
 
@@ -911,7 +911,7 @@ struct GenericHarnessTests {
         #expect(prepared.thread.activeTaskIDs == [task.id])
         #expect(prepared.task.id == task.id)
         #expect(prepared.task.context.turn?.id == "turn-1")
-        #expect(prepared.task.context.availableToolNames == [AppHarnessGenericLifecycleToolNames.localAppRun])
+        #expect(prepared.task.context.availableToolNames == AppHarnessGenericLifecycleToolNames.localAppTools)
         #expect(prepared.task.grantedPermissions == [.verification])
         #expect(prepared.compactedContext.events.map(\.id) == ["event-1"])
         #expect(prepared.compactedContext.assets.map(\.id) == ["asset-1"])
@@ -919,7 +919,7 @@ struct GenericHarnessTests {
     }
 
     @Test
-    func pointerPromptLifecyclePlansLocalRunAndStopsForExecutorUserGate() async {
+    func pointerPromptLifecyclePlansLocalAppStepAndStopsForExecutorUserGate() async {
         let store = InMemoryHarnessThreadStore()
         let coordinator = HarnessTaskCoordinator()
         let lifecycle = AppHarnessGenericLifecycle(threadStore: store, coordinator: coordinator)
@@ -936,7 +936,12 @@ struct GenericHarnessTests {
             entities: ["recipient": "Alex"],
             normalizedEntities: ["recipient": "Alex"],
             confidence: 0.8,
-            parserSource: .onlineModel
+            parserSource: .onlineModel,
+            metadata: [
+                "genericHarness.planStepsJSON": """
+                [{"id":"enter-message","summary":"Enter the message.","toolName":"ui.setText","inputEntity":"message","controlID":"editor","focusKey":"","expectedObservation":"Message is entered."}]
+                """
+            ]
         )
         let resolution = LocalAppTaskCatalogResolution(
             status: .needsConfirmation,
@@ -951,7 +956,11 @@ struct GenericHarnessTests {
         )
         let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
         await registry.register(
-            HarnessTool(descriptor: AppHarnessGenericLifecycle.localTaskRunDescriptor()) { context in
+            HarnessTool(
+                descriptor: LocalAppHarnessStepExecutor.descriptors.first {
+                    $0.name == LocalAppActionPlanTool.setText.rawValue
+                }!
+            ) { context in
                 HarnessToolResult(
                     callID: context.call.id,
                     toolName: context.call.name,
@@ -971,7 +980,7 @@ struct GenericHarnessTests {
         #expect(result?.stoppedForGate == true)
         #expect(result?.task.status == .waitingForUser)
         #expect(result?.task.pendingContinuation?.question == "What should I send?")
-        #expect(result?.task.pendingContinuation?.pendingToolCall?.name == AppHarnessGenericLifecycleToolNames.localAppRun)
+        #expect(result?.task.pendingContinuation?.pendingToolCall?.name == LocalAppActionPlanTool.setText.rawValue)
         #expect(result?.toolResult?.status == .waitingForUser)
     }
 
@@ -1025,9 +1034,9 @@ struct GenericHarnessTests {
         #expect(planned?.intent?.goal == "open example.org in Safari")
         #expect(planned?.intent?.riskLevel == .low)
         #expect(planned?.plan?.steps.first?.id == "model-focus-address")
-        #expect(planned?.plan?.steps.first?.toolCall == nil)
+        #expect(planned?.plan?.steps.first?.toolCall?.name == LocalAppActionPlanTool.focusAddressBar.rawValue)
         #expect(planned?.plan?.steps.first?.metadata["toolName"] == "ui.focusAddressBar")
-        #expect(planned?.plan?.steps.contains { $0.id == "run-local-app-task" } == true)
+        #expect(planned?.plan?.steps.contains { $0.id == "run-local-app-task" } == false)
         #expect(planned?.plan?.successCriteria == ["The requested website navigation is attempted."])
         #expect(planned?.plan?.fallbackPolicy == ["Ask before navigating if the URL is ambiguous."])
         #expect(planned?.plan?.clarificationPolicy == [
@@ -1053,7 +1062,7 @@ struct GenericHarnessTests {
             question: "What should I send?",
             pendingToolCall: HarnessToolCall(
                 id: "pending-run",
-                name: AppHarnessGenericLifecycleToolNames.localAppRun
+                name: LocalAppActionPlanTool.setText.rawValue
             )
         )
         let pointerTask = PointerPromptNotchTask(
@@ -1077,7 +1086,7 @@ struct GenericHarnessTests {
             request: request,
             pointerTask: pointerTask,
             traceID: "trace-answer",
-            availableToolNames: [AppHarnessGenericLifecycleToolNames.localAppRun]
+            availableToolNames: AppHarnessGenericLifecycleToolNames.localAppTools
         )
 
         #expect(prepared.task.status == .resuming)

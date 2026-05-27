@@ -173,6 +173,14 @@ observes, acts, verifies, and replans. The planner may propose the next tool
 step, but deterministic Swift owns task state, tool validation, permissions,
 focus checks, execution, and result recording.
 
+Pointer-prompt local-app work is executed through the same tool loop. Hosted
+planning emits local-app tool calls such as `app.openOrFocus`, `app.observe`,
+`ui.setText`, and `app.verifyCommand`; the runtime executes one guarded step,
+records the resulting Accessibility or screenshot-backed observation, and then
+continues only while the next planned tool remains valid. It stops on
+verification failure, missing evidence, permission gates, clarification gates,
+or exhausted plan steps.
+
 If the user interrupts a task, the harness classifies whether the turn starts a
 new task, modifies the current task, cancels, pauses, resumes, answers a
 clarification, grants permission, or is conversation. A course change updates
@@ -247,6 +255,12 @@ Element actions execute only after the harness validates:
 Models choose semantic targets and tool calls. They do not micromanage pixels.
 Coordinate input is fallback evidence only and must pass the same guarded
 execution checks as other input.
+
+Verification must be backed by task evidence. A local-app command attempt is not
+verified merely because the target app is focused or running after execution;
+post-action verification records guarded command evidence and should use
+available observation evidence, including screenshots when needed, before the
+task can complete or choose a recovery path.
 
 ## AppleScript And Scripts
 

@@ -3,7 +3,7 @@ import DonkeyHarness
 import Foundation
 
 public enum AppHarnessGenericLifecycleToolNames {
-    public static let localAppRun = "pointer-prompt.local-app.run"
+    public static let localAppTools: [String] = LocalAppActionPlanTool.allCases.map(\.rawValue)
 }
 
 public struct AppHarnessGenericLifecyclePreparedTurn: Equatable, Sendable {
@@ -144,46 +144,13 @@ public struct AppHarnessGenericLifecycle: Sendable {
         )
         _ = await coordinator.updateIntent(taskID: taskID, intent: intent)
         let plannedStepMetadata = resolution.intent?.metadata ?? [:]
-        let modelPlanSteps = Self.modelPlanningSteps(from: plannedStepMetadata)
+        let modelPlanSteps = Self.modelPlanningSteps(
+            from: plannedStepMetadata,
+            traceID: traceID
+        )
         let plan = HarnessPlan(
             goal: intent.goal,
-            steps: modelPlanSteps + [
-                HarnessPlanStep(
-                    id: "run-local-app-task",
-                    summary: "Run the resolved local app task through the generic harness executor.",
-                    toolCall: HarnessToolCall(
-                        id: "local-app-run-\(traceID)",
-                        name: AppHarnessGenericLifecycleToolNames.localAppRun,
-                        input: [
-                            "resolutionStatus": resolution.status.rawValue,
-                            "taskType": resolution.intent?.taskType ?? resolution.definition?.taskType ?? "",
-                            "targetApp": resolution.intent?.targetApp.appName
-                                ?? resolution.definition?.targetApp.appName
-                                ?? resolution.availability?.target.appName
-                                ?? ""
-                        ],
-                        metadata: [
-                            "adapter": "pointerPrompt",
-                            "traceID": traceID
-                        ]
-                    ),
-                    expectedObservation: "Local app task reaches a terminal or waiting state."
-                ),
-                HarnessPlanStep(
-                    id: "verify-local-app-task",
-                    summary: "Verify the local app task result.",
-                    toolCall: HarnessToolCall(
-                        id: "local-app-verify-\(traceID)",
-                        name: "state.verify",
-                        input: ["criteria": "Use the local app task result status and verification metadata."],
-                        metadata: [
-                            "adapter": "pointerPrompt",
-                            "traceID": traceID
-                        ]
-                    ),
-                    expectedObservation: "Verification records success criteria or evidence."
-                )
-            ],
+            steps: modelPlanSteps,
             successCriteria: Self.stringArrayMetadata(
                 plannedStepMetadata["genericHarness.verificationCriteriaJSON"],
                 fallback: ["Resolved local app result is completed or handed to a user gate."]
@@ -279,27 +246,6 @@ public struct AppHarnessGenericLifecycle: Sendable {
             taskID: taskID,
             permissions: Set(continuation.missingPermissions),
             reason: reason
-        )
-    }
-
-    public static func localTaskRunDescriptor() -> HarnessToolDescriptor {
-        HarnessToolDescriptor(
-            name: AppHarnessGenericLifecycleToolNames.localAppRun,
-            pluginID: "pointer-prompt.local-app",
-            summary: "Execute a resolved pointer-prompt local app task through the Mac local-app executor.",
-            inputSchema: [
-                "resolutionStatus": "Resolved, waiting, unsupported, or unavailable local app task status.",
-                "taskType": "Resolved local app task type.",
-                "targetApp": "Resolved local app target name."
-            ],
-            outputSchema: ["status": "Local app task terminal status and metadata."],
-            requiredPermissions: [],
-            safetyClass: .guardedInput,
-            requiredContext: ["structured intent", "local app task resolution", "generic harness task"],
-            verificationHints: ["Run state.verify after this step records its terminal evidence."],
-            metadata: [
-                "executor": "LocalAppTaskLiveRunner"
-            ]
         )
     }
 
@@ -479,7 +425,10 @@ public struct AppHarnessGenericLifecycle: Sendable {
         )
     }
 
-    private static func modelPlanningSteps(from metadata: [String: String]) -> [HarnessPlanStep] {
+    private static func modelPlanningSteps(
+        from metadata: [String: String],
+        traceID: String
+    ) -> [HarnessPlanStep] {
         guard let text = metadata["genericHarness.planStepsJSON"],
               let data = text.data(using: .utf8),
               let values = try? JSONSerialization.jsonObject(with: data) as? [[String: String]]
@@ -489,14 +438,35 @@ public struct AppHarnessGenericLifecycle: Sendable {
 
         return values.enumerated().map { index, value in
             let id = nonEmpty(value["id"]) ?? "model-plan-step-\(index + 1)"
+            let toolName = nonEmpty(value["toolName"])
+            let toolCall = toolName.flatMap { toolName -> HarnessToolCall? in
+                guard LocalAppActionPlanTool(rawValue: toolName) != nil else { return nil }
+                return HarnessToolCall(
+                    id: "local-app-step-\(traceID)-\(index + 1)",
+                    name: toolName,
+                    input: [
+                        "inputEntity": value["inputEntity"] ?? "",
+                        "controlID": value["controlID"] ?? "",
+                        "focusKey": value["focusKey"] ?? "",
+                        "expectedObservation": value["expectedObservation"] ?? "",
+                        "modelStepID": id,
+                        "modelStepIndex": String(index)
+                    ],
+                    metadata: [
+                        "adapter": "pointerPrompt",
+                        "traceID": traceID,
+                        "source": "hostedGenericHarnessPlanning"
+                    ]
+                )
+            }
             return HarnessPlanStep(
                 id: "model-\(id)",
                 summary: nonEmpty(value["summary"]) ?? "Model-planned harness step",
-                toolCall: nil,
+                toolCall: toolCall,
                 expectedObservation: nonEmpty(value["expectedObservation"]),
                 metadata: [
                     "source": "hostedGenericHarnessPlanning",
-                    "toolName": value["toolName"] ?? "",
+                    "toolName": toolName ?? "",
                     "inputEntity": value["inputEntity"] ?? "",
                     "controlID": value["controlID"] ?? "",
                     "focusKey": value["focusKey"] ?? ""

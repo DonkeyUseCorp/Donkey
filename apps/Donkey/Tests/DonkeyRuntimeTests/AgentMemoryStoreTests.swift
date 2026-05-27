@@ -113,16 +113,16 @@ struct AgentMemoryStoreTests {
         store.prewarmTaskDefinitions(BuiltInLocalAppTaskDefinitions.benchmarkFixtures)
 
         let result = try #require(try store.search(query: AgentMemoryQuery(
-            text: "media playback",
+            text: "local app interaction",
             scope: .global,
             kinds: [.taskDefinition],
             budget: AgentMemoryRetrievalBudget(maxRecords: 4, minRelevance: 0)
         )).first)
         #expect(result.record.kind == .taskDefinition)
-        #expect(result.record.metadata["taskType"] == "media_playback")
-        #expect(result.record.metadata["appleScript.action"] == "music.playMediaQuery")
-        #expect(store.taskDefinitions().contains { $0.taskType == "media_playback" })
-        #expect(store.cachedAvailability(named: "media playback", preferredKind: nil) == nil)
+        #expect(result.record.metadata["taskType"] == "local_app_interaction")
+        #expect(result.record.metadata["modelPlanned"] == "true")
+        #expect(store.taskDefinitions().contains { $0.taskType == "local_app_interaction" })
+        #expect(store.cachedAvailability(named: "local app interaction", preferredKind: nil) == nil)
     }
 
     @Test

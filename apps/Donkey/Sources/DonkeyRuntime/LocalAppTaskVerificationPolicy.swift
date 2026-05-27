@@ -23,7 +23,7 @@ enum LocalAppTaskVerificationPolicy {
             return .focusedApp
         case "openedLocalItem":
             return .openedLocalItem
-        case "playbackCommandAttempted", "commandAttempted":
+        case "commandAttempted":
             return .commandAttempted
         case "visibleText":
             return .visibleText
@@ -133,13 +133,40 @@ enum LocalAppTaskVerificationPolicy {
             )
         }
 
+        guard observation.metadata["postActionObservation"] == "true" else {
+            return blocked(
+                confidence: observation.confidence,
+                summary: "No post-action observation has been recorded for \(definition.targetApp.appName)",
+                metadata: [
+                    "reason": "missingPostActionObservation",
+                    "verificationMode": modeName(for: definition),
+                    "targetApp": definition.targetApp.appName
+                ]
+            )
+        }
+
+        let executedCommandCount = Int(observation.metadata["executedCommandCount"] ?? "") ?? 0
+        guard executedCommandCount > 0 else {
+            return blocked(
+                confidence: observation.confidence,
+                summary: "No guarded command execution has been recorded for \(definition.targetApp.appName)",
+                metadata: [
+                    "reason": "missingCommandExecutionEvidence",
+                    "verificationMode": modeName(for: definition),
+                    "targetApp": definition.targetApp.appName
+                ]
+            )
+        }
+
         if observation.appIsFocused || observation.appIsRunning {
             return verified(
                 confidence: max(observation.confidence, 0.72),
                 summary: "Command was sent to \(definition.targetApp.appName)",
                 metadata: [
                     "verificationMode": modeName(for: definition),
-                    "targetApp": definition.targetApp.appName
+                    "targetApp": definition.targetApp.appName,
+                    "executedCommandCount": observation.metadata["executedCommandCount"] ?? "",
+                    "submittedCommandCount": observation.metadata["submittedCommandCount"] ?? ""
                 ]
             )
         }

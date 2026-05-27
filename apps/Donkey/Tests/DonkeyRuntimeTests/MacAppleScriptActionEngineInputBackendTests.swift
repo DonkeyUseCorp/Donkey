@@ -6,32 +6,28 @@ import Testing
 @Suite
 struct MacAppleScriptActionEngineInputBackendTests {
     @Test
-    func musicPlaybackCommandRunsEscapedAppleScript() async throws {
-        let template = try #require(BuiltInLocalAppSkillPacks.scriptSource(
-            skillID: "music-media",
-            relativePath: "scripts/play-media-query.applescript"
-        ))
+    func generatedAppleScriptTemplateRunsEscapedSource() async throws {
+        let template = "set donkeyQuery to {query}\nreturn donkeyQuery"
         let runner = RecordingAppleScriptRunner(
             result: AppleScriptExecutionResult(
                 succeeded: true,
-                output: "searched-ui-first-result"
+                output: #"Justin "JB" Bieber"#
             )
         )
         let backend = MacAppleScriptActionEngineInputBackend(runner: runner)
         let result = await backend.execute(
             ActionEngineCommand(
-                id: "play-media",
-                traceID: "trace-media",
-                targetID: "local-app-task-media-playback",
+                id: "generated-template",
+                traceID: "trace-template",
+                targetID: "local-app-task-generated-template",
                 kind: .controller,
                 issuedAt: timestamp(100),
                 key: "Justin \"JB\" Bieber",
                 metadata: [
                     "automationBackend": "appleScript",
-                    "appleScript.action": "music.playMediaQuery",
+                    "appleScript.action": "generated.template",
                     "appleScript.query": "Justin \"JB\" Bieber",
-                    "appleScript.template": template,
-                    "appleScript.successOutputs": "played-library-track,searched-ui-first-result"
+                    "appleScript.template": template
                 ]
             )
         )
@@ -39,11 +35,9 @@ struct MacAppleScriptActionEngineInputBackendTests {
         let scripts = await runner.scripts()
         #expect(result.executed)
         #expect(result.metadata["liveInputBackend"] == "mac-apple-script")
-        #expect(result.metadata["appleScript.output"] == "searched-ui-first-result")
+        #expect(result.metadata["appleScript.output"] == #"Justin "JB" Bieber"#)
         #expect(scripts.count == 1)
         #expect(scripts.first?.contains(#"set donkeyQuery to "Justin \"JB\" Bieber""#) == true)
-        #expect(scripts.first?.contains("tell application \"Music\"") == true)
-        #expect(scripts.first?.contains("tell application \"System Events\"") == true)
         #expect(result.metadata["appleScript.scriptKind"] == "template")
     }
 

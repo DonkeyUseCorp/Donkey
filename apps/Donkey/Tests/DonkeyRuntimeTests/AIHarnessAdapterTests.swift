@@ -340,7 +340,7 @@ struct AIHarnessAdapterTests {
                 result: LocalJSONSidecarResult(
                     status: .completed,
                     outputData: Data("""
-                    {"outputText":"{\\"taskType\\":\\"media_playback\\",\\"targetAppName\\":\\"Music\\",\\"entities\\":{\\"query\\":\\"Viva La Vida Coldplay\\"},\\"normalizedEntities\\":{\\"query\\":\\"Viva La Vida Coldplay\\"},\\"confidence\\":0.91,\\"needsConfirmation\\":false,\\"actionPlan\\":{\\"tools\\":[],\\"inputEntity\\":\\"\\",\\"controlID\\":\\"\\",\\"focusKey\\":\\"\\",\\"verification\\":\\"commandAttempted\\"},\\"metadata\\":{\\"source\\":\\"test\\",\\"mediaSelection.kind\\":\\"representative_song\\",\\"mediaSelection.seed\\":\\"Coldplay\\",\\"mediaSelection.selectedTitle\\":\\"Viva La Vida\\",\\"mediaSelection.reason\\":\\"User asked for Coldplay, so choose a concrete song.\\"}}","metadata":{"local.provider":"donkey-local-llm-sidecar"}}
+                    {"outputText":"{\\"taskType\\":\\"local_app_interaction\\",\\"targetAppName\\":\\"Music\\",\\"entities\\":{\\"appName\\":\\"Music\\",\\"goal\\":\\"play media\\",\\"query\\":\\"Viva La Vida Coldplay\\"},\\"normalizedEntities\\":{\\"appName\\":\\"Music\\",\\"goal\\":\\"play media\\",\\"query\\":\\"Viva La Vida Coldplay\\"},\\"confidence\\":0.91,\\"needsConfirmation\\":false,\\"actionPlan\\":{\\"tools\\":[\\"app.openOrFocus\\",\\"app.observe\\",\\"ui.focusSearch\\",\\"ui.setText\\",\\"ui.pressReturn\\",\\"app.verifyCommand\\"],\\"inputEntity\\":\\"query\\",\\"controlID\\":\\"search\\",\\"focusKey\\":\\"Command+F\\",\\"verification\\":\\"commandAttempted\\"},\\"metadata\\":{\\"source\\":\\"test\\",\\"mediaSelection.kind\\":\\"representative_song\\",\\"mediaSelection.seed\\":\\"Coldplay\\",\\"mediaSelection.selectedTitle\\":\\"Viva La Vida\\",\\"mediaSelection.reason\\":\\"User asked for Coldplay, so choose a concrete song.\\"}}","metadata":{"local.provider":"donkey-local-llm-sidecar"}}
                     """.utf8),
                     latencyMS: 14,
                     metadata: ["sidecar.role": "taskIntent"]
@@ -351,12 +351,12 @@ struct AIHarnessAdapterTests {
         let result = await adapter.parseTaskIntent(
             TaskIntentAdapterRequest(
                 command: "play cold play",
-                taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
+                taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
                 sourceTraceID: "trace-local-llm"
             )
         )
 
-        #expect(result.intent?.taskType == "media_playback")
+        #expect(result.intent?.taskType == "local_app_interaction")
         #expect(result.intent?.targetApp.appName == "Music")
         #expect(result.intent?.normalizedEntities["query"] == "Viva La Vida Coldplay")
         #expect(result.intent?.metadata["mediaSelection.selectedTitle"] == "Viva La Vida")
@@ -372,11 +372,12 @@ struct AIHarnessAdapterTests {
             data: responseData(
                 outputText: hostedPlanningOutput(
                     goal: "play Viva La Vida by Coldplay",
-                    taskType: "media_playback",
+                    taskType: "local_app_interaction",
                     targetAppName: "Music",
-                    entitiesJSON: #"{"query":"Viva La Vida Coldplay"}"#,
-                    normalizedEntitiesJSON: #"{"query":"Viva La Vida Coldplay"}"#,
+                    entitiesJSON: #"{"appName":"Music","goal":"play media","query":"Viva La Vida Coldplay"}"#,
+                    normalizedEntitiesJSON: #"{"appName":"Music","goal":"play media","query":"Viva La Vida Coldplay"}"#,
                     confidence: 0.91,
+                    planStepsJSON: #"[{"id":"launch","summary":"Open Music.","toolName":"app.openOrFocus","inputEntity":"","controlID":"","focusKey":"","expectedObservation":"Music is focused."},{"id":"focus-search","summary":"Focus search.","toolName":"ui.focusSearch","inputEntity":"","controlID":"search","focusKey":"Command+F","expectedObservation":"Search is focused."},{"id":"set-query","summary":"Enter media query.","toolName":"ui.setText","inputEntity":"query","controlID":"search","focusKey":"","expectedObservation":"Query is entered."},{"id":"submit","summary":"Submit search.","toolName":"ui.pressReturn","inputEntity":"","controlID":"","focusKey":"","expectedObservation":"Search is submitted."},{"id":"verify","summary":"Verify command.","toolName":"app.verifyCommand","inputEntity":"","controlID":"","focusKey":"","expectedObservation":"Playback command is attempted."}]"#,
                     verificationCriteriaJSON: #"["Playback command is attempted for the concrete selected song."]"#,
                     fallbacksJSON: #"["Ask before playing if the selected media is ambiguous."]"#,
                     metadataJSON: #"{"source":"test","mediaSelection.kind":"representative_song","mediaSelection.seed":"Coldplay","mediaSelection.selectedTitle":"Viva La Vida","mediaSelection.reason":"User asked for Coldplay, so choose a concrete song."}"#
@@ -395,12 +396,12 @@ struct AIHarnessAdapterTests {
         let result = await adapter.parseTaskIntent(
             TaskIntentAdapterRequest(
                 command: "play cold play",
-                taskDefinitions: BuiltInLocalAppTaskDefinitions.benchmarkFixtures,
+                taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
                 sourceTraceID: "trace-hosted-intent"
             )
         )
 
-        #expect(result.intent?.taskType == "media_playback")
+        #expect(result.intent?.taskType == "local_app_interaction")
         #expect(result.intent?.parserSource == .onlineModel)
         #expect(result.trace.provider == .donkeyBackend)
         #expect(result.trace.modelID == AIModelRegistryEntry.backendSelectedModelID)
@@ -689,7 +690,7 @@ struct AIHarnessAdapterTests {
     }
 
     @Test
-    func taskIntentDecoderRejectsPlayMediaWithoutConcreteSelection() async throws {
+    func taskIntentDecoderDoesNotHardCodePlayMediaSelectionSemantics() async throws {
         let appFinderCatalog = StaticLocalAppAvailabilityProvider(
             installedBundleIdentifiers: ["com.apple.Music"]
         ).appFinderCatalogEntries()
@@ -715,13 +716,16 @@ struct AIHarnessAdapterTests {
                 command: "play some coldplay",
                 taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
                 appFinderCatalog: appFinderCatalog,
-                sourceTraceID: "trace-play-media-requires-selection"
+                sourceTraceID: "trace-play-media-no-hardcoded-selection"
             )
         )
 
-        #expect(result.intent == nil)
-        #expect(result.trace.status == .invalidOutput)
-        #expect(result.trace.validationStatus == "invalid")
+        #expect(result.intent?.taskType == "local_app_interaction")
+        #expect(result.intent?.targetApp.appName == "Music")
+        #expect(result.intent?.normalizedEntities["query"] == "Coldplay")
+        #expect(result.intent?.metadata["appFinder.validated"] == "true")
+        #expect(result.trace.status == .completed)
+        #expect(result.trace.validationStatus == "schemaDecoded")
     }
 
     @Test

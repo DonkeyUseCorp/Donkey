@@ -6,7 +6,7 @@ import Testing
 @Suite
 struct AgentVisualizationRuntimeTests {
     @Test
-    func localAppRunWithoutGroundedTargetsDoesNotCreateCursorPlayback() throws {
+    func localAppStepLoopWithoutGroundedTargetsDoesNotCreateCursorPlayback() throws {
         let definition = localAppDefinition()
         let intent = taskIntent(definition: definition)
         let actionPlan = LocalAppEvidenceBackedActionPlan(
@@ -56,7 +56,7 @@ struct AgentVisualizationRuntimeTests {
     }
 
     @Test
-    func localAppRunBuildsLiveVisualizationPlanWithoutMovingRealPointer() throws {
+    func localAppStepLoopBuildsLiveVisualizationPlanWithoutMovingRealPointer() throws {
         let definition = localAppDefinition()
         let intent = taskIntent(definition: definition)
         let actionPlan = LocalAppEvidenceBackedActionPlan(
