@@ -14,7 +14,7 @@ public struct LexicalRunMemoryEmbeddingProvider: RunMemoryEmbeddingProviding {
     }
 
     private static let vocabulary = [
-        "app", "button", "field", "form", "media", "music", "pdf", "play", "search", "weather"
+        "app", "button", "field", "form", "input", "open", "play", "search", "submit", "text"
     ]
 
     fileprivate static func tokens(in text: String) -> [String] {

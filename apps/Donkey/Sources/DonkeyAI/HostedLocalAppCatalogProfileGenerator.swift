@@ -187,7 +187,7 @@ public struct HostedLocalAppCatalogProfileGenerator: LocalAppCatalogProfileGener
         "Return strict JSON only with an entries array and metadata object.",
         "Return one entry for each input application. Preserve the input appID, appName, and bundleIdentifier exactly; use an empty string when bundleIdentifier is absent.",
         "Supported means the app has a safe generic workflow through one of these control profiles only: search_then_enter, address_bar_submit, new_document_text.",
-        "Use supported only for low-risk actions such as media search/playback, opening websites in browsers, writing text in editors/notes, or creating simple tables in document/spreadsheet apps.",
+        "Use supported only for low-risk actions that fit one allowed profile with a clear user payload, such as search-and-submit, address-bar submission, or creating a new text-like document.",
         "Use candidate when the app might be automatable but a safe generic workflow is uncertain.",
         "Use unsupported when it is not meaningfully controllable through the allowed profiles.",
         "Use denied for password managers, credential/keychain tools, shells/terminals, system settings, process managers, logs/consoles, security tools, payment/finance tools, or anything where generic automation would be risky.",

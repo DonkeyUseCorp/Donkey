@@ -21,10 +21,6 @@ even when there are no active tasks.
 
 ## Current Sequence
 
-1. Delete old app-specific paths once the generic path covers them. Remove
-   hardcoded Music/Notes/Numbers/media/weather-style prompt rules, catalog
-   special cases, repair logic, and demo-only workflow branches.
-
 ## Invariants
 
 - Completed behavior belongs in `docs/`, not in active plans.

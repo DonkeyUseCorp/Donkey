@@ -13,14 +13,15 @@ New agent capabilities should plug into that module through tools, skills,
 scripts, plugins, catalogs, or memory. Do not add app-specific branches,
 phrase lists, or one-off workflow conditionals to the core harness.
 
-Bundled local-app skills now carry the app-specific planning guidance for
-Music/media, browser navigation, notes/text writing, spreadsheet tables, and
-weather lookup. Task-intent model calls receive those skills as bounded skill
-context alongside task definitions, app catalog data, and memory.
+Bundled and learned local-app skills carry app-specific planning guidance.
+Task-intent model calls receive relevant skills as bounded context alongside
+the generic task definitions, generated or user-reviewed app catalog data, and
+memory. The core runtime does not ship app-specific Weather, Music, Notes, or
+Numbers task branches.
 
-The existing pointer-prompt and local-app runner code still exists while the
-product migrates onto the generic harness. New work should build toward the
-generic registry and avoid expanding the older app-specific paths.
+The existing pointer-prompt and local-app runner code still bridges concrete
+desktop workflows while the product migrates onto the generic harness. New work
+should build toward the generic registry and avoid app-specific runtime paths.
 
 Pointer-prompt local-app execution now enters the generic lifecycle before it
 uses the older live-runner backend. The hosted planning boundary emits the

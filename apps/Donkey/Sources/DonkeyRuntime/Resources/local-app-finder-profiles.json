@@ -2,186 +2,6 @@
   "schemaVersion": 1,
   "entries": [
     {
-      "appID": "com.apple.Music",
-      "appName": "Music",
-      "bundleIdentifier": "com.apple.Music",
-      "description": "Apple Music library and playback app.",
-      "supportStatus": "supported",
-      "capabilities": [
-        {
-          "id": "play_media",
-          "summary": "Search for and play a song, artist, album, podcast, or playlist.",
-          "controlProfiles": [
-            "search_then_enter"
-          ],
-          "requiredEntities": [
-            "query"
-          ]
-        }
-      ],
-      "metadata": {}
-    },
-    {
-      "appID": "com.spotify.client",
-      "appName": "Spotify",
-      "bundleIdentifier": "com.spotify.client",
-      "description": "Spotify music and podcast playback app.",
-      "supportStatus": "supported",
-      "capabilities": [
-        {
-          "id": "play_media",
-          "summary": "Search for and play a song, artist, album, podcast, or playlist.",
-          "controlProfiles": [
-            "search_then_enter"
-          ],
-          "requiredEntities": [
-            "query"
-          ]
-        }
-      ],
-      "metadata": {}
-    },
-    {
-      "appID": "com.apple.Safari",
-      "appName": "Safari",
-      "bundleIdentifier": "com.apple.Safari",
-      "description": "Apple web browser for opening websites and URLs.",
-      "supportStatus": "supported",
-      "capabilities": [
-        {
-          "id": "open_url",
-          "summary": "Open a requested website or URL.",
-          "controlProfiles": [
-            "address_bar_submit"
-          ],
-          "requiredEntities": [
-            "query"
-          ]
-        }
-      ],
-      "metadata": {}
-    },
-    {
-      "appID": "com.google.Chrome",
-      "appName": "Google Chrome",
-      "bundleIdentifier": "com.google.Chrome",
-      "description": "Google web browser for opening websites and URLs.",
-      "supportStatus": "supported",
-      "capabilities": [
-        {
-          "id": "open_url",
-          "summary": "Open a requested website or URL.",
-          "controlProfiles": [
-            "address_bar_submit"
-          ],
-          "requiredEntities": [
-            "query"
-          ]
-        }
-      ],
-      "metadata": {}
-    },
-    {
-      "appID": "company.thebrowser.Browser",
-      "appName": "Arc",
-      "bundleIdentifier": "company.thebrowser.Browser",
-      "description": "Arc web browser for opening websites and URLs.",
-      "supportStatus": "supported",
-      "capabilities": [
-        {
-          "id": "open_url",
-          "summary": "Open a requested website or URL.",
-          "controlProfiles": [
-            "address_bar_submit"
-          ],
-          "requiredEntities": [
-            "query"
-          ]
-        }
-      ],
-      "metadata": {}
-    },
-    {
-      "appID": "com.apple.Notes",
-      "appName": "Notes",
-      "bundleIdentifier": "com.apple.Notes",
-      "description": "Apple Notes app for creating and editing notes.",
-      "supportStatus": "supported",
-      "capabilities": [
-        {
-          "id": "write_text",
-          "summary": "Create a new text document or note and type the requested text.",
-          "controlProfiles": [
-            "new_document_text"
-          ],
-          "requiredEntities": [
-            "query"
-          ]
-        }
-      ],
-      "metadata": {}
-    },
-    {
-      "appID": "com.apple.TextEdit",
-      "appName": "TextEdit",
-      "bundleIdentifier": "com.apple.TextEdit",
-      "description": "Apple text editor for creating plain or rich text documents.",
-      "supportStatus": "supported",
-      "capabilities": [
-        {
-          "id": "write_text",
-          "summary": "Create a new text document or note and type the requested text.",
-          "controlProfiles": [
-            "new_document_text"
-          ],
-          "requiredEntities": [
-            "query"
-          ]
-        }
-      ],
-      "metadata": {}
-    },
-    {
-      "appID": "com.apple.iWork.Numbers",
-      "appName": "Numbers",
-      "bundleIdentifier": "com.apple.iWork.Numbers",
-      "description": "Apple spreadsheet app for creating tables and spreadsheets.",
-      "supportStatus": "supported",
-      "capabilities": [
-        {
-          "id": "create_table",
-          "summary": "Create a compact table or spreadsheet from tab-separated text.",
-          "controlProfiles": [
-            "new_document_text"
-          ],
-          "requiredEntities": [
-            "query"
-          ]
-        }
-      ],
-      "metadata": {}
-    },
-    {
-      "appID": "com.microsoft.Excel",
-      "appName": "Microsoft Excel",
-      "bundleIdentifier": "com.microsoft.Excel",
-      "description": "Microsoft spreadsheet app for creating and editing workbooks.",
-      "supportStatus": "candidate",
-      "capabilities": [
-        {
-          "id": "create_table",
-          "summary": "Create a compact table or spreadsheet from tab-separated text.",
-          "controlProfiles": [
-            "new_document_text"
-          ],
-          "requiredEntities": [
-            "query"
-          ]
-        }
-      ],
-      "metadata": {}
-    },
-    {
       "appID": "com.apple.Terminal",
       "appName": "Terminal",
       "bundleIdentifier": "com.apple.Terminal",
@@ -222,81 +42,50 @@
       "metadata": {}
     },
     {
-      "appID": "com.apple.systempreferences",
-      "appName": "System Settings",
-      "bundleIdentifier": "com.apple.systempreferences",
-      "description": "System settings changes require a more specific reviewed capability.",
+      "appID": "com.agilebits.onepassword7",
+      "appName": "1Password",
+      "bundleIdentifier": "com.agilebits.onepassword7",
+      "description": "Password manager apps are denied for local-app automation.",
       "supportStatus": "denied",
       "capabilities": [],
-      "denyReason": "System settings changes require a more specific reviewed capability.",
+      "denyReason": "Password manager apps are denied for local-app automation.",
+      "metadata": {}
+    },
+    {
+      "appID": "com.1password.1password",
+      "appName": "1Password",
+      "bundleIdentifier": "com.1password.1password",
+      "description": "Password manager apps are denied for local-app automation.",
+      "supportStatus": "denied",
+      "capabilities": [],
+      "denyReason": "Password manager apps are denied for local-app automation.",
       "metadata": {}
     },
     {
       "appID": "com.apple.ActivityMonitor",
       "appName": "Activity Monitor",
       "bundleIdentifier": "com.apple.ActivityMonitor",
-      "description": "Process-management tools are denied for generic local-app automation.",
+      "description": "Process-management apps are denied for generic local-app automation.",
       "supportStatus": "denied",
       "capabilities": [],
-      "denyReason": "Process-management tools are denied for generic local-app automation.",
+      "denyReason": "Process-management apps are denied for generic local-app automation.",
       "metadata": {}
     },
     {
-      "appID": "com.apple.Console",
-      "appName": "Console",
-      "bundleIdentifier": "com.apple.Console",
-      "description": "System log tools are denied for generic local-app automation.",
+      "appID": "com.apple.systempreferences",
+      "appName": "System Settings",
+      "bundleIdentifier": "com.apple.systempreferences",
+      "description": "System settings are denied for generic local-app automation.",
       "supportStatus": "denied",
       "capabilities": [],
-      "denyReason": "System log tools are denied for generic local-app automation.",
-      "metadata": {}
-    },
-    {
-      "appID": "app:1password",
-      "appName": "1Password",
-      "description": "Password manager apps are denied for local-app automation.",
-      "supportStatus": "denied",
-      "capabilities": [],
-      "denyReason": "Password manager apps are denied for local-app automation.",
-      "metadata": {}
-    },
-    {
-      "appID": "app:bitwarden",
-      "appName": "Bitwarden",
-      "description": "Password manager apps are denied for local-app automation.",
-      "supportStatus": "denied",
-      "capabilities": [],
-      "denyReason": "Password manager apps are denied for local-app automation.",
-      "metadata": {}
-    },
-    {
-      "appID": "app:lastpass",
-      "appName": "LastPass",
-      "description": "Password manager apps are denied for local-app automation.",
-      "supportStatus": "denied",
-      "capabilities": [],
-      "denyReason": "Password manager apps are denied for local-app automation.",
-      "metadata": {}
-    },
-    {
-      "appID": "app:dashlane",
-      "appName": "Dashlane",
-      "description": "Password manager apps are denied for local-app automation.",
-      "supportStatus": "denied",
-      "capabilities": [],
-      "denyReason": "Password manager apps are denied for local-app automation.",
+      "denyReason": "System settings are denied for generic local-app automation.",
       "metadata": {}
     }
   ],
   "aliases": {
-    "chrome": "com.google.Chrome",
-    "excel": "com.microsoft.Excel",
-    "iterm": "com.googlecode.iterm2",
-    "iterm2": "com.googlecode.iterm2",
     "system preferences": "com.apple.systempreferences",
-    "1password": "app:1password",
-    "bitwarden": "app:bitwarden",
-    "lastpass": "app:lastpass",
-    "dashlane": "app:dashlane"
+    "settings": "com.apple.systempreferences",
+    "passwords": "com.apple.Passwords",
+    "terminal": "com.apple.Terminal"
   }
 }

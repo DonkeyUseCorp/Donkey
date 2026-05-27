@@ -950,7 +950,7 @@ struct AIHarnessAdapterTests {
     }
 
     @Test
-    func processBackedLocalLLMTaskIntentAdapterRepairsIncompleteModelPlannedInteraction() async throws {
+    func processBackedLocalLLMTaskIntentAdapterPreservesIncompleteModelPlannedInteraction() async throws {
         let adapter = ProcessBackedLocalLLMTaskIntentAdapter(
             router: AIModelRouter(registry: .defaultHybridPlanner),
             sidecarRunner: FakeSidecarRunner(
@@ -975,18 +975,17 @@ struct AIHarnessAdapterTests {
                 command: "play some justin bieber",
                 taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
                 contextSnippets: ["Music application com.apple.Music"],
-                sourceTraceID: "trace-repaired-local-app-plan"
+                sourceTraceID: "trace-preserved-local-app-plan"
             )
         )
 
         #expect(result.intent?.taskType == "local_app_interaction")
         #expect(result.intent?.normalizedEntities["appName"] == "Music")
         #expect(result.intent?.normalizedEntities["query"] == "Justin Bieber")
-        #expect(result.intent?.metadata["modelPlan.repaired"] == "true")
-        #expect(result.intent?.actionPlan?.tools.contains(.setText) == true)
-        #expect(result.intent?.actionPlan?.tools.contains(.pressReturn) == true)
-        #expect(result.intent?.actionPlan?.controlID == "search")
-        #expect(result.intent?.actionPlan?.focusKey == "Command+F")
+        #expect(result.intent?.metadata["modelPlan.repaired"] == nil)
+        #expect(result.intent?.actionPlan?.tools == [.openOrFocusApp, .focusSearch])
+        #expect(result.intent?.actionPlan?.controlID == "")
+        #expect(result.intent?.actionPlan?.focusKey == "")
         #expect(result.trace.status == .completed)
     }
 
@@ -1379,11 +1378,10 @@ struct AIHarnessAdapterTests {
             )
         )
 
-        #expect(result.intent?.confidence == 0.2)
-        #expect(result.intent?.actionPlan == nil)
-        #expect(result.intent?.metadata["responseMode"] == "conversation")
-        #expect(result.intent?.metadata["notActionableReason"] == "insufficientDocumentPayload")
-        #expect(result.intent?.metadata["assistantResponse"]?.contains("clearer thing to write") == true)
+        #expect(result.intent?.confidence == 0.9)
+        #expect(result.intent?.actionPlan?.tools.contains(.setText) == true)
+        #expect(result.intent?.metadata["responseMode"] == nil)
+        #expect(result.intent?.metadata["notActionableReason"] == nil)
     }
 
     @Test
@@ -1420,7 +1418,7 @@ struct AIHarnessAdapterTests {
     }
 
     @Test
-    func taskIntentDecoderRoutesCopiedPromptPlaceholderToConversation() async throws {
+    func taskIntentDecoderPreservesCopiedPromptPlaceholderFromModelBoundary() async throws {
         let adapter = ProcessBackedLocalLLMTaskIntentAdapter(
             router: AIModelRouter(registry: .defaultHybridPlanner),
             sidecarRunner: FakeSidecarRunner(
@@ -1447,14 +1445,14 @@ struct AIHarnessAdapterTests {
             )
         )
 
-        #expect(result.intent?.confidence == 0.2)
-        #expect(result.intent?.actionPlan == nil)
-        #expect(result.intent?.metadata["responseMode"] == "conversation")
-        #expect(result.intent?.metadata["notActionableReason"] == "promptPlaceholderPayload")
+        #expect(result.intent?.confidence == 0.9)
+        #expect(result.intent?.actionPlan?.tools.contains(.setText) == true)
+        #expect(result.intent?.metadata["responseMode"] == nil)
+        #expect(result.intent?.metadata["notActionableReason"] == nil)
     }
 
     @Test
-    func taskIntentDecoderRoutesEmptyTextInputPlanToConversation() async throws {
+    func taskIntentDecoderPreservesEmptyTextInputPlanForCatalogValidation() async throws {
         let adapter = ProcessBackedLocalLLMTaskIntentAdapter(
             router: AIModelRouter(registry: .defaultHybridPlanner),
             sidecarRunner: FakeSidecarRunner(
@@ -1481,14 +1479,14 @@ struct AIHarnessAdapterTests {
             )
         )
 
-        #expect(result.intent?.confidence == 0.2)
-        #expect(result.intent?.actionPlan == nil)
-        #expect(result.intent?.metadata["responseMode"] == "conversation")
-        #expect(result.intent?.metadata["notActionableReason"] == "missingTextPayload")
+        #expect(result.intent?.confidence == 0.9)
+        #expect(result.intent?.actionPlan?.tools.contains(.setText) == true)
+        #expect(result.intent?.metadata["responseMode"] == nil)
+        #expect(result.intent?.metadata["notActionableReason"] == nil)
     }
 
     @Test
-    func taskIntentDecoderRepairsSentenceSpreadsheetPayloadIntoTableText() async throws {
+    func taskIntentDecoderPreservesSpreadsheetPayloadFromModelBoundary() async throws {
         let adapter = ProcessBackedLocalLLMTaskIntentAdapter(
             router: AIModelRouter(registry: .defaultHybridPlanner),
             sidecarRunner: FakeSidecarRunner(
@@ -1511,13 +1509,13 @@ struct AIHarnessAdapterTests {
                 command: "create a table in numbers with the marketcap of the 10 largest companies in s&p",
                 taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
                 contextSnippets: ["Numbers application com.apple.iWork.Numbers"],
-                sourceTraceID: "trace-repaired-table-payload"
+                sourceTraceID: "trace-preserved-table-payload"
             )
         )
 
         #expect(result.intent?.actionPlan?.tools.contains(.setText) == true)
-        #expect(result.intent?.metadata["modelPlan.repairedTableText"] == "true")
-        #expect(result.intent?.normalizedEntities["query"]?.contains("Request\tStatus") == true)
+        #expect(result.intent?.metadata["modelPlan.repairedTableText"] == nil)
+        #expect(result.intent?.normalizedEntities["query"]?.contains("Request\tStatus") == false)
         #expect(result.intent?.normalizedEntities["query"]?.contains("Market capital") == true)
     }
 

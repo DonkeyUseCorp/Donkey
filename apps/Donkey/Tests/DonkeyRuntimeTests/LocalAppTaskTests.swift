@@ -390,7 +390,7 @@ struct LocalAppTaskTests {
     }
 
     @Test
-    func catalogResolvesValidatedGenericPlayMediaToMusicAutomation() throws {
+    func catalogKeepsValidatedPlayMediaCapabilityOnGenericInteraction() throws {
         let catalog = LocalAppTaskCatalog(
             taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
             availabilityProvider: StaticLocalAppAvailabilityProvider(
@@ -421,22 +421,24 @@ struct LocalAppTaskTests {
         let resolution = catalog.resolve(intent: genericIntent)
         let intent = try #require(resolution.intent)
         let definition = try #require(resolution.definition)
-        let commands = catalog.adapter(for: definition).guardedAutomationCommandTemplates(
+        let automationCommands = catalog.adapter(for: definition).guardedAutomationCommandTemplates(
+            for: intent,
+            issuedAt: timestamp(100)
+        )
+        let keyboardCommands = catalog.adapter(for: definition).guardedKeyboardCommandTemplates(
             for: intent,
             issuedAt: timestamp(100)
         )
 
         #expect(resolution.status == .resolved)
-        #expect(intent.taskType == "media_playback")
+        #expect(intent.taskType == "local_app_interaction")
         #expect(intent.targetApp.appName == "Music")
         #expect(intent.normalizedEntities["query"] == "Viva La Vida Coldplay")
-        #expect(intent.metadata["resolvedFromCapability"] == "play_media")
-        #expect(intent.metadata["automationBackend"] == "appleScript")
-        #expect(definition.taskType == "media_playback")
-        #expect(definition.metadata["automationBackend"] == "appleScript")
-        #expect(commands.map(\.kind) == [.controller])
-        #expect(commands.first?.metadata["appleScript.action"] == "music.playMediaQuery")
-        #expect(commands.first?.key == "Viva La Vida Coldplay")
+        #expect(intent.metadata["appFinder.selectedCapabilityID"] == "play_media")
+        #expect(definition.taskType == "local_app_interaction")
+        #expect(definition.metadata["automationBackend"] == nil)
+        #expect(automationCommands.isEmpty)
+        #expect(keyboardCommands.map(\.key) == ["Command+F", "Viva La Vida Coldplay", "Return"])
     }
 
     @Test
@@ -454,9 +456,8 @@ struct LocalAppTaskTests {
         let terminal = try #require(entries.first { $0.appID == "com.apple.Terminal" })
         let draftPad = try #require(entries.first { $0.appID == "com.example.DraftPad" })
 
-        #expect(music.supportStatus == .supported)
-        #expect(music.capabilities.map(\.id) == ["play_media"])
-        #expect(music.capabilities.first?.controlProfiles == ["search_then_enter"])
+        #expect(music.supportStatus == .candidate)
+        #expect(music.capabilities.isEmpty)
         #expect(terminal.supportStatus == .denied)
         #expect(terminal.capabilities.isEmpty)
         #expect(terminal.denyReason?.contains("shell") == true)
@@ -687,13 +688,8 @@ struct LocalAppTaskTests {
     func appFinderProfilesLoadFromBundledJSON() throws {
         let store = LocalAppFinderProfileStore.defaultStore
 
-        let music = try #require(store.profile(appName: "Music", bundleIdentifier: "com.apple.Music"))
-        #expect(music.supportStatus == .supported)
-        #expect(music.capabilities.map(\.id).contains("play_media"))
-
-        let chrome = try #require(store.profile(appName: "Chrome", bundleIdentifier: nil))
-        #expect(chrome.bundleIdentifier == "com.google.Chrome")
-        #expect(chrome.capabilities.map(\.id).contains("open_url"))
+        #expect(store.profile(appName: "Music", bundleIdentifier: "com.apple.Music") == nil)
+        #expect(store.profile(appName: "Chrome", bundleIdentifier: nil) == nil)
 
         let terminal = try #require(store.profile(appName: "Terminal", bundleIdentifier: "com.apple.Terminal"))
         #expect(terminal.supportStatus == .denied)
@@ -1199,13 +1195,13 @@ struct LocalAppTaskTests {
         )
 
         #expect(result.status == .completed)
-        #expect(result.resolution.definition?.taskType == "media_playback")
+        #expect(result.resolution.definition?.taskType == "local_app_interaction")
         #expect(result.metadata["reason"] != "evidencePlanBlocked")
-        #expect(result.metadata["automation.backend"] == "appleScript")
-        #expect(result.metadata["automation.action"] == "music.playMediaQuery")
+        #expect(result.metadata["automation.backend"] == nil)
+        #expect(result.metadata["automation.action"] == nil)
         #expect(result.workflowProgress.state(for: .evidencePlan)?.status == .completed)
         #expect(result.workflowProgress.state(for: .execute)?.status == .completed)
-        #expect(await backend.executedKeys() == ["Viva La Vida Coldplay"])
+        #expect(await backend.executedKeys() == ["Command+F", "Viva La Vida Coldplay", "Return"])
     }
 
     @Test @MainActor
