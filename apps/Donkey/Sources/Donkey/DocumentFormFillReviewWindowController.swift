@@ -1,4 +1,5 @@
 import AppKit
+import DonkeyAI
 import DonkeyRuntime
 import SwiftUI
 
@@ -53,6 +54,9 @@ private final class DocumentFormFillReviewViewModel: ObservableObject {
         request: DocumentFormFillReviewRequest,
         close: @escaping @MainActor () -> Void,
         runner: DocumentFormFillApprovalLiveRunner = DocumentFormFillApprovalLiveRunner(
+            appController: MacLocalAppTaskController(
+                uiUnderstandingRunner: DonkeyUIUnderstandingRunnerFactory.defaultRunner()
+            ),
             coordinator: RunCoordinator()
         )
     ) {

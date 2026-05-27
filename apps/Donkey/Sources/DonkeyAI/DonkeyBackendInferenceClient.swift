@@ -1,4 +1,5 @@
 import DonkeyContracts
+import DonkeyRuntime
 import Foundation
 
 public enum DonkeyBackendInferenceClientError: Error, Equatable, Sendable {
@@ -125,6 +126,39 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
         request.httpBody = try JSONEncoder().encode(responseRequest)
         let data = try await send(request)
         return try JSONDecoder().decode(RemoteInferenceJSONValue.self, from: data)
+    }
+
+    public func parseScreenshot(
+        _ understandingRequest: LocalUIUnderstandingRequest,
+        imageData: Data? = nil,
+        contentType: String = "image/png"
+    ) async throws -> LocalUIUnderstandingResult {
+        guard let imageData = try imageData ?? understandingRequest.imageFileURL.map({ try Data(contentsOf: $0) }) else {
+            throw DonkeyBackendInferenceClientError.missingDownloadPayload("screenshot")
+        }
+
+        var request = makeRequest(path: "/api/inference/screenshots/parse/")
+        request.httpMethod = "POST"
+        var metadata = understandingRequest.metadata
+        metadata["screenshot.scope"] = metadata["screenshot.scope"] ?? "targetWindow"
+        metadata["screenshot.desktopCaptureAllowed"] = "false"
+        request.httpBody = try JSONEncoder().encode(
+            RemoteScreenshotParseRequest(
+                imageBase64: imageData.base64EncodedString(),
+                contentType: contentType,
+                pixelSize: understandingRequest.pixelSize ?? HotLoopSize(
+                    width: 1,
+                    height: 1,
+                    space: .window
+                ),
+                traceID: understandingRequest.traceID,
+                targetID: understandingRequest.targetID,
+                cropBounds: understandingRequest.cropBounds,
+                metadata: metadata
+            )
+        )
+        let data = try await send(request)
+        return try JSONDecoder().decode(LocalUIUnderstandingResult.self, from: data)
     }
 
     public func makeStreamingChatRequest(
@@ -365,4 +399,14 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return cleaned.isEmpty ? "asset" : String(cleaned.prefix(160))
     }
+}
+
+private struct RemoteScreenshotParseRequest: Encodable {
+    var imageBase64: String
+    var contentType: String
+    var pixelSize: HotLoopSize
+    var traceID: String
+    var targetID: String
+    var cropBounds: HotLoopRect?
+    var metadata: [String: String]
 }

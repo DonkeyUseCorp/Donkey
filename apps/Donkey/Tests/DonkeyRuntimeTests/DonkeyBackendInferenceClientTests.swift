@@ -1,5 +1,6 @@
 import DonkeyAI
 import DonkeyContracts
+import DonkeyRuntime
 import Foundation
 import Testing
 
@@ -95,6 +96,344 @@ struct DonkeyBackendInferenceClientTests {
         #expect(object["store"] as? Bool == false)
         let tools = try #require(object["tools"] as? [[String: Any]])
         #expect(tools.first?["type"] as? String == "donkey_debug_ui_inspection")
+    }
+
+    @Test
+    func parseScreenshotUsesBackendProxyAndDecodesLocalUIUnderstandingResult() async throws {
+        let response = LocalUIUnderstandingResult(
+            visibleText: ["visibleText": "Search"],
+            controls: [
+                LocalUIUnderstandingControl(
+                    id: "search",
+                    label: "Search",
+                    kind: .searchField,
+                    frame: HotLoopRect(x: 10, y: 20, width: 100, height: 30, space: .window),
+                    confidence: 0.84,
+                    metadata: ["controlID": "search"]
+                )
+            ],
+            confidence: 0.84,
+            metadata: ["runtime.backend": "gemini-screenshot-parser"]
+        )
+        let httpClient = FixtureHTTPClient(
+            data: try JSONEncoder().encode(response),
+            statusCode: 200
+        )
+        let client = DonkeyBackendInferenceClient(
+            configuration: configuration(),
+            httpClient: httpClient
+        )
+
+        let result = try await client.parseScreenshot(
+            LocalUIUnderstandingRequest(
+                traceID: "trace-1",
+                targetID: "target-1",
+                imageFileURL: nil,
+                cropBounds: HotLoopRect(x: 0, y: 0, width: 200, height: 100, space: .window),
+                pixelSize: HotLoopSize(width: 200, height: 100, space: .window),
+                metadata: ["source": "test"]
+            ),
+            imageData: Data("png".utf8)
+        )
+
+        #expect(result.controls.first?.id == "search")
+        let request = try #require(httpClient.requests.first)
+        #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+        #expect(request.value(forHTTPHeaderField: "x-donkey-client-id") == "client-1")
+        #expect(request.url?.path == "/api/inference/screenshots/parse/")
+
+        let object = try #require(request.httpBodyJSONObject)
+        #expect(object["imageBase64"] as? String == Data("png".utf8).base64EncodedString())
+        #expect(object["contentType"] as? String == "image/png")
+        #expect(object["traceID"] as? String == "trace-1")
+        #expect(object["targetID"] as? String == "target-1")
+        let pixelSize = try #require(object["pixelSize"] as? [String: Any])
+        #expect(pixelSize["width"] as? Double == 200)
+        #expect(pixelSize["height"] as? Double == 100)
+        let metadata = try #require(object["metadata"] as? [String: Any])
+        #expect(metadata["screenshot.scope"] as? String == "targetWindow")
+        #expect(metadata["screenshot.desktopCaptureAllowed"] as? String == "false")
+    }
+
+    @Test
+    func screenshotParseOverlayMapperConvertsWindowPixelsToScreenOverlayCoordinates() throws {
+        let result = LocalUIUnderstandingResult(
+            controls: [
+                LocalUIUnderstandingControl(
+                    id: "review",
+                    label: "Review",
+                    kind: .button,
+                    frame: HotLoopRect(x: 100, y: 50, width: 200, height: 100, space: .window),
+                    confidence: 0.91,
+                    metadata: ["controlID": "review"]
+                )
+            ],
+            confidence: 0.91,
+            metadata: ["parserProvider": "gemini-flash"]
+        )
+        let target = MacWindowTargetCandidate(
+            windowID: 42,
+            processID: 100,
+            appName: "Codex",
+            bundleIdentifier: "com.openai.codex",
+            title: "Add screenshot parsing endpoint",
+            bounds: WindowTargetBounds(x: 100, y: 200, width: 500, height: 300),
+            isVisible: true,
+            isOnScreen: true,
+            isFrontmost: true,
+            isFocused: true,
+            isIPhoneMirroring: false,
+            safetyAssessment: WindowTargetSafetyAssessment(
+                status: .allowed,
+                summary: "allowed"
+            )
+        )
+
+        let frame = ScreenshotParseDebugUIOverlayMapper.frame(
+            from: result,
+            target: target,
+            capturePixelSize: HotLoopSize(width: 1_000, height: 600, space: .window),
+            screenFrame: WindowTargetBounds(x: 0, y: 0, width: 1_000, height: 800),
+            minConfidence: 0.25
+        )
+
+        let element = try #require(frame.elements.first)
+        #expect(element.id == "gemini-42-review")
+        #expect(element.type == .button)
+        #expect(element.bbox == DebugUIBoundingBox(x: 150, y: 425, width: 100, height: 50))
+        #expect(element.metadata["directInputActionsAllowed"] == "false")
+        #expect(element.metadata["localUIElement.actionEligibility"] == "readOnlyEvidence")
+    }
+
+    @Test
+    func screenshotParseOverlayMapperUsesCompressedImagePixelSpace() throws {
+        let result = LocalUIUnderstandingResult(
+            controls: [
+                LocalUIUnderstandingControl(
+                    id: "compressed-review",
+                    label: "Review",
+                    kind: .button,
+                    frame: HotLoopRect(x: 448, y: 320, width: 112, height: 64, space: .window),
+                    confidence: 0.91
+                )
+            ],
+            confidence: 0.91
+        )
+        let target = MacWindowTargetCandidate(
+            windowID: 43,
+            processID: 100,
+            appName: "Codex",
+            bundleIdentifier: "com.openai.codex",
+            title: "Add screenshot parsing endpoint",
+            bounds: WindowTargetBounds(x: 1_440, y: 120, width: 756, height: 540),
+            isVisible: true,
+            isOnScreen: true,
+            isFrontmost: true,
+            isFocused: true,
+            isIPhoneMirroring: false,
+            safetyAssessment: WindowTargetSafetyAssessment(
+                status: .allowed,
+                summary: "allowed"
+            )
+        )
+
+        let frame = ScreenshotParseDebugUIOverlayMapper.frame(
+            from: result,
+            target: target,
+            capturePixelSize: HotLoopSize(width: 896, height: 640, space: .window),
+            screenFrame: WindowTargetBounds(x: 1_440, y: 0, width: 1_440, height: 900),
+            minConfidence: 0.25
+        )
+
+        let bbox = try #require(frame.elements.first?.bbox)
+        #expect(abs(bbox.x - 378) < 0.0001)
+        #expect(abs(bbox.y - 336) < 0.0001)
+        #expect(abs(bbox.width - 94.5) < 0.0001)
+        #expect(abs(bbox.height - 54) < 0.0001)
+    }
+
+    @Test
+    func debugUIFusionKeepsAccessibilityGeometryAndAddsGeminiGaps() throws {
+        let accessibilityFrame = DebugUIInspectionFrame(
+            elements: [
+                DebugUIElement(
+                    id: "ax-review",
+                    type: .button,
+                    label: "Review",
+                    bbox: DebugUIBoundingBox(x: 100, y: 100, width: 80, height: 30),
+                    confidence: 1,
+                    metadata: ["localUIElement.sources": "accessibility"]
+                ),
+                DebugUIElement(
+                    id: "ax-window",
+                    type: .draggable,
+                    label: "Window",
+                    bbox: DebugUIBoundingBox(x: 0, y: 0, width: 500, height: 400),
+                    confidence: 1,
+                    metadata: ["localUIElement.sources": "accessibility"]
+                )
+            ]
+        )
+        let geminiFrame = DebugUIInspectionFrame(
+            elements: [
+                DebugUIElement(
+                    id: "gemini-review",
+                    type: .button,
+                    label: "Review",
+                    bbox: DebugUIBoundingBox(x: 105, y: 105, width: 60, height: 20),
+                    confidence: 0.95,
+                    metadata: ["localUIElement.sources": "gemini-screenshot-parser"]
+                ),
+                DebugUIElement(
+                    id: "gemini-voice",
+                    type: .toolbarIcon,
+                    label: "Voice",
+                    bbox: DebugUIBoundingBox(x: 220, y: 100, width: 40, height: 30),
+                    confidence: 0.9,
+                    metadata: ["localUIElement.sources": "gemini-screenshot-parser"]
+                )
+            ]
+        )
+
+        let fused = DebugUIInspectionFrameFusion.fused(
+            accessibilityFrame: accessibilityFrame,
+            geminiFrame: geminiFrame
+        )
+        let ids = fused.elements.map(\.id)
+
+        #expect(ids.contains("ax-review"))
+        #expect(ids.contains("ax-window"))
+        #expect(!ids.contains("gemini-review"))
+        #expect(ids.contains("gemini-voice"))
+        let geminiElement = try #require(fused.elements.first { $0.id == "gemini-voice" })
+        #expect(geminiElement.metadata["debugUIFusion.source"] == "gemini")
+        #expect(geminiElement.metadata["directInputActionsAllowed"] == "false")
+        #expect(geminiElement.metadata["localUIElement.actionEligibility"] == "readOnlyEvidence")
+    }
+
+    @Test
+    func debugUIFusionDoesNotLetLargeAccessibilityContainersHideGeminiControls() throws {
+        let accessibilityFrame = DebugUIInspectionFrame(
+            elements: [
+                DebugUIElement(
+                    id: "ax-sidebar-group",
+                    type: .listItem,
+                    label: "Sidebar",
+                    bbox: DebugUIBoundingBox(x: 0, y: 0, width: 260, height: 700),
+                    confidence: 0.8,
+                    metadata: ["localUIElement.sources": "accessibility"]
+                )
+            ]
+        )
+        let geminiFrame = DebugUIInspectionFrame(
+            elements: [
+                DebugUIElement(
+                    id: "gemini-small-icon",
+                    type: .toolbarIcon,
+                    label: "Search",
+                    bbox: DebugUIBoundingBox(x: 18, y: 84, width: 28, height: 28),
+                    confidence: 0.88,
+                    metadata: ["localUIElement.sources": "gemini-screenshot-parser"]
+                )
+            ]
+        )
+
+        let fused = DebugUIInspectionFrameFusion.fused(
+            accessibilityFrame: accessibilityFrame,
+            geminiFrame: geminiFrame
+        )
+
+        #expect(fused.elements.map(\.id).contains("gemini-small-icon"))
+    }
+
+    @Test
+    func remoteFallbackDoesNotCallBackendWhenPrimaryEvidenceIsGood() async throws {
+        let httpClient = FixtureHTTPClient(
+            data: try JSONEncoder().encode(LocalUIUnderstandingResult(confidence: 0.9)),
+            statusCode: 200
+        )
+        let adapter = RemoteFallbackLocalUIUnderstandingAdapter(
+            primary: StaticUIUnderstandingRunner(
+                result: LocalUIUnderstandingResult(
+                    controls: [
+                        LocalUIUnderstandingControl(
+                            id: "native-search",
+                            label: "Search",
+                            kind: .searchField,
+                            confidence: 0.86
+                        )
+                    ],
+                    confidence: 0.86
+                )
+            ),
+            remote: RemoteScreenshotParsingLocalUIUnderstandingAdapter(
+                client: DonkeyBackendInferenceClient(
+                    configuration: configuration(),
+                    httpClient: httpClient
+                )
+            )
+        )
+
+        let result = try await adapter.understand(
+            LocalUIUnderstandingRequest(
+                traceID: "trace-good-primary",
+                targetID: "target-1"
+            )
+        )
+
+        #expect(result.controls.first?.id == "native-search")
+        #expect(httpClient.requests.isEmpty)
+    }
+
+    @Test
+    func remoteFallbackThrottlesUnchangedScreenshots() async throws {
+        let imageURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("donkey-remote-screenshot-\(UUID().uuidString).png")
+        try Data("same-image".utf8).write(to: imageURL)
+        defer {
+            try? FileManager.default.removeItem(at: imageURL)
+        }
+
+        let remoteResult = LocalUIUnderstandingResult(
+            controls: [
+                LocalUIUnderstandingControl(
+                    id: "remote-button",
+                    label: "Continue",
+                    kind: .button,
+                    confidence: 0.9
+                )
+            ],
+            confidence: 0.9
+        )
+        let httpClient = FixtureHTTPClient(
+            data: try JSONEncoder().encode(remoteResult),
+            statusCode: 200
+        )
+        let adapter = RemoteFallbackLocalUIUnderstandingAdapter(
+            primary: StaticUIUnderstandingRunner(
+                result: LocalUIUnderstandingResult(confidence: 0.1)
+            ),
+            remote: RemoteScreenshotParsingLocalUIUnderstandingAdapter(
+                client: DonkeyBackendInferenceClient(
+                    configuration: configuration(),
+                    httpClient: httpClient
+                )
+            ),
+            throttle: RemoteScreenshotParsingThrottle(minimumInterval: 60)
+        )
+        let request = LocalUIUnderstandingRequest(
+            traceID: "trace-throttle",
+            targetID: "target-throttle",
+            imageFileURL: imageURL,
+            pixelSize: HotLoopSize(width: 100, height: 100, space: .window)
+        )
+
+        let first = try await adapter.understand(request)
+        let second = try await adapter.understand(request)
+
+        #expect(first.controls.first?.id == "remote-button")
+        #expect(second.metadata["remoteScreenshotParsing.status"] == "throttled")
+        #expect(httpClient.requests.count == 1)
     }
 
     @Test
@@ -435,6 +774,14 @@ private final class FixtureHTTPClient: AIHTTPClient, @unchecked Sendable {
                 headerFields: headerFields
             )!
         )
+    }
+}
+
+private struct StaticUIUnderstandingRunner: LocalUIUnderstandingRunning {
+    var result: LocalUIUnderstandingResult
+
+    func understand(_ request: LocalUIUnderstandingRequest) async throws -> LocalUIUnderstandingResult {
+        result
     }
 }
 

@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 
 public struct DebugUIOverlayConfiguration: Equatable, Sendable {
     public var enabled: Bool
-    public var provider: DebugUIInspectionProvider
+    public var mode: String
     public var cadenceSeconds: TimeInterval
     public var screenScope: DebugUIInspectionScreenScope
     public var minConfidence: Double
@@ -18,7 +18,7 @@ public struct DebugUIOverlayConfiguration: Equatable, Sendable {
 
     public init(
         enabled: Bool = false,
-        provider: DebugUIInspectionProvider = .accessibility,
+        mode: String = "donkeyVision",
         cadenceSeconds: TimeInterval = 1.0,
         screenScope: DebugUIInspectionScreenScope = .main,
         minConfidence: Double = 0.25,
@@ -27,7 +27,7 @@ public struct DebugUIOverlayConfiguration: Equatable, Sendable {
         targetAppNames: [String] = []
     ) {
         self.enabled = enabled
-        self.provider = provider
+        self.mode = mode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "donkeyVision" : mode
         self.cadenceSeconds = min(max(cadenceSeconds, 0.25), 10.0)
         self.screenScope = screenScope
         self.minConfidence = min(max(minConfidence, 0), 1)
@@ -75,9 +75,10 @@ public struct DebugUIOverlayConfiguration: Equatable, Sendable {
             return .disabled
         }
 
+        let mode = raw.mode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return DebugUIOverlayConfiguration(
             enabled: raw.enabled ?? false,
-            provider: raw.provider.flatMap(DebugUIInspectionProvider.init(rawValue:)) ?? .accessibility,
+            mode: mode.isEmpty ? "donkeyVision" : mode,
             cadenceSeconds: raw.cadenceSeconds ?? 1.0,
             screenScope: raw.screenScope.flatMap(DebugUIInspectionScreenScope.init(rawValue:)) ?? .main,
             minConfidence: raw.minConfidence ?? 0.25,
@@ -152,7 +153,7 @@ public struct DebugUIOverlayConfiguration: Equatable, Sendable {
 
 private struct RawDebugUIOverlayConfiguration: Codable {
     var enabled: Bool?
-    var provider: String?
+    var mode: String?
     var cadenceSeconds: TimeInterval?
     var screenScope: String?
     var minConfidence: Double?
@@ -189,7 +190,11 @@ public struct DebugUIElementTracker: Equatable, Sendable {
         self.movementConfirmationSamples = max(1, movementConfirmationSamples)
     }
 
-    public mutating func update(with frame: DebugUIInspectionFrame) -> DebugUIInspectionFrame {
+    public mutating func update(
+        with frame: DebugUIInspectionFrame,
+        renderNewElementsImmediately: Bool = false
+    ) -> DebugUIInspectionFrame {
+        let isInitialObservation = previousElements.isEmpty && lastObservedElements.isEmpty
         var usedPreviousIDs = Set<String>()
         let matchBase = semanticMatchBase()
         var trackedCandidates: [DebugUIElement] = []
@@ -223,19 +228,27 @@ public struct DebugUIElementTracker: Equatable, Sendable {
         let trackedIDs = Set(trackedCandidates.map(\.id))
         var rendered: [DebugUIElement] = []
 
-        for candidate in trackedCandidates {
-            if previousElements.contains(where: { $0.id == candidate.id }) {
+        if isInitialObservation {
+            rendered = trackedCandidates
+            for candidate in trackedCandidates {
                 appearanceCounts[candidate.id] = appearanceThreshold
                 missingCounts[candidate.id] = nil
-                rendered.append(candidate)
-                continue
             }
+        } else {
+            for candidate in trackedCandidates {
+                if previousElements.contains(where: { $0.id == candidate.id }) {
+                    appearanceCounts[candidate.id] = appearanceThreshold
+                    missingCounts[candidate.id] = nil
+                    rendered.append(candidate)
+                    continue
+                }
 
-            let count = min(appearanceThreshold, (appearanceCounts[candidate.id] ?? 0) + 1)
-            appearanceCounts[candidate.id] = count
-            missingCounts[candidate.id] = nil
-            if count >= appearanceThreshold {
-                rendered.append(candidate)
+                let count = min(appearanceThreshold, (appearanceCounts[candidate.id] ?? 0) + 1)
+                appearanceCounts[candidate.id] = count
+                missingCounts[candidate.id] = nil
+                if renderNewElementsImmediately || count >= appearanceThreshold {
+                    rendered.append(candidate)
+                }
             }
         }
 
@@ -556,7 +569,7 @@ public enum DebugUIOverlayGeometry {
         let scaleY = screenPointSize.height / screenshotPixelSize.height
         return CGRect(
             x: bbox.x * scaleX,
-            y: screenPointSize.height - (bbox.y + bbox.height) * scaleY,
+            y: bbox.y * scaleY,
             width: bbox.width * scaleX,
             height: bbox.height * scaleY
         )

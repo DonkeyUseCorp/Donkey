@@ -1144,6 +1144,8 @@ public struct MacLocalAppTaskController: LocalAppTaskAppControlling {
                 "observer": "mac-local-app-controller",
                 "observation.source": "screenshot",
                 "verificationTextKey": verificationKey,
+                "screenshot.scope": "targetWindow",
+                "screenshot.desktopCaptureAllowed": "false",
                 "target.windowID": String(target.windowID),
                 "capture.method": screenshot.captureMethod.rawValue
             ].merging(LocalAppObservationGeometry.targetBoundsMetadata(target.bounds)) { current, _ in current }

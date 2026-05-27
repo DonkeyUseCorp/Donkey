@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "provider": "accessibility",
+  "mode": "donkeyVision",
   "cadenceSeconds": 1.0,
   "screenScope": "main",
   "minConfidence": 0.25,

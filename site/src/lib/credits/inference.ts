@@ -19,6 +19,7 @@ export const inferenceUsageRoutes = {
   assetsRefresh: "/api/inference/assets/refresh/",
   chatCompletions: "/api/inference/chat/completions/",
   responses: "/api/inference/responses/",
+  screenshotParse: "/api/inference/screenshots/parse/",
 } as const;
 
 type CreditsDatabase = PrismaClient | Prisma.TransactionClient;

@@ -112,8 +112,6 @@ public struct DebugUIAccessibilityInspectionService: Sendable {
         targets: [MacWindowTargetCandidate],
         minConfidence: Double
     ) -> [DebugUIAccessibilityInspectionResult] {
-        let screenshotsByScreenID = (try? screenCapturer.captureScreens(scope: screens.count > 1 ? .all : .main))
-            .map { Dictionary(uniqueKeysWithValues: $0.map { ($0.screenID, $0) }) } ?? [:]
         let candidatesByScreenID = accessibilityCandidatesByScreen(
             screens: screens,
             targets: targets
@@ -134,7 +132,7 @@ public struct DebugUIAccessibilityInspectionService: Sendable {
                     elements: []
                 )
             )
-            let snapshot = screenshotsByScreenID[screen.screenID] ?? fallbackSnapshot
+            let snapshot = fallbackSnapshot
             let accessibilityCandidates = Self.scaleCandidates(
                 candidatesByScreenID[screen.screenID] ?? [],
                 from: screen.captureFrame,
@@ -144,14 +142,14 @@ public struct DebugUIAccessibilityInspectionService: Sendable {
             let trace = elementDetectionService.detect(
                 LocalUIElementDetectionRequest(
                     traceID: "debug-ui-local-\(screen.screenID)-\(snapshot.fingerprint)",
-                    screenshotPNGData: snapshot.pngData.isEmpty ? nil : snapshot.pngData,
+                    screenshotPNGData: nil,
                     pixelSize: snapshot.pixelSize,
                     accessibilityCandidates: accessibilityCandidates,
                     minConfidence: minConfidence,
                     metadata: [
                         "screen.id": String(screen.screenID),
                         "screen.scope": screens.count > 1 ? "all" : "main",
-                        "provider": DebugUIInspectionProvider.accessibility.rawValue
+                        "donkeyVision.local": "accessibility"
                     ]
                 )
             )

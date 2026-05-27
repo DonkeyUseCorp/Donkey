@@ -57,14 +57,14 @@ public struct WindowScreenshotCaptureResult: Equatable, Sendable {
     }
 }
 
-struct CapturedWindowScreenshot: Equatable, Sendable {
-    var pngData: Data
-    var imageWidth: Int
-    var imageHeight: Int
-    var captureMethod: WindowScreenshotCaptureMethod
-    var coordinateSpace: String
+public struct CapturedWindowScreenshot: Equatable, Sendable {
+    public var pngData: Data
+    public var imageWidth: Int
+    public var imageHeight: Int
+    public var captureMethod: WindowScreenshotCaptureMethod
+    public var coordinateSpace: String
 
-    init(
+    public init(
         pngData: Data,
         imageWidth: Int,
         imageHeight: Int,
@@ -88,12 +88,14 @@ protocol WindowScreenshotCapturing {
     ) async throws -> CapturedWindowScreenshot
 }
 
-protocol ScreenRecordingPermissionChecking: Sendable {
+public protocol ScreenRecordingPermissionChecking: Sendable {
     func hasScreenRecordingAccess() -> Bool
 }
 
-struct CoreGraphicsScreenRecordingPermissionChecker: ScreenRecordingPermissionChecking {
-    func hasScreenRecordingAccess() -> Bool {
+public struct CoreGraphicsScreenRecordingPermissionChecker: ScreenRecordingPermissionChecking {
+    public init() {}
+
+    public func hasScreenRecordingAccess() -> Bool {
         CGPreflightScreenCaptureAccess()
     }
 }
@@ -293,22 +295,22 @@ public final class WindowScreenshotCaptureService {
     }
 }
 
-final class ScreenCaptureKitWindowScreenshotCapturer: WindowScreenshotCapturing {
+public final class ScreenCaptureKitWindowScreenshotCapturer: WindowScreenshotCapturing, @unchecked Sendable {
     private let permissionChecker: any ScreenRecordingPermissionChecking
 
-    init(permissionChecker: any ScreenRecordingPermissionChecking = CoreGraphicsScreenRecordingPermissionChecker()) {
+    public init(permissionChecker: any ScreenRecordingPermissionChecking = CoreGraphicsScreenRecordingPermissionChecker()) {
         self.permissionChecker = permissionChecker
     }
 
-    var captureMethod: WindowScreenshotCaptureMethod {
+    public var captureMethod: WindowScreenshotCaptureMethod {
         .screenCaptureKitDesktopIndependentWindow
     }
 
-    var requiresOverlapFreeTarget: Bool {
+    public var requiresOverlapFreeTarget: Bool {
         false
     }
 
-    func capture(
+    public func capture(
         target: MacWindowTargetCandidate
     ) async throws -> CapturedWindowScreenshot {
         guard permissionChecker.hasScreenRecordingAccess() else {

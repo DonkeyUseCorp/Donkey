@@ -27,27 +27,22 @@ quick local-app actions:
 - Maintain a background agent memory store in Application Support. The store records resolved and missing local-item lookups, prewarms apps, stores runtime task definitions, keeps metadata such as kind/path/bundle ID/source/task/action, indexes records with SQLite FTS5 plus local vectors, and passes a bounded set of matching hints into the agent harness memory section for classifier and model consideration. Protected file folders such as Desktop, Documents, and Downloads stay lazy and are searched only when a user-requested local-item lookup needs them. See `docs/guides/decision-system.md` for how those hints feed typed model decisions and guarded local-app plans.
 - Persist task threads as searchable Core Data conversations with event history, task assets, and per-run runtime coordination for any action work attached to the thread.
 - Keep the overlay non-invasive. Permission setup requests Accessibility, screenshot, and microphone access with user-visible reasons, but the overlay itself does not capture the screen or synthesize input directly. Bounded screenshots and Accessibility reads are used only by guarded local-app workflows.
-- A developer-only UI inspection overlay can be enabled by editing the
+- A developer-only Donkey Vision overlay can be enabled by editing the
   repo-tracked `apps/Donkey/dev-overlay.json` during debug runs, or by creating
   `~/Library/Application Support/Donkey/dev-overlay.json`. Production builds do
   not bundle the repo config and only honor the Application Support path. When
   no config exists, the config is invalid, or `"enabled": false`, the debug
-  overlay is fully disabled. When enabled with `"provider": "accessibility"`,
-  it uses the local UI element detection service: invisible Accessibility reads
-  are merged with optional hover-probe evidence, then drawn as
-  click-through boxes with source badges beneath Donkey's own
-  prompt/status/spawn UI. The native screenshot CV detector is stubbed and does
-  not emit OCR, shape, color, layout, segmentation, or tap-target candidates.
-  The local Accessibility provider only inspects safe visible windows on the
-  selected screen. Optional target filters such as `"targetBundleIdentifiers"`
-  and `"targetAppNames"` can narrow the overlay to matching apps, and
-  `"activeWindowOnly": true` can suppress rendering unless the matching app owns
-  the focused frontmost window.
+  overlay is fully disabled. When enabled, Donkey Vision fuses Accessibility and
+  hosted AI screenshot parsing. Local geometry wins; AI boxes are read-only
+  evidence and are visually marked as `AI`. The overlay never sends a full
+  desktop screenshot to hosted AI: it captures safe app/window or
+  system-navigation surfaces only. See
+  `docs/guides/donkey-vision.md`.
 
 ```json
 {
   "enabled": true,
-  "provider": "accessibility",
+  "mode": "donkeyVision",
   "cadenceSeconds": 1.0,
   "screenScope": "main",
   "minConfidence": 0.25

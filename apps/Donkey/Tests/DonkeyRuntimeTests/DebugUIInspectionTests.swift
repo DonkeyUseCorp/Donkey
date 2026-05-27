@@ -15,7 +15,7 @@ struct DebugUIInspectionTests {
         let config = DebugUIOverlayConfiguration.load(fileURL: url)
 
         #expect(config.enabled == false)
-        #expect(config.provider == .accessibility)
+        #expect(config.mode == "donkeyVision")
         #expect(config.screenScope == .main)
     }
 
@@ -41,7 +41,7 @@ struct DebugUIInspectionTests {
         let config = DebugUIOverlayConfiguration.load(fileURL: url)
 
         #expect(config.enabled == true)
-        #expect(config.provider == .accessibility)
+        #expect(config.mode == "donkeyVision")
         #expect(config.cadenceSeconds == 1.0)
         #expect(config.screenScope == .main)
         #expect(config.minConfidence == 0.25)
@@ -81,7 +81,6 @@ struct DebugUIInspectionTests {
             """
             {
               "enabled": false,
-              "provider": "gemini",
               "cadenceSeconds": 0.05,
               "screenScope": "all",
               "minConfidence": 2
@@ -93,7 +92,7 @@ struct DebugUIInspectionTests {
         let config = DebugUIOverlayConfiguration.load(fileURL: url)
 
         #expect(config.enabled == false)
-        #expect(config.provider == .gemini)
+        #expect(config.mode == "donkeyVision")
         #expect(config.cadenceSeconds == 0.25)
         #expect(config.screenScope == .all)
         #expect(config.minConfidence == 1)
@@ -280,18 +279,24 @@ struct DebugUIInspectionTests {
     }
 
     @Test
-    func trackerRequiresMultipleSamplesBeforeRenderingNewElement() {
+    func trackerRendersInitialElementsImmediatelyThenRequiresMultipleSamplesForNewElements() {
         var tracker = DebugUIElementTracker()
 
         let first = tracker.update(with: DebugUIInspectionFrame(elements: [
             element(id: "button-1", label: "Save", x: 10, y: 20)
         ]))
-        let second = tracker.update(with: DebugUIInspectionFrame(elements: [
-            element(id: "button-1", label: "Save", x: 10, y: 20)
+        let newElementFirstSample = tracker.update(with: DebugUIInspectionFrame(elements: [
+            element(id: "button-1", label: "Save", x: 10, y: 20),
+            element(id: "button-2", label: "Cancel", x: 110, y: 20)
+        ]))
+        let newElementSecondSample = tracker.update(with: DebugUIInspectionFrame(elements: [
+            element(id: "button-1", label: "Save", x: 10, y: 20),
+            element(id: "button-2", label: "Cancel", x: 110, y: 20)
         ]))
 
-        #expect(first.elements.isEmpty)
-        #expect(second.elements.map(\.id) == ["button-1"])
+        #expect(first.elements.map(\.id) == ["button-1"])
+        #expect(newElementFirstSample.elements.map(\.id) == ["button-1"])
+        #expect(newElementSecondSample.elements.map(\.id) == ["button-1", "button-2"])
     }
 
     @Test
@@ -332,7 +337,7 @@ struct DebugUIInspectionTests {
             screenPointSize: HotLoopSize(width: 1000, height: 500, space: .screen)
         )
 
-        #expect(frame == CGRect(x: 100, y: 350, width: 200, height: 100))
+        #expect(frame == CGRect(x: 100, y: 50, width: 200, height: 100))
     }
 
     @Test

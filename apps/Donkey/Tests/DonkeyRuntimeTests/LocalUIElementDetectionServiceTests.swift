@@ -108,10 +108,10 @@ struct LocalUIElementDetectionServiceTests {
     }
 
     @Test
-    func nativeVisualDetectorIsStubbedUntilReplacementImplementationExists() {
+    func nativeVisualDetectorFailsClosedWhenDetectorCannotReadScreenshot() {
         let trace = LocalUIElementDetectionService().detect(
             LocalUIElementDetectionRequest(
-                traceID: "trace-native-visual-stub",
+                traceID: "trace-native-visual-invalid-png",
                 screenshotPNGData: Data([0x89, 0x50, 0x4E, 0x47]),
                 pixelSize: HotLoopSize(width: 400, height: 300, space: .screen),
                 minConfidence: 0.25
@@ -120,8 +120,147 @@ struct LocalUIElementDetectionServiceTests {
 
         #expect(trace.candidates.isEmpty)
         #expect(trace.elements.isEmpty)
-        #expect(trace.metadata["nativeVisual.status"] == "stubbed")
-        #expect(trace.metadata["nativeVisual.reason"] == "cvPipelineRemovedPendingReplacement")
+        #expect(trace.metadata["nativeVisual.status"] == "failed")
+        #expect(trace.metadata["nativeVisual.detector"] == "generic_border_ui_detector")
+        #expect(trace.metadata["nativeVisual.algorithm"] == "border-ui")
+        #expect(trace.metadata["nativeVisual.rawPixelsPersisted"] == "false")
+    }
+
+    @Test
+    func nativeDetectorBoxesMapToDebugOverlayCandidatesWithoutGuardedActions() throws {
+        let candidate = try #require(
+            LocalUIElementNativeVisualDetector.candidate(
+                from: GenericInteractableBox(
+                    id: 7,
+                    x1: 16,
+                    y1: 42,
+                    x2: 180,
+                    y2: 76,
+                    text: "Settings",
+                    kind: "left_nav_row",
+                    confidence: 0.83,
+                    source: "ocr+geometry"
+                ),
+                pixelSize: HotLoopSize(width: 400, height: 300, space: .screen)
+            )
+        )
+        let trace = LocalUIElementDetectionService().detect(
+            LocalUIElementDetectionRequest(
+                traceID: "trace-native-visual-box",
+                pixelSize: HotLoopSize(width: 400, height: 300, space: .screen),
+                hoverProbeCandidates: [candidate],
+                minConfidence: 0.25
+            )
+        )
+
+        let element = try #require(trace.elements.first)
+        let frame = LocalUIElementDetectionService().debugInspectionFrame(from: trace)
+        let overlayElement = try #require(frame.elements.first)
+
+        #expect(element.type == .sidebarItem)
+        #expect(element.actionEligibility == .cursorVisualization)
+        #expect(element.metadata["candidate.native-cv-7-left-nav-row.debug.overlayRole"] == "sidebarRow")
+        #expect(overlayElement.id == element.id)
+        #expect(overlayElement.label == "Settings")
+    }
+
+    @Test
+    func borderDetectorBoxesMapToSeparateOverlayCandidates() throws {
+        let candidate = try #require(
+            LocalUIElementNativeVisualDetector.candidate(
+                from: GenericBorderUIBox(
+                    id: 4,
+                    x1: 24,
+                    y1: 36,
+                    x2: 220,
+                    y2: 80,
+                    text: "Search",
+                    kind: "textField",
+                    confidence: 0.91,
+                    source: "filledSurface",
+                    borderStrength: 0.81,
+                    fillDensity: 0.72,
+                    childCount: 0,
+                    textCount: 1
+                ),
+                pixelSize: HotLoopSize(width: 400, height: 300, space: .screen)
+            )
+        )
+
+        #expect(candidate.id == "native-border-4-textfield")
+        #expect(candidate.source == .color)
+        #expect(candidate.signalKind == .colorCluster)
+        #expect(candidate.typeHint == .input)
+        #expect(candidate.metadata["debug.overlayRole"] == "messageInput")
+        #expect(candidate.metadata["nativeVisual.detector"] == "generic_border_ui_detector")
+    }
+
+    @Test
+    func compiledGenericInteractableDetectorProducesBoxesWhenDependenciesAreInstalled() throws {
+        let fileManager = FileManager.default
+        let magick = ["/opt/imagemagick/bin/magick", "/opt/homebrew/bin/magick", "/usr/local/bin/magick"]
+            .first { fileManager.isExecutableFile(atPath: $0) }
+        let tesseract = ["/usr/bin/tesseract", "/opt/homebrew/bin/tesseract", "/usr/local/bin/tesseract"]
+            .first { fileManager.isExecutableFile(atPath: $0) }
+        guard let magick, let tesseract else {
+            return
+        }
+
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let input = packageRoot
+            .appendingPathComponent("Sources/Donkey/Resources/google-continue-dark-rounded.png")
+        let output = fileManager.temporaryDirectory
+            .appendingPathComponent("donkey-generic-interactable-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fileManager.removeItem(at: output) }
+
+        let result = try GenericInteractableDetector(
+            magickPath: magick,
+            tesseractPath: tesseract
+        ).detect(
+            inputURL: input,
+            outputDirectory: output
+        )
+
+        #expect(!result.boxes.isEmpty)
+        #expect(fileManager.fileExists(atPath: output.appendingPathComponent("swift_boxes.json").path))
+        #expect(fileManager.fileExists(atPath: output.appendingPathComponent("swift_overlay.svg").path))
+    }
+
+    @Test
+    func compiledBorderUIDetectorProducesBoxesWhenDependenciesAreInstalled() throws {
+        let fileManager = FileManager.default
+        let magick = ["/opt/imagemagick/bin/magick", "/opt/homebrew/bin/magick", "/usr/local/bin/magick"]
+            .first { fileManager.isExecutableFile(atPath: $0) }
+        let tesseract = ["/usr/bin/tesseract", "/opt/homebrew/bin/tesseract", "/usr/local/bin/tesseract"]
+            .first { fileManager.isExecutableFile(atPath: $0) }
+        guard let magick, let tesseract else {
+            return
+        }
+
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let input = packageRoot
+            .appendingPathComponent("Sources/Donkey/Resources/google-continue-dark-rounded.png")
+        let output = fileManager.temporaryDirectory
+            .appendingPathComponent("donkey-generic-border-ui-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fileManager.removeItem(at: output) }
+
+        let result = try GenericBorderUIDetector(
+            magickPath: magick,
+            tesseractPath: tesseract
+        ).detect(
+            inputURL: input,
+            outputDirectory: output
+        )
+
+        #expect(!result.boxes.isEmpty)
+        #expect(fileManager.fileExists(atPath: output.appendingPathComponent("border_boxes.json").path))
+        #expect(fileManager.fileExists(atPath: output.appendingPathComponent("border_overlay.svg").path))
     }
 
     @Test

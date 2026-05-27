@@ -88,7 +88,12 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         self.appHarnessRouter = AppHarnessTurnRouter(catalog: catalog)
         self.coordinatorRegistry = coordinatorRegistry
         self.localModelResolver = localModelResolver ?? LocalModelTaskIntentResolver(catalog: catalog)
-        self.liveRunner = liveRunner ?? LocalAppTaskLiveRunner(catalog: catalog)
+        self.liveRunner = liveRunner ?? LocalAppTaskLiveRunner(
+            catalog: catalog,
+            appController: MacLocalAppTaskController(
+                uiUnderstandingRunner: DonkeyUIUnderstandingRunnerFactory.defaultRunner()
+            )
+        )
         self.redactor = redactor
         self.memoryRetriever = memoryRetriever
         self.memoryStore = memoryStore

@@ -142,7 +142,7 @@ private final class DebugUIInspectionSurface {
         let boxLayer = CAShapeLayer()
         boxLayer.name = "debug-ui-box-\(element.id)"
         boxLayer.fillColor = fillColor(for: element)
-        boxLayer.strokeColor = nsColor(hex: element.visualStyle.borderColor, alpha: 0.95).cgColor
+        boxLayer.strokeColor = strokeColor(for: element)
         boxLayer.lineWidth = 2
         boxLayer.opacity = 0
 
@@ -182,7 +182,9 @@ private final class DebugUIInspectionSurface {
         layers.box.frame = boxFrame
         layers.box.path = path
         layers.box.fillColor = fillColor(for: element)
-        layers.box.strokeColor = nsColor(hex: element.visualStyle.borderColor, alpha: 0.95).cgColor
+        layers.box.strokeColor = strokeColor(for: element)
+        layers.box.lineDashPattern = lineDashPattern(for: element)
+        layers.box.lineWidth = lineWidth(for: element)
 
         let title = labelText(for: element)
         let labelFrame = DebugUIOverlayGeometry.stableLabelFrame(
@@ -192,23 +194,94 @@ private final class DebugUIInspectionSurface {
         )
         layers.label.string = title
         layers.label.foregroundColor = nsColor(hex: element.visualStyle.labelColor, alpha: 1).cgColor
-        layers.label.backgroundColor = nsColor(hex: element.visualStyle.overlayColor, alpha: 0.92).cgColor
+        layers.label.backgroundColor = labelBackgroundColor(for: element)
         layers.label.frame = labelFrame
     }
 
     private func labelText(for element: DebugUIElement) -> String {
         let label = element.label.trimmingCharacters(in: .whitespacesAndNewlines)
-        if label.isEmpty {
-            return element.type.rawValue.replacingOccurrences(of: "_", with: " ")
+        let base = label.isEmpty
+            ? element.type.rawValue.replacingOccurrences(of: "_", with: " ")
+            : label
+        if let badge = sourceBadge(for: element) {
+            return "\(badge) \(base)"
         }
-        return label
+        return base
     }
 
     private func fillColor(for element: DebugUIElement) -> CGColor {
         if element.id.hasPrefix("window-") {
             return NSColor.clear.cgColor
         }
+        if sourceKind(for: element) == .ai {
+            return nsColor(hex: "#FF2D55", alpha: 0.16).cgColor
+        }
+        if sourceKind(for: element) == .nativeVisual {
+            return nsColor(hex: "#00C7BE", alpha: 0.13).cgColor
+        }
         return nsColor(hex: element.visualStyle.overlayColor, alpha: 0.14).cgColor
+    }
+
+    private func strokeColor(for element: DebugUIElement) -> CGColor {
+        switch sourceKind(for: element) {
+        case .ai:
+            return nsColor(hex: "#FF2D55", alpha: 0.98).cgColor
+        case .nativeVisual:
+            return nsColor(hex: "#00C7BE", alpha: 0.95).cgColor
+        case .accessibility:
+            return nsColor(hex: "#34D399", alpha: 0.95).cgColor
+        case .other:
+            return nsColor(hex: element.visualStyle.borderColor, alpha: 0.95).cgColor
+        }
+    }
+
+    private func labelBackgroundColor(for element: DebugUIElement) -> CGColor {
+        switch sourceKind(for: element) {
+        case .ai:
+            return nsColor(hex: "#FF2D55", alpha: 0.94).cgColor
+        case .nativeVisual:
+            return nsColor(hex: "#00C7BE", alpha: 0.92).cgColor
+        case .accessibility:
+            return nsColor(hex: "#34D399", alpha: 0.92).cgColor
+        case .other:
+            return nsColor(hex: element.visualStyle.overlayColor, alpha: 0.92).cgColor
+        }
+    }
+
+    private func lineDashPattern(for element: DebugUIElement) -> [NSNumber]? {
+        sourceKind(for: element) == .ai ? [6, 4] : nil
+    }
+
+    private func lineWidth(for element: DebugUIElement) -> CGFloat {
+        sourceKind(for: element) == .ai ? 2.5 : 2
+    }
+
+    private func sourceBadge(for element: DebugUIElement) -> String? {
+        switch sourceKind(for: element) {
+        case .ai:
+            return "AI"
+        case .nativeVisual:
+            return "CV"
+        case .accessibility:
+            return "AX"
+        case .other:
+            return nil
+        }
+    }
+
+    private func sourceKind(for element: DebugUIElement) -> DebugUIInspectionSourceKind {
+        let fusionSource = element.metadata["debugUIFusion.source"] ?? ""
+        let sources = element.metadata["localUIElement.sources"] ?? ""
+        if fusionSource == "gemini" || sources.contains("gemini") || element.id.hasPrefix("gemini-") {
+            return .ai
+        }
+        if fusionSource == "native-visual" || sources.contains("shape") || sources.contains("ocr") || sources.contains("layout") || element.id.hasPrefix("native-visual-") {
+            return .nativeVisual
+        }
+        if sources.contains("accessibility") || element.id.hasPrefix("ax-") || sources.contains("window-chrome-geometry") {
+            return .accessibility
+        }
+        return .other
     }
 
     private func fadeIn(_ layers: DebugUIInspectionElementLayers) {
@@ -256,6 +329,13 @@ private final class DebugUIInspectionSurface {
 private struct DebugUIInspectionElementLayers {
     var box: CAShapeLayer
     var label: CATextLayer
+}
+
+private enum DebugUIInspectionSourceKind {
+    case accessibility
+    case nativeVisual
+    case ai
+    case other
 }
 
 private final class DebugUIInspectionPanel: NSPanel {

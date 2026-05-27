@@ -307,13 +307,15 @@ are fallback observation context only; they do not emit direct input actions.
 The local UI element detection service keeps this boundary explicit: it merges
 Accessibility candidates with optional hover-probe evidence, then marks each
 element as overlay-only, read-only evidence, cursor-visualization evidence, or
-guarded-action eligible. The native screenshot CV detector and off-the-shelf
-vision pipeline are stubs and must not produce OCR, shape, color, layout,
-segmentation, or tap-target candidates until a new measured implementation
-replaces them. Hover-only evidence can guide debug overlays or visualization,
-but it does not authorize live clicks or text entry. Captured screenshots,
-Accessibility snapshots, and manual capture artifacts are trace evidence, not a
-general live vision loop.
+guarded-action eligible. Native screenshot CV remains a local experimental
+detector, but it is not part of the live Donkey Vision overlay pipeline and
+does not authorize live clicks or text entry.
+The off-the-shelf vision pipeline remains stubbed and must not produce OCR,
+shape, color, layout, segmentation, or tap-target candidates until a new
+measured implementation replaces it. Hover-only evidence can guide debug
+overlays or visualization, but it does not authorize live clicks or text entry.
+Captured screenshots, Accessibility snapshots, and manual capture artifacts are
+trace evidence, not a general live vision loop.
 Verification and screenshot fallback behavior should be derived from task
 metadata and runtime item metadata, not one-off branches for individual apps.
 
@@ -338,18 +340,18 @@ tool-output feedback.
 The developer UI inspection overlay is not an action workflow. It is enabled by
 the repo-tracked `apps/Donkey/dev-overlay.json` during debug runs or by a local
 `dev-overlay.json` file under Donkey's Application Support directory. Production
-builds do not bundle the repo config. The `accessibility` provider runs the
-local AX-primary UI element detection service and renders merged source badges.
-The local provider only inspects safe visible windows on the selected screen;
+builds do not bundle the repo config. When enabled, Donkey Vision always fuses
+local Accessibility evidence with hosted AI enrichment and renders distinct
+source badges. It only inspects safe visible windows on the selected screen;
 optional target filters can narrow it to matching apps, and
 `"activeWindowOnly": true` can keep it blank unless a matching app owns the
 focused frontmost window. The overlay tracker stabilizes small geometry jitter,
 brief disappearances, and one-sample label/source changes before redrawing so
-the debugger reflects durable UI changes instead of sampler noise. Hosted
-providers send screenshots to the read-only
-inspection route only while a config explicitly enables them, and accept strict
-JSON element metadata only. If a provider returns a computer/function action for
-this route, the client rejects the frame and performs no interaction.
+the debugger reflects durable UI changes instead of sampler noise. The hosted AI
+path sends app/window-scoped screenshots to the read-only inspection route and
+accepts strict JSON element metadata only. If hosted AI returns a
+computer/function action for this route, the client rejects the frame and
+performs no interaction.
 
 ## State And Observability
 
