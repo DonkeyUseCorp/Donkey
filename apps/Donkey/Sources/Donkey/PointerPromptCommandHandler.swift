@@ -261,7 +261,7 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
         let modelInput = Self.modelInput(
             for: command,
             context: context,
-            contextPacket: routing.contextPacket
+            compactedContext: genericPreparedTurn.compactedContext
         )
         let commandRedaction = redactor.redact(modelInput.command, surface: .modelContext)
         let contextRedactions = modelInput.contextSnippets.map {
@@ -964,13 +964,14 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
     private static func modelInput(
         for command: String,
         context: PointerPromptCommandContext?,
-        contextPacket: AppHarnessContextPacket
+        compactedContext: HarnessCompactedThreadContext
     ) -> PointerPromptModelIntentInput {
-        let modelCommand = contextPacket.currentTurn.text
+        let modelCommand = compactedContext.currentTurn?.text ?? command
+        let compactedPrompt = compactedContext.promptText
         guard let context, context.isFollowUp else {
             return PointerPromptModelIntentInput(
                 command: modelCommand,
-                contextSnippets: []
+                contextSnippets: [compactedPrompt].filter { !$0.isEmpty }
             )
         }
 
@@ -986,8 +987,8 @@ struct LocalAppPointerPromptCommandHandler: PointerPromptCommandHandling {
             command: modelCommand,
             contextSnippets: [
                 taskContext,
-                contextPacket.promptText
-            ]
+                compactedPrompt
+            ].filter { !$0.isEmpty }
         )
     }
 

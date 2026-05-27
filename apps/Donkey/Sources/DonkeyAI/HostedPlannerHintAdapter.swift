@@ -74,7 +74,7 @@ public struct PlannerHintAdapterRequest: Equatable, Sendable {
         now: RunTraceTimestamp,
         routeRequest: AIModelRouteRequest = AIModelRouteRequest(jobType: .plannerHint)
     ) {
-        self.context = context
+        self.context = RunContextAssembler().compact(context)
         self.sourceTraceID = sourceTraceID
         self.sourceFrameID = sourceFrameID
         self.sourceStateID = sourceStateID

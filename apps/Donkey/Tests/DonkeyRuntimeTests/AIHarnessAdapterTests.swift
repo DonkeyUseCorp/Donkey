@@ -987,6 +987,26 @@ struct AIHarnessAdapterTests {
     }
 
     @Test
+    func taskIntentRequestsCompactContextSnippetsBeforeModelCalls() {
+        let snippets = (0..<12).map { index in
+            "snippet-\(index) " + String(repeating: "\(index)", count: 2_000)
+        }
+
+        let request = TaskIntentAdapterRequest(
+            command: "continue",
+            taskDefinitions: [],
+            contextSnippets: snippets,
+            sourceTraceID: "trace-compact-intent"
+        )
+
+        #expect(request.contextSnippets.count == 4)
+        #expect(request.contextSnippets.allSatisfy { $0.count <= 1_200 })
+        #expect(request.contextSnippets.joined().count <= 4_800)
+        #expect(request.contextSnippets.first?.contains("snippet-0") == true)
+        #expect(request.contextSnippets.first?.contains("[compacted]") == true)
+    }
+
+    @Test
     func processBackedLocalLLMTaskIntentAdapterDecodesWrappedStructuredOutput() async throws {
         let adapter = ProcessBackedLocalLLMTaskIntentAdapter(
             router: AIModelRouter(registry: .defaultHybridPlanner),
@@ -1961,6 +1981,43 @@ struct AIHarnessAdapterTests {
         let planner = ProviderBackedSlowPlannerHintGenerator()
 
         #expect(planner.providerOrder == [.donkeyBackend])
+    }
+
+    @Test
+    func plannerHintRequestsCompactMemoryBeforeProviderCalls() {
+        let longMemory = "important prefix " + String(repeating: "planner-memory ", count: 100)
+        let request = PlannerHintAdapterRequest(
+            context: RunContextPackage(
+                sessionID: "session-compact-planner",
+                userGoal: "recover",
+                targetID: "target-1",
+                runtimeProfile: "dry-run",
+                latestWorldState: RunWorldStateSummary(
+                    stateID: "state-long",
+                    summary: String(repeating: "state ", count: 200),
+                    confidence: 0.4
+                ),
+                transcriptSummary: "",
+                memorySnapshot: RunMemorySnapshot(
+                    targetRecords: [
+                        memoryRecord(
+                            id: "memory-long",
+                            value: longMemory,
+                            targetID: "target-1"
+                        )
+                    ]
+                )
+            ),
+            sourceTraceID: "trace-compact-planner",
+            sourceStateID: "state-long",
+            now: timestamp(10)
+        )
+
+        let record = request.context.memorySnapshot?.targetRecords.first
+        #expect(request.context.latestWorldState?.summary.count == 600)
+        #expect(record?.value.count == 600)
+        #expect(record?.value.contains("important prefix") == true)
+        #expect(record?.metadata["compaction.truncated"] == "true")
     }
 
     @Test

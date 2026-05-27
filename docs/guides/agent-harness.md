@@ -78,16 +78,22 @@ execution state.
 
 ## Smart Compaction
 
-The harness should never send raw unbounded history to a model. Before a model
-call or planner step, the thread compactor builds a bounded context packet. It
-keeps the current turn, active and waiting task state, pending questions or
-permissions, pinned events, durable summaries, the most recent useful events,
-recent tool summaries, and a bounded asset list.
+The harness never sends raw unbounded history to a model. Before model-backed
+intent routing, generic planning, or slow-planner hint generation, compaction
+builds a bounded context packet. It keeps the current turn, active and waiting
+task state, pending questions or permissions, pinned events, durable summaries,
+the most recent useful events, recent tool summaries, memory summaries, and a
+bounded asset list.
 
 Large event bodies are truncated. Raw screenshots, full Accessibility trees,
 script source, and long tool outputs should be saved as artifacts or structured
 records and summarized into the prompt. Compaction metadata records what was
 included, dropped, or truncated so the decision remains inspectable.
+
+Pointer-prompt hosted intent calls consume the generic compacted thread context
+rather than ad hoc thread snippets. Slow planner calls consume a compacted run
+context, including bounded world-state, failure, hint, memory, and semantic
+memory summaries.
 
 ## Turn Flow
 
