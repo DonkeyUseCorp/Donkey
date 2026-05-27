@@ -124,10 +124,25 @@ create_drag_to_applications_dmg() {
   render_dmg_background
 
   mount_dir="$(mktemp -d "${TMPDIR:-/tmp}/donkey-dmg.XXXXXX")"
+  detach_dmg_mount() {
+    local detach_target="$1"
+    local attempt
+
+    sync
+    for attempt in 1 2 3; do
+      if hdiutil detach "$detach_target" >/dev/null 2>&1; then
+        return 0
+      fi
+      sleep "$attempt"
+      sync
+    done
+
+    hdiutil detach "$detach_target" -force >/dev/null
+  }
   cleanup_dmg_mount() {
     trap - RETURN
     if [ "$mounted" = "1" ]; then
-      hdiutil detach "$mount_dir" -force >/dev/null 2>&1 || true
+      detach_dmg_mount "$mount_dir" >/dev/null 2>&1 || true
     fi
     rm -rf "$mount_dir"
   }
@@ -155,8 +170,7 @@ create_drag_to_applications_dmg() {
   mounted=1
 
   configure_dmg_window "$mount_dir"
-  sync
-  hdiutil detach "$mount_dir" >/dev/null
+  detach_dmg_mount "$mount_dir"
   mounted=0
 
   hdiutil convert "$DMG_RW_PATH" \
