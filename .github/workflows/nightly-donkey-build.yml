@@ -1,0 +1,100 @@
+name: Nightly Donkey Build
+
+on:
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly-donkey-build
+  cancel-in-progress: true
+
+jobs:
+  nightly:
+    name: Build nightly
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Prepare nightly values
+        id: nightly
+        run: |
+          version="$(python3 - <<'PY'
+          from datetime import UTC, datetime
+
+          now = datetime.now(UTC)
+          print(f"{now.year}.{now.month}.{now.day}")
+          PY
+          )"
+          build="${GITHUB_RUN_NUMBER}"
+          if [[ ! "$build" =~ ^[0-9]+$ ]]; then
+            echo "Build must be numeric for CFBundleVersion." >&2
+            exit 1
+          fi
+
+          {
+            echo "version=$version"
+            echo "build=$build"
+            echo "tag=nightly"
+            echo "target_sha=$(git rev-parse HEAD)"
+            echo "built_at=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install packaging dependencies
+        run: |
+          if ! command -v magick >/dev/null 2>&1; then
+            brew install imagemagick
+          fi
+
+      - name: Package Donkey
+        env:
+          DONKEY_APP_VERSION: ${{ steps.nightly.outputs.version }}
+          DONKEY_APP_BUILD: ${{ steps.nightly.outputs.build }}
+        run: ./scripts/package-donkey-app.sh
+
+      - name: Generate checksum
+        run: shasum -a 256 dist/Donkey.dmg > dist/Donkey.dmg.sha256
+
+      - name: Publish nightly prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.nightly.outputs.tag }}
+          TARGET_SHA: ${{ steps.nightly.outputs.target_sha }}
+          BUILT_AT: ${{ steps.nightly.outputs.built_at }}
+        run: |
+          git tag -f "$TAG" "$TARGET_SHA"
+          git push origin "refs/tags/$TAG" --force
+
+          notes_file="$RUNNER_TEMP/nightly-release-notes.md"
+          cat > "$notes_file" <<NOTES
+          This is the latest Donkey nightly build.
+
+          Built from \`$TARGET_SHA\` at \`$BUILT_AT\` UTC.
+
+          Nightly builds are prereleases and may be replaced by the next nightly run.
+          NOTES
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/Donkey.dmg dist/Donkey.dmg.sha256 --clobber
+            gh release edit "$TAG" \
+              --title "Donkey Nightly Build" \
+              --notes-file "$notes_file" \
+              --target "$TARGET_SHA" \
+              --prerelease \
+              --latest=false
+          else
+            gh release create "$TAG" dist/Donkey.dmg dist/Donkey.dmg.sha256 \
+              --target "$TARGET_SHA" \
+              --title "Donkey Nightly Build" \
+              --notes-file "$notes_file" \
+              --prerelease \
+              --latest=false
+          fi

@@ -8,6 +8,10 @@ maintainer chooses whether to bump the major, minor, or patch version in the
 GitHub UI, and the workflow builds the latest default-branch code into the
 release artifact.
 
+Nightly prereleases use a separate `Nightly Donkey Build` GitHub Actions
+workflow. It builds the latest default-branch code on a schedule and publishes
+the result to the moving `nightly` prerelease.
+
 ## Release Boundaries
 
 - Release tags use numeric SemVer in `vMAJOR.MINOR.PATCH` form, such as
@@ -85,6 +89,24 @@ The workflow moves these alias tags to the released commit:
 
 These aliases are for maintainer convenience. User-facing website and appcast
 links must keep using the immutable numeric tag.
+
+## Nightly Builds
+
+The `Nightly Donkey Build` workflow runs nightly at 09:00 UTC and can also be
+started manually from GitHub Actions. It builds the default branch, packages
+`dist/Donkey.dmg`, generates `dist/Donkey.dmg.sha256`, moves the `nightly` tag
+to that commit, and creates or updates the `Donkey Nightly Build` prerelease.
+
+Nightly builds are intentionally separate from production releases:
+
+- They do not use numeric SemVer tags.
+- They do not update `site/public/appcast.xml`.
+- They do not update the website download version.
+- They do not move production alias tags.
+- They are not marked as GitHub's latest release.
+
+Use nightly builds for smoke testing the latest default-branch app package.
+Use the `Release Donkey` workflow when publishing a user-facing release.
 
 ## Verification
 
