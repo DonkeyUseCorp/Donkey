@@ -385,8 +385,16 @@ struct AIHarnessAdapterTests {
         let format = try #require(text["format"] as? [String: Any])
         #expect(format["name"] as? String == "generic_harness_planning")
         let schema = try #require(format["schema"] as? [String: Any])
+        let required = try #require(schema["required"] as? [String])
+        #expect(required.contains("schemaVersion") == false)
         let properties = try #require(schema["properties"] as? [String: Any])
+        #expect(properties["schemaVersion"] == nil)
         #expect(properties["structuredIntent"] != nil)
+        let structuredIntent = try #require(properties["structuredIntent"] as? [String: Any])
+        let structuredRequired = try #require(structuredIntent["required"] as? [String])
+        #expect(structuredRequired.contains("goal") == false)
+        #expect(structuredRequired.contains("targetAppName") == false)
+        #expect(structuredRequired.contains("confidence") == false)
         #expect(properties["ambiguityRisk"] != nil)
         #expect(properties["contextNeeds"] != nil)
         #expect(properties["planSteps"] != nil)
@@ -463,6 +471,82 @@ struct AIHarnessAdapterTests {
         let toolName = try #require(stepProperties["toolName"] as? [String: Any])
         let toolEnums = try #require(toolName["enum"] as? [String])
         #expect(toolEnums.contains("skill.script.execute"))
+    }
+
+    @Test
+    func hostedTaskIntentAdapterDefaultsMissingPlanningSchemaVersion() async {
+        let output = hostedPlanningOutput(
+            goal: "play a selected song in Music",
+            taskType: "local_app_interaction",
+            targetAppName: "Music",
+            entitiesJSON: #"{"appName":"Music","goal":"play media","query":"Yellow Coldplay"}"#,
+            normalizedEntitiesJSON: #"{"appName":"Music","goal":"play media","query":"Yellow Coldplay"}"#,
+            confidence: 0.91,
+            planStepsJSON: #"[{"id":"launch","summary":"Open Music.","toolName":"app.openOrFocus","inputEntity":"","controlID":"","focusKey":"","expectedObservation":"Music is focused."},{"id":"focus-search","summary":"Focus search.","toolName":"ui.focusSearch","inputEntity":"","controlID":"search","focusKey":"Command+F","expectedObservation":"Search is focused."},{"id":"set-text","summary":"Enter query.","toolName":"ui.setText","inputEntity":"query","controlID":"search","focusKey":"","expectedObservation":"Query is entered."},{"id":"submit","summary":"Submit search.","toolName":"ui.pressReturn","inputEntity":"","controlID":"","focusKey":"","expectedObservation":"Search is submitted."}]"#,
+            verificationCriteriaJSON: #"{"success":"Playback command is attempted."}"#,
+            fallbacksJSON: #"["Ask if the song is ambiguous."]"#
+        )
+        .replacingOccurrences(
+            of: #""goal":"play a selected song in Music","#,
+            with: ""
+        )
+        let httpClient = FakeAIHTTPClient(data: responseData(outputText: output), statusCode: 200)
+        let adapter = HostedTaskIntentParsingAdapter(
+            configuration: DonkeyBackendInferenceConfiguration(
+                baseURL: URL(string: "https://donkey.example")!,
+                clientID: "client-1"
+            ),
+            httpClient: httpClient
+        )
+
+        let result = await adapter.parseTaskIntent(
+            TaskIntentAdapterRequest(
+                command: "play some coldplay",
+                taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
+                sourceTraceID: "trace-repair-intent"
+            )
+        )
+
+        #expect(result.intent?.taskType == "local_app_interaction")
+        #expect(result.trace.status == .completed)
+        #expect(result.trace.validationStatus == "schemaDecoded")
+        #expect(result.intent?.metadata["genericHarness.schemaVersion"] == "generic_harness_planning")
+        #expect(result.intent?.metadata["genericHarness.intent.goal"] == "play media")
+        #expect(result.intent?.metadata["genericHarness.verificationCriteriaJSON"] == #"["Playback command is attempted."]"#)
+        #expect(result.trace.metadata["reason"] == nil)
+        #expect(result.trace.metadata["planner.repairAttempted"] == nil)
+        #expect(httpClient.requests.count == 1)
+    }
+
+    @Test
+    func hostedTaskIntentAdapterTreatsIrreparablePlanningEnvelopeAsInvalidOutput() async {
+        let httpClient = SequencedFakeAIHTTPClient(responses: [
+            HTTPStub(data: responseData(outputText: "{}"), statusCode: 200),
+            HTTPStub(data: responseData(outputText: "{}"), statusCode: 200)
+        ])
+        let adapter = HostedTaskIntentParsingAdapter(
+            configuration: DonkeyBackendInferenceConfiguration(
+                baseURL: URL(string: "https://donkey.example")!,
+                clientID: "client-1"
+            ),
+            httpClient: httpClient
+        )
+
+        let result = await adapter.parseTaskIntent(
+            TaskIntentAdapterRequest(
+                command: "play some coldplay",
+                taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
+                sourceTraceID: "trace-invalid-intent"
+            )
+        )
+
+        #expect(result.intent == nil)
+        #expect(result.trace.status == .invalidOutput)
+        #expect(result.trace.validationStatus == "invalid")
+        #expect(result.trace.metadata["reason"] == "hostedPlanningSchemaDecodeFailed")
+        #expect(result.trace.metadata["planner.repairAttempted"] == "true")
+        #expect(result.trace.metadata["planner.repairStatus"] == "invalid")
+        #expect(httpClient.requests.count == 2)
     }
 
     @Test
@@ -1152,7 +1236,7 @@ struct AIHarnessAdapterTests {
         metadataJSON: String = "{}"
     ) -> String {
         """
-        {"schemaVersion":"generic_harness_planning","structuredIntent":{"route":"\(route)","goal":"\(goal)","taskType":"\(taskType)","targetAppName":"\(targetAppName)","entities":\(entitiesJSON),"normalizedEntities":\(normalizedEntitiesJSON),"confidence":\(confidence),"needsConfirmation":\(needsConfirmation)},"ambiguityRisk":{"ambiguityClass":"\(ambiguityClass)","riskLevel":"\(riskLevel)","missingInformation":\(missingInformationJSON),"shouldAskBeforeActing":\(shouldAskBeforeActing)},"contextNeeds":\(contextNeedsJSON),"planSteps":\(planStepsJSON),"verificationCriteria":\(verificationCriteriaJSON),"fallbacks":\(fallbacksJSON),"clarificationPolicy":{"shouldAsk":\(clarificationShouldAsk),"questions":\(clarificationQuestionsJSON),"policy":"\(clarificationPolicy)"},"metadata":\(metadataJSON)}
+        {"structuredIntent":{"route":"\(route)","goal":"\(goal)","taskType":"\(taskType)","targetAppName":"\(targetAppName)","entities":\(entitiesJSON),"normalizedEntities":\(normalizedEntitiesJSON),"confidence":\(confidence),"needsConfirmation":\(needsConfirmation)},"ambiguityRisk":{"ambiguityClass":"\(ambiguityClass)","riskLevel":"\(riskLevel)","missingInformation":\(missingInformationJSON),"shouldAskBeforeActing":\(shouldAskBeforeActing)},"contextNeeds":\(contextNeedsJSON),"planSteps":\(planStepsJSON),"verificationCriteria":\(verificationCriteriaJSON),"fallbacks":\(fallbacksJSON),"clarificationPolicy":{"shouldAsk":\(clarificationShouldAsk),"questions":\(clarificationQuestionsJSON),"policy":"\(clarificationPolicy)"},"metadata":\(metadataJSON)}
         """
     }
 

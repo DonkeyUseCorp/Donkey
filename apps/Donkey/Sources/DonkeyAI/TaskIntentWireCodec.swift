@@ -172,30 +172,15 @@ enum TaskIntentWireCodec {
             "type": "object",
             "additionalProperties": false,
             "required": [
-                "schemaVersion",
-                "structuredIntent",
-                "ambiguityRisk",
-                "contextNeeds",
-                "planSteps",
-                "verificationCriteria",
-                "fallbacks",
-                "clarificationPolicy",
-                "metadata"
+                "structuredIntent"
             ],
             "properties": [
-                "schemaVersion": ["type": "string", "enum": ["generic_harness_planning"]],
                 "structuredIntent": [
                     "type": "object",
                     "additionalProperties": false,
                     "required": [
                         "route",
-                        "goal",
-                        "taskType",
-                        "targetAppName",
-                        "entities",
-                        "normalizedEntities",
-                        "confidence",
-                        "needsConfirmation"
+                        "taskType"
                     ],
                     "properties": [
                         "route": [
@@ -862,6 +847,37 @@ private struct GenericHarnessPlanningWire: Decodable {
     var fallbacks: [String]
     var clarificationPolicy: GenericHarnessClarificationPolicyWire
     var metadata: [String: String]
+
+    private enum CodingKeys: String, CodingKey {
+        case structuredIntent
+        case ambiguityRisk
+        case contextNeeds
+        case planSteps
+        case verificationCriteria
+        case fallbacks
+        case clarificationPolicy
+        case metadata
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.schemaVersion = "generic_harness_planning"
+        self.structuredIntent = try container.decode(GenericHarnessStructuredIntentWire.self, forKey: .structuredIntent)
+        self.ambiguityRisk = try container.decodeIfPresent(GenericHarnessAmbiguityRiskWire.self, forKey: .ambiguityRisk)
+            ?? GenericHarnessAmbiguityRiskWire(
+                ambiguityClass: "safe",
+                riskLevel: "low",
+                missingInformation: [],
+                shouldAskBeforeActing: false
+            )
+        self.contextNeeds = try container.decodeIfPresent(GenericHarnessStringListWire.self, forKey: .contextNeeds)?.values ?? []
+        self.planSteps = try container.decodeIfPresent([GenericHarnessPlanStepWire].self, forKey: .planSteps) ?? []
+        self.verificationCriteria = try container.decodeIfPresent(GenericHarnessStringListWire.self, forKey: .verificationCriteria)?.values ?? []
+        self.fallbacks = try container.decodeIfPresent(GenericHarnessStringListWire.self, forKey: .fallbacks)?.values ?? []
+        self.clarificationPolicy = try container.decodeIfPresent(GenericHarnessClarificationPolicyWire.self, forKey: .clarificationPolicy)
+            ?? GenericHarnessClarificationPolicyWire(shouldAsk: false, questions: [], policy: "")
+        self.metadata = try container.decodeIfPresent(GenericHarnessStringMapWire.self, forKey: .metadata)?.values ?? [:]
+    }
 }
 
 private struct GenericHarnessStructuredIntentWire: Decodable {
@@ -873,6 +889,35 @@ private struct GenericHarnessStructuredIntentWire: Decodable {
     var normalizedEntities: [String: String]
     var confidence: Double
     var needsConfirmation: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case route
+        case goal
+        case taskType
+        case targetAppName
+        case entities
+        case normalizedEntities
+        case confidence
+        case needsConfirmation
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.route = try container.decode(String.self, forKey: .route)
+        self.taskType = try container.decode(String.self, forKey: .taskType)
+        self.entities = try container.decodeIfPresent(GenericHarnessStringMapWire.self, forKey: .entities)?.values ?? [:]
+        self.normalizedEntities = try container.decodeIfPresent(GenericHarnessStringMapWire.self, forKey: .normalizedEntities)?.values ?? entities
+        self.goal = try container.decodeIfPresent(String.self, forKey: .goal)
+            ?? normalizedEntities["goal"]
+            ?? entities["goal"]
+            ?? ""
+        self.targetAppName = try container.decodeIfPresent(String.self, forKey: .targetAppName)
+            ?? normalizedEntities["appName"]
+            ?? entities["appName"]
+            ?? "none"
+        self.confidence = try container.decodeIfPresent(Double.self, forKey: .confidence) ?? 0.7
+        self.needsConfirmation = try container.decodeIfPresent(Bool.self, forKey: .needsConfirmation) ?? false
+    }
 }
 
 private struct GenericHarnessAmbiguityRiskWire: Decodable {
@@ -880,6 +925,33 @@ private struct GenericHarnessAmbiguityRiskWire: Decodable {
     var riskLevel: String
     var missingInformation: [String]
     var shouldAskBeforeActing: Bool
+
+    init(
+        ambiguityClass: String,
+        riskLevel: String,
+        missingInformation: [String],
+        shouldAskBeforeActing: Bool
+    ) {
+        self.ambiguityClass = ambiguityClass
+        self.riskLevel = riskLevel
+        self.missingInformation = missingInformation
+        self.shouldAskBeforeActing = shouldAskBeforeActing
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ambiguityClass
+        case riskLevel
+        case missingInformation
+        case shouldAskBeforeActing
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.ambiguityClass = try container.decodeIfPresent(String.self, forKey: .ambiguityClass) ?? "safe"
+        self.riskLevel = try container.decodeIfPresent(String.self, forKey: .riskLevel) ?? "low"
+        self.missingInformation = try container.decodeIfPresent(GenericHarnessStringListWire.self, forKey: .missingInformation)?.values ?? []
+        self.shouldAskBeforeActing = try container.decodeIfPresent(Bool.self, forKey: .shouldAskBeforeActing) ?? false
+    }
 }
 
 private struct GenericHarnessPlanStepWire: Decodable {
@@ -905,14 +977,14 @@ private struct GenericHarnessPlanStepWire: Decodable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.id = try container.decode(String.self, forKey: .id)
-        self.summary = try container.decode(String.self, forKey: .summary)
         self.toolName = try container.decode(String.self, forKey: .toolName)
-        self.inputEntity = try container.decode(String.self, forKey: .inputEntity)
-        self.controlID = try container.decode(String.self, forKey: .controlID)
-        self.focusKey = try container.decode(String.self, forKey: .focusKey)
-        self.toolInputs = try container.decodeIfPresent([String: String].self, forKey: .toolInputs) ?? [:]
-        self.expectedObservation = try container.decode(String.self, forKey: .expectedObservation)
+        self.id = try container.decodeIfPresent(String.self, forKey: .id) ?? toolName
+        self.summary = try container.decodeIfPresent(String.self, forKey: .summary) ?? ""
+        self.inputEntity = try container.decodeIfPresent(String.self, forKey: .inputEntity) ?? ""
+        self.controlID = try container.decodeIfPresent(String.self, forKey: .controlID) ?? ""
+        self.focusKey = try container.decodeIfPresent(String.self, forKey: .focusKey) ?? ""
+        self.toolInputs = try container.decodeIfPresent(GenericHarnessStringMapWire.self, forKey: .toolInputs)?.values ?? [:]
+        self.expectedObservation = try container.decodeIfPresent(String.self, forKey: .expectedObservation) ?? ""
     }
 }
 
@@ -920,6 +992,107 @@ private struct GenericHarnessClarificationPolicyWire: Decodable {
     var shouldAsk: Bool
     var questions: [String]
     var policy: String
+
+    init(shouldAsk: Bool, questions: [String], policy: String) {
+        self.shouldAsk = shouldAsk
+        self.questions = questions
+        self.policy = policy
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case shouldAsk
+        case questions
+        case policy
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.shouldAsk = try container.decodeIfPresent(Bool.self, forKey: .shouldAsk) ?? false
+        self.questions = try container.decodeIfPresent(GenericHarnessStringListWire.self, forKey: .questions)?.values ?? []
+        self.policy = try container.decodeIfPresent(String.self, forKey: .policy) ?? ""
+    }
+}
+
+private struct GenericHarnessStringListWire: Decodable {
+    var values: [String]
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let strings = try? container.decode([String].self) {
+            self.values = strings
+            return
+        }
+        if let string = try? container.decode(String.self) {
+            self.values = string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? [] : [string]
+            return
+        }
+        if let object = try? container.decode(GenericHarnessStringMapWire.self) {
+            self.values = object.values
+                .map { key, value in value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? key : value }
+                .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                .sorted()
+            return
+        }
+        self.values = []
+    }
+}
+
+private struct GenericHarnessStringMapWire: Decodable {
+    var values: [String: String]
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: GenericHarnessDynamicCodingKey.self)
+        var values: [String: String] = [:]
+        for key in container.allKeys {
+            guard let value = try? container.decode(GenericHarnessStringValueWire.self, forKey: key),
+                  !value.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                continue
+            }
+            values[key.stringValue] = value.value
+        }
+        self.values = values
+    }
+}
+
+private struct GenericHarnessStringValueWire: Decodable {
+    var value: String
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let string = try? container.decode(String.self) {
+            self.value = string
+        } else if let bool = try? container.decode(Bool.self) {
+            self.value = String(bool)
+        } else if let int = try? container.decode(Int.self) {
+            self.value = String(int)
+        } else if let double = try? container.decode(Double.self) {
+            self.value = String(double)
+        } else if let strings = try? container.decode([String].self) {
+            self.value = strings.joined(separator: ", ")
+        } else if let object = try? container.decode([String: String].self) {
+            self.value = object
+                .map { "\($0.key): \($0.value)" }
+                .sorted()
+                .joined(separator: ", ")
+        } else {
+            self.value = ""
+        }
+    }
+}
+
+private struct GenericHarnessDynamicCodingKey: CodingKey {
+    var stringValue: String
+    var intValue: Int?
+
+    init?(stringValue: String) {
+        self.stringValue = stringValue
+    }
+
+    init?(intValue: Int) {
+        self.stringValue = String(intValue)
+        self.intValue = intValue
+    }
 }
 
 private struct TaskIntentWire: Decodable {

@@ -345,10 +345,18 @@ function parseGeminiOutput(rawBody: JsonValue) {
 }
 
 function parseGeminiOutputText(text: string) {
+  const candidates = jsonObjectCandidates(text).reverse();
   let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
+  for (const candidate of candidates) {
+    try {
+      parsed = JSON.parse(candidate);
+      break;
+    } catch {
+      continue;
+    }
+  }
+
+  if (parsed === undefined) {
     throw new InferenceProviderError("Gemini returned invalid screenshot parser JSON.", {
       statusCode: 502,
       code: "invalid_provider_output",
@@ -370,6 +378,47 @@ function parseGeminiOutputText(text: string) {
   }
 
   return output.data;
+}
+
+function jsonObjectCandidates(text: string) {
+  const trimmed = text.trim();
+  const candidates = trimmed ? [trimmed] : [];
+  let objectStart = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (character === "\"") {
+      inString = true;
+    } else if (character === "{") {
+      if (depth === 0) {
+        objectStart = index;
+      }
+      depth += 1;
+    } else if (character === "}" && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && objectStart >= 0) {
+        candidates.push(text.slice(objectStart, index + 1));
+        objectStart = -1;
+      }
+    }
+  }
+
+  return Array.from(new Set(candidates));
 }
 
 async function streamGeminiContent(

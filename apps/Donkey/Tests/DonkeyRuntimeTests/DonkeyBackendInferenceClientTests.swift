@@ -309,6 +309,72 @@ struct DonkeyBackendInferenceClientTests {
     }
 
     @Test
+    @MainActor
+    func parseScreenshotStreamRecoversResultFromErrorEventPayload() async throws {
+        let stalePartial = LocalUIUnderstandingResult(
+            controls: [
+                LocalUIUnderstandingControl(
+                    id: "stale-close",
+                    label: "Close",
+                    kind: .button,
+                    confidence: 0.5
+                )
+            ],
+            confidence: 0.5,
+            metadata: ["screenshotParser.stream": "partial"]
+        )
+        let final = LocalUIUnderstandingResult(
+            controls: [
+                LocalUIUnderstandingControl(
+                    id: "final-close",
+                    label: "Close",
+                    kind: .button,
+                    confidence: 0.9
+                )
+            ],
+            confidence: 0.9,
+            metadata: ["screenshotParser.stream": "final"]
+        )
+        let encoder = JSONEncoder()
+        let concatenatedResults = [
+            String(data: try encoder.encode(stalePartial), encoding: .utf8)!,
+            String(data: try encoder.encode(final), encoding: .utf8)!
+        ].joined(separator: "\n")
+        let errorPayloadData = try JSONSerialization.data(
+            withJSONObject: [
+                "error": "invalid_provider_output",
+                "message": concatenatedResults
+            ]
+        )
+        let errorPayload = try #require(String(data: errorPayloadData, encoding: .utf8))
+        let responseText = [
+            "event: error",
+            "data: \(errorPayload)",
+            "",
+        ].joined(separator: "\n")
+        let httpClient = FixtureHTTPClient(
+            data: Data(responseText.utf8),
+            statusCode: 200,
+            headerFields: ["Content-Type": "text/event-stream"]
+        )
+        let client = DonkeyBackendInferenceClient(
+            configuration: configuration(),
+            httpClient: httpClient
+        )
+
+        let result = try await client.parseScreenshotStream(
+            LocalUIUnderstandingRequest(
+                traceID: "trace-error-recovery",
+                targetID: "target-error-recovery",
+                pixelSize: HotLoopSize(width: 200, height: 100, space: .window)
+            ),
+            imageData: Data("png".utf8)
+        ) { _ in }
+
+        #expect(result.controls.map(\.id) == ["final-close"])
+    }
+
+    @Test
     func screenshotParseOverlayMapperConvertsWindowPixelsToScreenOverlayCoordinates() throws {
         let result = LocalUIUnderstandingResult(
             controls: [

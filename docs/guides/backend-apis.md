@@ -73,8 +73,11 @@ provider names are configuration/data inside private adapters only.
   fast structured task-intent and follow-up decisions to `gemini-3.1-flash-lite`,
   keep `gemini-3.5-flash` available for general chat and non-decision Responses
   calls, and use `gemini-3-flash-preview` for browser Computer Use tool calls.
-  Keep model selection in code rather than environment overrides. For Google
-  Cloud credits, set
+  Keep model selection in code rather than environment overrides. Structured
+  decision requests normalize JSON schemas for Gemini and retry without
+  provider-enforced schema when Vertex rejects schema parameters; Mac-side
+  runtime validation still owns whether the returned JSON is executable. For
+  Google Cloud credits, set
   `GOOGLE_APPLICATION_CREDENTIALS_JSON` as a hosted-deploy sensitive env var
   rather than storing Google provider credentials in the Mac app.
 - The OpenAI hosted Responses adapter uses `OPENAI_API_KEY` only for macOS

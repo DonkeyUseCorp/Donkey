@@ -139,7 +139,6 @@ PY
 
   if [ -n "$summary" ]; then
     echo "Dev overlay config: $summary"
-    echo "Dev overlay logs: look for 'debug inspection rendering ... elements=N' below."
   else
     echo "Dev overlay config: invalid JSON at $overlay_config"
   fi

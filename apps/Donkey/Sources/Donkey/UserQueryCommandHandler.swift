@@ -241,6 +241,48 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             ]
         )
 
+        if Self.shouldFailSafelyWithoutLocalTask(resolution) {
+            let response = Self.modelUnavailableResponse(for: resolution)
+            let decision = AppHarnessDecision(
+                kind: .respond,
+                message: response,
+                traceID: traceID,
+                metadata: [
+                    "structuredDecision": "true",
+                    "router": "modelUnavailable",
+                    "resolution.status": resolution.status.rawValue
+                ]
+            )
+            let handlingResult = UserQueryCommandHandlingResult(
+                status: .failedSafe,
+                threadStatus: .failed,
+                decision: decision,
+                summary: response,
+                taskLabel: nil,
+                traceID: traceID,
+                metadata: modelMetadata.merging([
+                    "appHarness.decision": AppHarnessDecisionKind.respond.rawValue,
+                    "router": "modelUnavailable",
+                    "resolution.status": resolution.status.rawValue,
+                    "resolution.reason": resolution.metadata["reason"] ?? ""
+                ]) { _, new in new },
+                documentReviewRequest: nil,
+                agentVisualizationPlan: nil,
+                cursorOverlayRequest: nil
+            )
+            _ = await genericHarnessLifecycle.coordinator.failSafe(
+                taskID: taskID,
+                reason: "Hosted command parser did not produce a safe action plan"
+            )
+            await coordinatorRegistry.finish(taskID: taskID)
+            logHandlingResult(
+                handlingResult,
+                stage: "modelUnavailable",
+                hint: "The hosted planner failed before producing executable intent; no local task was run."
+            )
+            return handlingResult
+        }
+
         if Self.shouldAskClarificationBeforeLocalTask(resolution) {
             let question = Self.clarificationQuestion(for: resolution)
             let decision = AppHarnessDecision(
@@ -849,18 +891,22 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
 
     private static func shouldRespondWithoutLocalTask(_ resolution: LocalAppTaskCatalogResolution) -> Bool {
         guard resolution.status == .needsConfirmation else { return false }
-        if resolution.intent == nil {
-            let reason = resolution.metadata["reason"]
-            if reason == "hostedModelIntentUnavailable" {
-                return true
-            }
-        }
         if resolution.metadata["responseMode"] == "conversation",
            resolution.metadata["assistantResponse"]?.isEmpty == false {
             return true
         }
         return resolution.metadata["reason"] == "lowConfidenceIntent"
             && resolution.metadata["assistantResponse"]?.isEmpty == false
+    }
+
+    private static func shouldFailSafelyWithoutLocalTask(_ resolution: LocalAppTaskCatalogResolution) -> Bool {
+        guard resolution.status == .needsConfirmation,
+              resolution.intent == nil,
+              resolution.metadata["reason"] == "hostedModelIntentUnavailable"
+        else {
+            return false
+        }
+        return resolution.metadata["responseMode"] != "conversation"
     }
 
     private static func shouldAskClarificationBeforeLocalTask(_ resolution: LocalAppTaskCatalogResolution) -> Bool {
@@ -905,6 +951,19 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             }
         }
         return "I can help, but I need a clearer request before opening an app."
+    }
+
+    private static func modelUnavailableResponse(for resolution: LocalAppTaskCatalogResolution) -> String {
+        let modelStatus = resolution.metadata["modelCallStatus"] ?? ""
+        if modelStatus == AIModelCallStatus.missingCredentials.rawValue {
+            return "The hosted command parser is not configured yet, so I couldn't safely run that action."
+        }
+        if modelStatus == AIModelCallStatus.providerOutage.rawValue
+            || modelStatus == AIModelCallStatus.timeout.rawValue
+            || modelStatus == AIModelCallStatus.rateLimited.rawValue {
+            return "The hosted command parser is not available right now, so I couldn't safely run that action."
+        }
+        return "The hosted command parser failed before it produced a safe action plan, so I didn't run anything."
     }
 
     private func retrieveSemanticMemory(

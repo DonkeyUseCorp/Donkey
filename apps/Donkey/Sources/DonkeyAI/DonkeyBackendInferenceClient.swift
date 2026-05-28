@@ -204,7 +204,22 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
                     decoder: decoder
                 )
             case "error":
+                if let result = try? Self.decodeLocalUIUnderstandingResult(
+                    from: event.data,
+                    decoder: decoder
+                ) {
+                    finalResult = result
+                    return
+                }
                 let error = (try? decoder.decode(RemoteScreenshotParseStreamError.self, from: Data(event.data.utf8)))
+                if let recovered = error?.message,
+                   let result = try? Self.decodeLocalUIUnderstandingResult(
+                       from: recovered,
+                       decoder: decoder
+                   ) {
+                    finalResult = result
+                    return
+                }
                 throw DonkeyBackendInferenceClientError.httpStatus(
                     response.statusCode,
                     error?.message ?? event.data

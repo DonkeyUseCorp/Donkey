@@ -76,29 +76,34 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
                 )
             }
 
-            if let intent = try TaskIntentWireCodec.decodeHostedPlanningIntent(
-                outputText,
-                definitions: request.taskDefinitions,
-                originalCommand: request.command,
-                appFinderCatalog: request.appFinderCatalog,
-                sourceModelCallID: "model-call-\(request.sourceTraceID)",
-                parserName: "hosted-responses-v1",
-                parserSource: .onlineModel
-            ) {
-                return TaskIntentAdapterResult(
-                    intent: intent,
-                    trace: trace(
-                        entry: entry,
-                        request: request,
-                        status: .completed,
-                        validationStatus: "schemaDecoded",
-                        latencyMS: latencyMS,
-                        metadata: Self.outputDiagnostics(for: outputText).merging([
-                            "provider": "donkeyBackend",
-                            "privacy.store": "false"
-                        ]) { current, _ in current }
+            var decodeFailureMetadata: [String: String] = [:]
+            do {
+                if let intent = try TaskIntentWireCodec.decodeHostedPlanningIntent(
+                    outputText,
+                    definitions: request.taskDefinitions,
+                    originalCommand: request.command,
+                    appFinderCatalog: request.appFinderCatalog,
+                    sourceModelCallID: "model-call-\(request.sourceTraceID)",
+                    parserName: "hosted-responses-v1",
+                    parserSource: .onlineModel
+                ) {
+                    return TaskIntentAdapterResult(
+                        intent: intent,
+                        trace: trace(
+                            entry: entry,
+                            request: request,
+                            status: .completed,
+                            validationStatus: "schemaDecoded",
+                            latencyMS: latencyMS,
+                            metadata: Self.outputDiagnostics(for: outputText).merging([
+                                "provider": "donkeyBackend",
+                                "privacy.store": "false"
+                            ]) { current, _ in current }
+                        )
                     )
-                )
+                }
+            } catch {
+                decodeFailureMetadata = Self.planningDecodeFailureMetadata(error)
             }
 
             let baseMetadata = Self.outputDiagnostics(for: outputText)
@@ -106,6 +111,7 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
                     "provider": "donkeyBackend",
                     "privacy.store": "false"
                 ]) { current, _ in current }
+                .merging(decodeFailureMetadata) { current, _ in current }
             if let noTaskMetadata = try? TaskIntentWireCodec.hostedPlanningNoTaskMetadata(
                 outputText,
                 parserName: "hosted-responses-v1"
@@ -130,6 +136,23 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
                     request: request,
                     previousOutputText: outputText,
                     previousMetadata: baseMetadata.merging(repairSeed) { current, _ in current },
+                    previousFailure: "The previous localAppTask JSON decoded but failed runtime validation, so it cannot be executed.",
+                    startedAt: startedAt
+                )
+            }
+
+            if !outputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return await repairHostedPlanningIntent(
+                    entry: entry,
+                    backend: backend,
+                    request: request,
+                    previousOutputText: outputText,
+                    previousMetadata: baseMetadata.merging([
+                        "reason": "hostedPlanningSchemaDecodeFailed",
+                        "validation.failure": "hostedPlanningSchemaDecodeFailed",
+                        "planner.repairable": "true"
+                    ]) { current, _ in current },
+                    previousFailure: "The previous planner output did not decode as the required generic_harness_planning schema, so it cannot be executed.",
                     startedAt: startedAt
                 )
             }
@@ -156,6 +179,13 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
                 metadata: Self.errorMetadata(error)
             )
         }
+    }
+
+    private static func planningDecodeFailureMetadata(_ error: Error) -> [String: String] {
+        [
+            "reason": "hostedPlanningSchemaDecodeFailed",
+            "detail": String(describing: error)
+        ]
     }
 
     private func responseRequest(
@@ -240,6 +270,7 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
         request: TaskIntentAdapterRequest,
         previousOutputText: String,
         previousMetadata: [String: String],
+        previousFailure: String,
         startedAt: TimeInterval
     ) async -> TaskIntentAdapterResult {
         do {
@@ -247,7 +278,10 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
                 responseRequest(
                     entry: entry,
                     adapterRequest: request,
-                    repairContext: HostedPlanningRepairContext(previousOutputText: previousOutputText)
+                    repairContext: HostedPlanningRepairContext(
+                        previousOutputText: previousOutputText,
+                        previousFailure: previousFailure
+                    )
                 )
             )
             let latencyMS = (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
@@ -266,30 +300,35 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
                 )
             }
 
-            if let intent = try TaskIntentWireCodec.decodeHostedPlanningIntent(
-                repairOutputText,
-                definitions: request.taskDefinitions,
-                originalCommand: request.command,
-                appFinderCatalog: request.appFinderCatalog,
-                sourceModelCallID: "model-call-\(request.sourceTraceID)-repair",
-                parserName: "hosted-responses-v1",
-                parserSource: .onlineModel
-            ) {
-                return TaskIntentAdapterResult(
-                    intent: intent,
-                    trace: trace(
-                        entry: entry,
-                        request: request,
-                        status: .completed,
-                        validationStatus: "schemaDecoded",
-                        latencyMS: latencyMS,
-                        metadata: Self.repairMetadata(
-                            previousMetadata: previousMetadata,
-                            repairOutputText: repairOutputText,
-                            status: "schemaDecoded"
+            var repairDecodeFailureMetadata: [String: String] = [:]
+            do {
+                if let intent = try TaskIntentWireCodec.decodeHostedPlanningIntent(
+                    repairOutputText,
+                    definitions: request.taskDefinitions,
+                    originalCommand: request.command,
+                    appFinderCatalog: request.appFinderCatalog,
+                    sourceModelCallID: "model-call-\(request.sourceTraceID)-repair",
+                    parserName: "hosted-responses-v1",
+                    parserSource: .onlineModel
+                ) {
+                    return TaskIntentAdapterResult(
+                        intent: intent,
+                        trace: trace(
+                            entry: entry,
+                            request: request,
+                            status: .completed,
+                            validationStatus: "schemaDecoded",
+                            latencyMS: latencyMS,
+                            metadata: Self.repairMetadata(
+                                previousMetadata: previousMetadata,
+                                repairOutputText: repairOutputText,
+                                status: "schemaDecoded"
+                            )
                         )
                     )
-                )
+                }
+            } catch {
+                repairDecodeFailureMetadata = Self.planningDecodeFailureMetadata(error)
             }
 
             if let noTaskMetadata = try? TaskIntentWireCodec.hostedPlanningNoTaskMetadata(
@@ -320,7 +359,7 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
                     previousMetadata: previousMetadata,
                     repairOutputText: repairOutputText,
                     status: "invalid"
-                )
+                ).merging(repairDecodeFailureMetadata) { current, _ in current }
             )
         } catch is CancellationError {
             return result(entry: entry, request: request, status: .cancelled, validationStatus: "notValidated", latencyMS: nil)
@@ -522,9 +561,11 @@ public struct HostedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
 
 private struct HostedPlanningRepairContext {
     var previousOutputText: String
+    var previousFailure: String
+
     var feedback: String {
         [
-            "The previous localAppTask JSON decoded but failed runtime validation, so it cannot be executed.",
+            previousFailure,
             "Return one corrected strict JSON object using the same schema.",
             "If no supported executable action is possible, return a conversation or clarification route.",
             "Use the relevant app skill and catalog metadata to repair app-specific workflow fields instead of inventing unsupported behavior."

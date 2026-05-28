@@ -47,6 +47,7 @@ export const geminiBrowserInteractionToolType = "donkey_gemini_browser_interacti
 export const debugUIInspectionToolType = "donkey_debug_ui_inspection";
 
 const fastDecisionSchemaNames = new Set([
+  "generic_harness_planning",
   "task_intent_v1",
   "task_followup_resolution_v1",
 ]);
@@ -111,10 +112,22 @@ export function createGeminiComputerUseProvider(
     const client = clientFactory(clientConfig.options);
 
     let rawResponse: unknown;
+    let retriedWithoutSchema = false;
     try {
       rawResponse = await client.models.generateContent(requestParameters);
     } catch (error) {
-      throw geminiProviderError(error);
+      if (shouldRetryWithoutStructuredSchema(error, requestParameters)) {
+        retriedWithoutSchema = true;
+        try {
+          rawResponse = await client.models.generateContent(
+            withoutStructuredResponseSchema(requestParameters),
+          );
+        } catch (retryError) {
+          throw geminiProviderError(retryError);
+        }
+      } else {
+        throw geminiProviderError(error);
+      }
     }
 
     const rawBody = toJsonValue(rawResponse);
@@ -129,6 +142,7 @@ export function createGeminiComputerUseProvider(
         api: "google-genai-sdk",
         service: clientConfig.service,
         registeredTools,
+        structuredSchemaRetry: String(retriedWithoutSchema),
       },
     };
   }
@@ -405,11 +419,106 @@ function generationConfigFromBody(body: JsonObject): Partial<GenerateContentConf
   if (responseFormat?.json) {
     config.responseMimeType = "application/json";
     if (responseFormat.schema) {
-      config.responseJsonSchema = responseFormat.schema;
+      config.responseJsonSchema = geminiJsonSchema(responseFormat.schema);
     }
   }
 
   return config;
+}
+
+const supportedGeminiJsonSchemaKeys = new Set([
+  "$anchor",
+  "$defs",
+  "$id",
+  "$ref",
+  "additionalProperties",
+  "anyOf",
+  "description",
+  "enum",
+  "format",
+  "items",
+  "maxItems",
+  "maximum",
+  "minItems",
+  "minimum",
+  "oneOf",
+  "prefixItems",
+  "properties",
+  "propertyOrdering",
+  "required",
+  "title",
+  "type",
+]);
+
+function geminiJsonSchema(schema: JsonObject): JsonObject {
+  const sanitized = sanitizeGeminiJsonSchema(schema);
+  return sanitized !== undefined && isJsonObject(sanitized) ? sanitized : schema;
+}
+
+function sanitizeGeminiJsonSchema(value: JsonValue): JsonValue | undefined {
+  if (Array.isArray(value)) {
+    return value
+      .map(sanitizeGeminiJsonSchema)
+      .filter((item): item is JsonValue => item !== undefined);
+  }
+
+  if (!isJsonObject(value)) {
+    return value;
+  }
+
+  const sanitized: JsonObject = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (!supportedGeminiJsonSchemaKeys.has(key)) {
+      continue;
+    }
+
+    const childValue = sanitizeGeminiJsonSchema(child);
+    if (childValue !== undefined) {
+      sanitized[key] = childValue;
+    }
+  }
+
+  if (
+    sanitized.type === "object" &&
+    isJsonObject(sanitized.properties) &&
+    !Array.isArray(sanitized.propertyOrdering)
+  ) {
+    sanitized.propertyOrdering = Object.keys(sanitized.properties);
+  }
+
+  return sanitized;
+}
+
+function shouldRetryWithoutStructuredSchema(
+  error: unknown,
+  request: GenerateContentParameters,
+) {
+  return (
+    hasStructuredResponseSchema(request) &&
+    error instanceof ApiError &&
+    error.status === 400
+  );
+}
+
+function hasStructuredResponseSchema(request: GenerateContentParameters) {
+  const config = request.config;
+  return Boolean(
+    config &&
+      ("responseJsonSchema" in config || "responseSchema" in config),
+  );
+}
+
+function withoutStructuredResponseSchema(
+  request: GenerateContentParameters,
+): GenerateContentParameters {
+  const restConfig = { ...(request.config ?? {}) };
+  delete restConfig.responseJsonSchema;
+  delete restConfig.responseSchema;
+
+  return {
+    ...request,
+    config: restConfig,
+  };
 }
 
 function responseFormatFromBody(body: JsonObject): { json: boolean; schema?: JsonObject } | null {
