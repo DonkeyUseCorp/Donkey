@@ -28,7 +28,9 @@ final class DebugUIInspectionCoordinator {
     private var lastRenderedFrames: [UInt32: DebugUIInspectionFrame] = [:]
     private var lastSnapshots: [UInt32: DebugUIScreenCaptureSnapshot] = [:]
     private var timer: Timer?
+    private var activeAccessibilityTimer: Timer?
     private var notificationObservers: [NSObjectProtocol] = []
+    private var movementEventMonitors: [Any] = []
     private var currentConfig: DebugUIOverlayConfiguration = .disabled
     private var isAnalyzing = false
 
@@ -49,11 +51,17 @@ final class DebugUIInspectionCoordinator {
     func stop() {
         timer?.invalidate()
         timer = nil
+        activeAccessibilityTimer?.invalidate()
+        activeAccessibilityTimer = nil
         for observer in notificationObservers {
             NotificationCenter.default.removeObserver(observer)
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
+        for monitor in movementEventMonitors {
+            NSEvent.removeMonitor(monitor)
+        }
         notificationObservers.removeAll()
+        movementEventMonitors.removeAll()
         overlayController.close()
         trackers.removeAll()
         lastFingerprints.removeAll()
@@ -89,6 +97,23 @@ final class DebugUIInspectionCoordinator {
             }
         }
         notificationObservers.append(workspaceObserver)
+
+        let movementMask: NSEvent.EventTypeMask = [.leftMouseDragged, .leftMouseUp]
+        if let globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: movementMask, handler: { [weak self] _ in
+            Task { @MainActor in
+                self?.reprojectRenderedFramesFromCurrentWindowBounds()
+            }
+        }) {
+            movementEventMonitors.append(globalMonitor)
+        }
+        if let localMonitor = NSEvent.addLocalMonitorForEvents(matching: movementMask, handler: { [weak self] event in
+            Task { @MainActor in
+                self?.reprojectRenderedFramesFromCurrentWindowBounds()
+            }
+            return event
+        }) {
+            movementEventMonitors.append(localMonitor)
+        }
     }
 
     private func reloadConfigAndReschedule(force: Bool = false) {
@@ -118,6 +143,22 @@ final class DebugUIInspectionCoordinator {
             }
             timer = newTimer
             RunLoop.main.add(newTimer, forMode: .common)
+        }
+
+        if newConfig.enabled {
+            if activeAccessibilityTimer == nil || force {
+                activeAccessibilityTimer?.invalidate()
+                let newTimer = Timer(timeInterval: 0.12, repeats: true) { [weak self] _ in
+                    Task { @MainActor in
+                        self?.refreshActiveAccessibilityFrame()
+                    }
+                }
+                activeAccessibilityTimer = newTimer
+                RunLoop.main.add(newTimer, forMode: .common)
+            }
+        } else {
+            activeAccessibilityTimer?.invalidate()
+            activeAccessibilityTimer = nil
         }
 
         if enablementChanged || scopeChanged || modeChanged || confidenceChanged || activeWindowChanged || targetFilterChanged {
@@ -219,7 +260,117 @@ final class DebugUIInspectionCoordinator {
         lastFingerprints[screen.screenID] = fingerprint
         lastRenderedFrames[screen.screenID] = trackedFrame
         lastSnapshots[screen.screenID] = snapshot
+        logLayoutDiagnostics(stage: stage, screen: screen, frame: trackedFrame, captures: [])
         overlayController.render(frame: trackedFrame, snapshot: snapshot)
+    }
+
+    private func refreshActiveAccessibilityFrame() {
+        guard currentConfig.enabled,
+              !isAnalyzing,
+              let screens = try? screenSurfaces(scope: currentConfig.screenScope)
+        else {
+            return
+        }
+
+        let frames = activeAccessibilityFrames()
+        guard !frames.isEmpty else { return }
+
+        for screen in screens {
+            guard let accessibilityFrame = frames[screen.screenID],
+                  !accessibilityFrame.elements.isEmpty
+            else {
+                continue
+            }
+
+            let existing = lastRenderedFrames[screen.screenID] ?? DebugUIInspectionFrame()
+            let nonAccessibilityFrame = DebugUIInspectionFrame(
+                elements: existing.elements.filter { !Self.isAccessibilityEvidence($0) }
+            )
+            let fusedFrame = DebugUIInspectionFrameFusion.fused(
+                accessibilityFrame: accessibilityFrame,
+                geminiFrame: nonAccessibilityFrame
+            )
+            guard !fusedFrame.elements.isEmpty,
+                  lastRenderedFrames[screen.screenID]?.isOverlayRenderEquivalent(to: fusedFrame) != true
+            else {
+                continue
+            }
+
+            let snapshot = Self.screenPointSnapshot(
+                screen: screen,
+                fingerprint: "active-accessibility-\(Self.frameSignature(fusedFrame))"
+            )
+            lastRenderedFrames[screen.screenID] = fusedFrame
+            lastSnapshots[screen.screenID] = snapshot
+            logLayoutDiagnostics(stage: "active-accessibility", screen: screen, frame: fusedFrame, captures: [])
+            overlayController.render(frame: fusedFrame, snapshot: snapshot)
+        }
+    }
+
+    private func reprojectRenderedFramesFromCurrentWindowBounds() {
+        guard currentConfig.enabled,
+              !lastRenderedFrames.isEmpty,
+              let screens = try? screenSurfaces(scope: currentConfig.screenScope)
+        else {
+            return
+        }
+
+        let candidates = Dictionary(
+            uniqueKeysWithValues: windowResolver.enumerateCandidates()
+                .filter { $0.isVisible && $0.isOnScreen && $0.safetyAssessment.status == .allowed }
+                .map { ($0.windowID, $0) }
+        )
+        let screensByID = Dictionary(uniqueKeysWithValues: screens.map { ($0.screenID, $0) })
+        var elementsByScreenID = Dictionary(
+            uniqueKeysWithValues: screens.map { ($0.screenID, [DebugUIElement]()) }
+        )
+        var changed = false
+
+        for (screenID, frame) in lastRenderedFrames {
+            for element in frame.elements {
+                guard let projected = Self.reproject(
+                    element,
+                    sourceScreen: screensByID[screenID],
+                    currentWindowTargets: candidates,
+                    screens: screens
+                ) else {
+                    if Self.windowID(for: element) == nil {
+                        elementsByScreenID[screenID, default: []].append(element)
+                    } else {
+                        changed = true
+                    }
+                    continue
+                }
+
+                elementsByScreenID[projected.screenID, default: []].append(projected.element)
+                changed = changed || projected.screenID != screenID || projected.element.bbox != element.bbox
+            }
+        }
+
+        guard changed else { return }
+
+        var activeScreenIDs = Set<UInt32>()
+        for screen in screens {
+            let elements = elementsByScreenID[screen.screenID] ?? []
+            if elements.isEmpty {
+                lastRenderedFrames.removeValue(forKey: screen.screenID)
+                lastSnapshots.removeValue(forKey: screen.screenID)
+                continue
+            }
+
+            activeScreenIDs.insert(screen.screenID)
+            let frame = DebugUIInspectionFrame(elements: elements.sorted(by: Self.elementSort))
+            let snapshot = Self.screenPointSnapshot(
+                screen: screen,
+                fingerprint: "window-geometry-\(Self.frameSignature(frame))"
+            )
+            lastRenderedFrames[screen.screenID] = frame
+            lastSnapshots[screen.screenID] = snapshot
+            logLayoutDiagnostics(stage: "window-geometry", screen: screen, frame: frame, captures: [])
+            overlayController.render(frame: frame, snapshot: snapshot)
+        }
+
+        overlayController.closeScreens(except: activeScreenIDs)
     }
 
     private func analyzeGeminiWindowScreens(force: Bool) async throws {
@@ -255,6 +406,7 @@ final class DebugUIInspectionCoordinator {
                 let snapshot = Self.screenPointSnapshot(screen: screen, fingerprint: fingerprint)
                 lastRenderedFrames[screen.screenID] = trackedFrame
                 lastSnapshots[screen.screenID] = snapshot
+                logLayoutDiagnostics(stage: "accessibility-fallback", screen: screen, frame: trackedFrame, captures: [])
                 overlayController.render(frame: trackedFrame, snapshot: snapshot)
             }
             return
@@ -283,12 +435,12 @@ final class DebugUIInspectionCoordinator {
         }
 
         let renderedScreenIDs = Set(captures.flatMap { capture in
-            screens.filter { Self.intersects(capture.target.bounds, Self.windowBounds(from: $0.appKitFrame)) }.map(\.screenID)
+            screens.filter { Self.intersects(capture.target.bounds, $0.captureFrame) }.map(\.screenID)
         }).union(accessibilityFrames.keys)
         ageMissingGeminiScreens(activeScreenIDs: renderedScreenIDs)
 
         for screen in screens where renderedScreenIDs.contains(screen.screenID) {
-            let screenBounds = Self.windowBounds(from: screen.appKitFrame)
+            let screenBounds = screen.captureFrame
             let screenCaptures = captures.filter { Self.intersects($0.target.bounds, screenBounds) }
             let accessibilityFrame = accessibilityFrames[screen.screenID] ?? DebugUIInspectionFrame()
             let fingerprint = Self.fingerprint(
@@ -392,7 +544,7 @@ final class DebugUIInspectionCoordinator {
             DebugUIInspectionLog.overlay.info(
                 "debug inspection rendering source=gemini-fused screenID=\(screen.screenID, privacy: .public) windows=\(screenCaptures.count, privacy: .public) localEvidenceElements=\(localEvidenceFrame.elements.count, privacy: .public) geminiElements=\(geminiFrame.elements.count, privacy: .public) elements=\(trackedFrame.elements.count, privacy: .public)"
             )
-            logSampleMappings(frame: trackedFrame, snapshot: snapshot)
+            logLayoutDiagnostics(stage: "gemini-fused", screen: screen, frame: trackedFrame, captures: screenCaptures)
             lastRenderedFrames[screen.screenID] = trackedFrame
             lastSnapshots[screen.screenID] = snapshot
             overlayController.render(frame: trackedFrame, snapshot: snapshot)
@@ -423,6 +575,35 @@ final class DebugUIInspectionCoordinator {
         } catch {
             DebugUIInspectionLog.overlay.info(
                 "debug inspection skipped accessibility fusion error=\(String(describing: error), privacy: .public)"
+            )
+            return [:]
+        }
+    }
+
+    private func activeAccessibilityFrames() -> [UInt32: DebugUIInspectionFrame] {
+        do {
+            let results = try accessibilityInspectionService.inspect(
+                scope: currentConfig.screenScope,
+                minConfidence: currentConfig.minConfidence,
+                frontmostOnly: true,
+                focusedOnly: true,
+                targetBundleIdentifiers: currentConfig.targetBundleIdentifiers,
+                targetAppNames: currentConfig.targetAppNames
+            )
+            return Dictionary(
+                uniqueKeysWithValues: results.map { result in
+                    (
+                        result.snapshot.screenID,
+                        Self.frameInScreenPointSpace(
+                            result.frame,
+                            snapshot: result.snapshot
+                        )
+                    )
+                }
+            )
+        } catch {
+            DebugUIInspectionLog.overlay.debug(
+                "debug inspection skipped active accessibility refresh error=\(String(describing: error), privacy: .public)"
             )
             return [:]
         }
@@ -511,8 +692,10 @@ final class DebugUIInspectionCoordinator {
             DebugUIInspectionLog.overlay.info(
                 "debug inspection rendering source=accessibility screenID=\(snapshot.screenID, privacy: .public) elements=\(trackedFrame.elements.count, privacy: .public)"
             )
-            logSampleMappings(frame: trackedFrame, snapshot: snapshot)
             lastRenderedFrames[snapshot.screenID] = trackedFrame
+            if let screen = try? screenSurfaces(scope: currentConfig.screenScope).first(where: { $0.screenID == snapshot.screenID }) {
+                logLayoutDiagnostics(stage: "accessibility", screen: screen, frame: trackedFrame, captures: [])
+            }
             overlayController.render(frame: trackedFrame, snapshot: snapshot)
         }
 
@@ -614,29 +797,84 @@ final class DebugUIInspectionCoordinator {
                     bundleFilters: bundleFilters,
                     appNameFilters: appNameFilters
                 )
-                && screens.contains { Self.intersects(target.bounds, Self.windowBounds(from: $0.appKitFrame)) }
+                && screens.contains { Self.intersects(target.bounds, $0.captureFrame) }
         }
     }
 
-    private func logSampleMappings(
+    private func logLayoutDiagnostics(
+        stage: String,
+        screen: DebugUIScreenSurface,
         frame: DebugUIInspectionFrame,
-        snapshot: DebugUIScreenCaptureSnapshot
+        captures: [DebugUIWindowCapture]
     ) {
         let screenPointSize = HotLoopSize(
-            width: snapshot.screenFrame.size.width,
-            height: snapshot.screenFrame.size.height,
+            width: screen.appKitFrame.size.width,
+            height: screen.appKitFrame.size.height,
             space: .screen
         )
-        for element in frame.elements.prefix(3) {
-            let localFrame = DebugUIOverlayGeometry.localLayerFrame(
+        let screenshotPixelSize = HotLoopSize(
+            width: screen.appKitFrame.size.width,
+            height: screen.appKitFrame.size.height,
+            space: .screen
+        )
+        let counts = sourceCounts(frame.elements)
+        DebugUIInspectionLog.overlay.info(
+            "debug inspection layout stage=\(stage, privacy: .public) screenID=\(screen.screenID, privacy: .public) elements=\(frame.elements.count, privacy: .public) ax=\(counts.ax, privacy: .public) ai=\(counts.ai, privacy: .public) cv=\(counts.cv, privacy: .public) other=\(counts.other, privacy: .public) appKitFrame=\(Self.describe(screen.appKitFrame), privacy: .public) captureFrame=\(Self.describe(screen.captureFrame), privacy: .public)"
+        )
+
+        for capture in captures.prefix(8) {
+            DebugUIInspectionLog.overlay.info(
+                "debug inspection layout-target stage=\(stage, privacy: .public) screenID=\(screen.screenID, privacy: .public) windowID=\(capture.target.windowID, privacy: .public) app=\(capture.target.appName ?? "", privacy: .public) bundle=\(capture.target.bundleIdentifier ?? "", privacy: .public) targetBounds=\(Self.describe(capture.target.bounds), privacy: .public) screenshot=\(capture.screenshot.imageWidth, privacy: .public)x\(capture.screenshot.imageHeight, privacy: .public) parse=\(Int(capture.parsePixelSize.width.rounded()), privacy: .public)x\(Int(capture.parsePixelSize.height.rounded()), privacy: .public) method=\(capture.screenshot.captureMethod.rawValue, privacy: .public) coord=\(capture.screenshot.coordinateSpace, privacy: .public)"
+            )
+        }
+
+        for (index, element) in frame.elements.sorted(by: Self.elementSort).prefix(48).enumerated() {
+            let layerFrame = DebugUIOverlayGeometry.localLayerFrame(
                 for: element.bbox,
-                screenshotPixelSize: snapshot.pixelSize,
+                screenshotPixelSize: screenshotPixelSize,
                 screenPointSize: screenPointSize
             )
             DebugUIInspectionLog.overlay.info(
-                "debug inspection mapping id=\(element.id, privacy: .public) label=\(element.label, privacy: .public) bbox=\(Self.describe(element.bbox), privacy: .public) local=\(Self.describe(localFrame), privacy: .public) pixels=\(Self.describe(snapshot.pixelSize), privacy: .public) points=\(Self.describe(screenPointSize), privacy: .public)"
+                "debug inspection layout-element stage=\(stage, privacy: .public) idx=\(index, privacy: .public) source=\(Self.sourceName(for: element), privacy: .public) id=\(element.id, privacy: .public) label=\(Self.shortLabel(element.label), privacy: .public) confidence=\(String(format: "%.2f", element.confidence), privacy: .public) bbox=\(Self.describe(element.bbox), privacy: .public) layer=\(Self.describe(layerFrame), privacy: .public) targetWindowID=\(Self.metadataValue("target.windowID", metadata: element.metadata) ?? "", privacy: .public) targetBounds=\(Self.describe(Self.targetBounds(for: element)), privacy: .public) localBounds=\(Self.describe(Self.localBounds(for: element)), privacy: .public) metadataSource=\(Self.metadataValue("localUIElement.sources", metadata: element.metadata) ?? "", privacy: .public)"
             )
         }
+    }
+
+    private func sourceCounts(_ elements: [DebugUIElement]) -> (ax: Int, ai: Int, cv: Int, other: Int) {
+        var ax = 0
+        var ai = 0
+        var cv = 0
+        var other = 0
+        for element in elements {
+            switch Self.sourceName(for: element) {
+            case "AX": ax += 1
+            case "AI": ai += 1
+            case "CV": cv += 1
+            default: other += 1
+            }
+        }
+        return (ax, ai, cv, other)
+    }
+
+    private static func sourceName(for element: DebugUIElement) -> String {
+        let fusionSource = element.metadata["debugUIFusion.source"] ?? ""
+        let sources = metadataValue("localUIElement.sources", metadata: element.metadata) ?? ""
+        if fusionSource == "gemini" || sources.contains("gemini") || element.id.hasPrefix("gemini-") {
+            return "AI"
+        }
+        if fusionSource == "native-visual" || sources.contains("shape") || sources.contains("ocr") || sources.contains("layout") || element.id.hasPrefix("native-visual-") {
+            return "CV"
+        }
+        if sources.contains("accessibility") || element.id.hasPrefix("ax-") || sources.contains("window-chrome-geometry") || element.id.hasPrefix("window-chrome-") {
+            return "AX"
+        }
+        return "OTHER"
+    }
+
+    private static func shortLabel(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 80 else { return trimmed }
+        return String(trimmed.prefix(77)) + "..."
     }
 
     private static func describe(_ box: DebugUIBoundingBox) -> String {
@@ -656,6 +894,31 @@ final class DebugUIInspectionCoordinator {
             rect.origin.y,
             rect.size.width,
             rect.size.height
+        )
+    }
+
+    private static func describe(_ rect: HotLoopRect) -> String {
+        String(
+            format: "x=%.1f y=%.1f w=%.1f h=%.1f",
+            rect.origin.x,
+            rect.origin.y,
+            rect.size.width,
+            rect.size.height
+        )
+    }
+
+    private static func describe(_ bounds: WindowTargetBounds?) -> String {
+        guard let bounds else { return "nil" }
+        return describe(bounds)
+    }
+
+    private static func describe(_ bounds: WindowTargetBounds) -> String {
+        String(
+            format: "x=%.1f y=%.1f w=%.1f h=%.1f",
+            bounds.x,
+            bounds.y,
+            bounds.width,
+            bounds.height
         )
     }
 
@@ -745,13 +1008,170 @@ final class DebugUIInspectionCoordinator {
             && lhs.y + lhs.height > rhs.y
     }
 
-    private static func windowBounds(from rect: HotLoopRect) -> WindowTargetBounds {
-        WindowTargetBounds(
-            x: rect.origin.x,
-            y: rect.origin.y,
-            width: rect.size.width,
-            height: rect.size.height
+    private static func reproject(
+        _ element: DebugUIElement,
+        sourceScreen: DebugUIScreenSurface?,
+        currentWindowTargets: [UInt32: MacWindowTargetCandidate],
+        screens: [DebugUIScreenSurface]
+    ) -> (screenID: UInt32, element: DebugUIElement)? {
+        guard let windowID = windowID(for: element),
+              let target = currentWindowTargets[windowID],
+              let localBounds = localBounds(for: element)
+        else {
+            return nil
+        }
+
+        let previousTarget = targetBounds(for: element)
+        let scaleX = previousTarget.flatMap { $0.width > 0 ? target.bounds.width / $0.width : nil } ?? 1
+        let scaleY = previousTarget.flatMap { $0.height > 0 ? target.bounds.height / $0.height : nil } ?? 1
+        let absoluteBounds: WindowTargetBounds
+        if let previousTarget,
+           let sourceScreen {
+            let deltaX = target.bounds.x - previousTarget.x
+            let deltaY = target.bounds.y - previousTarget.y
+            absoluteBounds = WindowTargetBounds(
+                x: sourceScreen.captureFrame.x + element.bbox.x + deltaX,
+                y: sourceScreen.captureFrame.y + element.bbox.y + deltaY,
+                width: element.bbox.width * scaleX,
+                height: element.bbox.height * scaleY
+            )
+        } else {
+            absoluteBounds = WindowTargetBounds(
+                x: target.bounds.x + localBounds.x * scaleX,
+                y: target.bounds.y + localBounds.y * scaleY,
+                width: localBounds.width * scaleX,
+                height: localBounds.height * scaleY
+            )
+        }
+        let updatedLocalBounds = WindowTargetBounds(
+            x: localBounds.x * scaleX,
+            y: localBounds.y * scaleY,
+            width: localBounds.width * scaleX,
+            height: localBounds.height * scaleY
         )
+
+        guard let screen = screens.first(where: { intersects(absoluteBounds, $0.captureFrame) }),
+              let bbox = clippedBoundingBox(absoluteBounds, screenFrame: screen.captureFrame)
+        else {
+            return nil
+        }
+
+        var metadata = element.metadata
+        metadata.merge(targetBoundsMetadata(target.bounds)) { _, new in new }
+        metadata.merge(boundsMetadata(prefix: "debugOverlay.localBounds.", bounds: updatedLocalBounds)) { _, new in new }
+        return (
+            screen.screenID,
+            DebugUIElement(
+                id: element.id,
+                type: element.type,
+                label: element.label,
+                description: element.description,
+                bbox: bbox,
+                confidence: element.confidence,
+                visualStyle: element.visualStyle,
+                metadata: metadata
+            )
+        )
+    }
+
+    private static func clippedBoundingBox(
+        _ bounds: WindowTargetBounds,
+        screenFrame: WindowTargetBounds
+    ) -> DebugUIBoundingBox? {
+        let minX = max(bounds.x, screenFrame.x)
+        let minY = max(bounds.y, screenFrame.y)
+        let maxX = min(bounds.x + bounds.width, screenFrame.x + screenFrame.width)
+        let maxY = min(bounds.y + bounds.height, screenFrame.y + screenFrame.height)
+        let width = maxX - minX
+        let height = maxY - minY
+        guard width > 0, height > 0 else {
+            return nil
+        }
+
+        return DebugUIBoundingBox(
+            x: minX - screenFrame.x,
+            y: minY - screenFrame.y,
+            width: width,
+            height: height
+        )
+    }
+
+    private static func elementSort(_ lhs: DebugUIElement, _ rhs: DebugUIElement) -> Bool {
+        if lhs.bbox.y != rhs.bbox.y { return lhs.bbox.y < rhs.bbox.y }
+        if lhs.bbox.x != rhs.bbox.x { return lhs.bbox.x < rhs.bbox.x }
+        return lhs.id < rhs.id
+    }
+
+    private static func isAccessibilityEvidence(_ element: DebugUIElement) -> Bool {
+        let sources = metadataValue("localUIElement.sources", metadata: element.metadata) ?? ""
+        return sources.contains("accessibility")
+            || element.id.hasPrefix("ax-")
+            || sources.contains("window-chrome-geometry")
+            || element.id.hasPrefix("window-chrome-")
+    }
+
+    private static func windowID(for element: DebugUIElement) -> UInt32? {
+        metadataValue("target.windowID", metadata: element.metadata).flatMap(UInt32.init)
+    }
+
+    private static func targetBounds(for element: DebugUIElement) -> WindowTargetBounds? {
+        metadataBounds(prefix: "target.bounds.", metadata: element.metadata)
+    }
+
+    private static func localBounds(for element: DebugUIElement) -> WindowTargetBounds? {
+        metadataBounds(prefix: "debugOverlay.localBounds.", metadata: element.metadata)
+    }
+
+    private static func metadataBounds(
+        prefix: String,
+        metadata: [String: String]
+    ) -> WindowTargetBounds? {
+        guard let xValue = metadataValue(prefix + "x", metadata: metadata),
+              let yValue = metadataValue(prefix + "y", metadata: metadata),
+              let widthValue = metadataValue(prefix + "width", metadata: metadata),
+              let heightValue = metadataValue(prefix + "height", metadata: metadata),
+              let x = Double(xValue),
+              let y = Double(yValue),
+              let width = Double(widthValue),
+              let height = Double(heightValue),
+              width > 0,
+              height > 0
+        else {
+            return nil
+        }
+
+        return WindowTargetBounds(x: x, y: y, width: width, height: height)
+    }
+
+    private static func metadataValue(
+        _ key: String,
+        metadata: [String: String]
+    ) -> String? {
+        if let value = metadata[key] {
+            return value
+        }
+
+        let suffix = ".\(key)"
+        return metadata
+            .sorted { $0.key < $1.key }
+            .first { entry in entry.key.hasSuffix(suffix) }?
+            .value
+    }
+
+    private static func targetBoundsMetadata(_ bounds: WindowTargetBounds) -> [String: String] {
+        boundsMetadata(prefix: "target.bounds.", bounds: bounds)
+    }
+
+    private static func boundsMetadata(
+        prefix: String,
+        bounds: WindowTargetBounds
+    ) -> [String: String] {
+        [
+            prefix + "x": String(bounds.x),
+            prefix + "y": String(bounds.y),
+            prefix + "width": String(bounds.width),
+            prefix + "height": String(bounds.height)
+        ]
     }
 
     private static func fingerprint(
@@ -786,6 +1206,18 @@ final class DebugUIInspectionCoordinator {
             .filter { !$0.isEmpty }
             .joined(separator: "||")
         return SHA256.hash(data: Data(combinedInput.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func frameSignature(_ frame: DebugUIInspectionFrame) -> String {
+        frame.elements.map { element in
+            [
+                element.id,
+                String(format: "%.1f", element.bbox.x),
+                String(format: "%.1f", element.bbox.y),
+                String(format: "%.1f", element.bbox.width),
+                String(format: "%.1f", element.bbox.height)
+            ].joined(separator: ":")
+        }.joined(separator: "|")
     }
 
     private static func screenPointSnapshot(

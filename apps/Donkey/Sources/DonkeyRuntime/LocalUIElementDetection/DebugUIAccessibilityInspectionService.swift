@@ -5,6 +5,11 @@ import CoreGraphics
 import CryptoKit
 import DonkeyContracts
 import Foundation
+import OSLog
+
+private enum DebugUIAccessibilityInspectionLog {
+    static let overlay = Logger(subsystem: "com.donkey.app", category: "debug-ui-inspection")
+}
 
 public struct DebugUIAccessibilityInspectionResult: Equatable, Sendable {
     public var snapshot: DebugUIScreenCaptureSnapshot
@@ -218,7 +223,14 @@ public struct DebugUIAccessibilityInspectionService: Sendable {
             }
             visibleWindowIndex += 1
 
-            let controls = controlDiscovery.discover(in: snapshot).controls
+            let controlIndex = controlDiscovery.discover(in: snapshot)
+            let controls = controlIndex.controls
+            Self.logDiscoverySummary(
+                target: target,
+                snapshot: snapshot,
+                controls: controls,
+                visibleText: controlIndex.visibleText
+            )
             for control in controls {
                 guard let candidate = accessibilityCandidate(
                     for: control,
@@ -272,6 +284,8 @@ public struct DebugUIAccessibilityInspectionService: Sendable {
                 "windowFrameStyle.index": String(visibleWindowIndex),
                 "classification.reason": "accessibilityWindowFrame"
             ]
+            .merging(Self.boundsMetadata(prefix: "target.bounds.", bounds: target.bounds)) { current, _ in current }
+            .merging(Self.boundsMetadata(prefix: "debugOverlay.localBounds.", bounds: Self.localBounds(for: windowBounds, in: target.bounds))) { current, _ in current }
         )
     }
 
@@ -449,7 +463,15 @@ public struct DebugUIAccessibilityInspectionService: Sendable {
                         description: "Window frame \(label)",
                         bbox: bbox,
                         confidence: 1,
-                        visualStyle: visualStyle
+                        visualStyle: visualStyle,
+                        metadata: [
+                            "target.windowID": String(target.windowID),
+                            "target.appName": target.appName ?? "",
+                            "target.title": target.title ?? "",
+                            "classification.reason": "accessibilityWindowFrame"
+                        ]
+                        .merging(Self.boundsMetadata(prefix: "target.bounds.", bounds: target.bounds)) { current, _ in current }
+                        .merging(Self.boundsMetadata(prefix: "debugOverlay.localBounds.", bounds: Self.localBounds(for: windowBounds, in: target.bounds))) { current, _ in current }
                     )
                 )
             }
@@ -571,7 +593,15 @@ public struct DebugUIAccessibilityInspectionService: Sendable {
                 label: label,
                 description: Self.description(for: control, target: target),
                 bbox: bbox,
-                confidence: 1
+                confidence: 1,
+                metadata: [
+                    "target.windowID": String(target.windowID),
+                    "target.appName": target.appName ?? "",
+                    "target.title": target.title ?? "",
+                    "classification.reason": "accessibilityControlDiscovery"
+                ]
+                .merging(Self.boundsMetadata(prefix: "target.bounds.", bounds: target.bounds)) { current, _ in current }
+                .merging(Self.boundsMetadata(prefix: "debugOverlay.localBounds.", bounds: Self.localBounds(for: bounds, in: target.bounds))) { current, _ in current }
             )
         )
     }
@@ -661,7 +691,10 @@ public struct DebugUIAccessibilityInspectionService: Sendable {
                     "accessibility.role": control.role ?? "",
                     "accessibility.actions": control.actions.joined(separator: ","),
                     "classification.reason": "accessibilityControlDiscovery"
-                ].merging(control.metadata) { current, _ in current }
+                ]
+                .merging(Self.boundsMetadata(prefix: "target.bounds.", bounds: target.bounds)) { current, _ in current }
+                .merging(Self.boundsMetadata(prefix: "debugOverlay.localBounds.", bounds: Self.localBounds(for: bounds, in: target.bounds))) { current, _ in current }
+                .merging(control.metadata) { current, _ in current }
             )
         )
     }
@@ -713,6 +746,89 @@ public struct DebugUIAccessibilityInspectionService: Sendable {
         ]
         .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
         .first { !$0.isEmpty } ?? "window \(target.windowID)"
+    }
+
+    private static func logDiscoverySummary(
+        target: MacWindowTargetCandidate,
+        snapshot: MacAccessibilitySnapshot,
+        controls: [LocalAppDiscoveredControl],
+        visibleText: String
+    ) {
+        DebugUIAccessibilityInspectionLog.overlay.info(
+            "debug inspection ax-discovery windowID=\(target.windowID, privacy: .public) app=\(target.appName ?? "", privacy: .public) targetBounds=\(Self.describe(target.bounds), privacy: .public) rootFrame=\(Self.describe(snapshot.root.frame), privacy: .public) nodeCount=\(snapshot.totalNodeCount, privacy: .public) truncated=\(String(snapshot.isTreeTruncated), privacy: .public) controls=\(controls.count, privacy: .public) visibleTextChars=\(visibleText.count, privacy: .public) kinds=\(Self.controlKindSummary(controls), privacy: .public) roles=\(Self.roleSummary(snapshot.root), privacy: .public)"
+        )
+    }
+
+    private static func controlKindSummary(_ controls: [LocalAppDiscoveredControl]) -> String {
+        let counts = Dictionary(grouping: controls, by: \.kind)
+            .mapValues(\.count)
+        return counts
+            .sorted { lhs, rhs in lhs.key.rawValue < rhs.key.rawValue }
+            .map { "\($0.key.rawValue):\($0.value)" }
+            .joined(separator: ",")
+    }
+
+    private static func roleSummary(_ root: MacAccessibilitySnapshotNode) -> String {
+        var counts: [String: Int] = [:]
+        collectRoles(root, counts: &counts)
+        return counts
+            .sorted { lhs, rhs in
+                if lhs.value != rhs.value { return lhs.value > rhs.value }
+                return lhs.key < rhs.key
+            }
+            .prefix(12)
+            .map { "\($0.key):\($0.value)" }
+            .joined(separator: ",")
+    }
+
+    private static func collectRoles(
+        _ node: MacAccessibilitySnapshotNode,
+        counts: inout [String: Int]
+    ) {
+        let role = node.role ?? "nil"
+        counts[role, default: 0] += 1
+        for child in node.children {
+            collectRoles(child, counts: &counts)
+        }
+    }
+
+    private static func localBounds(
+        for bounds: WindowTargetBounds,
+        in targetBounds: WindowTargetBounds
+    ) -> WindowTargetBounds {
+        WindowTargetBounds(
+            x: bounds.x - targetBounds.x,
+            y: bounds.y - targetBounds.y,
+            width: bounds.width,
+            height: bounds.height
+        )
+    }
+
+    private static func boundsMetadata(
+        prefix: String,
+        bounds: WindowTargetBounds
+    ) -> [String: String] {
+        [
+            prefix + "x": String(bounds.x),
+            prefix + "y": String(bounds.y),
+            prefix + "width": String(bounds.width),
+            prefix + "height": String(bounds.height)
+        ]
+    }
+
+    private static func describe(_ bounds: WindowTargetBounds?) -> String {
+        guard let bounds else { return "nil" }
+        return describe(bounds)
+    }
+
+    private static func describe(_ bounds: WindowTargetBounds) -> String {
+        String(
+            format: "x=%.1f y=%.1f w=%.1f h=%.1f",
+            bounds.x,
+            bounds.y,
+            bounds.width,
+            bounds.height
+        )
     }
 
     private static func windowFrameStyle(at index: Int) -> DebugUIOverlayStyle {

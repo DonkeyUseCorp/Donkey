@@ -24,28 +24,23 @@ public enum ScreenshotParseDebugUIOverlayMapper {
                 }
                 guard control.confidence >= threshold,
                       let frame = control.frame,
+                      let localBounds = overlayLocalBounds(
+                        for: frame,
+                        target: target,
+                        capturePixelSize: capturePixelSize
+                      ),
                       let bbox = overlayBoundingBox(
                         for: frame,
                         target: target,
                         capturePixelSize: capturePixelSize,
-                        screenFrame: screenFrame,
-                        flipWindowY: true
+                        screenFrame: screenFrame
                       )
                 else {
                     return nil
                 }
 
-                return DebugUIElement(
-                    id: "gemini-\(target.windowID)-\(control.id)",
-                    type: elementType(for: control.kind),
-                    label: control.label,
-                    description: [
-                        "gemini screenshot parser",
-                        control.kind.rawValue
-                    ].joined(separator: " "),
-                    bbox: bbox,
-                    confidence: control.confidence,
-                    metadata: control.metadata.merging([
+                let metadata = control.metadata
+                    .merging([
                         "localUIElement.sources": "gemini-screenshot-parser",
                         "localUIElement.actionEligibility": LocalUIElementActionEligibility.guardedAction.rawValue,
                         "remoteScreenshotParsing.status": result.metadata["remoteScreenshotParsing.status"] ?? "used",
@@ -57,6 +52,20 @@ public enum ScreenshotParseDebugUIOverlayMapper {
                         "coordinate.sourceSpace": frame.space.rawValue,
                         "directInputActionsAllowed": "true"
                     ]) { current, _ in current }
+                    .merging(boundsMetadata(prefix: "target.bounds.", bounds: target.bounds)) { current, _ in current }
+                    .merging(boundsMetadata(prefix: "debugOverlay.localBounds.", bounds: localBounds)) { current, _ in current }
+
+                return DebugUIElement(
+                    id: "gemini-\(target.windowID)-\(control.id)",
+                    type: elementType(for: control.kind),
+                    label: control.label,
+                    description: [
+                        "gemini screenshot parser",
+                        control.kind.rawValue
+                    ].joined(separator: " "),
+                    bbox: bbox,
+                    confidence: control.confidence,
+                    metadata: metadata
                 )
             }
         ).validated(minConfidence: threshold)
@@ -82,15 +91,33 @@ public enum ScreenshotParseDebugUIOverlayMapper {
         let centerY = 23.0
 
         return controls.compactMap { control in
+            let localBounds = WindowTargetBounds(
+                x: control.centerX - diameter / 2,
+                y: centerY - diameter / 2,
+                width: diameter,
+                height: diameter
+            )
             let bounds = WindowTargetBounds(
-                x: target.bounds.x + control.centerX - diameter / 2,
-                y: target.bounds.y + centerY - diameter / 2,
+                x: target.bounds.x + localBounds.x,
+                y: target.bounds.y + localBounds.y,
                 width: diameter,
                 height: diameter
             )
             guard let bbox = clippedBoundingBox(bounds, screenFrame: screenFrame) else {
                 return nil
             }
+            let metadata = [
+                "localUIElement.sources": "window-chrome-geometry",
+                "localUIElement.actionEligibility": LocalUIElementActionEligibility.guardedAction.rawValue,
+                "target.windowID": String(target.windowID),
+                "target.appName": target.appName ?? "",
+                "target.bundleIdentifier": target.bundleIdentifier ?? "",
+                "target.title": target.title ?? "",
+                "coordinate.sourceSpace": "windowChromeGeometry",
+                "directInputActionsAllowed": "true"
+            ]
+                .merging(boundsMetadata(prefix: "target.bounds.", bounds: target.bounds)) { current, _ in current }
+                .merging(boundsMetadata(prefix: "debugOverlay.localBounds.", bounds: localBounds)) { current, _ in current }
             return DebugUIElement(
                 id: "window-chrome-\(target.windowID)-\(control.id)",
                 type: .windowControl,
@@ -98,16 +125,7 @@ public enum ScreenshotParseDebugUIOverlayMapper {
                 description: "macOS window chrome",
                 bbox: bbox,
                 confidence: 1,
-                metadata: [
-                    "localUIElement.sources": "window-chrome-geometry",
-                    "localUIElement.actionEligibility": LocalUIElementActionEligibility.guardedAction.rawValue,
-                    "target.windowID": String(target.windowID),
-                    "target.appName": target.appName ?? "",
-                    "target.bundleIdentifier": target.bundleIdentifier ?? "",
-                    "target.title": target.title ?? "",
-                    "coordinate.sourceSpace": "windowChromeGeometry",
-                    "directInputActionsAllowed": "true"
-                ]
+                metadata: metadata
             )
         }
     }
@@ -123,8 +141,7 @@ public enum ScreenshotParseDebugUIOverlayMapper {
         for rect: HotLoopRect,
         target: MacWindowTargetCandidate,
         capturePixelSize: HotLoopSize,
-        screenFrame: WindowTargetBounds,
-        flipWindowY: Bool = false
+        screenFrame: WindowTargetBounds
     ) -> DebugUIBoundingBox? {
         guard rect.hasPositiveArea,
               target.bounds.hasPositiveArea,
@@ -135,23 +152,7 @@ public enum ScreenshotParseDebugUIOverlayMapper {
             return nil
         }
 
-        let localRect: WindowTargetBounds
-        switch rect.space {
-        case .window, .crop:
-            localRect = WindowTargetBounds(
-                x: rect.origin.x / capturePixelSize.width * target.bounds.width,
-                y: rect.origin.y / capturePixelSize.height * target.bounds.height,
-                width: rect.size.width / capturePixelSize.width * target.bounds.width,
-                height: rect.size.height / capturePixelSize.height * target.bounds.height
-            )
-        case .normalizedTarget:
-            localRect = WindowTargetBounds(
-                x: rect.origin.x * target.bounds.width,
-                y: rect.origin.y * target.bounds.height,
-                width: rect.size.width * target.bounds.width,
-                height: rect.size.height * target.bounds.height
-            )
-        case .screen:
+        if rect.space == .screen {
             return clippedBoundingBox(
                 WindowTargetBounds(
                     x: rect.origin.x,
@@ -163,14 +164,18 @@ public enum ScreenshotParseDebugUIOverlayMapper {
             )
         }
 
+        guard let localRect = overlayLocalBounds(
+            for: rect,
+            target: target,
+            capturePixelSize: capturePixelSize
+        ) else {
+            return nil
+        }
+
         return clippedBoundingBox(
             WindowTargetBounds(
                 x: target.bounds.x + localRect.x,
-                y: target.bounds.y + mappedWindowY(
-                    localRect,
-                    targetHeight: target.bounds.height,
-                    flipWindowY: flipWindowY
-                ),
+                y: target.bounds.y + localRect.y,
                 width: localRect.width,
                 height: localRect.height
             ),
@@ -178,16 +183,54 @@ public enum ScreenshotParseDebugUIOverlayMapper {
         )
     }
 
-    private static func mappedWindowY(
-        _ localRect: WindowTargetBounds,
-        targetHeight: Double,
-        flipWindowY: Bool
-    ) -> Double {
-        guard flipWindowY else {
-            return localRect.y
+    private static func overlayLocalBounds(
+        for rect: HotLoopRect,
+        target: MacWindowTargetCandidate,
+        capturePixelSize: HotLoopSize
+    ) -> WindowTargetBounds? {
+        guard rect.hasPositiveArea,
+              target.bounds.hasPositiveArea,
+              capturePixelSize.width > 0,
+              capturePixelSize.height > 0
+        else {
+            return nil
         }
 
-        return max(0, targetHeight - localRect.y - localRect.height)
+        switch rect.space {
+        case .window, .crop:
+            return WindowTargetBounds(
+                x: rect.origin.x / capturePixelSize.width * target.bounds.width,
+                y: rect.origin.y / capturePixelSize.height * target.bounds.height,
+                width: rect.size.width / capturePixelSize.width * target.bounds.width,
+                height: rect.size.height / capturePixelSize.height * target.bounds.height
+            )
+        case .normalizedTarget:
+            return WindowTargetBounds(
+                x: rect.origin.x * target.bounds.width,
+                y: rect.origin.y * target.bounds.height,
+                width: rect.size.width * target.bounds.width,
+                height: rect.size.height * target.bounds.height
+            )
+        case .screen:
+            return WindowTargetBounds(
+                x: rect.origin.x - target.bounds.x,
+                y: rect.origin.y - target.bounds.y,
+                width: rect.size.width,
+                height: rect.size.height
+            )
+        }
+    }
+
+    private static func boundsMetadata(
+        prefix: String,
+        bounds: WindowTargetBounds
+    ) -> [String: String] {
+        [
+            prefix + "x": String(bounds.x),
+            prefix + "y": String(bounds.y),
+            prefix + "width": String(bounds.width),
+            prefix + "height": String(bounds.height)
+        ]
     }
 
     private static func clippedBoundingBox(

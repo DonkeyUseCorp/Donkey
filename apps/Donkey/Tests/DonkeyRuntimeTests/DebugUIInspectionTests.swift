@@ -337,7 +337,7 @@ struct DebugUIInspectionTests {
             screenPointSize: HotLoopSize(width: 1000, height: 500, space: .screen)
         )
 
-        #expect(frame == CGRect(x: 100, y: 50, width: 200, height: 100))
+        #expect(frame == CGRect(x: 100, y: 350, width: 200, height: 100))
     }
 
     @Test
@@ -458,6 +458,11 @@ struct DebugUIInspectionTests {
         let button = results.first?.frame.elements.last
         #expect(button?.type == .button)
         #expect(button?.label == "Save")
+        #expect(button?.metadata["target.windowID"] == "11")
+        #expect(button?.metadata["debugOverlay.localBounds.x"] == "20.0")
+        #expect(button?.metadata["debugOverlay.localBounds.y"] == "30.0")
+        #expect(button?.metadata["debugOverlay.localBounds.width"] == "80.0")
+        #expect(button?.metadata["debugOverlay.localBounds.height"] == "30.0")
         #expect(button?.bbox == DebugUIBoundingBox(x: 120, y: 230, width: 80, height: 30))
     }
 

@@ -569,11 +569,12 @@ public enum DebugUIOverlayGeometry {
 
         let scaleX = screenPointSize.width / screenshotPixelSize.width
         let scaleY = screenPointSize.height / screenshotPixelSize.height
+        let height = bbox.height * scaleY
         return CGRect(
             x: bbox.x * scaleX,
-            y: bbox.y * scaleY,
+            y: screenPointSize.height - (bbox.y * scaleY + height),
             width: bbox.width * scaleX,
-            height: bbox.height * scaleY
+            height: height
         )
     }
 }

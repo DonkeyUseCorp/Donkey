@@ -200,9 +200,14 @@ struct DonkeyBackendInferenceClientTests {
         let element = try #require(frame.elements.first)
         #expect(element.id == "gemini-42-review")
         #expect(element.type == .button)
-        #expect(element.bbox == DebugUIBoundingBox(x: 150, y: 425, width: 100, height: 50))
+        #expect(element.bbox == DebugUIBoundingBox(x: 150, y: 225, width: 100, height: 50))
         #expect(element.metadata["directInputActionsAllowed"] == "true")
         #expect(element.metadata["localUIElement.actionEligibility"] == "guardedAction")
+        #expect(element.metadata["target.windowID"] == "42")
+        #expect(element.metadata["debugOverlay.localBounds.x"] == "50.0")
+        #expect(element.metadata["debugOverlay.localBounds.y"] == "25.0")
+        #expect(element.metadata["debugOverlay.localBounds.width"] == "100.0")
+        #expect(element.metadata["debugOverlay.localBounds.height"] == "50.0")
     }
 
     @Test
@@ -247,7 +252,7 @@ struct DonkeyBackendInferenceClientTests {
 
         let bbox = try #require(frame.elements.first?.bbox)
         #expect(abs(bbox.x - 378) < 0.0001)
-        #expect(abs(bbox.y - 336) < 0.0001)
+        #expect(abs(bbox.y - 390) < 0.0001)
         #expect(abs(bbox.width - 94.5) < 0.0001)
         #expect(abs(bbox.height - 54) < 0.0001)
     }
