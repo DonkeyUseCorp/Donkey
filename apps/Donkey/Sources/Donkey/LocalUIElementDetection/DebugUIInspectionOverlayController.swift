@@ -286,7 +286,7 @@ private final class DebugUIInspectionSurface {
     private func sourceKind(for element: DebugUIElement) -> DebugUIInspectionSourceKind {
         let fusionSource = element.metadata["debugUIFusion.source"] ?? ""
         let sources = element.metadata["localUIElement.sources"] ?? ""
-        if fusionSource == "gemini" || sources.contains("gemini") || element.id.hasPrefix("gemini-") {
+        if fusionSource == "ai" || sources.contains("remote-screenshot-parser") || element.id.hasPrefix("ai-") {
             return .ai
         }
         if fusionSource == "native-visual" || sources.contains("shape") || sources.contains("ocr") || sources.contains("layout") || element.id.hasPrefix("native-visual-") {

@@ -1,8 +1,5 @@
 import { InferenceProviderError } from "@/lib/inference/providers";
-import {
-  createGeminiFlashScreenshotParser,
-  screenshotParseModelForRequest,
-} from "@/lib/inference/screenshot-parsing/gemini-flash";
+import { createGeminiFlashScreenshotParser } from "@/lib/inference/screenshot-parsing/gemini-flash";
 import type {
   ScreenshotParserProvider,
   ScreenshotParserProviderResult,
@@ -14,8 +11,6 @@ export function createScreenshotParserProvider(): ScreenshotParserProvider {
   return createGeminiFlashScreenshotParser();
 }
 
-export { screenshotParseModelForRequest };
-
 export async function parseScreenshot(
   request: ScreenshotParseRequest,
   provider: ScreenshotParserProvider = createScreenshotParserProvider(),
@@ -25,7 +20,7 @@ export async function parseScreenshot(
       statusCode: 503,
       code: "missing_provider_credentials",
       details: {
-        provider: "gemini-flash",
+        provider: provider.id,
       },
     });
   }
@@ -42,7 +37,7 @@ export async function* parseScreenshotStream(
       statusCode: 503,
       code: "missing_provider_credentials",
       details: {
-        provider: "gemini-flash",
+        provider: provider.id,
       },
     });
   }

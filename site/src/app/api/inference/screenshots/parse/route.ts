@@ -21,9 +21,9 @@ import {
   validationErrorResponse,
 } from "@/lib/inference/responses";
 import {
+  createScreenshotParserProvider,
   parseScreenshot,
   parseScreenshotStream,
-  screenshotParseModelForRequest,
 } from "@/lib/inference/screenshot-parsing";
 import { screenshotParseRequestSchema } from "@/lib/inference/screenshot-parsing/schema";
 import type { ScreenshotParseRequest } from "@/lib/inference/screenshot-parsing/schema";
@@ -69,10 +69,11 @@ export const POST = withDonkeyAuth(async (request) => {
     );
   }
 
-  const model = screenshotParseModelForRequest(parsed.data);
+  const parserProvider = createScreenshotParserProvider();
+  const model = parserProvider.modelForRequest(parsed.data);
   const credits = await requireInferenceCredits({
     model,
-    provider: "gemini",
+    provider: parserProvider.inferenceProvider,
     route: inferenceUsageRoutes.screenshotParse,
     userId: request.donkey.userId,
   });
@@ -84,17 +85,18 @@ export const POST = withDonkeyAuth(async (request) => {
     return streamScreenshotParseResponse({
       clientId: client.clientId,
       model,
+      parserProvider,
       request: parsed.data,
       userId: request.donkey.userId,
     });
   }
 
   try {
-    const result = await parseScreenshot(parsed.data);
+    const result = await parseScreenshot(parsed.data, parserProvider);
     const recordedUsage = await recordInferenceUsage({
       clientId: client.clientId,
       metadata: {
-        parserProvider: "gemini-flash",
+        parserProvider: parserProvider.id,
       },
       model: result.model,
       provider: result.provider,
@@ -117,10 +119,10 @@ export const POST = withDonkeyAuth(async (request) => {
       clientId: client.clientId,
       errorCode: inferenceErrorCode(error),
       metadata: {
-        parserProvider: "gemini-flash",
+        parserProvider: parserProvider.id,
       },
       model,
-      provider: "gemini",
+      provider: parserProvider.inferenceProvider,
       requestKind: "screenshot_parse",
       route: inferenceUsageRoutes.screenshotParse,
       userId: request.donkey.userId,
@@ -136,6 +138,7 @@ export const POST = withDonkeyAuth(async (request) => {
 function streamScreenshotParseResponse(input: {
   clientId: string;
   model: string;
+  parserProvider: ReturnType<typeof createScreenshotParserProvider>;
   request: ScreenshotParseRequest;
   userId: string;
 }) {
@@ -143,7 +146,7 @@ function streamScreenshotParseResponse(input: {
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
-        for await (const event of parseScreenshotStream(input.request)) {
+        for await (const event of parseScreenshotStream(input.request, input.parserProvider)) {
           if (event.type === "partial") {
             controller.enqueue(encoder.encode(serverSentEvent("partial", event.result)));
             continue;
@@ -152,7 +155,7 @@ function streamScreenshotParseResponse(input: {
           const recordedUsage = await recordInferenceUsage({
             clientId: input.clientId,
             metadata: {
-              parserProvider: "gemini-flash",
+              parserProvider: input.parserProvider.id,
               streaming: true,
             },
             model: event.model,
@@ -180,11 +183,11 @@ function streamScreenshotParseResponse(input: {
           clientId: input.clientId,
           errorCode: inferenceErrorCode(error),
           metadata: {
-            parserProvider: "gemini-flash",
+            parserProvider: input.parserProvider.id,
             streaming: true,
           },
           model: input.model,
-          provider: "gemini",
+          provider: input.parserProvider.inferenceProvider,
           requestKind: "screenshot_parse",
           route: inferenceUsageRoutes.screenshotParse,
           userId: input.userId,
@@ -211,7 +214,7 @@ function streamScreenshotParseResponse(input: {
       "Content-Type": "text/event-stream; charset=utf-8",
       "X-Accel-Buffering": "no",
       "X-Donkey-Inference-Model": input.model,
-      "X-Donkey-Inference-Provider": "gemini",
+      "X-Donkey-Inference-Provider": input.parserProvider.inferenceProvider,
     },
   });
 }

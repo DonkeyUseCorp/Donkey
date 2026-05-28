@@ -39,12 +39,15 @@ public enum ScreenshotParseDebugUIOverlayMapper {
                     return nil
                 }
 
+                let parserProvider = result.metadata["parserProvider"]
+                    ?? result.metadata["runtime.backend"]
+                    ?? "remote-screenshot-parser"
                 let metadata = control.metadata
                     .merging([
-                        "localUIElement.sources": "gemini-screenshot-parser",
+                        "localUIElement.sources": "remote-screenshot-parser",
                         "localUIElement.actionEligibility": LocalUIElementActionEligibility.guardedAction.rawValue,
                         "remoteScreenshotParsing.status": result.metadata["remoteScreenshotParsing.status"] ?? "used",
-                        "remoteScreenshotParsing.provider": result.metadata["parserProvider"] ?? result.metadata["runtime.backend"] ?? "gemini-screenshot-parser",
+                        "remoteScreenshotParsing.provider": parserProvider,
                         "target.windowID": String(target.windowID),
                         "target.appName": target.appName ?? "",
                         "target.bundleIdentifier": target.bundleIdentifier ?? "",
@@ -56,11 +59,11 @@ public enum ScreenshotParseDebugUIOverlayMapper {
                     .merging(boundsMetadata(prefix: "debugOverlay.localBounds.", bounds: localBounds)) { current, _ in current }
 
                 return DebugUIElement(
-                    id: "gemini-\(target.windowID)-\(control.id)",
+                    id: "ai-\(target.windowID)-\(control.id)",
                     type: elementType(for: control.kind),
                     label: control.label,
                     description: [
-                        "gemini screenshot parser",
+                        "remote screenshot parser",
                         control.kind.rawValue
                     ].joined(separator: " "),
                     bbox: bbox,

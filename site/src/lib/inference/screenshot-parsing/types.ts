@@ -55,7 +55,10 @@ export type ScreenshotParserProviderStreamEvent =
     };
 
 export type ScreenshotParserProvider = {
+  id: string;
+  inferenceProvider: string;
   configured: boolean;
+  modelForRequest: (request: ScreenshotParseRequest) => string;
   parse: (request: ScreenshotParseRequest) => Promise<ScreenshotParserProviderResult>;
   stream?: (request: ScreenshotParseRequest) => AsyncGenerator<ScreenshotParserProviderStreamEvent>;
 };

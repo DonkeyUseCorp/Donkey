@@ -201,7 +201,7 @@ final class DebugUIInspectionCoordinator {
     }
 
     private func analyzeVisibleScreens(force: Bool) async throws {
-        try await analyzeGeminiWindowScreens(force: force)
+        try await analyzeRemoteAIWindowScreens(force: force)
     }
 
     private func needsTrackerWarmup(screenID: UInt32) -> Bool {
@@ -350,7 +350,7 @@ final class DebugUIInspectionCoordinator {
             )
             let fusedFrame = DebugUIInspectionFrameFusion.fused(
                 accessibilityFrame: progressiveAccessibilityFrame,
-                geminiFrame: nonAccessibilityFrame
+                aiFrame: nonAccessibilityFrame
             )
             guard !fusedFrame.elements.isEmpty,
                   lastRenderedFrames[screen.screenID]?.isOverlayRenderEquivalent(to: fusedFrame) != true
@@ -442,12 +442,12 @@ final class DebugUIInspectionCoordinator {
         overlayController.closeScreens(except: activeScreenIDs)
     }
 
-    private func analyzeGeminiWindowScreens(force: Bool) async throws {
+    private func analyzeRemoteAIWindowScreens(force: Bool) async throws {
         let screens = try screenSurfaces(scope: currentConfig.screenScope)
         let activeScreenIDs = Set(screens.map(\.screenID))
         overlayController.closeScreens(except: activeScreenIDs)
         lastRenderedFrames = lastRenderedFrames.filter { activeScreenIDs.contains($0.key) }
-        let accessibilityFrames = accessibilityFramesForGeminiFusion()
+        let accessibilityFrames = accessibilityFramesForRemoteAIFusion()
         renderFastLocalFrames(
             screens: screens,
             frames: accessibilityFrames,
@@ -457,7 +457,7 @@ final class DebugUIInspectionCoordinator {
 
         let targets = visibleOverlayTargets(on: screens)
         guard !targets.isEmpty else {
-            ageMissingGeminiScreens(activeScreenIDs: Set(accessibilityFrames.keys))
+            ageMissingRemoteAIScreens(activeScreenIDs: Set(accessibilityFrames.keys))
             for screen in screens where accessibilityFrames[screen.screenID] != nil {
                 let accessibilityFrame = accessibilityFrames[screen.screenID] ?? DebugUIInspectionFrame()
                 let fingerprint = Self.fingerprint(
@@ -486,7 +486,7 @@ final class DebugUIInspectionCoordinator {
         for target in targets {
             do {
                 let screenshot = try await windowScreenshotCapturer.capture(target: target)
-                let compressed = Self.compressedGeminiImage(from: screenshot)
+                let compressed = Self.compressedRemoteAIImage(from: screenshot)
                 captures.append(
                     DebugUIWindowCapture(
                         target: target,
@@ -498,7 +498,7 @@ final class DebugUIInspectionCoordinator {
                 )
             } catch {
                 DebugUIInspectionLog.overlay.error(
-                    "debug inspection skipped gemini windowID=\(target.windowID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                    "debug inspection skipped remote AI windowID=\(target.windowID, privacy: .public) error=\(String(describing: error), privacy: .public)"
                 )
             }
         }
@@ -506,7 +506,7 @@ final class DebugUIInspectionCoordinator {
         let renderedScreenIDs = Set(captures.flatMap { capture in
             screens.filter { Self.intersects(capture.target.bounds, $0.captureFrame) }.map(\.screenID)
         }).union(accessibilityFrames.keys)
-        ageMissingGeminiScreens(activeScreenIDs: renderedScreenIDs)
+        ageMissingRemoteAIScreens(activeScreenIDs: renderedScreenIDs)
 
         for screen in screens where renderedScreenIDs.contains(screen.screenID) {
             let screenBounds = screen.captureFrame
@@ -519,7 +519,7 @@ final class DebugUIInspectionCoordinator {
             )
             guard force || lastFingerprints[screen.screenID] != fingerprint || needsTrackerWarmup(screenID: screen.screenID) else {
                 DebugUIInspectionLog.overlay.debug(
-                    "debug inspection skipped unchanged gemini screenID=\(screen.screenID, privacy: .public)"
+                    "debug inspection skipped unchanged remote AI screenID=\(screen.screenID, privacy: .public)"
                 )
                 continue
             }
@@ -534,12 +534,12 @@ final class DebugUIInspectionCoordinator {
                     return currentWindowIDs.contains(windowID)
                 }
 
-            func renderGeminiFrame(stage: String, updatesFingerprint: Bool) {
+            func renderRemoteAIFrame(stage: String, updatesFingerprint: Bool) {
                 var tracker = trackers[screen.screenID] ?? DebugUIElementTracker()
-                let geminiFrame = DebugUIInspectionFrame(elements: elements)
+                let remoteAIFrame = DebugUIInspectionFrame(elements: elements)
                 let fusedFrame = DebugUIInspectionFrameFusion.fused(
                     accessibilityFrame: localEvidenceFrame,
-                    geminiFrame: geminiFrame
+                    aiFrame: remoteAIFrame
                 )
                 let trackedFrame = tracker.update(
                     with: fusedFrame,
@@ -575,7 +575,7 @@ final class DebugUIInspectionCoordinator {
                     space: .window
                 )
                 let request = LocalUIUnderstandingRequest(
-                    traceID: "debug-ui-gemini-\(screen.screenID)-\(capture.target.windowID)-\(fingerprint)",
+                    traceID: "debug-ui-ai-\(screen.screenID)-\(capture.target.windowID)-\(fingerprint)",
                     targetID: "window-\(capture.target.windowID)",
                     imageFileURL: nil,
                     cropBounds: HotLoopRect(
@@ -588,7 +588,6 @@ final class DebugUIInspectionCoordinator {
                     pixelSize: capturePixelSize,
                     metadata: [
                         "source": "debug-ui-inspection-overlay",
-                        "donkeyVision.ai": "gemini",
                         "screenshot.scope": "targetWindow",
                         "screenshot.desktopCaptureAllowed": "false",
                         "target.windowID": String(capture.target.windowID),
@@ -624,7 +623,7 @@ final class DebugUIInspectionCoordinator {
                         ).elements
                         elements.removeAll { Self.windowID(for: $0) == capture.target.windowID }
                         elements += parsedElements
-                        renderGeminiFrame(stage: "gemini-progress", updatesFingerprint: false)
+                        renderRemoteAIFrame(stage: "ai-progress", updatesFingerprint: false)
                     }
                     let parsedElements = ScreenshotParseDebugUIOverlayMapper.frame(
                         from: result,
@@ -635,19 +634,19 @@ final class DebugUIInspectionCoordinator {
                     ).elements
                     elements.removeAll { Self.windowID(for: $0) == capture.target.windowID }
                     elements += parsedElements
-                    renderGeminiFrame(stage: "gemini-progress", updatesFingerprint: false)
+                    renderRemoteAIFrame(stage: "ai-progress", updatesFingerprint: false)
                 } catch {
                     DebugUIInspectionLog.overlay.error(
-                        "debug inspection gemini parse failed windowID=\(capture.target.windowID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                        "debug inspection remote AI parse failed windowID=\(capture.target.windowID, privacy: .public) error=\(String(describing: error), privacy: .public)"
                     )
                 }
             }
 
-            renderGeminiFrame(stage: "gemini-fused", updatesFingerprint: true)
+            renderRemoteAIFrame(stage: "ai-fused", updatesFingerprint: true)
         }
     }
 
-    private func accessibilityFramesForGeminiFusion() -> [UInt32: DebugUIInspectionFrame] {
+    private func accessibilityFramesForRemoteAIFusion() -> [UInt32: DebugUIInspectionFrame] {
         do {
             let results = try accessibilityInspectionService.inspect(
                 scope: currentConfig.screenScope,
@@ -802,7 +801,7 @@ final class DebugUIInspectionCoordinator {
         ageMissingScreens(activeScreenIDs: activeScreenIDs)
     }
 
-    private func ageMissingGeminiScreens(activeScreenIDs: Set<UInt32>) {
+    private func ageMissingRemoteAIScreens(activeScreenIDs: Set<UInt32>) {
         ageMissingScreens(activeScreenIDs: activeScreenIDs)
     }
 
@@ -925,7 +924,7 @@ final class DebugUIInspectionCoordinator {
     private static func sourceName(for element: DebugUIElement) -> String {
         let fusionSource = element.metadata["debugUIFusion.source"] ?? ""
         let sources = metadataValue("localUIElement.sources", metadata: element.metadata) ?? ""
-        if fusionSource == "gemini" || sources.contains("gemini") || element.id.hasPrefix("gemini-") {
+        if fusionSource == "ai" || sources.contains("remote-screenshot-parser") || element.id.hasPrefix("ai-") {
             return "AI"
         }
         if fusionSource == "native-visual" || sources.contains("shape") || sources.contains("ocr") || sources.contains("layout") || element.id.hasPrefix("native-visual-") {
@@ -1303,7 +1302,7 @@ final class DebugUIInspectionCoordinator {
         )
     }
 
-    private static func compressedGeminiImage(
+    private static func compressedRemoteAIImage(
         from screenshot: CapturedWindowScreenshot
     ) -> DebugUICompressedImage {
         let fallbackSize = HotLoopSize(

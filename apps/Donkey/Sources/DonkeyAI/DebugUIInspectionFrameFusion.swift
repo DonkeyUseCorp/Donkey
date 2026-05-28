@@ -6,52 +6,52 @@ import Foundation
 public enum DebugUIInspectionFrameFusion {
     public static func fused(
         accessibilityFrame: DebugUIInspectionFrame,
-        geminiFrame: DebugUIInspectionFrame
+        aiFrame: DebugUIInspectionFrame
     ) -> DebugUIInspectionFrame {
         let accessibilityElements = accessibilityFrame.elements
         let accessibilityDeduplicationBase = accessibilityElements.filter { $0.type != .draggable }
-        let geminiOnlyElements = geminiFrame.elements.filter { geminiElement in
+        let aiOnlyElements = aiFrame.elements.filter { aiElement in
             !accessibilityDeduplicationBase.contains { accessibilityElement in
-                isDuplicate(geminiElement, of: accessibilityElement)
+                isDuplicate(aiElement, of: accessibilityElement)
             }
-        }.map(annotatedGeminiElement)
+        }.map(annotatedAIElement)
 
         return DebugUIInspectionFrame(
-            elements: (accessibilityElements + geminiOnlyElements).sorted(by: elementSort)
+            elements: (accessibilityElements + aiOnlyElements).sorted(by: elementSort)
         )
     }
 
     private static func isDuplicate(
-        _ geminiElement: DebugUIElement,
+        _ aiElement: DebugUIElement,
         of accessibilityElement: DebugUIElement
     ) -> Bool {
-        let smallerArea = min(area(geminiElement.bbox), area(accessibilityElement.bbox))
+        let smallerArea = min(area(aiElement.bbox), area(accessibilityElement.bbox))
         guard smallerArea > 0 else { return false }
 
-        let geminiLabel = normalized(geminiElement.label)
+        let aiLabel = normalized(aiElement.label)
         let accessibilityLabel = normalized(accessibilityElement.label)
-        if !geminiLabel.isEmpty,
-           geminiLabel == accessibilityLabel,
-           centerDistance(geminiElement.bbox, accessibilityElement.bbox) <= 32 {
+        if !aiLabel.isEmpty,
+           aiLabel == accessibilityLabel,
+           centerDistance(aiElement.bbox, accessibilityElement.bbox) <= 32 {
             return true
         }
 
-        guard areCompatibleTypes(geminiElement.type, accessibilityElement.type) else {
+        guard areCompatibleTypes(aiElement.type, accessibilityElement.type) else {
             return false
         }
 
         let accessibilityArea = area(accessibilityElement.bbox)
-        let geminiArea = area(geminiElement.bbox)
-        let areaRatio = smallerArea / max(accessibilityArea, geminiArea)
+        let aiArea = area(aiElement.bbox)
+        let areaRatio = smallerArea / max(accessibilityArea, aiArea)
         guard areaRatio >= 0.25 else {
             return false
         }
 
-        let containmentScore = intersectionArea(geminiElement.bbox, accessibilityElement.bbox) / smallerArea
+        let containmentScore = intersectionArea(aiElement.bbox, accessibilityElement.bbox) / smallerArea
         return containmentScore >= 0.62
     }
 
-    private static func annotatedGeminiElement(_ element: DebugUIElement) -> DebugUIElement {
+    private static func annotatedAIElement(_ element: DebugUIElement) -> DebugUIElement {
         DebugUIElement(
             id: element.id,
             type: element.type,
@@ -61,7 +61,7 @@ public enum DebugUIInspectionFrameFusion {
             confidence: element.confidence,
             visualStyle: element.visualStyle,
             metadata: element.metadata.merging([
-                "debugUIFusion.source": "gemini",
+                "debugUIFusion.source": "ai",
                 "localUIElement.actionEligibility": "guardedAction",
                 "directInputActionsAllowed": "true"
             ]) { current, _ in current }

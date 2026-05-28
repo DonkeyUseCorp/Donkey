@@ -351,7 +351,7 @@ struct DonkeyBackendInferenceClientTests {
         )
 
         let element = try #require(frame.elements.first)
-        #expect(element.id == "gemini-42-review")
+        #expect(element.id == "ai-42-review")
         #expect(element.type == .button)
         #expect(element.bbox == DebugUIBoundingBox(x: 150, y: 225, width: 100, height: 50))
         #expect(element.metadata["directInputActionsAllowed"] == "true")
@@ -411,7 +411,7 @@ struct DonkeyBackendInferenceClientTests {
     }
 
     @Test
-    func debugUIFusionKeepsAccessibilityGeometryAndAddsGeminiGaps() throws {
+    func debugUIFusionKeepsAccessibilityGeometryAndAddsAIGaps() throws {
         let accessibilityFrame = DebugUIInspectionFrame(
             elements: [
                 DebugUIElement(
@@ -432,45 +432,45 @@ struct DonkeyBackendInferenceClientTests {
                 )
             ]
         )
-        let geminiFrame = DebugUIInspectionFrame(
+        let aiFrame = DebugUIInspectionFrame(
             elements: [
                 DebugUIElement(
-                    id: "gemini-review",
+                    id: "ai-review",
                     type: .button,
                     label: "Review",
                     bbox: DebugUIBoundingBox(x: 105, y: 105, width: 60, height: 20),
                     confidence: 0.95,
-                    metadata: ["localUIElement.sources": "gemini-screenshot-parser"]
+                    metadata: ["localUIElement.sources": "remote-screenshot-parser"]
                 ),
                 DebugUIElement(
-                    id: "gemini-voice",
+                    id: "ai-voice",
                     type: .toolbarIcon,
                     label: "Voice",
                     bbox: DebugUIBoundingBox(x: 220, y: 100, width: 40, height: 30),
                     confidence: 0.9,
-                    metadata: ["localUIElement.sources": "gemini-screenshot-parser"]
+                    metadata: ["localUIElement.sources": "remote-screenshot-parser"]
                 )
             ]
         )
 
         let fused = DebugUIInspectionFrameFusion.fused(
             accessibilityFrame: accessibilityFrame,
-            geminiFrame: geminiFrame
+            aiFrame: aiFrame
         )
         let ids = fused.elements.map(\.id)
 
         #expect(ids.contains("ax-review"))
         #expect(ids.contains("ax-window"))
-        #expect(!ids.contains("gemini-review"))
-        #expect(ids.contains("gemini-voice"))
-        let geminiElement = try #require(fused.elements.first { $0.id == "gemini-voice" })
-        #expect(geminiElement.metadata["debugUIFusion.source"] == "gemini")
-        #expect(geminiElement.metadata["directInputActionsAllowed"] == "true")
-        #expect(geminiElement.metadata["localUIElement.actionEligibility"] == "guardedAction")
+        #expect(!ids.contains("ai-review"))
+        #expect(ids.contains("ai-voice"))
+        let aiElement = try #require(fused.elements.first { $0.id == "ai-voice" })
+        #expect(aiElement.metadata["debugUIFusion.source"] == "ai")
+        #expect(aiElement.metadata["directInputActionsAllowed"] == "true")
+        #expect(aiElement.metadata["localUIElement.actionEligibility"] == "guardedAction")
     }
 
     @Test
-    func debugUIFusionDoesNotLetLargeAccessibilityContainersHideGeminiControls() throws {
+    func debugUIFusionDoesNotLetLargeAccessibilityContainersHideAIControls() throws {
         let accessibilityFrame = DebugUIInspectionFrame(
             elements: [
                 DebugUIElement(
@@ -483,25 +483,25 @@ struct DonkeyBackendInferenceClientTests {
                 )
             ]
         )
-        let geminiFrame = DebugUIInspectionFrame(
+        let aiFrame = DebugUIInspectionFrame(
             elements: [
                 DebugUIElement(
-                    id: "gemini-small-icon",
+                    id: "ai-small-icon",
                     type: .toolbarIcon,
                     label: "Search",
                     bbox: DebugUIBoundingBox(x: 18, y: 84, width: 28, height: 28),
                     confidence: 0.88,
-                    metadata: ["localUIElement.sources": "gemini-screenshot-parser"]
+                    metadata: ["localUIElement.sources": "remote-screenshot-parser"]
                 )
             ]
         )
 
         let fused = DebugUIInspectionFrameFusion.fused(
             accessibilityFrame: accessibilityFrame,
-            geminiFrame: geminiFrame
+            aiFrame: aiFrame
         )
 
-        #expect(fused.elements.map(\.id).contains("gemini-small-icon"))
+        #expect(fused.elements.map(\.id).contains("ai-small-icon"))
     }
 
     @Test

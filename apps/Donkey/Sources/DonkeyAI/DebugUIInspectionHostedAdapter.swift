@@ -10,14 +10,14 @@ public enum DebugUIInspectionHostedAdapterError: Error, Equatable, Sendable {
 }
 
 public struct DebugUIInspectionRequest: Equatable, Sendable {
-    public var provider: DebugUIInspectionProvider
+    public var provider: DebugUIInspectionProvider?
     public var screenshotBase64: String
     public var pixelSize: HotLoopSize
     public var minConfidence: Double
     public var metadata: [String: String]
 
     public init(
-        provider: DebugUIInspectionProvider,
+        provider: DebugUIInspectionProvider? = nil,
         screenshotBase64: String,
         pixelSize: HotLoopSize,
         minConfidence: Double = 0.25,
@@ -61,7 +61,7 @@ public struct HostedDebugUIInspectionAnalyzer: DebugUIInspectionAnalyzing {
         for request: DebugUIInspectionRequest
     ) -> RemoteInferenceResponseCreateRequest {
         RemoteInferenceResponseCreateRequest(
-            donkeyProvider: request.provider.rawValue,
+            donkeyProvider: request.provider?.rawValue,
             input: .array([
                 .object([
                     "role": .string("user"),

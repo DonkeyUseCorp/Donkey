@@ -51,7 +51,10 @@ export function createGeminiFlashScreenshotParser(
   const config = geminiClientConfig(environment);
 
   return {
+    id: screenshotProviderID,
+    inferenceProvider: geminiProviderID,
     configured: config.configured,
+    modelForRequest: (request) => screenshotParseModelForRequest(request, environment),
     async parse(request) {
       ensureConfigured(config.configured);
       const client = clientFactory(config.options);
@@ -334,8 +337,7 @@ function screenshotParseProfile(request: ScreenshotParseRequest) {
 }
 
 function isDebugOverlayRequest(request: ScreenshotParseRequest) {
-  return request.metadata.source === "debug-ui-inspection-overlay"
-    || request.metadata.provider === "gemini";
+  return request.metadata.source === "debug-ui-inspection-overlay";
 }
 
 function parseGeminiOutput(rawBody: JsonValue) {
