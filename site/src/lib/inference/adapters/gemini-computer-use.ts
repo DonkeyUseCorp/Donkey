@@ -474,6 +474,20 @@ function sanitizeGeminiJsonSchema(value: JsonValue): JsonValue | undefined {
       continue;
     }
 
+    // `properties` and `$defs` are maps of caller-defined NAMES to sub-schemas — their keys are not
+    // schema keywords and must be preserved. Sanitize each sub-schema value, keep every name.
+    if ((key === "properties" || key === "$defs") && isJsonObject(child)) {
+      const inner: JsonObject = {};
+      for (const [name, subSchema] of Object.entries(child)) {
+        const sanitizedSub = sanitizeGeminiJsonSchema(subSchema);
+        if (sanitizedSub !== undefined) {
+          inner[name] = sanitizedSub;
+        }
+      }
+      sanitized[key] = inner;
+      continue;
+    }
+
     const childValue = sanitizeGeminiJsonSchema(child);
     if (childValue !== undefined) {
       sanitized[key] = childValue;
@@ -495,6 +509,12 @@ function shouldRetryWithoutStructuredSchema(
   error: unknown,
   request: GenerateContentParameters,
 ) {
+  // Never degrade a JSON request to free-form: unconstrained Gemini output is frequently invalid
+  // JSON (e.g. mangled keys), which is worse than a clean failure the caller can retry. For JSON
+  // requests we keep asking for structured output and surface the error instead.
+  if (request.config?.responseMimeType === "application/json") {
+    return false;
+  }
   return (
     hasStructuredResponseSchema(request) &&
     error instanceof ApiError &&
