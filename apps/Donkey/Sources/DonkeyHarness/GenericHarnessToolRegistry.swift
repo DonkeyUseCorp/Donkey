@@ -325,8 +325,9 @@ public enum BuiltInHarnessToolCatalog {
             descriptor(
                 "automation.applescript.generate",
                 pluginID: "core.automation",
-                summary: "Ask a model boundary to generate a bounded AppleScript artifact for a resolved app task.",
+                summary: "Ask a child model boundary to generate a small, bounded AppleScript artifact for a doable resolved app task.",
                 input: [
+                    "scriptArtifactID": "Stable artifact identifier reused by validate and execute steps.",
                     "targetApp": "Resolved app name and bundle identifier.",
                     "goal": "Structured task goal.",
                     "entities": "Resolved task entities.",
@@ -345,6 +346,21 @@ public enum BuiltInHarnessToolCatalog {
                     "modelBoundary": "required",
                     "directExecution": "false"
                 ]
+            ),
+            descriptor(
+                "automation.applescript.validate",
+                pluginID: "core.automation",
+                summary: "Validate a generated AppleScript artifact before execution.",
+                input: [
+                    "scriptArtifactID": "Generated AppleScript artifact identifier.",
+                    "targetApp": "Resolved app name and bundle identifier.",
+                    "validationPolicy": "Static checks, allowed APIs, target app, permissions, and review state."
+                ],
+                output: ["validationStatus": "validated or rejected with reason."],
+                permissions: [.appLookup],
+                safety: .readOnly,
+                requiredContext: ["generated AppleScript artifact", "validation policy"],
+                verification: ["validated artifacts record provenance and policy metadata"]
             ),
             descriptor(
                 "automation.applescript.execute",

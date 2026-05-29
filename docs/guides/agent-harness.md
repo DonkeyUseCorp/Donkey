@@ -1,165 +1,37 @@
 # Agent Harness
 
 ```text
-+-----------+       +----------------+       +---------------------------+
-| User turn | ----> | User query | ----> | Generic harness lifecycle |
-+-----------+       +----------------+       +-------------+-------------+
-                                                            |
-                                                            v
-                         +----------------------------------+----------------------------------+
-                         |                                                                     |
-                         v                                                                     v
-        +----------------+----------------+                              +----------------------+----------------------+
-        | Thread/task storage             |                              | Compacted model context                    |
-        | - conversation events           |                              | - active/waiting tasks                      |
-        | - task snapshots                |                              | - summaries, memory, recent tool evidence   |
-        | - compaction metadata           |                              | - bounded assets and world state            |
-        +----------------+----------------+                              +----------------------+----------------------+
-                         ^                                                                     |
-                         |                                                                     v
-                         |                                                +--------------------+--------------------+
-                         |                                                | Hosted model/runtime boundary             |
-                         |                                                | - structured intent                       |
-                         |                                                | - ambiguity and risk                      |
-                         |                                                | - plan, next step, verification criteria  |
-                         |                                                +--------------------+--------------------+
-                         |                                                                     |
-                         |                                                                     v
-                         |                                                +--------------------+--------------------+
-                         |                                                | Tool registry                            |
-                         |                                                | - permissions and schemas                 |
-                         |                                                | - skills, plugins, catalogs, memory       |
-                         |                                                | - app discovery, observation, actions     |
-                         |                                                +--------------------+--------------------+
-                         |                                                                     |
-                         |                                                                     v
-                         |                                                +--------------------+--------------------+
-                         |                                                | Guarded executors                         |
-                         |                                                | - validate focus, safety, permissions     |
-                         |                                                | - execute one tool step                   |
-                         |                                                | - return structured observations          |
-                         |                                                +--------------------+--------------------+
-                         |                                                                     |
-                         +---------------------------------------------------------------------+
-                                                     verify, recover, clarify,
-                                                     pause, resume, or complete
+User turn
+  |
+  v
+Model boundary -> structured intent, risk, plan, verification
+  |
+  v
+Generic harness task state
+  |
+  v
+Tool registry -> guarded executor -> structured observation
+  |                                      |
+  +----------- verify / recover / gate --+
 ```
 
-## What It Is
-
 The agent harness is Donkey's app-agnostic runtime boundary for turning a user
-turn into durable task progress. It owns the lifecycle around intent,
-context-gathering, world modeling, planning, tool execution, verification,
-recovery, permission gates, clarification, pause/resume, interruption, and
-multi-task coordination.
+turn into durable task progress. It owns intent routing, bounded context,
+planning, guarded tool execution, verification, recovery, permission gates,
+clarification, pause/resume, interruption, and multi-task state.
 
-The generic harness contracts live in `apps/Donkey/Sources/DonkeyHarness/`.
-Agent capabilities plug into that module through tools, skills, scripts,
-plugins, catalogs, or memory. Core harness code does not contain app-specific
-branches, phrase lists, or one-off workflow conditionals.
+Keep the harness generic. App-specific behavior belongs in task definitions,
+catalog data, skills, generated artifacts, plugins, or memory. Core harness
+code must not add phrase lists, app-name branches, or one-off natural-language
+conditionals.
 
-Bundled and learned local-app skills carry app-specific planning guidance.
-Task-intent model calls receive relevant skills as bounded context alongside
-the generic task definitions, generated or user-reviewed app catalog data, and
-memory. The core runtime does not ship app-specific Weather, Music, Notes, or
-Numbers task branches.
+## Runtime Shape
 
-The app catalog is part of the model boundary, not a hidden executor shortcut.
-User-query turns send the current supported app catalog to planning. If the
-catalog is still refreshing or does not contain a supported entry, the harness
-must surface conversation, clarification, waiting, or failed-safe state instead
-of silently dropping the request or executing an unsupported candidate.
-
-User query uses the generic harness as the entrypoint for conversation,
-clarification, planning, and tool selection. Local desktop actions are
-registered harness tools rather than a separate default path.
-
-User-query turns enter the generic lifecycle before any local-app executor
-is selected. The hosted planning boundary emits the
-`generic_harness_planning` packet: structured intent, ambiguity/risk, context
-needs, plan steps, verification criteria, fallbacks, and clarification policy.
-Conversation and clarification routes stop in the harness. A structured
-local-app route registers the Mac local-app execution tool, and the harness
-stores the model packet in generic task intent/plan state before using
-registry-backed executors for validation, state updates, gates, and lifecycle
-behavior.
-
-## Core Model
-
-Every task has its own durable state:
-
-- task id and thread id
-- current goal
-- structured intent analysis
-- gathered context
-- world model
-- plan
-- granted permissions
-- tool history
-- pending continuation
-- lifecycle status
-
-Supported task statuses are:
-
-- `running`
-- `paused`
-- `waitingForUser`
-- `waitingForPermission`
-- `interrupted`
-- `resuming`
-- `completed`
-- `failedSafe`
-- `cancelled`
-
-Multiple tasks may be active at once. Mutable execution state must stay
-task-local unless it is stored in an explicit task-safe service. A pause,
-clarification gate, permission gate, or cancellation affects only the selected
-task; it must not block unrelated active tasks.
-
-## Thread Storage
-
-Threads are the durable conversation record. The generic harness defines a
-thread-store boundary for threads, events, assets, task snapshots, task events,
-and compaction snapshots. In tests this can be backed by an in-memory store; in
-the app the default generic lifecycle uses a file-backed local store under the
-user's Application Support directory. Harness code depends on this generic
-store contract rather than reaching into UI-specific persistence.
-
-A thread record stores the user-visible conversation and the active task ids.
-Task state stores execution details such as world model, plan, permissions,
-tool history, and pending continuations. Summaries are stored as thread events
-with the `summary` role. Compaction snapshots store the selected event, asset,
-and task ids plus truncation/drop metadata so model context remains
-inspectable. Keeping thread records, task snapshots, and compaction metadata
-separate lets one thread coordinate multiple active tasks without mixing their
-execution state.
-
-## Smart Compaction
-
-The harness never sends raw unbounded history to a model. Before model-backed
-intent routing, generic planning, or slow-planner hint generation, compaction
-builds a bounded context packet. It keeps the current turn, active and waiting
-task state, pending questions or permissions, pinned events, durable summaries,
-the most recent useful events, recent tool summaries, memory summaries, and a
-bounded asset list.
-
-Large event bodies are truncated. Raw screenshots, full Accessibility trees,
-script source, and long tool outputs are saved as artifacts or structured
-records and summarized into the prompt. Compaction metadata records what was
-included, dropped, or truncated so the decision remains inspectable.
-
-Hosted planning calls consume the generic compacted thread context rather than
-ad hoc thread snippets. Slow planner calls consume a compacted run context,
-including bounded world-state, failure, hint, memory, and semantic memory
-summaries.
-
-The user-query notch mirrors generic task stop states. Permission gates
-show the pending tool and missing permissions, and the approval control grants
-those exact permissions through the generic lifecycle. Follow-up course changes
-surface as typed interrupted/changed-course task state instead of generic
-attention text.
-
-## Turn Flow
+A user-query turn enters the generic lifecycle before any local-app executor is
+selected. The model boundary returns structured intent, risk/ambiguity, context
+needs, plan steps, verification criteria, fallback policy, and clarification
+policy. Deterministic Swift then validates the structured plan against the tool
+registry, permissions, supported app catalog, and task state.
 
 The loop is:
 
@@ -169,282 +41,137 @@ intake
 -> context gathering
 -> world model update
 -> planning
--> execute one validated tool step
+-> execute one guarded tool step
 -> verify
--> recover, continue, clarify, or complete
+-> recover, continue, clarify, ask permission, or complete
 ```
 
-The harness does not treat desktop work as a single model completion. It
-observes, acts, verifies, and replans. The planner may propose the next tool
-step, but deterministic Swift owns task state, tool validation, permissions,
-focus checks, execution, and result recording.
+Desktop work is not a single model completion. The harness observes, acts,
+records evidence, verifies, and may replan. Models choose structured tool calls;
+Swift owns task state, tool validation, focus checks, permission gates,
+execution, and result recording.
 
-Pointer-prompt local-app work is executed through the same tool loop. Planning
-receives compacted context, tool descriptors, relevant skills, and the current
-supported app catalog, then returns a structured route and plan. A local-app
-route must validate against the catalog before it becomes executable tool
-state. The runtime executes one guarded step, records the resulting
-Accessibility or screenshot-backed observation, and continues only while the
-next planned step remains valid. It stops on verification failure, missing
-evidence, permission gates, clarification gates, or exhausted plan steps.
+## Task State
 
-If the user interrupts a task, the harness classifies whether the turn starts a
-new task, modifies the current task, cancels, pauses, resumes, answers a
-clarification, grants permission, or is conversation. A course change updates
-the existing task goal/world model/plan and resumes from the checkpoint instead
-of blindly restarting.
+Each task has its own durable state: goal, structured intent, context, world
+model, plan, granted permissions, tool history, pending continuation, and
+lifecycle status.
 
-## Stop Points
+Active/waiting tasks stay task-local. A pause, clarification, permission gate,
+interruption, cancellation, or failed-safe state must affect only the selected
+task.
 
-Waiting states are hard stop points.
+Threads store conversation events and active task ids. Task snapshots store
+execution state. Compaction snapshots record what bounded context was sent to a
+model so decisions remain inspectable.
 
-If a tool lacks permission, the task moves to `waitingForPermission`, stores a
-pending continuation, asks for the specific permission, and does not execute
-more tools until approval is recorded.
+## Context And Intent
 
-If required information is missing, the task moves to `waitingForUser`, stores
-the pending continuation, asks a specific question, and resumes only after the
-answer is attached.
+The harness never sends raw unbounded history to a model. Compaction keeps the
+current turn, relevant active/waiting task state, recent useful evidence,
+summaries, memory snippets, pending questions/permissions, and bounded assets.
 
-Dangerous ambiguity must ask before acting. Safe ambiguity may be inferred.
-Recoverable ambiguity uses available tools first, such as memory, app search,
-screen observation, or skill lookup, and asks only if uncertainty remains
-material.
+Never infer semantic intent by matching raw user text. Pass the turn through an
+LLM or another typed model/runtime boundary first. After that, deterministic
+code may match typed fields such as tool names, app ids, schema values,
+permissions, filesystem paths, and Accessibility roles/actions.
 
-## Tools And Plugins
+The app catalog is part of the model boundary. If a requested app or capability
+is not supported or is still refreshing, surface conversation, clarification,
+waiting, or failed-safe state rather than silently executing an unsupported
+candidate.
 
-Tools are registered through the generic tool registry. A tool descriptor
-declares:
+## Tools
 
-- name
-- plugin id
-- summary
-- input/output schema
-- required permissions
-- safety class
-- required context
-- verification hints
-- metadata
+Tools are registered through the generic registry. A descriptor declares the
+tool name, plugin id, schemas, required permissions, safety class, required
+context, verification hints, and metadata. The planner sees descriptors and
+schemas, not Swift implementation details.
 
-The planner sees tool descriptors and schemas, not Swift implementation
-details. Built-in registry executors validate inputs and permissions for memory
-lookup, skills, app lookup, observation, element actions, text/keyboard input,
-script generation/validation/execution, verification, and lifecycle changes.
-Tool results return structured observations that update the task's world model.
+Tool results return structured observations that update the task world model.
+Waiting states are hard stops:
 
-Core built-in tools cover conversation, user clarification, permission
-requests, memory lookup, skill lookup, skill-script lifecycle, app discovery,
-screen observation, UI element discovery and action, text and keyboard input,
-AppleScript generation/execution, state verification, and task lifecycle
-control.
+- missing permission moves the task to `waitingForPermission`
+- missing required user detail moves the task to `waitingForUser`
+- dangerous ambiguity asks before acting
+- verification failure chooses recovery, review, or failed-safe state
 
-Plugins register tools through the same interface. App knowledge belongs in
-plugins, skills, catalogs, or memory, not in core harness conditionals.
-
-Skill-backed local-app actions are first-class generic plan steps. A model plan
-may load a relevant skill, execute a validated skill script with structured
-entity input, and verify the script's structured evidence before falling back to
-Accessibility or screenshot-driven UI actions. Built-in and learned scripts must
-be registered as validated artifacts with provenance before execution; raw user
-text is not passed as script source or used to select app-specific behavior.
+Core tool families cover conversation, clarification, permission requests,
+memory, skills, app lookup, observation, UI element actions, text/keyboard
+input, AppleScript/script generation and execution, verification, learning, and
+lifecycle control.
 
 ## Computer Use
 
-Computer use is one tool family inside the harness.
+Computer use is a tool family inside the harness. Accessibility is the primary
+source for actionable elements. Screenshots, vision, OCR, and hover evidence
+enrich the world model and can provide fallback targets when Accessibility is
+insufficient.
 
-Accessibility is the primary source for actionable UI elements. Screenshots,
-vision, OCR, and hover evidence enrich the world model, labels, and layout. When
-Accessibility cannot resolve the target, scoped AI screenshot boxes may become a
-secondary actionable target for a guarded coordinate click.
+Input must be guarded by target focus, permission policy, element eligibility,
+allowed action type, safety class, and verification criteria. Coordinate input
+is a fallback path, not a shortcut around those checks.
 
-Screenshot understanding is a structured evidence source, not an overlay-only
-feature. Hosted screenshot parsers may stream partial UI-understanding results
-while a final parse is still running. The local-app controller forwards those
-partial controls, labels, boxes, confidence values, and provenance metadata into
-the same observation path used for actions, then replaces or augments them with
-the final parse result when it arrives.
-
-Element actions execute only after the harness validates:
-
-- target focus
-- permission policy
-- element eligibility
-- allowed action type
-- rate limits
-- safety class
-- verification criteria
-
-Models choose semantic targets and tool calls. They may choose an observed AI
-visual target when no Accessibility target is available. Coordinate input is a
-fallback execution path and must pass the same guarded execution checks as other
-input.
-
-Verification must be backed by task evidence. A local-app command attempt is not
-verified merely because the target app is focused or running after execution;
-the harness needs post-action evidence, such as guarded command traces, visible
-text, selected element state, app-reported results, or screenshot-backed
-observations, before the task can complete or choose a recovery path.
+Verification must be evidence-backed. A command is not complete merely because
+the target app is focused. The harness needs post-action evidence such as a
+guarded command trace, visible text, selected state, app-reported result, or
+screenshot-backed observation.
 
 ## AppleScript And Scripts
 
-AppleScript is a tool path, not a hardcoded helper path.
+AppleScript is a tool path, not a hardcoded helper path. Generation creates a
+script artifact; it does not execute the script. Execution may run only a
+validated, generated, or user-reviewed artifact through the guarded backend,
+with target app, permissions, action metadata, and verification evidence.
 
-AppleScript generation gathers the resolved app, goal, entities, allowed
-actions, and verification criteria, then passes that bounded request through a
-model/script-generation boundary. It returns a script artifact for validation or
-review. It does not execute the script.
+Dynamic AppleScript follows the same artifact boundary and should stay small:
 
-AppleScript execution may run only a validated, generated, or user-reviewed
-artifact through the guarded automation backend, with target app, permissions,
-action metadata, and verification evidence attached.
+```text
+automation.applescript.generate
+-> automation.applescript.validate
+-> automation.applescript.execute
+-> observe
+-> verify
+```
 
-App-specific AppleScript belongs in skill-local scripts or generated artifacts.
-The guarded backend renders explicit `appleScript.source` or
-`appleScript.template` metadata; it does not contain app-named script helpers.
+The generation step receives structured target-app, goal, entity,
+allowed-action, and verification inputs for one bounded target-app operation or
+a very small sequence. It must not try to build a full automation pipeline;
+observation, clicking, recovery, and verification stay as separate harness
+steps. If the requested operation is not doable as a small scoped AppleScript,
+generation should fail cleanly and the plan should use observation,
+Accessibility, screenshot, or UI tools instead.
 
-Do not add app-named Swift helpers such as `musicPlaybackScript` or
-`openFooScript`. If an app needs automation knowledge, put it in a skill,
-plugin, catalog entry, generated artifact, or user-reviewed definition.
+Planner output must not contain raw script source for dynamic AppleScript. A
+child generation boundary creates the artifact source, and the plan reuses the
+same `scriptArtifactID` across generation, validation, and execution.
 
-## Skills
+App-specific AppleScript belongs in skill-local scripts, generated artifacts,
+plugins, catalog entries, or user-reviewed definitions. Do not add app-named
+Swift helpers such as `musicPlaybackScript`.
 
-Skills are reusable harness extensions. A skill can be registered directly or
-discovered from configured roots by finding `SKILL.md` files. The skill
-registry indexes:
+## Skills And Learning
 
-- id
-- name
-- summary and description
-- source kind
-- instruction path
-- tags
-- provided tools
-- scripts
-- required permissions
-- metadata
+Skills are reusable harness extensions. Skill lookup gives the planner bounded
+instructions, descriptors, and validated scripts without putting app-specific
+branches into core runtime code.
 
-Skill lookup lets the planner find relevant instructions by structured task
-need. Loading a skill adds selected instructions to bounded planning context.
+Learning an application is a skill-producing harness task. It gathers bounded
+screenshot and Accessibility evidence, explores only safe/reversible states
+unless the user approves more, distills an app profile and workflow recipes,
+and saves a reusable skill pack with any validated scripts.
 
-Skills are shared infrastructure. They are reusable by any agent or task, not
-private scratch memory for one run.
+## Source Map
 
-Built-in app skills live as resource skill packs under
-`apps/Donkey/Sources/DonkeyRuntime/Resources/BuiltInSkills/`. They are loaded
-through the same skill descriptor shape as user/plugin skills and compacted
-before being sent to model boundaries.
+Start here:
 
-## Skill Scripts
-
-Skill packs may include generated scripts under a skill-local `scripts/`
-directory. Supported script descriptors include AppleScript, shell/Bash,
-Python, JavaScript, Swift, and additional language types.
-
-Each script descriptor records:
-
-- id
-- language
-- purpose
-- skill-relative path
-- generator provenance
-- validation status
-- required permissions
-- safety class
-- metadata
-
-Script generation, validation, and execution are separate steps. Generation
-creates a reusable artifact through a model boundary and stores it as pending
-validation. Validation records whether the script is allowed. Execution may run
-only validated scripts through the appropriate guarded backend with normal
-permission and verification gates.
-
-A learned application skill can therefore carry instructions, app maps,
-workflow recipes, evidence notes, and generated scripts together.
-
-## Learning Applications
-
-"Learn an application" is supported as a skill-producing harness task. The
-generic built-in tools `application.learning.start`,
-`application.learning.captureState`,
-`application.learning.proposeExploration`, `application.learning.distill`, and
-`application.learning.saveSkillPack` coordinate the flow: start a safe learning
-draft, record bounded screenshot and Accessibility evidence, propose reversible
-exploration candidates from technical Accessibility roles/actions, distill an
-app profile and workflow recipes, and save a reusable skill pack.
-
-For each meaningful state, the learner gathers:
-
-- screenshot evidence
-- Accessibility tree
-- focused app/window metadata
-- visible text
-- actionable elements
-- menus, buttons, fields, panels, and tabs
-- navigation path
-- what changed from the previous state
-
-The learner defaults to safe exploration: open menus, inspect tabs, focus
-fields, navigate panels, and avoid destructive/send/purchase/save-overwrite
-actions unless the user explicitly approves.
-
-The reusable output is distilled, not just raw captures:
-
-- `SKILL.md` for human/model instructions
-- structured app profile JSON
-- workflow recipes
-- generated scripts in `scripts/`
-- verification rules
-- safety notes
-- optional redacted evidence artifacts
-
-Validated generated scripts owned by the learned skill are copied into the
-skill-local `scripts/` directory when the pack is saved. Agents use the learned
-app skill by searching for the relevant skill, loading its bounded
-instructions, and then using any validated scripts or workflow tools exposed by
-that skill.
-
-## Intent Rules
-
-Never infer semantic user intent by string matching raw user input. Do not add
-phrase lists, prefixes, suffixes, regexes, app-name checks, greeting/help
-classifiers, or natural-language command-text matching to decide what the user
-wants.
-
-Pass the turn through an LLM or another typed model/runtime boundary first. Once
-structured output exists, deterministic code may validate typed fields, schema
-values, tool names, permissions, app identifiers, filesystem paths,
-Accessibility constants, and other non-semantic technical data.
-
-## Verification
-
-Use `swift test` from `apps/Donkey/`.
-
-Generic harness tests cover:
-
-- tool registration and unknown-tool rejection
-- permission stop/resume
-- clarification stop/resume
-- pause, resume, interrupt, cancel, complete, and fail-safe states
-- multiple active tasks with isolated state
-- one-tool-at-a-time execution loops
-- skill registration, search, loading, and filesystem discovery
-- script discovery, generation metadata, validation gates, and execution gates
-
-Computer-use tests cover app search, element retrieval, guarded element
-actions, screenshot/Accessibility evidence boundaries, and verification
-failure recovery.
-
-## Source Entry Points
-
-Start in:
-
-- `apps/Donkey/Sources/DonkeyHarness/` for generic harness lifecycle, tool
-  registry, skill discovery, and script descriptors.
-- `apps/Donkey/Sources/DonkeyContracts/` for shared contracts that cross module
-  boundaries.
-- `apps/Donkey/Sources/DonkeyRuntime/` for guarded runtime execution,
-  Accessibility, app/window observation, and input backends.
+- `apps/Donkey/Sources/DonkeyHarness/` for task state, registry, tools, skills,
+  thread storage, and generic runtime execution.
+- `apps/Donkey/Sources/DonkeyContracts/` for shared contracts across modules.
+- `apps/Donkey/Sources/DonkeyRuntime/` for guarded local-app execution,
+  Accessibility, screenshots, app/window observation, and input backends.
 - `apps/Donkey/Sources/DonkeyAI/` for hosted model routing and adapters.
 - `apps/Donkey/Sources/Donkey/` for user-query integration.
 
-Tests live in `apps/Donkey/Tests/DonkeyRuntimeTests/`.
+Tests live in `apps/Donkey/Tests/DonkeyRuntimeTests/`. Use focused `swift test`
+runs from `apps/Donkey/` when changing harness behavior.

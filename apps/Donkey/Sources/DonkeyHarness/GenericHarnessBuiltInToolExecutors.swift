@@ -100,6 +100,62 @@ public struct HarnessScriptExecutionOutcome: Equatable, Sendable {
     }
 }
 
+public struct HarnessScriptGenerationRequest: Equatable, Sendable {
+    public var language: HarnessGeneratedScriptLanguage
+    public var targetApp: String
+    public var bundleIdentifier: String?
+    public var goal: String
+    public var entities: [String: String]
+    public var allowedActions: String
+    public var verification: String
+    public var worldFacts: [String: String]
+    public var sourceTraceID: String?
+    public var metadata: [String: String]
+
+    public init(
+        language: HarnessGeneratedScriptLanguage,
+        targetApp: String,
+        bundleIdentifier: String? = nil,
+        goal: String,
+        entities: [String: String] = [:],
+        allowedActions: String = "",
+        verification: String = "",
+        worldFacts: [String: String] = [:],
+        sourceTraceID: String? = nil,
+        metadata: [String: String] = [:]
+    ) {
+        self.language = language
+        self.targetApp = targetApp
+        self.bundleIdentifier = bundleIdentifier
+        self.goal = goal
+        self.entities = entities
+        self.allowedActions = allowedActions
+        self.verification = verification
+        self.worldFacts = worldFacts
+        self.sourceTraceID = sourceTraceID
+        self.metadata = metadata
+    }
+}
+
+public struct HarnessScriptGenerationOutcome: Equatable, Sendable {
+    public var succeeded: Bool
+    public var source: String
+    public var summary: String
+    public var metadata: [String: String]
+
+    public init(
+        succeeded: Bool,
+        source: String = "",
+        summary: String,
+        metadata: [String: String] = [:]
+    ) {
+        self.succeeded = succeeded
+        self.source = source
+        self.summary = summary
+        self.metadata = metadata
+    }
+}
+
 public actor HarnessGeneratedScriptStore {
     private var artifactsByID: [String: HarnessGeneratedScriptArtifact]
 
@@ -154,6 +210,7 @@ public struct HarnessBuiltInToolServices: Sendable {
     public var generatedScripts: HarnessGeneratedScriptStore
     public var applicationLearningStore: HarnessApplicationLearningStore
     public var applicationSkillPackWriter: HarnessApplicationSkillPackWriter?
+    public var appleScriptGenerator: (@Sendable (HarnessScriptGenerationRequest) async -> HarnessScriptGenerationOutcome)?
     public var appleScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)?
     public var skillScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)?
 
@@ -164,6 +221,7 @@ public struct HarnessBuiltInToolServices: Sendable {
         generatedScripts: HarnessGeneratedScriptStore = HarnessGeneratedScriptStore(),
         applicationLearningStore: HarnessApplicationLearningStore = HarnessApplicationLearningStore(),
         applicationSkillPackWriter: HarnessApplicationSkillPackWriter? = nil,
+        appleScriptGenerator: (@Sendable (HarnessScriptGenerationRequest) async -> HarnessScriptGenerationOutcome)? = nil,
         appleScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)? = nil,
         skillScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)? = nil
     ) {
@@ -173,6 +231,7 @@ public struct HarnessBuiltInToolServices: Sendable {
         self.generatedScripts = generatedScripts
         self.applicationLearningStore = applicationLearningStore
         self.applicationSkillPackWriter = applicationSkillPackWriter
+        self.appleScriptGenerator = appleScriptGenerator
         self.appleScriptExecutor = appleScriptExecutor
         self.skillScriptExecutor = skillScriptExecutor
     }
@@ -229,6 +288,8 @@ public enum BuiltInHarnessToolExecutors {
             return keyboardPress(context)
         case "automation.applescript.generate":
             return await appleScriptGenerate(context, services: services)
+        case "automation.applescript.validate":
+            return await scriptValidate(context, services: services)
         case "automation.applescript.execute":
             return await scriptExecute(context, services: services, executor: services.appleScriptExecutor)
         case "application.learning.start":
@@ -451,6 +512,11 @@ public enum BuiltInHarnessToolExecutors {
         guard !artifact.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             _ = await services.generatedScripts.reject(id: scriptID, reason: "emptyScriptSource")
             return failed(context, "Script artifact has no source to validate.", reason: "emptyScriptSource")
+        }
+        if artifact.language == .appleScript,
+           let rejectionReason = appleScriptValidationRejectionReason(artifact: artifact, context: context) {
+            _ = await services.generatedScripts.reject(id: scriptID, reason: rejectionReason)
+            return failed(context, "AppleScript artifact failed validation.", reason: rejectionReason)
         }
 
         let validated = await services.generatedScripts.validate(
@@ -748,15 +814,51 @@ public enum BuiltInHarnessToolExecutors {
         _ context: HarnessToolExecutionContext,
         services: HarnessBuiltInToolServices
     ) async -> HarnessToolResult {
-        guard trimmed(context.call.input["targetApp"]) != nil else {
+        guard let targetApp = trimmed(context.call.input["targetApp"]) else {
             return invalidInput(context, "automation.applescript.generate requires a targetApp.")
         }
-        guard trimmed(context.call.input["goal"]) != nil else {
+        guard let goal = trimmed(context.call.input["goal"]) else {
             return invalidInput(context, "automation.applescript.generate requires a goal.")
         }
         var input = context.call.input
         input["language"] = HarnessGeneratedScriptLanguage.appleScript.rawValue
-        input["purpose"] = context.call.input["goal"]
+        input["purpose"] = goal
+        if trimmed(input["scriptSource"] ?? input["source"]) == nil {
+            guard let generator = services.appleScriptGenerator else {
+                return failed(context, "No dynamic AppleScript generation backend is configured.", reason: "missingAppleScriptGenerationBackend")
+            }
+            let outcome = await generator(
+                HarnessScriptGenerationRequest(
+                    language: .appleScript,
+                    targetApp: targetApp,
+                    bundleIdentifier: trimmed(context.call.input["bundleIdentifier"]),
+                    goal: goal,
+                    entities: scriptGenerationEntities(from: context),
+                    allowedActions: context.call.input["allowedActions"] ?? "",
+                    verification: context.call.input["verification"] ?? "",
+                    worldFacts: context.worldModel.facts,
+                    sourceTraceID: context.call.metadata["traceID"],
+                    metadata: context.call.input
+                )
+            )
+            guard outcome.succeeded,
+                  let generatedSource = trimmed(outcome.source)
+            else {
+                return failed(
+                    context,
+                    outcome.summary.isEmpty ? "Dynamic AppleScript generation failed." : outcome.summary,
+                    reason: outcome.metadata["reason"] ?? "appleScriptGenerationFailed"
+                )
+            }
+            input["scriptSource"] = generatedSource
+            input.merge(
+                Dictionary(uniqueKeysWithValues: outcome.metadata.map { key, value in
+                    ("generation.\(key)", value)
+                })
+            ) { current, _ in current }
+            input["generation.summary"] = outcome.summary
+            input["generation.backend"] = outcome.metadata["generator"] ?? "dynamicAppleScriptGenerator"
+        }
         let generatedContext = HarnessToolExecutionContext(
             taskID: context.taskID,
             call: HarnessToolCall(
@@ -770,6 +872,78 @@ public enum BuiltInHarnessToolExecutors {
             grantedPermissions: context.grantedPermissions
         )
         return await scriptGenerate(generatedContext, services: services, ownerSkillID: nil)
+    }
+
+    private static func appleScriptValidationRejectionReason(
+        artifact: HarnessGeneratedScriptArtifact,
+        context: HarnessToolExecutionContext
+    ) -> String? {
+        let source = artifact.source.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowercased = source.lowercased()
+        guard source.count <= 6_000 else {
+            return "appleScriptTooLarge"
+        }
+        guard lowercased.contains("tell application")
+                || lowercased.contains("using terms from application")
+        else {
+            return "missingAppleScriptApplicationScope"
+        }
+        let deniedFragments = [
+            "do shell script",
+            "system events",
+            "keystroke",
+            "key code",
+            "delete ",
+            "erase ",
+            "empty trash",
+            "shutdown",
+            "restart",
+            "quit "
+        ]
+        if let denied = deniedFragments.first(where: lowercased.contains) {
+            return "disallowedAppleScriptFragment:\(denied)"
+        }
+        if let targetApp = trimmed(
+            context.call.input["targetApp"]
+                ?? artifact.metadata["targetApp"]
+        ) {
+            let normalizedSource = normalized(source)
+            let normalizedTarget = normalized(targetApp)
+            let bundleIdentifier = trimmed(
+                context.call.input["bundleIdentifier"]
+                    ?? artifact.metadata["bundleIdentifier"]
+            ).map(normalized)
+            guard normalizedSource.contains(normalizedTarget)
+                    || bundleIdentifier.map({ normalizedSource.contains($0) }) == true
+            else {
+                return "targetAppNotReferenced"
+            }
+        }
+        return nil
+    }
+
+    private static func scriptGenerationEntities(
+        from context: HarnessToolExecutionContext
+    ) -> [String: String] {
+        var entities = context.worldModel.visibleText
+        for (key, value) in context.call.input {
+            if key.hasPrefix("entity.") {
+                entities[String(key.dropFirst("entity.".count))] = value
+            }
+        }
+        if let input = trimmed(context.call.input["input"]) {
+            entities["input"] = input
+        }
+        if let inputEntity = trimmed(context.call.input["inputEntity"]),
+           let value = trimmed(context.call.input[inputEntity] ?? context.call.input["input"]) {
+            entities[inputEntity] = value
+        }
+        if let rawEntities = context.call.input["entities"],
+           let data = rawEntities.data(using: .utf8),
+           let decoded = try? JSONSerialization.jsonObject(with: data) as? [String: String] {
+            entities.merge(decoded) { _, new in new }
+        }
+        return entities
     }
 
     private static func applicationLearningStart(

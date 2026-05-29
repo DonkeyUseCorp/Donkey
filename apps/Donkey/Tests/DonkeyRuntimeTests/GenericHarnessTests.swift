@@ -20,6 +20,7 @@ struct GenericHarnessTests {
         #expect(names.contains("skill.script.validate"))
         #expect(names.contains("skill.script.execute"))
         #expect(names.contains("automation.applescript.generate"))
+        #expect(names.contains("automation.applescript.validate"))
         #expect(names.contains("automation.applescript.execute"))
         #expect(names.contains("application.learning.start"))
         #expect(names.contains("application.learning.captureState"))
@@ -35,6 +36,10 @@ struct GenericHarnessTests {
         let execute = descriptors.first { $0.name == "automation.applescript.execute" }
         #expect(execute?.metadata["requiresGeneratedArtifact"] == "true")
         #expect(execute?.requiredPermissions == [.appControl, .input])
+
+        let validate = descriptors.first { $0.name == "automation.applescript.validate" }
+        #expect(validate?.requiredPermissions == [.appLookup])
+        #expect(validate?.safetyClass == .readOnly)
 
         let skillSearch = descriptors.first { $0.name == "skill.search" }
         #expect(skillSearch?.requiredPermissions == [.skillLookup])
@@ -445,12 +450,12 @@ struct GenericHarnessTests {
         let validatedAppleScript = await registry.execute(
             HarnessToolCall(
                 id: "as-validate",
-                name: "skill.script.validate",
+                name: "automation.applescript.validate",
                 input: ["scriptArtifactID": "script-open-notes", "validationPolicy": "static safe subset"]
             ),
             taskID: "task-scripts",
             worldModel: HarnessWorldModel(),
-            grantedPermissions: [.skillLookup]
+            grantedPermissions: [.appLookup]
         )
         let executedAppleScript = await registry.execute(
             HarnessToolCall(
@@ -506,6 +511,91 @@ struct GenericHarnessTests {
         #expect(generatedSkillScript.metadata["scriptArtifactID"] == "prepare-workspace")
         #expect(executedSkillScript.status == .succeeded)
         #expect(executedSkillScript.observations.facts["script.executed.output"] == "prepared")
+    }
+
+    @Test
+    func appleScriptGenerateUsesConfiguredChildGeneratorWhenSourceIsAbsent() async {
+        let scriptStore = HarnessGeneratedScriptStore()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(
+                generatedScripts: scriptStore,
+                appleScriptGenerator: { request in
+                    #expect(request.targetApp == "Music")
+                    #expect(request.goal == "play requested media")
+                    #expect(request.entities["query"] == "Yellow Coldplay")
+                    return HarnessScriptGenerationOutcome(
+                        succeeded: true,
+                        source: #"tell application "Music" to play"#,
+                        summary: "Generated Music playback script.",
+                        metadata: ["generator": "test-child-llm"]
+                    )
+                }
+            )
+        )
+
+        let generated = await registry.execute(
+            HarnessToolCall(
+                id: "dynamic-as-generate",
+                name: "automation.applescript.generate",
+                input: [
+                    "scriptArtifactID": "dynamic-music-play",
+                    "targetApp": "Music",
+                    "goal": "play requested media",
+                    "entities": #"{"query":"Yellow Coldplay"}"#,
+                    "allowedActions": "play media in Music",
+                    "verification": "playbackState=playing"
+                ],
+                metadata: ["traceID": "trace-dynamic-as"]
+            ),
+            taskID: "task-dynamic-as",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: [.appLookup]
+        )
+        let artifact = await scriptStore.artifact(id: "dynamic-music-play")
+
+        #expect(generated.status == .succeeded)
+        #expect(generated.metadata["scriptArtifactID"] == "dynamic-music-play")
+        #expect(generated.metadata["validationStatus"] == HarnessSkillScriptValidationStatus.pendingValidation.rawValue)
+        #expect(artifact?.source == #"tell application "Music" to play"#)
+        #expect(artifact?.metadata["generation.generator"] == "test-child-llm")
+    }
+
+    @Test
+    func appleScriptValidationRejectsOversizedGeneratedScripts() async {
+        let scriptStore = HarnessGeneratedScriptStore()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(generatedScripts: scriptStore)
+        )
+        let oversizedSource = #"tell application "Notes" to activate"# + String(repeating: "\n-- filler", count: 800)
+
+        _ = await registry.execute(
+            HarnessToolCall(
+                id: "oversized-as-generate",
+                name: "automation.applescript.generate",
+                input: [
+                    "scriptArtifactID": "oversized-notes-script",
+                    "targetApp": "Notes",
+                    "goal": "Activate Notes",
+                    "scriptSource": oversizedSource
+                ]
+            ),
+            taskID: "task-oversized-as",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: [.appLookup]
+        )
+        let validated = await registry.execute(
+            HarnessToolCall(
+                id: "oversized-as-validate",
+                name: "automation.applescript.validate",
+                input: ["scriptArtifactID": "oversized-notes-script", "targetApp": "Notes"]
+            ),
+            taskID: "task-oversized-as",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: [.appLookup]
+        )
+
+        #expect(validated.status == .failed)
+        #expect(validated.metadata["reason"] == "appleScriptTooLarge")
     }
 
     @Test

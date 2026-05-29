@@ -386,8 +386,13 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             traceID: traceID,
             availableToolNames: Self.genericHarnessToolNames()
         )
+        var harnessServices = LocalAppUserQueryHarnessServices.builtInSkillBackedServices()
+        let appleScriptGenerationAdapter = HostedAppleScriptGenerationAdapter()
+        harnessServices.appleScriptGenerator = { request in
+            await appleScriptGenerationAdapter.generateAppleScript(request)
+        }
         let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
-            services: LocalAppUserQueryHarnessServices.builtInSkillBackedServices()
+            services: harnessServices
         )
         let localStepExecutor = LocalAppHarnessStepExecutor(
             command: commandRedaction.redactedText,
@@ -1222,11 +1227,17 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
     }
 
     private static func genericHarnessToolNames() -> [String] {
-        Array(Set(
+        let allowedSensitiveTools: Set<String> = [
+            "automation.applescript.generate"
+        ]
+        return Array(Set(
             BuiltInHarnessToolCatalog.descriptors
                 .filter { descriptor in
-                    descriptor.safetyClass != .destructive
-                        && descriptor.safetyClass != .sensitive
+                    (
+                        descriptor.safetyClass != .destructive
+                            && descriptor.safetyClass != .sensitive
+                    )
+                        || allowedSensitiveTools.contains(descriptor.name)
                 }
                 .map(\.name)
                 + LocalAppHarnessStepExecutor.descriptors.map(\.name)
