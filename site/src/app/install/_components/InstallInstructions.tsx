@@ -5,7 +5,6 @@ import { ArrowRight } from "lucide-react";
 import {
   Headline,
   PillButton,
-  SectionLabel,
 } from "@/app/_components/landing/LandingPrimitives";
 import { DONKEY_DOWNLOAD_URL } from "@/app/_components/landing/data";
 import { BG, BLACK } from "@/app/_components/landing/theme";
@@ -52,7 +51,6 @@ export function InstallInstructions() {
       }}
     >
       <div style={{ margin: "0 auto", maxWidth: 1280 }}>
-        <SectionLabel number={1}>Install Donkey</SectionLabel>
         <div
           style={{
             alignItems: "end",
