@@ -7,26 +7,15 @@ end if
 
 tell application id "com.apple.Music"
     activate
-end tell
-
-delay 0.4
-
-tell application "System Events"
-    if not (exists process "Music") then
-        return "status=failed" & linefeed & "failureReason=music_process_unavailable"
+    -- Use the Music dictionary directly (Automation only, no UI keystrokes) so playback is reliable
+    -- and does not depend on Accessibility. `search` matches the query across title/artist/album.
+    set matches to (search library playlist 1 for trimmedQuery)
+    if (count of matches) is 0 then
+        return "status=not_found" & linefeed & "query=" & trimmedQuery & linefeed & "clarification.required=true" & linefeed & "clarification.question=I couldn't find " & trimmedQuery & " in the library. What would you like me to play?"
     end if
 
-    tell process "Music"
-        set frontmost to true
-    end tell
-
-    keystroke "f" using command down
-    delay 0.2
-    keystroke trimmedQuery
-    delay 0.2
-    key code 36
-    delay 1.0
-    key code 36
+    set chosen to item 1 of matches
+    play chosen
+    delay 0.6
+    return "status=played" & linefeed & "query=" & trimmedQuery & linefeed & "playedTitle=" & (name of chosen) & linefeed & "playedArtist=" & (artist of chosen)
 end tell
-
-return "status=played" & linefeed & "query=" & trimmedQuery & linefeed & "playedTitle=" & trimmedQuery
