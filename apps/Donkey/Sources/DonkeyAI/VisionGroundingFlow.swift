@@ -52,17 +52,24 @@ public enum VisionGroundingFlow {
             return Outcome(screenPoint: nil, reason: "emptyScreenshot", resolvedAppName: target.appName)
         }
 
-        let frame: DebugUIInspectionFrame
-        do {
-            frame = try await analyzer.inspect(
-                DebugUIInspectionRequest(
-                    screenshotBase64: shot.pngData.base64EncodedString(),
-                    pixelSize: HotLoopSize(width: Double(shot.imageWidth), height: Double(shot.imageHeight), space: .crop),
-                    minConfidence: minConfidence
-                )
-            )
-        } catch {
-            return Outcome(screenPoint: nil, reason: "visionInspectionFailed", resolvedAppName: target.appName)
+        // The hosted vision model occasionally returns malformed JSON; retry a few times.
+        let request = DebugUIInspectionRequest(
+            screenshotBase64: shot.pngData.base64EncodedString(),
+            pixelSize: HotLoopSize(width: Double(shot.imageWidth), height: Double(shot.imageHeight), space: .crop),
+            minConfidence: minConfidence
+        )
+        var frame: DebugUIInspectionFrame?
+        var lastError: Error?
+        for _ in 0..<3 {
+            do {
+                frame = try await analyzer.inspect(request)
+                break
+            } catch {
+                lastError = error
+            }
+        }
+        guard let frame else {
+            return Outcome(screenPoint: nil, reason: "visionInspectionFailed: \(lastError.map { "\($0)" } ?? "unknown")", resolvedAppName: target.appName)
         }
 
         guard let element = resolveElement(targetQuery, in: frame.elements) else {

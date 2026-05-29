@@ -269,7 +269,9 @@ public enum DebugUIInspectionResponseDecoder {
             else {
                 throw DebugUIInspectionHostedAdapterError.missingOutputText
             }
-            frameData = Data(outputText.utf8)
+            // Vision models occasionally wrap the JSON in markdown fences or add trailing prose;
+            // extract the JSON object so a stray character doesn't fail the whole inspection.
+            frameData = Data(jsonObjectSubstring(outputText).utf8)
         }
 
         do {
@@ -279,6 +281,22 @@ public enum DebugUIInspectionResponseDecoder {
         } catch {
             throw DebugUIInspectionHostedAdapterError.invalidJSON(String(describing: error))
         }
+    }
+
+    /// Extracts the JSON object from model output that may be fenced or have trailing prose.
+    static func jsonObjectSubstring(_ text: String) -> String {
+        var trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("```") {
+            trimmed = trimmed
+                .replacingOccurrences(of: "```json", with: "")
+                .replacingOccurrences(of: "```JSON", with: "")
+                .replacingOccurrences(of: "```", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let start = trimmed.firstIndex(of: "{"), let end = trimmed.lastIndex(of: "}"), start <= end {
+            return String(trimmed[start...end])
+        }
+        return trimmed
     }
 
     public static func containsActionOutput(_ value: RemoteInferenceJSONValue) -> Bool {

@@ -2,6 +2,34 @@ import CoreGraphics
 import DonkeyContracts
 import Foundation
 
+/// Low-level keyboard input via CGEvent. Real input — gate behind explicit permission/guards.
+public enum MacKeyboardInput {
+    /// Types arbitrary text by posting per-character unicode key events.
+    public static func type(_ text: String) {
+        guard let source = CGEventSource(stateID: .hidSystemState) else { return }
+        for scalar in text.unicodeScalars where scalar.value <= 0xFFFF {
+            var unit = UniChar(scalar.value)
+            guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
+            else { continue }
+            down.keyboardSetUnicodeString(stringLength: 1, unicodeString: &unit)
+            up.keyboardSetUnicodeString(stringLength: 1, unicodeString: &unit)
+            down.post(tap: .cghidEventTap)
+            up.post(tap: .cghidEventTap)
+        }
+    }
+
+    /// Posts a Return keypress (virtual key 36).
+    public static func pressReturn() {
+        guard let source = CGEventSource(stateID: .hidSystemState),
+              let down = CGEvent(keyboardEventSource: source, virtualKey: 36, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: 36, keyDown: false)
+        else { return }
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
+    }
+}
+
 /// Low-level pointer input via CGEvent (move + left click at a screen point). Real input — callers
 /// must gate this behind explicit permission/guards.
 public enum MacPointerInput {
