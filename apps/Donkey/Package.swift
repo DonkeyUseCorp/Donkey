@@ -99,6 +99,7 @@ let package = Package(
         .testTarget(
             name: "DonkeyRuntimeTests",
             dependencies: [
+                "Donkey",
                 "DonkeyAI",
                 "DonkeyContracts",
                 "DonkeyHarness",

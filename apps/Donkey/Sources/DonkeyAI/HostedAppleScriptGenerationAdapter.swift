@@ -102,7 +102,10 @@ public struct HostedAppleScriptGenerationAdapter: Sendable {
                 return HarnessScriptGenerationOutcome(
                     succeeded: false,
                     summary: "Dynamic AppleScript generation returned an empty script.",
-                    metadata: ["reason": "emptyScriptSource"]
+                    metadata: [
+                        "reason": "emptyScriptSource",
+                        "modelOutput.preview": String(outputText.prefix(800))
+                    ]
                 )
             }
 
@@ -253,6 +256,30 @@ private struct AppleScriptGenerationWire: Decodable {
     var summary: String
     var safetyNotes: [String]
     var expectedOutput: String
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        // Only `canGenerate` is essential. Models routinely omit the string/array fields when they
+        // don't apply (e.g. no `blockedReason` when `canGenerate` is true), so tolerate their
+        // absence instead of failing the whole generation.
+        canGenerate = try container.decode(Bool.self, forKey: .canGenerate)
+        blockedReason = try container.decodeIfPresent(String.self, forKey: .blockedReason) ?? ""
+        summary = try container.decodeIfPresent(String.self, forKey: .summary) ?? ""
+        safetyNotes = try container.decodeIfPresent([String].self, forKey: .safetyNotes) ?? []
+        expectedOutput = try container.decodeIfPresent(String.self, forKey: .expectedOutput) ?? ""
+        // Models name the script field inconsistently (`scriptSource`, `appleScript`, `script`,
+        // `source`). Accept any of them so a correct script isn't dropped over a key name.
+        scriptSource = try container.decodeIfPresent(String.self, forKey: .scriptSource)
+            ?? container.decodeIfPresent(String.self, forKey: .appleScript)
+            ?? container.decodeIfPresent(String.self, forKey: .script)
+            ?? container.decodeIfPresent(String.self, forKey: .source)
+            ?? ""
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case canGenerate, blockedReason, scriptSource, summary, safetyNotes, expectedOutput
+        case appleScript, script, source
+    }
 }
 
 private struct AppleScriptGenerationPromptPayload: Encodable {
