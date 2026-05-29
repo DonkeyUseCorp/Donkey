@@ -417,6 +417,12 @@ function generationConfigFromBody(body: JsonObject): Partial<GenerateContentConf
   if (maxOutputTokens !== undefined) {
     config.maxOutputTokens = maxOutputTokens;
   }
+  // Bound reasoning so thinking tokens (which count against maxOutputTokens) can't starve the
+  // structured output. Callers driving tight per-turn loops pass a small budget; 0 disables thinking.
+  const thinkingBudget = numberValue(body.thinking_budget) ?? numberValue(body.thinkingBudget);
+  if (thinkingBudget !== undefined) {
+    config.thinkingConfig = { thinkingBudget };
+  }
   const responseFormat = responseFormatFromBody(body);
   if (responseFormat?.json) {
     config.responseMimeType = "application/json";
