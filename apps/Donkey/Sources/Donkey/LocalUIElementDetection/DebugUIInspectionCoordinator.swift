@@ -1304,63 +1304,8 @@ final class DebugUIInspectionCoordinator {
 
     private static func compressedRemoteAIImage(
         from screenshot: CapturedWindowScreenshot
-    ) -> DebugUICompressedImage {
-        let fallbackSize = HotLoopSize(
-            width: Double(screenshot.imageWidth),
-            height: Double(screenshot.imageHeight),
-            space: .window
-        )
-        guard let source = CGImageSourceCreateWithData(screenshot.pngData as CFData, nil) else {
-            return DebugUICompressedImage(
-                data: screenshot.pngData,
-                contentType: "image/png",
-                pixelSize: fallbackSize
-            )
-        }
-
-        let maxPixelDimension = 896
-        let thumbnailOptions: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelDimension
-        ]
-        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary),
-              let encoded = NSMutableData() as CFMutableData?,
-              let destination = CGImageDestinationCreateWithData(
-                encoded,
-                UTType.jpeg.identifier as CFString,
-                1,
-                nil
-              )
-        else {
-            return DebugUICompressedImage(
-                data: screenshot.pngData,
-                contentType: "image/png",
-                pixelSize: fallbackSize
-            )
-        }
-
-        CGImageDestinationAddImage(destination, image, [
-            kCGImageDestinationLossyCompressionQuality: 0.48
-        ] as CFDictionary)
-        guard CGImageDestinationFinalize(destination) else {
-            return DebugUICompressedImage(
-                data: screenshot.pngData,
-                contentType: "image/png",
-                pixelSize: fallbackSize
-            )
-        }
-
-        return DebugUICompressedImage(
-            data: encoded as Data,
-            contentType: "image/jpeg",
-            pixelSize: HotLoopSize(
-                width: Double(image.width),
-                height: Double(image.height),
-                space: .window
-            )
-        )
+    ) -> CompressedScreenshot {
+        ScreenshotCompression.compressedForModel(screenshot)
     }
 }
 
@@ -1376,12 +1321,6 @@ private struct DebugUIWindowCapture: Sendable {
     var parseImageData: Data
     var parseContentType: String
     var parsePixelSize: HotLoopSize
-}
-
-private struct DebugUICompressedImage: Sendable {
-    var data: Data
-    var contentType: String
-    var pixelSize: HotLoopSize
 }
 
 #endif
