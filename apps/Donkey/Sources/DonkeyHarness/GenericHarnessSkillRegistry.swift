@@ -331,7 +331,11 @@ public struct HarnessSkillFileSystemSource: Sendable {
                 "directory": directory.path,
                 // File-based discovery signal: natural trigger words for lexical skill matching
                 // (no embeddings). Comma-separated `keywords:` line in the SKILL.md frontmatter.
-                "keywords": metadataList(named: "keywords", in: contents).joined(separator: " ")
+                "keywords": metadataList(named: "keywords", in: contents).joined(separator: " "),
+                // App-specific skills: comma-separated app names / bundle identifiers this skill knows
+                // how to operate (e.g. `apps: Spotify, com.spotify.client`). Lets the runtime fetch an
+                // app's operating playbook by name without hardcoding any app list in code.
+                "apps": metadataList(named: "apps", in: contents).joined(separator: ", ")
             ]
         )
     }

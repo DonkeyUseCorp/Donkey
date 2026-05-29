@@ -37,6 +37,34 @@ public enum BuiltInLocalAppSkillPacks {
             .joined(separator: "\n")
     }
 
+    /// Returns the operating playbook for an app-specific skill (one whose `apps:` frontmatter names
+    /// this app by display name or bundle identifier), or nil if no app-specific skill is installed.
+    /// This is how the runtime learns how to drive a particular app WITHOUT any hardcoded app list:
+    /// add a `BuiltInSkills/<app>/SKILL.md` with an `apps:` line and the guidance is discovered here.
+    public static func appOperatingGuidance(
+        forApp appName: String,
+        bundleIdentifier: String? = nil,
+        maxCharacters: Int = 4_000
+    ) -> String? {
+        let wanted = Set(
+            ([appName, bundleIdentifier].compactMap { $0 })
+                .map { $0.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
+        guard !wanted.isEmpty else { return nil }
+
+        let match = descriptors().first { descriptor in
+            let apps = (descriptor.metadata["apps"] ?? "")
+                .split(separator: ",")
+                .map { $0.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            return apps.contains { app in wanted.contains { $0 == app || $0.contains(app) || app.contains($0) } }
+        }
+        guard let match else { return nil }
+        let body = bounded(strippedSkillMetadata(from: match.description), maxCharacters: maxCharacters)
+        return body.isEmpty ? nil : body
+    }
+
     public static func scriptSource(
         skillID: String,
         relativePath: String
@@ -66,6 +94,8 @@ public enum BuiltInLocalAppSkillPacks {
                     && !lowered.hasPrefix("description:")
                     && !lowered.hasPrefix("tags:")
                     && !lowered.hasPrefix("keywords:")
+                    && !lowered.hasPrefix("apps:")
+                    && !lowered.hasPrefix("scripts:")
                     && !lowered.hasPrefix("tools:")
             }
             .joined(separator: "\n")
@@ -131,7 +161,11 @@ public struct LocalAppTaskSkillContext: Equatable, Sendable {
         taskDefinitions: [LocalAppTaskDefinition],
         appFinderCatalog: [LocalAppFinderCatalogEntry]
     ) -> [(descriptor: HarnessSkillDescriptor, score: Int)] {
+        // App-specific operating skills (those declaring `apps:`) are vision-driving playbooks
+        // consumed only via `appOperatingGuidance(forApp:)` during execution — they are not
+        // intent-planning skills, so keep them out of the planner's skill catalog/ranking.
         let descriptors = BuiltInLocalAppSkillPacks.descriptors()
+            .filter { ($0.metadata["apps"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         guard !descriptors.isEmpty else { return [] }
 
         var taskValues: [String] = []
