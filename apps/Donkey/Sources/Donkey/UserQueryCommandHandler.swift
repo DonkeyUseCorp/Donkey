@@ -261,6 +261,13 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             ]
         )
 
+        if taskIntentResult.trace.metadata["genericHarness.intent.route"] == "guidance" {
+            return await handleGuidance(
+                trace: taskIntentResult.trace, traceID: traceID, taskID: taskID,
+                modelMetadata: modelMetadata
+            )
+        }
+
         if Self.shouldFailSafelyWithoutLocalTask(resolution) {
             return await handleFailSafe(
                 resolution: resolution, traceID: traceID, taskID: taskID,
@@ -542,6 +549,84 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             hint: "No local task intent was produced; responded in the thread."
         )
         return result
+    }
+
+    /// Guidance route: show the user where something is by grounding the requested controls in the
+    /// target app's accessibility tree and presenting a cursor overlay. Visualization only — no
+    /// input, no app state change. Works for any app with an accessibility tree (native or Electron).
+    private func handleGuidance(
+        trace: AIModelCallTrace,
+        traceID: String,
+        taskID: String,
+        modelMetadata: [String: String]
+    ) async -> UserQueryCommandHandlingResult {
+        let appName = trace.metadata["genericHarness.intent.targetApp"].flatMap { $0.isEmpty ? nil : $0 }
+        let targets = Self.guidanceTargets(from: trace.metadata["guidanceTargets"] ?? "")
+        let title = trace.metadata["genericHarness.intent.goal"].flatMap { $0.isEmpty ? nil : $0 } ?? "Here you go"
+        let outcome = await MainActor.run {
+            GuidanceOverlayFlow.cursorGuide(
+                appName: appName,
+                bundleIdentifier: nil,
+                targets: targets,
+                title: title,
+                traceID: traceID
+            )
+        }
+        let located = outcome.request != nil
+        // Prefer the model's own narration; fall back only when it didn't provide one (or when we
+        // couldn't actually ground the control at runtime, which the planner can't know up front).
+        let modelResponse = trace.metadata["assistantResponse"].flatMap { $0.isEmpty ? nil : $0 }
+        let response = located
+            ? (modelResponse ?? "Here it is — follow the pointer.")
+            : "I couldn't locate that on screen right now."
+        let decision = AppHarnessDecision(
+            kind: .respond,
+            message: response,
+            traceID: traceID,
+            metadata: [
+                "structuredDecision": "true",
+                "router": "modelGuidance",
+                "guidance.reason": outcome.reason
+            ]
+        )
+        let result = UserQueryCommandHandlingResult(
+            status: .completed,
+            threadStatus: .chatting,
+            decision: decision,
+            summary: response,
+            traceID: traceID,
+            metadata: modelMetadata.merging([
+                "appHarness.decision": AppHarnessDecisionKind.respond.rawValue,
+                "router": "modelGuidance",
+                "guidance.reason": outcome.reason,
+                "guidance.targetCount": String(targets.count),
+                "guidance.resolvedApp": outcome.resolvedAppName ?? ""
+            ]) { _, new in new },
+            cursorOverlayRequest: outcome.request
+        )
+        _ = await genericHarnessLifecycle.coordinator.complete(
+            taskID: taskID,
+            reason: "User query guidance overlay"
+        )
+        await coordinatorRegistry.finish(taskID: taskID)
+        logHandlingResult(
+            result,
+            stage: "guidance",
+            hint: located ? "Guided with a pointer overlay." : "No grounded control to point at."
+        )
+        return result
+    }
+
+    /// Parses planner `guidanceTargets` ("Label::query; Label::query") into ordered path targets.
+    private static func guidanceTargets(from raw: String) -> [AccessibilityCursorPathTarget] {
+        raw.components(separatedBy: ";").compactMap { entry in
+            let parts = entry.components(separatedBy: "::")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            let query = (parts.count > 1 ? parts[1] : parts.first ?? "")
+            guard !query.isEmpty else { return nil }
+            let label = (parts.count > 1 && !parts[0].isEmpty) ? parts[0] : query
+            return AccessibilityCursorPathTarget(query: query, label: label, kind: .targetControl)
+        }
     }
 
     // MARK: - Generic Harness Task Execution

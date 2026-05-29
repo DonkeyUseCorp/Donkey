@@ -188,7 +188,7 @@ enum TaskIntentWireCodec {
                     "properties": [
                         "route": [
                             "type": "string",
-                            "enum": ["localAppTask", "conversation", "clarification"]
+                            "enum": ["localAppTask", "conversation", "clarification", "guidance"]
                         ],
                         "goal": ["type": "string"],
                         "taskType": ["type": "string", "enum": taskTypes],
@@ -623,6 +623,7 @@ enum TaskIntentWireCodec {
         metadata["genericHarness.schemaVersion"] = wire.schemaVersion
         metadata["genericHarness.intent.route"] = wire.structuredIntent.route
         metadata["genericHarness.intent.goal"] = wire.structuredIntent.goal
+        metadata["genericHarness.intent.targetApp"] = wire.structuredIntent.targetAppName
         metadata["genericHarness.ambiguity.class"] = wire.ambiguityRisk.ambiguityClass
         metadata["genericHarness.risk.level"] = wire.ambiguityRisk.riskLevel
         metadata["genericHarness.shouldAskBeforeActing"] = String(wire.ambiguityRisk.shouldAskBeforeActing)
