@@ -849,12 +849,25 @@ public struct LocalAppTaskCatalog: Sendable {
         }
 
         if intent.needsConfirmation {
-            return LocalAppTaskCatalogResolution(
-                status: .needsConfirmation,
-                intent: intent,
-                definition: definition,
-                metadata: ["reason": intent.metadata["missingEntity"] ?? "needsConfirmation"]
-            )
+            // The planner's confirmation request is advisory for safe, reversible actions. Donkey is
+            // an act-first Mac agent: it only hard-stops to confirm when the planner classified the
+            // action as genuinely high-risk/dangerous, or when a required detail is actually missing.
+            // Otherwise it proceeds and relies on the per-tool permission and guardrail gates at
+            // execution time for real safety.
+            let riskLevel = intent.metadata["genericHarness.risk.level"]?.lowercased() ?? ""
+            let ambiguityClass = intent.metadata["genericHarness.ambiguity.class"]?.lowercased() ?? ""
+            let hasMissingEntity = !(intent.metadata["missingEntity"] ?? "").isEmpty
+            let mustConfirm = hasMissingEntity
+                || riskLevel == "high"
+                || ambiguityClass == "dangerous"
+            if mustConfirm {
+                return LocalAppTaskCatalogResolution(
+                    status: .needsConfirmation,
+                    intent: intent,
+                    definition: definition,
+                    metadata: ["reason": intent.metadata["missingEntity"] ?? "needsConfirmation"]
+                )
+            }
         }
 
         let availability = availabilityProvider.availability(for: definition.targetApp)

@@ -108,7 +108,10 @@ enum TaskIntentWireCodec {
                     "additionalProperties": ["type": "string"]
                 ],
                 "confidence": ["type": "number", "minimum": 0, "maximum": 1],
-                "needsConfirmation": ["type": "boolean"],
+                "needsConfirmation": [
+                    "type": "boolean",
+                    "description": "Set true ONLY when the action is destructive, irreversible, costly, or sent/shared externally AND its intent is ambiguous. Set false for safe, reversible actions — including broad or casual requests you resolved by choosing concrete specifics yourself (e.g. playing a representative song). Do not set true just because a request was casual or under-specified."
+                ],
                 "actionPlan": actionPlanSchema,
                 "metadata": [
                     "type": "object",
@@ -199,7 +202,10 @@ enum TaskIntentWireCodec {
                             "additionalProperties": ["type": "string"]
                         ],
                         "confidence": ["type": "number", "minimum": 0, "maximum": 1],
-                        "needsConfirmation": ["type": "boolean"]
+                        "needsConfirmation": [
+                            "type": "boolean",
+                            "description": "Set true ONLY when the action is destructive, irreversible, costly, or sent/shared externally AND its intent is ambiguous. Set false for safe, reversible actions — including broad or casual requests you resolved by choosing concrete specifics yourself (e.g. playing a representative song). Do not set true just because a request was casual or under-specified."
+                        ]
                     ]
                 ],
                 "ambiguityRisk": [
@@ -590,7 +596,10 @@ enum TaskIntentWireCodec {
             guard !toolName.isEmpty else { return nil }
             return LocalAppActionPlanTool(rawValue: toolName)
         }
-        let inputEntity = firstNonEmpty(planSteps.map(\.inputEntity)) ?? ""
+        // Planners often carry the text to enter in a step's toolInputs (e.g. toolInputs.query)
+        // and leave the per-step inputEntity blank. Fall back to the conventional "query" entity so
+        // text-input plans still resolve their value from entities instead of looking up a blank key.
+        let inputEntity = firstNonEmpty(planSteps.map(\.inputEntity)) ?? "query"
         let controlID = firstNonEmpty(planSteps.map(\.controlID)) ?? ""
         let focusKey = firstNonEmpty(planSteps.map(\.focusKey)) ?? ""
         var verificationTools = tools.filter(LocalAppActionPlan.isVerificationTool)
