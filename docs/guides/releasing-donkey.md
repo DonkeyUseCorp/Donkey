@@ -9,8 +9,8 @@ GitHub UI, and the workflow builds the latest default-branch code into the
 release artifact.
 
 Nightly prereleases use a separate `Nightly Donkey Build` GitHub Actions
-workflow. It builds the latest default-branch code on a schedule and publishes
-the result to the moving `nightly` prerelease.
+workflow. It builds changed default-branch code on a schedule and publishes the
+result to the moving `nightly` prerelease.
 
 ## Release Boundaries
 
@@ -97,9 +97,12 @@ links must keep using the immutable numeric tag.
 ## Nightly Builds
 
 The `Nightly Donkey Build` workflow runs nightly at 09:00 UTC and can also be
-started manually from GitHub Actions. It builds the default branch, packages
-`dist/Donkey.dmg`, generates `dist/Donkey.dmg.sha256`, moves the `nightly` tag
-to that commit, and creates or updates the `Donkey Nightly Build` prerelease.
+started manually from GitHub Actions. It compares the default-branch commit to
+the current `nightly` tag before installing packaging dependencies. If the tag
+already points at the default-branch commit, the workflow skips packaging and
+publishing. When the default branch has changed, it packages `dist/Donkey.dmg`,
+generates `dist/Donkey.dmg.sha256`, moves the `nightly` tag to that commit, and
+creates or updates the `Donkey Nightly Build` prerelease.
 
 Nightly builds are intentionally separate from production releases:
 

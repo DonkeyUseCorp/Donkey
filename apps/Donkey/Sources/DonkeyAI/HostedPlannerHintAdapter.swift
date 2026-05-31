@@ -316,7 +316,7 @@ public struct HostedPlannerHintAdapter: Sendable {
         )
     }
 
-    private static let instructions = "Return strict JSON with a planner hint and memoryWriteProposals. Hints are advisory and never direct input. Leave memoryWriteProposals empty unless a source-linked target memory should be proposed."
+    private static let instructions = "Provide a planner hint and memoryWriteProposals. Hints are advisory and never direct input. Leave memoryWriteProposals empty unless a source-linked target memory should be proposed."
 
     private func promptText(for request: PlannerHintAdapterRequest) -> String {
         [

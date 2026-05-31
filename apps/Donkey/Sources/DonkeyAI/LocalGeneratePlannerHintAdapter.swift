@@ -135,7 +135,7 @@ public struct LocalGeneratePlannerHintAdapter: Sendable {
 
     private func promptText(for request: PlannerHintAdapterRequest) -> String {
         [
-            "Return strict JSON with a planner hint and memoryWriteProposals. Hints are advisory and never direct input.",
+            "Provide a planner hint and memoryWriteProposals. Hints are advisory and never direct input.",
             "goal: \(request.context.userGoal)",
             "target: \(request.context.targetID)",
             "runtime: \(request.context.runtimeProfile)",

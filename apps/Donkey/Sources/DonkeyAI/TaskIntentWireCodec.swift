@@ -159,15 +159,29 @@ enum TaskIntentWireCodec {
             "properties": [
                 "id": ["type": "string"],
                 "summary": ["type": "string"],
-                "toolName": ["type": "string", "enum": toolNames],
-                "inputEntity": ["type": "string"],
-                "controlID": ["type": "string"],
+                "toolName": [
+                    "type": "string",
+                    "enum": toolNames,
+                    "description": "One available tool name for an executable step; empty string for a non-executable reasoning step."
+                ],
+                "inputEntity": [
+                    "type": "string",
+                    "description": "Entity key feeding this step (usually query when text is entered); empty when unused."
+                ],
+                "controlID": [
+                    "type": "string",
+                    "description": "Semantic or observed visual target id for click/submit tools; empty when unused."
+                ],
                 "focusKey": ["type": "string"],
                 "toolInputs": [
                     "type": "object",
-                    "additionalProperties": ["type": "string"]
+                    "additionalProperties": ["type": "string"],
+                    "description": "Inputs for the tool, filled from structured entities and the tool's schema."
                 ],
-                "expectedObservation": ["type": "string"]
+                "expectedObservation": [
+                    "type": "string",
+                    "description": "What the harness should observe after this step."
+                ]
             ]
         ]
 
@@ -175,7 +189,14 @@ enum TaskIntentWireCodec {
             "type": "object",
             "additionalProperties": false,
             "required": [
-                "structuredIntent"
+                "structuredIntent",
+                "ambiguityRisk",
+                "contextNeeds",
+                "planSteps",
+                "verificationCriteria",
+                "fallbacks",
+                "clarificationPolicy",
+                "metadata"
             ],
             "properties": [
                 "structuredIntent": [
@@ -183,23 +204,34 @@ enum TaskIntentWireCodec {
                     "additionalProperties": false,
                     "required": [
                         "route",
-                        "taskType"
+                        "taskType",
+                        "needsConfirmation"
                     ],
                     "properties": [
                         "route": [
                             "type": "string",
-                            "enum": ["localAppTask", "conversation", "clarification", "guidance"]
+                            "enum": ["localAppTask", "conversation", "clarification", "guidance"],
+                            "description": "How the harness should handle the turn. localAppTask: operate a local app or item — the default for any safe, identifiable action, including broad or casual ones you resolve by choosing concrete specifics. conversation: greetings, questions, explanations, status, malformed input, or any turn needing no external action. guidance: SHOW where something is or how to do it without changing any state. clarification: only when acting would be destructive, irreversible, costly, or sent/shared externally AND intent is genuinely ambiguous, or a required target is unknown and cannot be inferred."
                         ],
-                        "goal": ["type": "string"],
-                        "taskType": ["type": "string", "enum": taskTypes],
+                        "goal": [
+                            "type": "string",
+                            "description": "Concise restatement of what the user wants."
+                        ],
+                        "taskType": [
+                            "type": "string",
+                            "enum": taskTypes,
+                            "description": "Provided task type to execute, or \"none\" for conversation, guidance, or clarification. Use local_app_interaction for an executable local-app request that needs a model-planned workflow and has no more specific provided task type."
+                        ],
                         "targetAppName": targetAppNameSchema,
                         "entities": [
                             "type": "object",
-                            "additionalProperties": ["type": "string"]
+                            "additionalProperties": ["type": "string"],
+                            "description": "Concrete values required by the task's entity rules. For local_app_interaction set appName (human app name) and goal, plus query when text must be entered."
                         ],
                         "normalizedEntities": [
                             "type": "object",
-                            "additionalProperties": ["type": "string"]
+                            "additionalProperties": ["type": "string"],
+                            "description": "Normalized form of entities; mirror query here when text input is needed."
                         ],
                         "confidence": ["type": "number", "minimum": 0, "maximum": 1],
                         "needsConfirmation": [
@@ -231,28 +263,35 @@ enum TaskIntentWireCodec {
                             "maxItems": 8,
                             "items": ["type": "string"]
                         ],
-                        "shouldAskBeforeActing": ["type": "boolean"]
+                        "shouldAskBeforeActing": [
+                            "type": "boolean",
+                            "description": "True only for dangerous, destructive, irreversible, costly, or externally-sent actions whose intent is ambiguous; false for safe, reversible actions, including broad or casual ones."
+                        ]
                     ]
                 ],
                 "contextNeeds": [
                     "type": "array",
                     "maxItems": 8,
-                    "items": ["type": "string"]
+                    "items": ["type": "string"],
+                    "description": "Lookups needed before or during execution: app lookup, memory lookup, screen observation, element discovery, or skill lookup."
                 ],
                 "planSteps": [
                     "type": "array",
                     "maxItems": 12,
-                    "items": planStepSchema
+                    "items": planStepSchema,
+                    "description": "Generic harness plan. Empty for conversation, guidance, and clarification — those routes carry no executable steps."
                 ],
                 "verificationCriteria": [
                     "type": "array",
                     "maxItems": 8,
-                    "items": ["type": "string"]
+                    "items": ["type": "string"],
+                    "description": "What proves the task succeeded."
                 ],
                 "fallbacks": [
                     "type": "array",
                     "maxItems": 8,
-                    "items": ["type": "string"]
+                    "items": ["type": "string"],
+                    "description": "Safe recovery choices if the primary plan fails."
                 ],
                 "clarificationPolicy": [
                     "type": "object",
@@ -263,18 +302,23 @@ enum TaskIntentWireCodec {
                         "policy"
                     ],
                     "properties": [
-                        "shouldAsk": ["type": "boolean"],
+                        "shouldAsk": [
+                            "type": "boolean",
+                            "description": "True only when route is clarification."
+                        ],
                         "questions": [
                             "type": "array",
                             "maxItems": 4,
-                            "items": ["type": "string"]
+                            "items": ["type": "string"],
+                            "description": "When asking, exactly one specific question naming what you need; otherwise empty."
                         ],
                         "policy": ["type": "string"]
                     ]
                 ],
                 "metadata": [
                     "type": "object",
-                    "additionalProperties": ["type": "string"]
+                    "additionalProperties": ["type": "string"],
+                    "description": "Free-form string map. conversation: set responseMode=\"conversation\" and assistantResponse=<brief natural-language reply>. guidance: set assistantResponse=<brief spoken narration> and guidanceTargets=<JSON array of {\"label\":\"...\",\"query\":\"...\"} controls to point at, in order; label is shown to the user, query is the control's on-screen text>. local_app_interaction with a non-empty app finder catalog: set appFinder.selectedAppID, appFinder.selectedCapabilityID, and appFinder.controlProfile from a catalog entry whose supportStatus is supported (never candidate, unsupported, or denied)."
                 ]
             ]
         ]

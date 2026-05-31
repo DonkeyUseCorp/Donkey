@@ -195,10 +195,8 @@ public struct HostedAppleScriptGenerationAdapter: Sendable {
 
     private static let instructions = [
         "You generate AppleScript for Donkey's guarded local-app harness.",
-        "Return strict JSON only.",
         "Generate only a small AppleScript for one bounded operation or a very small sequence inside the requested target app.",
         "Do not build a full automation pipeline; Donkey handles observation, clicking, recovery, and verification as separate harness steps.",
-        "Set canGenerate false when the task is not doable with a small target-app AppleScript using the provided entities and allowed actions.",
         "Use only the provided entities and allowed actions.",
         "Do not use shell commands, System Events, keystrokes, key codes, file deletion, quitting apps, network calls, credential access, or unrelated applications.",
         "Prefer app dictionary commands and return a concise structured text result with key=value fields when possible.",

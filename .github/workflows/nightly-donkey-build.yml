@@ -24,7 +24,39 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.repository.default_branch }}
 
+      - name: Fetch tags
+        run: git fetch --tags --force origin
+
+      - name: Check for nightly changes
+        id: changes
+        env:
+          TAG: nightly
+        run: |
+          target_sha="$(git rev-parse HEAD)"
+          previous_sha=""
+          should_build=true
+
+          if previous_sha="$(git rev-parse -q --verify "${TAG}^{commit}")"; then
+            if [[ "$previous_sha" == "$target_sha" ]]; then
+              should_build=false
+            fi
+          fi
+
+          {
+            echo "target_sha=$target_sha"
+            echo "previous_sha=$previous_sha"
+            echo "should_build=$should_build"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Skip unchanged nightly build
+        if: steps.changes.outputs.should_build != 'true'
+        run: |
+          echo "The nightly tag already points at ${TARGET_SHA}; skipping package and publish steps."
+        env:
+          TARGET_SHA: ${{ steps.changes.outputs.target_sha }}
+
       - name: Prepare nightly values
+        if: steps.changes.outputs.should_build == 'true'
         id: nightly
         run: |
           version="$(python3 - <<'PY'
@@ -44,26 +76,30 @@ jobs:
             echo "version=$version"
             echo "build=$build"
             echo "tag=nightly"
-            echo "target_sha=$(git rev-parse HEAD)"
+            echo "target_sha=${{ steps.changes.outputs.target_sha }}"
             echo "built_at=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           } >> "$GITHUB_OUTPUT"
 
       - name: Install packaging dependencies
+        if: steps.changes.outputs.should_build == 'true'
         run: |
           if ! command -v magick >/dev/null 2>&1; then
             brew install imagemagick
           fi
 
       - name: Package Donkey
+        if: steps.changes.outputs.should_build == 'true'
         env:
           DONKEY_APP_VERSION: ${{ steps.nightly.outputs.version }}
           DONKEY_APP_BUILD: ${{ steps.nightly.outputs.build }}
         run: ./scripts/package-donkey-app.sh
 
       - name: Generate checksum
+        if: steps.changes.outputs.should_build == 'true'
         run: shasum -a 256 dist/Donkey.dmg > dist/Donkey.dmg.sha256
 
       - name: Publish nightly prerelease
+        if: steps.changes.outputs.should_build == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.nightly.outputs.tag }}

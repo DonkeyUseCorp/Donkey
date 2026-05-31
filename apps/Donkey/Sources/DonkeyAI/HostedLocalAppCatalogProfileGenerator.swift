@@ -184,9 +184,8 @@ public struct HostedLocalAppCatalogProfileGenerator: LocalAppCatalogProfileGener
 
     private static let instructions = [
         "Generate local app catalog profiles for Donkey's guarded local-app task-intent boundary.",
-        "Return strict JSON only with an entries array and metadata object.",
         "Return one entry for each input application. Preserve the input appID, appName, and bundleIdentifier exactly; use an empty string when bundleIdentifier is absent.",
-        "Supported means the app has a safe generic workflow through one of these control profiles only: search_then_enter, address_bar_submit, new_document_text.",
+        "Supported means the app has a safe generic workflow through one of the allowed control profiles only.",
         "Use supported only for low-risk actions that fit one allowed profile with a clear user payload, such as search-and-submit, address-bar submission, or creating a new text-like document.",
         "Use candidate when the app might be automatable but a safe generic workflow is uncertain.",
         "Use unsupported when it is not meaningfully controllable through the allowed profiles.",
@@ -205,6 +204,7 @@ public struct HostedLocalAppCatalogProfileGenerator: LocalAppCatalogProfileGener
                 "summary": ["type": "string"],
                 "controlProfiles": [
                     "type": "array",
+                    "description": "Allowed generic control profiles this capability supports.",
                     "items": [
                         "type": "string",
                         "enum": [

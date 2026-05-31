@@ -113,7 +113,7 @@ public struct HostedDebugUIInspectionAnalyzer: DebugUIInspectionAnalyzing {
         let width = max(1, Int(pixelSize.width.rounded()))
         let height = max(1, Int(pixelSize.height.rounded()))
         return """
-    You are a read-only macOS UI inspection model. Return bounding boxes for visible visual controls that are likely clickable or otherwise user-interactable. Return ONLY valid JSON.
+    You are a read-only macOS UI inspection model. Return bounding boxes for visible visual controls that are likely clickable or otherwise user-interactable.
 
     The attached screenshot coordinate space is exactly \(width) pixels wide by \(height) pixels high.
 
@@ -126,9 +126,6 @@ public struct HostedDebugUIInspectionAnalyzer: DebugUIInspectionAnalyzing {
     Do not return an empty elements array unless the screenshot is blank or contains no visible UI. For a normal macOS desktop screenshot, return the visible controls you can identify.
 
     Do not click, type, scroll, drag, navigate, call tools, or propose actions. This is visual inspection only.
-
-    Return exactly:
-    {"coordinate_space":{"width":\(width),"height":\(height)},"elements":[{"id":"stable_unique_id","type":"button","label":"Save","description":"Saves current document","bbox":{"x":120,"y":340,"width":88,"height":32},"confidence":0.98,"visual_style":{"overlay_color":"#3B82F6","border_color":"#60A5FA","label_color":"#FFFFFF"}}]}
     """
     }
 
@@ -200,15 +197,25 @@ public struct HostedDebugUIInspectionAnalyzer: DebugUIInspectionAnalyzing {
                                 .string("visual_style")
                             ]),
                             "properties": .object([
-                                "id": .object(["type": .string("string")]),
+                                "id": .object([
+                                    "type": .string("string"),
+                                    "description": .string("Stable unique identifier for this control.")
+                                ]),
                                 "type": .object([
                                     "type": .string("string"),
                                     "enum": .array(DebugUIElementType.allCases.map { .string($0.rawValue) })
                                 ]),
-                                "label": .object(["type": .string("string")]),
-                                "description": .object(["type": .string("string")]),
+                                "label": .object([
+                                    "type": .string("string"),
+                                    "description": .string("Human-readable label; infer one for icon-only controls.")
+                                ]),
+                                "description": .object([
+                                    "type": .string("string"),
+                                    "description": .string("Brief description of what the control does.")
+                                ]),
                                 "bbox": .object([
                                     "type": .string("object"),
+                                    "description": .string("Bounding box in screenshot pixel coordinates, origin top-left, tightly fitting the control."),
                                     "additionalProperties": .bool(false),
                                     "required": .array([
                                         .string("x"),
@@ -226,10 +233,12 @@ public struct HostedDebugUIInspectionAnalyzer: DebugUIInspectionAnalyzing {
                                 "confidence": .object([
                                     "type": .string("number"),
                                     "minimum": .number(0),
-                                    "maximum": .number(1)
+                                    "maximum": .number(1),
+                                    "description": .string("Detection confidence from 0 to 1.")
                                 ]),
                                 "visual_style": .object([
                                     "type": .string("object"),
+                                    "description": .string("Hex colors for rendering this control's overlay."),
                                     "additionalProperties": .bool(false),
                                     "required": .array([
                                         .string("overlay_color"),
@@ -237,9 +246,18 @@ public struct HostedDebugUIInspectionAnalyzer: DebugUIInspectionAnalyzing {
                                         .string("label_color")
                                     ]),
                                     "properties": .object([
-                                        "overlay_color": .object(["type": .string("string")]),
-                                        "border_color": .object(["type": .string("string")]),
-                                        "label_color": .object(["type": .string("string")])
+                                        "overlay_color": .object([
+                                            "type": .string("string"),
+                                            "description": .string("Hex color for the overlay fill, e.g. #3B82F6.")
+                                        ]),
+                                        "border_color": .object([
+                                            "type": .string("string"),
+                                            "description": .string("Hex color for the overlay border, e.g. #60A5FA.")
+                                        ]),
+                                        "label_color": .object([
+                                            "type": .string("string"),
+                                            "description": .string("Hex color for the label text, e.g. #FFFFFF.")
+                                        ])
                                     ])
                                 ])
                             ])

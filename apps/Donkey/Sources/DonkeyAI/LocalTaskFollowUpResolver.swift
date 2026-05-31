@@ -386,7 +386,7 @@ public struct HostedTaskFollowUpResolver: UserQueryFollowUpResolving {
         )
     }
 
-    private static let instructions = "Decide whether the current turn continues one of the candidate Donkey task threads. Return strict JSON only. Set isFollowUp false and taskID empty when the turn should start a new task."
+    private static let instructions = "Decide whether the current turn continues one of the candidate Donkey task threads. Set isFollowUp false and taskID empty when the turn should start a new task."
 
     private static func schema(for candidates: [UserQueryFollowUpCandidate]) -> RemoteInferenceJSONValue {
         .object([

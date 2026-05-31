@@ -122,7 +122,7 @@ public enum VisionActionPlanner {
         Look at the history and the screenshot: if you just clicked a text field, the next action should be "type", not another click. Do not get stuck repeating the same step.
         If you clicked something and the screenshot looks unchanged, your click MISSED — do not repeat the same coordinate; re-locate the target and aim at its exact visual center.
         CLICK PRECISELY: set x,y to the exact visual CENTER of the intended control, not above/below/beside it.
-        Keep "reason" to one short sentence. Return ONLY the JSON object, nothing else.
+        Keep "reason" to one short sentence.
         """
         return RemoteInferenceResponseCreateRequest(
             input: .array([
