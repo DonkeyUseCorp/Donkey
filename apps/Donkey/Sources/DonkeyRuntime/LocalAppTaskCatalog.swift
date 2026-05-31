@@ -849,17 +849,19 @@ public struct LocalAppTaskCatalog: Sendable {
         }
 
         if intent.needsConfirmation {
-            // The planner's confirmation request is advisory for safe, reversible actions. Donkey is
-            // an act-first Mac agent: it only hard-stops to confirm when the planner classified the
-            // action as genuinely high-risk/dangerous, or when a required detail is actually missing.
-            // Otherwise it proceeds and relies on the per-tool permission and guardrail gates at
-            // execution time for real safety.
+            // Donkey is an act-first Mac agent: it doesn't over-confirm safe, reversible actions.
+            // But when the planner explicitly asked to confirm (needsConfirmation=true), the default
+            // is to HONOR that — we only proceed without confirming when the planner ALSO explicitly
+            // classified the action as low-risk and non-dangerous. Absent risk metadata (e.g. a
+            // non-hosted parser), medium/high risk, dangerous ambiguity, or a missing required detail
+            // all keep the confirmation hard-stop, rather than silently bypassing it.
+            // riskLevel ∈ {low, medium, high}; ambiguityClass ∈ {safe, recoverable, dangerous}.
+            // A non-hosted parser leaves both empty, which is (correctly) NOT low-risk → confirm.
             let riskLevel = intent.metadata["genericHarness.risk.level"]?.lowercased() ?? ""
             let ambiguityClass = intent.metadata["genericHarness.ambiguity.class"]?.lowercased() ?? ""
             let hasMissingEntity = !(intent.metadata["missingEntity"] ?? "").isEmpty
-            let mustConfirm = hasMissingEntity
-                || riskLevel == "high"
-                || ambiguityClass == "dangerous"
+            let explicitlyLowRisk = riskLevel == "low" && ambiguityClass != "dangerous"
+            let mustConfirm = hasMissingEntity || !explicitlyLowRisk
             if mustConfirm {
                 return LocalAppTaskCatalogResolution(
                     status: .needsConfirmation,

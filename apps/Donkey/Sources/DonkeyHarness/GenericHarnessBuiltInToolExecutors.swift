@@ -1317,27 +1317,51 @@ public enum BuiltInHarnessToolExecutors {
 
     // MARK: - Verification & Lifecycle
 
+    /// Tools that observe/plan/converse rather than change app state. A criteria-less `state.verify`
+    /// must not treat one of these succeeding as evidence the task's action actually happened.
+    private static let nonActionVerifyTools: Set<String> = [
+        "state.verify",
+        "screen.observe",
+        "app.observe",
+        "elements.get",
+        "skill.load",
+        "skill.list",
+        "app.list",
+        "app.lookup"
+    ]
+
     private static func stateVerify(_ context: HarnessToolExecutionContext) -> HarnessToolResult {
         guard let criteria = trimmed(context.call.input["criteria"]) else {
-            // Planners sometimes append a verify step without echoing explicit criteria. Rather than
-            // failing a run whose action already succeeded, verify against the most recent guarded
-            // action's structured outcome: pass unless that action explicitly reported failure.
-            let recentAction = context.worldModel.facts["script.executed.succeeded"]
-            let verified = recentAction != "false"
+            // Planners sometimes append a verify step without echoing explicit criteria. Verify against
+            // the evidence the run produced: a guarded script that explicitly reported failure fails;
+            // otherwise pass when SOME prior action (script OR accessibility/UI) actually succeeded.
+            // A criteria-less verify with no prior action at all (e.g. ordered before anything ran) has
+            // nothing to attest to, so it does not report success vacuously.
+            let scriptOutcome = context.worldModel.facts["script.executed.succeeded"]
+            let hadSucceededAction = context.worldModel.attemptedToolCalls.contains { record in
+                record.resultStatus == .succeeded && !Self.nonActionVerifyTools.contains(record.call.name)
+            }
+            let verified = scriptOutcome != "false" && (scriptOutcome == "true" || hadSucceededAction)
+            let summary: String
+            if !verified, scriptOutcome == "false" {
+                summary = "Prior action reported failure."
+            } else if !verified {
+                summary = "Verification has no criteria and no prior action evidence to confirm."
+            } else {
+                summary = "Verification succeeded from prior action evidence (no explicit criteria)."
+            }
             return HarnessToolResult(
                 callID: context.call.id,
                 toolName: context.call.name,
                 status: verified ? .succeeded : .failed,
-                summary: verified
-                    ? "Verification succeeded from prior action evidence (no explicit criteria)."
-                    : "Prior action reported failure.",
+                summary: summary,
                 observations: HarnessObservationDelta(
                     facts: [
-                        "state.verify.criteria": "inferred:script.executed.succeeded",
+                        "state.verify.criteria": "inferred:priorActionEvidence",
                         "state.verify.verified": String(verified),
                         "lastAcceptedTool": context.call.name
                     ],
-                    uncertainty: verified ? [] : ["prior guarded action reported failure"]
+                    uncertainty: verified ? [] : ["no explicit criteria and no successful prior action to verify against"]
                 ),
                 metadata: ["verified": String(verified), "criteria.inferred": "true"]
             )
