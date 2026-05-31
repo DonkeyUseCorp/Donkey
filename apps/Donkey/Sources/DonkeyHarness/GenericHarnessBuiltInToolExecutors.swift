@@ -214,6 +214,9 @@ public struct HarnessBuiltInToolServices: Sendable {
     public var appleScriptGenerator: (@Sendable (HarnessScriptGenerationRequest) async -> HarnessScriptGenerationOutcome)?
     public var appleScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)?
     public var skillScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)?
+    /// Native Donkey Command Layer backend. Returns a result for a recognized
+    /// command, or `nil` to let dispatch fall through to `unknownTool`.
+    public var commandExecutor: (@Sendable (HarnessToolExecutionContext) async -> HarnessToolResult?)?
 
     public init(
         memoryEntries: [HarnessMemoryEntry] = [],
@@ -224,7 +227,8 @@ public struct HarnessBuiltInToolServices: Sendable {
         applicationSkillPackWriter: HarnessApplicationSkillPackWriter? = nil,
         appleScriptGenerator: (@Sendable (HarnessScriptGenerationRequest) async -> HarnessScriptGenerationOutcome)? = nil,
         appleScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)? = nil,
-        skillScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)? = nil
+        skillScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)? = nil,
+        commandExecutor: (@Sendable (HarnessToolExecutionContext) async -> HarnessToolResult?)? = nil
     ) {
         self.memoryEntries = memoryEntries
         self.appEntries = appEntries
@@ -235,6 +239,7 @@ public struct HarnessBuiltInToolServices: Sendable {
         self.appleScriptGenerator = appleScriptGenerator
         self.appleScriptExecutor = appleScriptExecutor
         self.skillScriptExecutor = skillScriptExecutor
+        self.commandExecutor = commandExecutor
     }
 }
 
@@ -312,6 +317,10 @@ public enum BuiltInHarnessToolExecutors {
         case "run.pause", "run.resume", "run.recover", "run.cancel", "run.complete", "run.failSafe":
             return lifecycle(context)
         default:
+            if let commandExecutor = services.commandExecutor,
+               let result = await commandExecutor(context) {
+                return result
+            }
             return HarnessToolResult(
                 callID: context.call.id,
                 toolName: context.call.name,

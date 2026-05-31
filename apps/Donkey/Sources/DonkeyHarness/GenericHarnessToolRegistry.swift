@@ -5,6 +5,11 @@ public struct HarnessToolDescriptor: Codable, Equatable, Sendable {
     public var pluginID: String
     public var summary: String
     public var inputSchema: [String: String]
+    /// Input keys that are optional. Anything in `inputSchema` not listed here is
+    /// treated as required. Declared structurally rather than inferred from the
+    /// human-readable description text. (Property default keeps Codable decoding
+    /// of older payloads that lack the key tolerant.)
+    public var optionalInputKeys: [String] = []
     public var outputSchema: [String: String]
     public var requiredPermissions: [HarnessPermission]
     public var safetyClass: HarnessToolSafetyClass
@@ -17,6 +22,7 @@ public struct HarnessToolDescriptor: Codable, Equatable, Sendable {
         pluginID: String,
         summary: String,
         inputSchema: [String: String] = [:],
+        optionalInputKeys: [String] = [],
         outputSchema: [String: String] = [:],
         requiredPermissions: [HarnessPermission] = [],
         safetyClass: HarnessToolSafetyClass,
@@ -28,6 +34,7 @@ public struct HarnessToolDescriptor: Codable, Equatable, Sendable {
         self.pluginID = pluginID
         self.summary = summary
         self.inputSchema = inputSchema
+        self.optionalInputKeys = optionalInputKeys
         self.outputSchema = outputSchema
         self.requiredPermissions = requiredPermissions
         self.safetyClass = safetyClass
@@ -544,7 +551,7 @@ public enum BuiltInHarnessToolCatalog {
                 permissions: [.lifecycle],
                 safety: .readOnly
             )
-        ]
+        ] + DonkeyCommandLayer.descriptors
     }
 
     public static func registryWithBuiltInExecutors(

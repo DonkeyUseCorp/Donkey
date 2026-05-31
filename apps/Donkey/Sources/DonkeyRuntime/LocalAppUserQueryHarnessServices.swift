@@ -12,7 +12,11 @@ public enum LocalAppUserQueryHarnessServices {
             },
             skillScriptExecutor: { artifact, context in
                 await executeSkillScript(artifact: artifact, context: context)
-            }
+            },
+            // The Command Layer (incl. shell_exec) is intentionally available to
+            // the local planner as well as the Gemini Live session; both go
+            // through the same DonkeyCommandBackends guardrails.
+            commandExecutor: DonkeyCommandBackends.makeExecutor()
         )
     }
 

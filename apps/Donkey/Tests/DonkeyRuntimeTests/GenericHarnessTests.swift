@@ -394,6 +394,125 @@ struct GenericHarnessTests {
     }
 
     @Test
+    func donkeyCommandLayerDescriptorsAreSurfaced() {
+        let descriptors = BuiltInHarnessToolCatalog.descriptors
+        let names = Set(descriptors.map(\.name))
+        for command in DonkeyCommandLayer.Command.allCases {
+            #expect(names.contains(command.rawValue))
+        }
+        // Command Layer tools must not be sensitive/destructive, or the planner
+        // tool-name filter would drop them from the model's tool list.
+        let commandDescriptors = descriptors.filter { $0.pluginID == DonkeyCommandLayer.pluginID }
+        #expect(commandDescriptors.count == DonkeyCommandLayer.Command.allCases.count)
+        for descriptor in commandDescriptors {
+            #expect(descriptor.safetyClass != .sensitive)
+            #expect(descriptor.safetyClass != .destructive)
+        }
+    }
+
+    @Test
+    func donkeyCommandLayerDiscoversAppsAndFallsThrough() async {
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(commandExecutor: DonkeyCommandBackends.makeExecutor())
+        )
+
+        // apps.list is read-only discovery and always succeeds.
+        let apps = await registry.execute(
+            HarnessToolCall(id: "apps-1", name: "apps.list"),
+            taskID: "task-apps",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: [.appLookup]
+        )
+        #expect(apps.status == .succeeded)
+        #expect(apps.metadata["installed"] != nil)
+
+        // shell_exec with no command is rejected without side effects.
+        let emptyShell = await registry.execute(
+            HarnessToolCall(id: "sh-empty", name: "shell_exec"),
+            taskID: "task-sh-empty",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: [.appControl, .input]
+        )
+        #expect(emptyShell.status == .invalidInput)
+
+        // Delegation must still fall through to unknownTool for names the
+        // Command Layer does not own.
+        let unknown = await registry.execute(
+            HarnessToolCall(id: "x-1", name: "not.a.command"),
+            taskID: "task-unknown",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: [.appControl]
+        )
+        #expect(unknown.status == .unknownTool)
+    }
+
+    @Test
+    func shellExecRunsSafeCommandsAndBlocksDangerousOnes() async {
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(commandExecutor: DonkeyCommandBackends.makeExecutor())
+        )
+        let permissions: Set<HarnessPermission> = [.appControl, .input]
+
+        let ok = await registry.execute(
+            HarnessToolCall(id: "sh-1", name: "shell_exec", input: ["command": "echo donkey-ok"]),
+            taskID: "task-sh-ok",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: permissions
+        )
+        #expect(ok.status == .succeeded)
+        #expect(ok.metadata["stdout"] == "donkey-ok")
+        #expect(ok.metadata["exitCode"] == "0")
+
+        let blocked = await registry.execute(
+            HarnessToolCall(id: "sh-2", name: "shell_exec", input: ["command": "sudo rm -rf /"]),
+            taskID: "task-sh-blocked",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: permissions
+        )
+        #expect(blocked.status == .failed)
+        #expect(blocked.metadata["reason"] == "blockedCommand")
+
+        let multiline = await registry.execute(
+            HarnessToolCall(id: "sh-3", name: "shell_exec", input: ["command": "echo a\necho b"]),
+            taskID: "task-sh-multiline",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: permissions
+        )
+        #expect(multiline.status == .invalidInput)
+
+        // Hardened guardrail: a bare `rm` (no flags) is caught as a command word.
+        let bareRm = await registry.execute(
+            HarnessToolCall(id: "sh-4", name: "shell_exec", input: ["command": "rm ~/Documents/notes.txt"]),
+            taskID: "task-sh-rm",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: permissions
+        )
+        #expect(bareRm.status == .failed)
+        #expect(bareRm.metadata["reason"] == "blockedCommand")
+
+        // The osascript `do shell script` escape hatch is blocked.
+        let osaShell = await registry.execute(
+            HarnessToolCall(id: "sh-5", name: "shell_exec", input: ["command": "osascript -e 'do shell script \"rm -rf ~/x\"'"]),
+            taskID: "task-sh-osa",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: permissions
+        )
+        #expect(osaShell.status == .failed)
+        #expect(osaShell.metadata["reason"] == "blockedCommand")
+
+        // A benign redirect to a temp path is NOT a false positive (the old `> /`
+        // rule wrongly blocked this).
+        let redirect = await registry.execute(
+            HarnessToolCall(id: "sh-6", name: "shell_exec", input: ["command": "echo donkey > /tmp/donkey-review-test.txt"]),
+            taskID: "task-sh-redirect",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: permissions
+        )
+        #expect(redirect.status == .succeeded)
+        try? FileManager.default.removeItem(atPath: "/tmp/donkey-review-test.txt")
+    }
+
+    @Test
     func builtInExecutorsRetrieveMemoryAndResolveApps() async {
         let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
             services: HarnessBuiltInToolServices(
