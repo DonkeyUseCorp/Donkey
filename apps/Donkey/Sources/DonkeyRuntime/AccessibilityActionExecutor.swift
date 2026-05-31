@@ -7,13 +7,18 @@ public enum MacKeyboardInput {
     /// Types arbitrary text by posting per-character unicode key events.
     public static func type(_ text: String) {
         guard let source = CGEventSource(stateID: .hidSystemState) else { return }
-        for scalar in text.unicodeScalars where scalar.value <= 0xFFFF {
-            var unit = UniChar(scalar.value)
-            guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
+        // Post one event per Character, using its full UTF-16 representation. Characters outside the
+        // Basic Multilingual Plane (emoji, CJK extensions, …) encode as a surrogate pair, so we send
+        // both code units together in a single event rather than truncating to one UniChar — which
+        // would silently drop the character.
+        for character in text {
+            var units = Array(character.utf16)
+            guard !units.isEmpty,
+                  let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
                   let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
             else { continue }
-            down.keyboardSetUnicodeString(stringLength: 1, unicodeString: &unit)
-            up.keyboardSetUnicodeString(stringLength: 1, unicodeString: &unit)
+            down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
+            up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
             down.post(tap: .cghidEventTap)
             up.post(tap: .cghidEventTap)
         }
@@ -21,12 +26,52 @@ public enum MacKeyboardInput {
 
     /// Posts a Return keypress (virtual key 36).
     public static func pressReturn() {
+        pressKey("return")
+    }
+
+    /// Posts a single named key (return, escape, tab, arrows, …). Unknown names that look like a
+    /// single character are typed as text rather than silently firing the wrong key; truly unknown
+    /// multi-char names fall back to Return so a "submit"-style intent still does something sane.
+    public static func pressKey(_ name: String) {
+        let normalized = name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let keyCode = virtualKeyCode(for: normalized) else {
+            if normalized.count == 1 {
+                type(name)
+            } else {
+                postKey(36) // unknown key name → Return
+            }
+            return
+        }
+        postKey(keyCode)
+    }
+
+    private static func postKey(_ keyCode: CGKeyCode) {
         guard let source = CGEventSource(stateID: .hidSystemState),
-              let down = CGEvent(keyboardEventSource: source, virtualKey: 36, keyDown: true),
-              let up = CGEvent(keyboardEventSource: source, virtualKey: 36, keyDown: false)
+              let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
         else { return }
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
+    }
+
+    private static func virtualKeyCode(for name: String) -> CGKeyCode? {
+        switch name {
+        case "return", "enter", "\n", "": return 36
+        case "tab", "\t": return 48
+        case "space", "spacebar", " ": return 49
+        case "escape", "esc": return 53
+        case "delete", "backspace": return 51
+        case "forwarddelete", "fwddelete": return 117
+        case "left", "leftarrow": return 123
+        case "right", "rightarrow": return 124
+        case "down", "downarrow": return 125
+        case "up", "uparrow": return 126
+        case "home": return 115
+        case "end": return 119
+        case "pageup": return 116
+        case "pagedown": return 121
+        default: return nil
+        }
     }
 }
 

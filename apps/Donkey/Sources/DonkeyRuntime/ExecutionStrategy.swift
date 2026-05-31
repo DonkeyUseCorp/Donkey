@@ -113,9 +113,28 @@ public struct MacAppScriptabilityProbe: Sendable {
         AppScriptabilityClassifier.classify(facts(bundleIdentifier: bundleIdentifier, appName: appName))
     }
 
-    private func bundleURL(bundleIdentifier: String?, appName _: String?) -> URL? {
-        // Resolve by bundle identifier (reliable); name-only resolution is intentionally not used.
-        guard let bundleIdentifier else { return nil }
-        return NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
+    private func bundleURL(bundleIdentifier: String?, appName: String?) -> URL? {
+        // Resolve by bundle identifier first (reliable).
+        if let bundleIdentifier, !bundleIdentifier.isEmpty,
+           let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) {
+            return url
+        }
+        // Fall back to the display name: the planner often knows an app only by name. Prefer an
+        // EXACT running-app name match (so "Mail" doesn't resolve "YubiKey Mail Helper"), then a
+        // fuzzy running-app match, then Launch Services' lookup by application name.
+        guard let appName, !appName.isEmpty else { return nil }
+        let running = NSWorkspace.shared.runningApplications
+        let wanted = appName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if let exact = running.first(where: {
+            ($0.localizedName ?? "").lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == wanted
+        }), let url = exact.bundleURL {
+            return url
+        }
+        if let fuzzy = running.first(where: {
+            AppNameMatching.matches($0.localizedName ?? "", appName)
+        }), let url = fuzzy.bundleURL {
+            return url
+        }
+        return NSWorkspace.shared.fullPath(forApplication: appName).map { URL(fileURLWithPath: $0) }
     }
 }

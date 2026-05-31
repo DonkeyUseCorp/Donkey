@@ -116,6 +116,11 @@ public final class FileAppScriptabilityStore: AppScriptabilityStore, @unchecked 
 public final class AppCapabilityService: @unchecked Sendable {
     public typealias ScriptabilityProbe = @Sendable (_ bundleIdentifier: String?, _ appName: String?) -> AppScriptability
 
+    /// App-lifetime instance backing the production execution-strategy decision: the command router
+    /// consults `scriptability(...)` to pick AppleScript vs the accessibility/vision path, and records
+    /// each real AppleScript outcome here so the choice adapts per machine.
+    public static let shared = AppCapabilityService()
+
     private let store: AppScriptabilityStore
     private let probe: ScriptabilityProbe
 
@@ -144,7 +149,21 @@ public final class AppCapabilityService: @unchecked Sendable {
         return AppScriptabilityResolver.resolve(observation)
     }
 
-    /// Learn from an actual AppleScript attempt on this machine.
+    /// True when this machine has LEARNED (from real attempts) that AppleScript doesn't work for the
+    /// app — repeated failures with no success — as opposed to merely lacking a scripting dictionary.
+    /// The router uses this to decide whether to pre-empt the AppleScript/keystroke path for vision.
+    public func hasLearnedAppleScriptFailure(bundleIdentifier: String?) -> Bool {
+        guard let bundleIdentifier, !bundleIdentifier.isEmpty,
+              let observation = store.observation(bundleIdentifier: bundleIdentifier)
+        else {
+            return false
+        }
+        return observation.appleScriptSuccesses == 0
+            && observation.appleScriptFailures >= AppScriptabilityResolver.failureThreshold
+    }
+
+    /// Learn from an actual AppleScript attempt on this machine. Called by the command router after
+    /// each AppleScript-backed run (`UserQueryCommandHandler.recordAppleScriptScriptability`).
     public func recordAppleScriptOutcome(bundleIdentifier: String?, appName: String? = nil, succeeded: Bool) {
         guard let bundleIdentifier, !bundleIdentifier.isEmpty else { return }
         var observation = store.observation(bundleIdentifier: bundleIdentifier)

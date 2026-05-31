@@ -7,12 +7,19 @@ public enum BuiltInLocalAppSkillPacks {
         Bundle.module.resourceURL?.appendingPathComponent("BuiltInSkills", isDirectory: true)
     }
 
-    public static func descriptors() -> [HarnessSkillDescriptor] {
+    /// Built-in skills ship inside the bundle and never change at runtime, so discover them (which
+    /// walks the BuiltInSkills tree and reads every SKILL.md from disk) exactly once. Callers on the
+    /// planning hot path — `defaultContext` and `appOperatingGuidance` run per turn — reuse this.
+    private static let cachedDescriptors: [HarnessSkillDescriptor] = {
         guard let rootURL else { return [] }
         return HarnessSkillFileSystemSource(
             roots: [rootURL],
             sourceKind: .builtIn
         ).discover()
+    }()
+
+    public static func descriptors() -> [HarnessSkillDescriptor] {
+        cachedDescriptors
     }
 
     public static func instructionSnippet(
@@ -39,8 +46,12 @@ public enum BuiltInLocalAppSkillPacks {
 
     /// Returns the operating playbook for an app-specific skill (one whose `apps:` frontmatter names
     /// this app by display name or bundle identifier), or nil if no app-specific skill is installed.
-    /// This is how the runtime learns how to drive a particular app WITHOUT any hardcoded app list:
-    /// add a `BuiltInSkills/<app>/SKILL.md` with an `apps:` line and the guidance is discovered here.
+    /// This is how the runtime learns how to drive a particular app WITHOUT a hardcoded app list:
+    /// add a `BuiltInSkills/<app>/SKILL.md` with an `apps:` line and it is discovered here.
+    ///
+    /// Consumed by the vision-driving action path (`VisionActionPlanner` via
+    /// `UserQueryCommandHandler.handleVisionAction`) to supply per-app operating guidance when a
+    /// non-scriptable app is driven by vision.
     public static func appOperatingGuidance(
         forApp appName: String,
         bundleIdentifier: String? = nil,
@@ -56,9 +67,9 @@ public enum BuiltInLocalAppSkillPacks {
         let match = descriptors().first { descriptor in
             let apps = (descriptor.metadata["apps"] ?? "")
                 .split(separator: ",")
-                .map { $0.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) }
+                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
-            return apps.contains { app in wanted.contains { $0 == app || $0.contains(app) || app.contains($0) } }
+            return apps.contains { app in wanted.contains { AppNameMatching.matches($0, app) } }
         }
         guard let match else { return nil }
         let body = bounded(strippedSkillMetadata(from: match.description), maxCharacters: maxCharacters)
@@ -162,7 +173,7 @@ public struct LocalAppTaskSkillContext: Equatable, Sendable {
         appFinderCatalog: [LocalAppFinderCatalogEntry]
     ) -> [(descriptor: HarnessSkillDescriptor, score: Int)] {
         // App-specific operating skills (those declaring `apps:`) are vision-driving playbooks
-        // consumed only via `appOperatingGuidance(forApp:)` during execution — they are not
+        // consumed via `appOperatingGuidance(forApp:)` by the vision action path — they are not
         // intent-planning skills, so keep them out of the planner's skill catalog/ranking.
         let descriptors = BuiltInLocalAppSkillPacks.descriptors()
             .filter { ($0.metadata["apps"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -214,11 +225,6 @@ public struct LocalAppTaskSkillContext: Equatable, Sendable {
     }
 
     private static func tokens(in value: String) -> Set<String> {
-        Set(
-            value.lowercased()
-                .split { !$0.isLetter && !$0.isNumber }
-                .map(String.init)
-                .filter { !$0.isEmpty }
-        )
+        ControlTextRelevance.tokens(in: value)
     }
 }

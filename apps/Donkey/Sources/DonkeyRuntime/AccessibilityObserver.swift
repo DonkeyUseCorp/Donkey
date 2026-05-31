@@ -46,18 +46,18 @@ public enum AccessibilityObserver {
         resolver: MacWindowResolver = MacWindowResolver()
     ) -> MacWindowTargetCandidate? {
         if appName != nil || bundleIdentifier != nil {
+            // A specific app was requested: only ever return that app's window. If it isn't running /
+            // has no window, return nil — never fall back to the frontmost window, which would
+            // silently ground (and potentially click) in an unrelated app the user didn't name.
             let candidates = resolver.enumerateCandidates()
-            if let match = candidates.first(where: { candidate in
+            return candidates.first { candidate in
                 if let bundleIdentifier, let candidateBundle = candidate.bundleIdentifier {
                     return candidateBundle.caseInsensitiveCompare(bundleIdentifier) == .orderedSame
                 }
                 if let appName, let candidateApp = candidate.appName {
-                    return candidateApp.localizedCaseInsensitiveContains(appName)
-                        || appName.localizedCaseInsensitiveContains(candidateApp)
+                    return AppNameMatching.matches(candidateApp, appName)
                 }
                 return false
-            }) {
-                return match
             }
         }
         return try? resolver.selectTarget()

@@ -24,6 +24,8 @@ public enum VisionActionPlannerError: Error, CustomStringConvertible {
     }
 }
 
+/// Driven in production by `UserQueryCommandHandler.handleVisionAction` for non-scriptable apps, and
+/// by `SpotifyVisionAgentLiveSmokeTests` for live verification.
 @MainActor
 public enum VisionActionPlanner {
     public struct PlannedAction: Equatable, Sendable, Codable {

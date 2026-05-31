@@ -1,5 +1,15 @@
 # Adaptive grounded pointer overlay — implementation plan
 
+> **Status: wired into the live command router.** The guidance route (`"show me where X is"` →
+> AX-grounded cursor overlay) runs via `UserQueryCommandHandler.handleGuidance`. The action side is
+> live too: `UserQueryCommandHandler` consults `ExecutionStrategySelector` (backed by
+> `AppCapabilityService.shared`, which learns per-machine scriptability) after intent resolution; an
+> Electron app (or one this machine has learned fails AppleScript) is driven by vision via the shared
+> `VisionActionDriver` (per-turn `VisionActionPlanner` + real pointer/keyboard, gated by a frontmost
+> check before every input), supplied with per-app guidance from the matching `BuiltInSkills/<app>/SKILL.md`.
+> Each AppleScript-backed run records its outcome via `recordAppleScriptScriptability`, so apps that
+> repeatedly fail AppleScript flip to the vision path. See "How it is wired" at the end.
+
 ## Context
 
 Donkey can drive scriptable apps via AppleScript (e.g. Music, now playing reliably through the
@@ -121,6 +131,32 @@ which is why skill/AppleScript runs produce `noGroundedTargets`).
 - **Element resolution quality** on Electron: AX labels can be sparse; may need the screenshot +
   local-UI-understanding fallback (`strategyOrder: accessibility,windowMetadata,screenshotForLocalModel`)
   to locate controls when AX is thin.
+
+## How it is wired
+
+In `UserQueryCommandHandler.continueHandlingNonVisualizationCommand`, after intent resolution and the
+conversation/clarification routing:
+
+1. `handleVisionActionIfNonScriptable` consults `AppCapabilityService.shared.scriptability(...)` +
+   `ExecutionStrategySelector.strategy(...)` for the resolved target app. It only pre-empts the
+   AppleScript/keystroke path when the app is **Electron** or has a **learned AppleScript failure**
+   (`hasLearnedAppleScriptFailure`); a native app that merely lacks a scripting dictionary stays on
+   the existing path (System-Events keystrokes still work for it).
+2. Such an app is driven by the shared `VisionActionDriver.drive(...)`: a bounded per-turn loop that
+   resolves + activates the window once, captures, asks `VisionActionPlanner.nextAction` for the next
+   click/type/key, and executes it until the model reports `done`. Every real-input action is gated
+   by a frontmost check, so input never lands on a window the user switched to mid-round-trip. The
+   same driver backs `SpotifyVisionAgentLiveSmokeTests`. Per-app operating guidance comes from
+   `BuiltInLocalAppSkillPacks.appOperatingGuidance(forApp:)`.
+3. If the planner flagged the action `needsConfirmation`, the route asks the user first
+   (`confirmVisionAction`) instead of auto-driving.
+4. After every AppleScript-backed run, `recordAppleScriptScriptability` calls
+   `AppCapabilityService.shared.recordAppleScriptOutcome(...)`, so an app that keeps failing
+   AppleScript (≥2 failures, no success) flips to the vision path on the next request, and a success
+   keeps it on AppleScript.
+
+Guarded by the `.input` permission; the vision route no-ops back to the AppleScript path when the
+hosted backend or the target window can't be reached.
 - **Capability detection** accuracy (scriptable vs not) — start with an allowlist + runtime failure
   fallback; refine over time.
 - Environment for live demo: Spotify must be installed/running and the runner AX-granted.

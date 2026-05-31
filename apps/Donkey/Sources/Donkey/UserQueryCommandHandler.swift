@@ -289,6 +289,20 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             )
         }
 
+        // Execution-strategy router: for a non-scriptable target app (Electron, no dictionary), the
+        // AppleScript/skill path can't act — drive it by vision instead. Scriptable/unknown apps fall
+        // through to the AppleScript-first generic harness loop below.
+        if let visionResult = await handleVisionActionIfNonScriptable(
+            resolution: resolution,
+            trace: taskIntentResult.trace,
+            command: commandRedaction.redactedText,
+            traceID: traceID,
+            taskID: taskID,
+            modelMetadata: modelMetadata
+        ) {
+            return visionResult
+        }
+
         let decision = AppHarnessDecision(
             kind: .runLocalTask,
             taskIntentID: resolution.intent?.intentID,
@@ -336,6 +350,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             taskID: taskID,
             runtime: genericRuntime
         )
+        Self.recordAppleScriptScriptability(resolution: resolution, runSteps: runSteps)
         let runStep = runSteps.last
         let verificationStep = runSteps.last { step in
             step.toolResult?.toolName == LocalAppActionPlanTool.verifyCommand.rawValue
@@ -617,9 +632,20 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         return result
     }
 
-    /// Parses planner `guidanceTargets` ("Label::query; Label::query") into ordered path targets.
+    /// Parses planner `guidanceTargets` into ordered path targets. The planner emits a JSON array of
+    /// `{label, query}` objects — robust to labels/queries that contain punctuation (`:`, `;`, …),
+    /// which a delimiter-based format would mis-split. A legacy `"Label::query; …"` string is still
+    /// accepted as a fallback for older planner output.
     private static func guidanceTargets(from raw: String) -> [AccessibilityCursorPathTarget] {
-        raw.components(separatedBy: ";").compactMap { entry in
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+
+        if let data = trimmed.data(using: .utf8),
+           let decoded = try? JSONDecoder().decode([GuidanceTargetWire].self, from: data) {
+            return decoded.compactMap(\.pathTarget)
+        }
+
+        return trimmed.components(separatedBy: ";").compactMap { entry in
             let parts = entry.components(separatedBy: "::")
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             let query = (parts.count > 1 ? parts[1] : parts.first ?? "")
@@ -627,6 +653,223 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             let label = (parts.count > 1 && !parts[0].isEmpty) ? parts[0] : query
             return AccessibilityCursorPathTarget(query: query, label: label, kind: .targetControl)
         }
+    }
+
+    private struct GuidanceTargetWire: Decodable {
+        var label: String?
+        var query: String
+
+        var pathTarget: AccessibilityCursorPathTarget? {
+            let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedQuery.isEmpty else { return nil }
+            let trimmedLabel = (label ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return AccessibilityCursorPathTarget(
+                query: trimmedQuery,
+                label: trimmedLabel.isEmpty ? trimmedQuery : trimmedLabel,
+                kind: .targetControl
+            )
+        }
+    }
+
+    // MARK: - Vision Action Route (non-scriptable apps)
+
+    /// If the resolved target app genuinely can't be driven by AppleScript/keystrokes — an Electron app,
+    /// or one this machine has LEARNED fails AppleScript — drive it by vision via the shared
+    /// `VisionActionDriver`. Returns nil (use the normal AppleScript/keystroke path) when the app is
+    /// scriptable, when it merely lacks a dictionary (System-Events keystrokes still work), when input
+    /// isn't permitted, or when the hosted backend can't be reached. Honors the planner's confirm
+    /// request: an action flagged `needsConfirmation` asks the user first rather than auto-driving.
+    private func handleVisionActionIfNonScriptable(
+        resolution: LocalAppTaskCatalogResolution,
+        trace: AIModelCallTrace,
+        command: String,
+        traceID: String,
+        taskID: String,
+        modelMetadata: [String: String]
+    ) async -> UserQueryCommandHandlingResult? {
+        guard permissionPolicy.allowedCapabilities.contains(.input) else { return nil }
+        guard let intent = resolution.intent else { return nil }
+        let appName = intent.targetApp.appName
+        guard !appName.isEmpty, appName.lowercased() != "none" else { return nil }
+        let bundleIdentifier = intent.targetApp.bundleIdentifier
+
+        let scriptability = AppCapabilityService.shared.scriptability(
+            bundleIdentifier: bundleIdentifier,
+            appName: appName
+        )
+        guard ExecutionStrategySelector.strategy(scriptability: scriptability) == .accessibilityUI else {
+            return nil
+        }
+        // Only pre-empt the AppleScript/keystroke path for apps that truly can't use it: Electron
+        // (Chromium-rendered, no usable dictionary/keystroke automation) or apps that have actually
+        // failed AppleScript here. A native app that merely lacks a scripting dictionary can still be
+        // driven by System-Events keystrokes, so leave it on the existing path.
+        let isElectron = MacAppScriptabilityProbe().facts(
+            bundleIdentifier: bundleIdentifier,
+            appName: appName
+        ).isElectron
+        let learnedFailure = AppCapabilityService.shared.hasLearnedAppleScriptFailure(bundleIdentifier: bundleIdentifier)
+        guard isElectron || learnedFailure else { return nil }
+
+        guard let configuration = try? DonkeyBackendInferenceConfiguration.fromEnvironment() else {
+            return nil
+        }
+
+        // Never auto-drive the real pointer/keyboard for an action the planner asked to confirm; ask.
+        if intent.needsConfirmation {
+            return await confirmVisionAction(
+                appName: appName,
+                trace: trace,
+                traceID: traceID,
+                taskID: taskID,
+                modelMetadata: modelMetadata
+            )
+        }
+
+        let backend = DonkeyBackendInferenceClient(configuration: configuration)
+        let goal = trace.metadata["genericHarness.intent.goal"]
+            .flatMap { $0.isEmpty ? nil : $0 } ?? command
+        let appGuidance = BuiltInLocalAppSkillPacks.appOperatingGuidance(
+            forApp: appName,
+            bundleIdentifier: bundleIdentifier
+        )
+
+        let outcome = await VisionActionDriver.drive(
+            appName: appName,
+            bundleIdentifier: bundleIdentifier,
+            goal: goal,
+            appGuidance: appGuidance,
+            backend: backend
+        )
+
+        let response = outcome.completed
+            ? (outcome.lastNarration ?? "Done.")
+            : "I tried operating \(appName) but couldn't confirm the goal was finished."
+        let decision = AppHarnessDecision(
+            kind: .respond,
+            message: response,
+            traceID: traceID,
+            metadata: [
+                "structuredDecision": "true",
+                "router": "modelVisionAction",
+                "visionAction.completed": String(outcome.completed)
+            ]
+        )
+        let result = UserQueryCommandHandlingResult(
+            status: outcome.completed ? .completed : .failedSafe,
+            threadStatus: outcome.completed ? .completed : .failed,
+            decision: decision,
+            summary: response,
+            traceID: traceID,
+            metadata: modelMetadata.merging([
+                "appHarness.decision": AppHarnessDecisionKind.respond.rawValue,
+                "appHarness.router": "modelVisionAction",
+                "visionAction.app": appName,
+                "visionAction.completed": String(outcome.completed),
+                "visionAction.turns": String(outcome.turns),
+                "visionAction.reason": outcome.reason
+            ]) { _, new in new }
+        )
+        if outcome.completed {
+            _ = await genericHarnessLifecycle.coordinator.complete(
+                taskID: taskID,
+                reason: "User query vision action completed"
+            )
+        } else {
+            _ = await genericHarnessLifecycle.coordinator.failSafe(
+                taskID: taskID,
+                reason: "User query vision action did not confirm completion"
+            )
+        }
+        await coordinatorRegistry.finish(taskID: taskID)
+        logHandlingResult(
+            result,
+            stage: "visionAction",
+            hint: outcome.completed ? "Drove \(appName) by vision." : "Vision action stopped: \(outcome.reason)."
+        )
+        return result
+    }
+
+    /// Asks the user before driving an app by vision, when the planner flagged the action for
+    /// confirmation. Mirrors the clarification route — no input is performed.
+    private func confirmVisionAction(
+        appName: String,
+        trace: AIModelCallTrace,
+        traceID: String,
+        taskID: String,
+        modelMetadata: [String: String]
+    ) async -> UserQueryCommandHandlingResult {
+        let goal = trace.metadata["genericHarness.intent.goal"].flatMap { $0.isEmpty ? nil : $0 }
+        let question = goal.map { "I can do that in \(appName) by controlling it directly (\($0)). Want me to go ahead?" }
+            ?? "I can do that in \(appName) by controlling it directly. Want me to go ahead?"
+        let decision = AppHarnessDecision(
+            kind: .askClarification,
+            message: question,
+            traceID: traceID,
+            metadata: [
+                "structuredDecision": "true",
+                "router": "modelVisionActionConfirm"
+            ]
+        )
+        let result = UserQueryCommandHandlingResult(
+            status: .needsConfirmation,
+            threadStatus: .waitingForClarification,
+            decision: decision,
+            summary: question,
+            traceID: traceID,
+            metadata: modelMetadata.merging([
+                "appHarness.decision": AppHarnessDecisionKind.askClarification.rawValue,
+                "appHarness.router": "modelVisionActionConfirm",
+                "visionAction.app": appName
+            ]) { _, new in new }
+        )
+        _ = await genericHarnessLifecycle.coordinator.waitForUser(
+            taskID: taskID,
+            question: question,
+            reason: "Vision action requires confirmation before driving the app"
+        )
+        await coordinatorRegistry.finish(taskID: taskID)
+        logHandlingResult(
+            result,
+            stage: "visionActionConfirm",
+            hint: "Asked before driving \(appName) by vision."
+        )
+        return result
+    }
+
+    /// Records whether the AppleScript path actually worked for the target app, so the strategy router
+    /// learns per machine: repeated failures flip an app to the accessibility/vision path, a success
+    /// keeps it on AppleScript. Best-effort — only fires when the run executed an AppleScript action
+    /// and we know the app's bundle identifier.
+    private static func recordAppleScriptScriptability(
+        resolution: LocalAppTaskCatalogResolution,
+        runSteps: [HarnessStepExecutionResult]
+    ) {
+        guard let bundleIdentifier = (resolution.definition?.targetApp.bundleIdentifier
+            ?? resolution.intent?.targetApp.bundleIdentifier),
+            !bundleIdentifier.isEmpty
+        else {
+            return
+        }
+        let appName = resolution.definition?.targetApp.appName ?? resolution.intent?.targetApp.appName
+
+        var sawAppleScript = false
+        var anySucceeded = false
+        for step in runSteps {
+            guard let toolResult = step.toolResult else { continue }
+            let isAppleScript = toolResult.metadata["liveInputBackend"] == "mac-apple-script"
+                || toolResult.metadata["appleScript.output"] != nil
+                || toolResult.toolName == "automation.applescript.execute"
+            guard isAppleScript else { continue }
+            sawAppleScript = true
+            if toolResult.status == .succeeded { anySucceeded = true }
+        }
+        guard sawAppleScript else { return }
+        AppCapabilityService.shared.recordAppleScriptOutcome(
+            bundleIdentifier: bundleIdentifier,
+            appName: appName,
+            succeeded: anySucceeded
+        )
     }
 
     // MARK: - Generic Harness Task Execution

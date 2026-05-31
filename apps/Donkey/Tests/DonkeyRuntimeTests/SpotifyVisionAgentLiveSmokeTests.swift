@@ -20,7 +20,6 @@ struct SpotifyVisionAgentLiveSmokeTests {
 
         let goal = env["DONKEY_GOAL"] ?? "Search for the artist Coldplay and play their most popular song."
         let backend = DonkeyBackendInferenceClient(configuration: config, httpClient: URLSessionAIHTTPClient())
-        let capturer = ScreenCaptureKitWindowScreenshotCapturer()
         // App-specific operating playbook, discovered from BuiltInSkills/spotify/SKILL.md by app name
         // (no hardcoded app logic in code — add a SKILL.md to teach the agent a new app).
         let appGuidance = BuiltInLocalAppSkillPacks.appOperatingGuidance(forApp: "Spotify", bundleIdentifier: "com.spotify.client")
@@ -28,63 +27,28 @@ struct SpotifyVisionAgentLiveSmokeTests {
         NSWorkspace.shared.launchApplication("Spotify")
         try? await Task.sleep(nanoseconds: 1_500_000_000)
 
+        // Drive via the SAME shared loop production uses, so this smoke test validates the real path.
         var log: [String] = []
-        var history: [String] = []
-        for turn in 0..<12 {
-            guard let target = AccessibilityObserver.resolveTarget(appName: "Spotify", bundleIdentifier: nil) else {
-                log.append("turn \(turn): no window"); break
+        let outcome = await VisionActionDriver.drive(
+            appName: "Spotify",
+            bundleIdentifier: "com.spotify.client",
+            goal: goal,
+            appGuidance: appGuidance,
+            backend: backend,
+            settleNanoseconds: 2_200_000_000,
+            onTurn: { info in
+                // Dump exactly what the model saw (compressed) so we can inspect it.
+                let dump = ScreenshotCompression.compressedForModel(info.screenshot)
+                try? dump.data.write(to: URL(fileURLWithPath: "/tmp/spotify-agent-turn\(info.turn).jpg"))
+                log.append("turn \(info.turn): \(info.action.action) x=\(info.action.x.map { String(Int($0)) } ?? "-") y=\(info.action.y.map { String(Int($0)) } ?? "-") text=\(info.action.text ?? "") :: \(info.action.reason ?? "")")
             }
-            guard let shot = try? await capturer.capture(target: target) else {
-                log.append("turn \(turn): capture failed"); break
-            }
-            // Dump exactly what the model sees (compressed) so we can inspect it.
-            let dump = ScreenshotCompression.compressedForModel(shot)
-            let dumpPath = "/tmp/spotify-agent-turn\(turn).jpg"
-            try? dump.data.write(to: URL(fileURLWithPath: dumpPath))
-            log.append("turn \(turn): window=(\(Int(target.bounds.x)),\(Int(target.bounds.y)) \(Int(target.bounds.width))x\(Int(target.bounds.height))) model-image=\(Int(dump.pixelSize.width))x\(Int(dump.pixelSize.height)) -> \(dumpPath)")
-            let action: VisionActionPlanner.PlannedAction
-            do {
-                action = try await VisionActionPlanner.nextAction(goal: goal, app: "Spotify", screenshot: shot, window: target.bounds, history: history, appGuidance: appGuidance, backend: backend)
-            } catch {
-                log.append("turn \(turn): planner error \(error)"); break
-            }
-            log.append("turn \(turn): \(action.action) x=\(action.x.map { String(Int($0)) } ?? "-") y=\(action.y.map { String(Int($0)) } ?? "-") text=\(action.text ?? "") :: \(action.reason ?? "")")
+        )
+        log.append("driver outcome: completed=\(outcome.completed) turns=\(outcome.turns) reason=\(outcome.reason)")
 
-            // Effective action: a "click" that carries text but no point is really a "type".
-            var effective = action.action
-            if effective == "click", action.screenPoint == nil, let t = action.text, !t.isEmpty {
-                effective = "type"
-            }
-
-            switch effective {
-            case "done":
-                log.append("turn \(turn): model reports DONE")
-                // Verify the agent's claim against the app's real playback state.
-                let state = Self.spotifyPlayerState()
-                log.append("verified player state: \(state)")
-                #expect(state == "playing", "Agent finished but Spotify is not playing.\n\(log.joined(separator: "\n"))")
-                return
-            case "click":
-                if let p = action.screenPoint {
-                    _ = MacPointerInput.moveAndClick(at: p)
-                    history.append("clicked at (\(Int(action.x ?? 0)),\(Int(action.y ?? 0))) — \(action.reason ?? "")")
-                } else {
-                    history.append("attempted click but no coordinates were given — \(action.reason ?? "")")
-                }
-            case "type":
-                if let t = action.text { MacKeyboardInput.type(t); history.append("typed \"\(t)\"") }
-            case "key":
-                MacKeyboardInput.pressReturn()
-                history.append("pressed return")
-            default:
-                break
-            }
-            try? await Task.sleep(nanoseconds: 2_200_000_000)
-        }
-        // Loop ended without the model declaring done — still verify the end state.
+        // Verify the agent's claim against the app's REAL playback state (independent of vision).
         let state = Self.spotifyPlayerState()
-        log.append("loop ended; verified player state: \(state)")
-        #expect(state == "playing", "Vision agent loop ended without playing music.\n\(log.joined(separator: "\n"))")
+        log.append("verified player state: \(state)")
+        #expect(state == "playing", "Vision agent finished but Spotify is not playing.\n\(log.joined(separator: "\n"))")
     }
 
     /// Reads Spotify's real playback state via Automation (NSAppleScript), independent of vision,
