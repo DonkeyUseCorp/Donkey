@@ -21,11 +21,15 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     @Published private(set) var spawnStates: [UserQuerySpawnState] = []
     @Published private(set) var selectedSpawnID: String?
     var agentVisualizationPresenter: ((PointerCoachCursorGuideRequest, String?) -> Void)?
+    /// Fired when the Live session's optional audio streaming should start/stop,
+    /// so the mic owner can keep the engine running continuously.
+    var onLiveAudioStreamingChanged: ((Bool) -> Void)?
 
     private let commandHandler: any UserQueryCommandHandling
     private let taskStore: any UserQueryTaskStoring
     private let followUpResolver: any UserQueryFollowUpResolving
     private let voiceTranscriber: LocalVoiceTranscriptionAdapter
+    private let liveController: GeminiLiveVoiceController
     private var updateChecker: any DonkeyUpdateChecking
     private let documentReviewController: DocumentFormFillReviewWindowController
     private let appCatalogRefreshLoop: LocalAppDynamicCatalogRefreshLoop
@@ -45,12 +49,14 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         ),
         updateChecker: any DonkeyUpdateChecking = SparkleUpdateController(),
         documentReviewController: DocumentFormFillReviewWindowController = DocumentFormFillReviewWindowController(),
+        liveController: GeminiLiveVoiceController = GeminiLiveVoiceController(),
         theme: UserQueryTheme = UserQueryOverlayModel.bundledTheme()
     ) {
         self.commandHandler = commandHandler
         self.taskStore = taskStore
         self.followUpResolver = followUpResolver
         self.voiceTranscriber = voiceTranscriber
+        self.liveController = liveController
         self.updateChecker = updateChecker
         self.documentReviewController = documentReviewController
         self.appCatalogRefreshLoop = LocalAppDynamicCatalogRefreshLoop(
@@ -79,6 +85,39 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         SQLiteAgentMemoryStore.shared?.prewarmDefaultLocalItemsInBackground()
         appCatalogRefreshLoop.start()
         checkForUpdates()
+        startLiveSessionIfEnabled()
+    }
+
+    /// Bring up the always-on Gemini Live session. It self-gates on configuration
+    /// and only becomes `isConnected` if it can authenticate, so when it is not
+    /// configured the existing command pipeline is used unchanged.
+    private func startLiveSessionIfEnabled() {
+        guard liveController.isEnabled else { return }
+        liveController.onComplexRequest = { [weak self] text in
+            // Anything the Live model didn't satisfy with a tool call runs through
+            // the full local pipeline (never back through Live — no loop).
+            self?.runLocalCommand(text, source: .typedPrompt)
+        }
+        liveController.onActed = { [weak self] summary in
+            guard let self else { return }
+            self.promptState.leadingSignalLevel = .ready
+            self.promptState.promptText = summary
+        }
+        // Forward start/stop of optional audio streaming to the mic owner. The
+        // controller emits a paired false on disconnect/stop, so continuous
+        // listening is always torn down.
+        liveController.onAudioStreamingChanged = { [weak self] active in
+            self?.onLiveAudioStreamingChanged?(active)
+        }
+        Task { [liveController] in await liveController.start() }
+    }
+
+    /// Stream optional microphone audio into the Live session (no-op unless audio
+    /// is enabled and the session is connected).
+    func streamLiveAudioFrames(_ samples: [Float], sampleRate: Double) {
+        Task { [liveController] in
+            await liveController.sendAudioFrames(samples, sampleRate: sampleRate)
+        }
     }
 
     func activate() {
@@ -172,6 +211,32 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     }
 
     private func submitCommand(_ text: String, source: AppHarnessTurnSource = .typedPrompt) {
+        // Gemini Live is the always-on brain when connected: text always goes to
+        // it (tool-first). When audio is streaming, a batch voice transcript is
+        // redundant — the model already heard it — so drop it.
+        if liveController.isConnected {
+            if source == .voiceTranscript, liveController.isAudioEnabled {
+                clearSubmissionInputs()
+                promptState.isActive = false
+                promptState.isVoiceInputActive = false
+                return
+            }
+            routeToLiveSession(text)
+            return
+        }
+        runLocalCommand(text, source: source)
+    }
+
+    private func routeToLiveSession(_ text: String) {
+        clearSubmissionInputs()
+        promptState.isActive = false
+        promptState.isVoiceInputActive = false
+        promptState.leadingSignalLevel = .thinking
+        promptState.promptText = "On it"
+        Task { [liveController] in await liveController.sendText(text) }
+    }
+
+    private func runLocalCommand(_ text: String, source: AppHarnessTurnSource = .typedPrompt) {
         let candidates = followUpCandidates()
         let promptFollowUpTarget = promptSubmissionFollowUpTarget()
         let spawnID: String?

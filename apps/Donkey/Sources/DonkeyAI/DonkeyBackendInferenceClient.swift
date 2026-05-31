@@ -120,6 +120,17 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
         return try JSONDecoder().decode(RemoteInferenceModelList.self, from: data)
     }
 
+    /// Mint a short-lived Gemini Live (Vertex AI) connection: an OAuth access
+    /// token plus the websocket endpoint and fully-qualified model path. The
+    /// long-lived service-account credential stays on the backend.
+    public func mintLiveConnection() async throws -> RemoteLiveConnection {
+        var request = makeRequest(path: "/api/inference/live-token/")
+        request.httpMethod = "POST"
+        request.httpBody = Data("{}".utf8)
+        let data = try await send(request)
+        return try JSONDecoder().decode(RemoteLiveConnection.self, from: data)
+    }
+
     public func completeChat(
         _ completionRequest: RemoteInferenceChatCompletionRequest
     ) async throws -> RemoteInferenceJSONValue {

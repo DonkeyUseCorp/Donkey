@@ -62,6 +62,16 @@ final class UserQueryOverlayController {
         microphoneWaveformMeter.onLevelsChanged = { [weak model] levels in
             model?.updateVoiceWaveformLevels(levels)
         }
+        microphoneWaveformMeter.onAudioFrames = { [weak model] samples, sampleRate in
+            model?.streamLiveAudioFrames(samples, sampleRate: sampleRate)
+        }
+        model.onLiveAudioStreamingChanged = { [weak self] isStreaming in
+            if isStreaming {
+                self?.microphoneWaveformMeter.startContinuousListening()
+            } else {
+                self?.microphoneWaveformMeter.stopContinuousListening()
+            }
+        }
     }
 
     func show() {

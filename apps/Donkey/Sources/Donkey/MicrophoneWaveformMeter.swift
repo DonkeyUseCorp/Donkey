@@ -11,11 +11,15 @@ final class MicrophoneWaveformMeter {
     private var isRunning = false
     private var isStarting = false
     private var isRecordingAudio = false
+    private var isContinuousListening = false
     private var capturedSamples: [Float] = []
     private var capturedSampleRateHz = 0
     private var capturedStartedAt: Date?
 
     var onLevelsChanged: (([Double]) -> Void)?
+    /// Optional streaming hook: mono float32 samples + their sample rate, delivered
+    /// per audio buffer. Used to stream microphone audio into a realtime session.
+    var onAudioFrames: (([Float], Double) -> Void)?
 
     func start() {
         guard !isRunning, !isStarting else { return }
@@ -37,7 +41,24 @@ final class MicrophoneWaveformMeter {
         }
     }
 
+    /// Keep the mic engine running continuously so audio frames stream into a
+    /// realtime session beyond the voice-capture window. Used when Live audio
+    /// input is enabled.
+    func startContinuousListening() {
+        isContinuousListening = true
+        start()
+    }
+
+    func stopContinuousListening() {
+        isContinuousListening = false
+        stop()
+    }
+
     func stop() {
+        // While continuously listening, ignore UI-driven stops so the always-on
+        // audio stream survives the prompt closing. Tear down via
+        // `stopContinuousListening()`.
+        guard !isContinuousListening else { return }
         guard isRunning || isStarting || isRecordingAudio || engine != nil else { return }
 
         engine?.inputNode.removeTap(onBus: 0)
@@ -148,6 +169,12 @@ final class MicrophoneWaveformMeter {
         capturedSamples.append(contentsOf: samples)
     }
 
+    private func emitAudioFrames(_ samples: [Float], sampleRate: Double) {
+        guard !samples.isEmpty, sampleRate > 0 else { return }
+
+        onAudioFrames?(samples, sampleRate)
+    }
+
     private func publishSilence() {
         levels = Array(repeating: 0.08, count: barCount)
         publishLevels()
@@ -161,10 +188,12 @@ final class MicrophoneWaveformMeter {
         { [weak meter] buffer, _ in
             let level = Self.normalizedLevel(from: buffer)
             let samples = Self.monoSamples(from: buffer)
+            let sampleRate = buffer.format.sampleRate
 
-            Task { @MainActor [weak meter, samples, level] in
+            Task { @MainActor [weak meter, samples, level, sampleRate] in
                 meter?.appendAudioSamples(samples)
                 meter?.append(level)
+                meter?.emitAudioFrames(samples, sampleRate: sampleRate)
             }
         }
     }
