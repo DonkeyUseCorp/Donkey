@@ -70,7 +70,7 @@ public enum AccessibilityCursorPathBuilder {
     ) -> LocalAppDiscoveredControl? {
         let normalizedQuery = LocalAppTextNormalizer.normalizedPhrase(query)
         guard !normalizedQuery.isEmpty else { return nil }
-        let queryTokens = Set(normalizedQuery.split(separator: " ").map(String.init))
+        let queryTokens = ControlTextRelevance.tokens(in: normalizedQuery)
 
         var best: (control: LocalAppDiscoveredControl, score: Double)?
         for control in controls where !used.contains(control.id) {
@@ -80,20 +80,11 @@ public enum AccessibilityCursorPathBuilder {
                 .filter { !$0.isEmpty }
             guard !candidates.isEmpty else { continue }
 
-            var score = 0.0
-            for candidate in candidates {
-                if candidate == normalizedQuery {
-                    score = max(score, 1_000)
-                } else if candidate.contains(normalizedQuery) || normalizedQuery.contains(candidate) {
-                    score = max(score, 500)
-                } else {
-                    let candidateTokens = Set(candidate.split(separator: " ").map(String.init))
-                    let overlap = queryTokens.intersection(candidateTokens).count
-                    if overlap > 0 {
-                        score = max(score, Double(overlap))
-                    }
-                }
-            }
+            let score = ControlTextRelevance.score(
+                normalizedQuery: normalizedQuery,
+                queryTokens: queryTokens,
+                candidates: candidates
+            )
             guard score > 0 else { continue }
             // Tie-break toward the larger control (more likely the intended, prominent target).
             let area = frame.width * frame.height

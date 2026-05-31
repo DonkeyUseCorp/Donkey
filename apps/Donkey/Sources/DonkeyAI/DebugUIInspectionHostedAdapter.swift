@@ -11,20 +11,23 @@ public enum DebugUIInspectionHostedAdapterError: Error, Equatable, Sendable {
 
 public struct DebugUIInspectionRequest: Equatable, Sendable {
     public var provider: DebugUIInspectionProvider?
-    public var screenshotBase64: String
+    /// Full `data:<contentType>;base64,<…>` URL for the image. Callers prepare this with the shared
+    /// `ScreenshotCompression` helper so every hosted-vision request is downscaled + JPEG-encoded the
+    /// same way; `pixelSize` must be the size of THIS image (model coordinates map back through it).
+    public var imageDataURL: String
     public var pixelSize: HotLoopSize
     public var minConfidence: Double
     public var metadata: [String: String]
 
     public init(
         provider: DebugUIInspectionProvider? = nil,
-        screenshotBase64: String,
+        imageDataURL: String,
         pixelSize: HotLoopSize,
         minConfidence: Double = 0.25,
         metadata: [String: String] = [:]
     ) {
         self.provider = provider
-        self.screenshotBase64 = screenshotBase64
+        self.imageDataURL = imageDataURL
         self.pixelSize = pixelSize
         self.minConfidence = min(max(minConfidence, 0), 1)
         self.metadata = metadata
@@ -72,7 +75,7 @@ public struct HostedDebugUIInspectionAnalyzer: DebugUIInspectionAnalyzing {
                         ]),
                         .object([
                             "type": .string("input_image"),
-                            "image_url": .string("data:image/png;base64,\(request.screenshotBase64)"),
+                            "image_url": .string(request.imageDataURL),
                             "detail": .string("original")
                         ])
                     ])
@@ -284,6 +287,9 @@ public enum DebugUIInspectionResponseDecoder {
     }
 
     /// Extracts the JSON object from model output that may be fenced or have trailing prose.
+    /// Returns the FIRST brace-balanced `{…}` object, scanning past braces that appear inside string
+    /// literals — so trailing prose such as `{…valid…} note: see {example}` doesn't get swallowed
+    /// into malformed JSON (which the old first-`{`-to-last-`}` heuristic did).
     static func jsonObjectSubstring(_ text: String) -> String {
         var trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.hasPrefix("```") {
@@ -293,10 +299,38 @@ public enum DebugUIInspectionResponseDecoder {
                 .replacingOccurrences(of: "```", with: "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        if let start = trimmed.firstIndex(of: "{"), let end = trimmed.lastIndex(of: "}"), start <= end {
-            return String(trimmed[start...end])
+        guard let start = trimmed.firstIndex(of: "{") else { return trimmed }
+
+        var depth = 0
+        var inString = false
+        var escaped = false
+        var index = start
+        while index < trimmed.endIndex {
+            let character = trimmed[index]
+            if inString {
+                if escaped {
+                    escaped = false
+                } else if character == "\\" {
+                    escaped = true
+                } else if character == "\"" {
+                    inString = false
+                }
+            } else {
+                switch character {
+                case "\"": inString = true
+                case "{": depth += 1
+                case "}":
+                    depth -= 1
+                    if depth == 0 {
+                        return String(trimmed[start...index])
+                    }
+                default: break
+                }
+            }
+            index = trimmed.index(after: index)
         }
-        return trimmed
+        // Unbalanced (truncated) output: hand back from the first brace so the decoder surfaces it.
+        return String(trimmed[start...])
     }
 
     public static func containsActionOutput(_ value: RemoteInferenceJSONValue) -> Bool {

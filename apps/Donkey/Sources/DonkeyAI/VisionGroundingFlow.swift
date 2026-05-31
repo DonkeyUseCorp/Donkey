@@ -52,10 +52,13 @@ public enum VisionGroundingFlow {
             return Outcome(screenPoint: nil, reason: "emptyScreenshot", resolvedAppName: target.appName)
         }
 
+        // Compress (downscale + JPEG) through the shared helper so this request matches every other
+        // hosted-vision request; the model's coordinates then map back through the COMPRESSED size.
+        let compressed = ScreenshotCompression.compressedForModel(shot)
         // The hosted vision model occasionally returns malformed JSON; retry a few times.
         let request = DebugUIInspectionRequest(
-            screenshotBase64: shot.pngData.base64EncodedString(),
-            pixelSize: HotLoopSize(width: Double(shot.imageWidth), height: Double(shot.imageHeight), space: .crop),
+            imageDataURL: compressed.base64DataURL,
+            pixelSize: compressed.pixelSize,
             minConfidence: minConfidence
         )
         var frame: DebugUIInspectionFrame?
@@ -77,8 +80,8 @@ public enum VisionGroundingFlow {
         }
         let point = screenPoint(
             bbox: element.bbox,
-            imageWidth: shot.imageWidth,
-            imageHeight: shot.imageHeight,
+            imageWidth: Int(compressed.pixelSize.width.rounded()),
+            imageHeight: Int(compressed.pixelSize.height.rounded()),
             window: target.bounds
         )
         return Outcome(screenPoint: point, reason: "ok", matchedLabel: element.label, resolvedAppName: target.appName)
@@ -88,24 +91,18 @@ public enum VisionGroundingFlow {
     nonisolated static func resolveElement(_ query: String, in elements: [DebugUIElement]) -> DebugUIElement? {
         let normalizedQuery = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedQuery.isEmpty else { return nil }
-        let queryTokens = Set(normalizedQuery.split { !$0.isLetter && !$0.isNumber }.map(String.init))
+        let queryTokens = ControlTextRelevance.tokens(in: normalizedQuery)
 
         var best: (element: DebugUIElement, score: Double)?
         for element in elements where element.bbox.hasPositiveArea {
             let candidates = [element.label, element.description, element.type.rawValue]
                 .map { $0.lowercased() }
                 .filter { !$0.isEmpty }
-            var score = 0.0
-            for candidate in candidates {
-                if candidate == normalizedQuery {
-                    score = max(score, 1_000)
-                } else if candidate.contains(normalizedQuery) || normalizedQuery.contains(candidate) {
-                    score = max(score, 500)
-                } else {
-                    let overlap = queryTokens.intersection(Set(candidate.split { !$0.isLetter && !$0.isNumber }.map(String.init))).count
-                    if overlap > 0 { score = max(score, Double(overlap)) }
-                }
-            }
+            let score = ControlTextRelevance.score(
+                normalizedQuery: normalizedQuery,
+                queryTokens: queryTokens,
+                candidates: candidates
+            )
             guard score > 0 else { continue }
             // Tie-break toward higher model confidence.
             let composite = score * 1_000 + element.confidence
