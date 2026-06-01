@@ -38,15 +38,23 @@ RUN mkdir -p weights && \
     done && \
     mv weights/icon_caption weights/icon_caption_florence
 
-# Best-effort: prefetch EasyOCR's detection/recognition models so the first
-# request doesn't pay the ~150MB download. EasyOCR's downloader uses urllib with
-# NO timeout, so when its model host is slow/unreachable from the build sandbox
-# it hangs indefinitely (it stalled a build here for ~2h). Cap it and let the
-# build proceed - the worker falls back to the runtime download, which works.
-# gpu=False just avoids needing a GPU at build time; cached files are reused by
-# the runtime Reader.
-RUN timeout 600 python -c "import easyocr; easyocr.Reader(['en'], gpu=False)" \
-    || echo "EasyOCR prefetch skipped (timed out); models download on first request"
+# Prefetch EasyOCR's English models (detection + recognition) so the first
+# request doesn't pay the ~150MB download. EasyOCR's own downloader pulls from
+# github release assets, which the RunPod build sandbox can't reach (it stalled
+# builds here for 10min+). HuggingFace IS reachable (the OmniParser weights above
+# pull in ~12s), so fetch the byte-identical weights from a mirror, pinned to a
+# commit and MD5-verified against JaidedAI's official checksums so a changed or
+# corrupt file fails the build loudly. EASYOCR_MODULE_PATH makes the lookup dir
+# deterministic at runtime regardless of HOME.
+ENV EASYOCR_MODULE_PATH=/root/.EasyOCR
+ARG EASYOCR_MIRROR_REV=17cdb173ef73b32eb6e9d1270f33b30154b03908
+RUN mkdir -p "$EASYOCR_MODULE_PATH/model" && \
+    hf download xiaoyao9184/easyocr craft_mlt_25k.pth --revision "$EASYOCR_MIRROR_REV" --local-dir /tmp/easyocr && \
+    hf download xiaoyao9184/easyocr english_g2.pth   --revision "$EASYOCR_MIRROR_REV" --local-dir /tmp/easyocr && \
+    cp /tmp/easyocr/craft_mlt_25k.pth /tmp/easyocr/english_g2.pth "$EASYOCR_MODULE_PATH/model/" && \
+    echo "2f8227d2def4037cdb3b34389dcf9ec1  $EASYOCR_MODULE_PATH/model/craft_mlt_25k.pth" | md5sum -c && \
+    echo "5864788e1821be9e454ec108d61b887d  $EASYOCR_MODULE_PATH/model/english_g2.pth"   | md5sum -c && \
+    rm -rf /tmp/easyocr
 
 COPY vision/handler.py /app/handler.py
 
