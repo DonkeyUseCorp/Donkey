@@ -7,7 +7,10 @@ import {
   recordInferenceUsage,
   requireInferenceCredits,
 } from "@/lib/credits/inference";
-import { withDonkeyAuth } from "@/lib/donkey-api-auth";
+import {
+  shouldBypassDonkeyInferenceCredits,
+  withDonkeyAuth,
+} from "@/lib/donkey-api-auth";
 import { InferenceProviderError } from "@/lib/inference/providers";
 import {
   checkInMemoryRateLimit,
@@ -65,14 +68,19 @@ export const POST = withDonkeyAuth(async (request) => {
   const { image, instruction, model, returnElements, options } = parsed.data;
   const billedModel = instruction ? model : parseModel;
 
-  const credits = await requireInferenceCredits({
-    model: billedModel,
-    provider: inferenceProvider,
-    route: inferenceUsageRoutes.vision,
-    userId: request.donkey.userId,
-  });
-  if (!credits.ok) {
-    return credits.response;
+  // The dev-bypass user has no real account, so skip the credit preflight and
+  // usage recording (both reference a real user row) when bypassing auth.
+  const bypassCredits = shouldBypassDonkeyInferenceCredits(request.donkey);
+  if (!bypassCredits) {
+    const credits = await requireInferenceCredits({
+      model: billedModel,
+      provider: inferenceProvider,
+      route: inferenceUsageRoutes.vision,
+      userId: request.donkey.userId,
+    });
+    if (!credits.ok) {
+      return credits.response;
+    }
   }
 
   try {
@@ -91,31 +99,39 @@ export const POST = withDonkeyAuth(async (request) => {
         : {}),
     };
 
-    const recordedUsage = await recordInferenceUsage({
-      clientId: client.clientId,
-      metadata: { grounded: String(instruction !== undefined) },
-      model: billedModel,
-      provider: inferenceProvider,
-      requestKind: "vision_parse",
-      route: inferenceUsageRoutes.vision,
-      status: "succeeded",
-      userId: request.donkey.userId,
-    });
+    let usageHeaders: Record<string, string> = {};
+    if (bypassCredits) {
+      usageHeaders["X-Donkey-Dev-Auth-Bypass"] = "true";
+    } else {
+      const recordedUsage = await recordInferenceUsage({
+        clientId: client.clientId,
+        metadata: { grounded: String(instruction !== undefined) },
+        model: billedModel,
+        provider: inferenceProvider,
+        requestKind: "vision_parse",
+        route: inferenceUsageRoutes.vision,
+        status: "succeeded",
+        userId: request.donkey.userId,
+      });
+      usageHeaders = creditUsageHeaders(recordedUsage);
+    }
 
     return NextResponse.json(result, {
-      headers: creditUsageHeaders(recordedUsage),
+      headers: usageHeaders,
     });
   } catch (error) {
-    await recordFailedInferenceUsage({
-      clientId: client.clientId,
-      errorCode: inferenceErrorCode(error),
-      metadata: { grounded: String(instruction !== undefined) },
-      model: billedModel,
-      provider: inferenceProvider,
-      requestKind: "vision_parse",
-      route: inferenceUsageRoutes.vision,
-      userId: request.donkey.userId,
-    });
+    if (!bypassCredits) {
+      await recordFailedInferenceUsage({
+        clientId: client.clientId,
+        errorCode: inferenceErrorCode(error),
+        metadata: { grounded: String(instruction !== undefined) },
+        model: billedModel,
+        provider: inferenceProvider,
+        requestKind: "vision_parse",
+        route: inferenceUsageRoutes.vision,
+        userId: request.donkey.userId,
+      });
+    }
     if (error instanceof InferenceProviderError) {
       return inferenceProviderErrorResponse(error);
     }

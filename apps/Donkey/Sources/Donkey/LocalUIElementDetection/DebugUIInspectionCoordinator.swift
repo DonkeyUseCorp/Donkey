@@ -36,7 +36,13 @@ final class DebugUIInspectionCoordinator {
     private var lastRenderedFrames: [UInt32: DebugUIInspectionFrame] = [:]
     private var lastSnapshots: [UInt32: DebugUIScreenCaptureSnapshot] = [:]
     private var lastVisionImageHashes: [UInt32: String] = [:]
+    private var visionBackoff: [UInt32: VisionBackoff] = [:]
     private let remoteAIEngine: RemoteAIEngine = .vision
+
+    private struct VisionBackoff {
+        var nextAttempt: Date
+        var failureStreak: Int
+    }
     private var timer: Timer?
     private var activeAccessibilityTimer: Timer?
     private var notificationObservers: [NSObjectProtocol] = []
@@ -79,6 +85,7 @@ final class DebugUIInspectionCoordinator {
         lastRenderedFrames.removeAll()
         lastSnapshots.removeAll()
         lastVisionImageHashes.removeAll()
+        visionBackoff.removeAll()
         isAnalyzing = false
         isRefreshingActiveAccessibility = false
         currentConfig = .disabled
@@ -180,6 +187,7 @@ final class DebugUIInspectionCoordinator {
             lastRenderedFrames.removeAll()
             lastSnapshots.removeAll()
             lastVisionImageHashes.removeAll()
+            visionBackoff.removeAll()
             if !newConfig.enabled {
                 overlayController.close()
             }
@@ -589,6 +597,11 @@ final class DebugUIInspectionCoordinator {
 
                 if remoteAIEngine == .vision {
                     let windowID = capture.target.windowID
+                    // Back off after failures so a broken or cold backend isn't
+                    // re-hit (and re-logged) every refresh cycle.
+                    if let backoff = visionBackoff[windowID], Date() < backoff.nextAttempt {
+                        continue
+                    }
                     let imageHash = SHA256.hash(data: capture.parseImageData)
                         .map { String(format: "%02x", $0) }
                         .joined()
@@ -614,10 +627,13 @@ final class DebugUIInspectionCoordinator {
                         elements.removeAll { Self.windowID(for: $0) == windowID }
                         elements += parsedElements
                         lastVisionImageHashes[windowID] = imageHash
+                        visionBackoff[windowID] = nil
                         renderRemoteAIFrame(stage: "vision", updatesFingerprint: false)
                     } catch {
+                        let backoff = Self.nextVisionBackoff(after: visionBackoff[windowID])
+                        visionBackoff[windowID] = backoff
                         DebugUIInspectionLog.overlay.error(
-                            "debug inspection vision parse failed windowID=\(windowID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                            "debug inspection vision parse failed windowID=\(windowID, privacy: .public) failureStreak=\(backoff.failureStreak, privacy: .public) retryInSeconds=\(Int(backoff.nextAttempt.timeIntervalSinceNow.rounded()), privacy: .public) error=\(String(describing: error), privacy: .public)"
                         )
                     }
                     continue
@@ -1320,6 +1336,17 @@ final class DebugUIInspectionCoordinator {
             .filter { !$0.isEmpty }
             .joined(separator: "||")
         return SHA256.hash(data: Data(combinedInput.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func nextVisionBackoff(after previous: VisionBackoff?) -> VisionBackoff {
+        let baseSeconds = 2.0
+        let capSeconds = 30.0
+        let failureStreak = (previous?.failureStreak ?? 0) + 1
+        let delay = min(baseSeconds * pow(2, Double(failureStreak - 1)), capSeconds)
+        return VisionBackoff(
+            nextAttempt: Date().addingTimeInterval(delay),
+            failureStreak: failureStreak
+        )
     }
 
     private static func frameSignature(_ frame: DebugUIInspectionFrame) -> String {
