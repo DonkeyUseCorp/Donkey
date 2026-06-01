@@ -1,8 +1,10 @@
 # OmniParser V2 RunPod Serverless worker.
 #
 # RunPod builds this image from GitHub (Serverless -> Import Git Repository ->
-# Dockerfile Path = vision/Dockerfile). Build for linux/amd64 if building
-# locally on Apple Silicon: docker build --platform linux/amd64 ...
+# Dockerfile Path = vision/Dockerfile). The build context is the repo ROOT, not
+# vision/, so COPY sources must be repo-relative (e.g. vision/handler.py).
+# Build for linux/amd64 if building locally on Apple Silicon, from the repo
+# root: docker build --platform linux/amd64 -f vision/Dockerfile .
 FROM runpod/pytorch:1.0.3-cu1281-torch260-ubuntu2204
 
 WORKDIR /app
@@ -35,7 +37,7 @@ RUN mkdir -p weights && \
     done && \
     mv weights/icon_caption weights/icon_caption_florence
 
-COPY handler.py /app/handler.py
+COPY vision/handler.py /app/handler.py
 
 WORKDIR /app
 
