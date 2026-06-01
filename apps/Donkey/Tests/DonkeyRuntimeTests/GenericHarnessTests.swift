@@ -416,15 +416,20 @@ struct GenericHarnessTests {
             services: HarnessBuiltInToolServices(commandExecutor: DonkeyCommandBackends.makeExecutor())
         )
 
-        // apps.list is read-only discovery and always succeeds.
+        // apps_list is read-only discovery and always succeeds.
         let apps = await registry.execute(
-            HarnessToolCall(id: "apps-1", name: "apps.list"),
+            HarnessToolCall(id: "apps-1", name: "apps_list"),
             taskID: "task-apps",
             worldModel: HarnessWorldModel(),
             grantedPermissions: [.appLookup]
         )
         #expect(apps.status == .succeeded)
         #expect(apps.metadata["installed"] != nil)
+        // Default call reports pagination state so the model can page if needed.
+        #expect(apps.metadata["installedTotal"] != nil)
+        #expect(apps.metadata["offset"] == "0")
+        #expect(apps.metadata["limit"] == "50")
+        #expect(apps.metadata["hasMore"] != nil)
 
         // shell_exec with no command is rejected without side effects.
         let emptyShell = await registry.execute(
@@ -444,6 +449,61 @@ struct GenericHarnessTests {
             grantedPermissions: [.appControl]
         )
         #expect(unknown.status == .unknownTool)
+    }
+
+    @Test
+    func appsListPaginatesInstalledAppsAndValidatesInputs() async {
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(commandExecutor: DonkeyCommandBackends.makeExecutor())
+        )
+
+        // A single-item page never returns more than `limit`, and surfaces a
+        // `nextOffset` to continue paging whenever the catalog is larger.
+        let firstPage = await registry.execute(
+            HarnessToolCall(id: "apps-page-1", name: "apps_list", input: ["offset": "0", "limit": "1"]),
+            taskID: "task-apps-page-1",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: [.appLookup]
+        )
+        #expect(firstPage.status == .succeeded)
+        #expect(firstPage.metadata["limit"] == "1")
+        #expect(firstPage.metadata["offset"] == "0")
+        let returned = Int(firstPage.metadata["returned"] ?? "") ?? -1
+        #expect(returned >= 0 && returned <= 1)
+        let total = Int(firstPage.metadata["installedTotal"] ?? "") ?? -1
+        if total > 1 {
+            #expect(firstPage.metadata["hasMore"] == "true")
+            #expect(firstPage.metadata["nextOffset"] == "1")
+        }
+
+        // Out-of-range offsets clamp to an empty page rather than crashing.
+        let pastEnd = await registry.execute(
+            HarnessToolCall(id: "apps-page-end", name: "apps_list", input: ["offset": "100000", "limit": "10"]),
+            taskID: "task-apps-page-end",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: [.appLookup]
+        )
+        #expect(pastEnd.status == .succeeded)
+        #expect(pastEnd.metadata["returned"] == "0")
+        #expect(pastEnd.metadata["hasMore"] == "false")
+        #expect(pastEnd.metadata["nextOffset"] == nil)
+
+        // Malformed pagination inputs are rejected with actionable feedback.
+        let badOffset = await registry.execute(
+            HarnessToolCall(id: "apps-bad-offset", name: "apps_list", input: ["offset": "-1"]),
+            taskID: "task-apps-bad-offset",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: [.appLookup]
+        )
+        #expect(badOffset.status == .invalidInput)
+
+        let badLimit = await registry.execute(
+            HarnessToolCall(id: "apps-bad-limit", name: "apps_list", input: ["limit": "0"]),
+            taskID: "task-apps-bad-limit",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: [.appLookup]
+        )
+        #expect(badLimit.status == .invalidInput)
     }
 
     @Test

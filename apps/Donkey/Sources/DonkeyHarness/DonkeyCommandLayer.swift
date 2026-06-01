@@ -10,10 +10,15 @@ public enum DonkeyCommandLayer {
 
     /// Single source of truth for the command names shared between the descriptors
     /// here and the runtime backend that executes them.
+    ///
+    /// Names must be valid LLM function-call identifiers (`[A-Za-z_][A-Za-z0-9_]*`):
+    /// Gemini/Vertex Live rejects dots and silently normalizes them, so a name like
+    /// `apps.list` would come back from the model as `apps_list` and miss dispatch.
+    /// Use underscores, never dots.
     public enum Command: String, CaseIterable, Sendable {
         case shellExec = "shell_exec"
-        case appsList = "apps.list"
-        case musicPlay = "music.play"
+        case appsList = "apps_list"
+        case musicPlay = "music_play"
     }
 
     public static var descriptors: [HarnessToolDescriptor] {
@@ -36,12 +41,22 @@ public enum DonkeyCommandLayer {
             HarnessToolDescriptor(
                 name: Command.appsList.rawValue,
                 pluginID: pluginID,
-                summary: "List installed and currently-running applications (display names + bundle ids). Call this to discover exact app names before opening, quitting, or scripting an app instead of guessing.",
-                inputSchema: ["filter": "Case-insensitive substring to narrow the results."],
-                optionalInputKeys: ["filter"],
+                summary: "List installed and currently-running applications (display names + bundle ids), so you can target exact app names before opening, quitting, or scripting an app instead of guessing. Prefer `filter` when you already know part of the name. The installed list is paginated: to browse the full catalog, read `hasMore`/`nextOffset` in the result and call again with `offset` set to `nextOffset`, keeping the same `filter`.",
+                inputSchema: [
+                    "filter": "Case-insensitive substring to narrow both lists. Use this first when you know part of the app name.",
+                    "offset": "Zero-based start index into the installed list, for pagination. Defaults to 0. Pass the previous result's `nextOffset` to fetch the next page.",
+                    "limit": "Max installed apps to return in this page. Defaults to 50, capped at 200. Running apps are always returned in full."
+                ],
+                optionalInputKeys: ["filter", "offset", "limit"],
                 outputSchema: [
-                    "installed": "Comma-separated installed app names.",
-                    "running": "Comma-separated running app names."
+                    "installed": "Comma-separated installed app names for the current page.",
+                    "running": "Comma-separated running app names (always the full list).",
+                    "installedTotal": "Total installed apps matching the filter, across all pages.",
+                    "offset": "Start index of the returned page.",
+                    "limit": "Page size applied.",
+                    "returned": "Number of installed apps in this page.",
+                    "hasMore": "\"true\" when more installed pages remain.",
+                    "nextOffset": "Offset to pass next to continue paging (present only when hasMore is true)."
                 ],
                 requiredPermissions: [.appLookup],
                 safetyClass: .readOnly

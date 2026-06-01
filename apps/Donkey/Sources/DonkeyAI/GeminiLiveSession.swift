@@ -14,11 +14,17 @@ public struct GeminiLiveConnection: Equatable, Sendable {
     public var url: URL
     public var bearerToken: String?
     public var model: String
+    /// Request AUDIO response modality instead of TEXT. Some Live models (e.g. the
+    /// default Developer-API model, `GeminiLiveConfiguration.defaultModel`) are
+    /// audio-output only and reject TEXT; tool calls + output transcription still
+    /// work.
+    public var audioOutput: Bool
 
-    public init(url: URL, bearerToken: String?, model: String) {
+    public init(url: URL, bearerToken: String?, model: String, audioOutput: Bool = false) {
         self.url = url
         self.bearerToken = bearerToken
         self.model = model
+        self.audioOutput = audioOutput
     }
 }
 
@@ -130,7 +136,7 @@ public actor GeminiLiveSession: AIRealtimeSession {
             model: connection.model,
             systemInstruction: systemInstruction,
             functionDeclarations: CommandLayerFunctionDeclarations.declarations(from: functionDescriptors),
-            includeAudioResponse: false,
+            includeAudioResponse: connection.audioOutput,
             resumptionHandle: resumptionHandle
         )
         try await socket.send(.data(setup))

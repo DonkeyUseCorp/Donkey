@@ -4,9 +4,11 @@ import { InferenceProviderError } from "@/lib/inference/providers";
 
 const vertexAIScope = "https://www.googleapis.com/auth/cloud-platform";
 const defaultVertexLocation = "global";
-// Keep in sync with GeminiLiveConfiguration.defaultModel in the macOS client
-// (apps/Donkey/.../GeminiLiveConfiguration.swift); both read GEMINI_LIVE_MODEL.
-const defaultLiveModel = "gemini-3.1-flash-live-preview";
+// The backend owns the Live model id (the client never selects it). Override
+// with GEMINI_LIVE_MODEL. `gemini-live-2.5-flash` is the model that resolves on
+// Vertex AI in the `global` location and accepts the BidiGenerateContent setup
+// (verified end-to-end via GeminiLiveCommandSessionLiveSmokeTests).
+const defaultLiveModel = "gemini-live-2.5-flash";
 
 type AdapterEnvironment = Record<string, string | undefined>;
 

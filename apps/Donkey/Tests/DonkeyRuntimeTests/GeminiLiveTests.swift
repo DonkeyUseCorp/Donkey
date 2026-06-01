@@ -1,3 +1,4 @@
+@testable import Donkey
 import DonkeyAI
 import DonkeyHarness
 import Foundation
@@ -32,12 +33,79 @@ struct GeminiLiveTests {
             #expect(names.contains(command.rawValue))
         }
 
-        // music.play has a required `query` and an optional `app`.
-        let music = declarations.first { ($0["name"] as? String) == "music.play" }
+        // music_play has a required `query` and an optional `app`.
+        let music = declarations.first { ($0["name"] as? String) == "music_play" }
         let parameters = music?["parameters"] as? [String: Any]
         let required = parameters?["required"] as? [String] ?? []
         #expect(required.contains("query"))
         #expect(!required.contains("app"))
+    }
+
+    @Test
+    func commandNamesAreValidFunctionCallIdentifiers() {
+        // Gemini/Vertex Live rejects dots in function names and normalizes them
+        // (e.g. `apps.list` → `apps_list`), so a dotted name would never dispatch.
+        // Every Command Layer name must be a plain `[A-Za-z_][A-Za-z0-9_]*` id.
+        for command in DonkeyCommandLayer.Command.allCases {
+            let name = command.rawValue
+            #expect(!name.isEmpty)
+            let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
+            #expect(
+                name.unicodeScalars.allSatisfy(allowed.contains),
+                "command name \(name) is not a valid LLM function identifier"
+            )
+            let first = name.unicodeScalars.first!
+            #expect(
+                !CharacterSet(charactersIn: "0123456789").contains(first),
+                "command name \(name) must not start with a digit"
+            )
+        }
+    }
+
+    @Test
+    func developerAPIProviderUsesKeyModelAndAudioOutput() async throws {
+        // GEMINI_API_KEY → connect directly to the Developer API with the key in
+        // the query string, the configured model, and AUDIO output (gemini-3.1
+        // Live is audio-only).
+        let config = GeminiLiveConfiguration.fromEnvironment([
+            "GEMINI_API_KEY": "test-key-123",
+            "GEMINI_LIVE_MODEL": "gemini-3.1-flash-live-preview"
+        ])
+        #expect(config.apiKey == "test-key-123")
+        #expect(config.model == "gemini-3.1-flash-live-preview")
+
+        let connection = try await GeminiLiveConnectionFactory.makeProvider(configuration: config)()
+        #expect(connection.bearerToken == nil)
+        #expect(connection.audioOutput)
+        #expect(connection.model == "gemini-3.1-flash-live-preview")
+        #expect(connection.url.absoluteString.contains("generativelanguage.googleapis.com"))
+        #expect(connection.url.query?.contains("key=test-key-123") == true)
+    }
+
+    @Test
+    func configDefaultsToLive25AndVision35() {
+        // Command Live model defaults to a 2.5 model; the turn-based vision model
+        // defaults to the stronger gemini-3.5-flash.
+        #expect(GeminiLiveConfiguration.defaultModel.contains("2.5"))
+        #expect(GeminiLiveConfiguration.defaultVisionModel == "gemini-3.5-flash")
+        let defaults = GeminiLiveConfiguration.fromEnvironment([:])
+        #expect(defaults.apiKey == nil)
+        #expect(defaults.model == GeminiLiveConfiguration.defaultModel)
+        #expect(defaults.visionModel == "gemini-3.5-flash")
+        // GEMINI_VISION_MODEL overrides the vision model.
+        let overridden = GeminiLiveConfiguration.fromEnvironment(["GEMINI_VISION_MODEL": "gemini-2.5-pro"])
+        #expect(overridden.visionModel == "gemini-2.5-pro")
+    }
+
+    @Test
+    @MainActor
+    func canonicalToolNameStripsGeminiPrefixes() {
+        // Gemini sometimes namespaces tool-call names; dispatch must match the
+        // declared name (this regressed vision_control → `default_vision_control`).
+        #expect(GeminiLiveVoiceController.canonicalToolName("vision_control") == "vision_control")
+        #expect(GeminiLiveVoiceController.canonicalToolName("default_vision_control") == "vision_control")
+        #expect(GeminiLiveVoiceController.canonicalToolName("default_api.music_play") == "music_play")
+        #expect(GeminiLiveVoiceController.canonicalToolName("apps_list") == "apps_list")
     }
 
     @Test

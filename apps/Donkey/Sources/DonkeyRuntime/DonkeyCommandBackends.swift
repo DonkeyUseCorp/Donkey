@@ -32,7 +32,32 @@ public enum DonkeyCommandBackends {
         }
     }
 
-    // MARK: - apps.list
+    // MARK: - apps_list
+
+    /// Default and ceiling for the installed-list page size. The installed
+    /// catalog can run to ~100+ entries, which overflowed the response cap and
+    /// silently dropped the tail; pagination lets the model page deterministically.
+    private static let appsDefaultPageSize = 50
+    private static let appsMaxPageSize = 200
+    /// Char budget for the joined installed names. The page is built to fit this so
+    /// the reported `returned`/`hasMore`/`nextOffset` describe exactly the names
+    /// emitted — a later truncation can never silently drop names the model was told
+    /// it received and would page past.
+    private static let appsResponseCharBudget = 3_000
+    /// The Spotlight-backed catalog scan (mdfind subprocess + per-app Info.plist
+    /// reads) is expensive and barely changes within a session, so reuse it across
+    /// paginated calls instead of re-enumerating on every page.
+    private static let installedCatalogTTLSeconds: TimeInterval = 60
+    @MainActor private static var installedCatalogCache: (expires: Date, apps: [LocalApplicationCatalogCandidate])?
+
+    @MainActor
+    private static func cachedInstalledApplications() -> [LocalApplicationCatalogCandidate] {
+        let now = Date()
+        if let cache = installedCatalogCache, cache.expires > now { return cache.apps }
+        let apps = MacLocalAppAvailabilityProvider.installedApplications()
+        installedCatalogCache = (now.addingTimeInterval(installedCatalogTTLSeconds), apps)
+        return apps
+    }
 
     @MainActor
     private static func listApps(_ context: HarnessToolExecutionContext) -> HarnessToolResult {
@@ -43,9 +68,28 @@ public enum DonkeyCommandBackends {
             return value.lowercased().contains(filter)
         }
 
+        // Pagination inputs apply to the installed list only (the large one);
+        // running apps are few and always returned in full.
+        var offset = 0
+        if let rawOffset = trimmed(context.call.input["offset"]) {
+            guard let parsed = Int(rawOffset), parsed >= 0 else {
+                return invalidInput(context, "`offset` must be a non-negative integer (zero-based index into the installed list).")
+            }
+            offset = parsed
+        }
+
+        var limit = appsDefaultPageSize
+        if let rawLimit = trimmed(context.call.input["limit"]) {
+            guard let parsed = Int(rawLimit), parsed >= 1 else {
+                return invalidInput(context, "`limit` must be a positive integer (max \(appsMaxPageSize)).")
+            }
+            limit = min(parsed, appsMaxPageSize)
+        }
+
         // Reuse the shared Spotlight-backed catalog (names + bundle ids, all the
-        // standard search roots) instead of a duplicated directory scan.
-        let installed = MacLocalAppAvailabilityProvider.installedApplications()
+        // standard search roots — including /System/Applications, so Apple native
+        // apps are present) instead of a duplicated directory scan.
+        let installedAll = cachedInstalledApplications()
             .filter { passesFilter($0.appName) || ($0.bundleIdentifier.map(passesFilter) ?? false) }
             .map { candidate -> String in
                 guard let bundleID = candidate.bundleIdentifier, !bundleID.isEmpty else { return candidate.appName }
@@ -53,21 +97,80 @@ public enum DonkeyCommandBackends {
             }
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
 
+        let installedTotal = installedAll.count
+        let pageStart = min(offset, installedTotal)
+        // Build the page so what we COUNT is exactly what we EMIT: take up to `limit`
+        // names from `pageStart`, but stop early if the joined text would exceed the
+        // response budget. `nextOffset`/`hasMore` then describe the real emitted page,
+        // not an over-counted slice the response cap would have silently truncated.
+        let (installedPage, installedText) = pagedNames(
+            installedAll, start: pageStart, maxCount: limit, charBudget: appsResponseCharBudget
+        )
+        let pageEnd = pageStart + installedPage.count
+        let hasMore = pageEnd < installedTotal
+        let nextOffset = hasMore ? pageEnd : nil
+
         let running = NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular }
             .compactMap(\.localizedName)
             .filter(passesFilter)
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
 
+        // Self-describing page header so the model can chain pages from the
+        // result text alone, without re-deriving the input schema.
+        let rangeText = installedTotal == 0
+            ? "Installed (0)"
+            : "Installed \(pageStart + 1)–\(pageEnd) of \(installedTotal)"
+        let moreText = nextOffset.map { " — more available, call apps_list again with offset=\($0) (same filter) for the next page" } ?? ""
+
+        var metadata: [String: String] = [
+            "installed": installedText,
+            "running": capped(running),
+            "installedTotal": String(installedTotal),
+            "offset": String(pageStart),
+            "limit": String(limit),
+            "returned": String(installedPage.count),
+            "hasMore": hasMore ? "true" : "false"
+        ]
+        if let nextOffset { metadata["nextOffset"] = String(nextOffset) }
+        if let filter = trimmed(context.call.input["filter"]) { metadata["filter"] = filter }
+
         return success(
             context,
-            summary: "Installed (\(installed.count)): \(capped(installed))\nRunning (\(running.count)): \(capped(running))",
-            facts: ["installedAppCount": String(installed.count)],
-            metadata: [
-                "installed": capped(installed),
-                "running": capped(running)
-            ]
+            summary: "\(rangeText)\(moreText): \(installedText)\nRunning (\(running.count)): \(capped(running))",
+            facts: [
+                "installedAppCount": String(installedTotal),
+                "installedReturnedCount": String(installedPage.count)
+            ],
+            metadata: metadata
         )
+    }
+
+    /// Take up to `maxCount` names starting at `start`, stopping early if the joined
+    /// text would exceed `charBudget`, and return the names actually taken alongside
+    /// their joined string. The returned count is authoritative: callers derive
+    /// `returned`/`hasMore`/`nextOffset` from it so the page header can't claim more
+    /// than was emitted. At least one name is always taken (so paging makes progress
+    /// even if a single name exceeds the budget).
+    private static func pagedNames(
+        _ names: [String],
+        start: Int,
+        maxCount: Int,
+        charBudget: Int
+    ) -> (page: [String], joined: String) {
+        var page: [String] = []
+        var joinedLength = 0
+        var index = start
+        while index < names.count, page.count < maxCount {
+            let name = names[index]
+            let separatorLength = page.isEmpty ? 0 : 2  // ", "
+            let projected = joinedLength + separatorLength + name.count
+            if !page.isEmpty, projected > charBudget { break }
+            page.append(name)
+            joinedLength = projected
+            index += 1
+        }
+        return (page, page.joined(separator: ", "))
     }
 
     /// Join names, capped so the model response stays bounded.
@@ -83,11 +186,11 @@ public enum DonkeyCommandBackends {
         return result
     }
 
-    // MARK: - music.play
+    // MARK: - music_play
 
     private static func playMusic(_ context: HarnessToolExecutionContext) async -> HarnessToolResult {
         guard trimmed(context.call.input["query"]) != nil else {
-            return invalidInput(context, "music.play requires a `query`.")
+            return invalidInput(context, "music_play requires a `query`.")
         }
         guard let artifact = LocalAppUserQueryHarnessServices
             .builtInValidatedScriptArtifacts()

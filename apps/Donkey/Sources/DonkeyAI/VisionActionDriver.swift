@@ -17,10 +17,27 @@ import Foundation
 public enum VisionActionDriver {
     public typealias ScreenshotCapture = @MainActor (MacWindowTargetCandidate) async throws -> CapturedWindowScreenshot
 
+    /// Plans the single next UI action from the current screenshot. Injected so the
+    /// loop, guards, and action handling are shared across planner backends — the
+    /// `backend.createResponse` path (`VisionActionPlanner`) and the direct-Vertex
+    /// path (`GeminiVertexVisionPlanner`) differ only in this one step.
+    public typealias ActionPlanner = @MainActor (
+        _ goal: String,
+        _ appName: String,
+        _ screenshot: CapturedWindowScreenshot,
+        _ window: WindowTargetBounds,
+        _ history: [String],
+        _ appGuidance: String?
+    ) async throws -> VisionActionPlanner.PlannedAction
+
+    /// Repeated identical clicks mean the model is stuck (clicking a target that
+    /// never responds); abort rather than burn the whole turn budget on it.
+    private static let stuckClickRepeatLimit = 4
+
     public struct Outcome: Sendable {
         public var completed: Bool
         public var turns: Int
-        /// "ok" | "noWindowForApp" | "screenshotFailed" | "visionPlanFailed" | "targetNotFrontmost" | "maxTurnsReached"
+        /// "ok" | "noWindowForApp" | "screenshotFailed" | "visionPlanFailed" | "targetNotFrontmost" | "stuckRepeatingClick" | "maxTurnsReached"
         public var reason: String
         public var lastNarration: String?
         public var history: [String]
@@ -33,6 +50,9 @@ public enum VisionActionDriver {
         public var action: VisionActionPlanner.PlannedAction
     }
 
+    /// Convenience: drive via the backend `createResponse` planner
+    /// (`VisionActionPlanner`). Used by the production command router and the
+    /// Spotify live smoke test; the loop itself is `drive(planner:)` below.
     public static func drive(
         appName: String,
         bundleIdentifier: String?,
@@ -42,23 +62,66 @@ public enum VisionActionDriver {
         maxTurns: Int = 12,
         settleNanoseconds: UInt64 = 1_200_000_000,
         capture: @escaping ScreenshotCapture = { try await ScreenCaptureKitWindowScreenshotCapturer().capture(target: $0) },
+        verify: (@MainActor () -> Bool)? = nil,
         onTurn: (@MainActor (TurnInfo) -> Void)? = nil
+    ) async -> Outcome {
+        await drive(
+            appName: appName,
+            bundleIdentifier: bundleIdentifier,
+            goal: goal,
+            appGuidance: appGuidance,
+            maxTurns: maxTurns,
+            settleNanoseconds: settleNanoseconds,
+            capture: capture,
+            verify: verify,
+            onTurn: onTurn,
+            planner: { goal, app, shot, window, history, guidance in
+                try await VisionActionPlanner.nextAction(
+                    goal: goal, app: app, screenshot: shot, window: window,
+                    history: history, appGuidance: guidance, backend: backend
+                )
+            }
+        )
+    }
+
+    /// The single vision-driving loop: screenshot → `planner` → execute, until the
+    /// model reports `done` (optionally re-checked by `verify`), the goal is
+    /// independently verified, the model gets stuck, or `maxTurns` is reached.
+    public static func drive(
+        appName: String,
+        bundleIdentifier: String?,
+        goal: String,
+        appGuidance: String?,
+        maxTurns: Int = 12,
+        settleNanoseconds: UInt64 = 1_200_000_000,
+        capture: @escaping ScreenshotCapture = { try await ScreenCaptureKitWindowScreenshotCapturer().capture(target: $0) },
+        verify: (@MainActor () -> Bool)? = nil,
+        onTurn: (@MainActor (TurnInfo) -> Void)? = nil,
+        planner: @escaping ActionPlanner
     ) async -> Outcome {
         var history: [String] = []
         var lastNarration: String?
         var turnsTaken = 0
+        var lastClickKey = ""
+        var clickRepeatCount = 0
 
         // Resolve the target window once and reuse it; only re-resolve when a capture fails (the
         // window moving/closing is the only thing that invalidates the cached bounds).
         guard var target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier) else {
             return Outcome(completed: false, turns: 0, reason: "noWindowForApp", lastNarration: nil, history: history)
         }
-        activate(target)
+        activate(target, appName: appName)
 
         for _ in 0..<maxTurns {
+            // An independent success signal (e.g. "Spotify is playing") wins immediately —
+            // don't spend a turn asking the model whether it's done when we can check.
+            if verify?() == true {
+                return finish(true, turnsTaken, "ok", lastNarration, history)
+            }
+
             // Ensure the target is frontmost before we screenshot + act; re-activate only if needed.
             if !isFrontmost(target) {
-                activate(target)
+                activate(target, appName: appName)
                 try? await Task.sleep(nanoseconds: 250_000_000)
                 guard let refreshed = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier) else {
                     return finish(false, turnsTaken, "noWindowForApp", lastNarration, history)
@@ -75,15 +138,7 @@ public enum VisionActionDriver {
 
             let action: VisionActionPlanner.PlannedAction
             do {
-                action = try await VisionActionPlanner.nextAction(
-                    goal: goal,
-                    app: appName,
-                    screenshot: shot,
-                    window: target.bounds,
-                    history: history,
-                    appGuidance: appGuidance,
-                    backend: backend
-                )
+                action = try await planner(goal, appName, shot, target.bounds, history, appGuidance)
             } catch {
                 return finish(false, turnsTaken, "visionPlanFailed", lastNarration, history)
             }
@@ -105,11 +160,27 @@ public enum VisionActionDriver {
 
             switch effective {
             case "done":
-                return finish(true, turnsTaken, "ok", lastNarration, history)
+                // Verify-don't-trust when an independent signal is available: the model
+                // claiming done while verify() is false means its last action missed.
+                if let verify {
+                    if verify() { return finish(true, turnsTaken, "ok", lastNarration, history) }
+                    history.append("claimed done but the goal isn't satisfied yet — your last action missed; click the exact target")
+                } else {
+                    return finish(true, turnsTaken, "ok", lastNarration, history)
+                }
             case "click":
                 if let point = action.screenPoint {
+                    let key = "\(Int(point.x)),\(Int(point.y))"
+                    clickRepeatCount = (key == lastClickKey) ? clickRepeatCount + 1 : 0
+                    lastClickKey = key
+                    if clickRepeatCount >= stuckClickRepeatLimit {
+                        history.append("aborting: stuck repeating click \(key)")
+                        return finish(false, turnsTaken, "stuckRepeatingClick", lastNarration, history)
+                    }
                     _ = MacPointerInput.moveAndClick(at: point)
-                    history.append("clicked at (\(Int(point.x)),\(Int(point.y))): \(action.reason ?? "")")
+                    history.append(clickRepeatCount >= 2
+                        ? "clicked (\(key)) AGAIN — not working; pick a DIFFERENT target/exact center: \(action.reason ?? "")"
+                        : "clicked at (\(key)): \(action.reason ?? "")")
                 } else {
                     history.append("skipped click with no resolvable point")
                 }
@@ -128,6 +199,10 @@ public enum VisionActionDriver {
             try? await Task.sleep(nanoseconds: settleNanoseconds)
         }
 
+        // Last chance: the final action may have satisfied the goal on the turn we ran out.
+        if verify?() == true {
+            return finish(true, turnsTaken, "ok", lastNarration, history)
+        }
         return finish(false, turnsTaken, "maxTurnsReached", lastNarration, history)
     }
 
@@ -163,8 +238,33 @@ public enum VisionActionDriver {
         NSWorkspace.shared.frontmostApplication?.processIdentifier == pid_t(target.processID)
     }
 
-    private static func activate(_ target: MacWindowTargetCandidate) {
+    private static func activate(_ target: MacWindowTargetCandidate, appName: String) {
         let app = NSRunningApplication(processIdentifier: pid_t(target.processID))
         _ = app?.activate()
+        restoreMinimizedWindows(appName: appName)
+    }
+
+    /// Un-minimize the app's windows: a stray vision click can hit the minimize
+    /// button, which would break every later screenshot. Best-effort — silently
+    /// no-ops without Automation permission. Only runs on (re)activation, not every
+    /// turn, so the System Events round-trip isn't on the hot path.
+    private static func restoreMinimizedWindows(appName: String) {
+        let source = """
+        tell application "System Events"
+            if exists process "\(appName)" then
+                tell process "\(appName)"
+                    try
+                        repeat with w in windows
+                            if value of attribute "AXMinimized" of w is true then
+                                set value of attribute "AXMinimized" of w to false
+                            end if
+                        end repeat
+                    end try
+                end tell
+            end if
+        end tell
+        """
+        var error: NSDictionary?
+        NSAppleScript(source: source)?.executeAndReturnError(&error)
     }
 }

@@ -81,15 +81,20 @@ public enum VisionActionPlanner {
         )
     }
 
-    private static func responseRequest(
+    /// Builds the vision-action prompt shared by every planner backend (the
+    /// `backend.createResponse` path here and the direct-Vertex
+    /// `GeminiVertexVisionPlanner`). Kept in one place so the prompt — the single
+    /// most impactful lever on click accuracy — can never drift between paths, and
+    /// so the discoverable per-app `appGuidance` is applied uniformly (never a
+    /// hardcoded app list). `width`/`height` are the model-visible image pixels.
+    nonisolated static func visionPrompt(
         goal: String,
         app: String,
-        compressed: CompressedScreenshot,
+        width: Int,
+        height: Int,
         history: [String],
         appGuidance: String?
-    ) -> RemoteInferenceResponseCreateRequest {
-        let width = Int(compressed.pixelSize.width.rounded())
-        let height = Int(compressed.pixelSize.height.rounded())
+    ) -> String {
         let historyBlock = history.isEmpty
             ? "This is the first action; nothing has been done yet."
             : "Actions you have ALREADY performed, in order (do NOT repeat one that already worked):\n"
@@ -104,7 +109,7 @@ public enum VisionActionPlanner {
         } else {
             guidanceBlock = ""
         }
-        let prompt = """
+        return """
         You are operating the macOS app "\(app)" by clicking and typing to accomplish a goal.
         GOAL: \(goal)
         The attached screenshot is the CURRENT state of the app window (\(width) x \(height) pixels), origin top-left.
@@ -124,6 +129,20 @@ public enum VisionActionPlanner {
         CLICK PRECISELY: set x,y to the exact visual CENTER of the intended control, not above/below/beside it.
         Keep "reason" to one short sentence.
         """
+    }
+
+    private static func responseRequest(
+        goal: String,
+        app: String,
+        compressed: CompressedScreenshot,
+        history: [String],
+        appGuidance: String?
+    ) -> RemoteInferenceResponseCreateRequest {
+        let width = Int(compressed.pixelSize.width.rounded())
+        let height = Int(compressed.pixelSize.height.rounded())
+        let prompt = visionPrompt(
+            goal: goal, app: app, width: width, height: height, history: history, appGuidance: appGuidance
+        )
         return RemoteInferenceResponseCreateRequest(
             input: .array([
                 .object([
