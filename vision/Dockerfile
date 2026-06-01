@@ -3,7 +3,7 @@
 # RunPod builds this image from GitHub (Serverless -> Import Git Repository ->
 # Dockerfile Path = vision/Dockerfile). Build for linux/amd64 if building
 # locally on Apple Silicon: docker build --platform linux/amd64 ...
-FROM runpod/pytorch:2.4.0-py3.11-cuda12.1.0-devel
+FROM runpod/pytorch:1.0.3-cu1281-torch260-ubuntu2204
 
 WORKDIR /app
 
