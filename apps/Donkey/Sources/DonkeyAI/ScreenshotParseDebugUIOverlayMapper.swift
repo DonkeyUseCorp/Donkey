@@ -74,7 +74,7 @@ public enum ScreenshotParseDebugUIOverlayMapper {
         ).validated(minConfidence: threshold)
     }
 
-    private static func macWindowControlElements(
+    static func macWindowControlElements(
         target: MacWindowTargetCandidate,
         screenFrame: WindowTargetBounds
     ) -> [DebugUIElement] {
@@ -186,7 +186,7 @@ public enum ScreenshotParseDebugUIOverlayMapper {
         )
     }
 
-    private static func overlayLocalBounds(
+    static func overlayLocalBounds(
         for rect: HotLoopRect,
         target: MacWindowTargetCandidate,
         capturePixelSize: HotLoopSize

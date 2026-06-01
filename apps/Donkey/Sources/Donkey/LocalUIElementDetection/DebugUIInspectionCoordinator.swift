@@ -14,6 +14,14 @@ private enum DebugUIInspectionLog {
     static let overlay = Logger(subsystem: "com.donkey.app", category: "debug-ui-inspection")
 }
 
+/// Which hosted backend supplies the "AI" evidence rendered on the overlay.
+/// `vision` is the active path (RunPod OmniParser V2 via /api/inference/vision).
+/// `screenshotParse` is the older streaming parser, kept compiled but disabled.
+private enum RemoteAIEngine {
+    case vision
+    case screenshotParse
+}
+
 @MainActor
 final class DebugUIInspectionCoordinator {
     private let overlayController = DebugUIInspectionOverlayController()
@@ -27,6 +35,8 @@ final class DebugUIInspectionCoordinator {
     private var lastFingerprints: [UInt32: String] = [:]
     private var lastRenderedFrames: [UInt32: DebugUIInspectionFrame] = [:]
     private var lastSnapshots: [UInt32: DebugUIScreenCaptureSnapshot] = [:]
+    private var lastVisionImageHashes: [UInt32: String] = [:]
+    private let remoteAIEngine: RemoteAIEngine = .vision
     private var timer: Timer?
     private var activeAccessibilityTimer: Timer?
     private var notificationObservers: [NSObjectProtocol] = []
@@ -68,6 +78,7 @@ final class DebugUIInspectionCoordinator {
         lastFingerprints.removeAll()
         lastRenderedFrames.removeAll()
         lastSnapshots.removeAll()
+        lastVisionImageHashes.removeAll()
         isAnalyzing = false
         isRefreshingActiveAccessibility = false
         currentConfig = .disabled
@@ -168,6 +179,7 @@ final class DebugUIInspectionCoordinator {
             trackers.removeAll()
             lastRenderedFrames.removeAll()
             lastSnapshots.removeAll()
+            lastVisionImageHashes.removeAll()
             if !newConfig.enabled {
                 overlayController.close()
             }
@@ -574,6 +586,43 @@ final class DebugUIInspectionCoordinator {
                     height: capture.parsePixelSize.height,
                     space: .window
                 )
+
+                if remoteAIEngine == .vision {
+                    let windowID = capture.target.windowID
+                    let imageHash = SHA256.hash(data: capture.parseImageData)
+                        .map { String(format: "%02x", $0) }
+                        .joined()
+                    // Skip the network call when this window's pixels are unchanged
+                    // since the last successful vision parse; its elements are still
+                    // carried forward in `elements`. Server-side caching comes later.
+                    if lastVisionImageHashes[windowID] == imageHash {
+                        DebugUIInspectionLog.overlay.debug(
+                            "debug inspection skipped unchanged vision windowID=\(windowID, privacy: .public)"
+                        )
+                        continue
+                    }
+                    do {
+                        let response = try await client.parseScreenshotVision(
+                            imageData: capture.parseImageData
+                        )
+                        let parsedElements = VisionParseDebugUIOverlayMapper.frame(
+                            from: response,
+                            target: capture.target,
+                            screenFrame: screenBounds,
+                            minConfidence: currentConfig.minConfidence
+                        ).elements
+                        elements.removeAll { Self.windowID(for: $0) == windowID }
+                        elements += parsedElements
+                        lastVisionImageHashes[windowID] = imageHash
+                        renderRemoteAIFrame(stage: "vision", updatesFingerprint: false)
+                    } catch {
+                        DebugUIInspectionLog.overlay.error(
+                            "debug inspection vision parse failed windowID=\(windowID, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                        )
+                    }
+                    continue
+                }
+
                 let request = LocalUIUnderstandingRequest(
                     traceID: "debug-ui-ai-\(screen.screenID)-\(capture.target.windowID)-\(fingerprint)",
                     targetID: "window-\(capture.target.windowID)",

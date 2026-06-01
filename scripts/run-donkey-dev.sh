@@ -29,6 +29,15 @@ LOG_PID=""
 
 export DONKEY_WEB_BASE_URL="${DONKEY_WEB_BASE_URL:-http://localhost:3000}"
 
+# When pointing at a local site, default to dev auth bypass so hosted inference
+# (screenshot parse, vision) authenticates without an in-app login. An explicit
+# DONKEY_DEV_AUTH_BYPASS value (including 0) is always respected.
+case "$DONKEY_WEB_BASE_URL" in
+  http://localhost|http://localhost:*|http://127.0.0.1|http://127.0.0.1:*|http://[::1]|http://[::1]:*)
+    export DONKEY_DEV_AUTH_BYPASS="${DONKEY_DEV_AUTH_BYPASS:-1}"
+    ;;
+esac
+
 stop_running_donkey_apps() {
   killall Donkey >/dev/null 2>&1 || true
   if [ "$DEV_DISPLAY_NAME" != "Donkey" ]; then
@@ -442,5 +451,6 @@ fi
 
 echo "Starting Donkey..."
 print_dev_overlay_status
+echo "Hosted inference auth: dev-bypass=${DONKEY_DEV_AUTH_BYPASS:-0} baseURL=$DONKEY_WEB_BASE_URL"
 start_logger
 open -W -n "$DEV_APP_DIR"

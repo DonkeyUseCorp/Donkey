@@ -271,6 +271,26 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
         return finalResult
     }
 
+    /// Parse a screenshot with the hosted vision endpoint (RunPod OmniParser V2).
+    /// Single-shot only — the route does not stream. Returns elements with pixel
+    /// boxes relative to the uploaded image, origin top-left.
+    public func parseScreenshotVision(
+        imageData: Data,
+        options: RemoteVisionParseOptions? = nil
+    ) async throws -> RemoteVisionParseResponse {
+        var request = makeRequest(path: "/api/inference/vision")
+        request.httpMethod = "POST"
+        request.httpBody = try JSONEncoder().encode(
+            RemoteVisionParseRequest(
+                image: imageData.base64EncodedString(),
+                returnElements: true,
+                options: options
+            )
+        )
+        let data = try await send(request)
+        return try JSONDecoder().decode(RemoteVisionParseResponse.self, from: data)
+    }
+
     private static func decodeLocalUIUnderstandingResult(
         from text: String,
         decoder: JSONDecoder

@@ -114,6 +114,16 @@ Do not add a provider field to this config. Donkey Vision is always local AX
 evidence plus hosted AI enrichment; the config controls cadence, scope, and
 filters, not which evidence source runs.
 
+## AI Source
+
+The hosted AI evidence comes from the vision endpoint
+(`POST /api/inference/vision`, RunPod OmniParser V2). The overlay coordinator
+hashes each window screenshot and only calls the endpoint when that window's
+pixels changed since the last successful parse; unchanged windows reuse their
+carried-forward boxes. The older streaming screenshot-parse path is kept compiled
+but disabled behind `remoteAIEngine` in the coordinator so it can be switched back
+while we iterate on vision.
+
 ## Source Map
 
 High-signal entry points:
@@ -121,9 +131,10 @@ High-signal entry points:
 - `apps/Donkey/Sources/Donkey/LocalUIElementDetection/DebugUIInspectionCoordinator.swift`
 - `apps/Donkey/Sources/Donkey/LocalUIElementDetection/DebugUIInspectionOverlayController.swift`
 - `apps/Donkey/Sources/DonkeyAI/DebugUIInspectionFrameFusion.swift`
-- `apps/Donkey/Sources/DonkeyAI/ScreenshotParseDebugUIOverlayMapper.swift`
+- `apps/Donkey/Sources/DonkeyAI/VisionParseDebugUIOverlayMapper.swift` (active AI source)
+- `apps/Donkey/Sources/DonkeyAI/ScreenshotParseDebugUIOverlayMapper.swift` (retained, disabled)
 - `apps/Donkey/Sources/DonkeyRuntime/LocalUIElementDetection/LocalUIElementDetectionService.swift`
-- `site/src/lib/inference/screenshot-parsing/`
+- `site/src/lib/inference/vision/` and `site/src/lib/inference/screenshot-parsing/`
 
 ## Maintainer Rules
 
