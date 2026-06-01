@@ -6,6 +6,7 @@ import {
   Headline,
   PillButton,
 } from "@/app/_components/landing/LandingPrimitives";
+import { ContactSalesButton } from "@/app/_components/landing/ContactSalesButton";
 
 const points = [
   {
@@ -45,13 +46,11 @@ export function DonkeyVisionCTA() {
               <PillButton href="/donkeyvision" variant="primary" size="lg">
                 Explore Donkey Vision <ArrowRight size={18} />
               </PillButton>
-              <PillButton
-                href="mailto:david@donkeyuse.com?subject=Donkey%20Vision%20API"
-                variant="secondary"
-                size="lg"
+              <ContactSalesButton
+                className="inline-flex min-h-14 items-center justify-center gap-2 rounded-full border-2 border-[#0F0E0D] bg-[#EC7868] px-7 py-4 text-base font-semibold text-[#0F0E0D] transition hover:-translate-y-0.5"
               >
                 Contact us
-              </PillButton>
+              </ContactSalesButton>
             </div>
           </div>
           <div className="grid content-center gap-4">

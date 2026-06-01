@@ -1,5 +1,6 @@
 import { ArrowRight, Braces } from "lucide-react";
 
+import { ContactSalesButton } from "@/app/_components/landing/ContactSalesButton";
 import { VisionPreview } from "@/app/donkeyvision/VisionPreview";
 
 export function HeroSection() {
@@ -13,15 +14,15 @@ export function HeroSection() {
           Detect every interactable UI element in a screenshot, then optionally ask
           natural-language questions like find the play button or find the next
           button. It works across software because it reads the screen, not a
-          private app integration.
+          private app integration. It is the same screen-understanding layer we
+          now use inside Donkey to map app windows while building our Mac agent.
         </p>
         <div className="mt-9 flex max-w-full flex-wrap gap-3">
-          <a
+          <ContactSalesButton
             className="inline-flex min-h-14 items-center justify-center gap-2 rounded-full border-2 border-[#0F0E0D] bg-[#EC7868] px-7 text-base font-semibold text-[#0F0E0D] transition hover:-translate-y-0.5"
-            href="#contact"
           >
             Contact us <ArrowRight size={18} aria-hidden="true" />
-          </a>
+          </ContactSalesButton>
           <a
             className="inline-flex min-h-14 items-center justify-center gap-2 rounded-full border-2 border-[#0F0E0D] bg-white px-7 text-base font-semibold text-[#0F0E0D] transition hover:-translate-y-0.5"
             href="#api"

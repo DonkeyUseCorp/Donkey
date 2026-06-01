@@ -31,7 +31,7 @@ export function ApiSection() {
               One endpoint, two jobs.
             </h2>
             <p className="mt-6 max-w-2xl text-lg leading-8 text-[#454545]">
-              Donkey Vision first runs OmniParser to produce element IDs, labels,
+              Donkey Vision first detects UI elements and returns IDs, labels,
               boxes, center points, and interactivity. If you include an instruction,
               the LLM only receives that compact element catalog and picks the best
               target. Coordinates come from the parser output, not the LLM.

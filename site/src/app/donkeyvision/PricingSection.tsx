@@ -1,5 +1,7 @@
 import { Mail } from "lucide-react";
 
+import { ContactSalesButton } from "@/app/_components/landing/ContactSalesButton";
+
 export function PricingSection() {
   return (
     <section className="mx-auto w-full max-w-[1400px] px-6 py-20 md:px-12" id="contact">
@@ -16,12 +18,11 @@ export function PricingSection() {
             </p>
           </div>
           <div className="flex items-center md:justify-end">
-            <a
+            <ContactSalesButton
               className="inline-flex min-h-14 items-center justify-center gap-2 rounded-full border-2 border-white bg-[#EC7868] px-7 text-base font-semibold text-[#0F0E0D] transition hover:-translate-y-0.5"
-              href="mailto:david@donkeyuse.com?subject=Donkey%20Vision%20API"
             >
               Contact us <Mail size={18} aria-hidden="true" />
-            </a>
+            </ContactSalesButton>
           </div>
         </div>
       </div>
