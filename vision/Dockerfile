@@ -38,13 +38,15 @@ RUN mkdir -p weights && \
     done && \
     mv weights/icon_caption weights/icon_caption_florence
 
-# Bake EasyOCR's detection/recognition models into the image too. OmniParser's
-# check_ocr_box(use_paddleocr=False) uses EasyOCR, which otherwise downloads
-# ~150MB into ~/.EasyOCR on the FIRST request at runtime - so the first parse on
-# every fresh worker would hang (and fail outright if the worker has no egress).
-# gpu=False just avoids needing a GPU at build time; the cached model files are
-# device-agnostic and reused by the runtime Reader.
-RUN python -c "import easyocr; easyocr.Reader(['en'], gpu=False)"
+# Best-effort: prefetch EasyOCR's detection/recognition models so the first
+# request doesn't pay the ~150MB download. EasyOCR's downloader uses urllib with
+# NO timeout, so when its model host is slow/unreachable from the build sandbox
+# it hangs indefinitely (it stalled a build here for ~2h). Cap it and let the
+# build proceed - the worker falls back to the runtime download, which works.
+# gpu=False just avoids needing a GPU at build time; cached files are reused by
+# the runtime Reader.
+RUN timeout 600 python -c "import easyocr; easyocr.Reader(['en'], gpu=False)" \
+    || echo "EasyOCR prefetch skipped (timed out); models download on first request"
 
 COPY vision/handler.py /app/handler.py
 
