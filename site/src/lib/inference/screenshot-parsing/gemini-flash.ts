@@ -14,24 +14,20 @@ import type {
 import { ensureConfigured } from "@/lib/inference/http";
 import {
   isJsonObject,
-  toJsonObject,
   toJsonValue,
 } from "@/lib/inference/json";
 import {
   InferenceProviderError,
   type JsonValue,
 } from "@/lib/inference/providers";
+import { normalizedScreenshotResult } from "@/lib/inference/screenshot-parsing/normalize";
 import {
   geminiScreenshotParseOutputSchema,
   geminiScreenshotControlSchema,
   type GeminiScreenshotParseOutput,
-  type HotLoopRectJSON,
   type ScreenshotParseRequest,
 } from "@/lib/inference/screenshot-parsing/schema";
-import type {
-  ScreenshotParserProvider,
-  ScreenshotParserResult,
-} from "@/lib/inference/screenshot-parsing/types";
+import type { ScreenshotParserProvider } from "@/lib/inference/screenshot-parsing/types";
 
 type AdapterEnvironment = Record<string, string | undefined>;
 type GeminiClient = Pick<GoogleGenAI, "models">;
@@ -161,81 +157,6 @@ export function screenshotParseModelForRequest(
 
   return environment.GEMINI_SCREENSHOT_PARSE_MODEL?.trim()
     || defaultScreenshotParseModel;
-}
-
-export function normalizedScreenshotResult(
-  request: ScreenshotParseRequest,
-  output: GeminiScreenshotParseOutput,
-  metadata: Record<string, string>,
-): ScreenshotParserResult {
-  const visibleText = output.visibleText.reduce<Record<string, string>>((result, item, index) => {
-    const key = item.id?.trim() || (index === 0 ? "visibleText" : `visibleText.${index + 1}`);
-    result[key] = item.text;
-    return result;
-  }, {});
-
-  const controls = output.controls.map((control, index) => {
-    const id = control.id?.trim() || `gemini-control-${index + 1}`;
-    const controlID = normalizedControlID(control.label, control.kind, id);
-    return {
-      id,
-      label: control.label,
-      kind: control.kind,
-      frame: rectFromGeminiBox(control.box_2d, request.pixelSize.width, request.pixelSize.height),
-      confidence: clamp01(control.confidence),
-      metadata: {
-        controlID,
-        segmentID: id,
-        source: "gemini-screenshot-parser",
-        boxFormat: "ymin,xmin,ymax,xmax/1000",
-        "localUIElement.actionEligibility": "guardedAction",
-        directInputActionsAllowed: "true",
-      },
-    };
-  });
-
-  const formFields = output.formFields.map((field, index) => {
-    const id = field.id?.trim() || `gemini-form-field-${index + 1}`;
-    return {
-      id,
-      label: field.label,
-      isRequired: field.isRequired,
-      currentValue: field.currentValue ?? null,
-      metadata: {
-        source: "gemini-screenshot-parser",
-        confidence: String(clamp01(field.confidence)),
-      },
-    };
-  });
-
-  return {
-    visibleText,
-    controls,
-    formFields,
-    confidence: clamp01(output.confidence || controls.map((control) => control.confidence).reduce(
-      (max, value) => Math.max(max, value),
-      0,
-    )),
-    metadata: toJsonObject({
-      ...metadata,
-      "runtime.backend": "gemini-screenshot-parser",
-      "directInputActionsAllowed": "true",
-      "screenshotParser.controlCount": String(controls.length),
-      "screenshotParser.formFieldCount": String(formFields.length),
-    }),
-  };
-}
-
-function normalizedControlID(label: string, kind: string, fallbackID: string) {
-  const normalized = label
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  if (kind === "searchField") {
-    return "search";
-  }
-  return normalized || fallbackID;
 }
 
 function geminiRequestParameters(
@@ -562,36 +483,6 @@ function geminiResponseText(response: unknown) {
   return directText ?? geminiText(toJsonValue(response));
 }
 
-export function rectFromGeminiBox(
-  box: [number, number, number, number],
-  imageWidth: number,
-  imageHeight: number,
-): HotLoopRectJSON | null {
-  const [ymin, xmin, ymax, xmax] = box;
-  const x1 = clamp(xmin, 0, 1000) / 1000 * imageWidth;
-  const y1 = clamp(ymin, 0, 1000) / 1000 * imageHeight;
-  const x2 = clamp(xmax, 0, 1000) / 1000 * imageWidth;
-  const y2 = clamp(ymax, 0, 1000) / 1000 * imageHeight;
-  const width = Math.max(0, x2 - x1);
-  const height = Math.max(0, y2 - y1);
-  if (width <= 0 || height <= 0) {
-    return null;
-  }
-
-  return {
-    origin: {
-      x: x1,
-      y: y1,
-      space: "window",
-    },
-    size: {
-      width,
-      height,
-      space: "window",
-    },
-  };
-}
-
 function usageFromGeminiResponse(rawBody: JsonValue): JsonValue | undefined {
   if (!isJsonObject(rawBody)) {
     return undefined;
@@ -600,13 +491,6 @@ function usageFromGeminiResponse(rawBody: JsonValue): JsonValue | undefined {
   return usage === undefined ? undefined : toJsonValue(usage);
 }
 
-function clamp01(value: number) {
-  return clamp(value, 0, 1);
-}
-
-function clamp(value: number, lower: number, upper: number) {
-  return Math.min(Math.max(value, lower), upper);
-}
 
 const geminiOutputSchema: Schema = {
   type: Type.OBJECT,
@@ -663,7 +547,7 @@ const geminiOutputSchema: Schema = {
   },
 };
 
-function geminiClientConfig(environment: AdapterEnvironment): {
+export function geminiClientConfig(environment: AdapterEnvironment = process.env): {
   configured: boolean;
   options: GoogleGenAIOptions;
   service: "vertex-ai" | "gemini-api";
