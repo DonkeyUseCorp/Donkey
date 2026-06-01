@@ -13,10 +13,12 @@ import type { Feature, Stat } from "@/app/donkeyvision/types";
 
 export const stats: Stat[] = [
   {
+    eyebrow: "Full parse",
     label: "Typical time to detect and return every element in a screenshot.",
     value: "~600ms",
   },
   {
+    eyebrow: "Parse + ground",
     label:
       "Typical time to detect, then ground a natural-language instruction to one target.",
     value: "~1.2s",
