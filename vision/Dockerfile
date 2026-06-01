@@ -38,6 +38,14 @@ RUN mkdir -p weights && \
     done && \
     mv weights/icon_caption weights/icon_caption_florence
 
+# Bake EasyOCR's detection/recognition models into the image too. OmniParser's
+# check_ocr_box(use_paddleocr=False) uses EasyOCR, which otherwise downloads
+# ~150MB into ~/.EasyOCR on the FIRST request at runtime - so the first parse on
+# every fresh worker would hang (and fail outright if the worker has no egress).
+# gpu=False just avoids needing a GPU at build time; the cached model files are
+# device-agnostic and reused by the runtime Reader.
+RUN python -c "import easyocr; easyocr.Reader(['en'], gpu=False)"
+
 COPY vision/handler.py /app/handler.py
 
 WORKDIR /app
