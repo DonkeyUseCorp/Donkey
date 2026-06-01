@@ -6,7 +6,10 @@
 > directly to the Vertex Live websocket with a Bearer token, text/audio route through the session,
 > tool calls execute against the Command Layer, and the mic can stream continuously. Gemini Live is **enabled by default** and takes over once it
 > connects; if it can't authenticate it stays disconnected and the existing pipeline runs
-> unchanged. Remaining work is live end-to-end verification with real credentials + mic.
+> unchanged. The text path is verified end-to-end against real Vertex credentials by
+> `GeminiLiveCommandSessionLiveSmokeTests` (mint token → websocket → `setupComplete` → text turn
+> → tool call → Command Layer → result). Remaining work is live verification of the optional
+> microphone/audio input.
 
 ## Context
 
@@ -33,8 +36,8 @@ A deliberately small set:
 | Tool | Implementation |
 |---|---|
 | `shell_exec` | runs a safe, single-line shell command via `/bin/zsh -c` and returns its output — the primary, general-purpose tool |
-| `apps.list` | reuses `MacLocalAppAvailabilityProvider.installedApplications()` (Spotlight-backed, names + bundle ids) + running apps so the model targets exact names instead of guessing |
-| `music.play` | reuses the bundled, pre-validated `music-media` `play-media-by-search.applescript` (a multi-step search→play workflow a one-liner can't reproduce) |
+| `apps_list` | reuses `MacLocalAppAvailabilityProvider.installedApplications()` (Spotlight-backed, names + bundle ids, includes Apple native apps) + running apps so the model targets exact names instead of guessing; the installed list is paginated (`filter`/`offset`/`limit`, with `hasMore`/`nextOffset` in the result) so the full catalog survives the response cap |
+| `music_play` | reuses the bundled, pre-validated `music-media` `play-media-by-search.applescript` (a multi-step search→play workflow a one-liner can't reproduce) |
 
 `shell_exec` is the **primary, general-purpose tool** (the same capability the competitor's
 Realtime setup exposes) — listed first and prioritized in the system instruction. It handles most
@@ -42,7 +45,7 @@ requests directly: opening/quitting/controlling apps (`open -a Spotify`, `osascr
 changing settings, opening URLs (`open https://…`), and reading system state. Earlier dedicated
 tools (`app.open`, `app.quit`, `browser.open_url`, `system.set_volume`) were **removed** as
 redundant once `shell_exec` could do them reliably; only the two that earn their keep remain —
-`apps.list` (discovery is awkward via raw shell) and `music.play` (encapsulated workflow). The
+`apps_list` (discovery is awkward via raw shell) and `music_play` (encapsulated workflow). The
 model is told to send only safe single-line commands; a backstop guardrail in
 `DonkeyCommandBackends` enforces single-line input, a length cap, and a hard ~12s timeout
 (SIGTERM→SIGKILL). Unsafe commands are caught by a **command-word** check on each pipeline/segment
@@ -102,18 +105,28 @@ or deterministic prefilter: the Live model chooses a tool call (act now) vs. ask
 (visual task) vs. a plain reply. The speedup comes from the model *preferring* a fast tool, not
 from bypassing it.
 
-### Authentication — Vertex OAuth only
+### Authentication — two paths (`GeminiLiveConnectionFactory`)
 
-The backend authenticates to **Vertex AI with Google Cloud OAuth (service-account) credentials**,
-and the Live client uses the same. There is no client-held API-key path. `GeminiLiveSession`'s
-connection provider calls `DonkeyBackendInferenceClient.mintLiveConnection()` →
-`POST /api/inference/live-token/`. The backend route (`site/src/app/api/inference/live-token/route.ts`)
-uses the shared service-account JWT (`site/src/lib/inference/vertex-live.ts`, `cloud-platform`
-scope) to mint a short-lived access token and returns it with the Vertex Live websocket URL
-(`{location}-aiplatform.googleapis.com`, or `aiplatform.googleapis.com` for `global`) and the
-fully-qualified model path. The client connects with `Authorization: Bearer <token>`; the
-long-lived credential never leaves the backend, and the token is re-minted on every (re)connect so
-it stays fresh. The result is carried in a single `GeminiLiveConnection` (url + bearer + model).
+`GeminiLiveConnectionFactory.makeProvider` picks the connection path from config:
+
+- **Developer API** (`GEMINI_API_KEY` set): connect directly to
+  `wss://generativelanguage.googleapis.com/ws/...BidiGenerateContent?key=<KEY>` with the
+  client-configured model (`GEMINI_LIVE_MODEL`, default `GeminiLiveConfiguration.defaultModel`). No
+  backend round-trip. **Dev-only** — a client-held key; not for production. The default Dev-API model
+  is **audio-output only**: the session requests `AUDIO` response modality
+  (`GeminiLiveConnection.audioOutput`, controlled by `GEMINI_LIVE_AUDIO_OUTPUT`, default on); tool
+  calls and output transcription still flow, which is all the Command Layer needs. Point
+  `GEMINI_LIVE_MODEL` at a TEXT-capable Live model and set `GEMINI_LIVE_AUDIO_OUTPUT=0` to get TEXT.
+- **Vertex AI** (no key — production): the backend authenticates with Google Cloud OAuth
+  (service-account) credentials. `DonkeyBackendInferenceClient.mintLiveConnection()` →
+  `POST /api/inference/live-token/` (`site/src/app/api/inference/live-token/route.ts` +
+  `site/src/lib/inference/vertex-live.ts`, `cloud-platform` scope) mints a short-lived access token
+  and returns the Vertex Live websocket URL (`{location}-aiplatform.googleapis.com`, or
+  `aiplatform.googleapis.com` for `global`) + fully-qualified model path. The client connects with
+  `Authorization: Bearer <token>`; the long-lived credential never leaves the backend, and the token
+  is re-minted on every (re)connect. TEXT response modality.
+
+Both produce a single `GeminiLiveConnection` (url + optional bearer + model + audioOutput).
 
 ### Configuration
 
@@ -121,9 +134,16 @@ it stays fresh. The result is carried in a single `GeminiLiveConnection` (url + 
 |---|---|---|
 | `GEMINI_LIVE_ENABLED` | client | Always-on Live session. **On by default**; set falsey to opt out. |
 | `GEMINI_LIVE_AUDIO` | client | Also stream microphone audio (optional). Off by default. |
-| `GEMINI_LIVE_MODEL` | backend | Live model id (default `gemini-3.1-flash-live-preview`). Owned solely by the backend — the single source of truth. |
+| `GEMINI_API_KEY` | client | **Dev-only.** When set, route the Live session through the Developer-API key path instead of Vertex. Default/production is keyless Vertex. |
+| `GEMINI_LIVE_MODEL` | client (dev) / backend (Vertex) | Realtime command Live model. Vertex default `gemini-live-2.5-flash`; Dev-API default `gemini-2.5-flash-native-audio-preview-09-2025`. |
+| `GEMINI_LIVE_AUDIO_OUTPUT` | client (dev) | Request AUDIO response modality on the Dev-API path. **On by default** (the default Dev-API model is audio-only); set falsey only with a TEXT-capable `GEMINI_LIVE_MODEL`. |
+| `GEMINI_VISION_MODEL` | client | Turn-based **vision** model (default `gemini-3.5-flash`). A stronger, non-Live model used only when a task needs the screen — see below. |
 | `GOOGLE_APPLICATION_CREDENTIALS_JSON` | backend | Vertex service-account JSON used to mint tokens. |
 | `GEMINI_VERTEX_LOCATION` | backend | Vertex location (default `global`). |
+
+### Two models: realtime command vs vision
+
+The realtime Live session (`gemini-live-2.5-flash`) is the **command brain** — fast, tool-calling, screen-last. When a task genuinely needs the screen, the **vision** path uses a stronger turn-based model (`gemini-3.5-flash`) via `GeminiVertexVisionPlanner`: it calls Vertex `generateContent` with the window screenshot and returns the single next click/type/key (coordinates in Gemini's 0–1000 space, mapped to the window). `gemini-3.5-flash` isn't a Live/bidi model, so vision is per-turn `generateContent`, not the socket — slower per turn (~7s) but markedly better grounding than the realtime model. Both run on Vertex with backend-minted tokens.
 
 ## How the overlay is wired
 
@@ -163,5 +183,22 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter Gen
 
 (A no-filter full run hangs on a GUI-dependent suite.) Covered today: Command Layer descriptors
 surface + input validation (`GenericHarnessTests`), and Gemini Live config parsing, function
-declarations, PCM packing, and frame parsing (`GeminiLiveTests`). `GenericHarnessTests` has 8
-failures that pre-date this work (confirmed via a clean-tree `git stash -u` re-run).
+declarations, PCM packing, frame parsing, and the function-name identifier guard (`GeminiLiveTests`).
+`GenericHarnessTests` has 8 failures that pre-date this work (confirmed via a clean-tree
+`git stash -u` re-run).
+
+For the real round trip, `GeminiLiveCommandSessionLiveSmokeTests` drives the whole text path
+against a live backend + Vertex. It is gated behind `DONKEY_LIVE_SMOKE=1` and no-ops otherwise:
+
+```
+env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  DONKEY_LIVE_SMOKE=1 DONKEY_WEB_BASE_URL=http://localhost:3000 DONKEY_DEV_AUTH_BYPASS=1 \
+  swift test --filter GeminiLiveCommandSessionLiveSmokeTests
+```
+
+It mints a token, opens the Vertex Live websocket, waits for `setupComplete`, sends a text turn,
+and asserts the model's tool call executes against the Command Layer without a harness-side
+failure. This is what caught two real bugs the unit tests couldn't: the default model id had to be
+a model that exists on Vertex (`gemini-live-2.5-flash`), and tool names must be valid function-call
+identifiers — Gemini normalizes dots, so `apps.list`/`music.play` became unreachable and were
+renamed to `apps_list`/`music_play`.
