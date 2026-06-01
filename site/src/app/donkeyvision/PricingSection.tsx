@@ -7,9 +7,6 @@ export function PricingSection() {
         <div className="absolute inset-0 translate-x-2 translate-y-2 rounded-lg bg-[#EC7868]" />
         <div className="relative grid gap-8 rounded-lg border-2 border-[#0F0E0D] bg-[#0F0E0D] p-8 text-white md:grid-cols-[1fr_auto] md:p-12">
           <div>
-            <div className="mb-5 inline-flex w-fit rounded-md bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-[#0F0E0D]">
-              Pricing
-            </div>
             <h2 className="max-w-3xl text-4xl font-semibold leading-none md:text-6xl">
               Contact us for Donkey Vision API access.
             </h2>

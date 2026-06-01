@@ -1,4 +1,4 @@
-import { ImageIcon, Play, Video, type LucideIcon } from "lucide-react";
+import { ImageIcon, Video, type LucideIcon } from "lucide-react";
 
 type Props = {
   icon: LucideIcon;
@@ -10,10 +10,6 @@ export function MediaSection() {
     <section className="border-y-2 border-[#0F0E0D] bg-white px-6 py-20 md:px-12">
       <div className="mx-auto grid max-w-[1400px] gap-8 lg:grid-cols-[0.85fr_1.15fr]">
         <div>
-          <div className="mb-5 inline-flex w-fit items-center gap-2 rounded-md bg-[#0F0E0D] px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-white">
-            <Play size={15} aria-hidden="true" />
-            Demo assets
-          </div>
           <h2 className="max-w-2xl text-4xl font-semibold leading-none md:text-6xl">
             Ready for real apps, not only clean demos.
           </h2>

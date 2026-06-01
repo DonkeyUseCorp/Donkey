@@ -1,4 +1,4 @@
-import { Braces, Server } from "lucide-react";
+import { Braces } from "lucide-react";
 
 import {
   elementResponseExample,
@@ -27,10 +27,6 @@ export function ApiSection() {
       <div className="mx-auto max-w-[1400px]">
         <div className="grid gap-10 lg:grid-cols-[0.85fr_1.15fr]">
           <div className="min-w-0">
-            <div className="mb-5 inline-flex w-fit items-center gap-2 rounded-md bg-[#0F0E0D] px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-white">
-              <Server size={15} aria-hidden="true" />
-              POST /api/inference/vision
-            </div>
             <h2 className="max-w-2xl text-4xl font-semibold leading-none md:text-6xl">
               One endpoint, two jobs.
             </h2>

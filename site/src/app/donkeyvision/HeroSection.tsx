@@ -1,4 +1,4 @@
-import { ArrowRight, Braces, Gauge } from "lucide-react";
+import { ArrowRight, Braces } from "lucide-react";
 
 import { VisionPreview } from "@/app/donkeyvision/VisionPreview";
 
@@ -6,10 +6,6 @@ export function HeroSection() {
   return (
     <section className="mx-auto grid w-full max-w-[1400px] gap-10 px-6 pb-16 pt-10 md:grid-cols-[minmax(0,1.02fr)_minmax(420px,0.98fr)] md:px-12 md:pb-24 md:pt-16">
       <div className="flex min-w-0 flex-col justify-center">
-        <div className="mb-6 inline-flex w-fit items-center gap-2 rounded-md border-2 border-[#0F0E0D] bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em]">
-          <Gauge size={15} aria-hidden="true" />
-          Low-latency UI vision API
-        </div>
         <h1 className="max-w-4xl break-words text-[52px] font-semibold leading-[0.92] sm:text-[56px] md:text-[88px] md:leading-[0.9] lg:text-[112px]">
           Donkey Vision
         </h1>
