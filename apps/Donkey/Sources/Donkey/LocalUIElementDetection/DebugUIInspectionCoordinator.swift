@@ -523,6 +523,10 @@ final class DebugUIInspectionCoordinator {
             }
         }
 
+        DebugUIInspectionLog.overlay.info(
+            "debug inspection remote AI captures engine=\(String(describing: self.remoteAIEngine), privacy: .public) targets=\(targets.count, privacy: .public) captures=\(captures.count, privacy: .public) screens=\(screens.count, privacy: .public)"
+        )
+
         let renderedScreenIDs = Set(captures.flatMap { capture in
             screens.filter { Self.intersects(capture.target.bounds, $0.captureFrame) }.map(\.screenID)
         }).union(accessibilityFrames.keys)
@@ -585,6 +589,10 @@ final class DebugUIInspectionCoordinator {
                 }
                 lastRenderedFrames[screen.screenID] = trackedFrame
                 lastSnapshots[screen.screenID] = snapshot
+                let aiCount = trackedFrame.elements.filter { !Self.isAccessibilityEvidence($0) }.count
+                DebugUIInspectionLog.overlay.info(
+                    "debug inspection rendering \(stage, privacy: .public) screenID=\(screen.screenID, privacy: .public) totalElements=\(trackedFrame.elements.count, privacy: .public) aiElements=\(aiCount, privacy: .public)"
+                )
                 overlayController.render(frame: trackedFrame, snapshot: snapshot)
             }
 
@@ -624,6 +632,9 @@ final class DebugUIInspectionCoordinator {
                             screenFrame: screenBounds,
                             minConfidence: currentConfig.minConfidence
                         ).elements
+                        DebugUIInspectionLog.overlay.info(
+                            "debug inspection vision parsed windowID=\(windowID, privacy: .public) responseElements=\(response.elements.count, privacy: .public) mappedElements=\(parsedElements.count, privacy: .public) minConfidence=\(self.currentConfig.minConfidence, privacy: .public) responseImage=\(Int(response.image.width), privacy: .public)x\(Int(response.image.height), privacy: .public) captureBytes=\(capture.parseImageData.count, privacy: .public)"
+                        )
                         elements.removeAll { Self.windowID(for: $0) == windowID }
                         elements += parsedElements
                         lastVisionImageHashes[windowID] = imageHash
