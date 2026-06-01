@@ -25,6 +25,7 @@ RUN git clone https://github.com/microsoft/OmniParser.git \
 WORKDIR /app/OmniParser
 
 RUN pip install --upgrade pip \
+    && pip install --ignore-installed blinker \
     && pip install -r requirements.txt \
     && pip install runpod huggingface_hub
 
