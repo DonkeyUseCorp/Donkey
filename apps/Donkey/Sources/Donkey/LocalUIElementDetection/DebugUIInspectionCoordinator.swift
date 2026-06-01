@@ -623,9 +623,14 @@ final class DebugUIInspectionCoordinator {
                         continue
                     }
                     do {
+                        DebugUIInspectionLog.overlay.info(
+                            "debug inspection vision request sending windowID=\(windowID, privacy: .public) captureBytes=\(capture.parseImageData.count, privacy: .public)"
+                        )
+                        let requestStart = Date()
                         let response = try await client.parseScreenshotVision(
                             imageData: capture.parseImageData
                         )
+                        let elapsedMs = Int(Date().timeIntervalSince(requestStart) * 1000)
                         let parsedElements = VisionParseDebugUIOverlayMapper.frame(
                             from: response,
                             target: capture.target,
@@ -633,7 +638,7 @@ final class DebugUIInspectionCoordinator {
                             minConfidence: currentConfig.minConfidence
                         ).elements
                         DebugUIInspectionLog.overlay.info(
-                            "debug inspection vision parsed windowID=\(windowID, privacy: .public) responseElements=\(response.elements.count, privacy: .public) mappedElements=\(parsedElements.count, privacy: .public) minConfidence=\(self.currentConfig.minConfidence, privacy: .public) responseImage=\(Int(response.image.width), privacy: .public)x\(Int(response.image.height), privacy: .public) captureBytes=\(capture.parseImageData.count, privacy: .public)"
+                            "debug inspection vision parsed windowID=\(windowID, privacy: .public) elapsedMs=\(elapsedMs, privacy: .public) responseElements=\(response.elements.count, privacy: .public) mappedElements=\(parsedElements.count, privacy: .public) minConfidence=\(self.currentConfig.minConfidence, privacy: .public) responseImage=\(Int(response.image.width), privacy: .public)x\(Int(response.image.height), privacy: .public) captureBytes=\(capture.parseImageData.count, privacy: .public)"
                         )
                         elements.removeAll { Self.windowID(for: $0) == windowID }
                         elements += parsedElements

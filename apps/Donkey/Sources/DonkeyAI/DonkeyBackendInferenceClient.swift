@@ -280,6 +280,10 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
     ) async throws -> RemoteVisionParseResponse {
         var request = makeRequest(path: "/api/inference/vision")
         request.httpMethod = "POST"
+        // OmniParser on a cold/slow RunPod worker can take ~60s, which sits right
+        // on URLSession's default 60s request timeout. Give the parse room to land
+        // so a slow-but-successful response isn't killed at the boundary.
+        request.timeoutInterval = 180
         request.httpBody = try JSONEncoder().encode(
             RemoteVisionParseRequest(
                 image: imageData.base64EncodedString(),
