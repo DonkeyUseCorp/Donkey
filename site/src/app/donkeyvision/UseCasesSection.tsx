@@ -11,13 +11,13 @@ export function UseCasesSection() {
       <div className="mb-10 flex flex-col justify-between gap-5 md:flex-row md:items-end">
         <div>
           <h2 className="max-w-3xl text-4xl font-semibold leading-none md:text-6xl">
-            Screen understanding for software that does not expose an API.
+            Screen understanding for software that exposes no API.
           </h2>
         </div>
         <p className="max-w-lg text-lg leading-8 text-[#454545]">
-          Upload a screenshot from any application and get a structured UI map.
-          Add a natural-language instruction when your product needs a target
-          instead of a full element list.
+          Send a screenshot from any application and get back a structured UI
+          map. Add an instruction when your product needs one target instead of
+          the full element list.
         </p>
       </div>
       <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-4">

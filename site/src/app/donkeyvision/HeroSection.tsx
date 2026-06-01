@@ -7,15 +7,15 @@ export function HeroSection() {
   return (
     <section className="mx-auto grid w-full max-w-[1400px] gap-10 px-6 pb-16 pt-10 md:grid-cols-[minmax(0,1.02fr)_minmax(420px,0.98fr)] md:px-12 md:pb-24 md:pt-16">
       <div className="flex min-w-0 flex-col justify-center">
-        <h1 className="max-w-4xl break-words text-[52px] font-semibold leading-[0.92] sm:text-[56px] md:text-[88px] md:leading-[0.9] lg:text-[112px]">
-          Donkey Vision
+        <h1 className="max-w-4xl break-words text-[46px] font-semibold leading-[0.92] sm:text-[54px] md:text-[76px] md:leading-[0.9] lg:text-[92px]">
+          Turn any screenshot into <span className="italic">clickable UI.</span>
         </h1>
         <p className="mt-7 max-w-2xl break-words text-lg leading-8 text-[#454545] md:text-xl">
-          Detect every interactable UI element in a screenshot, then optionally ask
-          natural-language questions like find the play button or find the next
-          button. It works across software because it reads the screen, not a
-          private app integration. It is the same screen-understanding layer we
-          now use inside Donkey to map app windows while building our Mac agent.
+          Donkey Vision finds every interactable element in a screenshot —
+          buttons, icons, inputs, rows — and returns each one&rsquo;s box, center
+          point, and label. Add an instruction like &ldquo;find the next
+          button&rdquo; and it grounds to a single target. It reads pixels, so it
+          works on software that exposes no API at all.
         </p>
         <div className="mt-9 flex max-w-full flex-wrap gap-3">
           <ContactSalesButton
@@ -27,9 +27,13 @@ export function HeroSection() {
             className="inline-flex min-h-14 items-center justify-center gap-2 rounded-full border-2 border-[#0F0E0D] bg-white px-7 text-base font-semibold text-[#0F0E0D] transition hover:-translate-y-0.5"
             href="#api"
           >
-            See API shape <Braces size={18} aria-hidden="true" />
+            See the API <Braces size={18} aria-hidden="true" />
           </a>
         </div>
+        <p className="mt-7 text-sm text-[#666]">
+          The same screen-understanding layer Donkey uses to read and drive apps
+          on your Mac.
+        </p>
       </div>
       <VisionPreview />
     </section>

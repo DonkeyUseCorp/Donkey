@@ -47,7 +47,7 @@ export function DonkeyVisionCTA() {
                 Explore Donkey Vision <ArrowRight size={18} />
               </PillButton>
               <ContactSalesButton
-                className="inline-flex min-h-14 items-center justify-center gap-2 rounded-full border-2 border-[#0F0E0D] bg-[#EC7868] px-7 py-4 text-base font-semibold text-[#0F0E0D] transition hover:-translate-y-0.5"
+                className="inline-flex min-h-14 items-center justify-center gap-2 rounded-full bg-[#EC7868] px-7 py-4 text-base font-semibold text-[#0F0E0D] transition hover:-translate-y-0.5"
               >
                 Contact us
               </ContactSalesButton>

@@ -12,8 +12,15 @@ import {
 import type { Feature, Stat } from "@/app/donkeyvision/types";
 
 export const stats: Stat[] = [
-  { label: "Element detection", value: "As low as ~600ms" },
-  { label: "Ask about the screenshot", value: "As low as ~1.2s" },
+  {
+    label: "Typical time to detect and return every element in a screenshot.",
+    value: "~600ms",
+  },
+  {
+    label:
+      "Typical time to detect, then ground a natural-language instruction to one target.",
+    value: "~1.2s",
+  },
 ];
 
 export const features: Feature[] = [
@@ -68,6 +75,15 @@ export const useCases: Feature[] = [
     icon: ListChecks,
     title: "Cross-app workflow routing",
   },
+];
+
+export const surfaces: string[] = [
+  "Native macOS apps",
+  "Web apps in any browser",
+  "Electron and hybrid shells",
+  "Remote desktop and VNC sessions",
+  "Enterprise and internal tools",
+  "Games and media players",
 ];
 
 export const requestExample = `{

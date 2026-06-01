@@ -1,4 +1,4 @@
-import { Braces } from "lucide-react";
+import { ArrowDown, Braces } from "lucide-react";
 
 import {
   elementResponseExample,
@@ -18,6 +18,15 @@ type ExampleBlockProps = {
   title: string;
 };
 
+type ExamplePairProps = {
+  badge: string;
+  caption: string;
+  request: string;
+  requestTitle: string;
+  response: string;
+  responseTitle: string;
+};
+
 export function ApiSection() {
   return (
     <section
@@ -31,10 +40,11 @@ export function ApiSection() {
               One endpoint, two jobs.
             </h2>
             <p className="mt-6 max-w-2xl text-lg leading-8 text-[#454545]">
-              Donkey Vision first detects UI elements and returns IDs, labels,
-              boxes, center points, and interactivity. If you include an instruction,
-              the LLM only receives that compact element catalog and picks the best
-              target. Coordinates come from the parser output, not the LLM.
+              Every request detects UI elements and returns IDs, labels, boxes,
+              center points, and interactivity. Add an instruction and a second
+              stage runs: the LLM sees only that compact element catalog and picks
+              the best target. Coordinates always come from the parser, never the
+              model.
             </p>
             <div className="mt-8 grid gap-4">
               {features.map((feature) => (
@@ -42,15 +52,54 @@ export function ApiSection() {
               ))}
             </div>
           </div>
-          <div className="grid min-w-0 gap-5">
-            <ExampleBlock code={requestExample} title="Return all elements" />
-            <ExampleBlock code={elementResponseExample} title="Element response" />
-            <ExampleBlock code={groundingRequestExample} title="Ask about a screenshot" />
-            <ExampleBlock code={groundingResponseExample} title="Grounded target" />
+          <div className="grid min-w-0 gap-8">
+            <ExamplePair
+              badge="Job 1"
+              caption="Detect every interactable element."
+              request={requestExample}
+              requestTitle="Request"
+              response={elementResponseExample}
+              responseTitle="Response"
+            />
+            <ExamplePair
+              badge="Job 2"
+              caption="Ground an instruction to one target."
+              request={groundingRequestExample}
+              requestTitle="Request"
+              response={groundingResponseExample}
+              responseTitle="Response"
+            />
           </div>
         </div>
       </div>
     </section>
+  );
+}
+
+function ExamplePair({
+  badge,
+  caption,
+  request,
+  requestTitle,
+  response,
+  responseTitle,
+}: ExamplePairProps) {
+  return (
+    <div className="min-w-0">
+      <div className="mb-3 flex items-center gap-3">
+        <span className="inline-flex items-center rounded-full border-2 border-[#0F0E0D] bg-[#F5D875] px-3 py-1 text-xs font-semibold uppercase tracking-[0.08em]">
+          {badge}
+        </span>
+        <span className="text-sm font-semibold text-[#0F0E0D]">{caption}</span>
+      </div>
+      <div className="grid gap-2">
+        <ExampleBlock code={request} title={requestTitle} />
+        <div className="flex justify-center">
+          <ArrowDown size={18} className="text-[#0F0E0D]" aria-hidden="true" />
+        </div>
+        <ExampleBlock code={response} title={responseTitle} />
+      </div>
+    </div>
   );
 }
 
