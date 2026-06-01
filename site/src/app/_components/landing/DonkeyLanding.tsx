@@ -1,6 +1,7 @@
 "use client";
 
 import { Agents } from "@/app/_components/landing/Agents";
+import { DonkeyVisionCTA } from "@/app/_components/landing/DonkeyVisionCTA";
 import { FinalCTA } from "@/app/_components/landing/FinalCTA";
 import { Footer } from "@/app/_components/landing/Footer";
 import { Hero } from "@/app/_components/landing/Hero";
@@ -33,6 +34,7 @@ export default function DonkeyLanding() {
       <VsThePast />
       <OpenSource />
       <Pricing />
+      <DonkeyVisionCTA />
       <FinalCTA />
       <Footer />
     </main>
