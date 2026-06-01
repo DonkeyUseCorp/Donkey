@@ -135,6 +135,25 @@ public struct MacAppScriptabilityProbe: Sendable {
         }), let url = fuzzy.bundleURL {
             return url
         }
-        return NSWorkspace.shared.fullPath(forApplication: appName).map { URL(fileURLWithPath: $0) }
+        // Last resort: probe the standard application directories by name. This replaces the
+        // deprecated NSWorkspace.fullPath(forApplication:), which has no name-based successor;
+        // urlForApplication(withBundleIdentifier:) needs an identifier we don't have here.
+        return applicationBundleURL(named: appName)
+    }
+
+    private func applicationBundleURL(named appName: String) -> URL? {
+        let fileManager = FileManager.default
+        let bundleName = appName.hasSuffix(".app") ? appName : "\(appName).app"
+        var searchDirectories = [URL(fileURLWithPath: "/System/Applications")]
+        searchDirectories.append(
+            contentsOf: fileManager.urls(for: .applicationDirectory, in: [.localDomainMask, .userDomainMask])
+        )
+        for directory in searchDirectories {
+            let candidate = directory.appendingPathComponent(bundleName)
+            if fileManager.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+        return nil
     }
 }
