@@ -27,7 +27,13 @@ WORKDIR /app/OmniParser
 RUN pip install --upgrade pip \
     && pip install --ignore-installed blinker \
     && pip install -r requirements.txt \
-    && pip install runpod huggingface_hub
+    && pip install runpod huggingface_hub \
+    # OmniParser leaves transformers unpinned. Florence-2's remote config code
+    # reads self.forced_bos_token_id during init; transformers >=4.50 removed
+    # that generation attr from PretrainedConfig and raises AttributeError on
+    # access (and >=4.52 also breaks Florence-2 on _supports_sdpa), crashing the
+    # caption-model load at startup. Pin the last version that loads Florence-2.
+    && pip install "transformers==4.49.0"
 
 # OmniParser's util/utils.py builds a PaddleOCR() at import time with kwargs
 # (use_gpu, show_log, max_batch_size, use_dilation, det_db_score_mode) that
