@@ -45,6 +45,14 @@ RUN pip install --upgrade pip \
 # changes and the pattern stops matching.
 RUN python -c "import re,pathlib,sys; p=pathlib.Path('util/utils.py'); s=p.read_text(); s2=re.sub(r'paddle_ocr = PaddleOCR\(.*?\)','paddle_ocr = None',s,count=1,flags=re.S); p.write_text(s2) if s2!=s else sys.exit('paddle_ocr stub failed: pattern not found in util/utils.py')"
 
+# When OCR finds no text, get_som_labeled_img sets ocr_bbox = None and then
+# unconditionally does `zip(ocr_bbox, ocr_text)`, which raises "'NoneType'
+# object is not iterable" and fails the whole job. Any text-free capture (an
+# icon-only or blank window) trips this. Return an empty list instead of None so
+# the zip yields no OCR boxes and the YOLO/caption pipeline still runs. Fails
+# the build loudly if the upstream pattern stops matching.
+RUN python -c "import re,pathlib,sys; p=pathlib.Path('util/utils.py'); s=p.read_text(); s2=re.sub(r\"(print\('no ocr bbox!!!'\)\s*\n\s*ocr_bbox = )None\",r'\1[]',s,count=1); p.write_text(s2) if s2!=s else sys.exit('ocr_bbox empty-list patch failed: pattern not found in util/utils.py')"
+
 # Bake OmniParser V2 weights into the image so workers don't download on cold
 # start. icon_detect (YOLO) weights are AGPL-3.0; icon_caption is MIT.
 RUN mkdir -p weights && \
