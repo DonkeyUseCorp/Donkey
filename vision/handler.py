@@ -13,15 +13,21 @@ in ratio space (0-1), independent of image size. `label_coordinates` is
 import base64
 import io
 import os
+import sys
 
 import runpod
 import torch
 from PIL import Image
 
-# OmniParser resolves its weights relative to the working directory.
-os.chdir("/app/OmniParser")
+# OmniParser resolves its weights relative to the working directory, and its
+# `util` package is only importable when its repo root is on sys.path. chdir
+# alone doesn't add the cwd to sys.path (Python seeds sys.path with the script's
+# dir, /app), so do both explicitly before importing from util.
+OMNIPARSER_ROOT = "/app/OmniParser"
+os.chdir(OMNIPARSER_ROOT)
+sys.path.insert(0, OMNIPARSER_ROOT)
 
-from util.utils import (  # noqa: E402  (import after chdir, by design)
+from util.utils import (  # noqa: E402  (import after sys.path setup, by design)
     check_ocr_box,
     get_caption_model_processor,
     get_som_labeled_img,
