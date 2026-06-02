@@ -29,7 +29,10 @@
       "Bash(python3 -c \"import json; json.load\\(open\\('.claude/settings.json'\\)\\); json.load\\(open\\('.claude/settings.local.json'\\)\\); print\\('both valid JSON'\\)\")",
       "Bash(python3 -c \"import json;print\\(len\\(json.load\\(open\\('.claude/settings.local.json'\\)\\)['permissions']['allow']\\)\\)\")",
       "Bash(npm run *)",
-      "Bash(DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift build --target DonkeyRuntime)"
+      "Bash(DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift build --target DonkeyRuntime)",
+      "WebSearch",
+      "Bash(git switch *)",
+      "Bash(git push *)"
     ]
   }
 }
