@@ -1,38 +1,5 @@
 {
   "permissions": {
-    "allow": [
-      "Bash(swift build:*)",
-      "Bash(swift test:*)",
-      "Bash(env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift build:*)",
-      "Bash(env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test:*)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)",
-      "Bash(git status:*)",
-      "Bash(git stash:*)",
-      "Bash(lsof -iTCP:3000 -sTCP:LISTEN -P -n)",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000)",
-      "Bash(curl -s -o /dev/null -w \"localhost:3000 http=%{http_code}\\\\n\" http://localhost:3000)",
-      "Bash(osascript -e 'tell application \"Spotify\" to activate')",
-      "Bash(osascript -e 'tell application \"Spotify\" to player state')",
-      "Bash(osascript -e 'tell application \"Spotify\" to pause')",
-      "Bash(osascript -e 'tell application \"Spotify\" to name of current track & \" — \" & artist of current track')",
-      "Bash(osascript -e 'tell application \"System Events\" to tell process \"Spotify\" to keystroke \"l\" using {command down}')",
-      "Bash(osascript -e 'tell application \"System Events\" to tell process \"Spotify\" to keystroke \"h\" using {shift down, command down}')",
-      "Bash(open -a Spotify \"spotify:app:home\")",
-      "Bash(open \"spotify:\")",
-      "Bash(open \"spotify:app:home\")",
-      "Bash(rm -f /tmp/spotify-agent-turn*.jpg)",
-      "Bash(node -e \"const p=require\\('./package.json'\\); console.log\\(Object.keys\\(p.scripts||{}\\).join\\(', '\\)\\)\")",
-      "Bash(npx tsc *)",
-      "Bash(pkill -9 -f \"swift-test|swift-build|swiftpm-testing-helper|swift test|swift build\")",
-      "Bash(python3 -)",
-      "Bash(python3 -c \"import json; json.load\\(open\\('.claude/settings.json'\\)\\); json.load\\(open\\('.claude/settings.local.json'\\)\\); print\\('both valid JSON'\\)\")",
-      "Bash(python3 -c \"import json;print\\(len\\(json.load\\(open\\('.claude/settings.local.json'\\)\\)['permissions']['allow']\\)\\)\")",
-      "Bash(npm run *)",
-      "Bash(DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift build --target DonkeyRuntime)",
-      "WebSearch",
-      "Bash(git switch *)",
-      "Bash(git push *)"
-    ]
+    "defaultMode": "acceptEdits"
   }
 }
