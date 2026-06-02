@@ -15,6 +15,38 @@ private enum UserQueryLog {
     static let commands = Logger(subsystem: "com.donkey.app", category: "user-query")
 }
 
+/// End-to-end vision-grounding telemetry. Intentionally NOT `#if DEBUG`-gated and mirrored to
+/// stdout: these are the latency numbers we capture for marketing, so they must be visible when
+/// running a release binary from the terminal — not just in a debug build's os_log stream.
+private enum VisionGroundingLog {
+    static let logger = Logger(subsystem: "com.donkey.app", category: "vision-grounding")
+
+    static func emit(_ message: String) {
+        logger.notice("\(message, privacy: .public)")
+        print("[grounding-e2e] \(message)")
+    }
+}
+
+/// Configurable, env-gated "vision navigation" route. When enabled, a typed query is grounded
+/// straight into on-screen actions by `VisionActionDriver` against the FRONTMOST user app —
+/// bypassing the intent/AppleScript pipeline entirely. Gated by `DONKEY_VISION_NAV` so it is
+/// trivial to turn off and revert to the standard route; the value is injectable so callers and
+/// tests can force it on or off without touching the environment.
+struct VisionNavigationMode: Equatable, Sendable {
+    var isEnabled: Bool
+
+    static let disabled = VisionNavigationMode(isEnabled: false)
+
+    static func fromEnvironment(
+        _ environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> VisionNavigationMode {
+        let raw = (environment["DONKEY_VISION_NAV"] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return VisionNavigationMode(isEnabled: ["1", "true", "yes", "on"].contains(raw))
+    }
+}
+
 struct UserQueryCommandHandlingResult: Equatable, Sendable {
     var status: LocalAppTaskLiveRunStatus
     var threadStatus: UserQueryTaskStatus
@@ -100,6 +132,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
     var coordinatorRegistry: UserQueryRunCoordinatorRegistry
     var genericHarnessLifecycle: AppHarnessGenericLifecycle
     var memoryStore: SQLiteAgentMemoryStore?
+    var visionNavigationMode: VisionNavigationMode
 
     init(
         catalog: LocalAppTaskCatalog = .defaultLocal(),
@@ -116,7 +149,8 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         memoryRetriever: SemanticRunMemoryRetriever = SemanticRunMemoryRetriever(),
         coordinatorRegistry: UserQueryRunCoordinatorRegistry = UserQueryRunCoordinatorRegistry(),
         genericHarnessLifecycle: AppHarnessGenericLifecycle = AppHarnessGenericLifecycle(),
-        memoryStore: SQLiteAgentMemoryStore? = .shared
+        memoryStore: SQLiteAgentMemoryStore? = .shared,
+        visionNavigationMode: VisionNavigationMode = .fromEnvironment()
     ) {
         self.catalog = catalog
         self.coordinatorRegistry = coordinatorRegistry
@@ -128,6 +162,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         self.memoryRetriever = memoryRetriever
         self.genericHarnessLifecycle = genericHarnessLifecycle
         self.memoryStore = memoryStore
+        self.visionNavigationMode = visionNavigationMode
     }
 
     func handleSubmittedCommand(
@@ -190,6 +225,19 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         }
 
         let coordinator = await coordinatorRegistry.coordinator(for: taskID)
+
+        // Vision-navigation route (env-gated by `DONKEY_VISION_NAV`): ground the typed query
+        // directly into on-screen actions against the frontmost app, skipping intent parsing and
+        // the AppleScript pipeline. Configurable so we can revert to the standard route below.
+        if visionNavigationMode.isEnabled {
+            return await handleVisionNavigation(
+                command: command,
+                traceID: traceID,
+                taskID: taskID,
+                preparedTurnMetadata: Self.genericHarnessMetadata(preparedTurn: genericPreparedTurn)
+            )
+        }
+
         let modelInput = Self.modelInput(
             for: command,
             context: context,
@@ -835,6 +883,199 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             hint: "Asked before driving \(appName) by vision."
         )
         return result
+    }
+
+    // MARK: - Vision Navigation Route (frontmost app, env-gated)
+
+    /// Drives the FRONTMOST user app by vision to satisfy the typed query, end to end: resolve the
+    /// frontmost window, ground the query into a screenshot→action loop with `VisionActionDriver`,
+    /// and console-log the grounding latency (time-to-first-action and total) for telemetry.
+    ///
+    /// `@MainActor` because window resolution, the driver, and the per-turn timing closure all run on
+    /// the main actor — keeping it isolated lets the timing accumulators stay plain locals.
+    @MainActor
+    private func handleVisionNavigation(
+        command: String,
+        traceID: String,
+        taskID: String,
+        preparedTurnMetadata: [String: String]
+    ) async -> UserQueryCommandHandlingResult {
+        guard permissionPolicy.allowedCapabilities.contains(.input) else {
+            return await failVisionNavigation(
+                response: "Vision navigation needs input permission, which isn't granted.",
+                reason: "inputNotPermitted",
+                appName: "",
+                traceID: traceID,
+                taskID: taskID,
+                preparedTurnMetadata: preparedTurnMetadata
+            )
+        }
+        guard let target = Self.frontmostUserAppTarget() else {
+            return await failVisionNavigation(
+                response: "I couldn't find a frontmost app window to navigate. Focus the app you want, then type your request.",
+                reason: "noFrontmostApp",
+                appName: "",
+                traceID: traceID,
+                taskID: taskID,
+                preparedTurnMetadata: preparedTurnMetadata
+            )
+        }
+        let appName = target.appName ?? "the frontmost app"
+        let bundleIdentifier = target.bundleIdentifier
+
+        guard let configuration = try? DonkeyBackendInferenceConfiguration.fromEnvironment() else {
+            return await failVisionNavigation(
+                response: "The vision backend isn't configured (set DONKEY_WEB_BASE_URL), so I couldn't navigate by vision.",
+                reason: "visionBackendUnavailable",
+                appName: appName,
+                traceID: traceID,
+                taskID: taskID,
+                preparedTurnMetadata: preparedTurnMetadata
+            )
+        }
+        let backend = DonkeyBackendInferenceClient(configuration: configuration)
+        let appGuidance = BuiltInLocalAppSkillPacks.appOperatingGuidance(
+            forApp: appName,
+            bundleIdentifier: bundleIdentifier
+        )
+
+        VisionGroundingLog.emit(
+            "start traceID=\(traceID) app=\(appName) goal=\"\(command)\""
+        )
+        let e2eStartMS = Self.uptimeMilliseconds()
+        var timeToFirstActionMS: Double?
+        let outcome = await VisionActionDriver.drive(
+            appName: appName,
+            bundleIdentifier: bundleIdentifier,
+            goal: command,
+            appGuidance: appGuidance,
+            backend: backend,
+            onTurn: { info in
+                // Time-to-first-grounded-action: from query submit to the first on-screen action the
+                // model grounded from the screenshot + query. This is the headline grounding number.
+                guard timeToFirstActionMS == nil else { return }
+                let elapsed = Self.uptimeMilliseconds() - e2eStartMS
+                timeToFirstActionMS = elapsed
+                VisionGroundingLog.emit(
+                    "time-to-first-action traceID=\(traceID) app=\(appName) ms=\(Self.formatLatency(elapsed)) action=\(info.action.action)"
+                )
+            }
+        )
+        let e2eTotalMS = Self.uptimeMilliseconds() - e2eStartMS
+        let averagePerTurnMS = outcome.turns > 0 ? e2eTotalMS / Double(outcome.turns) : 0
+        VisionGroundingLog.emit(
+            "complete traceID=\(traceID) app=\(appName) completed=\(outcome.completed) reason=\(outcome.reason) turns=\(outcome.turns) e2eTotalMS=\(Self.formatLatency(e2eTotalMS)) timeToFirstActionMS=\(Self.formatLatency(timeToFirstActionMS ?? 0)) avgPerTurnMS=\(Self.formatLatency(averagePerTurnMS))"
+        )
+
+        let response = outcome.completed
+            ? (outcome.lastNarration ?? "Done.")
+            : "I tried navigating \(appName) by vision but couldn't confirm the goal was finished."
+        let decision = AppHarnessDecision(
+            kind: .respond,
+            message: response,
+            traceID: traceID,
+            metadata: [
+                "structuredDecision": "true",
+                "router": "visionNavigation",
+                "visionNavigation.completed": String(outcome.completed)
+            ]
+        )
+        let result = UserQueryCommandHandlingResult(
+            status: outcome.completed ? .completed : .failedSafe,
+            threadStatus: outcome.completed ? .completed : .failed,
+            decision: decision,
+            summary: response,
+            traceID: traceID,
+            metadata: preparedTurnMetadata.merging([
+                "appHarness.decision": AppHarnessDecisionKind.respond.rawValue,
+                "appHarness.router": "visionNavigation",
+                "visionNavigation.app": appName,
+                "visionNavigation.completed": String(outcome.completed),
+                "visionNavigation.turns": String(outcome.turns),
+                "visionNavigation.reason": outcome.reason,
+                "grounding.e2eTotalMS": Self.formatLatency(e2eTotalMS),
+                "grounding.timeToFirstActionMS": Self.formatLatency(timeToFirstActionMS ?? 0),
+                "grounding.avgPerTurnMS": Self.formatLatency(averagePerTurnMS)
+            ]) { _, new in new }
+        )
+        if outcome.completed {
+            _ = await genericHarnessLifecycle.coordinator.complete(
+                taskID: taskID,
+                reason: "User query vision navigation completed"
+            )
+        } else {
+            _ = await genericHarnessLifecycle.coordinator.failSafe(
+                taskID: taskID,
+                reason: "User query vision navigation did not confirm completion"
+            )
+        }
+        await coordinatorRegistry.finish(taskID: taskID)
+        logHandlingResult(
+            result,
+            stage: "visionNavigation",
+            hint: outcome.completed ? "Navigated \(appName) by vision." : "Vision navigation stopped: \(outcome.reason)."
+        )
+        return result
+    }
+
+    /// Fail-safe exit for the vision-navigation route when it can't even start (no frontmost app,
+    /// backend unconfigured, input not permitted). Mirrors the other non-local routes' lifecycle.
+    private func failVisionNavigation(
+        response: String,
+        reason: String,
+        appName: String,
+        traceID: String,
+        taskID: String,
+        preparedTurnMetadata: [String: String]
+    ) async -> UserQueryCommandHandlingResult {
+        VisionGroundingLog.emit("aborted traceID=\(traceID) reason=\(reason) app=\(appName)")
+        let decision = AppHarnessDecision(
+            kind: .respond,
+            message: response,
+            traceID: traceID,
+            metadata: [
+                "structuredDecision": "true",
+                "router": "visionNavigation",
+                "visionNavigation.abortReason": reason
+            ]
+        )
+        let result = UserQueryCommandHandlingResult(
+            status: .failedSafe,
+            threadStatus: .failed,
+            decision: decision,
+            summary: response,
+            traceID: traceID,
+            metadata: preparedTurnMetadata.merging([
+                "appHarness.decision": AppHarnessDecisionKind.respond.rawValue,
+                "appHarness.router": "visionNavigation",
+                "visionNavigation.abortReason": reason
+            ]) { _, new in new }
+        )
+        _ = await genericHarnessLifecycle.coordinator.failSafe(
+            taskID: taskID,
+            reason: "User query vision navigation could not start: \(reason)"
+        )
+        await coordinatorRegistry.finish(taskID: taskID)
+        logHandlingResult(result, stage: "visionNavigation", hint: response)
+        return result
+    }
+
+    /// Resolves the user's frontmost real window for vision navigation. Donkey's own overlay panels
+    /// float above layer 0 and are already excluded by the window enumerator, but we also skip our
+    /// own process so we never drive Donkey's UI. Candidates come back in front-to-back z-order, so
+    /// the first match is the app the user was last working in.
+    @MainActor
+    private static func frontmostUserAppTarget() -> MacWindowTargetCandidate? {
+        let ownProcessID = ProcessInfo.processInfo.processIdentifier
+        let ownBundleID = Bundle.main.bundleIdentifier
+        return MacWindowResolver().enumerateCandidates().first { candidate in
+            if candidate.processID == ownProcessID { return false }
+            if let ownBundleID, let candidateBundle = candidate.bundleIdentifier,
+               candidateBundle.caseInsensitiveCompare(ownBundleID) == .orderedSame {
+                return false
+            }
+            return true
+        }
     }
 
     /// Records whether the AppleScript path actually worked for the target app, so the strategy router

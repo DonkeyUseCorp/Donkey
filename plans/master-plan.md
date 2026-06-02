@@ -27,6 +27,14 @@ even when there are no active tasks.
   surface, not a real product/testing UI. We need a better way to view and
   evaluate raw vision output (boxes, labels, per-window parse latency, hit/skip on
   the local image-hash cache) while iterating. Scope/shape TBD.
+  - Iteration affordance now in place: an env-gated "vision navigation" route
+    (`DONKEY_VISION_NAV=1`, `VisionNavigationMode` in `UserQueryCommandHandler`)
+    sends a typed query straight to `VisionActionDriver` against the frontmost
+    app, so you can type one request after another and watch it navigate. It
+    console-logs end-to-end grounding latency (time-to-first-action and total)
+    under the `vision-grounding` logger / `[grounding-e2e]` stdout prefix. The
+    flag is configurable/revertible; this is a dev-test path, not yet a product
+    surface.
 
 ## Invariants
 

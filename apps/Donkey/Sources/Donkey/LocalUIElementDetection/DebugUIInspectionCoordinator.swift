@@ -35,7 +35,7 @@ final class DebugUIInspectionCoordinator {
     private var lastFingerprints: [UInt32: String] = [:]
     private var lastRenderedFrames: [UInt32: DebugUIInspectionFrame] = [:]
     private var lastSnapshots: [UInt32: DebugUIScreenCaptureSnapshot] = [:]
-    private var lastVisionImageHashes: [UInt32: String] = [:]
+    private var lastVisionSignatures: [UInt32: ScreenshotSignature] = [:]
     private var visionBackoff: [UInt32: VisionBackoff] = [:]
     private let remoteAIEngine: RemoteAIEngine = .vision
 
@@ -84,7 +84,7 @@ final class DebugUIInspectionCoordinator {
         lastFingerprints.removeAll()
         lastRenderedFrames.removeAll()
         lastSnapshots.removeAll()
-        lastVisionImageHashes.removeAll()
+        lastVisionSignatures.removeAll()
         visionBackoff.removeAll()
         isAnalyzing = false
         isRefreshingActiveAccessibility = false
@@ -186,7 +186,7 @@ final class DebugUIInspectionCoordinator {
             trackers.removeAll()
             lastRenderedFrames.removeAll()
             lastSnapshots.removeAll()
-            lastVisionImageHashes.removeAll()
+            lastVisionSignatures.removeAll()
             visionBackoff.removeAll()
             if !newConfig.enabled {
                 overlayController.close()
@@ -266,7 +266,7 @@ final class DebugUIInspectionCoordinator {
             return
         }
 
-        var tracker = trackers[screen.screenID] ?? DebugUIElementTracker()
+        var tracker = trackers[screen.screenID] ?? Self.makeElementTracker()
         let trackedFrame = tracker.update(with: frame)
         trackers[screen.screenID] = tracker
         guard force
@@ -378,7 +378,7 @@ final class DebugUIInspectionCoordinator {
                 continue
             }
 
-            var tracker = trackers[screen.screenID] ?? DebugUIElementTracker()
+            var tracker = trackers[screen.screenID] ?? Self.makeElementTracker()
             let trackedFrame = tracker.update(
                 with: fusedFrame,
                 renderNewElementsImmediately: true
@@ -489,7 +489,7 @@ final class DebugUIInspectionCoordinator {
                     continue
                 }
                 lastFingerprints[screen.screenID] = fingerprint
-                var tracker = trackers[screen.screenID] ?? DebugUIElementTracker()
+                var tracker = trackers[screen.screenID] ?? Self.makeElementTracker()
                 let trackedFrame = tracker.update(with: accessibilityFrame)
                 trackers[screen.screenID] = tracker
                 let snapshot = Self.screenPointSnapshot(screen: screen, fingerprint: fingerprint)
@@ -559,7 +559,7 @@ final class DebugUIInspectionCoordinator {
                 }
 
             func renderRemoteAIFrame(stage: String, updatesFingerprint: Bool) {
-                var tracker = trackers[screen.screenID] ?? DebugUIElementTracker()
+                var tracker = trackers[screen.screenID] ?? Self.makeElementTracker()
                 let remoteAIFrame = DebugUIInspectionFrame(elements: elements)
                 let fusedFrame = DebugUIInspectionFrameFusion.fused(
                     accessibilityFrame: localEvidenceFrame,
@@ -610,17 +610,21 @@ final class DebugUIInspectionCoordinator {
                     if let backoff = visionBackoff[windowID], Date() < backoff.nextAttempt {
                         continue
                     }
-                    let imageHash = SHA256.hash(data: capture.parseImageData)
-                        .map { String(format: "%02x", $0) }
-                        .joined()
-                    // Skip the network call when this window's pixels are unchanged
-                    // since the last successful vision parse; its elements are still
-                    // carried forward in `elements`. Server-side caching comes later.
-                    if lastVisionImageHashes[windowID] == imageHash {
-                        DebugUIInspectionLog.overlay.debug(
-                            "debug inspection skipped unchanged vision windowID=\(windowID, privacy: .public)"
-                        )
-                        continue
+                    // Skip the network call when this window looks unchanged since the last
+                    // successful vision parse; its elements are still carried forward in
+                    // `elements`. We compare a scale-normalized grayscale signature with a
+                    // per-pixel noise floor instead of an exact byte hash, so caret blink,
+                    // the clock, cursor motion, or a sub-pixel resize don't force a re-parse.
+                    // Built from the raw capture so JPEG quantization noise never enters.
+                    let signature = ScreenshotSignature.make(fromImageData: capture.screenshot.pngData)
+                    if let signature, let previous = lastVisionSignatures[windowID] {
+                        let changedFraction = signature.changedFraction(from: previous)
+                        if changedFraction <= Self.visionChangedFractionThreshold {
+                            DebugUIInspectionLog.overlay.debug(
+                                "debug inspection skipped unchanged vision windowID=\(windowID, privacy: .public) changedFraction=\(changedFraction, privacy: .public)"
+                            )
+                            continue
+                        }
                     }
                     do {
                         DebugUIInspectionLog.overlay.info(
@@ -642,7 +646,9 @@ final class DebugUIInspectionCoordinator {
                         )
                         elements.removeAll { Self.windowID(for: $0) == windowID }
                         elements += parsedElements
-                        lastVisionImageHashes[windowID] = imageHash
+                        if let signature {
+                            lastVisionSignatures[windowID] = signature
+                        }
                         visionBackoff[windowID] = nil
                         renderRemoteAIFrame(stage: "vision", updatesFingerprint: false)
                     } catch {
@@ -854,7 +860,7 @@ final class DebugUIInspectionCoordinator {
             lastFingerprints[snapshot.screenID] = snapshot.fingerprint
             lastSnapshots[snapshot.screenID] = snapshot
 
-            var tracker = trackers[snapshot.screenID] ?? DebugUIElementTracker()
+            var tracker = trackers[snapshot.screenID] ?? Self.makeElementTracker()
             let trackedFrame = tracker.update(with: result.frame)
             trackers[snapshot.screenID] = tracker
             if !force,
@@ -889,7 +895,7 @@ final class DebugUIInspectionCoordinator {
     private func ageMissingScreens(activeScreenIDs: Set<UInt32>) {
         let missingScreenIDs = Set(lastRenderedFrames.keys).subtracting(activeScreenIDs)
         for screenID in missingScreenIDs {
-            var tracker = trackers[screenID] ?? DebugUIElementTracker()
+            var tracker = trackers[screenID] ?? Self.makeElementTracker()
             let trackedFrame = tracker.update(with: DebugUIInspectionFrame())
             trackers[screenID] = tracker
             if trackedFrame.elements.isEmpty {
@@ -1352,6 +1358,24 @@ final class DebugUIInspectionCoordinator {
             .filter { !$0.isEmpty }
             .joined(separator: "||")
         return SHA256.hash(data: Data(combinedInput.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// A window must change by more than this fraction of its normalized grayscale cells before
+    /// we re-run a vision parse. ~1.2% of a 64x64 grid is ~50 cells — enough to ignore caret/clock
+    /// flicker while still catching a small new control or panel.
+    private static let visionChangedFractionThreshold = 0.012
+
+    /// Tracker used for the debug overlay. Carry-forward is disabled so each render shows exactly
+    /// the current parse's elements: vision (OmniParser) reassigns IDs and jitters labels every
+    /// parse, so the default multi-frame carry-forward would keep stale boxes alive and pile up
+    /// overlapping duplicates on screen. New elements render immediately and anything absent from
+    /// the latest frame is dropped at once — i.e. the previous overlay is cleared before the next.
+    private static func makeElementTracker() -> DebugUIElementTracker {
+        DebugUIElementTracker(
+            appearanceThreshold: 1,
+            disappearanceTolerance: 0,
+            movementConfirmationSamples: 1
+        )
     }
 
     private static func nextVisionBackoff(after previous: VisionBackoff?) -> VisionBackoff {

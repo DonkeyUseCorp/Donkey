@@ -168,6 +168,35 @@ struct DebugUIInspectionTests {
     }
 
     @Test
+    func trackerWithoutCarryForwardClearsPreviousFrameBeforeRenderingNext() {
+        // Mirrors the debug overlay's tracker config (appearanceThreshold 1, disappearanceTolerance 0):
+        // vision reassigns element IDs every parse, so any carry-forward leaves stale boxes stacked on
+        // screen. With no carry-forward, the previous overlay is fully replaced by the next parse.
+        var tracker = DebugUIElementTracker(
+            appearanceThreshold: 1,
+            disappearanceTolerance: 0,
+            movementConfirmationSamples: 1
+        )
+        let first = tracker.update(
+            with: DebugUIInspectionFrame(elements: [
+                element(id: "ai-1-a", label: "Coldplay", x: 10, y: 20),
+                element(id: "ai-1-b", label: "Notifications", x: 100, y: 20)
+            ]),
+            renderNewElementsImmediately: true
+        )
+        #expect(Set(first.elements.map(\.id)) == ["ai-1-a", "ai-1-b"])
+
+        // Next parse: brand-new IDs, no semantic overlap. The old boxes must not linger.
+        let second = tracker.update(
+            with: DebugUIInspectionFrame(elements: [
+                element(id: "ai-2-c", label: "Search", x: 300, y: 400)
+            ]),
+            renderNewElementsImmediately: true
+        )
+        #expect(second.elements.map(\.id) == ["ai-2-c"])
+    }
+
+    @Test
     func trackerPreservesStableIDForMovedSemanticMatch() {
         var tracker = DebugUIElementTracker()
         _ = tracker.update(with: DebugUIInspectionFrame(elements: [
