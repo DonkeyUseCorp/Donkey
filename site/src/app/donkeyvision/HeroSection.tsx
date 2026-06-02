@@ -14,9 +14,8 @@ export function HeroSection() {
         <p className="mt-7 max-w-2xl break-words text-lg leading-8 text-[#454545] md:text-xl">
           Donkey Vision finds every interactable element in a screenshot —
           buttons, icons, inputs, rows — and returns each one&rsquo;s box, center
-          point, and label. Add an instruction like &ldquo;find the next
-          button&rdquo; and it grounds to a single target. It reads pixels, so it
-          works on software that exposes no API at all.
+          point, and label. It reads pixels, so it works on software that exposes
+          no API at all.
         </p>
         <div className="mt-9 flex max-w-full flex-wrap gap-3">
           <ContactSalesButton

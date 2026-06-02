@@ -16,8 +16,7 @@ export function UseCasesSection() {
         </div>
         <p className="max-w-lg text-lg leading-8 text-[#454545]">
           Send a screenshot from any application and get back a structured UI
-          map. Add an instruction when your product needs one target instead of
-          the full element list.
+          map your own agents and tools can reason over.
         </p>
       </div>
       <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-4">

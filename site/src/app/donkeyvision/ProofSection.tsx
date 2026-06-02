@@ -38,9 +38,9 @@ export function ProofSection() {
         })}
       </div>
       <p className="mt-8 max-w-3xl text-sm leading-6 text-[#0F0E0D]/60">
-        These are planning estimates for normal screenshot sizes. Large images,
-        queueing, and the grounding step add time. For high-volume usage we tune
-        the endpoint to your target latency.
+        These are measured averages for normal screenshot sizes. Large images
+        and queueing add time. For high-volume usage we tune the endpoint to
+        your target latency.
       </p>
     </section>
   );

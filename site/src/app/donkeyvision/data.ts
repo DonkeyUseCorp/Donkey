@@ -3,8 +3,8 @@ import {
   Crosshair,
   ImageIcon,
   ListChecks,
-  LockKeyhole,
   Monitor,
+  SlidersHorizontal,
   Video,
   Zap,
 } from "lucide-react";
@@ -13,15 +13,10 @@ import type { Feature, Stat } from "@/app/donkeyvision/types";
 
 export const stats: Stat[] = [
   {
-    eyebrow: "Full parse",
-    label: "Typical time to detect and return every element in a screenshot.",
-    value: "~600ms",
-  },
-  {
-    eyebrow: "Parse + ground",
+    eyebrow: "End to end",
     label:
-      "Typical time to detect, then ground a natural-language instruction to one target.",
-    value: "~1.2s",
+      "Typical time from request to response for a full screenshot parse, per image.",
+    value: "~0.5s",
   },
 ];
 
@@ -34,9 +29,9 @@ export const features: Feature[] = [
   },
   {
     description:
-      "Ask for the play button, next button, search field, or any visible target. The LLM chooses from parsed element IDs.",
+      "Each element comes back with a pixel-space bounding box and a center point, ready to click without any coordinate conversion.",
     icon: Crosshair,
-    title: "Optional target grounding",
+    title: "Click-ready coordinates",
   },
   {
     description:
@@ -46,9 +41,9 @@ export const features: Feature[] = [
   },
   {
     description:
-      "LLM inference receives detected IDs, labels, kinds, and interactivity flags. The screenshot and raw page content stay out of the grounding prompt.",
-    icon: LockKeyhole,
-    title: "Small LLM payloads",
+      "Tune box and IoU thresholds per request to control detection sensitivity and how aggressively overlapping elements are merged.",
+    icon: SlidersHorizontal,
+    title: "Tunable detection",
   },
 ];
 
@@ -90,7 +85,6 @@ export const surfaces: string[] = [
 
 export const requestExample = `{
   "image": "<base64 png/jpeg/webp screenshot>",
-  "returnElements": true,
   "options": {
     "boxThreshold": 0.05,
     "iouThreshold": 0.1
@@ -110,25 +104,4 @@ export const elementResponseExample = `{
       "confidence": 0.5
     }
   ]
-}`;
-
-export const groundingRequestExample = `{
-  "image": "<base64 screenshot>",
-  "instruction": "find the next button",
-  "model": "gemini-2.5-flash",
-  "returnElements": false
-}`;
-
-export const groundingResponseExample = `{
-  "image": { "width": 1440, "height": 900 },
-  "model": "gemini-2.5-flash",
-  "target": {
-    "elementId": "n8x2p0",
-    "label": "Next",
-    "kind": "button",
-    "box": { "x": 1248, "y": 820, "width": 84, "height": 40 },
-    "point": { "x": 1290, "y": 840 },
-    "confidence": 0.86
-  },
-  "alternates": []
 }`;

@@ -56,8 +56,8 @@ export function VisionPreview() {
               <DetectionRow color="bg-[#F2B5C4]" label="search field" value="424, 112" />
             </div>
             <div className="mt-4 break-all rounded-md border-2 border-[#0F0E0D] bg-[#0F0E0D] p-3 font-mono text-xs leading-6 text-white">
-              {`target: "find the next button"`}<br />
-              {`provider_payload: ["n8x2p0", "Next", "button"]`}
+              {`element: { id: "n8x2p0", label: "Next" }`}<br />
+              {`box: [1248, 820, 84, 40]  point: [1290, 840]`}
             </div>
           </div>
         </div>

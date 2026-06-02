@@ -14,7 +14,7 @@ export const dynamic = "force-static";
 export const metadata: Metadata = {
   title: "Donkey Vision | Donkey",
   description:
-    "A low-latency API for detecting interactable UI elements in screenshots and grounding natural-language UI requests.",
+    "A low-latency API for detecting interactable UI elements in screenshots, with boxes, center points, and labels.",
 };
 
 export default function DonkeyVisionPage() {
