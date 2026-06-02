@@ -29,6 +29,16 @@ RUN pip install --upgrade pip \
     && pip install -r requirements.txt \
     && pip install runpod huggingface_hub
 
+# OmniParser's util/utils.py builds a PaddleOCR() at import time with kwargs
+# (use_gpu, show_log, max_batch_size, use_dilation, det_db_score_mode) that
+# only exist in PaddleOCR 2.x; requirements.txt leaves paddleocr unpinned, so
+# the build pulls 3.x and the constructor raises ValueError at import, crashing
+# the worker. We run EasyOCR (the handler passes use_paddleocr=False) and never
+# touch paddle_ocr, so stub the eager construction to None instead of pinning
+# the whole paddle stack we don't use. Fails the build loudly if upstream
+# changes and the pattern stops matching.
+RUN python -c "import re,pathlib,sys; p=pathlib.Path('util/utils.py'); s=p.read_text(); s2=re.sub(r'paddle_ocr = PaddleOCR\(.*?\)','paddle_ocr = None',s,count=1,flags=re.S); p.write_text(s2) if s2!=s else sys.exit('paddle_ocr stub failed: pattern not found in util/utils.py')"
+
 # Bake OmniParser V2 weights into the image so workers don't download on cold
 # start. icon_detect (YOLO) weights are AGPL-3.0; icon_caption is MIT.
 RUN mkdir -p weights && \
