@@ -11,6 +11,7 @@ import type {
   Schema,
 } from "@google/genai";
 
+import { geminiModelRoles } from "@/lib/inference/gemini-models";
 import { ensureConfigured } from "@/lib/inference/http";
 import {
   isJsonObject,
@@ -35,8 +36,8 @@ type GeminiClientFactory = (options: GoogleGenAIOptions) => GeminiClient;
 
 const geminiProviderID = "gemini";
 const screenshotProviderID = "gemini-flash";
-const defaultScreenshotParseModel = "gemini-2.5-flash";
-const defaultDebugOverlayScreenshotParseModel = "gemini-2.5-flash";
+const defaultScreenshotParseModel = geminiModelRoles.screenshotParse;
+const defaultDebugOverlayScreenshotParseModel = geminiModelRoles.screenshotParse;
 const defaultVertexLocation = "global";
 const vertexAIScope = "https://www.googleapis.com/auth/cloud-platform";
 

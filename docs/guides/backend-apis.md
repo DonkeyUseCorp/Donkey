@@ -62,7 +62,7 @@ provider names are configuration/data inside private adapters only.
 - Screenshot parsing is available at `POST /api/inference/screenshots/parse/`.
   It accepts scoped app/window or system-navigation screenshots only, never
   whole-desktop captures, and returns read-only UI evidence in the Mac app's
-  local UI understanding shape. The default provider is Gemini 2.5 Flash through
+  local UI understanding shape. The default provider is Gemini Flash through
   a dedicated screenshot-parsing module configured with hosted Google
   credentials or `GEMINI_API_KEY`.
 - The Gemini adapter uses the official `@google/genai` Node/TypeScript SDK for

@@ -12,6 +12,7 @@ import type {
   Tool,
 } from "@google/genai";
 
+import { geminiModelRoles } from "@/lib/inference/gemini-models";
 import { ensureConfigured } from "@/lib/inference/http";
 import {
   isJsonObject,
@@ -37,9 +38,9 @@ type GeminiClientFactory = (options: GoogleGenAIOptions) => GeminiClient;
 
 const providerID = "gemini-computer-use";
 const geminiProviderID = "gemini";
-const defaultDecisionResponsesModel = "gemini-3.1-flash-lite";
-const defaultVertexResponsesModel = "gemini-3.5-flash";
-const defaultComputerUseModel = "gemini-3-flash-preview";
+const defaultDecisionResponsesModel = geminiModelRoles.fastDecision;
+const defaultVertexResponsesModel = geminiModelRoles.chat;
+const defaultComputerUseModel = geminiModelRoles.browserComputerUse;
 const vertexLocation = "global";
 const vertexAIScope = "https://www.googleapis.com/auth/cloud-platform";
 

@@ -21,7 +21,6 @@ export type ProviderCreditPricing = {
 const providerMarginNumerator = BigInt(13);
 const providerMarginDenominator = BigInt(10);
 const openAILongContextThresholdTokens = BigInt(272000);
-const geminiLongContextThresholdTokens = BigInt(200000);
 
 export function providerCreditPricing(
   provider: string,
@@ -253,37 +252,6 @@ function geminiCreditPricing(model: string): ProviderCreditPricing | undefined {
       cachedInput: "0.025",
       output: "1.5",
       inputAudio: "0.5",
-    });
-  }
-  if (modelMatches(model, "gemini-2.5-pro")) {
-    return textAudioTokenPricing({
-      input: "1.25",
-      cachedInput: "0.13",
-      output: "10",
-      inputAudio: "1.25",
-      longContextThresholdTokens: geminiLongContextThresholdTokens,
-      longContext: {
-        inputTokenCostMicrosPerMillion: usdPerMillionWithMargin("2.5"),
-        cachedInputTokenCostMicrosPerMillion: usdPerMillionWithMargin("0.25"),
-        outputTokenCostMicrosPerMillion: usdPerMillionWithMargin("15"),
-        inputAudioTokenCostMicrosPerMillion: usdPerMillionWithMargin("2.5"),
-      },
-    });
-  }
-  if (modelMatches(model, "gemini-2.5-flash-lite")) {
-    return textAudioTokenPricing({
-      input: "0.1",
-      cachedInput: "0.01",
-      output: "0.4",
-      inputAudio: "0.3",
-    });
-  }
-  if (modelMatches(model, "gemini-2.5-flash")) {
-    return textAudioTokenPricing({
-      input: "0.3",
-      cachedInput: "0.03",
-      output: "2.5",
-      inputAudio: "1",
     });
   }
 
