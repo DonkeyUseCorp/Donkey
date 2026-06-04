@@ -452,5 +452,6 @@ fi
 echo "Starting Donkey..."
 print_dev_overlay_status
 echo "Hosted inference auth: dev-bypass=${DONKEY_DEV_AUTH_BYPASS:-0} baseURL=$DONKEY_WEB_BASE_URL"
+echo "Vision navigation (typed query -> vision click): hardcoded ON in the app"
 start_logger
 open -W -n "$DEV_APP_DIR"

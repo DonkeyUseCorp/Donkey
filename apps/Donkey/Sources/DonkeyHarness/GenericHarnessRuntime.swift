@@ -16,6 +16,14 @@ public struct HarnessStepExecutionResult: Equatable, Sendable {
     }
 }
 
+/// The model boundary the harness consults to choose the next tool call. This is the planning step of
+/// the harness loop: it is asked again after every observation, with the task's world model already
+/// updated by the previous tool's result, and returns the next call (or nil to stop). It expresses
+/// completion by returning a `run.complete` lifecycle call, which ends the loop.
+public protocol HarnessNextStepPlanning: Sendable {
+    func planNextStep(for task: HarnessTaskState) async -> HarnessToolCall?
+}
+
 public struct GenericHarnessRuntime: Sendable {
     public var coordinator: HarnessTaskCoordinator
     public var registry: HarnessToolRegistry
@@ -26,6 +34,37 @@ public struct GenericHarnessRuntime: Sendable {
     ) {
         self.coordinator = coordinator
         self.registry = registry
+    }
+
+    /// Runs the harness loop driven by per-observation re-planning: observe → plan one step → execute
+    /// → record observation → re-plan, repeating until the planner stops, a gate stops the task, the
+    /// task becomes non-executable (e.g. `run.complete`/`run.failSafe`), or `maxSteps` is reached.
+    ///
+    /// The planner is consulted with the *current* task each iteration, so it sees the world model the
+    /// previous tool produced — that is what makes this a real harness loop rather than a fixed plan.
+    @discardableResult
+    public func run(
+        taskID: String,
+        planner: any HarnessNextStepPlanning,
+        maxSteps: Int = 16
+    ) async -> [HarnessStepExecutionResult] {
+        var results: [HarnessStepExecutionResult] = []
+        for _ in 0..<maxSteps {
+            guard let task = await coordinator.task(id: taskID), task.status.canExecuteTools else {
+                break
+            }
+            guard let call = await planner.planNextStep(for: task) else {
+                break
+            }
+            guard let step = await executeToolCall(taskID: taskID, call: call) else {
+                break
+            }
+            results.append(step)
+            if step.stoppedForGate || !step.task.status.canExecuteTools {
+                break
+            }
+        }
+        return results
     }
 
     public func executeToolCall(

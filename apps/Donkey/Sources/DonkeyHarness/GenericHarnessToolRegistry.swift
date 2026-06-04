@@ -153,7 +153,8 @@ public enum BuiltInHarnessToolCatalog {
             descriptor(
                 "conversation.respond",
                 pluginID: "core.conversation",
-                summary: "Respond conversationally without taking external action.",
+                summary: "Answer the user or chat when the request needs a reply rather than an action. Set 'response' to the message.",
+                input: ["response": "The message to say to the user."],
                 permissions: [.conversation],
                 safety: .readOnly
             ),

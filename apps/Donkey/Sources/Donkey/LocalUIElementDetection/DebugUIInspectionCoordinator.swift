@@ -266,8 +266,24 @@ final class DebugUIInspectionCoordinator {
             return
         }
 
+        // Carry the already-detected vision/AI elements into this fast accessibility render. The
+        // element tracker is shared across every render path, so feeding it an accessibility-ONLY
+        // frame here would mark the vision boxes "missing" and age them out within
+        // `disappearanceTolerance` cycles — which, once the vision parse is skipped for an unchanged
+        // window, makes the boxes flicker (appear, vanish, reappear on the next real parse). Fusing
+        // the carried AI elements keeps them present every cycle, matching the active-accessibility
+        // path's behavior.
+        let carriedAIFrame = DebugUIInspectionFrame(
+            elements: (lastRenderedFrames[screen.screenID]?.elements ?? [])
+                .filter { !Self.isAccessibilityEvidence($0) }
+        )
+        let fusedFrame = DebugUIInspectionFrameFusion.fused(
+            accessibilityFrame: frame,
+            aiFrame: carriedAIFrame
+        )
+
         var tracker = trackers[screen.screenID] ?? Self.makeElementTracker()
-        let trackedFrame = tracker.update(with: frame)
+        let trackedFrame = tracker.update(with: fusedFrame, renderNewElementsImmediately: true)
         trackers[screen.screenID] = tracker
         guard force
             || lastRenderedFrames[screen.screenID]?.isOverlayRenderEquivalent(to: trackedFrame) != true

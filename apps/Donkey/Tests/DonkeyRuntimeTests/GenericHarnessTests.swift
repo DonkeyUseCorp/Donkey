@@ -163,6 +163,55 @@ struct GenericHarnessTests {
     }
 
     @Test
+    func runReplansAfterEachObservation() async {
+        // The harness loop must re-plan with the world model the previous tool produced. The planner
+        // observes once, then — seeing the observation now recorded — completes. Proves planning is
+        // driven by observations, not a fixed up-front plan.
+        struct StubReplanningPlanner: HarnessNextStepPlanning {
+            func planNextStep(for task: HarnessTaskState) async -> HarnessToolCall? {
+                if task.worldModel.facts["observed"] == "true" {
+                    return HarnessToolCall(name: "run.complete", input: ["reason": "done"])
+                }
+                return HarnessToolCall(name: "test.observe")
+            }
+        }
+
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(
+            HarnessTool(
+                descriptor: HarnessToolDescriptor(
+                    name: "test.observe",
+                    pluginID: "test",
+                    summary: "Stub observation tool.",
+                    safetyClass: .readOnly
+                )
+            ) { context in
+                HarnessToolResult(
+                    callID: context.call.id,
+                    toolName: context.call.name,
+                    status: .succeeded,
+                    summary: "observed",
+                    observations: HarnessObservationDelta(facts: ["observed": "true"])
+                )
+            }
+        )
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(
+            id: "task-replan",
+            threadID: "thread-replan",
+            goal: "observe then finish",
+            grantedPermissions: [.lifecycle]
+        )
+
+        let steps = await runtime.run(taskID: task.id, planner: StubReplanningPlanner(), maxSteps: 5)
+
+        #expect(steps.map { $0.toolResult?.toolName } == ["test.observe", "run.complete"])
+        let finalTask = await coordinator.task(id: task.id)
+        #expect(finalTask?.status == .completed)
+    }
+
+    @Test
     func skillRegistryCanRegisterAndSearchSkills() async {
         let registry = HarnessSkillRegistry()
         await registry.register(

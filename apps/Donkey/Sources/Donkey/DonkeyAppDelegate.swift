@@ -1,6 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 import Darwin
+import DonkeyAI
 import Foundation
 
 @MainActor
@@ -13,6 +14,7 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     private var debugInspectionCoordinator: DebugUIInspectionCoordinator?
     #endif
     private var runtimeOnboardingController: LocalRuntimeOnboardingWindowController?
+    private var frontmostVisionWarmCache: FrontmostVisionWarmCache?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if ManualCaptureDebugLaunchHandler.shouldHandle(arguments: CommandLine.arguments) {
@@ -70,6 +72,7 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
             andEventID: AEEventID(kAEGetURL)
         )
         overlayController?.stop()
+        frontmostVisionWarmCache?.stop()
         #if DONKEY_DEBUG_OVERLAY
         debugInspectionCoordinator?.stop()
         #endif
@@ -127,6 +130,13 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         let runtimeOnboardingController = LocalRuntimeOnboardingWindowController()
         self.runtimeOnboardingController = runtimeOnboardingController
         runtimeOnboardingController.showIfSetupNeeded()
+
+        // Keep ParsedVisionStore warm: watch the frontmost window and re-parse on big changes, so a
+        // typed vision command reuses a fresh parse instead of paying for one inline. No-ops when the
+        // vision backend isn't configured.
+        let frontmostVisionWarmCache = FrontmostVisionWarmCache.fromEnvironment()
+        self.frontmostVisionWarmCache = frontmostVisionWarmCache
+        frontmostVisionWarmCache?.start()
     }
 
     private func registerAuthCallbackHandler() {

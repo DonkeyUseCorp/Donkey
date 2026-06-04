@@ -4,15 +4,16 @@
 User turn
   |
   v
-Model boundary -> structured intent, risk, plan, verification
-  |
-  v
-Generic harness task state
-  |
-  v
+Generic harness task state (goal, world model, history) <--+
+  |                                                         |
+  v                                                         |
+Model boundary -> the single next tool call                |
+  |   (see, act, verify, respond, clarify, or complete)    |
+  v                                                         |
 Tool registry -> guarded executor -> structured observation
-  |                                      |
-  +----------- verify / recover / gate --+
+  |                                                         |
+  +-- update world model, then re-plan ---------------------+
+      (or hard-stop at a permission / clarification gate)
 ```
 
 The agent harness is Donkey's app-agnostic runtime boundary for turning a user
@@ -28,28 +29,29 @@ conditionals.
 ## Runtime Shape
 
 A user-query turn enters the generic lifecycle before any local-app executor is
-selected. The model boundary returns structured intent, risk/ambiguity, context
-needs, plan steps, verification criteria, fallback policy, and clarification
-policy. Deterministic Swift then validates the structured plan against the tool
-registry, permissions, supported app catalog, and task state.
+selected. The harness compacts context into task state, then runs a loop: each
+step it asks the model boundary for the single next tool call given the current
+world model, validates and executes that one call deterministically, records the
+resulting observation, and asks again. Planning happens per observation, not as
+one upfront plan.
 
 The loop is:
 
 ```text
 intake
--> intent analysis
--> context gathering
--> world model update
--> planning
+-> compact context into task state
+-> ask the model boundary for the next tool call
+-> validate against registry, permissions, and task state
 -> execute one guarded tool step
--> verify
--> recover, continue, clarify, ask permission, or complete
+-> record the structured observation into the world model
+-> re-plan, or hard-stop at a clarification / permission gate
 ```
 
-Desktop work is not a single model completion. The harness observes, acts,
-records evidence, verifies, and may replan. Models choose structured tool calls;
-Swift owns task state, tool validation, focus checks, permission gates,
-execution, and result recording.
+Desktop work is not a single model completion. The harness observes, acts, and
+records evidence one step at a time, re-planning after each observation. The
+model chooses the next tool — including when to see, verify, respond, clarify,
+or complete — while Swift owns task state, tool validation, focus checks,
+permission gates, execution, and result recording.
 
 ## Task State
 
@@ -94,7 +96,7 @@ Waiting states are hard stops:
 - missing permission moves the task to `waitingForPermission`
 - missing required user detail moves the task to `waitingForUser`
 - dangerous ambiguity asks before acting
-- verification failure chooses recovery, review, or failed-safe state
+- on verification failure the planner re-plans to recover, clarify, or fail safe
 
 Core tool families cover conversation, clarification, permission requests,
 memory, skills, app lookup, observation, UI element actions, text/keyboard
@@ -103,10 +105,28 @@ lifecycle control.
 
 ## Computer Use
 
-Computer use is a tool family inside the harness. Accessibility is the primary
-source for actionable elements. Screenshots, vision, OCR, and hover evidence
-enrich the world model and can provide fallback targets when Accessibility is
-insufficient.
+Computer use is a tool family inside the harness, and seeing and acting are each
+plain tools the planner chooses per step — not a fixed pipeline. The harness
+re-plans after every observation, so the model looks, sees the result, then picks
+the next tool.
+
+To **see**, it can read the Accessibility tree (fast, structured, best for native
+apps) or capture and analyze a screenshot with vision (works for any pixels, e.g.
+canvas or Electron content). Either returns elements into the world model.
+Accessibility is preferred when it's sufficient; vision is the fallback when it
+isn't.
+
+To **act**, it can click an element the AX tree or vision returned, type or press
+keys, or generate and run an AppleScript — whichever fits. Clicking an
+Accessibility control prefers a native Accessibility press (`AXPress`) and falls
+back to a guarded coordinate click on the control's frame; vision elements click
+by coordinate. Either way this is not a shortcut around the focus and permission
+checks below. The planner can also answer conversationally or ask the user to
+clarify instead of acting — responding and clarifying are themselves tools.
+
+A non-LLM monitor watches the frontmost window's screenshot fingerprint and
+re-parses on large changes, keeping the vision parse cache warm so a capture is
+usually reused instantly rather than paid for inline.
 
 Input must be guarded by target focus, permission policy, element eligibility,
 allowed action type, safety class, and verification criteria. Coordinate input

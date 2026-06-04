@@ -127,6 +127,23 @@ public final class MacWindowResolver: @unchecked Sendable {
         MacWindowCandidateListSnapshot(candidates: enumerateCandidates())
     }
 
+    /// The user's frontmost real window, skipping Donkey's own process and bundle so the agent never
+    /// targets its own overlay. Candidates come back front-to-back, so the first non-Donkey match is
+    /// the app the user was last working in. Shared by the harness run and the warm-cache monitor so
+    /// the two always agree on which window is "frontmost".
+    public func frontmostUserAppTarget() -> MacWindowTargetCandidate? {
+        let ownProcessID = ProcessInfo.processInfo.processIdentifier
+        let ownBundleID = Bundle.main.bundleIdentifier
+        return enumerateCandidates().first { candidate in
+            if candidate.processID == ownProcessID { return false }
+            if let ownBundleID, let candidateBundle = candidate.bundleIdentifier,
+               candidateBundle.caseInsensitiveCompare(ownBundleID) == .orderedSame {
+                return false
+            }
+            return true
+        }
+    }
+
     public func selectTarget(
         _ request: MacWindowSelectionRequest = MacWindowSelectionRequest()
     ) throws -> MacWindowTargetCandidate {
