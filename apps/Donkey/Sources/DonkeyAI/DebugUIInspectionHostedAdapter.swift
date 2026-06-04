@@ -1,5 +1,3 @@
-#if DONKEY_DEBUG_OVERLAY
-
 import DonkeyContracts
 import Foundation
 
@@ -442,5 +440,3 @@ private struct RawDebugUICoordinateSpace: Decodable {
     var width: Double
     var height: Double
 }
-
-#endif
