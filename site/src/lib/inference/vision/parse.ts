@@ -10,8 +10,19 @@ type FetchImpl = typeof fetch;
 
 // Read RunPod config at module load so a missing var fails the deploy, not the
 // first request.
-const apiKey = requireEnv("RUNPOD_API_KEY");
-const endpointId = requireEnv("RUNPOD_VISION_ENDPOINT_ID");
+//
+// RUNPOD_VISION_BASE_URL lets you point the worker somewhere other than RunPod
+// Cloud — e.g. a local CPU worker at http://localhost:8000 (see
+// vision/docker-compose.yml). When it's set we POST `${base}/runsync` and the
+// API key / endpoint ID become optional, since the local RunPod API server
+// doesn't authenticate. When it's unset we fall back to RunPod Cloud and both
+// of those vars are required.
+const baseUrlOverride = process.env.RUNPOD_VISION_BASE_URL?.trim();
+const apiKey = baseUrlOverride ? (process.env.RUNPOD_API_KEY?.trim() ?? "") : requireEnv("RUNPOD_API_KEY");
+const endpointId = baseUrlOverride ? "" : requireEnv("RUNPOD_VISION_ENDPOINT_ID");
+const runsyncUrl = baseUrlOverride
+  ? `${baseUrlOverride.replace(/\/+$/, "")}/runsync`
+  : `https://api.runpod.ai/v2/${endpointId}/runsync`;
 
 function requireEnv(name: string): string {
   const value = process.env[name]?.trim();
@@ -102,12 +113,15 @@ async function callWorker(
 ): Promise<unknown> {
   let response: Response;
   try {
-    response = await fetchImpl(`https://api.runpod.ai/v2/${endpointId}/runsync`, {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    // A local worker (RUNPOD_VISION_BASE_URL) needs no auth; only send the
+    // bearer token when we actually have one (i.e. talking to RunPod Cloud).
+    if (apiKey) {
+      headers.Authorization = `Bearer ${apiKey}`;
+    }
+    response = await fetchImpl(runsyncUrl, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify({
         input: {
           image: imageBase64,

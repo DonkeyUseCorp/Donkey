@@ -1,0 +1,121 @@
+# OmniParser V2 worker for LOCAL, CPU-only runs on your laptop.
+#
+# This is NOT the production image. Production uses ./Dockerfile, a CUDA
+# linux/amd64 image that RunPod builds and runs on rented NVIDIA GPUs. That
+# image only runs on this Apple Silicon Mac under QEMU emulation, which is far
+# too slow to tell you anything useful about latency.
+#
+# This file instead builds a NATIVE arm64 image (no emulation) with a CPU-only
+# PyTorch, so you get a realistic "how slow is OmniParser without a GPU" number
+# and a real endpoint to wire the backend against. Docker on macOS cannot reach
+# any GPU (no NVIDIA; Apple's Metal/MPS is invisible to the Linux VM), so this
+# is intentionally CPU-only. For an MPS (Apple GPU) measurement, use the
+# non-Docker benchmark in setup_local_bench.sh / bench_local.py.
+#
+# Build + run via: docker compose -f vision/docker-compose.yml up --build
+# (compose sets the build context to vision/, so COPY paths are vision-relative.)
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Runtime libs OmniParser's stack needs: git to clone, libgl1/libglib for
+# OpenCV, libgomp1 for PyTorch's OpenMP, curl for healthchecks.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    curl \
+    libgl1 \
+    libglib2.0-0 \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pin OmniParser to the same commit as the production image so behavior matches.
+ARG OMNIPARSER_COMMIT=b0d5c9f5701f7e2be4771872e6e928da77759df3
+RUN git clone https://github.com/microsoft/OmniParser.git \
+    && cd OmniParser \
+    && git checkout ${OMNIPARSER_COMMIT}
+
+WORKDIR /app/OmniParser
+
+# Install only the deps util/utils.py and the handler actually import. We
+# deliberately skip paddlepaddle/paddleocr: paddlepaddle has no reliable arm64
+# Linux wheel, and the handler runs EasyOCR (use_paddleocr=False). The default
+# PyPI torch wheel on linux/arm64 is CPU-only, which is exactly what we want.
+# transformers is pinned to 4.49.0: Florence-2's remote modeling code reads
+# config.forced_bos_token_id, which transformers removed in 4.50+, so newer
+# versions crash on model load with an AttributeError.
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir \
+        torch \
+        torchvision \
+        easyocr \
+        "supervision==0.18.0" \
+        "ultralytics==8.3.70" \
+        "transformers==4.49.0" \
+        "numpy==1.26.4" \
+        opencv-python-headless \
+        timm \
+        "einops==0.8.0" \
+        accelerate \
+        "openai==1.3.5" \
+        matplotlib \
+        pillow \
+        requests \
+        huggingface_hub \
+        runpod
+
+# util/utils.py imports paddleocr at module load and constructs a PaddleOCR()
+# eagerly. The production image only stubs the construction (paddleocr is still
+# installed there); here paddleocr isn't installed at all, so we must stub BOTH
+# the import and the construction. Fails the build loudly if upstream changes
+# and either pattern stops matching, so we never silently ship a broken stub.
+RUN python -c "import re,pathlib,sys; \
+p=pathlib.Path('util/utils.py'); s=p.read_text(); \
+s1=re.sub(r'from paddleocr import PaddleOCR','PaddleOCR = None  # stubbed: paddle not installed (arm64 local image)',s,count=1); \
+s2=re.sub(r'paddle_ocr = PaddleOCR\(.*?\)','paddle_ocr = None',s1,count=1,flags=re.S); \
+sys.exit('paddle import stub failed: pattern not found') if s1==s else None; \
+sys.exit('paddle construction stub failed: pattern not found') if s2==s1 else None; \
+p.write_text(s2)"
+
+# Bake OmniParser V2 weights into the image (same set the prod image uses) so
+# the worker doesn't download them on first request.
+RUN mkdir -p weights && \
+    for f in icon_detect/train_args.yaml icon_detect/model.pt icon_detect/model.yaml \
+             icon_caption/config.json icon_caption/generation_config.json icon_caption/model.safetensors; do \
+        hf download microsoft/OmniParser-v2.0 "$f" --local-dir weights; \
+    done && \
+    mv weights/icon_caption weights/icon_caption_florence
+
+# Prefetch EasyOCR's English models from a pinned, MD5-verified HF mirror (same
+# approach and checksums as the prod image). EASYOCR_MODULE_PATH fixes the
+# lookup dir so EasyOCR finds them at runtime regardless of HOME.
+ENV EASYOCR_MODULE_PATH=/root/.EasyOCR
+ARG EASYOCR_MIRROR_REV=17cdb173ef73b32eb6e9d1270f33b30154b03908
+RUN mkdir -p "$EASYOCR_MODULE_PATH/model" && \
+    hf download xiaoyao9184/easyocr craft_mlt_25k.pth --revision "$EASYOCR_MIRROR_REV" --local-dir /tmp/easyocr && \
+    hf download xiaoyao9184/easyocr english_g2.pth   --revision "$EASYOCR_MIRROR_REV" --local-dir /tmp/easyocr && \
+    cp /tmp/easyocr/craft_mlt_25k.pth /tmp/easyocr/english_g2.pth "$EASYOCR_MODULE_PATH/model/" && \
+    echo "2f8227d2def4037cdb3b34389dcf9ec1  $EASYOCR_MODULE_PATH/model/craft_mlt_25k.pth" | md5sum -c && \
+    echo "5864788e1821be9e454ec108d61b887d  $EASYOCR_MODULE_PATH/model/english_g2.pth"   | md5sum -c && \
+    rm -rf /tmp/easyocr
+
+# Warm the caches and validate the build in one shot: importing util.utils runs
+# the paddle stubs + builds the EasyOCR reader, and loading the caption model
+# pulls the Florence-2 processor + remote code from HF into the image. If any
+# dep or stub is wrong, the build fails here instead of on the first request.
+RUN python -c "import sys; sys.path.insert(0, '/app/OmniParser'); \
+from util.utils import get_yolo_model, get_caption_model_processor; \
+get_yolo_model('weights/icon_detect/model.pt'); \
+get_caption_model_processor('florence2', 'weights/icon_caption_florence'); \
+print('OmniParser local image warmed OK')"
+
+COPY handler.py /app/handler.py
+
+WORKDIR /app
+
+# Serve the RunPod handler as a local HTTP API (FastAPI) instead of connecting
+# to RunPod's queue. This exposes POST /runsync on :8000 with the same
+# {input:{...}} -> {output:{...}} contract the cloud endpoint uses, so the
+# backend can talk to it unchanged via RUNPOD_VISION_BASE_URL.
+EXPOSE 8000
+CMD ["python", "-u", "handler.py", "--rp_serve_api", "--rp_api_host", "0.0.0.0", "--rp_api_port", "8000"]
