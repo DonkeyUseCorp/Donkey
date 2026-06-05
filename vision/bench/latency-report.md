@@ -16,7 +16,7 @@ Client                        Queue                 Worker (GPU)
   |<-------- elements ----------+------------------------|
   |
   v
-  end to end: ~3-4s warm   --   only ~0.2s is the model
+  what we control: ~0.2s on the GPU.  upload + queue depend on the connection.
 ```
 
 ## Compress before upload
@@ -24,15 +24,16 @@ Client                        Queue                 Worker (GPU)
 We downscale each screenshot to 1568px and JPEG-encode it (~270KB) before
 sending. This is the biggest win, because the model is fast: ~0.2s to parse, of
 which only 16ms is detection. Most of the wait is transferring the image. A raw
-screenshot is several megabytes, so the upload and queue dominate. At ~270KB the
-upload is around 2 seconds, with enough detail left to parse.
+screenshot is several megabytes, so the upload and queue dominate — and those
+depend on the caller's connection, not us. At ~270KB the upload shrinks
+accordingly, with enough detail left to parse.
 
 ## Resolution is for detection, not speed
 
 We send 1568px rather than smaller because OCR reads the raw pixels. Below ~900px,
 dense screens degrade — a file list blurs and adjacent rows merge into one box. At
-1568px they stay separate. This adds ~1.5s of compute over a small image, but warm
-runs are still ~3-4s, so it's worth it.
+1568px they stay separate. The larger image costs a bit more to process, but the
+parse stays around 0.2s, so it's worth it.
 
 ## Overlap threshold (iou 0.7)
 
@@ -65,18 +66,17 @@ the model, is the slow part.
 
 ## Request timing
 
-Warm, the model parses in ~0.2s and the worker finishes in under a second. With
-upload, queue, and the response, the caller sees ~3-4s. The first request after a
-scale-up is slower: the model warms up (~0.5s parse) on top of a ~2s boot. None of
-this is the model itself — it's the payload and the dispatch.
+Warm, the model parses in ~0.2s and the worker finishes in under a second — that's
+the part we control. Upload, queue, and the response depend on the caller's
+connection, so total wall-clock varies. The first request after a scale-up is
+slower: the model warms up (~0.5s parse) on top of a ~2s boot.
 
-| Stage | Warm |
+| Stage (what we control) | Warm |
 | --- | --- |
 | Compress (local) | ~30ms |
 | Detection inference | ~16ms |
 | Parse (detection + OCR + captions) | ~0.2s |
 | Worker execution | ~0.7s |
-| Upload + queue + response | ~2-3s |
-| Wall-clock (client) | ~3-4s |
 | Cold boot (snapshot) | ~2s |
 | Cost / isolated request | ~$0.003 |
+| Upload + queue + response | connection-bound |

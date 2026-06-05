@@ -13,10 +13,10 @@ import type { Feature, Stat } from "@/app/donkeyvision/types";
 
 export const stats: Stat[] = [
   {
-    eyebrow: "End to end",
+    eyebrow: "On the GPU",
     label:
-      "Typical time from request to response for a full screenshot parse, per image.",
-    value: "~0.5s",
+      "Server-side time to detect, OCR, and label every element in a screenshot — the part we control.",
+    value: "~0.2s",
   },
 ];
 
