@@ -8,6 +8,7 @@ import { MediaSection } from "@/app/donkeyvision/MediaSection";
 import { PricingSection } from "@/app/donkeyvision/PricingSection";
 import { ProofSection } from "@/app/donkeyvision/ProofSection";
 import { UseCasesSection } from "@/app/donkeyvision/UseCasesSection";
+import { VisionCompareSection } from "@/app/donkeyvision/VisionCompareSection";
 
 export const dynamic = "force-static";
 
@@ -24,6 +25,7 @@ export default function DonkeyVisionPage() {
       <HeroSection />
       <ProofSection />
       <ApiSection />
+      <VisionCompareSection />
       <UseCasesSection />
       <MediaSection />
       <PricingSection />
