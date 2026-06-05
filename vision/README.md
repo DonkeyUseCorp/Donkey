@@ -91,55 +91,6 @@ Confirm `parsed_content_list` is non-empty and each `bbox` is four values in
 docker build --platform linux/amd64 -t vision-worker:dev vision/
 ```
 
-## Run it locally (no GPU, for dev and GPU-need evaluation)
-
-The production `Dockerfile` is a CUDA `linux/amd64` image meant for RunPod's
-NVIDIA GPUs; on an Apple Silicon Mac it only runs under slow QEMU emulation.
-`Dockerfile.local` is a **native arm64, CPU-only** image instead — it builds and
-runs natively and serves the same `/runsync` contract over HTTP, so you can wire
-the backend against it without renting anything.
-
-> Docker on macOS cannot reach any GPU — not NVIDIA (none present) and not
-> Apple's Metal/MPS (invisible to Docker's Linux VM). So this container is
-> always CPU. For a GPU number on your laptop, use the MPS benchmark below.
-
-```bash
-# Build + start the local worker on :8000 (first build is slow; weights bake in).
-docker compose -f vision/docker-compose.yml up --build
-
-# Point the site at it (site/.env.development):
-RUNPOD_VISION_BASE_URL="http://localhost:8000"
-```
-
-With `RUNPOD_VISION_BASE_URL` set, `POST /api/inference/vision` talks to the
-local worker and ignores `RUNPOD_API_KEY` / `RUNPOD_VISION_ENDPOINT_ID`. Unset
-it to go back to RunPod Cloud.
-
-## Deciding whether you need a GPU
-
-The cost question comes down to latency: is OmniParser fast enough without a
-rented GPU? The benchmark scripts live in `vision/bench/`. Measure all three and
-compare warm latency.
-
-```bash
-# 1. Local CPU (Docker). Realistic CPU floor.
-python vision/bench/bench_endpoint.py --image shot.png
-
-# 2. RunPod Cloud GPU. What you're paying for today.
-python vision/bench/bench_endpoint.py --image shot.png \
-  --url https://api.runpod.ai/v2/<ENDPOINT_ID>/runsync --api-key "$RUNPOD_API_KEY"
-
-# 3. Apple GPU (MPS), non-Docker — the true "can my laptop replace the GPU?" test.
-bash vision/bench/setup_local_bench.sh
-source vision/bench/.omniparser-local/.venv/bin/activate
-python vision/bench/bench_local.py --image shot.png --device mps
-python vision/bench/bench_local.py --image shot.png --device cpu   # comparison
-```
-
-Rule of thumb: if MPS warm latency is within your UX budget, you can likely skip
-renting GPUs for dev (and possibly light production). If only the rented GPU
-hits your budget, the cost is buying that latency.
-
 ## Calling the deployed endpoint
 
 ```bash
