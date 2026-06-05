@@ -13,10 +13,10 @@ import type { Feature, Stat } from "@/app/donkeyvision/types";
 
 export const stats: Stat[] = [
   {
-    eyebrow: "On the GPU",
+    eyebrow: "Server-side",
     label:
-      "Server-side time to detect, OCR, and label every element in a screenshot — the part we control.",
-    value: "~0.2s",
+      "Full time on our side to process a screenshot — detect, OCR, and label every element, ready to return. The part we control.",
+    value: "~0.7s",
   },
 ];
 
