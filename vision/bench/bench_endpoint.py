@@ -23,10 +23,10 @@ the local API server may not — those fields show as n/a).
 
 After the runs it saves a results folder under vision/bench/results/
 (named <image>-<timestamp>/, override with --out-dir):
-    <stem>.labeled.png    the worker's rendered overlay (numbered boxes drawn)
     <stem>.elements.json  parsed_content_list + label_coordinates + image_size
     summary.json          timing breakout for every run + warm medians
     summary.txt           the console report, verbatim
+Render an overlay from the elements with render_content_overlay.py.
 Use --no-save to skip.
 
 Examples:
@@ -117,8 +117,10 @@ def compress_image(path, max_dim, jpeg_quality):
 
 
 def save_outputs(output, out_dir, stem):
-    """Persist the run result: the worker's rendered overlay (the SOM-annotated
-    image with numbered boxes drawn) plus the structured elements JSON.
+    """Persist the structured elements JSON for the run.
+
+    The worker also returns a numbered SOM image, but we don't save it — the
+    overlay we keep is `<stem>.content.png` from render_content_overlay.py.
 
     Returns the list of written paths.
     """
@@ -126,13 +128,6 @@ def save_outputs(output, out_dir, stem):
         return []
     os.makedirs(out_dir, exist_ok=True)
     saved = []
-
-    labeled = output.get("labeled_image_base64")
-    if labeled:
-        png_path = os.path.join(out_dir, f"{stem}.labeled.png")
-        with open(png_path, "wb") as f:
-            f.write(base64.b64decode(labeled))
-        saved.append(png_path)
 
     json_path = os.path.join(out_dir, f"{stem}.elements.json")
     with open(json_path, "w") as f:
