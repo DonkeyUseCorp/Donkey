@@ -3,7 +3,11 @@ import { z } from "zod";
 
 import { creditMicrosToString, creditStringToMicros } from "@/lib/credits/amounts";
 import { getCreditBalance, grantCredits } from "@/lib/credits/inference";
-import { isDonkeySuperUser, withDonkeyAuth } from "@/lib/donkey-api-auth";
+import {
+  isDonkeySuperUser,
+  notFoundResponse,
+  withDonkeyAuth,
+} from "@/lib/donkey-api-auth";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -51,13 +55,7 @@ export const POST = withDonkeyAuth(async (request) => {
   });
 
   if (!targetUser) {
-    return NextResponse.json(
-      {
-        error: "Not found",
-        message: "No user exists with that id.",
-      },
-      { status: 404 },
-    );
+    return notFoundResponse();
   }
 
   const amountMicros = creditStringToMicros(String(parsed.data.amountDollars));
