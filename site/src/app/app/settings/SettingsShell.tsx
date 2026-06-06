@@ -9,13 +9,13 @@ import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const navItems = [
-  { href: "/dashboard", label: "Overview" },
-  { href: "/dashboard/api-keys", label: "API keys" },
+  { href: "/app/settings", label: "Overview" },
+  { href: "/app/settings/api-keys", label: "API keys" },
 ];
 
-// Dashboards are fully client-rendered. We guard on the client session and, if
-// signed out, send the user to Google sign-in (API routes also enforce auth).
-export function DashboardShell({ children }: { children: ReactNode }) {
+// The settings UI is fully client-rendered. We guard on the client session and,
+// if signed out, send the user to Google sign-in (API routes also enforce auth).
+export function SettingsShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const { data: session, isPending } = authClient.useSession();
@@ -23,7 +23,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!isPending && !session) {
       void authClient.signIn.social({
-        callbackURL: "/dashboard",
+        callbackURL: "/app/settings",
         provider: "google",
       });
     }
@@ -42,7 +42,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
     <div className="min-h-screen bg-background text-foreground">
       <header className="border-b">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
-          <Link className="text-lg font-semibold" href="/dashboard">
+          <Link className="text-lg font-semibold" href="/app/settings">
             Donkey Vision API
           </Link>
           <nav className="flex items-center gap-1">

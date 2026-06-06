@@ -44,13 +44,13 @@ export const POST = withDonkeyAuth(async (request) => {
   const origin = request.nextUrl.origin;
   const checkout = await stripe.checkout.sessions.create({
     allow_promotion_codes: true,
-    cancel_url: `${origin}/dashboard?checkout=cancelled`,
+    cancel_url: `${origin}/app/settings?checkout=cancelled`,
     client_reference_id: session.user.id,
     customer: customerId,
     line_items: [{ price: visionPriceId(), quantity: 1 }],
     mode: "subscription",
     subscription_data: { metadata: { userId: session.user.id } },
-    success_url: `${origin}/dashboard?checkout=success`,
+    success_url: `${origin}/app/settings?checkout=success`,
   });
 
   if (!checkout.url) {

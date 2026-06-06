@@ -40,6 +40,12 @@ export function visionPriceId(): string {
   return priceId;
 }
 
+// Optional: a specific billing portal configuration (bpc_...). When unset,
+// Stripe uses the account's default portal configuration.
+export function visionPortalConfigurationId(): string | undefined {
+  return process.env.STRIPE_PORTAL_CONFIGURATION_ID || undefined;
+}
+
 export function quotaFromPrice(price: Stripe.Price | null | undefined): number {
   const raw = price?.metadata?.monthlyCallQuota;
   if (raw) {

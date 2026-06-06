@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getStripe } from "@/lib/billing/stripe";
+import { getStripe, visionPortalConfigurationId } from "@/lib/billing/stripe";
 import {
   donkeySessionUserId,
   notFoundResponse,
@@ -26,9 +26,11 @@ export const POST = withDonkeyAuth(async (request) => {
   }
 
   const stripe = getStripe();
+  const configuration = visionPortalConfigurationId();
   const portal = await stripe.billingPortal.sessions.create({
     customer: subscription.stripeCustomerId,
-    return_url: `${request.nextUrl.origin}/dashboard`,
+    return_url: `${request.nextUrl.origin}/app/settings`,
+    ...(configuration ? { configuration } : {}),
   });
 
   return NextResponse.json({ url: portal.url });
