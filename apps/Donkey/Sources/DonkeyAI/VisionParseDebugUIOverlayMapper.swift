@@ -27,7 +27,7 @@ public enum VisionParseDebugUIOverlayMapper {
             screenFrame: screenFrame
         )
 
-        let parsed = response.elements.compactMap { element -> DebugUIElement? in
+        let parsed = response.elements.enumerated().compactMap { visionIndex, element -> DebugUIElement? in
             guard !isMacWindowControl(label: element.label) else {
                 return nil
             }
@@ -60,6 +60,7 @@ public enum VisionParseDebugUIOverlayMapper {
                 "remoteScreenshotParsing.status": "used",
                 "remoteScreenshotParsing.provider": "omniparser-v2",
                 "vision.kind": element.kind,
+                "vision.index": String(visionIndex),
                 "vision.interactive": String(element.interactive),
                 "target.windowID": String(target.windowID),
                 "target.appName": target.appName ?? "",

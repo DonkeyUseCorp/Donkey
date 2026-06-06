@@ -1437,7 +1437,15 @@ final class DebugUIInspectionCoordinator {
     private static func compressedRemoteAIImage(
         from screenshot: CapturedWindowScreenshot
     ) -> CompressedScreenshot {
-        ScreenshotCompression.compressedForModel(screenshot)
+        // OmniParser's OCR runs on the uploaded pixels, so the default 896px / q0.48
+        // (tuned for hosted LLM vision) blurs dense UI — e.g. file-list rows fuse into
+        // one box. 1568px @ q0.8 separates them while staying a small payload (~hundreds
+        // of KB, not MB); coordinates still map back through the returned pixelSize.
+        ScreenshotCompression.compressedForModel(
+            screenshot,
+            maxPixelDimension: 1568,
+            jpegQuality: 0.8
+        )
     }
 }
 

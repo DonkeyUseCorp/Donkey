@@ -22,7 +22,9 @@ function requireEnv(name: string): string {
 }
 
 const defaultBoxThreshold = 0.05;
-const defaultIouThreshold = 0.1;
+// 0.7 keeps adjacent/dense boxes (e.g. file-list rows) distinct; a low value
+// over-merges neighbors. Matches the worker default in vision/handler.py.
+const defaultIouThreshold = 0.7;
 const defaultImgsz = 640;
 
 // Raw worker output. bbox is [x1, y1, x2, y2] in ratio space (0-1).

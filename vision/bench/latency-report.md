@@ -1,129 +1,82 @@
-# OmniParser latency notes
+# Vision parsing: latency & cost notes
 
-Real numbers from our screenshot parser (OmniParser V2) on a RunPod serverless
-GPU. Test image: a Spotify screenshot, 104 UI elements.
-
----
-
-We ran the parser 4 times in a row on the same screenshot. Here's what the
-client saw:
+How the screenshot parser performs and why it's configured this way. It runs icon
+detection, OCR, and captioning on a serverless GPU; the site calls it at
+`POST /api/inference/vision`.
 
 ```
-run 1 (cold):  35.39s
-run 2 (warm):  12.09s
-run 3 (warm):  12.62s
-run 4 (warm):  18.11s
+Client                        Queue                 Worker (GPU)
+  |                             |                        |
+  |  compress -> 1568px JPEG (~270KB), ~30ms             |
+  |                             |                        |
+  |--------- upload ----------->|                        |
+  |                             |------ dispatch ------->|
+  |                             |                        |  parse ~0.2s
+  |                             |                        |  (16ms detect + OCR + caps)
+  |<-------- elements ----------+------------------------|
+  |
+  v
+  what we control: ~0.2s on the GPU.  upload + queue depend on the connection.
 ```
 
-~12s warm felt slow, so we checked the worker logs to see where the time went.
+## Compress before upload
 
-The GPU work is tiny:
+We downscale each screenshot to 1568px and JPEG-encode it (~270KB) before
+sending. This is the biggest win, because the model is fast: ~0.2s to parse, of
+which only 16ms is detection. Most of the wait is transferring the image. A raw
+screenshot is several megabytes, so the upload and queue dominate — and those
+depend on the caller's connection, not us. At ~270KB the upload shrinks
+accordingly, with enough detail left to parse.
 
-```
-0: 832x1280  85 icons, 15.3ms
-Speed: 6.4ms preprocess, 15.3ms inference, 1.1ms postprocess
-time to get parsed content: 0.16s
-```
+## Resolution is for detection, not speed
 
-15ms of inference. 0.16s for the full parse including captions. So where do the
-other ~12 seconds go?
+We send 1568px rather than smaller because OCR reads the raw pixels. Below ~900px,
+dense screens degrade — a file list blurs and adjacent rows merge into one box. At
+1568px they stay separate. The larger image costs a bit more to process, but the
+parse stays around 0.2s, so it's worth it.
 
-We lined up the client timer against the worker's own start/finish logs:
+## Overlap threshold (iou 0.7)
 
-```
-              client     worker        actual
-run           measured   start->fin    inference
-─────────────────────────────────────────────────
-1 (cold)      35.39s     5.6s          74ms
-2 (warm)      12.09s     3.8s          15ms
-3 (warm)      12.62s     3.6s          15ms
-4 (warm)      18.11s     3.7s          15ms
-```
+IoU (intersection-over-union) measures how much two boxes overlap: 0 is none, 1 is
+identical. After detection, a cleanup pass discards a box when it overlaps a
+neighbor by more than this threshold, treating it as a duplicate. At 0.1 it was
+too aggressive — boxes that barely touched were removed, so packed elements like
+list rows and toolbar icons collapsed into one. At 0.7, only near-identical boxes
+merge, and dense neighbors stay separate.
 
-The worker is idle for ~8-9s between jobs. It finishes one and sits there with
-nothing to do until the next request shows up.
+## Endpoint config in code
 
-That idle time is everything that happens off the GPU:
+The scaling settings live in `vision/deploy/endpoint.json` and are pushed to the
+live endpoint through the host's API; the image build never reads them.
 
-```
- client                  network / RunPod                worker (GPU)
-   │                                                          │
-   ├── base64-encode 7MB PNG ────────────────────►           │
-   │     upload full payload in HTTP body                     │
-   │                                                          │
-   │                  ┌─ runsync queue + dispatch ─┐          │
-   │                  └────────────────────────────┴────────► │ start
-   │                                                          │  ▓ 15ms inference
-   │                                                          │  ▓ 0.16s parse
-   │                  ◄──────── response ──────────┬───────── │ finish
-   │                                               │          │
-   ◄── download labeled image + JSON ──────────────┘          │
-   │                                                          │
- ~12s total                                              ~0.16s of it
-```
+- **Fast cold-boot (snapshots).** A cold start is ~2s, so scaling up from zero
+  workers is cheap.
+- **Idle timeout 10s.** A worker is billed while it idles after a request. At 60s
+  that idle was most of the cost of a one-off request; 10s brings it to ~$0.003.
+- **0 to 5 workers, queue-delay scaling.** Parallelism comes from adding workers
+  (one GPU, one request each), not from loading more onto a single GPU.
 
-Three things eat the time, in order:
+## Measure compute and transport separately
 
-1. We upload a 7MB base64 PNG on every call. The model only needs an 832x1280
-   image, so we're shipping a huge file to feed a small input.
-2. RunPod's `/runsync` queue and dispatch. The request waits before the worker
-   even sees it.
-3. Downloading the response (the labeled image comes back too).
+The bench (`vision/bench/bench_endpoint.py`) splits each run into queue, compute,
+and transport using the host's own timings. This keeps the measurements honest: a
+worker log reporting "15ms" and a client stopwatch reading several seconds are
+both correct — they measure different things. Separating them shows the pipe, not
+the model, is the slow part.
 
-Cold start adds ~20s on top: container boot plus downloading the Florence-2
-weights.
+## Request timing
 
-We also ran the whole thing on CPU only, on an M3 MacBook Pro. No GPU.
+Warm, the model parses in ~0.2s and the worker finishes in under a second — that's
+the part we control. Upload, queue, and the response depend on the caller's
+connection, so total wall-clock varies. The first request after a scale-up is
+slower: the model warms up (~0.5s parse) on top of a ~2s boot.
 
-Total time: 150-300s per screenshot. That's 10-20x the warm cloud number. So the
-GPU does buy real speed here. It's just being buried under the upload and queue
-time.
-
-What we're changing:
-
-- Compress the screenshot before upload (downscale to 896px, JPEG). The app
-  already does this; the benchmark now does too. A 7MB PNG drops to ~70KB.
-- Keep at least one active worker so cold starts don't hit users.
-- Measure compute and transport separately. A log that says "15ms" and a client
-  that says "12s" are both right; they measure different things.
-- CPU-only stays a fallback. 150-300s isn't usable for anything interactive.
-
-Bottom line: the model is fast enough. The slow part is the upload and the
-serverless queue, not the GPU. Fix the pipe first.
-
----
-
-## Methodology & raw data
-
-- Endpoint: `https://api.runpod.ai/v2/<id>/runsync` (RunPod serverless, single GPU)
-- Image: `spotify.png`, 6980 KB as base64, 104 detected elements
-- Runs: 4 sequential (run 1 cold, rest warm), `vision/bench/bench_endpoint.py`
-- Worker: OmniParser V2 — YOLO `icon_detect` + Florence-2 `icon_caption`, CUDA 12.8
-
-| Measure | Cold | Warm (median) |
-| --- | --- | --- |
-| Client wall-clock | 35.39s | 12.62s |
-| Worker job span (start->finish) | 5.6s | ~3.7s |
-| YOLO inference | 74ms | 15ms |
-| Full parse (`time to get parsed content`) | 0.52s | 0.16s |
-
-Idle gap between worker jobs (pure transport + queue): ~8-9s.
-
-CPU-only floor (M3 MacBook Pro, no GPU): 150-300s total per screenshot.
-
-### Sequence diagram
-
-```mermaid
-sequenceDiagram
-    participant C as Client (bench)
-    participant R as RunPod /runsync
-    participant W as Worker (GPU)
-    C->>C: base64-encode 7MB PNG
-    C->>R: POST full payload (~7MB body)
-    Note over R: queue + dispatch (~8s)
-    R->>W: deliver job
-    Note over W: 15ms inference<br/>0.16s full parse
-    W->>R: labeled image + JSON
-    R->>C: response
-    Note over C,W: ~12s wall-clock · ~0.16s on GPU
-```
+| Stage (what we control) | Warm |
+| --- | --- |
+| Compress (local) | ~30ms |
+| Detection inference | ~16ms |
+| Parse (detection + OCR + captions) | ~0.2s |
+| Worker execution | ~0.7s |
+| Cold boot (snapshot) | ~2s |
+| Cost / isolated request | ~$0.003 |
+| Upload + queue + response | connection-bound |

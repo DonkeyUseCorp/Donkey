@@ -44,7 +44,7 @@ caption_model_processor = get_caption_model_processor(
 )
 
 
-def parse_image(image, box_threshold=0.05, iou_threshold=0.1, imgsz=640):
+def parse_image(image, box_threshold=0.05, iou_threshold=0.7, imgsz=640):
     box_overlay_ratio = image.size[0] / 3200
     draw_bbox_config = {
         "text_scale": 0.8 * box_overlay_ratio,
@@ -93,7 +93,9 @@ def handler(event):
     inp = event["input"]
     image_b64 = inp["image"]
     box_threshold = inp.get("box_threshold", 0.05)
-    iou_threshold = inp.get("iou_threshold", 0.1)
+    # 0.7 keeps densely-packed, adjacent boxes (e.g. file-list rows) distinct;
+    # a low value over-merges neighbors via NMS. See OmniParser remove_overlap_new.
+    iou_threshold = inp.get("iou_threshold", 0.7)
     imgsz = inp.get("imgsz", 640)
 
     image_bytes = base64.b64decode(image_b64)
