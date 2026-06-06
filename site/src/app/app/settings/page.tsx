@@ -1,9 +1,9 @@
 "use client";
 
-import { SubscriptionCard } from "@/app/dashboard/_components/SubscriptionCard";
-import { UsageCard } from "@/app/dashboard/_components/UsageCard";
+import { SubscriptionCard } from "@/app/app/settings/_components/SubscriptionCard";
+import { UsageCard } from "@/app/app/settings/_components/UsageCard";
 
-export default function DashboardOverviewPage() {
+export default function SettingsOverviewPage() {
   return (
     <div className="space-y-8">
       <div>

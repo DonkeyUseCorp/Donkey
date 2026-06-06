@@ -1,6 +1,6 @@
 "use client";
 
-import { ApiKeysManager } from "@/app/dashboard/_components/ApiKeysManager";
+import { ApiKeysManager } from "@/app/app/settings/_components/ApiKeysManager";
 
 export default function ApiKeysPage() {
   return (

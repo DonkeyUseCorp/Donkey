@@ -38,7 +38,7 @@ export function PricingSection() {
           </div>
           <div className="flex flex-col items-stretch justify-center gap-3 md:items-end">
             <Link
-              href="/dashboard"
+              href="/app/settings"
               className="inline-flex min-h-14 items-center justify-center gap-2 rounded-full bg-[#EC7868] px-7 text-base font-semibold text-[#0F0E0D] transition hover:-translate-y-0.5"
             >
               Get started <ArrowRight size={18} aria-hidden="true" />

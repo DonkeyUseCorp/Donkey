@@ -1,5 +1,5 @@
 // Thin fetch wrapper shared by every query/mutation hook in this folder. All
-// dashboard data access goes through here so it can be audited in one place.
+// settings UI data access goes through here so it can be audited in one place.
 
 export class ApiError extends Error {
   public readonly status: number;

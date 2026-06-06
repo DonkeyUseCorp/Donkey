@@ -11,7 +11,7 @@ import { prisma } from "@/lib/prisma";
 export const dynamic = "force-dynamic";
 
 // Current-period Vision API call usage vs quota, plus recent API calls, for the
-// dashboard. Reads the authoritative per-period counter on the subscription;
+// settings UI. Reads the authoritative per-period counter on the subscription;
 // the recent list is independent so it runs in parallel.
 export const GET = withDonkeyAuth(async (request) => {
   const userId = donkeySessionUserId(request);
