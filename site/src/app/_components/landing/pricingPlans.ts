@@ -1,4 +1,4 @@
-import type { BillingPlanKey } from "@/app/api-clients/billingApi";
+import type { BillingPlanKey } from "@/queries/billing";
 import type { CardColor } from "@/app/_components/landing/theme";
 
 export type PricingPlanAction =

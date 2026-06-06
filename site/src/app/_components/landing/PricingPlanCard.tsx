@@ -4,16 +4,14 @@ import { ArrowRight, Check } from "lucide-react";
 import { useCallback, useState } from "react";
 
 import {
-  BillingApiError,
-  createCheckoutSession,
-} from "@/app/api-clients/billingApi";
-import {
   PillButton,
   TapedCard,
 } from "@/app/_components/landing/LandingPrimitives";
 import type { PricingPlan } from "@/app/_components/landing/pricingPlans";
 import { useMediaQuery } from "@/app/_components/landing/useMediaQuery";
 import { authClient } from "@/lib/auth-client";
+import { ApiError } from "@/queries/apiClient";
+import { useStartCheckout } from "@/queries/billing";
 
 type Props = {
   plan: PricingPlan;
@@ -21,8 +19,8 @@ type Props = {
 
 export function PricingPlanCard({ plan }: Props) {
   const isDesktop = useMediaQuery("(min-width: 768px)");
-  const [isPending, setIsPending] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const checkout = useStartCheckout();
   const action = plan.action;
 
   const handleCheckout = useCallback(async () => {
@@ -30,17 +28,13 @@ export function PricingPlanCard({ plan }: Props) {
       return;
     }
 
-    setIsPending(true);
     setStatusMessage(null);
 
     try {
-      const session = await createCheckoutSession(action.planKey);
+      const session = await checkout.mutateAsync(action.planKey);
       window.location.assign(session.url);
     } catch (error) {
-      if (
-        error instanceof BillingApiError &&
-        error.code === "unauthorized"
-      ) {
+      if (error instanceof ApiError && error.status === 401) {
         await authClient.signIn.social({
           callbackURL: `/pricing?checkout=${action.planKey}`,
           provider: "google",
@@ -48,24 +42,19 @@ export function PricingPlanCard({ plan }: Props) {
         return;
       }
 
-      if (error instanceof BillingApiError && error.code === "not-found") {
-        setStatusMessage("Checkout is not available yet.");
-      } else {
-        setStatusMessage("Checkout is not available yet. Please try again soon.");
-      }
-    } finally {
-      setIsPending(false);
+      setStatusMessage("Checkout is not available yet. Please try again soon.");
     }
-  }, [action]);
+  }, [action, checkout]);
 
   const button =
     action.kind === "checkout" ? (
       <PillButton
-        disabled={isPending}
+        disabled={checkout.isPending}
         onClick={handleCheckout}
         variant="dark"
       >
-        {isPending ? "Opening..." : action.label} <ArrowRight size={14} />
+        {checkout.isPending ? "Opening..." : action.label}{" "}
+        <ArrowRight size={14} />
       </PillButton>
     ) : (
       <PillButton href={action.href} variant="dark">
