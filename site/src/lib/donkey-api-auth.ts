@@ -6,14 +6,45 @@ import { prisma } from "@/lib/prisma";
 export type DonkeyAuthContext = {
   platform: "api";
   app: "donkey";
-  method: "session-cookie" | "dev-bypass";
+  method: "session-cookie" | "dev-bypass" | "api-key";
   clientId: string | null;
   userId: string;
+  apiKeyId: string | null;
+};
+
+export type DonkeyAuthOptions = {
+  // Routes are session-only by default. Set true to also accept a Vision API
+  // key as a bearer token. This is the typed allowlist for "which routes
+  // support API keys" — no path string matching.
+  allowApiKey?: boolean;
 };
 
 export type DonkeyAuthenticatedRequest = NextRequest & {
   donkey: DonkeyAuthContext;
 };
+
+// The real signed-in user's id, or null for api-key / dev-bypass callers. Use
+// this in session-only product routes (billing, API-key management) instead of
+// re-calling auth.api.getSession — withDonkeyAuth already authenticated.
+export function donkeySessionUserId(
+  request: DonkeyAuthenticatedRequest,
+): string | null {
+  return request.donkey.method === "session-cookie"
+    ? request.donkey.userId
+    : null;
+}
+
+// The single response for any access-control failure (no session, no
+// subscription). Routes return this rather than per-case descriptive errors.
+export function unauthorizedResponse() {
+  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+}
+
+// Generic 404 for any missing resource. Routes return this rather than per-case
+// descriptive not-found errors.
+export function notFoundResponse() {
+  return NextResponse.json({ error: "Not found" }, { status: 404 });
+}
 
 export type DonkeyAuthHandler<
   TReq extends DonkeyAuthenticatedRequest = DonkeyAuthenticatedRequest,
@@ -32,6 +63,11 @@ export async function getDonkeyAuthContext(
     return devBypass;
   }
 
+  const apiKeyContext = await apiKeyAuthContext(headers);
+  if (apiKeyContext) {
+    return apiKeyContext;
+  }
+
   const session = await auth.api.getSession({
     headers,
   });
@@ -47,6 +83,45 @@ export async function getDonkeyAuthContext(
     method: "session-cookie",
     clientId: clientId ? clientId : null,
     userId: session.user.id,
+    apiKeyId: null,
+  };
+}
+
+// Vision API keys are sent as a bearer token; that is the only accepted format.
+function apiKeyFromHeaders(headers: Headers): string | null {
+  const authorization = headers.get("authorization")?.trim();
+  if (!authorization?.toLowerCase().startsWith("bearer ")) {
+    return null;
+  }
+
+  const token = authorization.slice("bearer ".length).trim();
+  return token ? token : null;
+}
+
+async function apiKeyAuthContext(
+  headers: Headers,
+): Promise<DonkeyAuthContext | null> {
+  const key = apiKeyFromHeaders(headers);
+  if (!key) {
+    return null;
+  }
+
+  const verified = await auth.api.verifyApiKey({ body: { key } });
+  if (!verified.valid || !verified.key) {
+    return null;
+  }
+
+  const clientId = headers.get(clientIdHeader)?.trim();
+
+  return {
+    platform: "api",
+    app: "donkey",
+    method: "api-key",
+    // The Vision API does not require x-donkey-client-id; default it to the key
+    // id so downstream usage records and rate-limit buckets stay per-key.
+    clientId: clientId ? clientId : verified.key.id,
+    userId: verified.key.referenceId,
+    apiKeyId: verified.key.id,
   };
 }
 
@@ -72,13 +147,14 @@ function devAuthBypassContext(headers: Headers): DonkeyAuthContext | null {
     method: "dev-bypass",
     clientId: clientId ? clientId : null,
     userId: devAuthBypassUserID,
+    apiKeyId: null,
   };
 }
 
 export function withDonkeyAuth<
   TReq extends DonkeyAuthenticatedRequest = DonkeyAuthenticatedRequest,
   TArgs extends unknown[] = [],
->(handler: DonkeyAuthHandler<TReq, TArgs>) {
+>(handler: DonkeyAuthHandler<TReq, TArgs>, options: DonkeyAuthOptions = {}) {
   return async (request: NextRequest, ...args: TArgs) => {
     const authContext = await getDonkeyAuthContext(request.headers);
 
@@ -87,6 +163,18 @@ export function withDonkeyAuth<
         {
           error: "Unauthorized",
           message: "Authentication required",
+        },
+        {
+          status: 401,
+        },
+      );
+    }
+
+    if (authContext.method === "api-key" && !options.allowApiKey) {
+      return NextResponse.json(
+        {
+          error: "api_key_not_permitted_for_route",
+          message: "API keys are not accepted on this route.",
         },
         {
           status: 401,
