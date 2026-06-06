@@ -8,7 +8,14 @@ import {
   requireInferenceCredits,
 } from "@/lib/credits/inference";
 import {
+  getActiveVisionSubscription,
+  releaseVisionApiCall,
+  reserveVisionApiCall,
+} from "@/lib/billing/vision-subscription";
+import {
+  type DonkeyAuthenticatedRequest,
   shouldBypassDonkeyInferenceCredits,
+  unauthorizedResponse,
   withDonkeyAuth,
 } from "@/lib/donkey-api-auth";
 import { InferenceProviderError } from "@/lib/inference/providers";
@@ -37,20 +44,42 @@ const visionRateLimit = {
   limit: 4,
   windowMs: 3_000,
 };
+// Third-party API keys are capped at 3 requests/second (the monthly call quota
+// is the real spend cap; this is a burst guard).
+const visionApiKeyRateLimit = {
+  limit: 3,
+  windowMs: 1_000,
+};
 const inferenceProvider = "omniparser";
 const parseModel = "omniparser-v2";
 
+// This route accepts third-party API keys in addition to app sessions.
+export const POST = withDonkeyAuth(visionParseHandler, { allowApiKey: true });
+
 // B2B vision API: parse a screenshot into UI elements, and optionally ground a
 // natural-language instruction to a click target. Single-shot only.
-export const POST = withDonkeyAuth(async (request) => {
+//
+// Two auth paths share this handler:
+//   - api-key: third-party developers, gated by an active Vision API
+//     subscription + monthly call quota (no money-credit charge).
+//   - session-cookie / dev-bypass: the Mac app, gated by the credit balance.
+async function visionParseHandler(request: DonkeyAuthenticatedRequest) {
+  const isApiKey = request.donkey.method === "api-key";
+
   const client = requireInferenceClientId(request.donkey.clientId);
   if (!client.ok) {
     return client.response;
   }
 
+  // Bucket API-key callers by their key id, not the client-supplied
+  // x-donkey-client-id header — otherwise a caller could rotate the header to
+  // get a fresh burst bucket per request and defeat the limit.
+  const rateLimitKey = isApiKey
+    ? `apikey:${request.donkey.apiKeyId}`
+    : `${request.donkey.userId}:${client.clientId}`;
   const rateLimit = checkInMemoryRateLimit({
-    key: `${request.donkey.userId}:${client.clientId}`,
-    ...visionRateLimit,
+    key: rateLimitKey,
+    ...(isApiKey ? visionApiKeyRateLimit : visionRateLimit),
   });
   if (!rateLimit.ok) {
     return rateLimitResponse(rateLimit.retryAfterSeconds);
@@ -71,7 +100,31 @@ export const POST = withDonkeyAuth(async (request) => {
   // The dev-bypass user has no real account, so skip the credit preflight and
   // usage recording (both reference a real user row) when bypassing auth.
   const bypassCredits = shouldBypassDonkeyInferenceCredits(request.donkey);
-  if (!bypassCredits) {
+  // For the api-key path, the reserved quota call is released if the request
+  // later fails, so a failed parse doesn't burn the developer's quota.
+  let apiKeyQuota: { limit: number; remaining: number } | null = null;
+  if (isApiKey) {
+    const subscription = await getActiveVisionSubscription(request.donkey.userId);
+    if (!subscription) {
+      return unauthorizedResponse();
+    }
+    const reservation = await reserveVisionApiCall({
+      monthlyCallQuota: subscription.monthlyCallQuota,
+      userId: request.donkey.userId,
+    });
+    if (!reservation.ok) {
+      // Operational limit, not an auth failure — keep it distinct so API
+      // clients can tell "out of quota" apart from a bad key.
+      return NextResponse.json(
+        { error: "quota_exceeded", limit: subscription.monthlyCallQuota },
+        { status: 402 },
+      );
+    }
+    apiKeyQuota = {
+      limit: subscription.monthlyCallQuota,
+      remaining: reservation.remaining,
+    };
+  } else if (!bypassCredits) {
     const credits = await requireInferenceCredits({
       model: billedModel,
       provider: inferenceProvider,
@@ -104,6 +157,7 @@ export const POST = withDonkeyAuth(async (request) => {
       usageHeaders["X-Donkey-Dev-Auth-Bypass"] = "true";
     } else {
       const recordedUsage = await recordInferenceUsage({
+        billingMode: isApiKey ? "included" : "credits",
         clientId: client.clientId,
         metadata: { grounded: String(instruction !== undefined) },
         model: billedModel,
@@ -113,15 +167,25 @@ export const POST = withDonkeyAuth(async (request) => {
         status: "succeeded",
         userId: request.donkey.userId,
       });
-      usageHeaders = creditUsageHeaders(recordedUsage);
+      usageHeaders = apiKeyQuota
+        ? {
+            "X-Donkey-Calls-Limit": String(apiKeyQuota.limit),
+            "X-Donkey-Calls-Remaining": String(apiKeyQuota.remaining),
+          }
+        : creditUsageHeaders(recordedUsage);
     }
 
     return NextResponse.json(result, {
       headers: usageHeaders,
     });
   } catch (error) {
+    // Give the reserved quota call back — a failed parse shouldn't be billed.
+    if (apiKeyQuota) {
+      await releaseVisionApiCall(request.donkey.userId);
+    }
     if (!bypassCredits) {
       await recordFailedInferenceUsage({
+        billingMode: isApiKey ? "included" : "credits",
         clientId: client.clientId,
         errorCode: inferenceErrorCode(error),
         metadata: { grounded: String(instruction !== undefined) },
@@ -138,4 +202,4 @@ export const POST = withDonkeyAuth(async (request) => {
 
     throw error;
   }
-});
+}

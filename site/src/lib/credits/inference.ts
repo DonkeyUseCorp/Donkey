@@ -63,6 +63,10 @@ type InferenceUsageInput = {
   usage?: JsonValue;
   errorCode?: string;
   metadata?: JsonObject;
+  // "included" records the event for usage/quota tracking without charging the
+  // money-credit balance (the call is covered by a subscription, e.g. the
+  // Vision API product). Defaults to "credits".
+  billingMode?: "credits" | "included";
 };
 
 type CreditPreflightInput = {
@@ -269,22 +273,30 @@ export async function requireInferenceCredits(input: CreditPreflightInput) {
 export async function recordInferenceUsage(input: InferenceUsageInput) {
   return prisma.$transaction(
     async (tx): Promise<RecordedInferenceUsage> => {
+      const included = input.billingMode === "included";
+      // "included" calls never read or charge the balance, so skip the
+      // grant-expiry scan; we still ensure the account row exists because the
+      // usage event references it.
       const account = await ensureCreditAccountRecord(tx, input.userId);
-      const balanceAfterExpiry = await expireCreditsForAccount(
-        tx,
-        account.id,
-        input.userId,
-        account.balanceMicros,
-        new Date(),
-      );
-      const rate = input.status === "succeeded"
+      const balanceAfterExpiry = included
+        ? account.balanceMicros
+        : await expireCreditsForAccount(
+            tx,
+            account.id,
+            input.userId,
+            account.balanceMicros,
+            new Date(),
+          );
+      const rate = !included && input.status === "succeeded"
         ? await resolveCreditRate(tx, input.route, input.provider, input.model)
         : zeroCreditRate();
       const normalizedUsage = normalizeProviderUsage(input.usage);
-      const creditCostMicros = input.status === "succeeded"
+      const creditCostMicros = !included && input.status === "succeeded"
         ? costForUsage(rate, normalizedUsage)
         : zeroCreditMicros;
-      const billingStatus = billingStatusFor(input.status, creditCostMicros);
+      const billingStatus = included
+        ? "included"
+        : billingStatusFor(input.status, creditCostMicros);
       const usageEvent = await tx.inferenceUsageEvent.create({
         data: {
           accountId: account.id,
@@ -363,6 +375,7 @@ export async function recordFailedInferenceUsage(input: {
   model: string;
   errorCode: string;
   metadata?: JsonObject;
+  billingMode?: "credits" | "included";
 }) {
   try {
     await recordInferenceUsage({
