@@ -6,6 +6,11 @@ Backend APIs live in `site/src/app/api/**/route.ts`.
 
 - APIs are authenticated by default.
 - Always wrap route handlers with `withDonkeyAuth` from `@/lib/donkey-api-auth`.
+- Routes accept a Donkey session cookie by default. Third-party API keys are
+  opt-in per route: pass `withDonkeyAuth(handler, { allowApiKey: true })`. This
+  typed allowlist is the only way a key reaches a handler — never match on the
+  request path. `request.donkey.method` tells the handler how the caller
+  authenticated (`session-cookie`, `api-key`, or `dev-bypass`).
 - Treat public endpoints as exceptions that need an explicit product reason.
 - Better Auth is mounted as the public auth exception at `site/src/app/api/auth/[...all]/route.ts`; configure it through `@/lib/auth`.
 - The supported interactive login provider is Google OAuth only. Keep `emailAndPassword.enabled` false unless the product explicitly adds another login method.
@@ -25,6 +30,11 @@ Backend APIs live in `site/src/app/api/**/route.ts`.
 - Validate request bodies, search params, and route params with Zod before using them.
 - Verify resource ownership before reading or mutating scoped data.
 - Return explicit `NextResponse.json(...)` responses with the intended status code.
+- For access-control failures (missing session, missing/inactive subscription),
+  return a plain 401 via `unauthorizedResponse` from `@/lib/donkey-api-auth`; for
+  a missing resource, return a plain 404 via `notFoundResponse`. Do not write
+  per-case descriptive auth/not-found errors. Reserve distinct status codes for
+  genuinely different operational outcomes (e.g. 402 over quota, 429 rate limit).
 - Do not wrap route handlers in `try/catch` unless the handler can recover and
   return a different intentional response. Let unexpected errors surface to the
   framework's logging path.
@@ -33,6 +43,11 @@ Backend APIs live in `site/src/app/api/**/route.ts`.
   files under `site/prisma/`. Never put table/model definitions in
   `site/prisma/schema.prisma`; reserve that file for shared Prisma
   configuration such as generator and datasource blocks.
+- Use Prisma's default table names for new models; do not add `@@map`. (Some
+  earlier tables predate this and keep their mapped snake_case names.)
+- Add `@@index` only for a column a query actually filters or joins on. `@id`
+  and `@unique` already index their columns, so don't restate those or add
+  speculative indexes; an index you don't query is just write overhead.
 - Do not run database migrations as part of normal API work.
 
 ## Inference Gateway
@@ -116,6 +131,36 @@ checks, provider/model rates, debits, and audit rows.
   billable units. They must not store prompts, request bodies, screenshots,
   generated assets, provider output payloads, provider output references, or
   other user content.
+
+## Third-Party Vision API
+
+`POST /api/inference/vision` is also a self-serve product for outside
+developers, sold separately from the Mac app. It serves two audiences through
+the same handler, branching on `request.donkey.method`:
+
+- **Mac app** (`session-cookie`): gated by the hosted credit balance, as above.
+- **Third-party** (`api-key`): gated by an active subscription and a monthly
+  call quota — it never touches the money-credit balance.
+
+How the third-party path works:
+
+- Developers sign in with Google and subscribe through Stripe. The subscription
+  is a flat monthly plan that grants a quota of API calls, stored on
+  `VisionApiSubscription` (`site/prisma/Billing.prisma`). The included call
+  count comes from the Stripe price metadata (`monthlyCallQuota`).
+- Keys are issued by the Better Auth API-key plugin (`@better-auth/api-key`),
+  managed from the dashboard via `/api/api-keys`. Only a hash is stored; the
+  secret is shown once. Key creation requires an active subscription.
+- The vision route opts in with `allowApiKey: true`, enforces a per-key burst
+  limit, and counts succeeded vision usage events in the current period against
+  the quota. Covered calls are recorded with `billingMode: "included"` (zero
+  money cost) so they still appear in usage without debiting credits.
+- Stripe is the source of truth for subscription state. `POST /api/billing/webhook`
+  is signature-verified and therefore a deliberate public exception to the
+  `withDonkeyAuth` rule; it syncs subscription lifecycle and the call quota.
+  Checkout, portal, subscription, and usage live under `/api/billing/**`.
+- The dashboard (`/dashboard`) is client-rendered; all data access goes through
+  the audited TanStack Query hooks in `site/src/queries/`.
 
 ## Pattern
 

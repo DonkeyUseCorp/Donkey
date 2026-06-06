@@ -40,7 +40,16 @@ This guide explains how to work in the `site` app. Keep changes aligned with the
 - Protect Donkey APIs unless an endpoint is intentionally public.
 - Validate request bodies, search params, and route params before using them.
 - Keep API responses explicit and consistently shaped.
-- Do not call `fetch(...)` directly from React components. Put browser-facing API calls in a focused API client module and import that client into components.
+- Do not call `fetch(...)` directly from React components. Client-side data
+  access goes through TanStack Query hooks, and every query/mutation hook lives
+  in `src/queries/` so the cache surface is auditable in one place. Components
+  import the hooks; they do not fetch inline. The shared fetch wrapper and error
+  type are `src/queries/apiClient.ts`. Define each query's key as a constant
+  alongside its hook in the same module (export it if another module needs to
+  invalidate it). Mount `QueryProvider` once at the root layout.
+- Dashboard-style, per-user data views are client-rendered and read their data
+  through these hooks. The route handlers still enforce auth server-side, so a
+  client guard is for UX, not security.
 - Use database clients only from server-side code.
 - Do not run database migrations or schema pushes casually; choose the migration workflow deliberately for the target database.
 
@@ -49,6 +58,8 @@ This guide explains how to work in the `site` app. Keep changes aligned with the
 - Use `type` for props and local data shapes.
 - Prefer a short `Props` name when there is only one props type in the file.
 - Do not use `any`; define the narrowest useful type or stop and clarify.
+- Prefer optional chaining (`a?.b`) over `a && a.b` or `!a || !a.b` when reading
+  a possibly-absent member.
 - Keep imports direct and explicit.
 - Include real dependencies in hooks.
 - Store callbacks in refs when they should not trigger re-renders.
