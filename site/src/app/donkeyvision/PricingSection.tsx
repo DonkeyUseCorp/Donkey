@@ -6,7 +6,7 @@ import { ContactSalesButton } from "@/app/_components/landing/ContactSalesButton
 const planFeatures = [
   "5,000 API calls per month",
   "3 requests per second",
-  "Sign in with Google, generate API keys",
+  "Log in with Google, generate API keys",
   "Element boxes, center points, and labels",
 ];
 

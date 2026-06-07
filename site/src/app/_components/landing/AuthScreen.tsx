@@ -1,19 +1,13 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
-import { ArrowRight, ShieldCheck, Sparkles } from "lucide-react";
 import { useCallback, useState } from "react";
 
-import {
-  PillButton,
-  SectionLabel,
-  TapedCard,
-} from "@/app/_components/landing/LandingPrimitives";
 import { Footer } from "@/app/_components/landing/Footer";
 import { TopNav } from "@/app/_components/landing/TopNav";
-import { BG, BLACK, CARD } from "@/app/_components/landing/theme";
-import { useMediaQuery } from "@/app/_components/landing/useMediaQuery";
 import { authClient } from "@/lib/auth-client";
+import { cn } from "@/lib/utils";
 
 type AuthMode = "sign-in" | "sign-up";
 
@@ -25,19 +19,21 @@ const copy = {
   "sign-in": {
     alternateHref: "/sign-up",
     alternateLabel: "Create account",
-    eyebrow: "Welcome back",
-    heading: "Sign in and send Donkey back to work.",
-    supporting:
-      "Use the same Google account you used for Donkey. Your billing and downloads stay tied to one clean account.",
-    title: "Sign in",
+    alternateLead: "New to Donkey?",
+    googleAlt: "Sign in with Google",
+    googleSrc: "/google/dark-sign-in-with-google.svg",
+    googleWidth: 175,
+    heading: "Send Donkey back to work.",
+    title: "Log in",
   },
   "sign-up": {
     alternateHref: "/sign-in",
-    alternateLabel: "Sign in",
-    eyebrow: "Start your account",
-    heading: "Create an account for the work Donkey carries.",
-    supporting:
-      "Google OAuth keeps setup quick and gives checkout a real account to attach your subscription to.",
+    alternateLabel: "Log in",
+    alternateLead: "Already have an account?",
+    googleAlt: "Sign up with Google",
+    googleSrc: "/google/dark-sign-up-with-google.svg",
+    googleWidth: 179,
+    heading: "Put Donkey to Work",
     title: "Sign up",
   },
 } satisfies Record<
@@ -45,22 +41,26 @@ const copy = {
   {
     alternateHref: string;
     alternateLabel: string;
-    eyebrow: string;
+    alternateLead: string;
+    googleAlt: string;
+    googleSrc: string;
+    googleWidth: number;
     heading: string;
-    supporting: string;
     title: string;
   }
 >;
 
+const GOOGLE_BUTTON_HEIGHT = 56;
+
 export function AuthScreen({ mode }: Props) {
-  const isDesktop = useMediaQuery("(min-width: 900px)");
   const [isPending, setIsPending] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const screenCopy = copy[mode];
+  const otherMode: AuthMode = mode === "sign-in" ? "sign-up" : "sign-in";
 
   const handleGoogleAuth = useCallback(async () => {
     const searchParams = new URLSearchParams(window.location.search);
-    const callbackURL = searchParams.get("callbackURL") ?? "/pricing";
+    const callbackURL = searchParams.get("callbackURL") ?? "/app";
 
     setIsPending(true);
     setStatusMessage(null);
@@ -77,185 +77,80 @@ export function AuthScreen({ mode }: Props) {
     }
   }, []);
 
-  return (
-    <main
-      style={{
-        WebkitFontSmoothing: "antialiased",
-        background: BG,
-        color: BLACK,
-        boxSizing: "border-box",
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        maxWidth: "100%",
-        minHeight: "100vh",
-        overflowX: "hidden",
-        width: "100%",
-      }}
-    >
-      <TopNav ctaHref="/pricing" ctaLabel="Pricing" showAuthLinks={false} />
-      <section
-        style={{
-          display: "grid",
-          gap: isDesktop ? 48 : 32,
-          gridTemplateColumns: isDesktop ? "minmax(0, 1.05fr) minmax(360px, 0.8fr)" : "1fr",
-          boxSizing: "border-box",
-          margin: "0 auto",
-          maxWidth: 1400,
-          padding: isDesktop ? "72px 48px 120px" : "44px 24px 80px",
-          width: "100%",
-        }}
+  const googleButtonWidth = Math.round(
+    (screenCopy.googleWidth * GOOGLE_BUTTON_HEIGHT) / 40,
+  );
+
+  const formContent = (
+    <>
+      <button
+        type="button"
+        aria-label={screenCopy.googleAlt}
+        disabled={isPending}
+        onClick={handleGoogleAuth}
+        className={cn(
+          "inline-flex border-none bg-transparent p-0",
+          isPending ? "cursor-default opacity-60" : "cursor-pointer",
+        )}
       >
+        <Image
+          src={screenCopy.googleSrc}
+          alt={screenCopy.googleAlt}
+          width={screenCopy.googleWidth}
+          height={40}
+          priority
+          unoptimized
+          className="block h-14"
+          style={{ width: googleButtonWidth }}
+        />
+      </button>
+      <p className="mt-[18px] text-sm leading-normal text-[#555]">
+        {screenCopy.alternateLead}{" "}
+        <Link
+          href={screenCopy.alternateHref}
+          className="font-semibold text-ink underline underline-offset-[3px]"
+        >
+          {screenCopy.alternateLabel}
+        </Link>
+      </p>
+      <p className="mt-[18px] text-xs leading-normal text-[#555]">
+        By continuing, you agree to the{" "}
+        <Link href="/terms" className="font-semibold text-ink">
+          Terms of Use
+        </Link>{" "}
+        and{" "}
+        <Link href="/privacy" className="font-semibold text-ink">
+          Privacy Policy
+        </Link>
+        .
+      </p>
+      {statusMessage ? (
+        <div
+          role="status"
+          className="mt-[14px] text-[13px] font-semibold leading-[1.4] text-[#4a403d]"
+        >
+          {statusMessage}
+        </div>
+      ) : null}
+    </>
+  );
+
+  return (
+    <main className="min-h-screen w-full max-w-full overflow-x-hidden bg-background font-system text-ink antialiased">
+      <TopNav
+        ctaHref={screenCopy.alternateHref}
+        ctaLabel={copy[otherMode].title}
+        showAuthLinks={false}
+      />
+      <section className="mx-auto grid w-full max-w-[1400px] grid-cols-1 justify-items-center gap-16 px-6 pt-[44px] pb-[240px] text-center min-[900px]:gap-24 min-[900px]:px-12 min-[900px]:pt-[72px] min-[900px]:pb-[360px]">
         <div>
-          <SectionLabel number={1}>{screenCopy.eyebrow}</SectionLabel>
-          <h1
-            style={{
-              fontSize: isDesktop ? 92 : 52,
-              fontWeight: 600,
-              letterSpacing: 0,
-              lineHeight: 0.9,
-              margin: 0,
-              maxWidth: 920,
-              overflowWrap: "break-word",
-            }}
-          >
+          <h1 className="max-w-[920px] text-[33px] leading-[0.9] font-semibold break-words min-[900px]:text-[69px]">
             {screenCopy.heading}
           </h1>
-          <p
-            style={{
-              color: "#454545",
-              fontSize: isDesktop ? 20 : 18,
-              lineHeight: 1.55,
-              marginTop: 32,
-              maxWidth: 620,
-            }}
-          >
-            {screenCopy.supporting}
-          </p>
         </div>
 
-        <div style={{ alignSelf: "start" }}>
-          <TapedCard color="cream" tapeColor="coral" tapePosition="center">
-            <div style={{ padding: isDesktop ? 36 : 28 }}>
-              <div
-                style={{
-                  alignItems: "center",
-                  background: CARD.blue,
-                  border: `2px solid ${BLACK}`,
-                  borderRadius: 14,
-                  display: "inline-flex",
-                  height: 56,
-                  justifyContent: "center",
-                  marginBottom: 28,
-                  width: 56,
-                }}
-              >
-                <Sparkles size={24} />
-              </div>
-              <h2
-                style={{
-                  fontSize: isDesktop ? 42 : 34,
-                  fontWeight: 600,
-                  lineHeight: 1,
-                  margin: "0 0 14px",
-                }}
-              >
-                {screenCopy.title}
-              </h2>
-              <p
-                style={{
-                  color: "#444",
-                  fontSize: 15,
-                  lineHeight: 1.55,
-                  margin: "0 0 28px",
-                }}
-              >
-                Donkey uses Google sign-in so checkout, subscriptions, and account
-                access stay simple.
-              </p>
-              <div style={{ display: "grid", gap: 12 }}>
-                <PillButton
-                  disabled={isPending}
-                  onClick={handleGoogleAuth}
-                  size="lg"
-                  variant="dark"
-                >
-                  {isPending ? "Opening Google..." : "Continue with Google"}
-                  <ArrowRight size={18} />
-                </PillButton>
-                <PillButton
-                  href={screenCopy.alternateHref}
-                  size="lg"
-                  variant="secondary"
-                >
-                  {screenCopy.alternateLabel}
-                </PillButton>
-              </div>
-              <p
-                style={{
-                  color: "#555",
-                  fontSize: 12,
-                  lineHeight: 1.5,
-                  margin: "18px 0 0",
-                }}
-              >
-                By continuing, you agree to the{" "}
-                <Link
-                  href="/terms"
-                  style={{ color: BLACK, fontWeight: 600 }}
-                >
-                  Terms of Use
-                </Link>{" "}
-                and{" "}
-                <Link
-                  href="/privacy"
-                  style={{ color: BLACK, fontWeight: 600 }}
-                >
-                  Privacy Policy
-                </Link>
-                .
-              </p>
-              {statusMessage ? (
-                <div
-                  role="status"
-                  style={{
-                    color: "#4a403d",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    lineHeight: 1.4,
-                    marginTop: 14,
-                  }}
-                >
-                  {statusMessage}
-                </div>
-              ) : null}
-            </div>
-          </TapedCard>
-
-          <div
-            style={{
-              alignItems: "center",
-              display: "flex",
-              gap: 12,
-              marginTop: 24,
-            }}
-          >
-            <div
-              style={{
-                alignItems: "center",
-                background: CARD.mint,
-                border: `2px solid ${BLACK}`,
-                borderRadius: 12,
-                display: "flex",
-                height: 44,
-                justifyContent: "center",
-                width: 44,
-              }}
-            >
-              <ShieldCheck size={20} />
-            </div>
-            <div style={{ color: "#555", fontSize: 14, lineHeight: 1.4 }}>
-              OAuth only. No passwords to store, reset, or lose.
-            </div>
-          </div>
+        <div className="flex flex-col items-center justify-self-center text-center">
+          {formContent}
         </div>
       </section>
       <Footer />
