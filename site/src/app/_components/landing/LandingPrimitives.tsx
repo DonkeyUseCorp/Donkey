@@ -15,6 +15,7 @@ type ButtonSize = "sm" | "md" | "lg";
 type TapedCardProps = {
   children: ReactNode;
   color?: CardColor;
+  fill?: boolean;
   shadowColor?: CardColor;
   style?: CSSProperties;
   tapeColor?: CardColor;
@@ -24,6 +25,7 @@ type TapedCardProps = {
 export function TapedCard({
   children,
   color = "blue",
+  fill = false,
   shadowColor,
   style,
   tapeColor,
@@ -46,6 +48,7 @@ export function TapedCard({
         boxSizing: "border-box",
         minWidth: 0,
         position: "relative",
+        ...(fill ? { height: "100%" } : null),
         ...style,
       }}
     >
@@ -65,6 +68,7 @@ export function TapedCard({
           borderRadius: 16,
           border: `2px solid ${BLACK}`,
           background: CARD[color],
+          ...(fill ? { height: "100%" } : null),
         }}
       >
         {tapeColor ? (

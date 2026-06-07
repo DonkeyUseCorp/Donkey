@@ -65,10 +65,19 @@ export function PricingPlanCard({ plan }: Props) {
   return (
     <TapedCard
       color={plan.color}
+      fill
       tapeColor={plan.tapeColor}
       tapePosition={plan.tapePosition}
     >
-      <div style={{ padding: isDesktop ? 36 : 28 }}>
+      <div
+        style={{
+          boxSizing: "border-box",
+          display: "flex",
+          flexDirection: "column",
+          height: "100%",
+          padding: isDesktop ? 36 : 28,
+        }}
+      >
         <div style={{ fontWeight: 600, fontSize: 22, marginBottom: 18 }}>
           {plan.name}
         </div>
@@ -140,21 +149,23 @@ export function PricingPlanCard({ plan }: Props) {
             </div>
           ))}
         </div>
-        {button}
-        {statusMessage ? (
-          <div
-            role="status"
-            style={{
-              color: "#4a403d",
-              fontSize: 13,
-              fontWeight: 600,
-              lineHeight: 1.4,
-              marginTop: 14,
-            }}
-          >
-            {statusMessage}
-          </div>
-        ) : null}
+        <div style={{ marginTop: "auto" }}>
+          {button}
+          {statusMessage ? (
+            <div
+              role="status"
+              style={{
+                color: "#4a403d",
+                fontSize: 13,
+                fontWeight: 600,
+                lineHeight: 1.4,
+                marginTop: 14,
+              }}
+            >
+              {statusMessage}
+            </div>
+          ) : null}
+        </div>
       </div>
     </TapedCard>
   );
