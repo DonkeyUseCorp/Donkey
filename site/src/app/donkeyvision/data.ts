@@ -31,31 +31,31 @@ export const features: Feature[] = [
   },
   {
     description:
-      "Each element includes a bounding box and center point in the same image coordinate space.",
+      "Bounding boxes and center points are returned in the original screenshot coordinate space.",
     icon: Crosshair,
     title: "Coordinates",
   },
   {
     description:
-      "Each element includes a readable label and kind, such as button, input, icon, or text.",
+      "Each element includes a readable label and kind, such as `button`, `input`, `icon`, or `text`.",
     icon: Type,
     title: "Labels and types",
   },
   {
     description:
-      "Send a natural language instruction and get back the matching element, click point, and region.",
+      "Natural language instructions return the matching element, click point, and region.",
     icon: MousePointerClick,
     title: "Prompt-to-click",
   },
   {
     description:
-      "Adjust thresholds per request to control sensitivity and element merging.",
+      "Per-request thresholds control detection sensitivity and element merging.",
     icon: SlidersHorizontal,
     title: "Detection options",
   },
   {
     description:
-      "Use ChatGPT, Claude, Gemini, or bring your own custom model for prompt-based targeting.",
+      "Prompt-based targeting supports ChatGPT, Claude, Gemini, or a custom model.",
     icon: Sparkles,
     title: "Model choice",
   },
@@ -64,35 +64,35 @@ export const features: Feature[] = [
 export const useCases: Feature[] = [
   {
     description:
-      "Give an agent a fresh map of the current app before it decides where to click, type, or ask for confirmation.",
+      "Give agents the current screen state before taking action. Return clickable elements, coordinates, labels, and prompt-matched targets for tasks like `click the play button`.",
     icon: Zap,
     title: "Computer-use agents",
   },
   {
     description:
-      "Index screenshots from common applications so QA, support, and automation systems can reason over UI state.",
+      "Convert screenshots into structured UI data: detected elements, text labels, element types, bounding boxes, and center points.",
     icon: ImageIcon,
-    title: "Screenshot understanding",
+    title: "Screenshot parsing",
   },
   {
     description:
-      "Turn video frames into UI element timelines for product demos, workflow mining, and regression review.",
+      "Parse video frames into UI element timelines. Track visible controls, labels, and screen changes across demos, workflows, and regression tests.",
     icon: Video,
-    title: "Video walkthroughs",
+    title: "Video frame analysis",
   },
   {
     description:
-      "Find the next step in unfamiliar software without relying on DOM access, app-specific integrations, or brittle selectors.",
+      "Find click targets across native apps, web apps, Electron apps, VNC sessions, and remote desktops without DOM access or app-specific selectors.",
     icon: ListChecks,
-    title: "Cross-app workflow routing",
+    title: "Cross-app automation",
   },
 ];
 
 export const surfaces: string[] = [
   "Native macOS apps",
   "Web apps in any browser",
-  "Electron and hybrid shells",
-  "Remote desktop and VNC sessions",
+  "Electron and hybrid apps",
+  "Remote desktops and VNC sessions",
   "Enterprise and internal tools",
   "Games and media players",
 ];
