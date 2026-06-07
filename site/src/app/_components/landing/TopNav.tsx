@@ -95,10 +95,12 @@ export function TopNav({
                   </span>
                 </>
               ) : null}
-              <PillButton href={ctaHref} variant="dark" size="sm">
-                {ctaLabel}
-                {ctaShowArrow ? <ArrowRight size={14} /> : null}
-              </PillButton>
+              <span className={cn(ctaShowArrow ? "hidden md:inline-flex" : "inline-flex")}>
+                <PillButton href={ctaHref} variant="dark" size="sm">
+                  {ctaLabel}
+                  {ctaShowArrow ? <ArrowRight size={14} /> : null}
+                </PillButton>
+              </span>
             </>
           )}
         </div>
