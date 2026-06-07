@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { geminiModels, geminiModelRoles } from "@/lib/inference/gemini-models";
 
-// Public B2B vision API contract for POST /api/inference/vision.
+// Public B2B vision API contract for POST /api/vision.
 //
 // Two stages: parse a screenshot into UI elements (always), and optionally
 // ground a natural-language instruction ("click the play button") to a click
