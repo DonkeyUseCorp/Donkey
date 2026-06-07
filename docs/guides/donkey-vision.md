@@ -117,7 +117,7 @@ filters, not which evidence source runs.
 ## AI Source
 
 The hosted AI evidence comes from the vision endpoint
-(`POST /api/inference/vision`, RunPod OmniParser V2). The overlay coordinator
+(`POST /api/vision`, RunPod OmniParser V2). The overlay coordinator
 hashes each window screenshot and only calls the endpoint when that window's
 pixels changed since the last successful parse; unchanged windows reuse their
 carried-forward boxes. The older streaming screenshot-parse path is kept compiled
