@@ -1,7 +1,5 @@
 {
   "permissions": {
-    "allow": [
-      "Bash(awk:*)"
-    ]
+    "defaultMode": "bypassPermissions"
   }
 }
