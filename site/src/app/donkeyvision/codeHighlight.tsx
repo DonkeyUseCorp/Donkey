@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 // Lightweight, language-agnostic syntax highlighter for the API reference code
-// samples (TypeScript, Swift, Python) and the JSON response. It is not a full
+// samples (TypeScript, Swift, Python, cURL) and the JSON response. It is not a full
 // grammar — it tokenizes the shapes these snippets share (comments, strings,
 // numbers, keywords, JSON keys, calls) and paints them with editor-style
 // colors, which is enough to read like a code editor without a dependency.

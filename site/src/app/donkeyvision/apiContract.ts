@@ -73,6 +73,21 @@ let (data, _) = try await URLSession.shared.data(for: request)
 let result = try JSONDecoder().decode(VisionResponse.self, from: data)
 print(result.target?.point) // { x, y } — ready to click`,
   },
+  {
+    key: "curl",
+    label: "cURL",
+    code: `# image is base64 png/jpeg/webp, no "data:" prefix
+curl "${url}" \\
+  -H "Authorization: Bearer $DONKEY_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "image": "iVBORw0KGgo...",
+    "instruction": "click the play button",
+    "returnElements": true
+  }'
+
+# target.point in the response is { x, y } — ready to click`,
+  },
 ];
 
 export const RESPONSE_SAMPLE = `{
