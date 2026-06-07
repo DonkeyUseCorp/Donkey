@@ -48,10 +48,10 @@ export function TopNav({
   }, []);
 
   return (
-    <header className="sticky top-0 z-50 w-full px-4 py-3 md:px-8 md:py-4">
+    <header className="sticky top-0 z-50 w-full py-3 md:py-4">
       <div
         className={cn(
-          "mx-auto flex w-full max-w-[1400px] items-center justify-between rounded-[24px] px-5 py-2 transition-all duration-300 md:px-7 md:py-2.5",
+          "mx-auto flex w-full max-w-[1400px] items-center justify-between rounded-[24px] px-6 py-2 transition-all duration-300 md:px-12 md:py-2.5",
           scrolled
             ? "border border-ink/10 bg-cream/95 shadow-[0_18px_50px_rgba(15,14,13,0.10)] backdrop-blur-md"
             : "border border-transparent bg-transparent shadow-none",
