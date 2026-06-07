@@ -20,6 +20,12 @@ This guide explains how to work in the `site` app. Keep changes aligned with the
 - Keep secrets and direct database access out of Client Components.
 - Pass plain serializable props from Server Components into Client Components.
 
+## Navigation
+
+- Use the `next/link` `<Link>` component for internal routes (anything starting with `/`) so navigation stays client-side and prefetches.
+- Use a plain `<a>` only for external URLs, `mailto:`, and other non-route links.
+- When a shared control accepts an arbitrary `href` (such as the landing `PillButton`), let the control pick `<Link>` vs `<a>` from the href instead of duplicating that choice at every call site.
+
 ## Styling
 
 - Use Tailwind utilities and existing shared UI components as the default UI language.

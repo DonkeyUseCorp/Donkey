@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { ArrowRight, ShieldCheck, Sparkles } from "lucide-react";
 import { useCallback, useState } from "react";
 
@@ -90,7 +91,7 @@ export function AuthScreen({ mode }: Props) {
         width: "100%",
       }}
     >
-      <TopNav ctaHref="/pricing" ctaLabel="Pricing" />
+      <TopNav ctaHref="/pricing" ctaLabel="Pricing" showAuthLinks={false} />
       <section
         style={{
           display: "grid",
@@ -197,19 +198,19 @@ export function AuthScreen({ mode }: Props) {
                 }}
               >
                 By continuing, you agree to the{" "}
-                <a
+                <Link
                   href="/terms"
                   style={{ color: BLACK, fontWeight: 600 }}
                 >
                   Terms of Use
-                </a>{" "}
+                </Link>{" "}
                 and{" "}
-                <a
+                <Link
                   href="/privacy"
                   style={{ color: BLACK, fontWeight: 600 }}
                 >
                   Privacy Policy
-                </a>
+                </Link>
                 .
               </p>
               {statusMessage ? (

@@ -1,6 +1,13 @@
+import Link from "next/link";
 import type { CSSProperties, ReactNode } from "react";
 
 import { BLACK, CARD, CORAL, type CardColor } from "@/app/_components/landing/theme";
+
+// Internal routes use next/link for client-side navigation; anything else
+// (http(s), mailto, etc.) falls back to a plain anchor.
+function isInternalHref(href: string) {
+  return href.startsWith("/") && !href.startsWith("//");
+}
 
 type ButtonVariant = "primary" | "dark" | "secondary";
 type ButtonSize = "sm" | "md" | "lg";
@@ -136,6 +143,14 @@ export function PillButton({
   };
 
   if (href && !disabled && !onClick) {
+    if (isInternalHref(href)) {
+      return (
+        <Link aria-label={ariaLabel} href={href} style={sharedStyle}>
+          {children}
+        </Link>
+      );
+    }
+
     return (
       <a aria-label={ariaLabel} href={href} style={sharedStyle}>
         {children}

@@ -1,6 +1,7 @@
 "use client";
 
-import { Link, Play, Send, type LucideIcon } from "lucide-react";
+import { Link as LinkIcon, Play, Send, type LucideIcon } from "lucide-react";
+import Link from "next/link";
 
 import { useMediaQuery } from "@/app/_components/landing/useMediaQuery";
 import { BLACK } from "@/app/_components/landing/theme";
@@ -14,7 +15,7 @@ type SocialLink = {
 export function Footer() {
   const isDesktop = useMediaQuery("(min-width: 768px)");
   const socialLinks: SocialLink[] = [
-    { href: "https://www.linkedin.com", icon: Link, label: "LinkedIn" },
+    { href: "https://www.linkedin.com", icon: LinkIcon, label: "LinkedIn" },
     { href: "https://www.youtube.com", icon: Play, label: "YouTube" },
     { href: "https://twitter.com", icon: Send, label: "Twitter" },
   ];
@@ -91,7 +92,27 @@ export function Footer() {
               gap: 16,
             }}
           >
-            <a
+            <Link
+              href="/sign-in"
+              style={{
+                color: BLACK,
+                fontWeight: 600,
+                textDecoration: "none",
+              }}
+            >
+              Sign in
+            </Link>
+            <Link
+              href="/sign-up"
+              style={{
+                color: BLACK,
+                fontWeight: 600,
+                textDecoration: "none",
+              }}
+            >
+              Sign up
+            </Link>
+            <Link
               href="/privacy"
               style={{
                 color: BLACK,
@@ -100,8 +121,8 @@ export function Footer() {
               }}
             >
               Privacy Policy
-            </a>
-            <a
+            </Link>
+            <Link
               href="/terms"
               style={{
                 color: BLACK,
@@ -110,7 +131,7 @@ export function Footer() {
               }}
             >
               Terms of Use
-            </a>
+            </Link>
           </div>
         </div>
       </div>

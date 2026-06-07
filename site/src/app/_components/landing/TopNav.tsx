@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 
 import { PillButton } from "@/app/_components/landing/LandingPrimitives";
@@ -14,12 +15,14 @@ type Props = {
   ctaHref?: string;
   ctaLabel?: string;
   homeHref?: string;
+  showAuthLinks?: boolean;
 };
 
 export function TopNav({
   ctaHref = DONKEY_INSTALL_URL,
   ctaLabel = "Download",
   homeHref = "/",
+  showAuthLinks = true,
 }: Props) {
   const isDesktop = useMediaQuery("(min-width: 768px)");
 
@@ -36,7 +39,7 @@ export function TopNav({
         width: "100%",
       }}
     >
-      <a
+      <Link
         href={homeHref}
         style={{
           display: "flex",
@@ -72,10 +75,33 @@ export function TopNav({
           />
         </div>
         <span style={{ fontWeight: 600, fontSize: 24 }}>donkey</span>
-      </a>
-      <PillButton href={ctaHref} variant="dark" size="sm">
-        {ctaLabel} <ArrowRight size={14} />
-      </PillButton>
+      </Link>
+      <div style={{ display: "flex", alignItems: "center", gap: isDesktop ? 16 : 10 }}>
+        {showAuthLinks ? (
+          <>
+            <Link
+              href="/sign-in"
+              style={{
+                color: BLACK,
+                fontSize: 14,
+                fontWeight: 600,
+                textDecoration: "none",
+                whiteSpace: "nowrap",
+              }}
+            >
+              Sign in
+            </Link>
+            {isDesktop ? (
+              <PillButton href="/sign-up" variant="secondary" size="sm">
+                Sign up
+              </PillButton>
+            ) : null}
+          </>
+        ) : null}
+        <PillButton href={ctaHref} variant="dark" size="sm">
+          {ctaLabel} <ArrowRight size={14} />
+        </PillButton>
+      </div>
     </nav>
   );
 }
