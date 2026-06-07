@@ -83,6 +83,39 @@ is not supported or is still refreshing, surface conversation, clarification,
 waiting, or failed-safe state rather than silently executing an unsupported
 candidate.
 
+## Model Boundary And Adapters
+
+The model boundary is pluggable. The harness asks an abstract boundary for the
+single next tool call; a model adapter translates that request into one
+provider's wire format and parses the provider's response back into a validated
+registry tool call. Adapters live in `DonkeyAI/`, behind the generic registry —
+task state and the planner never see provider details.
+
+An adapter's job is narrow and total:
+
+```text
+next-tool-call request
+-> render registry descriptors + schemas into the provider's tool format
+-> send compacted task state as the prompt (never raw history)
+-> provider
+-> parse response into one validated registry tool call, or a boundary error
+```
+
+Provider-side failures (refusal, truncation, malformed call) map into harness
+states the planner already handles, not ad hoc retries inside the adapter.
+
+Because adapters are interchangeable, the boundary supports a primary hosted
+model plus a fallback. A fallback adapter targeting an open-weights model that
+emits tool calls as structured text — for example the Hermes function-call
+convention — is a supported shape: it implements the same render/parse contract,
+reuses the same registry and schemas, and changes nothing in the runtime loop.
+Keep format-specific parsing inside the adapter; the rest of the harness only
+ever sees a validated tool call.
+
+What stays out of adapters: task state, permission gates, verification,
+planning, and computer-use guarding. An adapter formats requests and parses tool
+calls; it never decides intent, executes tools, or holds task state.
+
 ## Tools
 
 Tools are registered through the generic registry. A descriptor declares the
@@ -194,7 +227,8 @@ Start here:
 - `apps/Donkey/Sources/DonkeyContracts/` for shared contracts across modules.
 - `apps/Donkey/Sources/DonkeyRuntime/` for guarded local-app execution,
   Accessibility, screenshots, app/window observation, and input backends.
-- `apps/Donkey/Sources/DonkeyAI/` for hosted model routing and adapters.
+- `apps/Donkey/Sources/DonkeyAI/` for hosted and fallback model routing and
+  adapters.
 - `apps/Donkey/Sources/Donkey/` for user-query integration.
 
 Tests live in `apps/Donkey/Tests/DonkeyRuntimeTests/`. Use focused `swift test`
