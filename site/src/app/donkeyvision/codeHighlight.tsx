@@ -26,6 +26,24 @@ const KEYWORDS = new Set([
 const TOKENIZER_SOURCE =
   "(\\/\\/[^\\n]*|#[^\\n]*|\\/\\*[\\s\\S]*?\\*\\/)|(\"(?:\\\\.|[^\"\\\\])*\"(?=\\s*:))|(`(?:\\\\.|[^`\\\\])*`|\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*')|(\\b\\d+(?:\\.\\d+)?\\b)|([A-Za-z_$][\\w$]*)";
 
+// Renders a plain string, turning `backtick` spans into inline <code> chips.
+// Used for prose (feature cards, parameter descriptions) where the source copy
+// marks code-like tokens with backticks.
+export function InlineMarkup({ text }: { text: string }): ReactNode {
+  return text.split(/(`[^`]+`)/g).map((part, i) =>
+    part.startsWith("`") && part.endsWith("`") ? (
+      <code
+        key={i}
+        className="rounded bg-[#0F0E0D]/8 px-1 py-0.5 font-mono text-[0.85em] text-[#0F0E0D]"
+      >
+        {part.slice(1, -1)}
+      </code>
+    ) : (
+      part
+    ),
+  );
+}
+
 export function HighlightedCode({ code }: { code: string }): ReactNode {
   const tokenizer = new RegExp(TOKENIZER_SOURCE, "g");
   const nodes: ReactNode[] = [];

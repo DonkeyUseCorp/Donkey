@@ -27,9 +27,9 @@ export function VisionCompareSection() {
   return (
     <section
       id="demo"
-      className="border-y-2 border-[#0F0E0D] bg-[#F5EFE0] px-6 py-20 md:px-12"
+      className="border-y-2 border-[#0F0E0D] bg-[#F5EFE0] py-20"
     >
-      <div className="mx-auto max-w-[1400px]">
+      <div className="mx-auto max-w-[1400px] px-6 md:px-12">
         <h2 className="max-w-3xl text-4xl font-semibold leading-none md:text-6xl">
           Drag to see what it reads.
         </h2>

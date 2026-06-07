@@ -46,8 +46,8 @@ export function Footer() {
   ];
 
   return (
-    <footer className="w-full border-t-2 border-ink px-6 py-16 md:px-12 md:py-[80px]">
-      <div className="mx-auto flex max-w-[1400px] flex-col gap-12 md:flex-row md:flex-wrap md:gap-x-24">
+    <footer className="w-full border-t-2 border-ink py-16 md:py-[80px]">
+      <div className="mx-auto flex max-w-[1400px] flex-col gap-12 px-6 md:flex-row md:flex-wrap md:gap-x-24 md:px-12">
         <div className="min-w-[240px] max-w-sm flex-1">
           <div className="mb-6 flex flex-wrap items-center gap-4">
             <span className="text-[40px] font-semibold md:text-[48px]">

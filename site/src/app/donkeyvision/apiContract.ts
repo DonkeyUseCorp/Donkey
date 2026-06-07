@@ -113,25 +113,25 @@ export const BODY_PARAMS: ApiField[] = [
     type: "string",
     required: true,
     description:
-      "Your screenshot as base64 text (PNG, JPEG, or WebP). For the best results, make it a JPEG at quality 0.8 and shrink it so the longest side is 1568 pixels.",
+      "Base64-encoded screenshot. Supports PNG, JPEG, and WebP. For best results, use JPEG quality `0.8` and resize the longest side to `1568px`.",
   },
   {
     name: "instruction",
     type: "string",
     description:
-      "Tell it what to click in plain words, like “click the play button”. Then you also get back the one spot to click.",
+      "Natural language click instruction, such as `click the play button`. When provided, the response includes a matching click target.",
   },
   {
     name: "model",
     type: "string",
     description:
-      "Which model picks the spot to click. Use gemini-3.5-flash or gemini-3.1-flash-lite. If you don’t pick, it uses gemini-3.1-flash-lite.",
+      "Model used for prompt-based targeting. Supported options include `gemini-3.5-flash` and `gemini-3.1-flash-lite`. Defaults to `gemini-3.1-flash-lite`.",
   },
   {
     name: "returnElements",
     type: "boolean",
     description:
-      "Set to true to get the full list of things it found. It’s on by default, and off when you send an instruction.",
+      "Controls whether the full detected element list is returned. Defaults to `true`; disabled automatically when an instruction is provided.",
   },
 ];
 
@@ -139,28 +139,29 @@ export const RESPONSE_FIELDS: ApiField[] = [
   {
     name: "image",
     type: "object",
-    description: "How big your screenshot is, in pixels: { width, height }.",
+    description: "Screenshot dimensions in pixels: `{ width, height }`.",
   },
   {
     name: "elements",
     type: "array",
     description:
-      "Everything it found. Each one has an id, label, kind, interactive, box, point, and confidence. Left out when returnElements is false.",
+      "Detected UI elements. Each element includes `id`, `label`, `kind`, `interactive`, `box`, `point`, and `confidence`. Omitted when `returnElements` is `false`.",
   },
   {
     name: "target",
     type: "object | null",
     description:
-      "The one thing to click for your instruction, with its box and click point. Only here when you send an instruction.",
+      "Best matching click target for the provided instruction. Includes the target element, bounding box, and click point. Returned only when `instruction` is provided.",
   },
   {
     name: "alternates",
     type: "array",
-    description: "Other things that might match your instruction, best ones first.",
+    description:
+      "Additional possible matches for the instruction, sorted by confidence.",
   },
   {
     name: "model",
     type: "string",
-    description: "The model that picked the spot to click.",
+    description: "Model used for prompt-based target selection.",
   },
 ];

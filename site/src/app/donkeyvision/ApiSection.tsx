@@ -1,4 +1,5 @@
 import { ApiReference } from "@/app/donkeyvision/ApiReference";
+import { InlineMarkup } from "@/app/donkeyvision/codeHighlight";
 import { features } from "@/app/donkeyvision/data";
 import type { Feature } from "@/app/donkeyvision/types";
 
@@ -9,23 +10,23 @@ type FeatureLineProps = {
 export function ApiSection() {
   return (
     <section
-      className="border-b-2 border-[#0F0E0D] bg-[#FAF6EC] px-6 py-20 md:px-12"
+      className="border-b-2 border-[#0F0E0D] bg-[#FAF6EC] py-20"
       id="api"
     >
-      <div className="mx-auto max-w-[1400px]">
+      <div className="mx-auto max-w-[1400px] px-6 md:px-12">
         <div className="max-w-3xl">
           <h2 className="text-4xl font-semibold leading-none md:text-6xl">
-            Here&rsquo;s how the API works.
+            How the API works
           </h2>
           <p className="mt-6 text-lg leading-8 text-[#454545]">
-            Send a screenshot to <Code>/parse</Code>. The response is a list of
-            detected UI elements with IDs, labels, types, boxes, center points,
-            and confidence scores.
+            Send a screenshot to <Code>/api/inference/vision</Code>. The response
+            includes detected UI elements with IDs, labels, types, bounding
+            boxes, center points, and confidence scores.
           </p>
           <p className="mt-4 text-lg leading-8 text-[#454545]">
-            You can also send a text prompt, like{" "}
-            <Code>click the play button</Code>, and get back the exact region to
-            click. Use your choice of LLM: ChatGPT, Claude, Gemini, or a custom
+            Add an optional text instruction, such as{" "}
+            <Code>click the play button</Code>, to return the matching click
+            target. Model selection supports ChatGPT, Claude, Gemini, or a custom
             model.
           </p>
         </div>
@@ -55,7 +56,7 @@ function FeatureLine({ feature }: FeatureLineProps) {
       <div>
         <h3 className="text-base font-semibold">{feature.title}</h3>
         <p className="mt-1 text-sm leading-6 text-[#555]">
-          {feature.description}
+          <InlineMarkup text={feature.description} />
         </p>
       </div>
     </div>

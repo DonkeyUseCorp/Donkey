@@ -11,7 +11,7 @@ import {
   RESPONSE_SAMPLE,
   type ApiField,
 } from "@/app/donkeyvision/apiContract";
-import { HighlightedCode } from "@/app/donkeyvision/codeHighlight";
+import { HighlightedCode, InlineMarkup } from "@/app/donkeyvision/codeHighlight";
 
 function CopyButton({ value, label }: { value: string; label: string }) {
   const [copied, setCopied] = useState(false);
@@ -125,7 +125,7 @@ function FieldList({ fields }: { fields: ApiField[] }) {
             </span>
           </dt>
           <dd className="mt-1 text-sm leading-6 text-[#555]">
-            {field.description}
+            <InlineMarkup text={field.description} />
           </dd>
         </div>
       ))}
@@ -147,9 +147,9 @@ export function ApiReference() {
           </code>
         </div>
         <p className="shrink-0 text-sm text-[#555]">
-          Authenticate with{" "}
+          Auth:{" "}
           <code className="rounded bg-[#0F0E0D]/8 px-1.5 py-0.5 font-mono text-[0.85em] text-[#0F0E0D]">
-            Authorization: Bearer dk_live_…
+            Authorization: Bearer dk_live_...
           </code>
         </p>
       </div>
@@ -161,11 +161,11 @@ export function ApiReference() {
             Request
           </h3>
           <p className="mt-2 text-sm leading-6 text-[#555]">
-            Send your screenshot as base64. Add an{" "}
+            Submit a base64 screenshot. Add an optional{" "}
             <code className="rounded bg-[#0F0E0D]/8 px-1 py-0.5 font-mono text-[0.85em] text-[#0F0E0D]">
               instruction
             </code>{" "}
-            and you also get back the one spot to click.
+            to return a matching click target.
           </p>
           <div className="mt-4">
             <RequestExamples />
@@ -184,8 +184,8 @@ export function ApiReference() {
             Response
           </h3>
           <p className="mt-2 text-sm leading-6 text-[#555]">
-            The numbers are pixels in the screenshot you sent, counted from the
-            top-left corner. You can click them right away.
+            Coordinates are pixel values from the submitted screenshot, measured
+            from the top-left corner.
           </p>
           <div className="mt-4">
             <ResponseExample />
