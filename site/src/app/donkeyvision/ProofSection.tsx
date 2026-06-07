@@ -30,7 +30,7 @@ export function ProofSection() {
               <div className="mt-4 text-5xl font-bold tracking-tight md:text-6xl">
                 {stat.value}
               </div>
-              <p className="mt-4 max-w-[34ch] text-sm font-medium leading-6 text-[#0F0E0D]/80">
+              <p className="mt-4 text-sm font-medium leading-6 text-[#0F0E0D]/80">
                 {stat.label}
               </p>
             </div>
@@ -38,9 +38,9 @@ export function ProofSection() {
         })}
       </div>
       <p className="mt-8 max-w-3xl text-sm leading-6 text-[#0F0E0D]/60">
-        These are measured averages for normal screenshot sizes. Large images
-        and queueing add time. For high-volume usage we tune the endpoint to
-        your target latency.
+        Latency numbers show server processing time only. Total request time
+        also depends on image size, upload speed, network latency, and any
+        queueing.
       </p>
     </section>
   );
