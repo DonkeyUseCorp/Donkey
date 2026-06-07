@@ -1,9 +1,9 @@
-// Public Donkey Vision API contract for POST /api/inference/vision.
+// Public Donkey Vision API contract for POST /api/vision.
 // Keep this in sync with src/lib/inference/vision/schema.ts.
 
 export const API_ENDPOINT = {
   method: "POST",
-  path: "/api/inference/vision",
+  path: "/api/vision",
   host: "https://donkeyuse.com",
 } as const;
 

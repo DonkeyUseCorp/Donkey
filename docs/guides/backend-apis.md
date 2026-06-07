@@ -134,7 +134,7 @@ checks, provider/model rates, debits, and audit rows.
 
 ## Third-Party Vision API
 
-`POST /api/inference/vision` is also a self-serve product for outside
+`POST /api/vision` is also a self-serve product for outside
 developers, sold separately from the Mac app. It serves two audiences through
 the same handler, branching on `request.donkey.method`:
 

@@ -15,7 +15,7 @@ private enum DebugUIInspectionLog {
 }
 
 /// Which hosted backend supplies the "AI" evidence rendered on the overlay.
-/// `vision` is the active path (RunPod OmniParser V2 via /api/inference/vision).
+/// `vision` is the active path (RunPod OmniParser V2 via /api/vision).
 /// `screenshotParse` is the older streaming parser, kept compiled but disabled.
 private enum RemoteAIEngine {
     case vision
