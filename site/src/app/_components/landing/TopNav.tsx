@@ -13,21 +13,20 @@ import { cn } from "@/lib/utils";
 const NAV_ICON_SIZE = 59;
 
 type Props = {
-  ctaHref?: string;
-  ctaLabel?: string;
   homeHref?: string;
+  // Log in + Sign up cluster. Hidden when an authToggle is supplied.
   showAuthLinks?: boolean;
-  // The arrow accent is reserved for the download CTA; non-download CTAs
-  // (Log in, Get started, auth toggles) pass false.
-  ctaShowArrow?: boolean;
+  // The Download pill belongs to the main landing page only.
+  showDownload?: boolean;
+  // Sign-in/up pages swap the auth links for a single toggle to the other mode.
+  authToggle?: { href: string; label: string };
 };
 
 export function TopNav({
-  ctaHref = DONKEY_INSTALL_URL,
-  ctaLabel = "Download",
   homeHref = "/",
   showAuthLinks = true,
-  ctaShowArrow = true,
+  showDownload = false,
+  authToggle,
 }: Props) {
   // Signed-in visitors don't need the auth links or the download CTA; the whole
   // right cluster collapses to a single white button into the product. During the
@@ -78,6 +77,13 @@ export function TopNav({
             <PillButton href="/app" variant="secondary" size="sm">
               Dashboard
             </PillButton>
+          ) : authToggle ? (
+            <Link
+              href={authToggle.href}
+              className="whitespace-nowrap text-sm font-semibold text-ink no-underline"
+            >
+              {authToggle.label}
+            </Link>
           ) : (
             <>
               {showAuthLinks ? (
@@ -95,23 +101,14 @@ export function TopNav({
                   </span>
                 </>
               ) : null}
-              {ctaShowArrow ? (
+              {showDownload ? (
                 <span className="hidden md:inline-flex">
-                  <PillButton href={ctaHref} variant="dark" size="sm">
-                    {ctaLabel}
+                  <PillButton href={DONKEY_INSTALL_URL} variant="dark" size="sm">
+                    Download
                     <ArrowRight size={14} />
                   </PillButton>
                 </span>
-              ) : (
-                // Non-download CTAs (auth toggles) read as a plain text link,
-                // matching the "Log in" link on the home page.
-                <Link
-                  href={ctaHref}
-                  className="whitespace-nowrap text-sm font-semibold text-ink no-underline"
-                >
-                  {ctaLabel}
-                </Link>
-              )}
+              ) : null}
             </>
           )}
         </div>

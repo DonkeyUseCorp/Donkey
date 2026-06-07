@@ -138,10 +138,10 @@ export function AuthScreen({ mode }: Props) {
   return (
     <main className="min-h-screen w-full bg-background font-system text-ink antialiased">
       <TopNav
-        ctaHref={screenCopy.alternateHref}
-        ctaLabel={copy[otherMode].title}
-        showAuthLinks={false}
-        ctaShowArrow={false}
+        authToggle={{
+          href: screenCopy.alternateHref,
+          label: copy[otherMode].title,
+        }}
       />
       <section className="mx-auto grid w-full max-w-[1400px] grid-cols-1 justify-items-center gap-16 px-6 pt-[44px] pb-[240px] text-center min-[900px]:gap-24 min-[900px]:px-12 min-[900px]:pt-[72px] min-[900px]:pb-[360px]">
         <div>

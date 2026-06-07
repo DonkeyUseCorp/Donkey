@@ -13,7 +13,7 @@ import { pricingPlans } from "@/app/_components/landing/pricingPlans";
 export function PricingPage() {
   return (
     <main className="min-h-screen w-full max-w-full overflow-x-hidden bg-background font-system text-ink antialiased">
-      <TopNav ctaHref="/sign-in" ctaLabel="Log in" ctaShowArrow={false} />
+      <TopNav />
       <section className="mx-auto w-full max-w-[1400px] px-6 pt-[44px] pb-12 md:px-12 md:pt-[72px] md:pb-16">
         <h1 className="max-w-[700px] text-[52px] leading-[0.9] font-semibold tracking-normal break-words md:max-w-[1304px] md:text-[112px]">
           Pick the plan.
