@@ -95,12 +95,23 @@ export function TopNav({
                   </span>
                 </>
               ) : null}
-              <span className={cn(ctaShowArrow ? "hidden md:inline-flex" : "inline-flex")}>
-                <PillButton href={ctaHref} variant="dark" size="sm">
+              {ctaShowArrow ? (
+                <span className="hidden md:inline-flex">
+                  <PillButton href={ctaHref} variant="dark" size="sm">
+                    {ctaLabel}
+                    <ArrowRight size={14} />
+                  </PillButton>
+                </span>
+              ) : (
+                // Non-download CTAs (auth toggles) read as a plain text link,
+                // matching the "Log in" link on the home page.
+                <Link
+                  href={ctaHref}
+                  className="whitespace-nowrap text-sm font-semibold text-ink no-underline"
+                >
                   {ctaLabel}
-                  {ctaShowArrow ? <ArrowRight size={14} /> : null}
-                </PillButton>
-              </span>
+                </Link>
+              )}
             </>
           )}
         </div>
