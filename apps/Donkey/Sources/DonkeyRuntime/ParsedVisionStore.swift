@@ -2,7 +2,7 @@ import DonkeyContracts
 import Foundation
 
 /// Process-wide cache of the most recent vision parse per app, so a typed command can reuse the
-/// elements that were already detected instead of paying for another `/api/inference/vision` parse
+/// elements that were already detected instead of paying for another `/api/vision` parse
 /// on every turn. Keyed by a stable app key (bundle identifier, falling back to app name).
 ///
 /// Reuse is gated by `ScreenshotSignature`: a fresh capture is fingerprinted and compared to the
