@@ -136,7 +136,7 @@ export function AuthScreen({ mode }: Props) {
   );
 
   return (
-    <main className="min-h-screen w-full max-w-full overflow-x-hidden bg-background font-system text-ink antialiased">
+    <main className="min-h-screen w-full bg-background font-system text-ink antialiased">
       <TopNav
         ctaHref={screenCopy.alternateHref}
         ctaLabel={copy[otherMode].title}
