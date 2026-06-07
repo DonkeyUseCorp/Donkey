@@ -19,7 +19,7 @@ export function ApiSection() {
             How the API works
           </h2>
           <p className="mt-6 text-lg leading-8 text-[#454545]">
-            Send a screenshot to <Code>/api/inference/vision</Code>. The response
+            Send a screenshot to <Code>/api/vision</Code>. The response
             includes detected UI elements with IDs, labels, types, bounding
             boxes, center points, and confidence scores.
           </p>
