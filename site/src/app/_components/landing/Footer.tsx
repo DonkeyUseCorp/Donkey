@@ -3,6 +3,8 @@
 import { Link as LinkIcon, Play, Send, type LucideIcon } from "lucide-react";
 import Link from "next/link";
 
+import { GITHUB_REPO_URL } from "@/app/_components/landing/data";
+
 type SocialLink = {
   href: string;
   icon: LucideIcon;
@@ -26,6 +28,7 @@ export function Footer() {
       links: [
         { href: "/install", label: "Donkey for Mac" },
         { href: "/donkeyvision", label: "Donkey Vision API" },
+        { href: GITHUB_REPO_URL, label: "GitHub" },
       ],
     },
     {
