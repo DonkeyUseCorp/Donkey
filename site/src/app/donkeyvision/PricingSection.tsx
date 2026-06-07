@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { Mail } from "lucide-react";
 
 import { ContactSalesButton } from "@/app/_components/landing/ContactSalesButton";
 
@@ -36,17 +35,21 @@ export function PricingSection() {
               </li>
             ))}
           </ul>
+          <p className="mt-6 text-sm leading-6 text-white/55">
+            Need higher call volume or rate limits?{" "}
+            <ContactSalesButton className="font-semibold text-white/80 underline underline-offset-2 transition hover:text-white">
+              Contact sales
+            </ContactSalesButton>{" "}
+            for increased limits.
+          </p>
         </div>
-        <div className="flex flex-col justify-center gap-3 md:w-60">
+        <div className="flex flex-col justify-center md:w-60">
           <Link
             href="/app/settings"
             className="flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-[#EC7868] px-7 text-base font-semibold text-[#0F0E0D] transition hover:-translate-y-0.5"
           >
             Start building
           </Link>
-          <ContactSalesButton className="flex min-h-14 w-full items-center justify-center gap-2 rounded-full border border-white/30 px-7 text-base font-semibold text-white transition hover:-translate-y-0.5">
-            Contact sales <Mail size={18} aria-hidden="true" />
-          </ContactSalesButton>
         </div>
       </div>
     </section>

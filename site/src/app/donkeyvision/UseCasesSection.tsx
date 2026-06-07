@@ -9,13 +9,11 @@ type Props = {
 export function UseCasesSection() {
   return (
     <section className="mx-auto w-full max-w-[1400px] px-6 py-20 md:px-12">
-      <div className="mb-10 flex flex-col justify-between gap-5 md:flex-row md:items-end">
-        <div>
-          <h2 className="max-w-3xl text-4xl font-semibold leading-none md:text-6xl">
-            Use screenshots when there is no API.
-          </h2>
-        </div>
-        <p className="max-w-lg text-lg leading-8 text-[#454545]">
+      <div className="mb-10">
+        <h2 className="text-4xl font-semibold leading-none md:whitespace-nowrap md:text-6xl">
+          Use screenshots when there is no API.
+        </h2>
+        <p className="mt-5 max-w-2xl text-lg leading-8 text-[#454545]">
           Send a screenshot from any application. Donkey Vision returns detected
           UI elements, labels, bounding boxes, center points, and optional
           prompt-matched click targets.
