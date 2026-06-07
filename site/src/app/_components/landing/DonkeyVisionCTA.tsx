@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Boxes, Crosshair, Gauge } from "lucide-react";
+import { Boxes, Crosshair, Gauge } from "lucide-react";
 
 import {
   Headline,
@@ -40,7 +40,7 @@ export function DonkeyVisionCTA() {
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <PillButton href="/donkeyvision" variant="secondary" size="lg">
-                Explore Donkey Vision <ArrowRight size={18} />
+                Explore Donkey Vision
               </PillButton>
             </div>
           </div>

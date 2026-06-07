@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, Mail } from "lucide-react";
+import { Mail } from "lucide-react";
 
 import { ContactSalesButton } from "@/app/_components/landing/ContactSalesButton";
 
@@ -41,7 +41,7 @@ export function PricingSection() {
               href="/app/settings"
               className="inline-flex min-h-14 items-center justify-center gap-2 rounded-full bg-[#EC7868] px-7 text-base font-semibold text-[#0F0E0D] transition hover:-translate-y-0.5"
             >
-              Get started <ArrowRight size={18} aria-hidden="true" />
+              Get started
             </Link>
             <ContactSalesButton className="inline-flex min-h-14 items-center justify-center gap-2 rounded-full border border-white/30 px-7 text-base font-semibold text-white transition hover:-translate-y-0.5">
               Contact sales <Mail size={18} aria-hidden="true" />

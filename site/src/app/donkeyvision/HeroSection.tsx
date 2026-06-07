@@ -1,4 +1,4 @@
-import { ArrowRight, Braces } from "lucide-react";
+import { Braces } from "lucide-react";
 
 import { ContactSalesButton } from "@/app/_components/landing/ContactSalesButton";
 import { VisionPreview } from "@/app/donkeyvision/VisionPreview";
@@ -21,7 +21,7 @@ export function HeroSection() {
           <ContactSalesButton
             className="inline-flex min-h-14 items-center justify-center gap-2 rounded-full border-2 border-[#0F0E0D] bg-[#EC7868] px-7 text-base font-semibold text-[#0F0E0D] transition hover:-translate-y-0.5"
           >
-            Contact us <ArrowRight size={18} aria-hidden="true" />
+            Contact us
           </ContactSalesButton>
           <a
             className="inline-flex min-h-14 items-center justify-center gap-2 rounded-full border-2 border-[#0F0E0D] bg-white px-7 text-base font-semibold text-[#0F0E0D] transition hover:-translate-y-0.5"

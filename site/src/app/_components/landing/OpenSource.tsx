@@ -1,7 +1,5 @@
 "use client";
 
-import { ArrowRight } from "lucide-react";
-
 import {
   Headline,
   PillButton,
@@ -57,7 +55,7 @@ export function OpenSource() {
 
             <div className="mt-6 flex flex-wrap items-center gap-3">
               <PillButton href={GITHUB_REPO_URL} variant="secondary" size="md">
-                Star on GitHub <ArrowRight size={14} />
+                Star on GitHub
               </PillButton>
             </div>
           </div>

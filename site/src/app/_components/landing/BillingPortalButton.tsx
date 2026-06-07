@@ -1,6 +1,5 @@
 "use client";
 
-import { ArrowRight } from "lucide-react";
 import { useCallback, useState } from "react";
 
 import { PillButton } from "@/app/_components/landing/LandingPrimitives";
@@ -38,8 +37,7 @@ export function BillingPortalButton() {
         onClick={handleOpenPortal}
         variant="secondary"
       >
-        {portal.isPending ? "Opening..." : "Manage billing"}{" "}
-        <ArrowRight size={14} />
+        {portal.isPending ? "Opening..." : "Manage billing"}
       </PillButton>
       {statusMessage ? (
         <div

@@ -21,7 +21,7 @@ export const metadata: Metadata = {
 export default function DonkeyVisionPage() {
   return (
     <main className="min-h-screen w-full overflow-x-hidden bg-[#F5EFE0] font-[-apple-system,BlinkMacSystemFont,'Segoe_UI',sans-serif] text-[#0F0E0D]">
-      <TopNav ctaHref="/app/settings" ctaLabel="Get started" />
+      <TopNav ctaHref="/app/settings" ctaLabel="Get started" ctaShowArrow={false} />
       <HeroSection />
       <ProofSection />
       <ApiSection />

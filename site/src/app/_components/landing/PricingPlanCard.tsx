@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Check } from "lucide-react";
+import { Check } from "lucide-react";
 import { useCallback, useState } from "react";
 
 import {
@@ -53,12 +53,11 @@ export function PricingPlanCard({ plan }: Props) {
         onClick={handleCheckout}
         variant="dark"
       >
-        {checkout.isPending ? "Opening..." : action.label}{" "}
-        <ArrowRight size={14} />
+        {checkout.isPending ? "Opening..." : action.label}
       </PillButton>
     ) : (
       <PillButton href={action.href} variant="dark">
-        {action.label} <ArrowRight size={14} />
+        {action.label}
       </PillButton>
     );
 
