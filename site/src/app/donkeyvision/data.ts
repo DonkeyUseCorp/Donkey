@@ -3,8 +3,10 @@ import {
   Crosshair,
   ImageIcon,
   ListChecks,
-  Monitor,
+  MousePointerClick,
   SlidersHorizontal,
+  Sparkles,
+  Type,
   Video,
   Zap,
 } from "lucide-react";
@@ -15,7 +17,7 @@ export const stats: Stat[] = [
   {
     eyebrow: "Server-side",
     label:
-      "Full time on our side to process a screenshot — detect, OCR, and label every element, ready to return. The part we control.",
+      "Process a screenshot into structured UI elements — boxes, labels, OCR, and click coordinates — in under a second.",
     value: "~0.7s",
   },
 ];
@@ -23,27 +25,39 @@ export const stats: Stat[] = [
 export const features: Feature[] = [
   {
     description:
-      "Return every detected button, icon, input, row, link, and text target from a screenshot with boxes and center points.",
+      "Buttons, icons, inputs, links, rows, text targets, and other visible UI regions.",
     icon: Boxes,
-    title: "All interactable elements",
+    title: "Detected elements",
   },
   {
     description:
-      "Each element comes back with a pixel-space bounding box and a center point, ready to click without any coordinate conversion.",
+      "Each element includes a bounding box and center point in the same image coordinate space.",
     icon: Crosshair,
-    title: "Click-ready coordinates",
+    title: "Coordinates",
   },
   {
     description:
-      "Works on native Mac apps, web apps, Electron shells, VNC sessions, enterprise tools, games, and remote desktops.",
-    icon: Monitor,
-    title: "Any software surface",
+      "Each element includes a readable label and kind, such as button, input, icon, or text.",
+    icon: Type,
+    title: "Labels and types",
   },
   {
     description:
-      "Tune box and IoU thresholds per request to control detection sensitivity and how aggressively overlapping elements are merged.",
+      "Send a natural language instruction and get back the matching element, click point, and region.",
+    icon: MousePointerClick,
+    title: "Prompt-to-click",
+  },
+  {
+    description:
+      "Adjust thresholds per request to control sensitivity and element merging.",
     icon: SlidersHorizontal,
-    title: "Tunable detection",
+    title: "Detection options",
+  },
+  {
+    description:
+      "Use ChatGPT, Claude, Gemini, or bring your own custom model for prompt-based targeting.",
+    icon: Sparkles,
+    title: "Model choice",
   },
 ];
 
@@ -82,26 +96,3 @@ export const surfaces: string[] = [
   "Enterprise and internal tools",
   "Games and media players",
 ];
-
-export const requestExample = `{
-  "image": "<base64 png/jpeg/webp screenshot>",
-  "options": {
-    "boxThreshold": 0.05,
-    "iouThreshold": 0.1
-  }
-}`;
-
-export const elementResponseExample = `{
-  "image": { "width": 1440, "height": 900 },
-  "elements": [
-    {
-      "id": "a92kfq",
-      "label": "Play",
-      "kind": "button",
-      "interactive": true,
-      "box": { "x": 618, "y": 816, "width": 42, "height": 42 },
-      "point": { "x": 639, "y": 837 },
-      "confidence": 0.5
-    }
-  ]
-}`;
