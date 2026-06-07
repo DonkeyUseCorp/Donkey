@@ -28,14 +28,12 @@ This guide explains how to work in the `site` app. Keep changes aligned with the
 
 ## Styling
 
-- Use Tailwind utilities and existing shared UI components as the default UI language.
-- Tailwind is already configured for the site; the absence of a `tailwind.config.*` file is not a reason to use inline styles.
-- Use Tailwind responsive variants such as `md:*` for breakpoints.
-- Use Tailwind arbitrary values when a design needs a precise value that is not in the theme.
-- Avoid React inline style objects for normal layout, spacing, typography, colors, borders, and responsive behavior.
-- Reserve inline styles for genuinely runtime values, such as measured dimensions, CSS custom properties derived from data, or third-party style APIs.
-- Do not add client-only media query hooks just to choose styling; use Tailwind responsive utilities instead.
-- Use the existing class-name helper when composing conditional classes.
+- Tailwind utility classes are the default for all UI, with no exceptions by area. This includes the landing components under `src/app/_components/landing`, which were historically inline-styled and are now Tailwind-first. Do not reintroduce React inline `style` objects for layout, spacing, typography, colors, borders, or responsive behavior.
+- Tailwind is configured via CSS (`@theme` in `src/app/globals.css`), not a `tailwind.config.*` file; its absence is not a reason to use inline styles.
+- Use the brand tokens defined in `globals.css` rather than repeating raw hex: `text-ink`/`bg-ink`/`border-ink` (near-black), `bg-coral`/`text-coral`, `bg-cream`, `bg-background` (page sand), and `font-system`/`font-code`. Reach for a Tailwind arbitrary value (`text-[#454545]`, `text-[clamp(45px,9.6vw,134px)]`) only for genuinely one-off values not worth a token.
+- Use Tailwind responsive variants for breakpoints (`md:*`, and arbitrary variants like `min-[900px]:*` when a design uses a non-standard breakpoint). Do not add client-only media-query hooks to choose styling; express responsive styling in classes and, when an element only differs by visibility, toggle it with `hidden`/`md:block` rather than conditional rendering.
+- Reserve inline `style` strictly for genuinely runtime values, such as a dimension computed from props or state, CSS custom properties derived from data, or a third-party style API.
+- Compose conditional classes with the `cn` helper from `@/lib/utils`.
 - Prefer existing icon components for buttons and compact actions when an icon fits the control.
 - Keep controls at stable dimensions so hover states, icons, labels, and loading states do not shift layout.
 - Keep cards for repeated items, modals, and genuinely framed content. Avoid nesting cards inside cards.

@@ -4,101 +4,26 @@ import { ArrowRight } from "lucide-react";
 
 import { PillButton } from "@/app/_components/landing/LandingPrimitives";
 import { DONKEY_INSTALL_URL } from "@/app/_components/landing/data";
-import { useMediaQuery } from "@/app/_components/landing/useMediaQuery";
-import { BLACK, CORAL } from "@/app/_components/landing/theme";
 
 export function FinalCTA() {
-  const isDesktop = useMediaQuery("(min-width: 768px)");
-
   return (
     <section
       id="download"
-      style={{
-        boxSizing: "border-box",
-        padding: isDesktop ? "64px 48px 120px" : "48px 24px 80px",
-        maxWidth: 1400,
-        margin: "0 auto",
-        width: "100%",
-      }}
+      className="mx-auto w-full max-w-[1400px] px-6 pt-12 pb-20 md:px-12 md:pt-16 md:pb-[120px]"
     >
-      <div style={{ position: "relative" }}>
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            transform: "translate(8px, 8px)",
-            borderRadius: 24,
-            background: CORAL,
-          }}
-        />
-        <div
-          style={{
-            position: "relative",
-            borderRadius: 24,
-            border: `2px solid ${BLACK}`,
-            background: BLACK,
-            color: "#fff",
-            padding: isDesktop ? "80px 48px" : "40px 24px",
-            textAlign: "center",
-          }}
-        >
-          <div
-            style={{
-              position: "absolute",
-              top: -10,
-              left: "50%",
-              transform: "translateX(-50%) rotate(-2deg)",
-              width: 80,
-              height: 18,
-              borderRadius: 3,
-              border: `2px solid ${BLACK}`,
-              background: CORAL,
-            }}
-          />
-          <div
-            style={{
-              fontSize: 12,
-              fontWeight: 600,
-              letterSpacing: "0.12em",
-              textTransform: "uppercase",
-              color: "rgba(255,255,255,0.6)",
-              marginBottom: 20,
-            }}
-          >
-            Start with Donkey
-          </div>
-          <h2
-            style={{
-              fontWeight: 600,
-              fontSize: "clamp(40px, 7vw, 80px)",
-              lineHeight: 0.95,
-              margin: "0 0 16px",
-            }}
-          >
+      <div className="relative">
+        <div className="absolute inset-0 translate-x-2 translate-y-2 rounded-3xl bg-coral" />
+        <div className="relative rounded-3xl border-2 border-ink bg-ink px-6 py-10 text-center text-white md:px-12 md:py-20">
+          <div className="absolute -top-[10px] left-1/2 h-[18px] w-20 -translate-x-1/2 -rotate-2 rounded-[3px] border-2 border-ink bg-coral" />
+          <h2 className="mb-4 text-[clamp(40px,7vw,80px)] leading-[0.95] font-semibold">
             Let Donkey
             <br />
             carry the load.
           </h2>
-          <p
-            style={{
-              color: "rgba(255,255,255,0.7)",
-              fontSize: isDesktop ? 18 : 16,
-              marginBottom: 32,
-              maxWidth: 480,
-              marginLeft: "auto",
-              marginRight: "auto",
-            }}
-          >
-            Free during beta. Installs in 90 seconds.
+          <p className="mx-auto mb-8 max-w-[480px] text-base text-[rgba(255,255,255,0.7)] md:text-lg">
+            Installs in 90 seconds.
           </p>
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 12,
-              justifyContent: "center",
-            }}
-          >
+          <div className="flex flex-wrap justify-center gap-3">
             <PillButton href={DONKEY_INSTALL_URL} variant="primary" size="lg">
               Download for Mac <ArrowRight size={18} />
             </PillButton>

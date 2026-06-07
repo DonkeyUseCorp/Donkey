@@ -6,8 +6,6 @@ import { ArrowRight } from "lucide-react";
 
 import { PillButton } from "@/app/_components/landing/LandingPrimitives";
 import { DONKEY_INSTALL_URL } from "@/app/_components/landing/data";
-import { useMediaQuery } from "@/app/_components/landing/useMediaQuery";
-import { BLACK } from "@/app/_components/landing/theme";
 
 const NAV_ICON_SIZE = 59;
 
@@ -24,78 +22,38 @@ export function TopNav({
   homeHref = "/",
   showAuthLinks = true,
 }: Props) {
-  const isDesktop = useMediaQuery("(min-width: 768px)");
-
   return (
-    <nav
-      style={{
-        display: "flex",
-        alignItems: "center",
-        boxSizing: "border-box",
-        justifyContent: "space-between",
-        padding: isDesktop ? "28px 48px" : "24px 24px",
-        maxWidth: 1400,
-        margin: "0 auto",
-        width: "100%",
-      }}
-    >
+    <nav className="mx-auto flex w-full max-w-[1400px] items-center justify-between px-6 py-6 md:px-12 md:py-7">
       <Link
         href={homeHref}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 0,
-          color: BLACK,
-          textDecoration: "none",
-        }}
+        className="flex items-center gap-0 text-ink no-underline"
       >
-        <div
-          style={{
-            width: NAV_ICON_SIZE,
-            height: NAV_ICON_SIZE,
-            borderRadius: 10,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            overflow: "hidden",
-          }}
-        >
+        <div className="flex h-[59px] w-[59px] items-center justify-center overflow-hidden rounded-[10px]">
           <Image
             src="/donkey-site-mark.webp"
             alt=""
             width={NAV_ICON_SIZE}
             height={NAV_ICON_SIZE}
             sizes={`${NAV_ICON_SIZE}px`}
-            style={{
-              display: "block",
-              width: "100%",
-              height: "100%",
-              objectFit: "cover",
-            }}
+            className="block h-full w-full object-cover"
           />
         </div>
-        <span style={{ fontWeight: 600, fontSize: 24 }}>donkey</span>
+        <span className="text-2xl font-semibold">donkey</span>
       </Link>
-      <div style={{ display: "flex", alignItems: "center", gap: isDesktop ? 16 : 10 }}>
+      <div className="flex items-center gap-[10px] md:gap-4">
         {showAuthLinks ? (
           <>
             <Link
               href="/sign-in"
-              style={{
-                color: BLACK,
-                fontSize: 14,
-                fontWeight: 600,
-                textDecoration: "none",
-                whiteSpace: "nowrap",
-              }}
+              className="whitespace-nowrap text-sm font-semibold text-ink no-underline"
             >
-              Sign in
+              Log in
             </Link>
-            {isDesktop ? (
+            <span className="hidden md:inline-flex">
               <PillButton href="/sign-up" variant="secondary" size="sm">
                 Sign up
               </PillButton>
-            ) : null}
+            </span>
           </>
         ) : null}
         <PillButton href={ctaHref} variant="dark" size="sm">

@@ -4,63 +4,27 @@ import { ArrowRight } from "lucide-react";
 
 import { PillButton } from "@/app/_components/landing/LandingPrimitives";
 import { DONKEY_INSTALL_URL } from "@/app/_components/landing/data";
-import { useMediaQuery } from "@/app/_components/landing/useMediaQuery";
 
 export function Hero() {
-  const isDesktop = useMediaQuery("(min-width: 768px)");
-
   return (
     <section
       id="top"
-      style={{
-        padding: isDesktop ? "64px 48px 120px" : "32px 24px 80px",
-        maxWidth: 1400,
-        margin: "0 auto",
-      }}
+      className="mx-auto max-w-[1400px] px-6 pt-8 pb-20 md:px-12 md:pt-16 md:pb-[120px]"
     >
-      <h1
-        style={{
-          fontWeight: 600,
-          letterSpacing: "-0.03em",
-          lineHeight: 0.88,
-          fontSize: "clamp(56px, 12vw, 168px)",
-          margin: 0,
-        }}
-      >
+      <h1 className="text-[clamp(45px,9.6vw,134px)] leading-[0.88] font-semibold tracking-[-0.03em]">
         Get work done
         <br />
-        while <span style={{ fontStyle: "italic" }}>you sleep.</span>
+        while <span className="italic">you sleep.</span>
       </h1>
-      <p
-        style={{
-          marginTop: 32,
-          fontSize: isDesktop ? 20 : 18,
-          lineHeight: 1.55,
-          maxWidth: 560,
-          color: "#454545",
-        }}
-      >
+      <p className="mt-8 max-w-[560px] text-[18px] leading-[1.55] text-[#454545] md:text-[20px]">
         Donkey gets work done on your Mac. Tell it what to do: research,
         drafting, scheduling, scraping, and it runs the rest of your machine for
         you.
       </p>
-      <div style={{ marginTop: 36, display: "flex", flexWrap: "wrap", gap: 12 }}>
+      <div className="mt-9 flex flex-wrap gap-3">
         <PillButton href={DONKEY_INSTALL_URL} variant="primary" size="lg">
           Download for Mac <ArrowRight size={18} />
         </PillButton>
-      </div>
-      <div
-        style={{
-          marginTop: 28,
-          display: "flex",
-          alignItems: "center",
-          gap: 14,
-          fontSize: 13,
-          color: "#666",
-          flexWrap: "wrap",
-        }}
-      >
-        <span>Free during beta</span>
       </div>
     </section>
   );

@@ -3,9 +3,6 @@
 import { Link as LinkIcon, Play, Send, type LucideIcon } from "lucide-react";
 import Link from "next/link";
 
-import { useMediaQuery } from "@/app/_components/landing/useMediaQuery";
-import { BLACK } from "@/app/_components/landing/theme";
-
 type SocialLink = {
   href: string;
   icon: LucideIcon;
@@ -13,7 +10,6 @@ type SocialLink = {
 };
 
 export function Footer() {
-  const isDesktop = useMediaQuery("(min-width: 768px)");
   const socialLinks: SocialLink[] = [
     { href: "https://www.linkedin.com", icon: LinkIcon, label: "LinkedIn" },
     { href: "https://www.youtube.com", icon: Play, label: "YouTube" },
@@ -21,25 +17,10 @@ export function Footer() {
   ];
 
   return (
-    <footer
-      style={{
-        borderTop: `2px solid ${BLACK}`,
-        boxSizing: "border-box",
-        padding: isDesktop ? "80px 48px" : "64px 24px",
-        width: "100%",
-      }}
-    >
-      <div style={{ maxWidth: 1400, margin: "0 auto" }}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 16,
-            marginBottom: 32,
-            flexWrap: "wrap",
-          }}
-        >
-          <span style={{ fontWeight: 600, fontSize: isDesktop ? 48 : 40 }}>
+    <footer className="w-full border-t-2 border-ink px-6 py-16 md:px-12 md:py-[80px]">
+      <div className="mx-auto max-w-[1400px]">
+        <div className="mb-8 flex flex-wrap items-center gap-4">
+          <span className="text-[40px] font-semibold md:text-[48px]">
             donkey
           </span>
           {socialLinks.map((link) => {
@@ -50,86 +31,34 @@ export function Footer() {
                 aria-label={link.label}
                 href={link.href}
                 key={link.label}
-                style={{
-                  width: 40,
-                  height: 40,
-                  borderRadius: 8,
-                  border: `2px solid ${BLACK}`,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  color: BLACK,
-                  textDecoration: "none",
-                  background: "#fff",
-                }}
+                className="flex h-10 w-10 items-center justify-center rounded-lg border-2 border-ink bg-white text-ink no-underline"
               >
                 <Icon size={18} />
               </a>
             );
           })}
         </div>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "flex-end",
-            justifyContent: "space-between",
-            gap: 16,
-            flexWrap: "wrap",
-            fontSize: 13,
-            color: "#666",
-          }}
-        >
+        <div className="flex flex-wrap items-end justify-between gap-4 text-[13px] text-[#666]">
           <div>
-            <div style={{ fontWeight: 600, color: BLACK, marginBottom: 4 }}>
+            <div className="mb-1 font-semibold text-ink">
               david@donkeyuse.com
             </div>
             <div>2026 Donkey, Inc. Made for Macs.</div>
           </div>
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 16,
-            }}
-          >
-            <Link
-              href="/sign-in"
-              style={{
-                color: BLACK,
-                fontWeight: 600,
-                textDecoration: "none",
-              }}
-            >
-              Sign in
+          <div className="flex flex-wrap gap-4">
+            <Link href="/pricing" className="font-semibold text-ink no-underline">
+              Pricing
             </Link>
-            <Link
-              href="/sign-up"
-              style={{
-                color: BLACK,
-                fontWeight: 600,
-                textDecoration: "none",
-              }}
-            >
+            <Link href="/sign-in" className="font-semibold text-ink no-underline">
+              Log in
+            </Link>
+            <Link href="/sign-up" className="font-semibold text-ink no-underline">
               Sign up
             </Link>
-            <Link
-              href="/privacy"
-              style={{
-                color: BLACK,
-                fontWeight: 600,
-                textDecoration: "none",
-              }}
-            >
+            <Link href="/privacy" className="font-semibold text-ink no-underline">
               Privacy Policy
             </Link>
-            <Link
-              href="/terms"
-              style={{
-                color: BLACK,
-                fontWeight: 600,
-                textDecoration: "none",
-              }}
-            >
+            <Link href="/terms" className="font-semibold text-ink no-underline">
               Terms of Use
             </Link>
           </div>

@@ -11,160 +11,51 @@ import { Footer } from "@/app/_components/landing/Footer";
 import { PricingPlanCard } from "@/app/_components/landing/PricingPlanCard";
 import { TopNav } from "@/app/_components/landing/TopNav";
 import { pricingPlans } from "@/app/_components/landing/pricingPlans";
-import { BG, BLACK } from "@/app/_components/landing/theme";
-import { useMediaQuery } from "@/app/_components/landing/useMediaQuery";
 
 export function PricingPage() {
-  const isDesktop = useMediaQuery("(min-width: 768px)");
-  const isWideDesktop = useMediaQuery("(min-width: 1400px)");
-
   return (
-    <main
-      style={{
-        WebkitFontSmoothing: "antialiased",
-        background: BG,
-        color: BLACK,
-        boxSizing: "border-box",
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        maxWidth: "100%",
-        minHeight: "100vh",
-        overflowX: "hidden",
-        width: "100%",
-      }}
-    >
-      <TopNav ctaHref="/sign-in" ctaLabel="Sign in" />
-      <section
-        style={{
-          boxSizing: "border-box",
-          margin: "0 auto",
-          maxWidth: 1400,
-          padding: isDesktop ? "72px 48px 64px" : "44px 24px 48px",
-          width: "100%",
-        }}
-      >
-        <h1
-          style={{
-            fontSize: isDesktop ? 112 : 52,
-            fontWeight: 600,
-            letterSpacing: 0,
-            lineHeight: 0.9,
-            margin: 0,
-            maxWidth: isDesktop ? 1304 : 700,
-            overflowWrap: "break-word",
-          }}
-        >
+    <main className="min-h-screen w-full max-w-full overflow-x-hidden bg-background font-system text-ink antialiased">
+      <TopNav ctaHref="/sign-in" ctaLabel="Log in" />
+      <section className="mx-auto w-full max-w-[1400px] px-6 pt-[44px] pb-12 md:px-12 md:pt-[72px] md:pb-16">
+        <h1 className="max-w-[700px] text-[52px] leading-[0.9] font-semibold tracking-normal break-words md:max-w-[1304px] md:text-[112px]">
           Pick the plan.
           <br />
-          <span style={{ whiteSpace: isWideDesktop ? "nowrap" : "normal" }}>
-            Let Donkey <span style={{ fontStyle: "italic" }}>carry it.</span>
+          <span className="whitespace-normal min-[1400px]:whitespace-nowrap">
+            Let Donkey <span className="italic">carry it.</span>
           </span>
         </h1>
-        <p
-          style={{
-            color: "#454545",
-            fontSize: isDesktop ? 20 : 18,
-            lineHeight: 1.55,
-            marginTop: 32,
-            maxWidth: 640,
-          }}
-        >
+        <p className="mt-8 max-w-[640px] text-[18px] leading-[1.55] text-[#454545] md:text-[20px]">
           Pro is the self-serve path. Enterprise stays personal: tell us what
           your team needs, and we will shape the rollout around it.
         </p>
       </section>
 
-      <section
-        style={{
-          boxSizing: "border-box",
-          margin: "0 auto",
-          maxWidth: 1400,
-          padding: isDesktop ? "0 48px 96px" : "0 24px 80px",
-          width: "100%",
-        }}
-      >
-        <div
-          style={{
-            display: "grid",
-            gap: 24,
-            gridTemplateColumns: isDesktop ? "1fr 1fr" : "1fr",
-          }}
-        >
+      <section className="mx-auto w-full max-w-[1400px] px-6 pb-20 md:px-12 md:pb-24">
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
           {pricingPlans.map((plan) => (
             <PricingPlanCard key={plan.name} plan={plan} />
           ))}
         </div>
       </section>
 
-      <section
-        style={{
-          boxSizing: "border-box",
-          margin: "0 auto",
-          maxWidth: 1400,
-          padding: isDesktop ? "0 48px 120px" : "0 24px 80px",
-          width: "100%",
-        }}
-      >
-        <div style={{ position: "relative" }}>
-          <div
-            style={{
-              background: "#EC7868",
-              borderRadius: 24,
-              inset: 0,
-              position: "absolute",
-              transform: "translate(8px, 8px)",
-            }}
-          />
-          <div
-            style={{
-              background: BLACK,
-              border: `2px solid ${BLACK}`,
-              borderRadius: 24,
-              color: "#fff",
-              display: "grid",
-              gap: isDesktop ? 36 : 24,
-              gridTemplateColumns: isDesktop ? "1fr auto" : "1fr",
-              padding: isDesktop ? "56px 48px" : "36px 28px",
-              position: "relative",
-            }}
-          >
+      <section className="mx-auto w-full max-w-[1400px] px-6 pb-20 md:px-12 md:pb-[120px]">
+        <div className="relative">
+          <div className="absolute inset-0 translate-x-2 translate-y-2 rounded-3xl bg-coral" />
+          <div className="relative grid grid-cols-1 gap-6 rounded-3xl border-2 border-ink bg-ink px-7 py-9 text-white md:grid-cols-[1fr_auto] md:gap-9 md:px-12 md:py-14">
             <div>
-              <div
-                style={{
-                  color: "rgba(255,255,255,0.55)",
-                  fontSize: 12,
-                  fontWeight: 600,
-                  letterSpacing: "0.12em",
-                  marginBottom: 18,
-                  textTransform: "uppercase",
-                }}
-              >
+              <div className="mb-[18px] text-xs font-semibold tracking-[0.12em] text-white/55 uppercase">
                 Already subscribed
               </div>
               <Headline size="lg">Keep billing boring.</Headline>
-              <p
-                style={{
-                  color: "rgba(255,255,255,0.72)",
-                  fontSize: isDesktop ? 17 : 15,
-                  lineHeight: 1.55,
-                  margin: "18px 0 0",
-                  maxWidth: 560,
-                }}
-              >
+              <p className="mt-[18px] max-w-[560px] text-[15px] leading-[1.55] text-white/72 md:text-[17px]">
                 Manage payment methods, receipts, and subscription details from
                 one secure place.
               </p>
             </div>
-            <div
-              style={{
-                alignSelf: "center",
-                display: "flex",
-                flexWrap: "wrap",
-                gap: 12,
-              }}
-            >
+            <div className="flex flex-wrap items-center gap-3 self-center">
               <BillingPortalButton />
               <PillButton href="/sign-in" variant="primary">
-                Sign in <ArrowRight size={14} />
+                Log in <ArrowRight size={14} />
               </PillButton>
             </div>
           </div>
