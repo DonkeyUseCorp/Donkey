@@ -193,32 +193,3 @@ public actor LocalModelPriorityWorker {
 public enum LocalModelWorkScheduling {
     public static let shared = LocalModelPriorityWorker()
 }
-
-public struct PriorityQueuedTaskIntentParsingAdapter: TaskIntentParsingAdapter {
-    public var base: any TaskIntentParsingAdapter
-    public var worker: LocalModelPriorityWorker
-
-    public init(
-        base: any TaskIntentParsingAdapter,
-        worker: LocalModelPriorityWorker = LocalModelWorkScheduling.shared
-    ) {
-        self.base = base
-        self.worker = worker
-    }
-
-    public func parseTaskIntent(_ request: TaskIntentAdapterRequest) async -> TaskIntentAdapterResult {
-        let priority: LocalModelWorkPriority = request.routeRequest.latencyTolerance == .interactive
-            ? .userInteractive
-            : .plannerHint
-        return await worker.submit(
-            kind: .taskIntent,
-            priority: priority,
-            metadata: [
-                "sourceTraceID": request.sourceTraceID,
-                "latencyTolerance": request.routeRequest.latencyTolerance.rawValue
-            ]
-        ) {
-            await base.parseTaskIntent(request)
-        }
-    }
-}

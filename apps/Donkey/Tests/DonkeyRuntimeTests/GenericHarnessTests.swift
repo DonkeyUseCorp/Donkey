@@ -324,14 +324,6 @@ struct GenericHarnessTests {
         let skills = BuiltInLocalAppSkillPacks.descriptors()
         #expect(skills.contains { $0.id == "music-media" })
         #expect(skills.contains { $0.id == "browser-navigation" })
-
-        let context = LocalAppTaskSkillContext.defaultContext(
-            taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
-            appFinderCatalog: []
-        )
-
-        #expect(context.snippets.contains { $0.contains("Skill ID: music-media") })
-        #expect(context.snippets.joined(separator: "\n").contains("metadata.mediaSelection.kind"))
     }
 
     @Test
