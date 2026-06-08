@@ -10,7 +10,6 @@ public enum AgentMemoryScope: String, Codable, CaseIterable, Equatable, Sendable
 public enum AgentMemoryKind: String, Codable, CaseIterable, Equatable, Sendable {
     case localItem
     case negativeLookup
-    case taskDefinition
     case targetFact
     case userInstruction
     case safetyStop

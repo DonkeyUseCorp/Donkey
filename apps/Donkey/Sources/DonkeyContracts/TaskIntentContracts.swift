@@ -76,39 +76,6 @@ public struct LocalAppFinderCatalogEntry: Codable, Equatable, Sendable {
     }
 }
 
-public struct LocalAppTaskEntityRule: Codable, Equatable, Sendable {
-    public var name: String
-    public var markers: [String]
-    public var aliases: [String: String]
-    public var required: Bool
-    public var metadata: [String: String]
-
-    public init(
-        name: String,
-        markers: [String] = [],
-        aliases: [String: String] = [:],
-        required: Bool = true,
-        metadata: [String: String] = [:]
-    ) {
-        self.name = name
-        self.markers = markers
-        self.aliases = aliases
-        self.required = required
-        self.metadata = metadata
-    }
-}
-
-public enum LocalAppTaskStepRole: String, Codable, Equatable, Sendable {
-    case parseIntent
-    case launchOrFocusApp
-    case observeApp
-    case focusControl
-    case enterText
-    case submit
-    case verifyResult
-    case custom
-}
-
 public enum LocalAppTaskWorkflowStage: String, Codable, CaseIterable, Equatable, Sendable {
     case parseIntent
     case resolveApp
@@ -162,63 +129,6 @@ public struct LocalAppTaskWorkflowProgress: Codable, Equatable, Sendable {
 
     public func state(for stage: LocalAppTaskWorkflowStage) -> LocalAppTaskWorkflowStageState? {
         stages.first { $0.stage == stage }
-    }
-}
-
-public struct LocalAppTaskWorkflowStepDefinition: Codable, Equatable, Sendable {
-    public var id: String
-    public var role: LocalAppTaskStepRole
-    public var summary: String
-    public var metadata: [String: String]
-
-    public init(
-        id: String,
-        role: LocalAppTaskStepRole,
-        summary: String,
-        metadata: [String: String] = [:]
-    ) {
-        self.id = id
-        self.role = role
-        self.summary = summary
-        self.metadata = metadata
-    }
-}
-
-public enum LocalAppObservationStrategy: String, Codable, Equatable, Sendable {
-    case accessibility
-    case windowMetadata
-    case screenshotForLocalModel = "screenshot_for_local_model"
-    case screenshotOCR = "screenshot_ocr"
-}
-
-public struct LocalAppTaskDefinition: Codable, Equatable, Sendable {
-    public var taskType: String
-    public var targetApp: LocalAppTarget
-    public var triggerTerms: [String]
-    public var entityRules: [LocalAppTaskEntityRule]
-    public var workflowSteps: [LocalAppTaskWorkflowStepDefinition]
-    public var observationStrategies: [LocalAppObservationStrategy]
-    public var verificationEntityName: String?
-    public var metadata: [String: String]
-
-    public init(
-        taskType: String,
-        targetApp: LocalAppTarget,
-        triggerTerms: [String],
-        entityRules: [LocalAppTaskEntityRule] = [],
-        workflowSteps: [LocalAppTaskWorkflowStepDefinition] = [],
-        observationStrategies: [LocalAppObservationStrategy] = [.accessibility, .windowMetadata, .screenshotForLocalModel],
-        verificationEntityName: String? = nil,
-        metadata: [String: String] = [:]
-    ) {
-        self.taskType = taskType
-        self.targetApp = targetApp
-        self.triggerTerms = triggerTerms
-        self.entityRules = entityRules
-        self.workflowSteps = workflowSteps
-        self.observationStrategies = observationStrategies
-        self.verificationEntityName = verificationEntityName
-        self.metadata = metadata
     }
 }
 

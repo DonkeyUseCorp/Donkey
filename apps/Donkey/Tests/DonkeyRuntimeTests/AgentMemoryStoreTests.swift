@@ -105,27 +105,6 @@ struct AgentMemoryStoreTests {
     }
 
     @Test
-    func storePrewarmsTaskDefinitionsAsSearchableCapabilities() throws {
-        let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = try SQLiteAgentMemoryStore(baseDirectory: root, cleanupLegacyStores: false)
-
-        store.prewarmTaskDefinitions(BuiltInLocalAppTaskDefinitions.testFixtures)
-
-        let result = try #require(try store.search(query: AgentMemoryQuery(
-            text: "local app interaction",
-            scope: .global,
-            kinds: [.taskDefinition],
-            budget: AgentMemoryRetrievalBudget(maxRecords: 4, minRelevance: 0)
-        )).first)
-        #expect(result.record.kind == .taskDefinition)
-        #expect(result.record.metadata["taskType"] == "local_app_interaction")
-        #expect(result.record.metadata["modelPlanned"] == "true")
-        #expect(store.taskDefinitions().contains { $0.taskType == "local_app_interaction" })
-        #expect(store.cachedAvailability(named: "local app interaction", preferredKind: nil) == nil)
-    }
-
-    @Test
     func storeCombinesFTSAndVectorRetrievalWithPromptBudget() throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
