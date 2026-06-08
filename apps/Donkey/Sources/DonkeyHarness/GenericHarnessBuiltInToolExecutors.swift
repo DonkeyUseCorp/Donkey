@@ -20,31 +20,6 @@ public struct HarnessMemoryEntry: Codable, Equatable, Sendable {
     }
 }
 
-public struct HarnessAppLookupEntry: Codable, Equatable, Sendable {
-    public var id: String
-    public var name: String
-    public var bundleIdentifier: String?
-    public var path: String?
-    public var isInstalled: Bool
-    public var metadata: [String: String]
-
-    public init(
-        id: String,
-        name: String,
-        bundleIdentifier: String? = nil,
-        path: String? = nil,
-        isInstalled: Bool = true,
-        metadata: [String: String] = [:]
-    ) {
-        self.id = id
-        self.name = name
-        self.bundleIdentifier = bundleIdentifier
-        self.path = path
-        self.isInstalled = isInstalled
-        self.metadata = metadata
-    }
-}
-
 public enum HarnessGeneratedScriptLanguage: String, Codable, Equatable, Sendable {
     case appleScript
     case shell
@@ -206,7 +181,6 @@ public actor HarnessGeneratedScriptStore {
 
 public struct HarnessBuiltInToolServices: Sendable {
     public var memoryEntries: [HarnessMemoryEntry]
-    public var appEntries: [HarnessAppLookupEntry]
     public var skillRegistry: HarnessSkillRegistry?
     public var generatedScripts: HarnessGeneratedScriptStore
     public var applicationLearningStore: HarnessApplicationLearningStore
@@ -220,7 +194,6 @@ public struct HarnessBuiltInToolServices: Sendable {
 
     public init(
         memoryEntries: [HarnessMemoryEntry] = [],
-        appEntries: [HarnessAppLookupEntry] = [],
         skillRegistry: HarnessSkillRegistry? = nil,
         generatedScripts: HarnessGeneratedScriptStore = HarnessGeneratedScriptStore(),
         applicationLearningStore: HarnessApplicationLearningStore = HarnessApplicationLearningStore(),
@@ -231,7 +204,6 @@ public struct HarnessBuiltInToolServices: Sendable {
         commandExecutor: (@Sendable (HarnessToolExecutionContext) async -> HarnessToolResult?)? = nil
     ) {
         self.memoryEntries = memoryEntries
-        self.appEntries = appEntries
         self.skillRegistry = skillRegistry
         self.generatedScripts = generatedScripts
         self.applicationLearningStore = applicationLearningStore
@@ -280,10 +252,6 @@ public enum BuiltInHarnessToolExecutors {
             return await scriptValidate(context, services: services)
         case "skill.script.execute":
             return await scriptExecute(context, services: services, executor: services.skillScriptExecutor)
-        case "app.search":
-            return appSearch(context, services: services)
-        case "app.openOrFocus":
-            return appOpenOrFocus(context, services: services)
         case "screen.observe":
             return screenObserve(context)
         case "elements.get":
@@ -626,78 +594,6 @@ public enum BuiltInHarnessToolExecutors {
             metadata: outcome.metadata.merging([
                 "scriptArtifactID": scriptID,
                 "executor": "guardedScriptBackend"
-            ]) { current, _ in current }
-        )
-    }
-
-    // MARK: - App Search & Focus
-
-    private static func appSearch(
-        _ context: HarnessToolExecutionContext,
-        services: HarnessBuiltInToolServices
-    ) -> HarnessToolResult {
-        guard let query = trimmed(context.call.input["query"] ?? context.call.input["target"]) else {
-            return invalidInput(context, "app.search requires a non-empty query.")
-        }
-        let queryTokens = tokens(in: query)
-        let appMatches = services.appEntries
-            .filter { entry in
-                Self.matches(
-                    tokens: queryTokens,
-                    values: [entry.id, entry.name, entry.bundleIdentifier ?? "", entry.path ?? ""] + Array(entry.metadata.values)
-                )
-            }
-            .prefix(10)
-        let facts = Dictionary<String, String>(
-            uniqueKeysWithValues: appMatches.map { entry in
-                ("app.search.match.\(entry.id)", entry.name)
-            }
-        )
-        return success(
-            context,
-            summary: "Found \(appMatches.count) app/item match(es).",
-            facts: facts.merging([
-                "app.search.query": query,
-                "app.search.ids": appMatches.map(\.id).joined(separator: ","),
-                "lastAcceptedTool": context.call.name
-            ]) { current, _ in current },
-            metadata: [
-                "resultCount": String(appMatches.count),
-                "targetIDs": appMatches.map(\.id).joined(separator: ",")
-            ]
-        )
-    }
-
-    private static func appOpenOrFocus(
-        _ context: HarnessToolExecutionContext,
-        services: HarnessBuiltInToolServices
-    ) -> HarnessToolResult {
-        guard let targetID = trimmed(context.call.input["targetID"]) else {
-            return invalidInput(context, "app.openOrFocus requires a targetID.")
-        }
-        guard let target = services.appEntries.first(where: { appMatchesTarget($0, targetID: targetID) }) else {
-            return failed(context, "App/item target was not found: \(targetID)", reason: "targetNotFound")
-        }
-        guard target.isInstalled else {
-            return failed(context, "App/item target is not installed: \(target.name)", reason: "targetUnavailable")
-        }
-        return HarnessToolResult(
-            callID: context.call.id,
-            toolName: context.call.name,
-            status: .succeeded,
-            summary: "Focused \(target.name).",
-            observations: HarnessObservationDelta(
-                focusedApp: target.name,
-                facts: [
-                    "focusedApp.id": target.id,
-                    "focusedApp.bundleIdentifier": target.bundleIdentifier ?? "",
-                    "lastAcceptedTool": context.call.name
-                ]
-            ),
-            metadata: target.metadata.merging([
-                "targetID": target.id,
-                "bundleIdentifier": target.bundleIdentifier ?? "",
-                "path": target.path ?? ""
             ]) { current, _ in current }
         )
     }
@@ -1473,11 +1369,6 @@ public enum BuiltInHarnessToolExecutors {
         return context.worldModel.elements.filter { element in
             matches(tokens: scopeTokens, values: [element.id, element.label, element.role] + Array(element.metadata.values))
         }
-    }
-
-    private static func appMatchesTarget(_ entry: HarnessAppLookupEntry, targetID: String) -> Bool {
-        [entry.id, entry.name, entry.bundleIdentifier ?? "", entry.path ?? ""]
-            .contains { normalized($0) == normalized(targetID) }
     }
 
     private static func actionAllowed(_ action: String, elementActions: [String]) -> Bool {

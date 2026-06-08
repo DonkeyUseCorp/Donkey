@@ -263,25 +263,6 @@ public enum BuiltInHarnessToolCatalog {
                 ]
             ),
             descriptor(
-                "app.search",
-                pluginID: "core.computer-use",
-                summary: "Search installed apps, running apps, files, folders, default handlers, and capability catalog entries.",
-                input: ["query": "Structured app/item/capability query."],
-                output: ["matches": "Ranked local apps/items/capabilities."],
-                permissions: [.appLookup],
-                safety: .readOnly
-            ),
-            descriptor(
-                "app.openOrFocus",
-                pluginID: "core.computer-use",
-                summary: "Open or focus a validated local app or item.",
-                input: ["targetID": "Resolved app or local item target."],
-                output: ["focusedApp": "Focused application after the action."],
-                permissions: [.appControl],
-                safety: .reversible,
-                verification: ["focused app or opened local item is observed"]
-            ),
-            descriptor(
                 "screen.observe",
                 pluginID: "core.computer-use",
                 summary: "Observe current screen/window state with bounded Accessibility and screenshot evidence.",

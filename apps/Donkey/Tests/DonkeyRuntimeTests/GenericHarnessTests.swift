@@ -614,7 +614,7 @@ struct GenericHarnessTests {
     }
 
     @Test
-    func builtInExecutorsRetrieveMemoryAndResolveApps() async {
+    func builtInExecutorsRetrieveMemory() async {
         let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
             services: HarnessBuiltInToolServices(
                 memoryEntries: [
@@ -622,14 +622,6 @@ struct GenericHarnessTests {
                         id: "memory-calendar",
                         summary: "Calendar is the preferred scheduling app.",
                         value: "Use Calendar for schedule lookups."
-                    )
-                ],
-                appEntries: [
-                    HarnessAppLookupEntry(
-                        id: "com.apple.iCal",
-                        name: "Calendar",
-                        bundleIdentifier: "com.apple.iCal",
-                        path: "/System/Applications/Calendar.app"
                     )
                 ]
             )
@@ -641,24 +633,9 @@ struct GenericHarnessTests {
             worldModel: HarnessWorldModel(),
             grantedPermissions: [.memory]
         )
-        let appSearch = await registry.execute(
-            HarnessToolCall(id: "app-search-call", name: "app.search", input: ["query": "calendar"]),
-            taskID: "task-tools",
-            worldModel: HarnessWorldModel(),
-            grantedPermissions: [.appLookup]
-        )
-        let open = await registry.execute(
-            HarnessToolCall(id: "app-open-call", name: "app.openOrFocus", input: ["targetID": "com.apple.iCal"]),
-            taskID: "task-tools",
-            worldModel: HarnessWorldModel(),
-            grantedPermissions: [.appControl]
-        )
 
         #expect(memory.status == .succeeded)
         #expect(memory.observations.facts["memory.retrieve.count"] == "1")
-        #expect(appSearch.metadata["targetIDs"] == "com.apple.iCal")
-        #expect(open.observations.focusedApp == "Calendar")
-        #expect(open.observations.facts["focusedApp.bundleIdentifier"] == "com.apple.iCal")
     }
 
     @Test
