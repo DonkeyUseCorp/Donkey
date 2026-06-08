@@ -8,7 +8,7 @@ import {
   useDeleteApiKey,
   type CreatedApiKey,
 } from "@/queries/apiKeys";
-import { useSubscription } from "@/queries/billing";
+import { useSubscription, useUsage } from "@/queries/billing";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -39,6 +39,7 @@ import {
 
 export function ApiKeysManager() {
   const subscription = useSubscription();
+  const usage = useUsage();
   const keys = useApiKeys();
   const createKey = useCreateApiKey();
   const deleteKey = useDeleteApiKey();
@@ -46,7 +47,11 @@ export function ApiKeysManager() {
   const [name, setName] = useState("");
   const [createdKey, setCreatedKey] = useState<CreatedApiKey | null>(null);
 
-  const hasActiveSubscription = subscription.data?.isActive ?? false;
+  // Keys can always be created, but only return data when the user has capacity:
+  // an active subscription or remaining extra calls.
+  const hasCapacity =
+    (subscription.data?.isActive ?? false) ||
+    (usage.data?.extraRemaining ?? 0) > 0;
 
   const handleCreate = () => {
     const trimmed = name.trim();
@@ -70,11 +75,7 @@ export function ApiKeysManager() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
-        {!hasActiveSubscription ? (
-          <p className="text-sm text-muted-foreground">
-            An active subscription is required to create API keys.
-          </p>
-        ) : (
+        <div className="space-y-3">
           <div className="flex items-end gap-3">
             <div className="grid gap-1.5">
               <Label htmlFor="key-name">New key name</Label>
@@ -92,7 +93,13 @@ export function ApiKeysManager() {
               {createKey.isPending ? "Creating…" : "Create key"}
             </Button>
           </div>
-        )}
+          {!hasCapacity ? (
+            <p className="text-sm text-muted-foreground">
+              Keys won&apos;t return data until you have available calls —
+              subscribe or use your free calls.
+            </p>
+          ) : null}
+        </div>
 
         {keys.isLoading ? (
           <Skeleton className="h-24 w-full" />

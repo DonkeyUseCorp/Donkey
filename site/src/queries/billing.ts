@@ -25,6 +25,9 @@ export type VisionUsage = {
   used: number;
   limit: number;
   remaining: number;
+  // Extra calls from one-time grants (signup bonus, top-ups), spent after the
+  // subscription quota is exhausted.
+  extraRemaining: number;
   periodStart: string | null;
   periodEnd: string | null;
   recent: {

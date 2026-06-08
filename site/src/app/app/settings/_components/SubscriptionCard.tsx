@@ -72,7 +72,7 @@ export function SubscriptionCard() {
           </div>
         ) : (
           <p>
-            Subscribe to generate API keys and start calling the Vision API.
+            Subscribe for a monthly quota, or get started with your free calls.
           </p>
         )}
       </CardContent>

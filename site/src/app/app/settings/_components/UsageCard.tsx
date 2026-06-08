@@ -36,9 +36,11 @@ export function UsageCard() {
   }
 
   const data = usage.data;
+  const limit = data?.limit ?? 0;
+  const extra = data?.extraRemaining ?? 0;
   const pct =
-    data && data.limit > 0
-      ? Math.min(100, Math.round((data.used / data.limit) * 100))
+    data && limit > 0
+      ? Math.min(100, Math.round((data.used / limit) * 100))
       : 0;
 
   return (
@@ -46,13 +48,15 @@ export function UsageCard() {
       <CardHeader>
         <CardTitle>Usage this period</CardTitle>
         <CardDescription>
-          {data && data.limit > 0
-            ? `${data.used.toLocaleString()} of ${data.limit.toLocaleString()} calls used · ${data.remaining.toLocaleString()} remaining`
-            : "No active plan — subscribe to start making calls."}
+          {data && limit > 0
+            ? `${data.used.toLocaleString()} of ${limit.toLocaleString()} calls used · ${data.remaining.toLocaleString()} remaining`
+            : extra > 0
+              ? "No subscription — using your extra calls."
+              : "No active plan — subscribe to start making calls."}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {data && data.limit > 0 ? (
+        {data && limit > 0 ? (
           <div
             aria-label="Quota used"
             className="h-2 w-full overflow-hidden rounded-full bg-muted"
@@ -61,6 +65,17 @@ export function UsageCard() {
               className="h-full rounded-full bg-primary"
               style={{ width: `${pct}%` }}
             />
+          </div>
+        ) : null}
+
+        {extra > 0 ? (
+          <div className="flex items-baseline justify-between rounded-md border bg-muted/40 px-3 py-2">
+            <span className="text-sm font-medium text-foreground">
+              Extra calls
+            </span>
+            <span className="text-sm text-muted-foreground">
+              {extra.toLocaleString()} available
+            </span>
           </div>
         ) : null}
 

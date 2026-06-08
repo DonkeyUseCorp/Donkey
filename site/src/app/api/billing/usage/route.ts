@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { inferenceUsageRoutes } from "@/lib/credits/inference";
+import { visionCallGrantRemaining } from "@/lib/credits/vision-grants";
 import {
   donkeySessionUserId,
   unauthorizedResponse,
@@ -19,7 +20,7 @@ export const GET = withDonkeyAuth(async (request) => {
     return unauthorizedResponse();
   }
 
-  const [subscription, recent] = await Promise.all([
+  const [subscription, recent, extraRemaining] = await Promise.all([
     prisma.visionApiSubscription.findUnique({ where: { userId } }),
     prisma.inferenceUsageEvent.findMany({
       orderBy: { createdAt: "desc" },
@@ -38,12 +39,16 @@ export const GET = withDonkeyAuth(async (request) => {
         userId,
       },
     }),
+    // One-time vision-call grants (signup bonus, top-ups) on top of any plan.
+    visionCallGrantRemaining(userId),
   ]);
 
   const limit = subscription?.monthlyCallQuota ?? 0;
   const used = subscription?.periodCallCount ?? 0;
 
   return NextResponse.json({
+    // Extra calls from grants, spent after the subscription quota runs out.
+    extraRemaining: Number(extraRemaining),
     limit,
     periodEnd: subscription?.currentPeriodEnd?.toISOString() ?? null,
     periodStart: subscription?.currentPeriodStart?.toISOString() ?? null,
