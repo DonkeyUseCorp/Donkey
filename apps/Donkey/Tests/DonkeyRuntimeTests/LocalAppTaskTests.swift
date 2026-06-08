@@ -32,81 +32,6 @@ struct LocalAppTaskTests {
     }
 
     @Test
-    func genericAdapterBuildsLocalNavigationRequestForTargetApp() throws {
-        let intent = weatherIntent(rawCity: "San Francisco", city: "San Francisco")
-        let request = try #require(adapter().localNavigationFrameRequest(
-            for: intent,
-            traceID: "trace-local-app-task",
-            maxFrameCount: 2
-        ))
-
-        #expect(request.targetID == "local-app-task-weather-lookup")
-        #expect(request.traceID == "trace-local-app-task")
-        #expect(request.maxFrameCount == 2)
-        #expect(request.requestedBundleIdentifier == "com.apple.weather")
-        #expect(request.requestedTitleContains == "Weather")
-    }
-
-    @Test
-    func genericAdapterBuildsEvidenceBackedActionPlanAndGuardedKeyboardTemplates() throws {
-        let intent = weatherIntent(rawCity: "SF", city: "San Francisco")
-        let localAdapter = adapter()
-
-        let plan = localAdapter.evidenceBackedActionPlan(for: intent)
-        #expect(plan.terminalState == .needsUserReview)
-        #expect(plan.canExecuteGuardedActions == false)
-        #expect(plan.verificationConfidence == 0)
-        #expect(plan.steps.map(\.role) == [
-            .parseIntent,
-            .launchOrFocusApp,
-            .observeApp,
-            .focusControl,
-            .enterText,
-            .submit,
-            .submit,
-            .verifyResult
-        ])
-        #expect(plan.steps.last?.status == .blocked)
-        #expect(plan.metadata["defaultOSInputBackendAvailable"] == "true")
-        #expect(plan.metadata["defaultOSInputBackend"] == "mac-keyboard")
-        #expect(plan.metadata["visualFallback"] == "localModel")
-        #expect(plan.metadata["ocrFallbackDefault"] == "false")
-
-        let commands = localAdapter.guardedKeyboardCommandTemplates(
-            for: intent,
-            issuedAt: timestamp(100)
-        )
-        #expect(commands.map(\.kind) == [.key, .key, .key, .key])
-        #expect(commands.map(\.key) == ["Command+F", "San Francisco", "Return", "Return"])
-        #expect(commands[1].metadata["workflowStepRole"] == "enterText")
-        #expect(commands[1].metadata["text"] == "San Francisco")
-        #expect(commands[1].metadata["bundleIdentifier"] == "com.apple.weather")
-    }
-
-    @Test
-    func genericAdapterVerifiesObservedVisibleText() throws {
-        let intent = weatherIntent(rawCity: "SF", city: "San Francisco")
-        let localAdapter = adapter()
-        let plan = localAdapter.evidenceBackedActionPlan(
-            for: intent,
-            observation: LocalAppTaskObservation(
-                appIsRunning: true,
-                appIsFocused: true,
-                availableControls: ["search": true],
-                visibleText: ["city": "San Francisco, CA"],
-                confidence: 0.91,
-                metadata: groundedControlMetadata()
-            )
-        )
-
-        #expect(plan.terminalState == .completed)
-        #expect(plan.verificationConfidence == 0.91)
-        #expect(plan.steps.first(where: { $0.role == .verifyResult })?.status == .verified)
-        #expect(localAdapter.verifiesVisibleText("San Francisco, CA", matches: intent) == true)
-        #expect(localAdapter.verifiesVisibleText("New York", matches: intent) == false)
-    }
-
-    @Test
     func staticProviderBuildsAppFinderCatalogWithSupportAndDenyMetadata() throws {
         let provider = StaticLocalAppAvailabilityProvider(
             installedBundleIdentifiers: [
@@ -300,66 +225,6 @@ struct LocalAppTaskTests {
     }
 
     @Test
-    func accessibilityActionPlannerPressesExplicitSubmitControls() throws {
-        let definition = LocalAppTaskDefinition(
-            taskType: "button_submit",
-            targetApp: LocalAppTarget(appName: "Music", bundleIdentifier: "com.apple.Music"),
-            triggerTerms: [],
-            workflowSteps: [
-                LocalAppTaskWorkflowStepDefinition(
-                    id: "play-result",
-                    role: .submit,
-                    summary: "Play the selected result",
-                    metadata: ["controlID": "play-result"]
-                )
-            ]
-        )
-        let intent = TaskIntent(
-            intentID: "button-submit-play-result",
-            taskType: definition.taskType,
-            targetApp: definition.targetApp,
-            entities: [:],
-            normalizedEntities: [:],
-            confidence: 0.9,
-            parserSource: .localModel
-        )
-        let index = LocalAppAccessibilityControlIndex(
-            controls: [
-                LocalAppDiscoveredControl(
-                    id: "ax-1.4",
-                    kind: .button,
-                    role: "AXButton",
-                    label: "Play Result",
-                    frame: WindowTargetBounds(x: 320, y: 240, width: 42, height: 28),
-                    actions: ["AXPress"],
-                    metadata: ["controlID": "play-result"]
-                )
-            ],
-            visibleText: "Play Result"
-        )
-
-        let commands = LocalAppAccessibilityActionPlanner().commands(
-            for: intent,
-            definition: definition,
-            index: index,
-            issuedAt: timestamp(200)
-        )
-        let command = try #require(commands.first)
-
-        #expect(commands.count == 1)
-        #expect(command.kind == .tap)
-        #expect(command.metadata["workflowStepID"] == "play-result")
-        #expect(command.metadata["inputIntent"] == "submit")
-        #expect(command.metadata["accessibility.action"] == "AXPress")
-        #expect(command.metadata["controlID"] == "play-result")
-        #expect(command.targetBounds?.origin.x == 320)
-        #expect(command.targetBounds?.origin.y == 240)
-        #expect(command.targetBounds?.size.width == 42)
-        #expect(command.targetBounds?.size.height == 28)
-        #expect(command.targetBounds?.space == .screen)
-    }
-
-    @Test
     func screenshotUnderstandingIsOnlyUsedWhenAccessibilityIsInsufficient() {
         let definition = BuiltInLocalAppTaskDefinitions.weatherLookup
         var boundedSearchMetadata = LocalAppObservationGeometry.targetBoundsMetadata(
@@ -508,39 +373,12 @@ struct LocalAppTaskTests {
         )
     }
 
-    private func adapter() -> LocalAppTaskAdapter {
-        LocalAppTaskAdapter(definition: BuiltInLocalAppTaskDefinitions.weatherLookup)
-    }
-
     private func slug(_ value: String) -> String {
         LocalAppTextNormalizer.normalizedPhrase(value)
             .split(separator: " ")
             .joined(separator: "-")
     }
 
-    private func timestamp(_ milliseconds: UInt64) -> RunTraceTimestamp {
-        RunTraceTimestamp(
-            wallClock: Date(timeIntervalSince1970: Double(milliseconds) / 1_000),
-            monotonicUptimeNanoseconds: milliseconds * 1_000_000
-        )
-    }
-
-    private func groundedControlMetadata(controlID: String = "search") -> [String: String] {
-        var metadata = LocalAppObservationGeometry.targetBoundsMetadata(
-            WindowTargetBounds(x: 100, y: 120, width: 900, height: 700)
-        )
-        metadata.merge(
-            LocalAppObservationGeometry.controlMetadata(
-                controlID: controlID,
-                frame: HotLoopRect(x: 140, y: 180, width: 320, height: 44, space: .screen),
-                source: .accessibility,
-                label: "Search",
-                kind: .searchField,
-                confidence: 0.86
-            )
-        ) { current, _ in current }
-        return metadata
-    }
 }
 
 private final class RecordingApplicationCatalogScanner: LocalApplicationCatalogScanning, @unchecked Sendable {
@@ -605,34 +443,6 @@ private actor RecordingCatalogProfileGenerator: LocalAppCatalogProfileGenerating
     }
 }
 
-@MainActor
-private final class FakeLocalAppTaskAppController: LocalAppTaskAppControlling {
-    private let launchObservation: LocalAppTaskObservation
-    private let finalObservation: LocalAppTaskObservation
-    private(set) var launchCount = 0
-    private(set) var observeCount = 0
-
-    init(
-        launchObservation: LocalAppTaskObservation,
-        finalObservation: LocalAppTaskObservation
-    ) {
-        self.launchObservation = launchObservation
-        self.finalObservation = finalObservation
-    }
-
-    func launchOrFocus(
-        definition: LocalAppTaskDefinition,
-        availability: LocalAppAvailability
-    ) async -> LocalAppTaskObservation {
-        launchCount += 1
-        return launchObservation
-    }
-
-    func observe(definition: LocalAppTaskDefinition) async -> LocalAppTaskObservation {
-        observeCount += 1
-        return finalObservation
-    }
-}
 
 private actor RecordingLocalAppTaskInputBackend: ActionEngineInputBackend {
     private var keys: [String] = []

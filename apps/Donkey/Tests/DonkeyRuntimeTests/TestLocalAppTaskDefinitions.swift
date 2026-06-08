@@ -1,7 +1,30 @@
 import DonkeyContracts
 @testable import DonkeyRuntime
 
-extension BuiltInLocalAppTaskDefinitions {
+/// Test-only task-definition fixtures (the production catalog no longer ships built-in
+/// definitions; these exercise the agent memory store and adapter behavior).
+enum BuiltInLocalAppTaskDefinitions {
+    static var commonWorkflowPrefix: [LocalAppTaskWorkflowStepDefinition] {
+        [
+            LocalAppTaskWorkflowStepDefinition(
+                id: "parse-intent",
+                role: .parseIntent,
+                summary: "Parse the local app task intent"
+            ),
+            LocalAppTaskWorkflowStepDefinition(
+                id: "launch-or-focus",
+                role: .launchOrFocusApp,
+                summary: "Launch or focus the target app"
+            ),
+            LocalAppTaskWorkflowStepDefinition(
+                id: "observe-app",
+                role: .observeApp,
+                summary: "Observe the target app state",
+                metadata: ["strategyOrder": "accessibility,windowMetadata,screenshotForLocalModel"]
+            )
+        ]
+    }
+
     static var weatherLookup: LocalAppTaskDefinition {
         LocalAppTaskDefinition(
             taskType: "weather_lookup",
