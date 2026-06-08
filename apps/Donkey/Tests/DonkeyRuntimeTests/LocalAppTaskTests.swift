@@ -7,31 +7,6 @@ import Testing
 @Suite
 struct LocalAppTaskTests {
     @Test
-    func structuredWeatherIntentCarriesModelSelectedEntities() throws {
-        let intent = weatherIntent(rawCity: "SF", city: "San Francisco")
-
-        #expect(intent.taskType == "weather_lookup")
-        #expect(intent.targetApp.appName == "Weather")
-        #expect(intent.targetApp.bundleIdentifier == "com.apple.weather")
-        #expect(intent.entities["city"] == "SF")
-        #expect(intent.normalizedEntities["city"] == "San Francisco")
-        #expect(intent.confidence == 0.93)
-        #expect(intent.parserSource == .localModel)
-        #expect(intent.needsConfirmation == false)
-        #expect(intent.metadata["catalogEntry"] == "built-in-weather-lookup")
-    }
-
-    @Test
-    func modelIntentCanRequestConfirmationForMissingRequiredEntity() throws {
-        let intent = weatherIntent(rawCity: "", city: "", needsConfirmation: true)
-
-        #expect(intent.taskType == "weather_lookup")
-        #expect(intent.intentID == "weather_lookup-needs-city")
-        #expect(intent.needsConfirmation == true)
-        #expect(intent.metadata["missingEntity"] == "city")
-    }
-
-    @Test
     func staticProviderBuildsAppFinderCatalogWithSupportAndDenyMetadata() throws {
         let provider = StaticLocalAppAvailabilityProvider(
             installedBundleIdentifiers: [
@@ -351,34 +326,6 @@ struct LocalAppTaskTests {
         #expect(groundedMetadata["control.bounds.space"] == HotLoopCoordinateSpace.normalizedTarget.rawValue)
     }
 
-    private func weatherIntent(
-        rawCity: String,
-        city: String,
-        confidence: Double = 0.93,
-        needsConfirmation: Bool = false
-    ) -> TaskIntent {
-        let definition = BuiltInLocalAppTaskDefinitions.weatherLookup
-        return TaskIntent(
-            intentID: needsConfirmation ? "weather_lookup-needs-city" : "weather_lookup-\(slug(city))",
-            taskType: definition.taskType,
-            targetApp: definition.targetApp,
-            entities: rawCity.isEmpty ? [:] : ["city": rawCity],
-            normalizedEntities: city.isEmpty ? [:] : ["city": city],
-            confidence: confidence,
-            parserSource: .localModel,
-            needsConfirmation: needsConfirmation,
-            metadata: definition.metadata.merging(
-                needsConfirmation ? ["missingEntity": "city"] : [:]
-            ) { current, _ in current }
-        )
-    }
-
-    private func slug(_ value: String) -> String {
-        LocalAppTextNormalizer.normalizedPhrase(value)
-            .split(separator: " ")
-            .joined(separator: "-")
-    }
-
 }
 
 private final class RecordingApplicationCatalogScanner: LocalApplicationCatalogScanning, @unchecked Sendable {
@@ -440,34 +387,5 @@ private actor RecordingCatalogProfileGenerator: LocalAppCatalogProfileGenerating
 
     func requestedBatches() -> [[String]] {
         batches
-    }
-}
-
-
-private actor RecordingLocalAppTaskInputBackend: ActionEngineInputBackend {
-    private var keys: [String] = []
-    private var commands: [ActionEngineCommand] = []
-
-    func execute(_ command: ActionEngineCommand) async -> ActionEngineInputBackendResult {
-        commands.append(command)
-        keys.append(command.key ?? "")
-        return ActionEngineInputBackendResult(
-            executed: true,
-            completedAt: command.issuedAt,
-            metadata: [
-                "liveInputBackend": "recording-local-app-task",
-                "inputMode": command.kind == .tap ? "coordinateClick" : "keyCommand",
-                "elementClick": String(command.kind == .tap),
-                "controlID": command.metadata["controlID"] ?? ""
-            ]
-        )
-    }
-
-    func executedKeys() -> [String] {
-        keys
-    }
-
-    func executedCommands() -> [ActionEngineCommand] {
-        commands
     }
 }

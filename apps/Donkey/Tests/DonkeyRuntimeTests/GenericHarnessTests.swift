@@ -1414,7 +1414,7 @@ struct GenericHarnessTests {
             question: "What should I send?",
             pendingToolCall: HarnessToolCall(
                 id: "pending-run",
-                name: LocalAppActionPlanTool.setText.rawValue
+                name: "ui.setText"
             )
         )
         let pointerTask = UserQueryNotchTask(

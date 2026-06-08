@@ -1,10 +1,5 @@
 import Foundation
 
-public enum TaskIntentParserSource: String, Codable, Equatable, Sendable {
-    case localModel = "local_model"
-    case onlineModel = "online_model"
-}
-
 public struct LocalAppTarget: Codable, Equatable, Sendable {
     public var appName: String
     public var bundleIdentifier: String?
@@ -77,146 +72,6 @@ public struct LocalAppFinderCatalogEntry: Codable, Equatable, Sendable {
         self.supportStatus = supportStatus
         self.capabilities = capabilities
         self.denyReason = denyReason
-        self.metadata = metadata
-    }
-}
-
-public enum LocalAppActionPlanTool: String, Codable, CaseIterable, Equatable, Sendable {
-    case openOrFocusApp = "app.openOrFocus"
-    case observeApp = "app.observe"
-    case newDocument = "ui.newDocument"
-    case focusSearch = "ui.focusSearch"
-    case focusAddressBar = "ui.focusAddressBar"
-    case focusTextEntry = "ui.focusTextEntry"
-    case setText = "ui.setText"
-    case clickTarget = "ui.clickTarget"
-    case pressReturn = "ui.pressReturn"
-    case verifyCommand = "app.verifyCommand"
-    case verifyVisibleText = "app.verifyVisibleText"
-}
-
-public struct LocalAppActionPlan: Codable, Equatable, Sendable {
-    public var tools: [LocalAppActionPlanTool]
-    public var inputEntity: String
-    public var controlID: String
-    public var focusKey: String
-    public var verificationTools: [LocalAppActionPlanTool]
-
-    public init(
-        tools: [LocalAppActionPlanTool],
-        inputEntity: String = "query",
-        controlID: String = "search",
-        focusKey: String = "Command+F",
-        verificationTools: [LocalAppActionPlanTool] = [.verifyCommand]
-    ) {
-        self.tools = tools
-        self.inputEntity = inputEntity
-        self.controlID = controlID
-        self.focusKey = focusKey
-        let normalizedVerificationTools = verificationTools.filter(Self.isVerificationTool)
-        self.verificationTools = normalizedVerificationTools.isEmpty
-            ? tools.filter(Self.isVerificationTool)
-            : normalizedVerificationTools
-    }
-
-    public static var defaultSearchSubmitPlan: LocalAppActionPlan {
-        LocalAppActionPlan(
-            tools: [
-                .openOrFocusApp,
-                .observeApp,
-                .focusSearch,
-                .setText,
-                .pressReturn,
-                .verifyCommand
-            ]
-        )
-    }
-
-    public var isExecutable: Bool {
-        tools.isEmpty == false
-            && tools.contains(where: { $0 == .setText || $0 == .pressReturn })
-    }
-
-    public var requiresTextInput: Bool {
-        tools.contains(.setText)
-    }
-
-    public var requiresVisibleTextVerification: Bool {
-        verificationTools.contains(.verifyVisibleText)
-    }
-
-    public static func isVerificationTool(_ tool: LocalAppActionPlanTool) -> Bool {
-        tool == .verifyCommand || tool == .verifyVisibleText
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case tools
-        case inputEntity
-        case controlID
-        case focusKey
-        case verificationTools
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let tools = try container.decode([LocalAppActionPlanTool].self, forKey: .tools)
-        let verificationTools = try container.decodeIfPresent([LocalAppActionPlanTool].self, forKey: .verificationTools)
-            ?? tools.filter(Self.isVerificationTool)
-        self.init(
-            tools: tools,
-            inputEntity: try container.decode(String.self, forKey: .inputEntity),
-            controlID: try container.decode(String.self, forKey: .controlID),
-            focusKey: try container.decode(String.self, forKey: .focusKey),
-            verificationTools: verificationTools
-        )
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(tools, forKey: .tools)
-        try container.encode(inputEntity, forKey: .inputEntity)
-        try container.encode(controlID, forKey: .controlID)
-        try container.encode(focusKey, forKey: .focusKey)
-        try container.encode(verificationTools, forKey: .verificationTools)
-    }
-}
-
-public struct TaskIntent: Codable, Equatable, Sendable {
-    public var intentID: String
-    public var taskType: String
-    public var targetApp: LocalAppTarget
-    public var entities: [String: String]
-    public var normalizedEntities: [String: String]
-    public var confidence: Double
-    public var parserSource: TaskIntentParserSource
-    public var needsConfirmation: Bool
-    public var sourceModelCallID: String?
-    public var actionPlan: LocalAppActionPlan?
-    public var metadata: [String: String]
-
-    public init(
-        intentID: String,
-        taskType: String,
-        targetApp: LocalAppTarget,
-        entities: [String: String] = [:],
-        normalizedEntities: [String: String] = [:],
-        confidence: Double,
-        parserSource: TaskIntentParserSource,
-        needsConfirmation: Bool = false,
-        sourceModelCallID: String? = nil,
-        actionPlan: LocalAppActionPlan? = nil,
-        metadata: [String: String] = [:]
-    ) {
-        self.intentID = intentID
-        self.taskType = taskType
-        self.targetApp = targetApp
-        self.entities = entities
-        self.normalizedEntities = normalizedEntities
-        self.confidence = min(max(confidence, 0), 1)
-        self.parserSource = parserSource
-        self.needsConfirmation = needsConfirmation
-        self.sourceModelCallID = sourceModelCallID
-        self.actionPlan = actionPlan
         self.metadata = metadata
     }
 }
@@ -367,19 +222,6 @@ public struct LocalAppTaskDefinition: Codable, Equatable, Sendable {
     }
 }
 
-public enum LocalAppTaskStepStatus: String, Codable, Equatable, Sendable {
-    case needsEvidence = "needs-evidence"
-    case blocked
-    case verified
-}
-
-public enum LocalAppTaskTerminalState: String, Codable, Equatable, Sendable {
-    case completed
-    case needsUserReview = "needs-user-review"
-    case failedSafe = "failed-safe"
-    case timedOut = "timed-out"
-}
-
 public struct LocalAppTaskObservation: Codable, Equatable, Sendable {
     public var appIsRunning: Bool
     public var appIsFocused: Bool
@@ -405,52 +247,3 @@ public struct LocalAppTaskObservation: Codable, Equatable, Sendable {
     }
 }
 
-public struct LocalAppEvidenceBackedActionStep: Codable, Equatable, Sendable {
-    public var id: String
-    public var role: LocalAppTaskStepRole
-    public var status: LocalAppTaskStepStatus
-    public var summary: String
-    public var metadata: [String: String]
-
-    public init(
-        id: String,
-        role: LocalAppTaskStepRole,
-        status: LocalAppTaskStepStatus,
-        summary: String,
-        metadata: [String: String] = [:]
-    ) {
-        self.id = id
-        self.role = role
-        self.status = status
-        self.summary = summary
-        self.metadata = metadata
-    }
-}
-
-public struct LocalAppEvidenceBackedActionPlan: Codable, Equatable, Sendable {
-    public var intent: TaskIntent
-    public var targetApp: LocalAppTarget
-    public var steps: [LocalAppEvidenceBackedActionStep]
-    public var terminalState: LocalAppTaskTerminalState
-    public var canExecuteGuardedActions: Bool
-    public var verificationConfidence: Double
-    public var metadata: [String: String]
-
-    public init(
-        intent: TaskIntent,
-        targetApp: LocalAppTarget,
-        steps: [LocalAppEvidenceBackedActionStep],
-        terminalState: LocalAppTaskTerminalState,
-        canExecuteGuardedActions: Bool,
-        verificationConfidence: Double,
-        metadata: [String: String] = [:]
-    ) {
-        self.intent = intent
-        self.targetApp = targetApp
-        self.steps = steps
-        self.terminalState = terminalState
-        self.canExecuteGuardedActions = canExecuteGuardedActions
-        self.verificationConfidence = min(max(verificationConfidence, 0), 1)
-        self.metadata = metadata
-    }
-}
