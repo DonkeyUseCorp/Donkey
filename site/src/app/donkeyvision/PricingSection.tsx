@@ -35,10 +35,10 @@ export function PricingSection() {
               </li>
             ))}
           </ul>
-          <p className="mt-6 text-sm leading-6 text-white/55">
+          <p className="mt-24 text-sm leading-6 text-white/55">
             Need higher call volume or rate limits?{" "}
             <ContactSalesButton className="font-semibold text-white/80 underline underline-offset-2 transition hover:text-white">
-              Contact sales
+              Contact us 
             </ContactSalesButton>{" "}
             for increased limits.
           </p>
