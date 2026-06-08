@@ -1,3 +1,4 @@
+import AppKit
 import DonkeyAI
 import DonkeyContracts
 import DonkeyHarness
@@ -174,7 +175,8 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             command: redactedCommand,
             traceID: traceID,
             taskID: taskID,
-            preparedTurnMetadata: Self.genericHarnessMetadata(preparedTurn: genericPreparedTurn)
+            preparedTurnMetadata: Self.genericHarnessMetadata(preparedTurn: genericPreparedTurn),
+            visualize: context?.agentVisualizationChanged
         )
     }
 
@@ -213,7 +215,8 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         command: String,
         traceID: String,
         taskID: String,
-        preparedTurnMetadata: [String: String]
+        preparedTurnMetadata: [String: String],
+        visualize: (@MainActor @Sendable (AgentVisualizationPlan) -> Void)? = nil
     ) async -> UserQueryCommandHandlingResult {
         guard permissionPolicy.allowedCapabilities.contains(.input) else {
             return await failHarnessRun(
@@ -334,7 +337,25 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // Suspend the warm-cache monitor for the whole drive so it never races us writing the same
         // app's parse. The run between these calls has no early exit, so resume always pairs with it.
         VisionWarmCacheActivity.shared.suspend()
-        let runSteps = await runtime.run(taskID: taskID, planner: planner, maxSteps: 24)
+        // Realtime per-turn cursor path: after each step that physically moved the pointer (a click),
+        // animate the overlay cursor traveling to that exact target, so the visualization tracks what
+        // the harness is actually doing rather than a precomputed plan.
+        var onStep: (@Sendable (HarnessStepExecutionResult) async -> Void)?
+        if let present = visualize {
+            onStep = { (step: HarnessStepExecutionResult) async -> Void in
+                await MainActor.run {
+                    let screenSize = (NSScreen.main ?? NSScreen.screens.first)?.frame.size ?? .zero
+                    guard let plan = Self.cursorVisualizationPlan(
+                        for: step,
+                        appName: appName,
+                        traceID: traceID,
+                        screenSize: screenSize
+                    ) else { return }
+                    present(plan)
+                }
+            }
+        }
+        let runSteps = await runtime.run(taskID: taskID, planner: planner, maxSteps: 24, onStep: onStep)
         VisionWarmCacheActivity.shared.resume()
 
         let finalTask = await genericHarnessLifecycle.coordinator.task(id: taskID)
@@ -556,6 +577,55 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             return (frontmostAppName, frontmostBundleIdentifier)
         }
         return (resolved.appName ?? requested, resolved.bundleIdentifier)
+    }
+
+    /// Builds a one-step cursor-path visualization toward the exact screen point a just-executed action
+    /// clicked, in screen-normalized coordinates for the overlay. Returns nil for steps that did not
+    /// move the pointer (observation, conversation, AXPress without a coordinate fallback).
+    static func cursorVisualizationPlan(
+        for step: HarnessStepExecutionResult,
+        appName: String,
+        traceID: String,
+        screenSize: CGSize
+    ) -> AgentVisualizationPlan? {
+        guard let result = step.toolResult,
+              result.status == .succeeded,
+              let raw = result.metadata["screenPoint"],
+              screenSize.width > 0, screenSize.height > 0 else {
+            return nil
+        }
+        let parts = raw.split(separator: ",")
+        guard parts.count == 2,
+              let px = Double(parts[0].trimmingCharacters(in: .whitespaces)),
+              let py = Double(parts[1].trimmingCharacters(in: .whitespaces)) else {
+            return nil
+        }
+        let label = result.metadata["label"].flatMap { $0.isEmpty ? nil : $0 } ?? appName
+        let target = AgentVisualizationStepTarget(
+            point: HotLoopPoint(
+                x: px / Double(screenSize.width),
+                y: py / Double(screenSize.height),
+                space: .normalizedTarget
+            ),
+            description: label,
+            source: .actionTrace,
+            confidence: 0.95
+        )
+        return AgentVisualizationPlan(
+            title: appName,
+            executionMode: .live,
+            sourceTraceID: traceID,
+            steps: [
+                AgentVisualizationStep(
+                    kind: .moveToTarget,
+                    label: label,
+                    target: target,
+                    travelDuration: 0.45,
+                    holdDuration: 0.5
+                )
+            ],
+            metadata: ["realPointerMoved": "true"]
+        )
     }
 
     static func genericHarnessToolNames() -> [String] {

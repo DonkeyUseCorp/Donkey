@@ -42,11 +42,15 @@ public struct GenericHarnessRuntime: Sendable {
     ///
     /// The planner is consulted with the *current* task each iteration, so it sees the world model the
     /// previous tool produced — that is what makes this a real harness loop rather than a fixed plan.
+    /// `onStep`, when provided, is awaited after each executed step with that step's result. It lets a
+    /// caller react to realtime loop progress (e.g. drive a cursor-path overlay toward the target the
+    /// step just acted on) without the runtime knowing anything about the UI.
     @discardableResult
     public func run(
         taskID: String,
         planner: any HarnessNextStepPlanning,
-        maxSteps: Int = 16
+        maxSteps: Int = 16,
+        onStep: (@Sendable (HarnessStepExecutionResult) async -> Void)? = nil
     ) async -> [HarnessStepExecutionResult] {
         var results: [HarnessStepExecutionResult] = []
         for _ in 0..<maxSteps {
@@ -60,6 +64,7 @@ public struct GenericHarnessRuntime: Sendable {
                 break
             }
             results.append(step)
+            await onStep?(step)
             if step.stoppedForGate || !step.task.status.canExecuteTools {
                 break
             }
