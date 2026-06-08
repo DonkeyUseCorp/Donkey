@@ -20,7 +20,6 @@ public struct LocalAppTaskLiveRunResult: Equatable, Sendable {
     public var initialActionPlan: LocalAppEvidenceBackedActionPlan?
     public var finalActionPlan: LocalAppEvidenceBackedActionPlan?
     public var observation: LocalAppTaskObservation?
-    public var documentFormFillPlan: DocumentFormFillPlan?
     public var actionTraces: [ActionEngineCommandTrace]
     public var workflowProgress: LocalAppTaskWorkflowProgress
     public var metadata: [String: String]
@@ -33,7 +32,6 @@ public struct LocalAppTaskLiveRunResult: Equatable, Sendable {
         initialActionPlan: LocalAppEvidenceBackedActionPlan? = nil,
         finalActionPlan: LocalAppEvidenceBackedActionPlan? = nil,
         observation: LocalAppTaskObservation? = nil,
-        documentFormFillPlan: DocumentFormFillPlan? = nil,
         actionTraces: [ActionEngineCommandTrace] = [],
         workflowProgress: LocalAppTaskWorkflowProgress = LocalAppTaskWorkflowProgress(),
         metadata: [String: String] = [:]
@@ -45,7 +43,6 @@ public struct LocalAppTaskLiveRunResult: Equatable, Sendable {
         self.initialActionPlan = initialActionPlan
         self.finalActionPlan = finalActionPlan
         self.observation = observation
-        self.documentFormFillPlan = documentFormFillPlan
         self.actionTraces = actionTraces
         self.workflowProgress = workflowProgress
         self.metadata = metadata

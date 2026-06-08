@@ -352,35 +352,6 @@ public struct LocalAppAccessibilityActionPlanner: Sendable {
         }
     }
 
-    public func fillCommands(
-        approval: DocumentFormFillApproval,
-        definition: LocalAppTaskDefinition,
-        issuedAt: RunTraceTimestamp
-    ) -> [ActionEngineCommand] {
-        let adapter = LocalAppTaskAdapter(definition: definition)
-        return approval.approvedProposals.enumerated().map { index, proposal in
-            ActionEngineCommand(
-                id: "\(approval.id)-fill-\(index)",
-                traceID: approval.traceID,
-                targetID: adapter.targetID,
-                kind: .key,
-                issuedAt: Self.timestamp(issuedAt, advancedByMilliseconds: Double(index) * 60),
-                key: proposal.proposedValue,
-                metadata: [
-                    "taskType": definition.taskType,
-                    "workflowStepRole": "enterText",
-                    "inputStrategy": "accessibility",
-                    "accessibility.action": "AXSetValue",
-                    "accessibility.nodeID": proposal.fieldID,
-                    "accessibility.value": proposal.proposedValue,
-                    "documentFormFill.approvalID": approval.id,
-                    "documentFormFill.sourceKey": proposal.sourceKey,
-                    "documentFormFill.fieldLabel": proposal.fieldLabel
-                ]
-            )
-        }
-    }
-
     private func command(
         id: String,
         traceID: String,

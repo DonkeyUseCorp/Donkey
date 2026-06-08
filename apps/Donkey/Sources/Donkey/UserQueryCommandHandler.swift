@@ -35,7 +35,6 @@ struct UserQueryCommandHandlingResult: Equatable, Sendable {
     var taskLabel: String?
     var traceID: String
     var metadata: [String: String]
-    var documentReviewRequest: DocumentFormFillReviewRequest?
     var agentVisualizationPlan: AgentVisualizationPlan?
     var cursorOverlayRequest: PointerCoachCursorGuideRequest?
 
@@ -47,7 +46,6 @@ struct UserQueryCommandHandlingResult: Equatable, Sendable {
         traceID: String,
         metadata: [String: String],
         taskLabel: String? = nil,
-        documentReviewRequest: DocumentFormFillReviewRequest? = nil,
         agentVisualizationPlan: AgentVisualizationPlan? = nil,
         cursorOverlayRequest: PointerCoachCursorGuideRequest? = nil
     ) {
@@ -58,16 +56,9 @@ struct UserQueryCommandHandlingResult: Equatable, Sendable {
         self.taskLabel = taskLabel
         self.traceID = traceID
         self.metadata = metadata
-        self.documentReviewRequest = documentReviewRequest
         self.agentVisualizationPlan = agentVisualizationPlan
         self.cursorOverlayRequest = cursorOverlayRequest
     }
-}
-
-struct DocumentFormFillReviewRequest: Equatable, Sendable {
-    var plan: DocumentFormFillPlan
-    var definition: LocalAppTaskDefinition
-    var traceID: String
 }
 
 struct UserQueryCommandContext: Sendable {

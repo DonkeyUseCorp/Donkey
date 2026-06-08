@@ -22,23 +22,6 @@ struct LocalAppTaskTests {
     }
 
     @Test
-    func structuredDocumentFormFillIntentBuildsReviewOnlyTask() throws {
-        let intent = documentFormFillIntent()
-
-        #expect(intent.taskType == "document_form_fill")
-        #expect(intent.targetApp.appName == "Preview")
-        #expect(intent.normalizedEntities["document"] == "current PDF")
-        #expect(intent.normalizedEntities["dataSource"] == "provided data")
-        #expect(intent.metadata["requiresDocumentContext"] == "true")
-
-        let plan = LocalAppTaskAdapter(definition: BuiltInLocalAppTaskDefinitions.documentFormFill)
-            .evidenceBackedActionPlan(for: intent)
-        #expect(plan.canExecuteGuardedActions == false)
-        #expect(plan.metadata["guardedLiveDefault"] == "reviewOnly")
-        #expect(plan.steps.map(\.role).contains(.custom))
-    }
-
-    @Test
     func modelIntentCanRequestConfirmationForMissingRequiredEntity() throws {
         let intent = weatherIntent(rawCity: "", city: "", needsConfirmation: true)
 
@@ -261,75 +244,6 @@ struct LocalAppTaskTests {
             ["com.figma.Desktop"],
             ["com.linear"]
         ])
-    }
-
-    @Test
-    func documentFormFillPlannerMapsStructuredDataToObservedFieldsForReview() throws {
-        let intent = documentFormFillIntent()
-        let context = LocalAppTaskContext(
-            focusedAppName: "Preview",
-            focusedBundleIdentifier: "com.apple.Preview",
-            focusedWindowTitle: "W-9.pdf",
-            structuredData: [
-                "Name": "Ada Lovelace",
-                "Address": "12 Algorithm Ave"
-            ],
-            observedFormFields: [
-                LocalDocumentFormField(id: "field-name", label: "Name", isRequired: true),
-                LocalDocumentFormField(id: "field-address", label: "Mailing Address", isRequired: true)
-            ]
-        )
-
-        let plan = DocumentFormFillPlanner().plan(
-            intent: intent,
-            definition: BuiltInLocalAppTaskDefinitions.documentFormFill,
-            context: context
-        )
-
-        #expect(plan.status == .readyForReview)
-        #expect(plan.proposals.count == 2)
-        #expect(plan.proposals.first(where: { $0.fieldID == "field-name" })?.proposedValue == "Ada Lovelace")
-        #expect(plan.metadata["requiresReview"] == "true")
-    }
-
-    @Test
-    func documentFormFillApprovalBuildsOnlyApprovedAccessibilityCommands() throws {
-        let intent = documentFormFillIntent()
-        let context = LocalAppTaskContext(
-            focusedWindowTitle: "W-9.pdf",
-            structuredData: [
-                "Name": "Ada Lovelace",
-                "Address": "12 Algorithm Ave"
-            ],
-            observedFormFields: [
-                LocalDocumentFormField(id: "ax-1.1", label: "Name", isRequired: true),
-                LocalDocumentFormField(id: "ax-1.2", label: "Address", isRequired: true)
-            ]
-        )
-        let planner = DocumentFormFillPlanner()
-        let plan = planner.plan(
-            intent: intent,
-            definition: BuiltInLocalAppTaskDefinitions.documentFormFill,
-            context: context
-        )
-        let approval = planner.approval(
-            for: plan,
-            traceID: "trace-approval",
-            approvedFieldIDs: ["ax-1.1"]
-        )
-        let commands = LocalAppAccessibilityActionPlanner().fillCommands(
-            approval: approval,
-            definition: BuiltInLocalAppTaskDefinitions.documentFormFill,
-            issuedAt: timestamp(200)
-        )
-
-        #expect(approval.status == .partiallyApproved)
-        #expect(approval.approvedProposals.map(\.fieldID) == ["ax-1.1"])
-        #expect(approval.rejectedFieldIDs == ["ax-1.2"])
-        #expect(commands.count == 1)
-        #expect(commands.first?.metadata["accessibility.action"] == "AXSetValue")
-        #expect(commands.first?.metadata["accessibility.nodeID"] == "ax-1.1")
-        #expect(commands.first?.metadata["documentFormFill.approvalID"] == approval.id)
     }
 
     @Test
@@ -572,58 +486,6 @@ struct LocalAppTaskTests {
         #expect(groundedMetadata["control.bounds.space"] == HotLoopCoordinateSpace.normalizedTarget.rawValue)
     }
 
-    @Test @MainActor
-    func documentApprovalRunnerExecutesOnlyApprovedFields() async throws {
-        let backend = RecordingLocalAppTaskInputBackend()
-        let controller = FakeLocalAppTaskAppController(
-            launchObservation: LocalAppTaskObservation(appIsRunning: true, appIsFocused: true),
-            finalObservation: LocalAppTaskObservation(appIsRunning: true, appIsFocused: true)
-        )
-        let plan = DocumentFormFillPlan(
-            status: .readyForReview,
-            proposals: [
-                DocumentFormFillProposal(
-                    fieldID: "ax-1.1",
-                    fieldLabel: "Name",
-                    proposedValue: "Ada Lovelace",
-                    sourceKey: "Name",
-                    confidence: 0.94
-                ),
-                DocumentFormFillProposal(
-                    fieldID: "ax-1.2",
-                    fieldLabel: "Address",
-                    proposedValue: "12 Algorithm Ave",
-                    sourceKey: "Address",
-                    confidence: 0.94
-                )
-            ]
-        )
-        let coordinator = RunCoordinator()
-        let runner = DocumentFormFillApprovalLiveRunner(
-            appController: controller,
-            availabilityProvider: StaticLocalAppAvailabilityProvider(installedBundleIdentifiers: ["com.apple.Preview"]),
-            coordinator: coordinator,
-            actionEngineFactory: { _ in
-                ActionEngineGuardrail(
-                    configuration: ActionEngineConfiguration(liveInputEnabled: true),
-                    inputBackend: backend
-                )
-            }
-        )
-
-        let result = await runner.run(
-            plan: plan,
-            definition: BuiltInLocalAppTaskDefinitions.documentFormFill,
-            traceID: "trace-document-approval",
-            approvedFieldIDs: ["ax-1.1"]
-        )
-
-        #expect(result.status == .completed)
-        #expect(result.approval.approvedProposals.map(\.fieldID) == ["ax-1.1"])
-        #expect(await backend.executedKeys() == ["Ada Lovelace"])
-        #expect(controller.launchCount == 1)
-    }
-
     private func weatherIntent(
         rawCity: String,
         city: String,
@@ -643,26 +505,6 @@ struct LocalAppTaskTests {
             metadata: definition.metadata.merging(
                 needsConfirmation ? ["missingEntity": "city"] : [:]
             ) { current, _ in current }
-        )
-    }
-
-    private func documentFormFillIntent(confidence: Double = 0.9) -> TaskIntent {
-        let definition = BuiltInLocalAppTaskDefinitions.documentFormFill
-        return TaskIntent(
-            intentID: "document_form_fill-current-pdf",
-            taskType: definition.taskType,
-            targetApp: definition.targetApp,
-            entities: [
-                "document": "this PDF",
-                "dataSource": "this data"
-            ],
-            normalizedEntities: [
-                "document": "current PDF",
-                "dataSource": "provided data"
-            ],
-            confidence: confidence,
-            parserSource: .localModel,
-            metadata: definition.metadata
         )
     }
 

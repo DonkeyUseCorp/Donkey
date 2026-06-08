@@ -83,8 +83,7 @@ extension BuiltInLocalAppTaskDefinitions {
     static var testFixtures: [LocalAppTaskDefinition] {
         [
             genericLocalAppInteraction,
-            weatherLookup,
-            documentFormFill
+            weatherLookup
         ]
     }
 }

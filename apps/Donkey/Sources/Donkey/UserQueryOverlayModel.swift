@@ -31,7 +31,6 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     private let voiceTranscriber: LocalVoiceTranscriptionAdapter
     private let liveController: GeminiLiveVoiceController
     private var updateChecker: any DonkeyUpdateChecking
-    private let documentReviewController: DocumentFormFillReviewWindowController
     private let appCatalogRefreshLoop: LocalAppDynamicCatalogRefreshLoop
     private var activeTaskIDs: Set<String> = []
     private var lastActiveTaskID: String?
@@ -48,7 +47,6 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             runtime: ProcessBackedParakeetTranscriptionRuntime()
         ),
         updateChecker: any DonkeyUpdateChecking = SparkleUpdateController(),
-        documentReviewController: DocumentFormFillReviewWindowController = DocumentFormFillReviewWindowController(),
         liveController: GeminiLiveVoiceController = GeminiLiveVoiceController(),
         theme: UserQueryTheme = UserQueryOverlayModel.bundledTheme()
     ) {
@@ -58,7 +56,6 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         self.voiceTranscriber = voiceTranscriber
         self.liveController = liveController
         self.updateChecker = updateChecker
-        self.documentReviewController = documentReviewController
         self.appCatalogRefreshLoop = LocalAppDynamicCatalogRefreshLoop(
             profileGenerator: HostedLocalAppCatalogProfileGenerator()
         )
@@ -416,9 +413,6 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
                     taskID: task.id,
                     result: result
                 )
-                if let documentReviewRequest = result.documentReviewRequest {
-                    self.documentReviewController.show(request: documentReviewRequest)
-                }
                 let cursorOverlayRequest = result.cursorOverlayRequest
                 if let cursorOverlayRequest {
                     self.agentVisualizationPresenter?(cursorOverlayRequest, spawnID)
