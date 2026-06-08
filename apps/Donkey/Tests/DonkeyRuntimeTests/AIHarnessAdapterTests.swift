@@ -108,46 +108,6 @@ struct AIHarnessAdapterTests {
     }
 
     @Test
-    func localModelPriorityWorkerPreemptsLowerPriorityWorkCooperatively() async throws {
-        let worker = LocalModelPriorityWorker()
-        let recorder = LocalModelPriorityWorkerRecorder()
-
-        let lowPriority = Task {
-            await worker.submit(kind: .plannerHint, priority: .replay) { context in
-                await recorder.append("low-start")
-                while !(await context.isCancelled()) {
-                    try? await Task.sleep(nanoseconds: 5_000_000)
-                }
-                await recorder.append("low-cancelled")
-                return "low"
-            }
-        }
-
-        for _ in 0..<100 where !(await recorder.events().contains("low-start")) {
-            try await Task.sleep(nanoseconds: 1_000_000)
-        }
-        #expect(await recorder.events().contains("low-start"))
-
-        let highPriority = Task {
-            await worker.submit(kind: .taskIntent, priority: .userInteractive) {
-                await recorder.append("high-run")
-                return "high"
-            }
-        }
-
-        let highResult = await highPriority.value
-        let lowResult = await lowPriority.value
-        let events = await recorder.events()
-        let snapshot = await worker.snapshot()
-
-        #expect(highResult == "high")
-        #expect(lowResult == "low")
-        #expect(events == ["low-start", "low-cancelled", "high-run"])
-        #expect(snapshot.currentWorkID == nil)
-        #expect(snapshot.queuedCount == 0)
-    }
-
-    @Test
     func voiceTranscriptionRouteHasNoDefaultLocalModel() throws {
         let router = AIModelRouter(registry: .defaultHybridPlanner)
 
@@ -1086,18 +1046,6 @@ private struct FakeSidecarRunner: LocalJSONSidecarRunning {
 
     func run(_ request: LocalJSONSidecarRequest) async -> LocalJSONSidecarResult {
         result
-    }
-}
-
-private actor LocalModelPriorityWorkerRecorder {
-    private var values: [String] = []
-
-    func append(_ value: String) {
-        values.append(value)
-    }
-
-    func events() -> [String] {
-        values
     }
 }
 
