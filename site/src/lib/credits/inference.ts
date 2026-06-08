@@ -14,6 +14,13 @@ import {
 import { isJsonObject, toJsonValue } from "@/lib/inference/json";
 import type { JsonObject, JsonValue } from "@/lib/inference/providers";
 
+// UserCreditGrant.unit values. Dollar grants ("credit") feed the account
+// balance and pay for hosted inference; vision-call grants ("vision_call") are
+// an off-balance integer count consumed only by the Vision API quota path.
+export const creditGrantUnit = "credit";
+export const visionCallGrantUnit = "vision_call";
+export type CreditGrantUnit = typeof creditGrantUnit | typeof visionCallGrantUnit;
+
 export const inferenceUsageRoutes = {
   assets: "/api/inference/assets/",
   assetsRefresh: "/api/inference/assets/refresh/",
@@ -100,19 +107,9 @@ export class CreditLimitExceededError extends Error {
 }
 
 export async function ensureCreditAccount(userId: string) {
-  const account = await ensureCreditAccountRecord(prisma, userId);
-  const initialGrantMicros = initialFreeCreditMicros();
-  if (initialGrantMicros > zeroCreditMicros) {
-    await grantCredits({
-      userId,
-      amountMicros: initialGrantMicros,
-      source: "free",
-      sourceId: `first-use:${userId}`,
-      description: "Initial free credits",
-    });
-  }
-
-  return account;
+  // Signup grants are provisioned once at user creation (see
+  // provisionSignupGrants); this only guarantees the account row exists.
+  return ensureCreditAccountRecord(prisma, userId);
 }
 
 export async function grantCredits(input: {
@@ -120,6 +117,7 @@ export async function grantCredits(input: {
   amountMicros: bigint;
   source: string;
   sourceId?: string;
+  unit?: CreditGrantUnit;
   expiresAt?: Date;
   periodStart?: Date;
   periodEnd?: Date;
@@ -130,11 +128,18 @@ export async function grantCredits(input: {
     throw new Error("Credit grants must be positive.");
   }
 
+  const unit = input.unit ?? creditGrantUnit;
+  // Only dollar grants move the account balance and write a balance-tracking
+  // ledger entry. Vision-call grants are an off-balance count, so they create
+  // just the grant row.
+  const affectsBalance = unit === creditGrantUnit;
+
   if (input.sourceId) {
     const existing = await prisma.userCreditGrant.findFirst({
       where: {
         source: input.source,
         sourceId: input.sourceId,
+        unit,
         userId: input.userId,
       },
     });
@@ -147,19 +152,21 @@ export async function grantCredits(input: {
     return await prisma.$transaction(
       async (tx) => {
         const account = await ensureCreditAccountRecord(tx, input.userId);
-        const updatedAccount = await tx.userCreditAccount.update({
-          data: {
-            balanceMicros: {
-              increment: input.amountMicros,
-            },
-            lifetimeGrantedMicros: {
-              increment: input.amountMicros,
-            },
-          },
-          where: {
-            id: account.id,
-          },
-        });
+        const updatedAccount = affectsBalance
+          ? await tx.userCreditAccount.update({
+              data: {
+                balanceMicros: {
+                  increment: input.amountMicros,
+                },
+                lifetimeGrantedMicros: {
+                  increment: input.amountMicros,
+                },
+              },
+              where: {
+                id: account.id,
+              },
+            })
+          : account;
 
         const grant = await tx.userCreditGrant.create({
           data: {
@@ -173,24 +180,27 @@ export async function grantCredits(input: {
             remainingAmountMicros: input.amountMicros,
             source: input.source,
             sourceId: input.sourceId,
+            unit,
             userId: input.userId,
           },
         });
 
-        await tx.userCreditLedgerEntry.create({
-          data: {
-            accountId: account.id,
-            amountMicros: input.amountMicros,
-            balanceAfterMicros: updatedAccount.balanceMicros,
-            description: input.description,
-            grantId: grant.id,
-            metadata: prismaJson(input.metadata),
-            source: input.source,
-            sourceId: input.sourceId,
-            type: "grant",
-            userId: input.userId,
-          },
-        });
+        if (affectsBalance) {
+          await tx.userCreditLedgerEntry.create({
+            data: {
+              accountId: account.id,
+              amountMicros: input.amountMicros,
+              balanceAfterMicros: updatedAccount.balanceMicros,
+              description: input.description,
+              grantId: grant.id,
+              metadata: prismaJson(input.metadata),
+              source: input.source,
+              sourceId: input.sourceId,
+              type: "grant",
+              userId: input.userId,
+            },
+          });
+        }
 
         return grant;
       },
@@ -208,6 +218,7 @@ export async function grantCredits(input: {
         where: {
           source: input.source,
           sourceId: input.sourceId,
+          unit,
           userId: input.userId,
         },
       });
@@ -421,6 +432,9 @@ export async function getCreditBalance(userId: string) {
           gt: zeroCreditMicros,
         },
         status: "active",
+        // The dollar balance view lists dollar grants only; vision-call grants
+        // are surfaced through the Vision API quota path.
+        unit: creditGrantUnit,
         userId,
         OR: [
           {
@@ -593,6 +607,9 @@ async function expireCreditsForAccount(
         gt: zeroCreditMicros,
       },
       status: "active",
+      // Dollar grants only — vision-call grants are off-balance and expire via
+      // their own path, so they must never decrement balanceMicros here.
+      unit: creditGrantUnit,
     },
   });
 
@@ -659,6 +676,9 @@ async function debitGrants(
         gt: zeroCreditMicros,
       },
       status: "active",
+      // Dollar inference only spends dollar grants — vision-call grants are a
+      // separate denomination and must never be debited here.
+      unit: creditGrantUnit,
     },
   });
 
@@ -1227,10 +1247,6 @@ function billingStatusFor(status: InferenceUsageStatus, creditCostMicros: bigint
   }
 
   return creditCostMicros > zeroCreditMicros ? "charged" : "zero_cost";
-}
-
-function initialFreeCreditMicros() {
-  return creditStringToMicros(process.env.DONKEY_INITIAL_FREE_CREDITS);
 }
 
 function prismaJson(value: JsonValue | undefined): Prisma.InputJsonValue | undefined {

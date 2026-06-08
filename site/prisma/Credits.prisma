@@ -22,6 +22,11 @@ model UserCreditGrant {
   user                  User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
   source                String
   sourceId              String?
+  // What the amounts below are denominated in. "credit" = USD micros that feed
+  // UserCreditAccount.balanceMicros. "vision_call" = a raw integer count of
+  // Vision API calls that lives off-balance (never touches balanceMicros and is
+  // consumed by the Vision API quota path, not by dollar inference).
+  unit                  String    @default("credit")
   originalAmountMicros  BigInt
   remainingAmountMicros BigInt
   expiresAt             DateTime?
@@ -34,10 +39,9 @@ model UserCreditGrant {
   updatedAt             DateTime                @updatedAt
   ledgerEntries         UserCreditLedgerEntry[]
 
-  @@unique([userId, source, sourceId])
+  @@unique([userId, unit, source, sourceId])
   @@index([accountId])
-  @@index([userId, expiresAt])
-  @@index([userId, status])
+  @@index([userId, unit, status])
   @@map("user_credit_grant")
 }
 
