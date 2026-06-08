@@ -311,41 +311,6 @@ public struct ProcessBackedLocalLLMAgentVisualizationPlanResolver: AgentVisualiz
     }
 }
 
-public struct DisabledAgentVisualizationPlanResolver: AgentVisualizationPlanResolving {
-    public static let schemaID = "agent_visualization_disabled"
-
-    public var reason: String
-
-    public init(reason: String = "hostedVisualizationResolverNotConfigured") {
-        self.reason = reason
-    }
-
-    public func resolveVisualizationPlan(
-        _ request: AgentVisualizationPlanResolverRequest
-    ) async -> AgentVisualizationPlanResolverResult {
-        AgentVisualizationPlanResolverResult(
-            visualizationPlan: nil,
-            cursorRequest: nil,
-            confidence: 0,
-            reason: reason,
-            trace: AIModelCallTrace(
-                id: "model-call-\(request.sourceTraceID)",
-                role: .taskIntent,
-                provider: .donkeyBackend,
-                modelID: "disabled",
-                promptVersion: "disabled",
-                schemaID: Self.schemaID,
-                latencyMS: nil,
-                timeoutMS: 0,
-                status: .completed,
-                validationStatus: "disabled",
-                sourceTraceID: request.sourceTraceID,
-                metadata: ["reason": reason]
-            )
-        )
-    }
-}
-
 private struct LocalLLMAgentVisualizationPlanSidecarRequest: Codable, Equatable, Sendable {
     var command: String
     var runtimeCapabilities: [String]

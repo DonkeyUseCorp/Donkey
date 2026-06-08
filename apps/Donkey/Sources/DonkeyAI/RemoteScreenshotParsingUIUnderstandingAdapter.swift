@@ -289,23 +289,3 @@ public struct RemoteFallbackLocalUIUnderstandingAdapter: LocalUIUnderstandingRun
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 }
-
-public enum DonkeyUIUnderstandingRunnerFactory {
-    public static func defaultRunner(
-        environment: [String: String] = ProcessInfo.processInfo.environment,
-        bundle: Bundle = .main
-    ) -> any LocalUIUnderstandingRunning {
-        guard let configuration = try? DonkeyBackendInferenceConfiguration.fromEnvironment(
-            environment,
-            bundle: bundle
-        ) else {
-            return ProcessBackedLocalUIUnderstandingAdapter()
-        }
-
-        return RemoteFallbackLocalUIUnderstandingAdapter(
-            remote: RemoteScreenshotParsingLocalUIUnderstandingAdapter(
-                client: DonkeyBackendInferenceClient(configuration: configuration)
-            )
-        )
-    }
-}

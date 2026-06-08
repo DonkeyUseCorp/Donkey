@@ -76,62 +76,6 @@ public struct LocalAppFinderCatalogEntry: Codable, Equatable, Sendable {
     }
 }
 
-public enum LocalAppTaskWorkflowStage: String, Codable, CaseIterable, Equatable, Sendable {
-    case parseIntent
-    case resolveApp
-    case observe
-    case evidencePlan = "evidence-plan"
-    case approval
-    case execute
-    case verify
-}
-
-public enum LocalAppTaskWorkflowStageStatus: String, Codable, Equatable, Sendable {
-    case pending
-    case started
-    case completed
-    case waiting
-    case skipped
-    case blocked
-    case failed
-}
-
-public struct LocalAppTaskWorkflowStageState: Codable, Equatable, Sendable {
-    public var stage: LocalAppTaskWorkflowStage
-    public var status: LocalAppTaskWorkflowStageStatus
-    public var summary: String
-    public var metadata: [String: String]
-
-    public init(
-        stage: LocalAppTaskWorkflowStage,
-        status: LocalAppTaskWorkflowStageStatus = .pending,
-        summary: String = "",
-        metadata: [String: String] = [:]
-    ) {
-        self.stage = stage
-        self.status = status
-        self.summary = summary
-        self.metadata = metadata
-    }
-}
-
-public struct LocalAppTaskWorkflowProgress: Codable, Equatable, Sendable {
-    public var stages: [LocalAppTaskWorkflowStageState]
-    public var metadata: [String: String]
-
-    public init(
-        stages: [LocalAppTaskWorkflowStageState] = [],
-        metadata: [String: String] = [:]
-    ) {
-        self.stages = stages
-        self.metadata = metadata
-    }
-
-    public func state(for stage: LocalAppTaskWorkflowStage) -> LocalAppTaskWorkflowStageState? {
-        stages.first { $0.stage == stage }
-    }
-}
-
 public struct LocalAppTaskObservation: Codable, Equatable, Sendable {
     public var appIsRunning: Bool
     public var appIsFocused: Bool

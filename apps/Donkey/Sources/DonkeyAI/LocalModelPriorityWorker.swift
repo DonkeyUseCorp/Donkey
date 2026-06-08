@@ -189,7 +189,3 @@ public actor LocalModelPriorityWorker {
         continuation?.resume()
     }
 }
-
-public enum LocalModelWorkScheduling {
-    public static let shared = LocalModelPriorityWorker()
-}

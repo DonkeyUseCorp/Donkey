@@ -95,22 +95,6 @@ public struct ReflexLatencyReport: Codable, Equatable, Sendable {
     }
 }
 
-public struct ReflexBenchmarkBaseline: Codable, Equatable, Sendable {
-    public var targetID: String
-    public var machineClass: String
-    public var report: ReflexLatencyReport
-
-    public init(
-        targetID: String,
-        machineClass: String,
-        report: ReflexLatencyReport
-    ) {
-        self.targetID = targetID
-        self.machineClass = machineClass
-        self.report = report
-    }
-}
-
 public enum ReflexLatencyReportBuilder {
     public static func build(
         from traces: [ReflexTraceRecord],

@@ -31,17 +31,6 @@ public enum HarnessTaskStatus: String, Codable, CaseIterable, Equatable, Sendabl
     }
 }
 
-public enum HarnessTurnRelationship: String, Codable, Equatable, Sendable {
-    case startsNewTask
-    case modifiesCurrentTask
-    case cancelsTask
-    case pausesTask
-    case resumesTask
-    case answersClarification
-    case grantsPermission
-    case conversation
-}
-
 public enum HarnessAmbiguityClass: String, Codable, Equatable, Sendable {
     case safe
     case recoverable
