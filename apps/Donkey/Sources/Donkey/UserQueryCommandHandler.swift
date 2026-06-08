@@ -581,7 +581,6 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                         || allowedSensitiveTools.contains(descriptor.name)
                 }
                 .map(\.name)
-                + LocalAppHarnessStepExecutor.descriptors.map(\.name)
         )).sorted()
     }
 

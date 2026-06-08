@@ -1384,7 +1384,7 @@ struct GenericHarnessTests {
             request: request,
             pointerTask: task,
             traceID: "trace-1",
-            availableToolNames: AppHarnessGenericLifecycleToolNames.localAppTools,
+            availableToolNames: ["screen.observe", "elements.get"],
             grantedPermissions: [.verification]
         )
 
@@ -1392,201 +1392,11 @@ struct GenericHarnessTests {
         #expect(prepared.thread.activeTaskIDs == [task.id])
         #expect(prepared.task.id == task.id)
         #expect(prepared.task.context.turn?.id == "turn-1")
-        #expect(prepared.task.context.availableToolNames == AppHarnessGenericLifecycleToolNames.localAppTools)
+        #expect(prepared.task.context.availableToolNames == ["screen.observe", "elements.get"])
         #expect(prepared.task.grantedPermissions == [.verification])
         #expect(prepared.compactedContext.events.map(\.id) == ["event-1"])
         #expect(prepared.compactedContext.assets.map(\.id) == ["asset-1"])
         #expect(prepared.compactedContext.promptText.contains("Current turn: open calendar"))
-    }
-
-    @Test
-    func userQueryLifecyclePlansLocalAppStepAndStopsForExecutorUserGate() async {
-        let store = InMemoryHarnessThreadStore()
-        let coordinator = HarnessTaskCoordinator()
-        let lifecycle = AppHarnessGenericLifecycle(threadStore: store, coordinator: coordinator)
-        let task = await coordinator.createTask(
-            id: "pointer-task-gate",
-            threadID: "thread-gate",
-            goal: "send a message",
-            grantedPermissions: [.verification]
-        )
-        let intent = TaskIntent(
-            intentID: "intent-1",
-            taskType: "local_app_interaction",
-            targetApp: LocalAppTarget(appName: "Messages"),
-            entities: ["recipient": "Alex"],
-            normalizedEntities: ["recipient": "Alex"],
-            confidence: 0.8,
-            parserSource: .onlineModel,
-            metadata: [
-                "genericHarness.planStepsJSON": """
-                [{"id":"enter-message","summary":"Enter the message.","toolName":"ui.setText","inputEntity":"message","controlID":"editor","focusKey":"","expectedObservation":"Message is entered."}]
-                """
-            ]
-        )
-        let resolution = LocalAppTaskCatalogResolution(
-            status: .needsConfirmation,
-            intent: intent,
-            metadata: ["reason": "missing message"]
-        )
-        _ = await lifecycle.planLocalTaskRun(
-            taskID: task.id,
-            resolution: resolution,
-            fallbackGoal: "send a message",
-            traceID: "trace-gate"
-        )
-        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
-        await registry.register(
-            HarnessTool(
-                descriptor: LocalAppHarnessStepExecutor.descriptors.first {
-                    $0.name == LocalAppActionPlanTool.setText.rawValue
-                }!
-            ) { context in
-                HarnessToolResult(
-                    callID: context.call.id,
-                    toolName: context.call.name,
-                    status: .waitingForUser,
-                    summary: "Need the message text.",
-                    question: "What should I send?"
-                )
-            }
-        )
-        let runtime = GenericHarnessRuntime(
-            coordinator: coordinator,
-            registry: registry
-        )
-
-        let result = await runtime.executeNextPlannedStep(taskID: task.id)
-
-        #expect(result?.stoppedForGate == true)
-        #expect(result?.task.status == .waitingForUser)
-        #expect(result?.task.pendingContinuation?.question == "What should I send?")
-        #expect(result?.task.pendingContinuation?.pendingToolCall?.name == LocalAppActionPlanTool.setText.rawValue)
-        #expect(result?.toolResult?.status == .waitingForUser)
-    }
-
-    @Test
-    func userQueryLifecyclePlansGenericSkillToolSteps() async throws {
-        let store = InMemoryHarnessThreadStore()
-        let coordinator = HarnessTaskCoordinator()
-        let lifecycle = AppHarnessGenericLifecycle(threadStore: store, coordinator: coordinator)
-        let task = await coordinator.createTask(
-            id: "skill-task",
-            threadID: "skill-thread",
-            goal: "play media"
-        )
-        let intent = TaskIntent(
-            intentID: "intent-skill-music",
-            taskType: "local_app_interaction",
-            targetApp: LocalAppTarget(appName: "Music"),
-            entities: [
-                "appName": "Music",
-                "goal": "play media",
-                "query": "Yellow Coldplay"
-            ],
-            normalizedEntities: [
-                "appName": "Music",
-                "goal": "play media",
-                "query": "Yellow Coldplay"
-            ],
-            confidence: 0.9,
-            parserSource: .onlineModel,
-            actionPlan: LocalAppActionPlan(tools: [], inputEntity: "query", focusKey: ""),
-            metadata: [
-                "genericHarness.schemaVersion": "generic_harness_planning",
-                "genericHarness.planStepsJSON": """
-                [{"id":"load-music-skill","summary":"Load the media skill.","toolName":"skill.load","inputEntity":"","controlID":"","focusKey":"","toolInputs":{"skillID":"music-media"},"expectedObservation":"Skill loaded."},{"id":"play-media","summary":"Run the validated script.","toolName":"skill.script.execute","inputEntity":"query","controlID":"","focusKey":"","toolInputs":{"skillID":"music-media","scriptID":"scripts-play-media-by-search"},"expectedObservation":"status=played"}]
-                """,
-                "genericHarness.verificationCriteriaJSON": #"["status=played"]"#,
-                "genericHarness.fallbacksJSON": #"["Ask for a different query."]"#
-            ]
-        )
-        let resolution = LocalAppTaskCatalogResolution(
-            status: .resolved,
-            intent: intent,
-            definition: LocalAppTaskCatalog.genericLocalAppInteractionDefinition(
-                target: LocalAppTarget(appName: "Music", bundleIdentifier: "com.apple.Music"),
-                plan: LocalAppActionPlan(tools: [], inputEntity: "query", focusKey: "")
-            )
-        )
-
-        let planned = await lifecycle.planLocalTaskRun(
-            taskID: task.id,
-            resolution: resolution,
-            fallbackGoal: "play music",
-            traceID: "trace-skill-plan",
-            availableToolNames: ["skill.load", "skill.script.execute"]
-        )
-
-        let steps = try #require(planned?.plan?.steps)
-        let calls = steps.compactMap(\.toolCall)
-        #expect(calls.map(\.name) == ["skill.load", "skill.script.execute"])
-        #expect(calls[0].input["skillID"] == "music-media")
-        #expect(calls[1].input["scriptID"] == "scripts-play-media-by-search")
-        #expect(calls[1].input["input"] == "Yellow Coldplay")
-    }
-
-    @Test
-    func userQueryLifecycleUsesHostedGenericPlanningMetadata() async {
-        let store = InMemoryHarnessThreadStore()
-        let coordinator = HarnessTaskCoordinator()
-        let lifecycle = AppHarnessGenericLifecycle(threadStore: store, coordinator: coordinator)
-        let task = await coordinator.createTask(
-            id: "pointer-task-hosted-plan",
-            threadID: "thread-hosted-plan",
-            goal: "open a site"
-        )
-        let intent = TaskIntent(
-            intentID: "intent-hosted-plan",
-            taskType: "local_app_interaction",
-            targetApp: LocalAppTarget(appName: "Safari"),
-            entities: ["query": "https://example.org"],
-            normalizedEntities: ["query": "https://example.org"],
-            confidence: 0.92,
-            parserSource: .onlineModel,
-            metadata: [
-                "genericHarness.schemaVersion": "generic_harness_planning",
-                "genericHarness.intent.goal": "open example.org in Safari",
-                "genericHarness.ambiguity.class": "safe",
-                "genericHarness.risk.level": "low",
-                "genericHarness.shouldAskBeforeActing": "false",
-                "genericHarness.missingInformationJSON": "[]",
-                "genericHarness.planStepsJSON": """
-                [{"controlID":"addressBar","expectedObservation":"Address bar is focused.","focusKey":"Command+L","id":"focus-address","inputEntity":"","summary":"Focus the browser address bar.","toolName":"ui.focusAddressBar"},{"controlID":"addressBar","expectedObservation":"Requested URL is entered.","focusKey":"","id":"enter-url","inputEntity":"query","summary":"Enter the requested URL.","toolName":"ui.setText"}]
-                """,
-                "genericHarness.verificationCriteriaJSON": #"["The requested website navigation is attempted."]"#,
-                "genericHarness.fallbacksJSON": #"["Ask before navigating if the URL is ambiguous."]"#,
-                "genericHarness.clarification.questionsJSON": #"["Which URL should I open?"]"#,
-                "genericHarness.clarification.policy": "Ask only if the requested URL is missing."
-            ]
-        )
-        let resolution = LocalAppTaskCatalogResolution(
-            status: .resolved,
-            intent: intent
-        )
-
-        _ = await lifecycle.planLocalTaskRun(
-            taskID: task.id,
-            resolution: resolution,
-            fallbackGoal: "open a site",
-            traceID: "trace-hosted-plan"
-        )
-        let planned = await coordinator.task(id: task.id)
-
-        #expect(planned?.intent?.goal == "open example.org in Safari")
-        #expect(planned?.intent?.riskLevel == .low)
-        #expect(planned?.plan?.steps.first?.id == "model-focus-address")
-        #expect(planned?.plan?.steps.first?.toolCall?.name == LocalAppActionPlanTool.focusAddressBar.rawValue)
-        #expect(planned?.plan?.steps.first?.metadata["toolName"] == "ui.focusAddressBar")
-        #expect(planned?.plan?.steps.contains { $0.id == "run-local-app-task" } == false)
-        #expect(planned?.plan?.successCriteria == ["The requested website navigation is attempted."])
-        #expect(planned?.plan?.fallbackPolicy == ["Ask before navigating if the URL is ambiguous."])
-        #expect(planned?.plan?.clarificationPolicy == [
-            "Which URL should I open?",
-            "Ask only if the requested URL is missing."
-        ])
-        #expect(planned?.plan?.metadata["modelPlan.schemaVersion"] == "generic_harness_planning")
-        #expect(planned?.plan?.metadata["modelPlan.stepCount"] == "2")
     }
 
     @Test
@@ -1628,7 +1438,7 @@ struct GenericHarnessTests {
             request: request,
             pointerTask: pointerTask,
             traceID: "trace-answer",
-            availableToolNames: AppHarnessGenericLifecycleToolNames.localAppTools
+            availableToolNames: ["screen.observe", "elements.get"]
         )
 
         #expect(prepared.task.status == .resuming)
@@ -1692,35 +1502,6 @@ struct GenericHarnessTests {
         #expect(approved?.grantedPermissions == [.accessibility, .input])
         #expect(approved?.pendingContinuation == nil)
         #expect(reloaded?.grantedPermissions == [.accessibility, .input])
-    }
-
-    @Test
-    func userQueryLifecyclePlansRecoveryAsGenericToolStep() async {
-        let store = InMemoryHarnessThreadStore()
-        let coordinator = HarnessTaskCoordinator()
-        let lifecycle = AppHarnessGenericLifecycle(threadStore: store, coordinator: coordinator)
-        let task = await coordinator.createTask(
-            id: "pointer-task-recover",
-            threadID: "thread-recover",
-            goal: "open an app",
-            grantedPermissions: [.lifecycle]
-        )
-        _ = await lifecycle.planRecovery(
-            taskID: task.id,
-            reason: "App not found",
-            traceID: "trace-recover"
-        )
-        let runtime = GenericHarnessRuntime(
-            coordinator: coordinator,
-            registry: BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
-        )
-
-        let result = await runtime.executeNextPlannedStep(taskID: task.id)
-
-        #expect(result?.toolResult?.toolName == "run.recover")
-        #expect(result?.toolResult?.status == .succeeded)
-        #expect(result?.task.toolHistory.map(\.call.name) == ["run.recover"])
-        #expect(result?.task.plan?.metadata["planner"] == "genericHarnessUserQueryRecovery")
     }
 
     @Test

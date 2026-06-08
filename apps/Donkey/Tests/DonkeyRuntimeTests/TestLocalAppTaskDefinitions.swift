@@ -62,10 +62,27 @@ extension BuiltInLocalAppTaskDefinitions {
         )
     }
 
+    static var genericLocalAppInteraction: LocalAppTaskDefinition {
+        LocalAppTaskDefinition(
+            taskType: "local_app_interaction",
+            targetApp: LocalAppTarget(appName: "Local App Interaction"),
+            triggerTerms: [],
+            entityRules: [],
+            workflowSteps: commonWorkflowPrefix,
+            observationStrategies: [.accessibility, .windowMetadata],
+            verificationEntityName: nil,
+            metadata: [
+                "catalogEntry": "local app interaction",
+                "displayTitle": "local app interaction",
+                "modelPlanned": "true",
+                "dynamicTarget": "true"
+            ]
+        )
+    }
+
     static var testFixtures: [LocalAppTaskDefinition] {
         [
-            LocalAppTaskCatalog.genericLocalItemOpenDefinition,
-            LocalAppTaskCatalog.genericLocalAppInteractionDefinition,
+            genericLocalAppInteraction,
             weatherLookup,
             documentFormFill
         ]
