@@ -13,9 +13,12 @@ import {
   reserveVisionApiCall,
 } from "@/lib/billing/vision-subscription";
 import {
+  releaseVisionCallGrant,
+  reserveVisionCallGrant,
+} from "@/lib/credits/vision-grants";
+import {
   type DonkeyAuthenticatedRequest,
   shouldBypassDonkeyInferenceCredits,
-  unauthorizedResponse,
   withDonkeyAuth,
 } from "@/lib/donkey-api-auth";
 import { InferenceProviderError } from "@/lib/inference/providers";
@@ -52,6 +55,13 @@ const visionApiKeyRateLimit = {
 };
 const inferenceProvider = "omniparser";
 const parseModel = "omniparser-v2";
+
+// How an api-key call's capacity was reserved, so the right bucket is credited
+// back if the request fails: the subscription's monthly quota or a one-time
+// vision-call grant.
+type VisionReservation =
+  | { kind: "subscription"; limit: number; remaining: number }
+  | { kind: "grant"; grantId: string; remaining: number };
 
 // This route accepts third-party API keys in addition to app sessions.
 export const POST = withDonkeyAuth(visionParseHandler, { allowApiKey: true });
@@ -100,30 +110,49 @@ async function visionParseHandler(request: DonkeyAuthenticatedRequest) {
   // The dev-bypass user has no real account, so skip the credit preflight and
   // usage recording (both reference a real user row) when bypassing auth.
   const bypassCredits = shouldBypassDonkeyInferenceCredits(request.donkey);
-  // For the api-key path, the reserved quota call is released if the request
-  // later fails, so a failed parse doesn't burn the developer's quota.
-  let apiKeyQuota: { limit: number; remaining: number } | null = null;
+  // For the api-key path, the reserved call is released if the request later
+  // fails, so a failed parse doesn't burn the developer's subscription quota or
+  // their grant allotment.
+  let visionReservation: VisionReservation | null = null;
   if (isApiKey) {
-    const subscription = await getActiveVisionSubscription(request.donkey.userId);
-    if (!subscription) {
-      return unauthorizedResponse();
+    const userId = request.donkey.userId;
+    // Spend the subscription's monthly quota first (it resets each period), then
+    // fall back to one-time vision-call grants.
+    const subscription = await getActiveVisionSubscription(userId);
+    if (subscription) {
+      const reserved = await reserveVisionApiCall({
+        monthlyCallQuota: subscription.monthlyCallQuota,
+        userId,
+      });
+      if (reserved.ok) {
+        visionReservation = {
+          kind: "subscription",
+          limit: subscription.monthlyCallQuota,
+          remaining: reserved.remaining,
+        };
+      }
     }
-    const reservation = await reserveVisionApiCall({
-      monthlyCallQuota: subscription.monthlyCallQuota,
-      userId: request.donkey.userId,
-    });
-    if (!reservation.ok) {
-      // Operational limit, not an auth failure — keep it distinct so API
-      // clients can tell "out of quota" apart from a bad key.
+    if (!visionReservation) {
+      const granted = await reserveVisionCallGrant(userId);
+      if (granted.ok) {
+        visionReservation = {
+          grantId: granted.grantId,
+          kind: "grant",
+          remaining: Number(granted.remaining),
+        };
+      }
+    }
+    if (!visionReservation) {
+      // Valid key, but no capacity on either the subscription or grants.
+      // Operational limit, not an auth failure — keep it distinct from a bad key.
       return NextResponse.json(
-        { error: "quota_exceeded", limit: subscription.monthlyCallQuota },
+        {
+          error: "quota_exceeded",
+          ...(subscription ? { limit: subscription.monthlyCallQuota } : {}),
+        },
         { status: 402 },
       );
     }
-    apiKeyQuota = {
-      limit: subscription.monthlyCallQuota,
-      remaining: reservation.remaining,
-    };
   } else if (!bypassCredits) {
     const credits = await requireInferenceCredits({
       model: billedModel,
@@ -167,10 +196,12 @@ async function visionParseHandler(request: DonkeyAuthenticatedRequest) {
         status: "succeeded",
         userId: request.donkey.userId,
       });
-      usageHeaders = apiKeyQuota
+      usageHeaders = visionReservation
         ? {
-            "X-Donkey-Calls-Limit": String(apiKeyQuota.limit),
-            "X-Donkey-Calls-Remaining": String(apiKeyQuota.remaining),
+            "X-Donkey-Calls-Remaining": String(visionReservation.remaining),
+            ...(visionReservation.kind === "subscription"
+              ? { "X-Donkey-Calls-Limit": String(visionReservation.limit) }
+              : {}),
           }
         : creditUsageHeaders(recordedUsage);
     }
@@ -179,9 +210,13 @@ async function visionParseHandler(request: DonkeyAuthenticatedRequest) {
       headers: usageHeaders,
     });
   } catch (error) {
-    // Give the reserved quota call back — a failed parse shouldn't be billed.
-    if (apiKeyQuota) {
-      await releaseVisionApiCall(request.donkey.userId);
+    // Give the reserved call back — a failed parse shouldn't be billed.
+    if (visionReservation) {
+      if (visionReservation.kind === "subscription") {
+        await releaseVisionApiCall(request.donkey.userId);
+      } else {
+        await releaseVisionCallGrant(visionReservation.grantId);
+      }
     }
     if (!bypassCredits) {
       await recordFailedInferenceUsage({

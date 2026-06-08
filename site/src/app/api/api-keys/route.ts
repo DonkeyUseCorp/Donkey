@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { auth, visionApiKeyPrefix } from "@/lib/auth";
-import { getActiveVisionSubscription } from "@/lib/billing/vision-subscription";
 import {
   donkeySessionUserId,
   withDonkeyAuth,
@@ -63,16 +62,13 @@ export const GET = withDonkeyAuth(async (request) => {
   return NextResponse.json({ apiKeys: ownKeys.map(toSafeApiKey) });
 });
 
-// Create a new key. Gated on an active Vision API subscription. The full secret
-// is returned exactly once here and never again.
+// Create a new key. Any signed-in user can mint one; the key only returns data
+// when the user has capacity (an active subscription or remaining vision-call
+// grants), which the Vision API route enforces per call. The full secret is
+// returned exactly once here and never again.
 export const POST = withDonkeyAuth(async (request) => {
   const userId = donkeySessionUserId(request);
   if (!userId) {
-    return unauthorized();
-  }
-
-  const subscription = await getActiveVisionSubscription(userId);
-  if (!subscription) {
     return unauthorized();
   }
 
