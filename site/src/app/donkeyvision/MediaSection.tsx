@@ -4,14 +4,14 @@ export function MediaSection() {
   return (
     <section className="border-y-2 border-[#0F0E0D] bg-white py-20">
       <div className="mx-auto max-w-[1400px] px-6 md:px-12">
-        <h2 className="text-4xl font-semibold leading-none md:whitespace-nowrap md:text-6xl">
+        <h2 className="text-4xl font-semibold leading-none md:text-6xl 2xl:whitespace-nowrap">
           Works anywhere a screenshot can be captured.
         </h2>
-        <p className="mt-6 text-lg leading-8 text-[#454545] md:whitespace-nowrap">
+        <p className="mt-6 text-lg leading-8 text-[#454545] 2xl:whitespace-nowrap">
           Donkey Vision analyzes pixels directly. No DOM access, private
           integration, app-specific setup, or brittle selectors required.
         </p>
-        <p className="mt-4 text-lg leading-8 text-[#454545] md:whitespace-nowrap">
+        <p className="mt-4 text-lg leading-8 text-[#454545] 2xl:whitespace-nowrap">
           The same API request can process native apps, browser tabs, Electron
           apps, remote desktops, and other screenshot-based environments.
         </p>
