@@ -3,6 +3,7 @@ import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { oneTimeToken } from "better-auth/plugins";
 
+import { provisionSignupGrants } from "@/lib/onboarding/signup-grants";
 import { prisma } from "@/lib/prisma";
 
 // Prefix for issued Vision API keys. The full secret is shown to the developer
@@ -27,6 +28,18 @@ export const auth = betterAuth({
   database: prismaAdapter(prisma, {
     provider: "postgresql",
   }),
+  databaseHooks: {
+    user: {
+      create: {
+        // Every new account is provisioned with its signup grants (app credits
+        // + free Vision API calls). provisionSignupGrants is idempotent and
+        // swallows its own errors, so it never blocks user creation.
+        after: async (user) => {
+          await provisionSignupGrants(user.id);
+        },
+      },
+    },
+  },
   emailAndPassword: {
     enabled: false,
   },
