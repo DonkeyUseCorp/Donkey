@@ -244,20 +244,38 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 preparedTurnMetadata: preparedTurnMetadata
             )
         }
-        let appName = target.appName ?? "the frontmost app"
-        let bundleIdentifier = target.bundleIdentifier
+        let frontmostAppName = target.appName ?? "the frontmost app"
+        let frontmostBundleIdentifier = target.bundleIdentifier
 
         guard let configuration = try? DonkeyBackendInferenceConfiguration.fromEnvironment() else {
             return await failHarnessRun(
                 response: "The vision backend isn't configured (set DONKEY_WEB_BASE_URL), so I couldn't navigate by vision.",
                 reason: "visionBackendUnavailable",
-                appName: appName,
+                appName: frontmostAppName,
                 traceID: traceID,
                 taskID: taskID,
                 preparedTurnMetadata: preparedTurnMetadata
             )
         }
         let backend = DonkeyBackendInferenceClient(configuration: configuration)
+
+        // Understand the request ONCE before the loop: restate the goal, identify the target app,
+        // extract parameters, and decide whether to clarify. Degrades to driving the raw command when
+        // it returns nil, so a backend hiccup never dead-ends the run.
+        let understanding = await HostedHarnessRequestUnderstanding(backend: backend)
+            .understand(command: command, frontmostAppName: frontmostAppName)
+
+        // Drive the understood target app when it names one that resolves to a running window; else the
+        // frontmost app. resolveTarget never falls back to an unrelated window, so a miss keeps us on
+        // the frontmost app and the planner can app.openOrFocus the target itself.
+        let driveTarget = Self.resolveDriveTarget(
+            understanding: understanding,
+            frontmostAppName: frontmostAppName,
+            frontmostBundleIdentifier: frontmostBundleIdentifier
+        )
+        let appName = driveTarget.appName
+        let bundleIdentifier = driveTarget.bundleIdentifier
+
         let appGuidance = BuiltInLocalAppSkillPacks.appOperatingGuidance(
             forApp: appName,
             bundleIdentifier: bundleIdentifier
@@ -310,7 +328,8 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             backend: backend,
             descriptors: plannerDescriptors,
             appName: appName,
-            appGuidance: appGuidance
+            appGuidance: appGuidance,
+            understanding: understanding
         )
         _ = await genericHarnessLifecycle.coordinator.startRunning(
             taskID: taskID,
@@ -324,7 +343,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // Suspend the warm-cache monitor for the whole drive so it never races us writing the same
         // app's parse. The run between these calls has no early exit, so resume always pairs with it.
         VisionWarmCacheActivity.shared.suspend()
-        let runSteps = await runtime.run(taskID: taskID, planner: planner, maxSteps: 8)
+        let runSteps = await runtime.run(taskID: taskID, planner: planner, maxSteps: 24)
         VisionWarmCacheActivity.shared.resume()
 
         let finalTask = await genericHarnessLifecycle.coordinator.task(id: taskID)
@@ -526,6 +545,26 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             .accessibility,
             .input
         ]
+    }
+
+    /// Picks the app the harness drive operates: the understood target app when it names one that
+    /// resolves to a running window, otherwise the frontmost app. `AccessibilityObserver.resolveTarget`
+    /// only ever returns the named app's window (never an unrelated frontmost one), so a non-running or
+    /// misnamed target safely falls back to the frontmost app.
+    @MainActor
+    private static func resolveDriveTarget(
+        understanding: HarnessRequestUnderstanding?,
+        frontmostAppName: String,
+        frontmostBundleIdentifier: String?
+    ) -> (appName: String, bundleIdentifier: String?) {
+        guard let requested = understanding?.targetAppName,
+              !requested.isEmpty,
+              requested.caseInsensitiveCompare(frontmostAppName) != .orderedSame,
+              let resolved = AccessibilityObserver.resolveTarget(appName: requested, bundleIdentifier: nil)
+        else {
+            return (frontmostAppName, frontmostBundleIdentifier)
+        }
+        return (resolved.appName ?? requested, resolved.bundleIdentifier)
     }
 
     static func genericHarnessToolNames() -> [String] {

@@ -17,6 +17,10 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     private let descriptors: [HarnessToolDescriptor]
     private let appName: String
     private let appGuidance: String?
+    /// One-shot understanding parsed before the loop: the restated goal, target app, parameters, and a
+    /// clarify gate. nil when the upfront understanding call was skipped or failed, in which case the
+    /// planner falls back to the raw task goal.
+    private let understanding: HarnessRequestUnderstanding?
     private let uptimeMS: @Sendable () -> Double
 
     /// Uptime (ms) at which the planner first chose an *action* tool (something that changes app
@@ -38,17 +42,30 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         descriptors: [HarnessToolDescriptor],
         appName: String,
         appGuidance: String?,
+        understanding: HarnessRequestUnderstanding? = nil,
         uptimeMS: @escaping @Sendable () -> Double = { ProcessInfo.processInfo.systemUptime * 1_000 }
     ) {
         self.backend = backend
         self.descriptors = descriptors
         self.appName = appName
         self.appGuidance = appGuidance
+        self.understanding = understanding
         self.uptimeMS = uptimeMS
         self.readOnlyToolNames = Set(descriptors.filter { $0.safetyClass == .readOnly }.map(\.name))
     }
 
     public func planNextStep(for task: HarnessTaskState) async -> HarnessToolCall? {
+        // When the upfront understanding flagged the request as ambiguous, ask before doing anything.
+        // Gated on a typed field (not raw text) and only on the first step, so a user answer resumes
+        // into the normal planning loop. Reuses the harness's existing user.clarify waiting gate.
+        if task.toolHistory.isEmpty,
+           let understanding,
+           understanding.needsClarification,
+           let question = understanding.clarifyingQuestion,
+           !question.isEmpty,
+           descriptors.contains(where: { $0.name == "user.clarify" }) {
+            return HarnessToolCall(name: "user.clarify", input: ["question": question])
+        }
         let decision: Decision
         do {
             decision = try await decide(task: task)
@@ -183,6 +200,28 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         )
     }
 
+    /// A compact, high-signal block describing the parsed request, rendered every step so the planner
+    /// keeps the precise target, parameters, and success criteria in view. Empty when no understanding
+    /// was produced.
+    private func understandingBlock() -> String {
+        guard let understanding else { return "" }
+        var lines: [String] = []
+        if let app = understanding.targetAppName, !app.isEmpty {
+            lines.append("  Target app: \(app)")
+        }
+        if !understanding.parameters.isEmpty {
+            let params = understanding.parameters.sorted { $0.key < $1.key }
+                .map { "\($0.key)=\($0.value)" }
+                .joined(separator: ", ")
+            lines.append("  Parameters: \(params)")
+        }
+        if let criteria = understanding.successCriteria, !criteria.isEmpty {
+            lines.append("  Success when: \(criteria)")
+        }
+        guard !lines.isEmpty else { return "" }
+        return "WHAT THE USER WANTS:\n" + lines.joined(separator: "\n") + "\n"
+    }
+
     private func prompt(task: HarnessTaskState) -> String {
         let elements = task.worldModel.elements
         let elementsBlock: String
@@ -224,11 +263,18 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
             guidanceBlock = ""
         }
 
+        // Prefer the restated goal parsed once up front; fall back to the raw task goal when no
+        // understanding was produced.
+        let restatedGoal = understanding?.restatedGoal
+        let goalText = (restatedGoal?.isEmpty == false ? restatedGoal : nil) ?? task.goal
+        let understandingBlock = self.understandingBlock()
+
         return """
         You operate the macOS app "\(appName)" by choosing ONE tool to run next, then you will see the
-        result and choose again. Work toward the goal in small, verifiable steps.
-        GOAL: \(task.goal)
-
+        result and choose again. Work toward the goal in small, verifiable steps. If the goal targets a
+        different app than the one in front, focus it first with app.openOrFocus.
+        GOAL: \(goalText)
+        \(understandingBlock)
         \(historyBlock)
         \(factsBlock)\(guidanceBlock)
         \(elementsBlock)

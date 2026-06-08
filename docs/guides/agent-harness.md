@@ -78,6 +78,14 @@ LLM or another typed model/runtime boundary first. After that, deterministic
 code may match typed fields such as tool names, app ids, schema values,
 permissions, filesystem paths, and Accessibility roles/actions.
 
+A desktop turn is understood once before the per-step loop begins: a typed
+understanding boundary restates the goal, names the target app, extracts the
+request's parameters and success criteria, and decides whether to clarify. That
+understanding selects which app the loop drives and is carried into every step so
+the planner grounds against a stable goal instead of re-reading raw text each
+step. Deterministic matching (e.g. clarify when the understanding flags it) keys
+off those typed fields, never the raw command.
+
 The app catalog is part of the model boundary. If a requested app or capability
 is not supported or is still refreshing, surface conversation, clarification,
 waiting, or failed-safe state rather than silently executing an unsupported
