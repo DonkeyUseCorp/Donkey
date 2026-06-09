@@ -53,9 +53,13 @@ export function Footer() {
       <div className="mx-auto flex max-w-[1400px] flex-col gap-12 px-6 md:flex-row md:flex-wrap md:gap-x-24 md:px-12">
         <div className="min-w-[240px] max-w-sm flex-1">
           <div className="mb-6 flex flex-wrap items-center gap-4">
-            <span className="text-[40px] font-semibold md:text-[48px]">
+            <Link
+              href="/"
+              aria-label="Donkey home"
+              className="text-[40px] font-semibold text-ink no-underline md:text-[48px]"
+            >
               donkey
-            </span>
+            </Link>
             {socialLinks.map((link) => {
               const Icon = link.icon;
 

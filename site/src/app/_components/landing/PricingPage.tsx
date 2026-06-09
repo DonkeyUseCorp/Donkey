@@ -39,7 +39,7 @@ export function PricingPage() {
       <section className="mx-auto w-full max-w-[1400px] px-6 pb-20 md:px-12 md:pb-[120px]">
         <div className="relative">
           <div className="absolute inset-0 translate-x-2 translate-y-2 rounded-3xl bg-coral" />
-          <div className="relative grid grid-cols-1 gap-6 rounded-3xl border-2 border-ink bg-ink px-7 py-9 text-white md:grid-cols-[1fr_auto] md:gap-9 md:px-12 md:py-14">
+          <div className="relative grid grid-cols-1 gap-6 rounded-3xl border-2 border-ink bg-ink px-7 py-9 text-white md:grid-cols-[1fr_auto_auto] md:gap-9 md:px-12 md:py-14">
             <div>
               <div className="mb-[18px] text-xs font-semibold tracking-[0.12em] text-white/55 uppercase">
                 Already subscribed
@@ -50,6 +50,19 @@ export function PricingPage() {
                 one secure place.
               </p>
             </div>
+            <ul className="hidden flex-col gap-3 self-center border-l border-white/15 pl-9 md:flex">
+              {["Update your card anytime", "Download every invoice", "Switch or cancel plans"].map(
+                (item) => (
+                  <li
+                    key={item}
+                    className="flex items-center gap-2.5 text-[15px] leading-none text-white/72"
+                  >
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-coral" />
+                    {item}
+                  </li>
+                ),
+              )}
+            </ul>
             <div className="flex flex-wrap items-center gap-3 self-center">
               <BillingPortalButton />
               <PillButton href="/sign-in" variant="primary">
