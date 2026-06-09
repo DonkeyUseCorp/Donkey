@@ -39,10 +39,16 @@ final class UIUnderstandingCoordinator {
     private var lastRenderedFrames: [UInt32: DebugUIInspectionFrame] = [:]
     private var lastSnapshots: [UInt32: DebugUIScreenCaptureSnapshot] = [:]
     private var lastVisionSignatures: [UInt32: ScreenshotSignature] = [:]
+    // How many vision elements the last successful parse produced per window. Paired with
+    // `lastVisionSignatures` so the unchanged-signature skip can tell "unchanged and its boxes are
+    // still on screen" (safe to skip) from "unchanged but its boxes were lost" (must re-parse to
+    // recover), instead of skipping forever and leaving the window with no vision overlay.
+    private var lastVisionElementCounts: [UInt32: Int] = [:]
     private var visionBackoff: [UInt32: VisionBackoff] = [:]
     private var lastActiveWindowIDs: [UInt32: Set<UInt32>] = [:]
     private var windowElementCache: [UInt32: [DebugUIElement]] = [:]
     private var isWarmingBackground = false
+    private var lastBackgroundWarmCount: Int?
     private let remoteAIEngine: RemoteAIEngine = .vision
 
     private struct VisionBackoff {
@@ -106,6 +112,7 @@ final class UIUnderstandingCoordinator {
         lastRenderedFrames.removeAll()
         lastSnapshots.removeAll()
         lastVisionSignatures.removeAll()
+        lastVisionElementCounts.removeAll()
         visionBackoff.removeAll()
         lastActiveWindowIDs.removeAll()
         windowElementCache.removeAll()
@@ -218,6 +225,7 @@ final class UIUnderstandingCoordinator {
             lastRenderedFrames.removeAll()
             lastSnapshots.removeAll()
             lastVisionSignatures.removeAll()
+            lastVisionElementCounts.removeAll()
             visionBackoff.removeAll()
             lastActiveWindowIDs.removeAll()
             windowElementCache.removeAll()
@@ -576,6 +584,7 @@ final class UIUnderstandingCoordinator {
         let liveWindowIDs = Set(windowResolver.enumerateCandidates().map(\.windowID))
         windowElementCache = windowElementCache.filter { liveWindowIDs.contains($0.key) }
         lastVisionSignatures = lastVisionSignatures.filter { liveWindowIDs.contains($0.key) }
+        lastVisionElementCounts = lastVisionElementCounts.filter { liveWindowIDs.contains($0.key) }
         visionBackoff = visionBackoff.filter { liveWindowIDs.contains($0.key) }
         let accessibilityFrames = accessibilityFramesForRemoteAIFusion()
         renderFastLocalFrames(
@@ -742,7 +751,20 @@ final class UIUnderstandingCoordinator {
                     let signature = ScreenshotSignature.make(fromImageData: capture.screenshot.pngData)
                     if let signature, let previous = lastVisionSignatures[windowID] {
                         let changedFraction = signature.changedFraction(from: previous)
-                        if changedFraction <= Self.visionChangedFractionThreshold {
+                        // The unchanged-signature skip assumes this window's boxes are still being
+                        // carried forward in `elements`. If they were lost (aged out across a window
+                        // switch, or never re-seeded) we must re-parse to recover them instead of
+                        // skipping forever — but only when the last parse actually produced boxes, so
+                        // a genuinely element-free window doesn't re-parse every pass.
+                        let carriedAICount = elements.reduce(into: 0) { count, element in
+                            if !Self.isAccessibilityEvidence(element),
+                               Self.windowID(for: element) == windowID {
+                                count += 1
+                            }
+                        }
+                        let expectedAI = (lastVisionElementCounts[windowID] ?? 0) > 0
+                        if changedFraction <= Self.visionChangedFractionThreshold,
+                           carriedAICount > 0 || !expectedAI {
                             UIUnderstandingLog.overlay.debug(
                                 "debug inspection skipped unchanged vision windowID=\(windowID, privacy: .public) changedFraction=\(changedFraction, privacy: .public)"
                             )
@@ -772,6 +794,7 @@ final class UIUnderstandingCoordinator {
                         if let signature {
                             lastVisionSignatures[windowID] = signature
                         }
+                        lastVisionElementCounts[windowID] = parsedElements.count
                         visionBackoff[windowID] = nil
                         renderRemoteAIFrame(stage: "vision", updatesFingerprint: false)
                         publishUnderstanding(for: capture.target, signature: signature)
@@ -875,6 +898,17 @@ final class UIUnderstandingCoordinator {
                 return
             }
             let activeWindowIDs = Set(self.visibleOverlayTargets(on: screens).map(\.windowID))
+            let backgroundWarmCount = self.backgroundWarmTargets(
+                on: screens,
+                excluding: activeWindowIDs
+            ).count
+            // Only log when the count changes so the ~1Hz warm pass doesn't spam an identical line.
+            if self.lastBackgroundWarmCount != backgroundWarmCount {
+                self.lastBackgroundWarmCount = backgroundWarmCount
+                UIUnderstandingLog.overlay.info(
+                    "debug inspection background warm windows=\(backgroundWarmCount, privacy: .public)"
+                )
+            }
             // Accessibility is local and cheap, so warm every background window that has no cached
             // accessibility yet; vision is a slow network parse, so warm just one window per pass.
             self.warmBackgroundAccessibility(screens: screens, excluding: activeWindowIDs)
@@ -882,15 +916,9 @@ final class UIUnderstandingCoordinator {
         }
     }
 
-    /// Cap how many background windows we ever warm, so a desktop full of windows does not trigger a
-    /// flood of captures and vision parses. The frontmost background windows (the ones most likely to
-    /// be switched to) are warmed first.
-    private static let backgroundWarmWindowCap = 5
-
     /// Candidate windows eligible for background warming: every visible, allowed window except the
-    /// active one(s) the live path already handles, capped to `backgroundWarmWindowCap`. Unlike
-    /// `visibleOverlayTargets` this ignores the frontmost/focused requirement so background windows
-    /// are included.
+    /// active one(s) the live path already handles. Unlike `visibleOverlayTargets` this ignores the
+    /// frontmost/focused requirement so background windows are included.
     private func backgroundWarmTargets(
         on screens: [DebugUIScreenSurface],
         excluding excludedWindowIDs: Set<UInt32>
@@ -911,7 +939,7 @@ final class UIUnderstandingCoordinator {
                 )
                 && screens.contains { Self.intersects(target.bounds, $0.captureFrame) }
         }
-        return Array(eligible.prefix(Self.backgroundWarmWindowCap))
+        return eligible
     }
 
     private func hasCachedAccessibility(forWindow windowID: UInt32) -> Bool {
@@ -1012,6 +1040,7 @@ final class UIUnderstandingCoordinator {
             if let signature {
                 lastVisionSignatures[windowID] = signature
             }
+            lastVisionElementCounts[windowID] = parsedElements.count
             visionBackoff[windowID] = nil
             publishUnderstanding(for: target, signature: signature)
             UIUnderstandingLog.overlay.info(
@@ -1685,7 +1714,18 @@ final class UIUnderstandingCoordinator {
             byWindow[windowID, default: []].append(element)
         }
         for (windowID, windowElements) in byWindow {
-            windowElementCache[windowID] = windowElements
+            let newAI = windowElements.filter { !Self.isAccessibilityEvidence($0) }
+            if newAI.isEmpty {
+                // An accessibility-only render (e.g. the moment right after a window switch, before
+                // its vision parse returns) must not wipe this window's cached vision boxes. Refresh
+                // the accessibility portion but keep the existing AI, so a later switch back to this
+                // window can seed its boxes from cache instantly instead of blanking and re-parsing.
+                let existingAI = (windowElementCache[windowID] ?? []).filter { !Self.isAccessibilityEvidence($0) }
+                let newAX = windowElements.filter(Self.isAccessibilityEvidence)
+                windowElementCache[windowID] = newAX + existingAI
+            } else {
+                windowElementCache[windowID] = windowElements
+            }
         }
     }
 
