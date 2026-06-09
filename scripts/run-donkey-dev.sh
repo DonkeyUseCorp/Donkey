@@ -29,14 +29,11 @@ LOG_PID=""
 
 export DONKEY_WEB_BASE_URL="${DONKEY_WEB_BASE_URL:-http://localhost:3000}"
 
-# When pointing at a local site, default to dev auth bypass so hosted inference
-# (screenshot parse, vision) authenticates without an in-app login. An explicit
-# DONKEY_DEV_AUTH_BYPASS value (including 0) is always respected.
-case "$DONKEY_WEB_BASE_URL" in
-  http://localhost|http://localhost:*|http://127.0.0.1|http://127.0.0.1:*|http://[::1]|http://[::1]:*)
-    export DONKEY_DEV_AUTH_BYPASS="${DONKEY_DEV_AUTH_BYPASS:-1}"
-    ;;
-esac
+# The app authenticates hosted inference with a real signed-in session: launch
+# it, sign in through Google, and the native session cookie carries the auth.
+# Dev auth bypass is intentionally NOT enabled here. It exists only for scripts
+# that hit the API directly (e.g. the GeminiLive smoke tests, which set
+# DONKEY_DEV_AUTH_BYPASS=1 themselves), not for normal app usage.
 
 stop_running_donkey_apps() {
   killall Donkey >/dev/null 2>&1 || true
@@ -451,7 +448,7 @@ fi
 
 echo "Starting Donkey..."
 print_dev_overlay_status
-echo "Hosted inference auth: dev-bypass=${DONKEY_DEV_AUTH_BYPASS:-0} baseURL=$DONKEY_WEB_BASE_URL"
+echo "Hosted inference auth: login-based session (dev-bypass=${DONKEY_DEV_AUTH_BYPASS:-0}) baseURL=$DONKEY_WEB_BASE_URL"
 echo "Vision navigation (typed query -> vision click): hardcoded ON in the app"
 start_logger
 open -W -n "$DEV_APP_DIR"
