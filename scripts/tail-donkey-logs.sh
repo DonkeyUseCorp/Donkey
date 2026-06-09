@@ -154,13 +154,15 @@ if [ "$INCLUDE_DEBUG" -eq 1 ]; then
   LOG_COMMAND+=(--debug)
 fi
 
-filter_log_tool_noise() {
-  while IFS= read -r line || [ -n "$line" ]; do
-    if [[ "$line" == "Filtering the log data using "* ]]; then
-      continue
-    fi
-    printf '%s\n' "$line"
-  done
+# Trim the unified-log boilerplate down to "HH:MM:SS.mmm  message": drop the date,
+# the message-type letter, the "Process[pid:tid]" column, and the "[subsystem:category]"
+# tag, which are identical on every Donkey line and just add noise.
+reformat_log_stream() {
+  sed -E \
+    -e '/^Filtering the log data using /d' \
+    -e '/^Timestamp[[:space:]]+Ty/d' \
+    -e 's/^[0-9]{4}-[0-9]{2}-[0-9]{2} //' \
+    -e 's/^([0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+) +[A-Za-z]+ +[^[]*\[[0-9]+:[0-9a-fx]+\] +(\[[^]]*\] )?/\1  /'
 }
 
-exec "${LOG_COMMAND[@]}" > >(filter_log_tool_noise) 2> >(filter_log_tool_noise >&2)
+exec "${LOG_COMMAND[@]}" > >(reformat_log_stream) 2> >(reformat_log_stream >&2)
