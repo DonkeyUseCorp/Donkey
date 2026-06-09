@@ -916,9 +916,15 @@ final class UIUnderstandingCoordinator {
         }
     }
 
+    /// Cap how many background windows we ever warm, so a desktop full of windows does not trigger a
+    /// flood of captures and vision parses. The frontmost background windows (the ones most likely to
+    /// be switched to) are warmed first.
+    private static let backgroundWarmWindowCap = 5
+
     /// Candidate windows eligible for background warming: every visible, allowed window except the
-    /// active one(s) the live path already handles. Unlike `visibleOverlayTargets` this ignores the
-    /// frontmost/focused requirement so background windows are included.
+    /// active one(s) the live path already handles, capped to `backgroundWarmWindowCap`. Unlike
+    /// `visibleOverlayTargets` this ignores the frontmost/focused requirement so background windows
+    /// are included.
     private func backgroundWarmTargets(
         on screens: [DebugUIScreenSurface],
         excluding excludedWindowIDs: Set<UInt32>
@@ -939,7 +945,7 @@ final class UIUnderstandingCoordinator {
                 )
                 && screens.contains { Self.intersects(target.bounds, $0.captureFrame) }
         }
-        return eligible
+        return Array(eligible.prefix(Self.backgroundWarmWindowCap))
     }
 
     private func hasCachedAccessibility(forWindow windowID: UInt32) -> Bool {
