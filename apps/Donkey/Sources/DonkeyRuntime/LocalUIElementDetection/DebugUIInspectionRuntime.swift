@@ -1,5 +1,3 @@
-#if DONKEY_DEBUG_OVERLAY
-
 @preconcurrency import AppKit
 import CoreGraphics
 import CryptoKit
@@ -173,13 +171,17 @@ public struct DebugUIElementTracker: Equatable, Sendable {
     private var pendingContent: [String: PendingTrackedElement]
     private var appearanceThreshold: Int
     private var disappearanceTolerance: Int
+    private var stableDisappearanceTolerance: Int
+    private var stableIDPrefixes: [String]
     private var movementConfirmationSamples: Int
 
     public init(
         previousElements: [DebugUIElement] = [],
         appearanceThreshold: Int = 2,
         disappearanceTolerance: Int = 2,
-        movementConfirmationSamples: Int = 2
+        movementConfirmationSamples: Int = 2,
+        stableDisappearanceTolerance: Int? = nil,
+        stableIDPrefixes: [String] = []
     ) {
         self.previousElements = previousElements
         self.lastObservedElements = previousElements
@@ -189,7 +191,23 @@ public struct DebugUIElementTracker: Equatable, Sendable {
         self.pendingContent = [:]
         self.appearanceThreshold = max(1, appearanceThreshold)
         self.disappearanceTolerance = max(0, disappearanceTolerance)
+        // Stable-ID elements (e.g. accessibility boxes) keep a fixed identity across scans, so a
+        // brief detection gap should not yank them — that is what reads as flicker. Volatile
+        // elements (e.g. vision parses that reassign IDs every pass) must stay at the base
+        // tolerance, otherwise stale boxes linger and stack. Never below the base tolerance.
+        self.stableDisappearanceTolerance = max(
+            max(0, disappearanceTolerance),
+            stableDisappearanceTolerance ?? disappearanceTolerance
+        )
+        self.stableIDPrefixes = stableIDPrefixes
         self.movementConfirmationSamples = max(1, movementConfirmationSamples)
+    }
+
+    private func disappearanceTolerance(for element: DebugUIElement) -> Int {
+        for prefix in stableIDPrefixes where element.id.hasPrefix(prefix) {
+            return stableDisappearanceTolerance
+        }
+        return disappearanceTolerance
     }
 
     public mutating func update(
@@ -256,7 +274,7 @@ public struct DebugUIElementTracker: Equatable, Sendable {
 
         for previous in previousElements where !trackedIDs.contains(previous.id) {
             let missingCount = (missingCounts[previous.id] ?? 0) + 1
-            if missingCount <= disappearanceTolerance {
+            if missingCount <= disappearanceTolerance(for: previous) {
                 missingCounts[previous.id] = missingCount
                 rendered.append(previous)
             } else {
@@ -846,5 +864,3 @@ protocol DebugUIScreenCapturing: Sendable {
 }
 
 extension DebugUIScreenCaptureService: DebugUIScreenCapturing {}
-
-#endif

@@ -6,7 +6,7 @@ import DonkeyRuntime
 import QuartzCore
 
 @MainActor
-final class DebugUIInspectionOverlayController {
+final class DebugUIInspectionOverlayController: DebugUIInspectionOverlayRendering {
     private var surfaces: [UInt32: DebugUIInspectionSurface] = [:]
 
     func render(

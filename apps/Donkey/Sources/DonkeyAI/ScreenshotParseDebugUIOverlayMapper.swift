@@ -1,5 +1,3 @@
-#if DONKEY_DEBUG_OVERLAY
-
 import DonkeyContracts
 import DonkeyRuntime
 import Foundation
@@ -277,5 +275,3 @@ public enum ScreenshotParseDebugUIOverlayMapper {
         }
     }
 }
-
-#endif

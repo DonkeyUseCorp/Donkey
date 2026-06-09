@@ -197,6 +197,63 @@ struct DebugUIInspectionTests {
     }
 
     @Test
+    func trackerKeepsStableAccessibilityBoxThroughBriefDetectionGap() {
+        // Mirrors the debug overlay's tracker config: vision boxes (ai-) drop immediately, but
+        // stable accessibility boxes (ax-) get a few frames of hysteresis so a single missed scan
+        // does not strobe the overlay.
+        var tracker = DebugUIElementTracker(
+            appearanceThreshold: 1,
+            disappearanceTolerance: 0,
+            movementConfirmationSamples: 1,
+            stableDisappearanceTolerance: 4,
+            stableIDPrefixes: ["ax-", "window-chrome-"]
+        )
+        _ = tracker.update(
+            with: DebugUIInspectionFrame(elements: [
+                element(id: "ax-1.1.1.1", label: "Scroll Area", x: 10, y: 20)
+            ]),
+            renderNewElementsImmediately: true
+        )
+
+        // One scan omits the accessibility box: it must persist instead of flickering out.
+        let gap = tracker.update(with: DebugUIInspectionFrame(elements: []))
+        #expect(gap.elements.map(\.id) == ["ax-1.1.1.1"])
+
+        // A genuinely vanished box still clears once the hysteresis is exhausted.
+        for _ in 0..<4 {
+            _ = tracker.update(with: DebugUIInspectionFrame(elements: []))
+        }
+        let cleared = tracker.update(with: DebugUIInspectionFrame(elements: []))
+        #expect(cleared.elements.isEmpty)
+    }
+
+    @Test
+    func trackerDropsVolatileBoxImmediatelyEvenWithStableHysteresis() {
+        // The stable hysteresis must not leak onto vision boxes — a parse that omits an ai- box
+        // clears it on the very next frame, so stale vision boxes never stack.
+        var tracker = DebugUIElementTracker(
+            appearanceThreshold: 1,
+            disappearanceTolerance: 0,
+            movementConfirmationSamples: 1,
+            stableDisappearanceTolerance: 4,
+            stableIDPrefixes: ["ax-", "window-chrome-"]
+        )
+        _ = tracker.update(
+            with: DebugUIInspectionFrame(elements: [
+                element(id: "ai-1-a", label: "Coldplay", x: 10, y: 20)
+            ]),
+            renderNewElementsImmediately: true
+        )
+        let next = tracker.update(
+            with: DebugUIInspectionFrame(elements: [
+                element(id: "ai-2-b", label: "Search", x: 300, y: 400)
+            ]),
+            renderNewElementsImmediately: true
+        )
+        #expect(next.elements.map(\.id) == ["ai-2-b"])
+    }
+
+    @Test
     func trackerPreservesStableIDForMovedSemanticMatch() {
         var tracker = DebugUIElementTracker()
         _ = tracker.update(with: DebugUIInspectionFrame(elements: [
