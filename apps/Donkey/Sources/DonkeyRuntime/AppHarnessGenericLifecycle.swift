@@ -2,6 +2,15 @@ import DonkeyContracts
 import DonkeyHarness
 import Foundation
 
+/// How the user answered a permission/consent gate. `allow` covers a one-time
+/// approval (category permission grant, or shell allow-once); `allowAlways`
+/// persists a standing shell-command rule and is offered only for non-highRisk
+/// commands.
+public enum HarnessGateApproval: String, Sendable {
+    case allow
+    case allowAlways
+}
+
 public struct AppHarnessGenericLifecyclePreparedTurn: Equatable, Sendable {
     public var thread: HarnessThread
     public var task: HarnessTaskState
@@ -142,14 +151,32 @@ public struct AppHarnessGenericLifecycle: Sendable {
     }
 
     @discardableResult
-    public func approvePermissionGate(taskID: String, reason: String) async -> HarnessTaskState? {
+    public func approvePermissionGate(
+        taskID: String,
+        decision: HarnessGateApproval = .allow,
+        reason: String
+    ) async -> HarnessTaskState? {
         guard let task = await coordinator.task(id: taskID),
               task.status == .waitingForPermission,
-              let continuation = task.pendingContinuation,
-              !continuation.missingPermissions.isEmpty else {
+              let continuation = task.pendingContinuation else {
             return nil
         }
 
+        // Shell-command consent: persist an always-allow rule or grant a single
+        // use, then resume so the loop re-issues the command and the executor
+        // finds it allowed.
+        if continuation.metadata["gate"] == "shellConsent" {
+            let signature = continuation.metadata["shell.signature"] ?? ""
+            let tier = ShellRiskTier(rawValue: continuation.metadata["shell.tier"] ?? "") ?? .reversibleWrite
+            if decision == .allowAlways, tier != .highRisk {
+                await ShellPermissionPolicyStore.shared.allowAlways(signature, tier: tier)
+            } else {
+                await ShellPermissionPolicyStore.shared.grantOnce(taskID: taskID, signature: signature)
+            }
+            return await coordinator.resume(taskID: taskID, reason: reason)
+        }
+
+        guard !continuation.missingPermissions.isEmpty else { return nil }
         return await coordinator.grantPermissions(
             taskID: taskID,
             permissions: Set(continuation.missingPermissions),

@@ -79,7 +79,7 @@ protocol UserQueryCommandHandling: Sendable {
     ) async -> UserQueryCommandHandlingResult
     func pauseCommand(taskID: String) async -> Bool
     func resumeCommand(taskID: String) async -> Bool
-    func approvePermissionGate(taskID: String) async -> Bool
+    func approvePermissionGate(taskID: String, alwaysAllow: Bool) async -> Bool
 }
 
 extension UserQueryCommandHandling {
@@ -194,9 +194,10 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         ) != nil
     }
 
-    func approvePermissionGate(taskID: String) async -> Bool {
+    func approvePermissionGate(taskID: String, alwaysAllow: Bool) async -> Bool {
         await genericHarnessLifecycle.approvePermissionGate(
             taskID: taskID,
+            decision: alwaysAllow ? .allowAlways : .allow,
             reason: "User query approved pending permissions"
         ) != nil
     }
@@ -682,7 +683,11 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             "genericHarness.runStoppedForGate": runStep.map { String($0.stoppedForGate) } ?? "",
             "genericHarness.verificationToolStatus": verificationStep?.toolResult?.status.rawValue ?? "",
             "genericHarness.recoveryToolStatus": recoveryStep?.toolResult?.status.rawValue ?? "",
-            "genericHarness.pendingQuestion": runStep?.task.pendingContinuation?.question ?? ""
+            "genericHarness.pendingQuestion": runStep?.task.pendingContinuation?.question ?? "",
+            "genericHarness.shellConsent.command": runStep?.task.pendingContinuation?.metadata["shell.command"] ?? "",
+            "genericHarness.shellConsent.tier": runStep?.task.pendingContinuation?.metadata["shell.tier"] ?? "",
+            "genericHarness.shellConsent.reason": runStep?.task.pendingContinuation?.metadata["shell.reason"] ?? "",
+            "genericHarness.shellConsent.allowAlways": runStep?.task.pendingContinuation?.metadata["shell.allowAlways"] ?? ""
         ]
     }
 }

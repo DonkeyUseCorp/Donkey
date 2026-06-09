@@ -279,14 +279,16 @@ public actor HarnessTaskCoordinator {
         taskID: String,
         missingPermissions: [HarnessPermission],
         pendingToolCall: HarnessToolCall,
-        reason: String = "Task needs permission"
+        reason: String = "Task needs permission",
+        metadata: [String: String] = [:]
     ) async -> HarnessTaskState? {
         await mutate(taskID: taskID, status: .waitingForPermission, summary: reason) { task in
             task.pendingContinuation = HarnessPendingContinuation(
                 stage: .permissionGate,
                 reason: reason,
                 missingPermissions: missingPermissions,
-                pendingToolCall: pendingToolCall
+                pendingToolCall: pendingToolCall,
+                metadata: metadata
             )
         }
     }

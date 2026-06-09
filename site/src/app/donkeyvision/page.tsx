@@ -66,7 +66,7 @@ export default function DonkeyVisionPage() {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
       />
-      <TopNav />
+      <TopNav wordmark="donkey vision" />
       <HeroSection />
       <ProofSection />
       <VisionCompareSection />

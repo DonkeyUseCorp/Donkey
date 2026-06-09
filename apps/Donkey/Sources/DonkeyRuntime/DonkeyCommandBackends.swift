@@ -228,50 +228,6 @@ public enum DonkeyCommandBackends {
     /// Max stdout characters returned to the model.
     private static let shellOutputMaxLength = 4_000
 
-    /// Executables that are unsafe in any position. Matched against the leading
-    /// token of each pipeline/command segment (path-stripped, dequoted), so a
-    /// bare `rm file`, `/bin/rm`, or a denied command inside `$(…)` is caught —
-    /// unlike substring matching, which both missed these and false-positived on
-    /// benign text.
-    private static let shellDeniedExecutables: Set<String> = [
-        "sudo", "su", "doas",
-        "rm", "rmdir", "mv", "dd", "mkfs", "fdisk", "diskutil", "shred", "srm",
-        "chmod", "chown", "chflags",
-        "shutdown", "reboot", "halt", "killall", "pkill", "kill",
-        "launchctl", "csrutil", "spctl", "nvram", "pmset",
-        "scp", "sftp", "ssh", "telnet", "nc", "ncat", "curl", "wget",
-        "eval", "source", "security"
-    ]
-
-    /// Dangerous regardless of position (shell-level constructs / sensitive
-    /// redirect targets / privilege-escalation phrases).
-    private static let shellDeniedSubstrings: [String] = [
-        "do shell script", ":(){", "| sh", "|sh", "| bash", "|bash",
-        "> /dev", ">/dev", "> /system", ">/system", "> /usr", ">/usr",
-        "> /etc", ">/etc", "defaults delete"
-    ]
-
-    /// Returns the matched unsafe token if the command should be refused, else nil.
-    static func unsafeShellReason(_ command: String) -> String? {
-        let lowered = command.lowercased()
-        for substring in shellDeniedSubstrings where lowered.contains(substring) {
-            return substring.trimmingCharacters(in: .whitespaces)
-        }
-        // Split into command segments on shell separators and substitution
-        // boundaries, then check each segment's leading executable.
-        let separators = CharacterSet(charactersIn: ";|&\n`(")
-        for segment in lowered.components(separatedBy: separators) {
-            let trimmedSegment = segment.trimmingCharacters(in: .whitespaces)
-            guard let firstToken = trimmedSegment.split(separator: " ").first.map(String.init) else { continue }
-            let executable = (firstToken.split(separator: "/").last.map(String.init) ?? firstToken)
-                .trimmingCharacters(in: CharacterSet(charactersIn: "\\'\"$"))
-            if shellDeniedExecutables.contains(executable) {
-                return executable
-            }
-        }
-        return nil
-    }
-
     private static func shellExec(_ context: HarnessToolExecutionContext) async -> HarnessToolResult {
         guard let command = trimmed(context.call.input["command"]) ?? trimmed(context.call.input["cmd"]) else {
             return invalidInput(context, "shell_exec requires a one-line `command`.")
@@ -282,12 +238,15 @@ public enum DonkeyCommandBackends {
         guard command.count <= shellCommandMaxLength else {
             return invalidInput(context, "shell_exec command is too long.")
         }
-        if let blocked = unsafeShellReason(command) {
-            return failed(
-                context,
-                "Refused an unsafe shell command (matched \"\(blocked)\").",
-                reason: "blockedCommand"
-            )
+
+        // Classify by risk tier. Reads run immediately; anything that changes
+        // state needs consent (allow-once / always-allow) unless it was already
+        // granted. Nothing is silently refused.
+        let classification = ShellCommandClassifier.classify(command)
+        if classification.tier != .read {
+            if let gate = await consentGate(context, command: command, classification: classification) {
+                return gate
+            }
         }
 
         let result = await Task.detached(priority: .userInitiated) {
@@ -315,6 +274,45 @@ public enum DonkeyCommandBackends {
             summary: stdout.isEmpty ? "Command ran (no output)." : stdout,
             facts: ["lastShellExitCode": "0"],
             metadata: ["stdout": stdout, "exitCode": "0"]
+        )
+    }
+
+    /// Returns nil when the command is already allowed (run it), or a
+    /// `waitingForPermission` gate result the runtime turns into an allow-once /
+    /// always-allow prompt. `highRisk` commands can only be allowed once.
+    private static func consentGate(
+        _ context: HarnessToolExecutionContext,
+        command: String,
+        classification: ShellCommandClassification
+    ) async -> HarnessToolResult? {
+        let store = ShellPermissionPolicyStore.shared
+        let signature = classification.signature
+
+        var allowed = false
+        if classification.tier != .highRisk {
+            allowed = await store.isAlwaysAllowed(signature)
+        }
+        if !allowed {
+            allowed = await store.consumeOnce(taskID: context.taskID, signature: signature)
+        }
+        if allowed { return nil }
+
+        let allowAlways = classification.tier != .highRisk
+        let reason = classification.reason.map { " (\($0))" } ?? ""
+        return HarnessToolResult(
+            callID: context.call.id,
+            toolName: context.call.name,
+            status: .waitingForPermission,
+            summary: "Needs your approval to run `\(command)`\(reason).",
+            metadata: [
+                "executor": "donkeyCommandLayer",
+                "gate": "shellConsent",
+                "shell.command": command,
+                "shell.signature": signature,
+                "shell.tier": classification.tier.rawValue,
+                "shell.reason": classification.reason ?? "",
+                "shell.allowAlways": allowAlways ? "true" : "false"
+            ]
         )
     }
 

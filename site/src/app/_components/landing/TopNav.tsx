@@ -14,6 +14,9 @@ const NAV_ICON_SIZE = 59;
 
 type Props = {
   homeHref?: string;
+  // Wordmark next to the logo. Donkey Vision is its own B2B product, so that
+  // page overrides the default "donkey" with "donkey vision".
+  wordmark?: string;
   // Log in + Sign up cluster. Hidden when an authToggle is supplied.
   showAuthLinks?: boolean;
   // The Download pill belongs to the main landing page only.
@@ -24,6 +27,7 @@ type Props = {
 
 export function TopNav({
   homeHref = "/",
+  wordmark = "donkey",
   showAuthLinks = true,
   showDownload = false,
   authToggle,
@@ -70,7 +74,7 @@ export function TopNav({
               className="block h-full w-full object-cover"
             />
           </div>
-          <span className="text-2xl font-semibold">donkey</span>
+          <span className="text-2xl font-semibold">{wordmark}</span>
         </Link>
         <div className="flex items-center gap-[10px] md:gap-4">
           {isSignedIn ? (

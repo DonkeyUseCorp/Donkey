@@ -462,7 +462,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         }
     }
 
-    func approvePermissionGate(id taskID: String) {
+    func approvePermissionGate(id taskID: String, alwaysAllow: Bool = false) {
         guard let task = task(withID: taskID),
               task.status == .waitingForPermission else {
             return
@@ -477,7 +477,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         promptState.promptText = task.title
         syncPrimaryTaskPausedFlag()
         Task { [weak self, commandHandler] in
-            let approved = await commandHandler.approvePermissionGate(taskID: taskID)
+            let approved = await commandHandler.approvePermissionGate(taskID: taskID, alwaysAllow: alwaysAllow)
             await MainActor.run {
                 guard let self else { return }
                 if approved {
