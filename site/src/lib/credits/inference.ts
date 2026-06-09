@@ -903,14 +903,22 @@ function rateSnapshot(
   };
 }
 
+// Flat per-call price for an app vision parse. Vision reports no token usage, so
+// each successful app (credits-billed) call is charged this flat amount. A DB
+// InferenceCreditRate row still overrides it.
+export const visionCallDefaultMicros = creditStringToMicros("0.004");
+
 function defaultCreditRate(
   route: string,
   provider: string,
   model: string,
 ): CreditRateSnapshot {
-  const defaultRequestMicros = route === inferenceUsageRoutes.assetsRefresh
-    ? zeroCreditMicros
-    : creditStringToMicros("1");
+  const defaultRequestMicros =
+    route === inferenceUsageRoutes.assetsRefresh
+      ? zeroCreditMicros
+      : route === inferenceUsageRoutes.vision
+        ? visionCallDefaultMicros
+        : creditStringToMicros("1");
   const providerPricing = providerCreditPricing(provider, model);
 
   return {
