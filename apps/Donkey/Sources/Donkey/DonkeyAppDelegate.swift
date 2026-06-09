@@ -2,6 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 import Darwin
 import DonkeyAI
+import DonkeyRuntime
 import Foundation
 
 @MainActor
@@ -10,9 +11,7 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     private var loginWindowController: DonkeyLoginWindowController?
     private var permissionSetupController: MacPermissionSetupWindowController?
     private var overlayController: UserQueryOverlayController?
-    #if DONKEY_DEBUG_OVERLAY
-    private var debugInspectionCoordinator: DebugUIInspectionCoordinator?
-    #endif
+    private var uiUnderstandingCoordinator: UIUnderstandingCoordinator?
     private var runtimeOnboardingController: LocalRuntimeOnboardingWindowController?
     private var frontmostVisionWarmCache: FrontmostVisionWarmCache?
 
@@ -73,9 +72,7 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         )
         overlayController?.stop()
         frontmostVisionWarmCache?.stop()
-        #if DONKEY_DEBUG_OVERLAY
-        debugInspectionCoordinator?.stop()
-        #endif
+        uiUnderstandingCoordinator?.stop()
     }
 
     private func showLoginWindow() {
@@ -121,11 +118,22 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         overlayController = controller
         controller.show()
 
+        // The UI-understanding engine (AX + AI parse + per-window cache + background warming) runs in
+        // every build. Only the visual overlay is debug-only: debug builds inject the AppKit overlay
+        // renderer, while production parses headlessly through a no-op renderer.
         #if DONKEY_DEBUG_OVERLAY
-        let debugInspectionCoordinator = DebugUIInspectionCoordinator()
-        self.debugInspectionCoordinator = debugInspectionCoordinator
-        debugInspectionCoordinator.start()
+        let uiUnderstandingCoordinator = UIUnderstandingCoordinator(
+            overlayController: DebugUIInspectionOverlayController(),
+            rendersOverlay: true
+        )
+        #else
+        let uiUnderstandingCoordinator = UIUnderstandingCoordinator(
+            rendersOverlay: false,
+            defaultConfiguration: DebugUIOverlayConfiguration(enabled: true, activeWindowOnly: true)
+        )
         #endif
+        self.uiUnderstandingCoordinator = uiUnderstandingCoordinator
+        uiUnderstandingCoordinator.start()
 
         let runtimeOnboardingController = LocalRuntimeOnboardingWindowController()
         self.runtimeOnboardingController = runtimeOnboardingController

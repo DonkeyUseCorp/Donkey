@@ -1,5 +1,3 @@
-#if DONKEY_DEBUG_OVERLAY
-
 import AppKit
 import CryptoKit
 import DonkeyAI
@@ -10,8 +8,8 @@ import ImageIO
 import OSLog
 import UniformTypeIdentifiers
 
-private enum DebugUIInspectionLog {
-    static let overlay = Logger(subsystem: "com.donkey.app", category: "debug-ui-inspection")
+private enum UIUnderstandingLog {
+    static let overlay = Logger(subsystem: "com.donkey.app", category: "ui-understanding")
 }
 
 /// Which hosted backend supplies the "AI" evidence rendered on the overlay.
@@ -22,9 +20,14 @@ private enum RemoteAIEngine {
     case screenshotParse
 }
 
+/// Always-on engine that turns the user's windows into structured UI understanding (accessibility +
+/// vision elements) for the agent to reason over. It runs in every build; only the visual overlay is
+/// a debug concern, injected through `DebugUIInspectionOverlayRendering`.
 @MainActor
-final class DebugUIInspectionCoordinator {
-    private let overlayController = DebugUIInspectionOverlayController()
+final class UIUnderstandingCoordinator {
+    private let overlayController: any DebugUIInspectionOverlayRendering
+    private let rendersOverlay: Bool
+    private let defaultConfiguration: DebugUIOverlayConfiguration
     private let captureService = DebugUIScreenCaptureService()
     private let accessibilityInspectionService = DebugUIAccessibilityInspectionService()
     private let windowResolver = MacWindowResolver()
@@ -37,6 +40,9 @@ final class DebugUIInspectionCoordinator {
     private var lastSnapshots: [UInt32: DebugUIScreenCaptureSnapshot] = [:]
     private var lastVisionSignatures: [UInt32: ScreenshotSignature] = [:]
     private var visionBackoff: [UInt32: VisionBackoff] = [:]
+    private var lastActiveWindowIDs: [UInt32: Set<UInt32>] = [:]
+    private var windowElementCache: [UInt32: [DebugUIElement]] = [:]
+    private var isWarmingBackground = false
     private let remoteAIEngine: RemoteAIEngine = .vision
 
     private struct VisionBackoff {
@@ -51,12 +57,27 @@ final class DebugUIInspectionCoordinator {
     private var isAnalyzing = false
     private var isRefreshingActiveAccessibility = false
 
-    init(configURL: URL? = nil) {
+    /// - Parameters:
+    ///   - overlayController: where parsed frames are painted. Production injects a no-op renderer
+    ///     so the engine still parses and caches without drawing anything.
+    ///   - rendersOverlay: whether this instance drives a visible overlay. Render-only smoothing work
+    ///     (the high-frequency active-window accessibility pass) is skipped when false.
+    ///   - defaultConfiguration: the configuration used when no dev-overlay config file enables the
+    ///     engine. Production passes an enabled configuration so AX + AI parsing runs everywhere.
+    init(
+        configURL: URL? = nil,
+        overlayController: any DebugUIInspectionOverlayRendering = NoopDebugUIInspectionOverlayRenderer(),
+        rendersOverlay: Bool = false,
+        defaultConfiguration: DebugUIOverlayConfiguration = .disabled
+    ) {
         self.configURL = configURL
+        self.overlayController = overlayController
+        self.rendersOverlay = rendersOverlay
+        self.defaultConfiguration = defaultConfiguration
     }
 
     func start() {
-        DebugUIInspectionLog.overlay.info(
+        UIUnderstandingLog.overlay.info(
             "debug inspection starting configURL=\(self.configURL?.path ?? "candidate-search", privacy: .public)"
         )
         stop()
@@ -86,7 +107,10 @@ final class DebugUIInspectionCoordinator {
         lastSnapshots.removeAll()
         lastVisionSignatures.removeAll()
         visionBackoff.removeAll()
+        lastActiveWindowIDs.removeAll()
+        windowElementCache.removeAll()
         isAnalyzing = false
+        isWarmingBackground = false
         isRefreshingActiveAccessibility = false
         currentConfig = .disabled
     }
@@ -137,7 +161,11 @@ final class DebugUIInspectionCoordinator {
     }
 
     private func reloadConfigAndReschedule(force: Bool = false) {
-        let newConfig = DebugUIOverlayConfiguration.load(fileURL: configURL)
+        // The dev-overlay config file turns the visible overlay on and tunes it. When it does not
+        // enable the engine, fall back to `defaultConfiguration` — production passes an enabled
+        // configuration there so AX + AI parsing runs even though nothing is rendered.
+        let loaded = DebugUIOverlayConfiguration.load(fileURL: configURL)
+        let newConfig = loaded.enabled ? loaded : defaultConfiguration
         let cadenceChanged = newConfig.cadenceSeconds != currentConfig.cadenceSeconds
         let enablementChanged = newConfig.enabled != currentConfig.enabled
         let scopeChanged = newConfig.screenScope != currentConfig.screenScope
@@ -149,7 +177,7 @@ final class DebugUIInspectionCoordinator {
         currentConfig = newConfig
 
         if force || enablementChanged || scopeChanged || modeChanged || confidenceChanged || activeWindowChanged || targetFilterChanged {
-            DebugUIInspectionLog.overlay.info(
+            UIUnderstandingLog.overlay.info(
                 "debug inspection config enabled=\(String(newConfig.enabled), privacy: .public) mode=\(newConfig.mode, privacy: .public) cadence=\(newConfig.cadenceSeconds, privacy: .public) scope=\(newConfig.screenScope.rawValue, privacy: .public) minConfidence=\(newConfig.minConfidence, privacy: .public) activeWindowOnly=\(String(newConfig.activeWindowOnly), privacy: .public) targetBundles=\(newConfig.targetBundleIdentifiers.joined(separator: ","), privacy: .public) targetApps=\(newConfig.targetAppNames.joined(separator: ","), privacy: .public)"
             )
         }
@@ -165,7 +193,10 @@ final class DebugUIInspectionCoordinator {
             RunLoop.main.add(newTimer, forMode: .common)
         }
 
-        if newConfig.enabled {
+        // The 0.12s active-accessibility pass exists purely to keep the visible overlay smooth, so
+        // it only runs when this instance actually renders. Headless (production) parsing relies on
+        // the main cadence below.
+        if newConfig.enabled && rendersOverlay {
             if activeAccessibilityTimer == nil || force {
                 activeAccessibilityTimer?.invalidate()
                 let newTimer = Timer(timeInterval: 0.12, repeats: true) { [weak self] _ in
@@ -188,6 +219,8 @@ final class DebugUIInspectionCoordinator {
             lastSnapshots.removeAll()
             lastVisionSignatures.removeAll()
             visionBackoff.removeAll()
+            lastActiveWindowIDs.removeAll()
+            windowElementCache.removeAll()
             if !newConfig.enabled {
                 overlayController.close()
             }
@@ -198,7 +231,7 @@ final class DebugUIInspectionCoordinator {
         reloadConfigAndReschedule()
         guard currentConfig.enabled else { return }
         guard !isAnalyzing else {
-            DebugUIInspectionLog.overlay.debug("debug inspection skipped refresh because analysis is already running")
+            UIUnderstandingLog.overlay.debug("debug inspection skipped refresh because analysis is already running")
             return
         }
 
@@ -208,7 +241,7 @@ final class DebugUIInspectionCoordinator {
             do {
                 try await analyzeVisibleScreens(force: force)
             } catch {
-                DebugUIInspectionLog.overlay.error(
+                UIUnderstandingLog.overlay.error(
                     "debug inspection failed error=\(String(describing: error), privacy: .public)"
                 )
                 if lastRenderedFrames.isEmpty {
@@ -218,6 +251,10 @@ final class DebugUIInspectionCoordinator {
                 }
             }
         }
+
+        // Warm background windows' overlays off the critical path so switching to any window is
+        // instant. This runs on its own single-flight task and does not block active rendering.
+        scheduleBackgroundWarm()
     }
 
     private func analyzeVisibleScreens(force: Bool) async throws {
@@ -272,10 +309,16 @@ final class DebugUIInspectionCoordinator {
         // `disappearanceTolerance` cycles — which, once the vision parse is skipped for an unchanged
         // window, makes the boxes flicker (appear, vanish, reappear on the next real parse). Fusing
         // the carried AI elements keeps them present every cycle, matching the active-accessibility
-        // path's behavior.
+        // path's behavior. Scope the carry-forward to this frame's window so a previous window's
+        // boxes do not survive a window switch.
+        let focusedWindowIDs = Set(frame.elements.compactMap(Self.windowID(for:)))
         let carriedAIFrame = DebugUIInspectionFrame(
             elements: (lastRenderedFrames[screen.screenID]?.elements ?? [])
-                .filter { !Self.isAccessibilityEvidence($0) }
+                .filter { element in
+                    guard !Self.isAccessibilityEvidence(element) else { return false }
+                    guard let windowID = Self.windowID(for: element) else { return true }
+                    return focusedWindowIDs.contains(windowID)
+                }
         )
         let fusedFrame = DebugUIInspectionFrameFusion.fused(
             accessibilityFrame: frame,
@@ -295,6 +338,7 @@ final class DebugUIInspectionCoordinator {
         lastFingerprints[screen.screenID] = fingerprint
         lastRenderedFrames[screen.screenID] = trackedFrame
         lastSnapshots[screen.screenID] = snapshot
+        cacheRenderedElements(trackedFrame.elements)
         logLayoutDiagnostics(stage: stage, screen: screen, frame: trackedFrame, captures: [])
         overlayController.render(frame: trackedFrame, snapshot: snapshot)
     }
@@ -331,7 +375,7 @@ final class DebugUIInspectionCoordinator {
                 stage: "active-accessibility"
             )
         } catch {
-            DebugUIInspectionLog.overlay.debug(
+            UIUnderstandingLog.overlay.debug(
                 "debug inspection skipped active accessibility refresh error=\(String(describing: error), privacy: .public)"
             )
         }
@@ -362,18 +406,63 @@ final class DebugUIInspectionCoordinator {
             }
 
             let existing = lastRenderedFrames[screen.screenID] ?? DebugUIInspectionFrame()
+            let focusedWindowIDs = Set(accessibilityFrame.elements.compactMap(Self.windowID(for:)))
+
+            // Detect a focused-window switch. On switch we do not throw the previous window's
+            // metadata away — it stays in `windowElementCache`. Instead we reset the tracker and
+            // seed the carried-forward AI from this window's cache so its last-known vision boxes
+            // reappear instantly, rather than blanking until the next ~1Hz vision pass.
+            let switchedWindow = !focusedWindowIDs.isEmpty
+                && lastActiveWindowIDs[screen.screenID].map { $0 != focusedWindowIDs } == true
+            if switchedWindow {
+                trackers[screen.screenID] = Self.makeElementTracker()
+                lastFingerprints[screen.screenID] = nil
+            }
+            if !focusedWindowIDs.isEmpty {
+                lastActiveWindowIDs[screen.screenID] = focusedWindowIDs
+            }
+
+            // Carry forward only AI boxes that belong to the focused window. In steady state they
+            // are already on screen (`existing`); right after a switch `existing` still holds the
+            // previous window, so pull this window's boxes from the per-window cache instead.
+            let carriedAIElements: [DebugUIElement]
+            if switchedWindow {
+                carriedAIElements = cachedElements(
+                    forWindows: focusedWindowIDs,
+                    screens: screens,
+                    where: { !Self.isAccessibilityEvidence($0) }
+                )[screen.screenID] ?? []
+            } else {
+                carriedAIElements = existing.elements.filter { element in
+                    guard !Self.isAccessibilityEvidence(element) else { return false }
+                    guard let windowID = Self.windowID(for: element) else { return true }
+                    return focusedWindowIDs.contains(windowID)
+                }
+            }
+
             let progressiveAccessibilityFrame: DebugUIInspectionFrame
             if stage.contains("progress") {
                 let incomingIDs = Set(accessibilityFrame.elements.map(\.id))
-                let incomingWindowIDs = Set(accessibilityFrame.elements.compactMap(Self.windowID(for:)))
-                let carriedAccessibilityElements = existing.elements.filter { element in
-                    guard Self.isAccessibilityEvidence(element),
-                          !incomingIDs.contains(element.id),
+                // While a scan streams in, hold the previously rendered accessibility boxes for the
+                // focused window so partial frames do not flicker. After a switch those come from
+                // the cache, since `existing` is still the previous window.
+                let priorAccessibilityElements: [DebugUIElement]
+                if switchedWindow {
+                    priorAccessibilityElements = cachedElements(
+                        forWindows: focusedWindowIDs,
+                        screens: screens,
+                        where: { Self.isAccessibilityEvidence($0) }
+                    )[screen.screenID] ?? []
+                } else {
+                    priorAccessibilityElements = existing.elements.filter { Self.isAccessibilityEvidence($0) }
+                }
+                let carriedAccessibilityElements = priorAccessibilityElements.filter { element in
+                    guard !incomingIDs.contains(element.id),
                           let windowID = Self.windowID(for: element)
                     else {
                         return false
                     }
-                    return incomingWindowIDs.contains(windowID)
+                    return focusedWindowIDs.contains(windowID)
                 }
                 progressiveAccessibilityFrame = DebugUIInspectionFrame(
                     elements: carriedAccessibilityElements + accessibilityFrame.elements
@@ -381,9 +470,7 @@ final class DebugUIInspectionCoordinator {
             } else {
                 progressiveAccessibilityFrame = accessibilityFrame
             }
-            let nonAccessibilityFrame = DebugUIInspectionFrame(
-                elements: existing.elements.filter { !Self.isAccessibilityEvidence($0) }
-            )
+            let nonAccessibilityFrame = DebugUIInspectionFrame(elements: carriedAIElements)
             let fusedFrame = DebugUIInspectionFrameFusion.fused(
                 accessibilityFrame: progressiveAccessibilityFrame,
                 aiFrame: nonAccessibilityFrame
@@ -407,6 +494,7 @@ final class DebugUIInspectionCoordinator {
             )
             lastRenderedFrames[screen.screenID] = trackedFrame
             lastSnapshots[screen.screenID] = snapshot
+            cacheRenderedElements(trackedFrame.elements)
             logLayoutDiagnostics(stage: stage, screen: screen, frame: trackedFrame, captures: [])
             overlayController.render(frame: trackedFrame, snapshot: snapshot)
         }
@@ -483,6 +571,12 @@ final class DebugUIInspectionCoordinator {
         let activeScreenIDs = Set(screens.map(\.screenID))
         overlayController.closeScreens(except: activeScreenIDs)
         lastRenderedFrames = lastRenderedFrames.filter { activeScreenIDs.contains($0.key) }
+        // Drop cached state for windows that no longer exist so the per-window caches do not grow
+        // without bound over a long session.
+        let liveWindowIDs = Set(windowResolver.enumerateCandidates().map(\.windowID))
+        windowElementCache = windowElementCache.filter { liveWindowIDs.contains($0.key) }
+        lastVisionSignatures = lastVisionSignatures.filter { liveWindowIDs.contains($0.key) }
+        visionBackoff = visionBackoff.filter { liveWindowIDs.contains($0.key) }
         let accessibilityFrames = accessibilityFramesForRemoteAIFusion()
         renderFastLocalFrames(
             screens: screens,
@@ -533,13 +627,13 @@ final class DebugUIInspectionCoordinator {
                     )
                 )
             } catch {
-                DebugUIInspectionLog.overlay.error(
+                UIUnderstandingLog.overlay.error(
                     "debug inspection skipped remote AI windowID=\(target.windowID, privacy: .public) error=\(String(describing: error), privacy: .public)"
                 )
             }
         }
 
-        DebugUIInspectionLog.overlay.info(
+        UIUnderstandingLog.overlay.debug(
             "debug inspection remote AI captures engine=\(String(describing: self.remoteAIEngine), privacy: .public) targets=\(targets.count, privacy: .public) captures=\(captures.count, privacy: .public) screens=\(screens.count, privacy: .public)"
         )
 
@@ -558,7 +652,7 @@ final class DebugUIInspectionCoordinator {
                 accessibilityFrame: accessibilityFrame
             )
             guard force || lastFingerprints[screen.screenID] != fingerprint || needsTrackerWarmup(screenID: screen.screenID) else {
-                DebugUIInspectionLog.overlay.debug(
+                UIUnderstandingLog.overlay.debug(
                     "debug inspection skipped unchanged remote AI screenID=\(screen.screenID, privacy: .public)"
                 )
                 continue
@@ -573,6 +667,18 @@ final class DebugUIInspectionCoordinator {
                     guard let windowID = Self.windowID(for: element) else { return true }
                     return currentWindowIDs.contains(windowID)
                 }
+            // If a captured window has no AI on screen yet (e.g. the user just switched back to it),
+            // seed from its cached vision boxes so they reappear immediately instead of blanking
+            // until this parse returns.
+            let windowsWithAI = Set(elements.compactMap(Self.windowID(for:)))
+            let missingAIWindows = currentWindowIDs.subtracting(windowsWithAI)
+            if !missingAIWindows.isEmpty {
+                elements += cachedElements(
+                    forWindows: missingAIWindows,
+                    screens: screens,
+                    where: { !Self.isAccessibilityEvidence($0) }
+                )[screen.screenID] ?? []
+            }
 
             func renderRemoteAIFrame(stage: String, updatesFingerprint: Bool) {
                 var tracker = trackers[screen.screenID] ?? Self.makeElementTracker()
@@ -589,7 +695,7 @@ final class DebugUIInspectionCoordinator {
                 if !force,
                    let previousFrame = lastRenderedFrames[screen.screenID],
                    trackedFrame.isOverlayRenderEquivalent(to: previousFrame) {
-                    DebugUIInspectionLog.overlay.debug(
+                    UIUnderstandingLog.overlay.debug(
                         "debug inspection skipped stable \(stage, privacy: .public) render screenID=\(screen.screenID, privacy: .public)"
                     )
                     return
@@ -605,8 +711,9 @@ final class DebugUIInspectionCoordinator {
                 }
                 lastRenderedFrames[screen.screenID] = trackedFrame
                 lastSnapshots[screen.screenID] = snapshot
+                cacheRenderedElements(trackedFrame.elements)
                 let aiCount = trackedFrame.elements.filter { !Self.isAccessibilityEvidence($0) }.count
-                DebugUIInspectionLog.overlay.info(
+                UIUnderstandingLog.overlay.debug(
                     "debug inspection rendering \(stage, privacy: .public) screenID=\(screen.screenID, privacy: .public) totalElements=\(trackedFrame.elements.count, privacy: .public) aiElements=\(aiCount, privacy: .public)"
                 )
                 overlayController.render(frame: trackedFrame, snapshot: snapshot)
@@ -636,14 +743,14 @@ final class DebugUIInspectionCoordinator {
                     if let signature, let previous = lastVisionSignatures[windowID] {
                         let changedFraction = signature.changedFraction(from: previous)
                         if changedFraction <= Self.visionChangedFractionThreshold {
-                            DebugUIInspectionLog.overlay.debug(
+                            UIUnderstandingLog.overlay.debug(
                                 "debug inspection skipped unchanged vision windowID=\(windowID, privacy: .public) changedFraction=\(changedFraction, privacy: .public)"
                             )
                             continue
                         }
                     }
                     do {
-                        DebugUIInspectionLog.overlay.info(
+                        UIUnderstandingLog.overlay.debug(
                             "debug inspection vision request sending windowID=\(windowID, privacy: .public) captureBytes=\(capture.parseImageData.count, privacy: .public)"
                         )
                         let requestStart = Date()
@@ -657,7 +764,7 @@ final class DebugUIInspectionCoordinator {
                             screenFrame: screenBounds,
                             minConfidence: currentConfig.minConfidence
                         ).elements
-                        DebugUIInspectionLog.overlay.info(
+                        UIUnderstandingLog.overlay.info(
                             "debug inspection vision parsed windowID=\(windowID, privacy: .public) elapsedMs=\(elapsedMs, privacy: .public) responseElements=\(response.elements.count, privacy: .public) mappedElements=\(parsedElements.count, privacy: .public) minConfidence=\(self.currentConfig.minConfidence, privacy: .public) responseImage=\(Int(response.image.width), privacy: .public)x\(Int(response.image.height), privacy: .public) captureBytes=\(capture.parseImageData.count, privacy: .public)"
                         )
                         elements.removeAll { Self.windowID(for: $0) == windowID }
@@ -667,10 +774,11 @@ final class DebugUIInspectionCoordinator {
                         }
                         visionBackoff[windowID] = nil
                         renderRemoteAIFrame(stage: "vision", updatesFingerprint: false)
+                        publishUnderstanding(for: capture.target, signature: signature)
                     } catch {
                         let backoff = Self.nextVisionBackoff(after: visionBackoff[windowID])
                         visionBackoff[windowID] = backoff
-                        DebugUIInspectionLog.overlay.error(
+                        UIUnderstandingLog.overlay.error(
                             "debug inspection vision parse failed windowID=\(windowID, privacy: .public) failureStreak=\(backoff.failureStreak, privacy: .public) retryInSeconds=\(Int(backoff.nextAttempt.timeIntervalSinceNow.rounded()), privacy: .public) error=\(String(describing: error), privacy: .public)"
                         )
                     }
@@ -739,13 +847,182 @@ final class DebugUIInspectionCoordinator {
                     elements += parsedElements
                     renderRemoteAIFrame(stage: "ai-progress", updatesFingerprint: false)
                 } catch {
-                    DebugUIInspectionLog.overlay.error(
+                    UIUnderstandingLog.overlay.error(
                         "debug inspection remote AI parse failed windowID=\(capture.target.windowID, privacy: .public) error=\(String(describing: error), privacy: .public)"
                     )
                 }
             }
 
             renderRemoteAIFrame(stage: "ai-fused", updatesFingerprint: true)
+        }
+    }
+
+    /// Kick a single-flight background pass that pre-extracts and caches overlays for windows the
+    /// user is not currently looking at, so switching to any of them is instant. Only meaningful
+    /// when just the active window renders; otherwise every window is already analyzed live.
+    private func scheduleBackgroundWarm() {
+        guard currentConfig.enabled,
+              currentConfig.activeWindowOnly,
+              remoteAIEngine == .vision,
+              !isWarmingBackground
+        else {
+            return
+        }
+        isWarmingBackground = true
+        Task { @MainActor in
+            defer { self.isWarmingBackground = false }
+            guard let screens = try? self.screenSurfaces(scope: self.currentConfig.screenScope) else {
+                return
+            }
+            let activeWindowIDs = Set(self.visibleOverlayTargets(on: screens).map(\.windowID))
+            // Accessibility is local and cheap, so warm every background window that has no cached
+            // accessibility yet; vision is a slow network parse, so warm just one window per pass.
+            self.warmBackgroundAccessibility(screens: screens, excluding: activeWindowIDs)
+            await self.warmNextBackgroundVisionWindow(screens: screens, excluding: activeWindowIDs)
+        }
+    }
+
+    /// Cap how many background windows we ever warm, so a desktop full of windows does not trigger a
+    /// flood of captures and vision parses. The frontmost background windows (the ones most likely to
+    /// be switched to) are warmed first.
+    private static let backgroundWarmWindowCap = 5
+
+    /// Candidate windows eligible for background warming: every visible, allowed window except the
+    /// active one(s) the live path already handles, capped to `backgroundWarmWindowCap`. Unlike
+    /// `visibleOverlayTargets` this ignores the frontmost/focused requirement so background windows
+    /// are included.
+    private func backgroundWarmTargets(
+        on screens: [DebugUIScreenSurface],
+        excluding excludedWindowIDs: Set<UInt32>
+    ) -> [MacWindowTargetCandidate] {
+        let bundleFilters = Set(currentConfig.targetBundleIdentifiers.map(Self.normalizedTargetFilter))
+        let appNameFilters = Set(currentConfig.targetAppNames.map(Self.normalizedTargetFilter))
+        let eligible = windowResolver.enumerateCandidates().filter { target in
+            target.isVisible
+                && target.isOnScreen
+                && !excludedWindowIDs.contains(target.windowID)
+                && target.safetyAssessment.status == .allowed
+                && !target.isIPhoneMirroring
+                && target.processID != ProcessInfo.processInfo.processIdentifier
+                && Self.matchesTargetFilter(
+                    target,
+                    bundleFilters: bundleFilters,
+                    appNameFilters: appNameFilters
+                )
+                && screens.contains { Self.intersects(target.bounds, $0.captureFrame) }
+        }
+        return Array(eligible.prefix(Self.backgroundWarmWindowCap))
+    }
+
+    private func hasCachedAccessibility(forWindow windowID: UInt32) -> Bool {
+        windowElementCache[windowID]?.contains(where: Self.isAccessibilityEvidence) ?? false
+    }
+
+    /// Run one all-windows accessibility scan and cache the accessibility boxes for background
+    /// windows that have none yet. Skips entirely once every background window is covered so we are
+    /// not walking every app's accessibility tree on a loop.
+    private func warmBackgroundAccessibility(
+        screens: [DebugUIScreenSurface],
+        excluding activeWindowIDs: Set<UInt32>
+    ) {
+        let pending = backgroundWarmTargets(on: screens, excluding: activeWindowIDs)
+            .filter { !hasCachedAccessibility(forWindow: $0.windowID) }
+        guard !pending.isEmpty else { return }
+        let pendingWindowIDs = Set(pending.map(\.windowID))
+
+        let results: [DebugUIAccessibilityInspectionResult]
+        do {
+            results = try accessibilityInspectionService.inspect(
+                scope: currentConfig.screenScope,
+                minConfidence: currentConfig.minConfidence,
+                frontmostOnly: false,
+                focusedOnly: false,
+                targetBundleIdentifiers: currentConfig.targetBundleIdentifiers,
+                targetAppNames: currentConfig.targetAppNames
+            )
+        } catch {
+            UIUnderstandingLog.overlay.debug(
+                "debug inspection background accessibility warm skipped error=\(String(describing: error), privacy: .public)"
+            )
+            return
+        }
+
+        var accessibilityByWindow: [UInt32: [DebugUIElement]] = [:]
+        for result in results {
+            let frame = Self.frameInScreenPointSpace(result.frame, snapshot: result.snapshot)
+            for element in frame.elements {
+                guard let windowID = Self.windowID(for: element),
+                      pendingWindowIDs.contains(windowID)
+                else {
+                    continue
+                }
+                accessibilityByWindow[windowID, default: []].append(element)
+            }
+        }
+        guard !accessibilityByWindow.isEmpty else { return }
+        for (windowID, accessibilityElements) in accessibilityByWindow {
+            let existingAI = (windowElementCache[windowID] ?? []).filter { !Self.isAccessibilityEvidence($0) }
+            windowElementCache[windowID] = accessibilityElements + existingAI
+        }
+        UIUnderstandingLog.overlay.info(
+            "debug inspection warmed background accessibility windows=\(accessibilityByWindow.count, privacy: .public)"
+        )
+    }
+
+    /// Vision-parse one not-yet-parsed background window and cache its boxes. One per pass keeps the
+    /// parser from being hammered; the per-window signature marks it done so we do not re-parse it.
+    private func warmNextBackgroundVisionWindow(
+        screens: [DebugUIScreenSurface],
+        excluding activeWindowIDs: Set<UInt32>
+    ) async {
+        let candidate = backgroundWarmTargets(on: screens, excluding: activeWindowIDs)
+            .first { target in
+                lastVisionSignatures[target.windowID] == nil
+                    && (visionBackoff[target.windowID].map { Date() >= $0.nextAttempt } ?? true)
+            }
+        guard let target = candidate,
+              let screen = screens.first(where: { Self.intersects(target.bounds, $0.captureFrame) })
+        else {
+            return
+        }
+        let client: DonkeyBackendInferenceClient
+        do {
+            client = try backendInferenceClient()
+        } catch {
+            return
+        }
+
+        let windowID = target.windowID
+        do {
+            let screenshot = try await windowScreenshotCapturer.capture(target: target)
+            let signature = ScreenshotSignature.make(fromImageData: screenshot.pngData)
+            let compressed = Self.compressedRemoteAIImage(from: screenshot)
+            let requestStart = Date()
+            let response = try await client.parseScreenshotVision(imageData: compressed.data)
+            let elapsedMs = Int(Date().timeIntervalSince(requestStart) * 1000)
+            let parsedElements = VisionParseDebugUIOverlayMapper.frame(
+                from: response,
+                target: target,
+                screenFrame: screen.captureFrame,
+                minConfidence: currentConfig.minConfidence
+            ).elements
+            // Keep whatever accessibility we already cached for this window and replace its vision.
+            let existingAccessibility = (windowElementCache[windowID] ?? []).filter(Self.isAccessibilityEvidence)
+            windowElementCache[windowID] = existingAccessibility + parsedElements
+            if let signature {
+                lastVisionSignatures[windowID] = signature
+            }
+            visionBackoff[windowID] = nil
+            publishUnderstanding(for: target, signature: signature)
+            UIUnderstandingLog.overlay.info(
+                "debug inspection warmed background vision windowID=\(windowID, privacy: .public) elapsedMs=\(elapsedMs, privacy: .public) mappedElements=\(parsedElements.count, privacy: .public)"
+            )
+        } catch {
+            let backoff = Self.nextVisionBackoff(after: visionBackoff[windowID])
+            visionBackoff[windowID] = backoff
+            UIUnderstandingLog.overlay.error(
+                "debug inspection background vision warm failed windowID=\(windowID, privacy: .public) failureStreak=\(backoff.failureStreak, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
         }
     }
 
@@ -771,7 +1048,7 @@ final class DebugUIInspectionCoordinator {
                 }
             )
         } catch {
-            DebugUIInspectionLog.overlay.info(
+            UIUnderstandingLog.overlay.info(
                 "debug inspection skipped accessibility fusion error=\(String(describing: error), privacy: .public)"
             )
             return [:]
@@ -800,7 +1077,7 @@ final class DebugUIInspectionCoordinator {
                 }
             )
         } catch {
-            DebugUIInspectionLog.overlay.debug(
+            UIUnderstandingLog.overlay.debug(
                 "debug inspection skipped active accessibility refresh error=\(String(describing: error), privacy: .public)"
             )
             return [:]
@@ -859,7 +1136,7 @@ final class DebugUIInspectionCoordinator {
             targetBundleIdentifiers: currentConfig.targetBundleIdentifiers,
             targetAppNames: currentConfig.targetAppNames
         )
-        DebugUIInspectionLog.overlay.debug(
+        UIUnderstandingLog.overlay.debug(
             "debug inspection accessibility screens=\(results.count, privacy: .public) force=\(String(force), privacy: .public)"
         )
 
@@ -869,7 +1146,7 @@ final class DebugUIInspectionCoordinator {
         for result in results {
             let snapshot = result.snapshot
             if !force, lastFingerprints[snapshot.screenID] == snapshot.fingerprint {
-                DebugUIInspectionLog.overlay.debug(
+                UIUnderstandingLog.overlay.debug(
                     "debug inspection sampling unchanged accessibility screenID=\(snapshot.screenID, privacy: .public)"
                 )
             }
@@ -882,7 +1159,7 @@ final class DebugUIInspectionCoordinator {
             if !force,
                let previousFrame = lastRenderedFrames[snapshot.screenID],
                trackedFrame.isOverlayRenderEquivalent(to: previousFrame) {
-                DebugUIInspectionLog.overlay.debug(
+                UIUnderstandingLog.overlay.debug(
                     "debug inspection skipped stable accessibility render screenID=\(snapshot.screenID, privacy: .public)"
                 )
                 continue
@@ -1100,7 +1377,7 @@ final class DebugUIInspectionCoordinator {
         }
 
         let configuration = try DonkeyBackendInferenceConfiguration.fromEnvironment()
-        DebugUIInspectionLog.overlay.info(
+        UIUnderstandingLog.overlay.info(
             "debug inspection using backend baseURL=\(configuration.baseURL.absoluteString, privacy: .public)"
         )
         let created = HostedDebugUIInspectionAnalyzer(
@@ -1381,17 +1658,104 @@ final class DebugUIInspectionCoordinator {
     /// flicker while still catching a small new control or panel.
     private static let visionChangedFractionThreshold = 0.012
 
-    /// Tracker used for the debug overlay. Carry-forward is disabled so each render shows exactly
-    /// the current parse's elements: vision (OmniParser) reassigns IDs and jitters labels every
-    /// parse, so the default multi-frame carry-forward would keep stale boxes alive and pile up
-    /// overlapping duplicates on screen. New elements render immediately and anything absent from
-    /// the latest frame is dropped at once — i.e. the previous overlay is cleared before the next.
+    /// Tracker used for the debug overlay. Within a single focused window, vision (OmniParser)
+    /// reassigns IDs and jitters labels every parse, so vision boxes must drop immediately
+    /// (tolerance 0) or stale boxes pile up as overlapping duplicates. Accessibility boxes keep
+    /// stable IDs, so a short hysteresis bridges the brief detection gaps between the ~8Hz
+    /// accessibility scan and the ~1Hz vision pass that otherwise make a box strobe. Across a
+    /// window switch the previous window's metadata is not thrown away — it is cached per window
+    /// and restored instantly (see `windowElementCache` and `renderActiveAccessibilityResults`).
     private static func makeElementTracker() -> DebugUIElementTracker {
         DebugUIElementTracker(
             appearanceThreshold: 1,
             disappearanceTolerance: 0,
-            movementConfirmationSamples: 1
+            movementConfirmationSamples: 1,
+            stableDisappearanceTolerance: 4,
+            stableIDPrefixes: ["ax-", "window-chrome-"]
         )
+    }
+
+    /// Remember each window's most recent overlay elements (accessibility + vision) so that when
+    /// the user switches back to a window we can paint its last-known overlay immediately instead
+    /// of waiting for a fresh accessibility scan and vision parse.
+    private func cacheRenderedElements(_ elements: [DebugUIElement]) {
+        var byWindow: [UInt32: [DebugUIElement]] = [:]
+        for element in elements {
+            guard let windowID = Self.windowID(for: element) else { continue }
+            byWindow[windowID, default: []].append(element)
+        }
+        for (windowID, windowElements) in byWindow {
+            windowElementCache[windowID] = windowElements
+        }
+    }
+
+    /// Publish this window's fused accessibility + vision understanding to the shared store that the
+    /// agent reads when it decides what to act on. Elements are stored in window-local point space,
+    /// with the window's point size as the image size — exactly the geometry the agent's tools map
+    /// back to a screen point, so a warmed background window is instantly actionable without a parse.
+    private func publishUnderstanding(for target: MacWindowTargetCandidate, signature: ScreenshotSignature?) {
+        guard let signature else { return }
+        let imageWidth = Int(target.bounds.width.rounded())
+        let imageHeight = Int(target.bounds.height.rounded())
+        guard imageWidth > 0, imageHeight > 0 else { return }
+
+        let elements = (windowElementCache[target.windowID] ?? []).compactMap { element -> DebugUIElement? in
+            guard let local = Self.localBounds(for: element) else { return nil }
+            return DebugUIElement(
+                id: element.id,
+                type: element.type,
+                label: element.label,
+                description: element.description,
+                bbox: DebugUIBoundingBox(x: local.x, y: local.y, width: local.width, height: local.height),
+                confidence: element.confidence,
+                visualStyle: element.visualStyle,
+                metadata: element.metadata
+            )
+        }
+        guard !elements.isEmpty else { return }
+
+        let appKey = (target.bundleIdentifier?.isEmpty == false ? target.bundleIdentifier : nil)
+            ?? target.appName
+            ?? ""
+        WindowUIUnderstandingStore.shared.store(
+            appKey: appKey,
+            entry: WindowUIUnderstandingStore.Entry(
+                signature: signature,
+                elements: elements,
+                imagePixelWidth: imageWidth,
+                imagePixelHeight: imageHeight,
+                capturedAtUptimeMS: ProcessInfo.processInfo.systemUptime * 1_000
+            )
+        )
+    }
+
+    /// Pull cached elements for the given windows, reprojected onto the window's current on-screen
+    /// position so a window that moved while unfocused still lines up. Reprojection with no source
+    /// screen places each element from its stored window-local bounds against the window's current
+    /// bounds; if the window is not currently enumerable we fall back to the cached geometry.
+    private func cachedElements(
+        forWindows windowIDs: Set<UInt32>,
+        screens: [DebugUIScreenSurface],
+        where predicate: (DebugUIElement) -> Bool
+    ) -> [UInt32: [DebugUIElement]] {
+        guard !windowIDs.isEmpty else { return [:] }
+        let candidates = Dictionary(
+            uniqueKeysWithValues: windowResolver.enumerateCandidates().map { ($0.windowID, $0) }
+        )
+        var byScreen: [UInt32: [DebugUIElement]] = [:]
+        for windowID in windowIDs {
+            for element in windowElementCache[windowID] ?? [] where predicate(element) {
+                if let projected = Self.reproject(
+                    element,
+                    sourceScreen: nil,
+                    currentWindowTargets: candidates,
+                    screens: screens
+                ) {
+                    byScreen[projected.screenID, default: []].append(projected.element)
+                }
+            }
+        }
+        return byScreen
     }
 
     private static func nextVisionBackoff(after previous: VisionBackoff?) -> VisionBackoff {
@@ -1462,5 +1826,3 @@ private struct DebugUIWindowCapture: Sendable {
     var parseContentType: String
     var parsePixelSize: HotLoopSize
 }
-
-#endif
