@@ -28,7 +28,7 @@ public enum DonkeyCommandLayer {
             HarnessToolDescriptor(
                 name: Command.shellExec.rawValue,
                 pluginID: pluginID,
-                summary: "Run a safe, single-line shell command on the user's Mac and return its output. General-purpose: open/activate or quit apps (e.g. `open -a Spotify`), drive apps and the system — including via `osascript -e '…'` — and read state (e.g. `date`, `pmset -g batt`). Avoid destructive, privileged (`sudo`), raw-disk, network-download, or pipe-to-shell commands.",
+                summary: "Run a single-line shell command on the user's Mac and return its output. This is your primary, expert tool: prefer it for finding files (`mdfind`, `ls -t`, `find`), launching or quitting apps (`open -a Spotify`, `osascript -e 'quit app …'`), reading state (`date`, `pmset -g batt`, `system_profiler`), and changing settings (`defaults write`, `networksetup -set…`). Read-only commands run immediately; anything that changes state asks the user for one-time or always-allow consent first, so you may freely propose it. Destructive or privileged commands (`sudo`, `rm`, `dd`, piping into a shell) ask every time.",
                 inputSchema: ["command": "A safe, single-line shell command, e.g. `open -a Notes`, `osascript -e 'tell application \"Spotify\" to play'`, or `date`."],
                 outputSchema: [
                     "stdout": "Captured standard output (trimmed).",

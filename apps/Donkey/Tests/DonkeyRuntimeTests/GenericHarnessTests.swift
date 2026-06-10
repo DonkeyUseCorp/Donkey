@@ -548,12 +548,13 @@ struct GenericHarnessTests {
     }
 
     @Test
-    func shellExecRunsSafeCommandsAndBlocksDangerousOnes() async {
+    func shellExecRunsReadsAndGatesStateChanges() async {
         let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
             services: HarnessBuiltInToolServices(commandExecutor: DonkeyCommandBackends.makeExecutor())
         )
         let permissions: Set<HarnessPermission> = [.appControl, .input]
 
+        // A read-only command runs immediately, no consent.
         let ok = await registry.execute(
             HarnessToolCall(id: "sh-1", name: "shell_exec", input: ["command": "echo donkey-ok"]),
             taskID: "task-sh-ok",
@@ -564,14 +565,17 @@ struct GenericHarnessTests {
         #expect(ok.metadata["stdout"] == "donkey-ok")
         #expect(ok.metadata["exitCode"] == "0")
 
-        let blocked = await registry.execute(
+        // High-risk asks for consent every time and can never be always-allowed.
+        let highRisk = await registry.execute(
             HarnessToolCall(id: "sh-2", name: "shell_exec", input: ["command": "sudo rm -rf /"]),
-            taskID: "task-sh-blocked",
+            taskID: "task-sh-highrisk",
             worldModel: HarnessWorldModel(),
             grantedPermissions: permissions
         )
-        #expect(blocked.status == .failed)
-        #expect(blocked.metadata["reason"] == "blockedCommand")
+        #expect(highRisk.status == .waitingForPermission)
+        #expect(highRisk.metadata["gate"] == "shellConsent")
+        #expect(highRisk.metadata["shell.tier"] == "highRisk")
+        #expect(highRisk.metadata["shell.allowAlways"] == "false")
 
         let multiline = await registry.execute(
             HarnessToolCall(id: "sh-3", name: "shell_exec", input: ["command": "echo a\necho b"]),
@@ -581,30 +585,41 @@ struct GenericHarnessTests {
         )
         #expect(multiline.status == .invalidInput)
 
-        // Hardened guardrail: a bare `rm` (no flags) is caught as a command word.
+        // A bare `rm` (no flags) is still high-risk.
         let bareRm = await registry.execute(
             HarnessToolCall(id: "sh-4", name: "shell_exec", input: ["command": "rm ~/Documents/notes.txt"]),
             taskID: "task-sh-rm",
             worldModel: HarnessWorldModel(),
             grantedPermissions: permissions
         )
-        #expect(bareRm.status == .failed)
-        #expect(bareRm.metadata["reason"] == "blockedCommand")
+        #expect(bareRm.status == .waitingForPermission)
+        #expect(bareRm.metadata["shell.tier"] == "highRisk")
 
-        // The osascript `do shell script` escape hatch is blocked.
+        // The osascript `do shell script` escape hatch is high-risk.
         let osaShell = await registry.execute(
             HarnessToolCall(id: "sh-5", name: "shell_exec", input: ["command": "osascript -e 'do shell script \"rm -rf ~/x\"'"]),
             taskID: "task-sh-osa",
             worldModel: HarnessWorldModel(),
             grantedPermissions: permissions
         )
-        #expect(osaShell.status == .failed)
-        #expect(osaShell.metadata["reason"] == "blockedCommand")
+        #expect(osaShell.status == .waitingForPermission)
+        #expect(osaShell.metadata["shell.tier"] == "highRisk")
 
-        // A benign redirect to a temp path is NOT a false positive (the old `> /`
-        // rule wrongly blocked this).
+        // A reversible state change gates too, but offers always-allow.
+        let reversible = await registry.execute(
+            HarnessToolCall(id: "sh-6", name: "shell_exec", input: ["command": "defaults write com.apple.dock autohide -bool true"]),
+            taskID: "task-sh-defaults",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: permissions
+        )
+        #expect(reversible.status == .waitingForPermission)
+        #expect(reversible.metadata["shell.tier"] == "reversibleWrite")
+        #expect(reversible.metadata["shell.allowAlways"] == "true")
+        #expect(reversible.metadata["shell.signature"] == "defaults write")
+
+        // A benign read with a redirect to a temp path runs without a prompt.
         let redirect = await registry.execute(
-            HarnessToolCall(id: "sh-6", name: "shell_exec", input: ["command": "echo donkey > /tmp/donkey-review-test.txt"]),
+            HarnessToolCall(id: "sh-7", name: "shell_exec", input: ["command": "echo donkey > /tmp/donkey-review-test.txt"]),
             taskID: "task-sh-redirect",
             worldModel: HarnessWorldModel(),
             grantedPermissions: permissions
