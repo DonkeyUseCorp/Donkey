@@ -30,14 +30,19 @@ public enum DonkeyCommandLayer {
                 name: Command.shellExec.rawValue,
                 pluginID: pluginID,
                 summary: "Run a single-line shell command on the user's Mac and return its output. This is your primary, expert tool: prefer it for finding files (`mdfind`, `ls -t`, `find`), launching or quitting apps (`open -a \"App Name\"`, `osascript -e 'quit app \"App Name\"'`), reading state (`date`, `pmset -g batt`, `system_profiler`), and changing settings (`defaults write`, `networksetup -set…`). Read-only commands run immediately; anything that changes state asks the user for one-time or always-allow consent first, so you may freely propose it. Destructive or privileged commands (`sudo`, `rm`, `dd`, piping into a shell) ask every time.",
-                inputSchema: ["command": "A safe, single-line shell command, e.g. `open -a \"App Name\"`, `osascript -e '…'`, or `date`."],
+                inputSchema: [
+                    "command": "A safe, single-line shell command, e.g. `open -a \"App Name\"`, `osascript -e '…'`, or `date`.",
+                    "timeoutSeconds": "Time budget for known-slow commands (default 12, max 120)."
+                ],
+                optionalInputKeys: ["timeoutSeconds"],
                 outputSchema: [
-                    "stdout": "Captured standard output (trimmed).",
+                    "stdout": "Captured standard output (trimmed; long output is truncated with an explicit marker).",
                     "exitCode": "Process exit code."
                 ],
                 requiredPermissions: [.appControl, .input],
                 safetyClass: .guardedInput,
-                verificationHints: ["the command exits with code 0"]
+                verificationHints: ["the command exits with code 0"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
             ),
             HarnessToolDescriptor(
                 name: Command.appsList.rawValue,
@@ -87,7 +92,8 @@ public enum DonkeyCommandLayer {
                 outputSchema: ["status": "Structured status the script reports."],
                 requiredPermissions: [.appControl, .input],
                 safetyClass: .guardedInput,
-                verificationHints: ["the script reports a successful structured status"]
+                verificationHints: ["the script reports a successful structured status"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
             )
         ]
     }

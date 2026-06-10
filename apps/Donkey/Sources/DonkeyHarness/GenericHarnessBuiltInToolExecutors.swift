@@ -282,6 +282,8 @@ public enum BuiltInHarnessToolExecutors {
             return await applicationLearningSaveSkillPack(context, services: services)
         case "state.verify":
             return stateVerify(context)
+        case "wait":
+            return await timingWait(context)
         case "run.pause", "run.resume", "run.recover", "run.cancel", "run.complete", "run.failSafe":
             return lifecycle(context)
         default:
@@ -1234,6 +1236,18 @@ public enum BuiltInHarnessToolExecutors {
         "app.list",
         "app.lookup"
     ]
+
+    private static func timingWait(_ context: HarnessToolExecutionContext) async -> HarnessToolResult {
+        let requested = context.call.input["seconds"].flatMap(Double.init) ?? 1
+        let seconds = min(max(requested, 0.1), 10)
+        try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+        return success(
+            context,
+            summary: "Waited \(String(format: "%.1f", seconds))s for the app to settle.",
+            facts: ["lastAcceptedTool": context.call.name],
+            metadata: ["seconds": String(format: "%.1f", seconds)]
+        )
+    }
 
     private static func stateVerify(_ context: HarnessToolExecutionContext) -> HarnessToolResult {
         guard let criteria = trimmed(context.call.input["criteria"]) else {

@@ -361,9 +361,10 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             bundleIdentifier: bundleIdentifier,
             analyzer: analyzer
         )
-        // Register the AX/vision see/act tools only when this turn holds their permissions, mirroring
-        // the built-in descriptor filter so the planner is never offered a tool it can't run.
-        for tool in axProvider.makeTools() + visionProvider.makeTools()
+        let pointerProvider = PointerComputerUseToolProvider(appName: appName, bundleIdentifier: bundleIdentifier)
+        // Register the AX/vision/pointer see/act tools only when this turn holds their permissions,
+        // mirroring the built-in descriptor filter so the planner is never offered a tool it can't run.
+        for tool in axProvider.makeTools() + visionProvider.makeTools() + pointerProvider.makeTools()
         where Set(tool.descriptor.requiredPermissions).isSubset(of: granted) {
             await registry.register(tool)
         }
@@ -401,7 +402,13 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         if visualize != nil || progress != nil {
             onStep = { (step: HarnessStepExecutionResult) async -> Void in
                 await MainActor.run {
-                    if let progress, let narration = Self.stepNarration(for: step, planner: planner) {
+                    // Every step narrates through the spawn label (a lightweight text update), so the
+                    // user is kept informed even on steps that don't move the pointer — observe, shell,
+                    // wait, verify. The cursor itself only travels (a heavier window-animating overlay
+                    // playback) on steps that actually moved it; re-running that playback every step
+                    // thrashes window layout, so it stays gated to real pointer moves.
+                    let narration = Self.stepNarration(for: step, planner: planner)
+                    if let progress, let narration {
                         progress(narration)
                     }
                     guard let present = visualize else { return }
@@ -416,7 +423,9 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 }
             }
         }
-        let runSteps = await runtime.run(taskID: taskID, planner: planner, maxSteps: 24, onStep: onStep)
+        // Step budget is progress-based, not a fixed count: the runtime keeps going while the task
+        // advances and stops fast when it stalls or loops, so a long legitimate task isn't cut off.
+        let runSteps = await runtime.run(taskID: taskID, planner: planner, onStep: onStep)
         VisionWarmCacheActivity.shared.resume()
 
         let finalTask = await genericHarnessLifecycle.coordinator.task(id: taskID)

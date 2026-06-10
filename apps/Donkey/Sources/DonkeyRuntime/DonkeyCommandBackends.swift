@@ -277,10 +277,19 @@ public enum DonkeyCommandBackends {
 
     /// Max characters accepted for a one-line command.
     private static let shellCommandMaxLength = 400
-    /// Seconds before a command is terminated.
+    /// Seconds before a command is terminated when the call does not set its own budget.
     private static let shellTimeout: TimeInterval = 12
+    /// Upper bound for a caller-provided `timeoutSeconds`, so a planner mistake can never hang a run.
+    private static let shellTimeoutMax: TimeInterval = 120
     /// Max stdout characters returned to the model.
     private static let shellOutputMaxLength = 4_000
+
+    /// Truncates output to the model-facing cap, announcing the cut instead of trimming silently —
+    /// the model must know it saw a prefix, not the whole output.
+    private static func boundedOutput(_ output: String) -> (text: String, truncated: Bool) {
+        guard output.count > shellOutputMaxLength else { return (output, false) }
+        return (String(output.prefix(shellOutputMaxLength)) + "\n… [output truncated]", true)
+    }
 
     private static func shellExec(_ context: HarnessToolExecutionContext) async -> HarnessToolResult {
         guard let command = trimmed(context.call.input["command"]) ?? trimmed(context.call.input["cmd"]) else {
@@ -303,31 +312,38 @@ public enum DonkeyCommandBackends {
             }
         }
 
+        let timeout = context.call.input["timeoutSeconds"].flatMap(Double.init)
+            .map { min(max($0, 1), shellTimeoutMax) } ?? shellTimeout
         let result = await Task.detached(priority: .userInitiated) {
-            runShellSync(command, timeout: shellTimeout)
+            runShellSync(command, timeout: timeout)
         }.value
 
-        let stdout = String(result.stdout.prefix(shellOutputMaxLength))
+        let stdout = boundedOutput(result.stdout)
         guard result.exitCode == 0 else {
+            let stderr = boundedOutput(result.stderr)
             return HarnessToolResult(
                 callID: context.call.id,
                 toolName: context.call.name,
                 status: .failed,
-                summary: "Command exited with code \(result.exitCode).",
+                summary: result.timedOut
+                    ? "Command timed out after \(Int(timeout))s and was terminated. Pass timeoutSeconds (max \(Int(shellTimeoutMax))) for known-slow commands."
+                    : "Command exited with code \(result.exitCode).",
                 metadata: [
                     "executor": "donkeyCommandLayer",
                     "reason": result.timedOut ? "timedOut" : "nonZeroExit",
                     "exitCode": String(result.exitCode),
-                    "stdout": stdout,
-                    "stderr": String(result.stderr.prefix(shellOutputMaxLength))
+                    "stdout": stdout.text,
+                    "stderr": stderr.text,
+                    "stdoutTruncated": String(stdout.truncated),
+                    "timeoutSeconds": String(Int(timeout))
                 ]
             )
         }
         return success(
             context,
-            summary: stdout.isEmpty ? "Command ran (no output)." : stdout,
+            summary: stdout.text.isEmpty ? "Command ran (no output)." : stdout.text,
             facts: ["lastShellExitCode": "0"],
-            metadata: ["stdout": stdout, "exitCode": "0"]
+            metadata: ["stdout": stdout.text, "exitCode": "0", "stdoutTruncated": String(stdout.truncated)]
         )
     }
 

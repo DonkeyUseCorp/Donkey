@@ -1,6 +1,12 @@
 import Foundation
 
 public struct HarnessToolDescriptor: Codable, Equatable, Sendable {
+    /// Descriptor metadata key a tool sets to "true" when its successful result is itself
+    /// verification evidence (e.g. a shell command returning output and exit code). The runtime's
+    /// completion gate accepts such a step as the post-action check; other state-changing tools
+    /// need a later read-only observation before `run.complete` is accepted.
+    public static let resultIsEvidenceMetadataKey = "resultIsEvidence"
+
     public var name: String
     public var pluginID: String
     public var summary: String
@@ -487,6 +493,15 @@ public enum BuiltInHarnessToolCatalog {
                 output: ["verified": "Boolean-like verification result with evidence."],
                 permissions: [.verification],
                 safety: .readOnly
+            ),
+            descriptor(
+                "wait",
+                pluginID: "core.timing",
+                summary: "Pause briefly while the app settles (a page loads, a window opens, an animation finishes), then re-plan. Prefer this over re-observing in a tight loop when the UI is still catching up.",
+                input: ["seconds": "How long to wait, 0.1–10 (default 1)."],
+                permissions: [],
+                safety: .readOnly,
+                verification: ["re-observe after waiting to confirm the expected state arrived"]
             ),
             descriptor(
                 "run.pause",
