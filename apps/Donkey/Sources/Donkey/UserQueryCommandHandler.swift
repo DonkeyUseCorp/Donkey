@@ -80,11 +80,25 @@ protocol UserQueryCommandHandling: Sendable {
     func pauseCommand(taskID: String) async -> Bool
     func resumeCommand(taskID: String) async -> Bool
     func approvePermissionGate(taskID: String, alwaysAllow: Bool) async -> Bool
+    /// Re-run the harness loop for a task whose permission gate was just
+    /// approved, so the granted command actually executes. Returns nil when the
+    /// task is unknown.
+    func continueApprovedCommand(
+        taskID: String,
+        context: UserQueryCommandContext?
+    ) async -> UserQueryCommandHandlingResult?
 }
 
 extension UserQueryCommandHandling {
     func handleSubmittedCommand(_ command: String) async -> UserQueryCommandHandlingResult {
         await handleSubmittedCommand(command, context: nil)
+    }
+
+    func continueApprovedCommand(
+        taskID: String,
+        context: UserQueryCommandContext?
+    ) async -> UserQueryCommandHandlingResult? {
+        nil
     }
 }
 
@@ -176,8 +190,39 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             traceID: traceID,
             taskID: taskID,
             preparedTurnMetadata: Self.genericHarnessMetadata(preparedTurn: genericPreparedTurn),
-            visualize: context?.agentVisualizationChanged
+            visualize: context?.agentVisualizationChanged,
+            progress: Self.progressLabeler(context?.spawnProgressChanged)
         )
+    }
+
+    func continueApprovedCommand(
+        taskID: String,
+        context: UserQueryCommandContext?
+    ) async -> UserQueryCommandHandlingResult? {
+        guard let task = await genericHarnessLifecycle.taskState(taskID: taskID),
+              !task.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        let traceID = "user-query-resume-\(UUID().uuidString)"
+        return await runHarnessLoop(
+            command: task.goal,
+            traceID: traceID,
+            taskID: taskID,
+            preparedTurnMetadata: [:],
+            visualize: context?.agentVisualizationChanged,
+            progress: Self.progressLabeler(context?.spawnProgressChanged)
+        )
+    }
+
+    /// Adapt the spawn-progress callback into a plain narration sink the run
+    /// loop can feed with one-line status labels.
+    private static func progressLabeler(
+        _ spawnProgressChanged: (@MainActor @Sendable (UserQuerySpawnProgressUpdate) -> Void)?
+    ) -> (@MainActor @Sendable (String) -> Void)? {
+        guard let spawnProgressChanged else { return nil }
+        return { label in
+            spawnProgressChanged(UserQuerySpawnProgressUpdate(label: label))
+        }
     }
 
     func pauseCommand(taskID: String) async -> Bool {
@@ -217,7 +262,8 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         traceID: String,
         taskID: String,
         preparedTurnMetadata: [String: String],
-        visualize: (@MainActor @Sendable (AgentVisualizationPlan) -> Void)? = nil
+        visualize: (@MainActor @Sendable (AgentVisualizationPlan) -> Void)? = nil,
+        progress: (@MainActor @Sendable (String) -> Void)? = nil
     ) async -> UserQueryCommandHandlingResult {
         guard permissionPolicy.allowedCapabilities.contains(.input) else {
             return await failHarnessRun(
@@ -256,9 +302,16 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
 
         // Understand the request ONCE before the loop: restate the goal, identify the target app,
         // extract parameters, and decide whether to clarify. Degrades to driving the raw command when
-        // it returns nil, so a backend hiccup never dead-ends the run.
-        let understanding = await HostedHarnessRequestUnderstanding(backend: backend)
-            .understand(command: command, frontmostAppName: frontmostAppName)
+        // it returns nil — or when the call outlives its deadline — so a backend hiccup never
+        // dead-ends or silently stalls the run.
+        progress?("Working out what you need")
+        let understandingBoundary = HostedHarnessRequestUnderstanding(backend: backend)
+        let understanding = await AIDeadline.race(seconds: Self.understandingTimeoutSeconds) {
+            await understandingBoundary.understand(command: command, frontmostAppName: frontmostAppName)
+        }
+        if let restated = understanding?.restatedGoal, !restated.isEmpty {
+            progress?(restated)
+        }
 
         // Drive the understood target app when it names one that resolves to a running window; else the
         // frontmost app. resolveTarget never falls back to an unrelated window, so a miss keeps us on
@@ -340,13 +393,18 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // Suspend the warm-cache monitor for the whole drive so it never races us writing the same
         // app's parse. The run between these calls has no early exit, so resume always pairs with it.
         VisionWarmCacheActivity.shared.suspend()
-        // Realtime per-turn cursor path: after each step that physically moved the pointer (a click),
-        // animate the overlay cursor traveling to that exact target, so the visualization tracks what
-        // the harness is actually doing rather than a precomputed plan.
+        // Realtime per-step feedback: narrate every step through the spawn cursor's label (the
+        // planner's one-line reason, falling back to the tool's own summary), and after each step that
+        // physically moved the pointer (a click), animate the overlay cursor traveling to that exact
+        // target, so the visualization tracks what the harness is actually doing.
         var onStep: (@Sendable (HarnessStepExecutionResult) async -> Void)?
-        if let present = visualize {
+        if visualize != nil || progress != nil {
             onStep = { (step: HarnessStepExecutionResult) async -> Void in
                 await MainActor.run {
+                    if let progress, let narration = Self.stepNarration(for: step, planner: planner) {
+                        progress(narration)
+                    }
+                    guard let present = visualize else { return }
                     let screenSize = (NSScreen.main ?? NSScreen.screens.first)?.frame.size ?? .zero
                     guard let plan = Self.cursorVisualizationPlan(
                         for: step,
@@ -365,9 +423,11 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         let finalStatus = finalTask?.status
         let completed = finalStatus == .completed
         let awaitingUser = finalStatus == .waitingForUser
+        let awaitingPermission = finalStatus == .waitingForPermission
         let outcomeReason = completed ? "ok"
             : (awaitingUser ? "awaitingUser"
-            : (finalStatus == .failedSafe ? "failedSafe" : "maxStepsReached"))
+            : (awaitingPermission ? "awaitingPermission"
+            : (finalStatus == .failedSafe ? "failedSafe" : "maxStepsReached")))
         let turns = runSteps.count
         let anyTurnUsedCache = runSteps.contains { $0.toolResult?.metadata["usedCache"] == "true" }
         let totalParseMS = runSteps.reduce(0.0) { $0 + ($1.toolResult?.metadata["parseMS"].flatMap(Double.init) ?? 0) }
@@ -420,6 +480,41 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             )
             await coordinatorRegistry.finish(taskID: taskID)
             logHandlingResult(result, stage: "harness", hint: "Asked the user to clarify.")
+            return result
+        }
+
+        // A permission gate (e.g. shell-command consent) is a hard stop that waits for the user's
+        // allow-once / always-allow decision, not a failure. Surface it with the consent metadata the
+        // notch controls read; approval re-enters the loop via `continueApprovedCommand`.
+        if awaitingPermission {
+            let continuation = finalTask?.pendingContinuation
+            let summary = runSteps.last?.toolResult?.summary
+                ?? continuation?.reason
+                ?? "Waiting for your approval."
+            let decision = AppHarnessDecision(
+                kind: .respond,
+                message: summary,
+                traceID: traceID,
+                metadata: ["structuredDecision": "true", "router": "harness"]
+            )
+            let result = UserQueryCommandHandlingResult(
+                status: .needsConfirmation,
+                threadStatus: .waitingForPermission,
+                decision: decision,
+                summary: summary,
+                traceID: traceID,
+                metadata: baseMetadata.merging([
+                    "appHarness.decision": AppHarnessDecisionKind.respond.rawValue,
+                    "genericHarness.shellConsent.command": continuation?.metadata["shell.command"] ?? "",
+                    "genericHarness.shellConsent.tier": continuation?.metadata["shell.tier"] ?? "",
+                    "genericHarness.shellConsent.reason": continuation?.metadata["shell.reason"] ?? "",
+                    "genericHarness.shellConsent.allowAlways": continuation?.metadata["shell.allowAlways"] ?? "",
+                    "genericHarness.missingPermissions": (continuation?.missingPermissions ?? [])
+                        .map(\.rawValue).joined(separator: ",")
+                ]) { _, new in new }
+            )
+            await coordinatorRegistry.finish(taskID: taskID)
+            logHandlingResult(result, stage: "harness", hint: "Stopped at a permission gate.")
             return result
         }
 
@@ -537,6 +632,31 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         UserQueryLog.commands.notice(
             "command finished traceID=\(result.traceID, privacy: .public) stage=\(stage, privacy: .public) status=\(result.status.rawValue, privacy: .public) threadStatus=\(result.threadStatus.rawValue, privacy: .public) summary=\(result.summary, privacy: .public) taskLabel=\(taskLabel, privacy: .public) hint=\(hint, privacy: .public)"
         )
+    }
+
+    /// Deadline for the one-shot understanding call; past it the run degrades to
+    /// driving the raw command instead of stalling silently.
+    private static let understandingTimeoutSeconds: TimeInterval = 15
+
+    /// One short line describing the step that just ran, for the spawn cursor's
+    /// label: the planner's stated reason, else the tool result's own summary.
+    @MainActor
+    static func stepNarration(
+        for step: HarnessStepExecutionResult,
+        planner: HostedHarnessStepPlanner
+    ) -> String? {
+        let candidate = planner.lastNarration ?? step.toolResult?.summary
+        guard var narration = candidate?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: .newlines).first,
+            !narration.isEmpty else {
+            return nil
+        }
+        let maxLength = 90
+        if narration.count > maxLength {
+            narration = String(narration.prefix(maxLength)).trimmingCharacters(in: .whitespaces) + "…"
+        }
+        return narration
     }
 
     private static func uptimeMilliseconds() -> Double {
