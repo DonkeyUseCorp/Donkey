@@ -4,10 +4,20 @@ import DonkeyHarness
 import DonkeyRuntime
 import Foundation
 
+/// A shell command the Live model wants to run that needs the user's consent
+/// (allow once / always allow) before it can execute.
+struct GeminiLiveShellConsentRequest: Equatable, Sendable {
+    var command: String
+    var signature: String
+    var tier: String
+    var allowAlways: Bool
+    var summary: String
+}
+
 /// Drives the always-on Gemini Live session for the app: streams text (and
 /// optionally audio) into the session, executes the model's tool calls against
-/// the Donkey Command Layer, and surfaces anything the model didn't handle with
-/// a tool call back to the normal command pipeline.
+/// the Donkey Command Layer, and surfaces the model's answers and delegations
+/// back to the overlay.
 ///
 /// Entirely gated by `GeminiLiveConfiguration.enabled`; when disabled, nothing
 /// here runs and the existing pipeline is unchanged.
@@ -18,13 +28,26 @@ final class GeminiLiveVoiceController {
     private let registry: HarnessToolRegistry
     private var session: GeminiLiveSession?
     private var eventTask: Task<Void, Never>?
+    /// The model's in-flight text answer, accumulated across `.textOut` chunks
+    /// and flushed to `onResponse` when the turn completes.
+    private var pendingResponseText = ""
+    /// The audio-mode answer transcription, used when no text parts arrived.
+    private var pendingResponseTranscript = ""
+    /// A consent-gated tool call held until the user decides in the notch UI.
+    private var pendingConsent: (call: HarnessToolCall, liveCall: AIRealtimeToolCall, session: GeminiLiveSession)?
 
-    /// Invoked for transcripts/requests the model did not satisfy with a tool
-    /// call (e.g. a complex request). Wire this to the overlay's submit path.
+    /// Invoked when the model explicitly delegates a task it can't do with the
+    /// fast tools (the `agent_run` function call), with the structured goal.
+    /// Wire this to the overlay's local-pipeline submit path.
     var onComplexRequest: ((String) -> Void)?
     /// Invoked after a Command Layer tool runs, with a short status summary, so
     /// the UI can reflect that the model acted.
     var onActed: ((String) -> Void)?
+    /// Invoked with the model's completed answer for the current turn.
+    var onResponse: ((String) -> Void)?
+    /// Invoked when a shell command needs allow-once / always-allow consent.
+    /// The decision comes back through `resolvePendingConsent`.
+    var onConsentNeeded: ((GeminiLiveShellConsentRequest) -> Void)?
     /// Invoked when optional microphone streaming should start (`true`) or stop
     /// (`false`). Always paired — a `true` is always followed by a `false` when
     /// the session disconnects or stops — so the mic owner never gets stuck on.
@@ -42,7 +65,7 @@ final class GeminiLiveVoiceController {
 
     init(
         configuration: GeminiLiveConfiguration = .fromEnvironment(),
-        systemInstruction: String = GeminiLiveVoiceController.defaultSystemInstruction,
+        systemInstruction: String = DonkeyPrompts.realtimeCommandSystemInstruction,
         visionAuthProvider: @escaping @Sendable () async throws -> GeminiVertexVisionPlanner.VertexAuth = {
             try await GeminiVertexVisionPlanner.mintAuth(
                 backend: DonkeyBackendInferenceClient(configuration: try DonkeyBackendInferenceConfiguration.fromEnvironment())
@@ -65,7 +88,7 @@ final class GeminiLiveVoiceController {
         guard configuration.enabled, session == nil else { return }
         let session = GeminiLiveSession(
             systemInstruction: systemInstruction,
-            functionDescriptors: DonkeyCommandLayer.descriptors + [Self.visionControlDescriptor],
+            functionDescriptors: DonkeyCommandLayer.descriptors + [Self.visionControlDescriptor, Self.agentRunDescriptor],
             connectionProvider: Self.makeConnectionProvider()
         )
         self.session = session
@@ -124,8 +147,17 @@ final class GeminiLiveVoiceController {
             updateAudioStreaming()
         case .toolCalls(let calls):
             await execute(calls)
+        case .textOut(let text):
+            pendingResponseText += text
         case .finalTranscript(let text):
-            onComplexRequest?(text)
+            // The model's own answer transcription (audio mode). It is OUTPUT,
+            // never a user request — surface it as the answer, don't re-run it.
+            pendingResponseTranscript = text
+        case .turnComplete:
+            flushResponse()
+        case .interrupted:
+            pendingResponseText = ""
+            pendingResponseTranscript = ""
         case .closed:
             isConnected = false
             updateAudioStreaming()
@@ -133,6 +165,24 @@ final class GeminiLiveVoiceController {
             break
         }
     }
+
+    /// Deliver the model's completed answer for this turn, preferring text parts
+    /// over the audio transcription when both arrived.
+    private func flushResponse() {
+        let answer = pendingResponseText.isEmpty ? pendingResponseTranscript : pendingResponseText
+        pendingResponseText = ""
+        pendingResponseTranscript = ""
+        let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        onResponse?(trimmed)
+    }
+
+    /// The task id consent grants and tool executions are keyed on for this
+    /// session-wide Live "task".
+    static let liveTaskID = "gemini-live"
+
+    /// Permissions the Live session's Command Layer tools run with.
+    static let liveGrantedPermissions: Set<HarnessPermission> = [.appControl, .input, .appLookup, .skillLookup]
 
     private func execute(_ calls: [AIRealtimeToolCall]) async {
         guard let session else { return }
@@ -148,13 +198,44 @@ final class GeminiLiveVoiceController {
                 launchVision(call)
                 continue
             }
+            // Explicit delegation to the desktop agent: hand the structured goal
+            // to the local pipeline (which has its own UI and reporting) and let
+            // the Live turn finish immediately.
+            if toolName == Self.agentRunToolName {
+                let goal = (call.arguments["goal"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !goal.isEmpty else {
+                    results.append(AIRealtimeToolResult(
+                        id: call.id,
+                        name: call.name,
+                        response: ["status": "invalidInput", "summary": "agent_run needs a non-empty `goal`."]
+                    ))
+                    continue
+                }
+                onComplexRequest?(goal)
+                results.append(AIRealtimeToolResult(
+                    id: call.id,
+                    name: call.name,
+                    response: [
+                        "status": "delegated",
+                        "summary": "Handed off to the desktop agent; it reports its progress and result to the user directly. Tell the user it's underway."
+                    ]
+                ))
+                continue
+            }
             let toolCall = HarnessToolCall(id: call.id, name: toolName, input: call.arguments)
             let result = await registry.execute(
                 toolCall,
-                taskID: "gemini-live",
+                taskID: Self.liveTaskID,
                 worldModel: HarnessWorldModel(),
-                grantedPermissions: [.appControl, .input, .appLookup]
+                grantedPermissions: Self.liveGrantedPermissions
             )
+            // Shell consent: hold the call, surface allow-once / always-allow in
+            // the notch, and answer the session when the user decides — the same
+            // gate the harness path uses, so nothing state-changing runs silently.
+            if result.status == .waitingForPermission, result.metadata["gate"] == "shellConsent" {
+                holdForConsent(call: toolCall, liveCall: call, session: session, result: result)
+                continue
+            }
             onActed?(result.summary)
             // Forward the full execution detail (stdout/stderr/exitCode/reason,
             // plus tool-specific facts) so the model can read output and
@@ -163,7 +244,7 @@ final class GeminiLiveVoiceController {
             response.removeValue(forKey: "executor")
             response["status"] = result.status.rawValue
             response["summary"] = result.summary
-            // Surface a clarification gate (e.g. music_play asking what to play)
+            // Surface a clarification gate (e.g. a skill script asking for a missing detail)
             // so the model asks the user instead of guessing or stalling.
             if result.status == .waitingForUser, let question = result.question {
                 response["needsUserInput"] = "true"
@@ -176,6 +257,76 @@ final class GeminiLiveVoiceController {
             ))
         }
         if !results.isEmpty { try? await session.sendToolResults(results) }
+    }
+
+    // MARK: - Shell consent
+
+    /// Park a consent-gated shell command and surface the decision UI. A newer
+    /// gated command supersedes a parked one (the old call is answered as
+    /// declined so the session never hangs on it).
+    private func holdForConsent(
+        call: HarnessToolCall,
+        liveCall: AIRealtimeToolCall,
+        session: GeminiLiveSession,
+        result: HarnessToolResult
+    ) {
+        if let superseded = pendingConsent {
+            answerConsent(superseded, status: "declined", summary: "Superseded by a newer command awaiting approval.")
+        }
+        pendingConsent = (call, liveCall, session)
+        let request = GeminiLiveShellConsentRequest(
+            command: result.metadata["shell.command"] ?? call.input["command"] ?? "",
+            signature: result.metadata["shell.signature"] ?? "",
+            tier: result.metadata["shell.tier"] ?? "",
+            allowAlways: result.metadata["shell.allowAlways"] == "true",
+            summary: result.summary
+        )
+        onConsentNeeded?(request)
+    }
+
+    /// The user decided on the parked command: grant (once or always) and
+    /// re-execute it, or decline it, then answer the waiting Live tool call.
+    func resolvePendingConsent(approved: Bool, alwaysAllow: Bool) async {
+        guard let pending = pendingConsent else { return }
+        pendingConsent = nil
+        guard approved else {
+            answerConsent(pending, status: "declined", summary: "The user declined to run the command.")
+            return
+        }
+        let command = pending.call.input["command"] ?? pending.call.input["cmd"] ?? ""
+        let classification = ShellCommandClassifier.classify(command)
+        if alwaysAllow, classification.tier != .highRisk {
+            await ShellPermissionPolicyStore.shared.allowAlways(classification.signature, tier: classification.tier)
+        } else {
+            await ShellPermissionPolicyStore.shared.grantOnce(taskID: Self.liveTaskID, signature: classification.signature)
+        }
+        let result = await registry.execute(
+            pending.call,
+            taskID: Self.liveTaskID,
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: Self.liveGrantedPermissions
+        )
+        onActed?(result.summary)
+        var response = result.metadata
+        response.removeValue(forKey: "executor")
+        response["status"] = result.status.rawValue
+        response["summary"] = result.summary
+        try? await pending.session.sendToolResults([
+            AIRealtimeToolResult(id: pending.liveCall.id, name: pending.liveCall.name, response: response)
+        ])
+    }
+
+    private func answerConsent(
+        _ pending: (call: HarnessToolCall, liveCall: AIRealtimeToolCall, session: GeminiLiveSession),
+        status: String,
+        summary: String
+    ) {
+        let result = AIRealtimeToolResult(
+            id: pending.liveCall.id,
+            name: pending.liveCall.name,
+            response: ["status": status, "summary": summary]
+        )
+        Task { try? await pending.session.sendToolResults([result]) }
     }
 
     /// Run the vision escalation in a separate task (NOT the event-consumer task)
@@ -258,6 +409,24 @@ final class GeminiLiveVoiceController {
         return raw
     }
 
+    // MARK: - Agent delegation
+
+    static let agentRunToolName = "agent_run"
+
+    /// Explicit, typed escalation to the full desktop agent (the generic harness
+    /// loop with understanding, planning, consent gates, and verification). The
+    /// model calls this instead of guessing when the fast tools can't do the task.
+    static let agentRunDescriptor = HarnessToolDescriptor(
+        name: agentRunToolName,
+        pluginID: "donkey.agent",
+        summary: "Delegate a task to the full desktop agent, which plans multi-step work, drives app GUIs, and asks the user for consent when needed. Use when the fast tools can't complete the request — multi-step workflows, tasks inside an app's UI beyond a single command, or anything you cannot verify with the tools you have. Do not use it for questions you can answer directly or single commands shell_exec covers.",
+        inputSchema: [
+            "goal": "The task to accomplish, restated as one concrete imperative sentence carrying the user's specifics (titles, names, values)."
+        ],
+        requiredPermissions: [.appControl, .input],
+        safetyClass: .guardedInput
+    )
+
     // MARK: - Vision escalation
 
     static let visionControlToolName = "vision_control"
@@ -270,26 +439,13 @@ final class GeminiLiveVoiceController {
     static let visionControlDescriptor = HarnessToolDescriptor(
         name: visionControlToolName,
         pluginID: "donkey.vision",
-        summary: "Operate an app by looking at the screen (a vision agent clicks/types). Use ONLY when a task must happen inside a specific app the fast tools can't drive — e.g. searching for and playing something in Spotify (music_play controls Apple Music only).",
+        summary: "Operate an app by looking at the screen (a vision agent clicks/types). Use ONLY when a task must happen inside a specific app the fast tools can't drive — typically when the app's skill (from app_skill) says it must be driven by vision, or when scripting it failed.",
         inputSchema: [
-            "app": "The app to operate, e.g. Spotify.",
-            "goal": "What to accomplish in the app, e.g. play Coldplay's most popular song."
+            "app": "The app to operate.",
+            "goal": "What to accomplish in the app, stated concretely."
         ],
         requiredPermissions: [.input, .screenCapture],
         safetyClass: .guardedInput
     )
 
-    // Cross-tool policy only. Each tool's purpose, parameters, examples, and
-    // safety constraints live in its registered function declaration (see
-    // CommandLayerFunctionDeclarations / DonkeyCommandLayer), not here.
-    static let defaultSystemInstruction = """
-    You are Donkey, a fast macOS assistant. Act directly and immediately with the \
-    registered tools, preferring shell_exec for anything the more specific tools \
-    don't cover. music_play controls Apple Music only — it CANNOT control Spotify. \
-    When a task must happen in a specific app that no fast tool can operate (e.g. \
-    searching for and playing a song in Spotify), call vision_control with the app \
-    and goal; a vision agent will operate the screen. Discover before guessing rather \
-    than inventing names or values. Read each tool's returned output and retry or \
-    adjust on failure. Keep replies short.
-    """
 }

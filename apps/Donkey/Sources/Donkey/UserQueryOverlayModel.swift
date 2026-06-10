@@ -34,9 +34,16 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     private let appCatalogRefreshLoop: LocalAppDynamicCatalogRefreshLoop
     private var activeTaskIDs: Set<String> = []
     private var lastActiveTaskID: String?
+    /// The task/spawn the in-flight Gemini Live turn reports into, so the user
+    /// sees the same cursor-and-task feedback as a local pipeline run.
+    private var liveTurn: (taskID: String, spawnID: String?)?
+    private var liveTurnWatchdog: Task<Void, Never>?
     private static let notchTaskDisplayLimit = 12
     private static let followUpCandidateLimit = 8
     private static let followUpMatchConfidenceThreshold = 0.62
+    /// How long a Live turn may stay silent (no tool, no answer) before the task
+    /// is failed instead of spinning forever.
+    private static let liveTurnSilenceLimitSeconds: TimeInterval = 75
 
     init(
         aiProvider: any AIHarnessSnapshotProviding = AIHarnessBoundary(),
@@ -90,15 +97,34 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     /// configured the existing command pipeline is used unchanged.
     private func startLiveSessionIfEnabled() {
         guard liveController.isEnabled else { return }
-        liveController.onComplexRequest = { [weak self] text in
-            // Anything the Live model didn't satisfy with a tool call runs through
-            // the full local pipeline (never back through Live — no loop).
-            self?.runLocalCommand(text, source: .typedPrompt)
+        liveController.onComplexRequest = { [weak self] goal in
+            // The model explicitly delegated via agent_run: close out the Live
+            // turn and run the goal through the full local pipeline (never back
+            // through Live — no loop). The pipeline has its own task/spawn UI.
+            guard let self else { return }
+            self.finishLiveTurn(detail: "Handed off to the desktop agent", status: .completed)
+            self.runLocalCommand(goal, source: .typedPrompt)
         }
         liveController.onActed = { [weak self] summary in
             guard let self else { return }
             self.promptState.leadingSignalLevel = .ready
             self.promptState.promptText = summary
+            guard let liveTurn = self.liveTurn else { return }
+            self.updateSpawn(id: liveTurn.spawnID, label: Self.collapsedDisplayText(for: summary), phase: .holding)
+            self.updateTask(id: liveTurn.taskID, detail: summary, status: .running)
+            self.appendTaskEvent(taskID: liveTurn.taskID, role: .system, text: summary)
+            self.restartLiveTurnWatchdog()
+        }
+        liveController.onResponse = { [weak self] answer in
+            guard let self else { return }
+            self.promptState.leadingSignalLevel = .ready
+            self.promptState.promptText = answer
+            guard let liveTurn = self.liveTurn else { return }
+            self.appendTaskEvent(taskID: liveTurn.taskID, role: .assistant, text: answer)
+            self.finishLiveTurn(detail: answer, status: .completed)
+        }
+        liveController.onConsentNeeded = { [weak self] request in
+            self?.presentLiveShellConsent(request)
         }
         // Forward start/stop of optional audio streaming to the mic owner. The
         // controller emits a paired false on disconnect/stop, so continuous
@@ -224,13 +250,97 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         runLocalCommand(text, source: source)
     }
 
+    /// Send a turn to the Live session with the same visible lifecycle as a
+    /// local run: a task in the rail and a spawn cursor that narrates tool
+    /// activity, consent gates, and the final answer.
     private func routeToLiveSession(_ text: String) {
+        if liveTurn != nil {
+            finishLiveTurn(detail: "Changed course", status: .interrupted)
+        }
+        let spawnID = beginSpawn(for: text)
+        let task = taskForSubmittedCommand(
+            text: text,
+            matchedTaskID: nil,
+            reservedAccentIndex: spawn(withID: spawnID)?.accentIndex
+        )
+        updateSpawn(id: spawnID, taskID: task.id, accentIndex: task.accentIndex)
+        activeTaskIDs.insert(task.id)
+        lastActiveTaskID = task.id
+        appendTaskEvent(taskID: task.id, role: .user, text: text)
         clearSubmissionInputs()
         promptState.isActive = false
         promptState.isVoiceInputActive = false
         promptState.leadingSignalLevel = .thinking
-        promptState.promptText = "On it"
+        promptState.promptText = task.title
+        liveTurn = (task.id, spawnID)
+        restartLiveTurnWatchdog()
         Task { [liveController] in await liveController.sendText(text) }
+    }
+
+    /// Close out the in-flight Live turn's task and spawn.
+    private func finishLiveTurn(detail: String?, status: UserQueryTaskStatus) {
+        liveTurnWatchdog?.cancel()
+        liveTurnWatchdog = nil
+        guard let turn = liveTurn else { return }
+        liveTurn = nil
+        updateTask(id: turn.taskID, detail: detail, status: status)
+        activeTaskIDs.remove(turn.taskID)
+        syncPrimaryTaskPausedFlag()
+        guard let spawnID = turn.spawnID, let index = spawnIndex(id: spawnID) else { return }
+        var spawnState = spawnStates[index]
+        switch status {
+        case .completed:
+            spawnState.label = detail.map(Self.collapsedDisplayText(for:)) ?? "Done"
+        case .failed:
+            spawnState.label = "Stopped"
+        default:
+            spawnState.label = Self.collapsedDisplayText(for: detail ?? spawnState.label)
+        }
+        spawnState.updatedAt = Date()
+        spawnStates[index] = spawnState
+        if !UserQuerySpawnLifecycle.keepsVisibleResult(for: status) {
+            scheduleSpawnFade(id: spawnID, after: 2.0)
+        }
+    }
+
+    /// Fail the Live turn if the session stays silent (no tool call, no answer)
+    /// past the limit, instead of leaving the task spinning.
+    private func restartLiveTurnWatchdog() {
+        liveTurnWatchdog?.cancel()
+        let limit = Self.liveTurnSilenceLimitSeconds
+        liveTurnWatchdog = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(limit * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.liveTurn != nil else { return }
+                self.finishLiveTurn(detail: "No response — try again or rephrase.", status: .failed)
+                self.promptState.leadingSignalLevel = .idle
+            }
+        }
+    }
+
+    /// Surface a Live-path shell consent in the notch using the same task
+    /// metadata the harness consent UI reads, marked so approval routes back to
+    /// the Live controller instead of the harness lifecycle.
+    private func presentLiveShellConsent(_ request: GeminiLiveShellConsentRequest) {
+        guard let turn = liveTurn else { return }
+        liveTurnWatchdog?.cancel()
+        updateSpawn(id: turn.spawnID, label: "Waiting for approval", phase: .holding)
+        updateTask(
+            id: turn.taskID,
+            detail: request.summary,
+            status: .waitingForPermission,
+            metadata: [
+                "genericHarness.shellConsent.command": request.command,
+                "genericHarness.shellConsent.tier": request.tier,
+                "genericHarness.shellConsent.allowAlways": request.allowAlways ? "true" : "false",
+                "live.shellConsent": "true"
+            ]
+        )
+        appendTaskEvent(taskID: turn.taskID, role: .system, text: request.summary)
+        promptState.leadingSignalLevel = .ready
+        promptState.promptText = request.summary
+        syncPrimaryTaskPausedFlag()
     }
 
     private func runLocalCommand(_ text: String, source: AppHarnessTurnSource = .typedPrompt) {
@@ -399,31 +509,43 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         Task { [weak self, commandHandler] in
             let result = await commandHandler.handleSubmittedCommand(text, context: context)
             await MainActor.run {
-                guard let self else { return }
-                self.updateTask(
-                    id: task.id,
-                    title: isFollowUp ? nil : result.taskLabel,
-                    detail: result.summary,
-                    status: Self.taskStatus(for: result),
-                    metadata: result.metadata
-                )
-                self.appendTaskEvent(taskID: task.id, role: .assistant, text: result.summary)
-                self.activeTaskIDs.remove(task.id)
-                self.refreshPromptStateAfterRunResult(
+                self?.handleCommandRunResult(
                     taskID: task.id,
+                    spawnID: spawnID,
+                    isFollowUp: isFollowUp,
                     result: result
-                )
-                let cursorOverlayRequest = result.cursorOverlayRequest
-                if let cursorOverlayRequest {
-                    self.agentVisualizationPresenter?(cursorOverlayRequest, spawnID)
-                }
-                self.finishSpawn(
-                    id: spawnID,
-                    result: result,
-                    minimumFadeDelay: cursorOverlayRequest.map(Self.visualizationPlaybackDuration)
                 )
             }
         }
+    }
+
+    /// Apply a finished pipeline run to the task rail, prompt pill, cursor
+    /// replay, and spawn — shared by fresh submissions and post-approval resumes.
+    private func handleCommandRunResult(
+        taskID: String,
+        spawnID: String?,
+        isFollowUp: Bool,
+        result: UserQueryCommandHandlingResult
+    ) {
+        updateTask(
+            id: taskID,
+            title: isFollowUp ? nil : result.taskLabel,
+            detail: result.summary,
+            status: Self.taskStatus(for: result),
+            metadata: result.metadata
+        )
+        appendTaskEvent(taskID: taskID, role: .assistant, text: result.summary)
+        activeTaskIDs.remove(taskID)
+        refreshPromptStateAfterRunResult(taskID: taskID, result: result)
+        let cursorOverlayRequest = result.cursorOverlayRequest
+        if let cursorOverlayRequest {
+            agentVisualizationPresenter?(cursorOverlayRequest, spawnID)
+        }
+        finishSpawn(
+            id: spawnID,
+            result: result,
+            minimumFadeDelay: cursorOverlayRequest.map(Self.visualizationPlaybackDuration)
+        )
     }
 
     func pauseTask(id taskID: String) {
@@ -468,6 +590,21 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             return
         }
 
+        // A Live-path shell consent resolves through the Live controller, which
+        // re-executes the held command and reports back via onActed/onResponse.
+        if task.metadata["live.shellConsent"] == "true" {
+            updateTask(id: taskID, detail: "Approved — running", status: .running, metadata: [:])
+            if let turn = liveTurn, turn.taskID == taskID {
+                updateSpawn(id: turn.spawnID, label: "Approved — running")
+                restartLiveTurnWatchdog()
+            }
+            syncPrimaryTaskPausedFlag()
+            Task { [liveController] in
+                await liveController.resolvePendingConsent(approved: true, alwaysAllow: alwaysAllow)
+            }
+            return
+        }
+
         activeTaskIDs.insert(taskID)
         lastActiveTaskID = taskID
         let detail = Self.permissionApprovalDetail(for: task)
@@ -476,17 +613,36 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         promptState.leadingSignalLevel = .thinking
         promptState.promptText = task.title
         syncPrimaryTaskPausedFlag()
+        let spawnID = spawnStates.first { $0.taskID == taskID }?.id
+        let context = commandContext(taskID: taskID, isFollowUp: true, spawnID: spawnID)
         Task { [weak self, commandHandler] in
             let approved = await commandHandler.approvePermissionGate(taskID: taskID, alwaysAllow: alwaysAllow)
-            await MainActor.run {
-                guard let self else { return }
-                if approved {
-                    self.updateTask(id: taskID, detail: "Permission approved", status: .running)
-                } else {
+            guard approved else {
+                await MainActor.run {
+                    guard let self else { return }
                     self.updateTask(id: taskID, detail: "Approval unavailable", status: .needsAttention)
                     self.activeTaskIDs.remove(taskID)
+                    self.syncPrimaryTaskPausedFlag()
                 }
-                self.syncPrimaryTaskPausedFlag()
+                return
+            }
+            // The grant only recorded consent; the loop already exited at the
+            // gate. Re-run it so the approved command actually executes.
+            let result = await commandHandler.continueApprovedCommand(taskID: taskID, context: context)
+            await MainActor.run {
+                guard let self else { return }
+                guard let result else {
+                    self.updateTask(id: taskID, detail: "Could not resume the task", status: .needsAttention)
+                    self.activeTaskIDs.remove(taskID)
+                    self.syncPrimaryTaskPausedFlag()
+                    return
+                }
+                self.handleCommandRunResult(
+                    taskID: taskID,
+                    spawnID: spawnID,
+                    isFollowUp: true,
+                    result: result
+                )
             }
         }
     }

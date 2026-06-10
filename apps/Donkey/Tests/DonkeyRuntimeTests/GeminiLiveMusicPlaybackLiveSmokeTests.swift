@@ -11,7 +11,8 @@ import Testing
 /// (`gemini-live-2.5-flash` on Vertex) and the Donkey Command Layer harness
 /// registry. The test only hands the controller a text turn ("play some cold play")
 /// and verifies a music app actually starts playing; the controller does the real
-/// work (model → `music_play` tool → harness execution).
+/// work (model → `app_skill` discovery → `skill_run` script execution, or an
+/// equivalent route the model chooses).
 ///
 /// Gated behind `DONKEY_LIVE_SMOKE=1`; no-ops otherwise. To run it live:
 ///

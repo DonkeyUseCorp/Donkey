@@ -33,12 +33,14 @@ struct GeminiLiveTests {
             #expect(names.contains(command.rawValue))
         }
 
-        // music_play has a required `query` and an optional `app`.
-        let music = declarations.first { ($0["name"] as? String) == "music_play" }
-        let parameters = music?["parameters"] as? [String: Any]
+        // skill_run requires the ids app_skill advertises; the script input is
+        // optional (some scripts take none).
+        let skillRun = declarations.first { ($0["name"] as? String) == "skill_run" }
+        let parameters = skillRun?["parameters"] as? [String: Any]
         let required = parameters?["required"] as? [String] ?? []
-        #expect(required.contains("query"))
-        #expect(!required.contains("app"))
+        #expect(required.contains("skillID"))
+        #expect(required.contains("scriptID"))
+        #expect(!required.contains("input"))
     }
 
     @Test
@@ -104,7 +106,7 @@ struct GeminiLiveTests {
         // declared name (this regressed vision_control → `default_vision_control`).
         #expect(GeminiLiveVoiceController.canonicalToolName("vision_control") == "vision_control")
         #expect(GeminiLiveVoiceController.canonicalToolName("default_vision_control") == "vision_control")
-        #expect(GeminiLiveVoiceController.canonicalToolName("default_api.music_play") == "music_play")
+        #expect(GeminiLiveVoiceController.canonicalToolName("default_api.skill_run") == "skill_run")
         #expect(GeminiLiveVoiceController.canonicalToolName("apps_list") == "apps_list")
     }
 
@@ -135,6 +137,45 @@ struct GeminiLiveTests {
         #expect(events == [.toolCalls([
             AIRealtimeToolCall(id: "c1", name: "app.open", arguments: ["app": "Spotify"])
         ])])
+    }
+
+    @Test
+    func parsesModelTurnTextAndTurnCompletion() {
+        // Text-modality answers arrive as modelTurn text parts; they are the
+        // model's ANSWER and must surface as textOut, never as a transcript.
+        let textFrame = Data(#"""
+        {"serverContent":{"modelTurn":{"parts":[{"text":"Your largest file is movie.mkv (4.2 GB)."}]}}}
+        """#.utf8)
+        #expect(GeminiLiveProtocol.parseServerEvents(textFrame) == [
+            .textOut("Your largest file is movie.mkv (4.2 GB).")
+        ])
+
+        // turnComplete closes the turn so buffered text can flush; an audio-mode
+        // output transcription on the same frame is delivered first.
+        let completeFrame = Data(#"""
+        {"serverContent":{"turnComplete":true,"outputTranscription":{"text":"Done."}}}
+        """#.utf8)
+        #expect(GeminiLiveProtocol.parseServerEvents(completeFrame) == [
+            .finalTranscript("Done."),
+            .turnComplete
+        ])
+
+        let bareComplete = Data(#"{"serverContent":{"turnComplete":true}}"#.utf8)
+        #expect(GeminiLiveProtocol.parseServerEvents(bareComplete) == [.turnComplete])
+    }
+
+    @Test
+    @MainActor
+    func agentRunDescriptorIsAValidRegisteredEscalation() {
+        // The delegation escalation must be a valid LLM function identifier and
+        // require the structured goal it hands to the local pipeline.
+        let descriptor = GeminiLiveVoiceController.agentRunDescriptor
+        #expect(descriptor.name == "agent_run")
+        #expect(descriptor.inputSchema.keys.contains("goal"))
+        let declarations = CommandLayerFunctionDeclarations.declarations(from: [descriptor])
+        let parameters = declarations.first?["parameters"] as? [String: Any]
+        let required = parameters?["required"] as? [String] ?? []
+        #expect(required.contains("goal"))
     }
 
     @Test
