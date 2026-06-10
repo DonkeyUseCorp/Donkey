@@ -20,6 +20,7 @@ public actor SystemToolCapabilityProbe {
     private let ttl: TimeInterval
     private let toolNames: [String]
     private var cached: (expires: Date, summary: String)?
+    private var probeTask: Task<Void, Never>?
 
     public init(
         cacheURL: URL? = nil,
@@ -41,25 +42,39 @@ public actor SystemToolCapabilityProbe {
     /// A one-line summary of installed vs missing tools, e.g.
     /// `Installed: git 2.43, jq 1.7, python3 3.12.2. Not installed: node, ffmpeg.`
     /// Cached in memory and on disk; recomputed only after the TTL lapses.
+    ///
+    /// Never blocks on subprocesses: with no fresh cache it kicks the probe off
+    /// in the background and returns an empty summary, so a user turn never
+    /// waits on `which`/`--version` children. The next turn gets the cached line.
     public func summary(now: Date = Date()) async -> String {
         if let cached, cached.expires > now { return cached.summary }
         if let disk = loadFromDisk(), disk.expires > now {
             cached = disk
             return disk.summary
         }
-        let summary = probe()
-        let entry = (expires: now.addingTimeInterval(ttl), summary: summary)
+        if probeTask == nil {
+            let tools = toolNames
+            probeTask = Task.detached(priority: .utility) { [weak self] in
+                let summary = Self.probe(tools: tools)
+                await self?.store(summary: summary)
+            }
+        }
+        return ""
+    }
+
+    private func store(summary: String) {
+        let entry = (expires: Date().addingTimeInterval(ttl), summary: summary)
         cached = entry
         saveToDisk(entry)
-        return summary
+        probeTask = nil
     }
 
     // MARK: - Probing
 
-    private func probe() -> String {
+    private static func probe(tools: [String]) -> String {
         var installed: [String] = []
         var missing: [String] = []
-        for tool in toolNames {
+        for tool in tools {
             guard let path = run("/usr/bin/which", [tool]), !path.isEmpty else {
                 missing.append(tool)
                 continue
@@ -77,7 +92,7 @@ public actor SystemToolCapabilityProbe {
     }
 
     /// Best-effort version string from the tool's own version flag.
-    private func version(of tool: String) -> String? {
+    private static func version(of tool: String) -> String? {
         guard let raw = run("/usr/bin/env", [tool, "--version"]) ?? run("/usr/bin/env", [tool, "version"]) else {
             return nil
         }
@@ -92,21 +107,43 @@ public actor SystemToolCapabilityProbe {
         return nil
     }
 
-    /// Run a short, bounded subprocess and return trimmed stdout (nil on failure).
-    private func run(_ launchPath: String, _ arguments: [String]) -> String? {
+    /// Run a short subprocess and return trimmed stdout (nil on failure). The
+    /// bound is real: a wedged child is killed at the deadline, and stderr is
+    /// drained concurrently so a chatty tool can't fill the pipe and deadlock.
+    private static func run(
+        _ launchPath: String,
+        _ arguments: [String],
+        timeout: TimeInterval = 3
+    ) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: launchPath)
         process.arguments = arguments
         let outPipe = Pipe()
+        let errPipe = Pipe()
         process.standardOutput = outPipe
-        process.standardError = Pipe()
+        process.standardError = errPipe
+
+        let finished = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in finished.signal() }
         do {
             try process.run()
         } catch {
             return nil
         }
+
+        DispatchQueue.global(qos: .utility).async {
+            _ = errPipe.fileHandleForReading.readDataToEndOfFile()
+        }
+        if finished.wait(timeout: .now() + timeout) == .timedOut {
+            process.terminate()
+            if finished.wait(timeout: .now() + 1.0) == .timedOut {
+                kill(process.processIdentifier, SIGKILL)
+                finished.wait()
+            }
+            return nil
+        }
+
         let data = outPipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
         guard process.terminationStatus == 0 else { return nil }
         let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return text.isEmpty ? nil : text
