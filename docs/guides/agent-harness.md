@@ -141,8 +141,18 @@ Waiting states are hard stops:
 
 Core tool families cover conversation, clarification, permission requests,
 memory, skills, app lookup, observation, UI element actions, text/keyboard
-input, shell commands, AppleScript/script generation and execution,
-verification, learning, and lifecycle control.
+input, pointer input (scroll, drag, click variants), waiting, shell commands,
+AppleScript/script generation and execution, verification, learning, and
+lifecycle control.
+
+Completion is evidence-gated by the runtime, not just prompt guidance: a
+`run.complete` whose most recent succeeded state-changing step has no later
+succeeded evidence step (a read-only observation, or a tool whose descriptor
+declares its result is itself evidence — like a shell command's output and exit
+code) is rejected with a failed result, and the planner re-plans to verify
+first. Planner-side failures are bounded honestly too: a malformed or empty
+model reply is retried once with the failure fed back, and an empty tool name
+never reads as completion.
 
 ## System Tools First
 
@@ -185,15 +195,21 @@ To **see**, it can read the Accessibility tree (fast, structured, best for nativ
 apps) or capture and analyze a screenshot with vision (works for any pixels, e.g.
 canvas or Electron content). Either returns elements into the world model.
 Accessibility is preferred when it's sufficient; vision is the fallback when it
-isn't.
+isn't. Screenshots never go to hosted model providers: the planner reads the
+AX/vision annotations as text, so the prompt renders each element with its
+geometry, value, and click eligibility, in reading order, and ranks clickable
+controls first when the list is capped.
 
-To **act**, it can click an element the AX tree or vision returned, type or press
-keys, or generate and run an AppleScript — whichever fits. Clicking an
+To **act**, it can click an element the AX tree or vision returned (left, right,
+double, or triple click), type or press keys — including modifier chords like
+Cmd+C — scroll, drag one observed element onto another, wait briefly for the app
+to settle, or generate and run an AppleScript — whichever fits. Clicking an
 Accessibility control prefers a native Accessibility press (`AXPress`) and falls
 back to a guarded coordinate click on the control's frame; vision elements click
-by coordinate. Either way this is not a shortcut around the focus and permission
-checks below. The planner can also answer conversationally or ask the user to
-clarify instead of acting — responding and clarifying are themselves tools.
+by coordinate; right- and multi-clicks always take the coordinate path. Either
+way this is not a shortcut around the focus and permission checks below. The
+planner can also answer conversationally or ask the user to clarify instead of
+acting — responding and clarifying are themselves tools.
 
 A non-LLM monitor watches the frontmost window's screenshot fingerprint and
 re-parses on large changes, keeping the vision parse cache warm so a capture is
@@ -201,7 +217,11 @@ usually reused instantly rather than paid for inline.
 
 Input must be guarded by target focus, permission policy, element eligibility,
 allowed action type, safety class, and verification criteria. Coordinate input
-is a fallback path, not a shortcut around those checks.
+is a fallback path, not a shortcut around those checks. When the target window
+lost focus between observe and act, the guard attempts one recovery activation
+of the target app (never any other app) before denying; a denial names whatever
+is in front so the planner can react to the blocking window instead of failing
+opaquely.
 
 Verification must be evidence-backed. A command is not complete merely because
 the target app is focused. The harness needs post-action evidence such as a
@@ -210,7 +230,10 @@ screenshot-backed observation.
 
 Pointer playback is separate from input. It may rotate, travel, hold, and label
 the path the agent planned or observed, while AX, AppleScript, keyboard input,
-or guarded coordinate fallback perform the real work.
+or guarded coordinate fallback perform the real work. The overlay narrates every
+step, not just clicks: steps that move the pointer animate the cursor to the
+target, and steps that don't (observe, shell, wait, verify) hold the cursor in
+place and update its label, so a user always sees what the run is doing.
 
 ## AppleScript And Scripts
 
@@ -255,6 +278,12 @@ Learning an application is a skill-producing harness task. It gathers bounded
 screenshot and Accessibility evidence, explores only safe/reversible states
 unless the user approves more, distills an app profile and workflow recipes,
 and saves a reusable skill pack with any validated scripts.
+
+Learned packs compound across sessions: a saved pack (under the app-support
+learned-skills directory) declares its app in `apps:` frontmatter and is
+re-discovered alongside the bundled packs, so a later run driving that app
+preloads its learned playbook exactly like a built-in. Bundled packs win when
+both name the same app.
 
 ## Source Map
 
