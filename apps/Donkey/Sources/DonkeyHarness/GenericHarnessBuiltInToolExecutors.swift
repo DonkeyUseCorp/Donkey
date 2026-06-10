@@ -195,6 +195,12 @@ public struct HarnessBuiltInToolServices: Sendable {
     /// failure). Backs the `llm.generate` tool, the model boundary the planner can reach for to
     /// compose, transform, summarize, or massage text without leaving the harness.
     public var textGenerator: (@Sendable (String) async -> String?)?
+    /// Web search: a query in, ranked results as text (title — url, then snippet, per result), or nil
+    /// on failure. Backs the `web.search` tool so the agent can find current facts.
+    public var webSearcher: (@Sendable (String) async -> String?)?
+    /// Web fetch/navigation: a URL in, the page's readable text out, or nil on failure. Backs the
+    /// `web.fetch` tool so the agent can read a page it found or was given.
+    public var webFetcher: (@Sendable (String) async -> String?)?
 
     public init(
         memoryEntries: [HarnessMemoryEntry] = [],
@@ -206,7 +212,9 @@ public struct HarnessBuiltInToolServices: Sendable {
         appleScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)? = nil,
         skillScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)? = nil,
         commandExecutor: (@Sendable (HarnessToolExecutionContext) async -> HarnessToolResult?)? = nil,
-        textGenerator: (@Sendable (String) async -> String?)? = nil
+        textGenerator: (@Sendable (String) async -> String?)? = nil,
+        webSearcher: (@Sendable (String) async -> String?)? = nil,
+        webFetcher: (@Sendable (String) async -> String?)? = nil
     ) {
         self.memoryEntries = memoryEntries
         self.skillRegistry = skillRegistry
@@ -218,6 +226,8 @@ public struct HarnessBuiltInToolServices: Sendable {
         self.skillScriptExecutor = skillScriptExecutor
         self.commandExecutor = commandExecutor
         self.textGenerator = textGenerator
+        self.webSearcher = webSearcher
+        self.webFetcher = webFetcher
     }
 }
 
@@ -290,6 +300,10 @@ public enum BuiltInHarnessToolExecutors {
             return stateVerify(context)
         case "llm.generate":
             return await llmGenerate(context, services: services)
+        case "web.search":
+            return await webSearch(context, services: services)
+        case "web.fetch":
+            return await webFetch(context, services: services)
         case "wait":
             return await timingWait(context)
         case "run.pause", "run.resume", "run.recover", "run.cancel", "run.complete", "run.failSafe":
@@ -1283,6 +1297,63 @@ public enum BuiltInHarnessToolExecutors {
         return success(
             context,
             summary: text.count > 400 ? String(text.prefix(400)) + "…" : text,
+            facts: ["lastAcceptedTool": context.call.name],
+            metadata: ["text": text, "characterCount": String(text.count)]
+        )
+    }
+
+    private static func webSearch(
+        _ context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices
+    ) async -> HarnessToolResult {
+        guard let searcher = services.webSearcher else {
+            return failed(context, "Web search is not configured.", reason: "webSearchUnavailable")
+        }
+        guard let query = trimmed(context.call.input["query"]) else {
+            return invalidInput(context, "web.search requires a `query`.")
+        }
+        guard let results = await searcher(query), !results.isEmpty else {
+            return failed(context, "No results for \"\(query)\".", reason: "noWebResults")
+        }
+        return success(
+            context,
+            summary: results.count > 600 ? String(results.prefix(600)) + "…" : results,
+            facts: ["lastAcceptedTool": context.call.name],
+            metadata: ["results": results, "query": query]
+        )
+    }
+
+    private static func webFetch(
+        _ context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices
+    ) async -> HarnessToolResult {
+        guard let fetcher = services.webFetcher else {
+            return failed(context, "Web fetch is not configured.", reason: "webFetchUnavailable")
+        }
+        guard let url = trimmed(context.call.input["url"]) else {
+            return invalidInput(context, "web.fetch requires a `url`.")
+        }
+        guard let text = await fetcher(url), !text.isEmpty else {
+            return failed(context, "Could not read \(url).", reason: "webFetchFailed")
+        }
+        if (context.call.input["toFile"] ?? "").lowercased() == "true" {
+            let fileURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("donkey-web-\(context.call.id).txt")
+            do {
+                try text.write(to: fileURL, atomically: true, encoding: .utf8)
+            } catch {
+                return failed(context, "Could not write page text to a file: \(error)", reason: "fileWriteFailed")
+            }
+            return success(
+                context,
+                summary: "Fetched \(text.count) characters → \(fileURL.path)",
+                facts: ["lastAcceptedTool": context.call.name],
+                metadata: ["filePath": fileURL.path, "text": String(text.prefix(200)), "characterCount": String(text.count)]
+            )
+        }
+        return success(
+            context,
+            summary: text.count > 600 ? String(text.prefix(600)) + "…" : text,
             facts: ["lastAcceptedTool": context.call.name],
             metadata: ["text": text, "characterCount": String(text.count)]
         )

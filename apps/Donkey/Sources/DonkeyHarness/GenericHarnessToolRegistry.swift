@@ -504,6 +504,34 @@ public enum BuiltInHarnessToolCatalog {
                 metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
             ),
             descriptor(
+                "web.search",
+                pluginID: "core.web",
+                summary: "Search the web and return ranked results (title, URL, snippet). Use it for current facts the model can't be sure of — an artist's latest album, today's news, a product spec, an address. Follow up with web.fetch to read a result in full.",
+                input: ["query": "What to search for.", "count": "How many results (default 5, max 10)."],
+                output: ["results": "Ranked results: title — URL, then snippet, per result."],
+                permissions: [],
+                safety: .readOnly,
+                verification: ["the results are relevant to the query"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            descriptor(
+                "web.fetch",
+                pluginID: "core.web",
+                summary: "Fetch a web page and return its readable text (HTML stripped). Use it to read a page from web.search or a URL the user gave. Set toFile=true for a long page so you build a note/document from the file instead of a length-limited command.",
+                input: [
+                    "url": "The page URL to read.",
+                    "toFile": "\"true\" to write the page text to a temp file and return its path."
+                ],
+                output: [
+                    "text": "The page's readable text (a preview when written to a file).",
+                    "filePath": "Path to the file holding the full text, when toFile=true."
+                ],
+                permissions: [],
+                safety: .readOnly,
+                verification: ["the fetched text matches the requested page"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            descriptor(
                 "state.verify",
                 pluginID: "core.verification",
                 summary: "Verify the expected outcome using world-model evidence and task-specific success criteria.",

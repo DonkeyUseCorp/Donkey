@@ -247,6 +247,58 @@ struct GenericHarnessTests {
     }
 
     @Test
+    func webSearchReturnsRankedResultsFromTheSearcher() async {
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(
+                webSearcher: { query in "Latest Album — https://ex.com\nIt's the newest record for \(query)." }
+            )
+        )
+        let result = await registry.execute(
+            HarnessToolCall(name: "web.search", input: ["query": "taylor swift latest album"]),
+            taskID: "t", worldModel: HarnessWorldModel(), grantedPermissions: []
+        )
+        #expect(result.status == .succeeded)
+        #expect(result.metadata["results"]?.contains("https://ex.com") == true)
+    }
+
+    @Test
+    func webFetchWritesLongPagesToAFile() async throws {
+        let page = String(repeating: "paragraph of readable text\n", count: 400)
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(webFetcher: { _ in page })
+        )
+        let result = await registry.execute(
+            HarnessToolCall(name: "web.fetch", input: ["url": "https://ex.com", "toFile": "true"]),
+            taskID: "t", worldModel: HarnessWorldModel(), grantedPermissions: []
+        )
+        #expect(result.status == .succeeded)
+        let path = try #require(result.metadata["filePath"])
+        #expect(try String(contentsOfFile: path, encoding: .utf8) == page)
+        try? FileManager.default.removeItem(atPath: path)
+    }
+
+    @Test
+    func webToolsFailCleanlyWhenNotConfigured() async {
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        let search = await registry.execute(
+            HarnessToolCall(name: "web.search", input: ["query": "x"]),
+            taskID: "t", worldModel: HarnessWorldModel(), grantedPermissions: []
+        )
+        #expect(search.metadata["reason"] == "webSearchUnavailable")
+    }
+
+    @Test
+    func htmlIsStrippedToReadableText() {
+        let html = "<html><head><style>.x{}</style><script>bad()</script></head><body><h1>Title</h1><p>First &amp; second.</p><p>Third</p></body></html>"
+        let text = WebTools.readableText(fromHTML: html)
+        #expect(text.contains("Title"))
+        #expect(text.contains("First & second."))
+        #expect(text.contains("Third"))
+        #expect(!text.contains("bad()"))
+        #expect(!text.contains("<"))
+    }
+
+    @Test
     func llmGenerateFailsCleanlyWithoutAModelBoundary() async {
         let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
         let result = await registry.execute(

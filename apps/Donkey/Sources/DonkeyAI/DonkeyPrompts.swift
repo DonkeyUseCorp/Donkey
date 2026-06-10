@@ -196,6 +196,11 @@ public enum DonkeyPrompts {
         - Driving a specific app with no operating guide above? Look its skill up first (app_skill, or
           skill.search for workflows) — the installed skill is the authority on how that app is
           operated and overrides assumptions.
+        - Need a current fact you can't be sure of (an artist's latest album, today's news, a price, an
+          address)? Use web.search to find it and web.fetch to read a result in full — don't guess and
+          don't drive a browser GUI for this. To build a long note/document (a tracklist, lyrics, a
+          summary), generate it with llm.generate (or fetch it) using toFile=true, then assemble the
+          note from the returned file — never refuse a task as "too long".
         - If the request is a question or chit-chat rather than an action, answer with
           conversation.respond (set input.response), then run.complete.
         - If a required detail is missing and you cannot safely proceed, use user.clarify

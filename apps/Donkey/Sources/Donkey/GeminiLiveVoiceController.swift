@@ -84,8 +84,12 @@ final class GeminiLiveVoiceController {
             )
             services.textGenerator = { await textGenerator.generate($0) }
         }
-        let llmDescriptors = BuiltInHarnessToolCatalog.descriptors.filter { $0.name == "llm.generate" }
-        let liveDescriptors = DonkeyCommandLayer.descriptors + llmDescriptors
+        let webTools = WebTools()
+        services.webSearcher = { await webTools.search($0) }
+        services.webFetcher = { await webTools.fetch($0) }
+        let extraToolNames: Set<String> = ["llm.generate", "web.search", "web.fetch"]
+        let extraDescriptors = BuiltInHarnessToolCatalog.descriptors.filter { extraToolNames.contains($0.name) }
+        let liveDescriptors = DonkeyCommandLayer.descriptors + extraDescriptors
         self.liveToolDescriptors = liveDescriptors
         self.registry = HarnessToolRegistry(
             tools: BuiltInHarnessToolExecutors.tools(
