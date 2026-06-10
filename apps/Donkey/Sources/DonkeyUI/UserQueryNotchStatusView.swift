@@ -26,7 +26,9 @@ public struct UserQueryNotchStatusView: View {
     private let assetsDropped: @MainActor ([UserQueryTaskAssetDraft]) -> Void
     private let pauseRequested: @MainActor (String) -> Void
     private let resumeRequested: @MainActor (String) -> Void
-    private let approvePermissionRequested: @MainActor (String) -> Void
+    /// (taskID, alwaysAllow). `alwaysAllow` persists a standing rule for the
+    /// command signature; it is only offered for non-highRisk shell consent.
+    private let approvePermissionRequested: @MainActor (String, Bool) -> Void
     private let updateRequested: @MainActor () -> Void
 
     public init(
@@ -49,7 +51,7 @@ public struct UserQueryNotchStatusView: View {
         assetsDropped: @escaping @MainActor ([UserQueryTaskAssetDraft]) -> Void,
         pauseRequested: @escaping @MainActor (String) -> Void,
         resumeRequested: @escaping @MainActor (String) -> Void,
-        approvePermissionRequested: @escaping @MainActor (String) -> Void,
+        approvePermissionRequested: @escaping @MainActor (String, Bool) -> Void,
         updateRequested: @escaping @MainActor () -> Void
     ) {
         self.state = state
@@ -569,14 +571,39 @@ public struct UserQueryNotchStatusView: View {
     private func activeTaskControls(for task: UserQueryNotchTask) -> some View {
         switch task.status {
         case .waitingForPermission:
-            statusControlButton(
-                systemName: "checkmark.shield",
-                label: "Approve Permission",
-                isEnabled: true,
-                action: {
-                    approvePermissionRequested(task.id)
+            let isShellConsent = !(task.metadata["genericHarness.shellConsent.command"] ?? "").isEmpty
+            let allowAlways = task.metadata["genericHarness.shellConsent.allowAlways"] == "true"
+            if isShellConsent {
+                HStack(spacing: 6) {
+                    statusControlButton(
+                        systemName: "checkmark.shield",
+                        label: "Allow Once",
+                        isEnabled: true,
+                        action: {
+                            approvePermissionRequested(task.id, false)
+                        }
+                    )
+                    if allowAlways {
+                        statusControlButton(
+                            systemName: "checkmark.shield.fill",
+                            label: "Always Allow",
+                            isEnabled: true,
+                            action: {
+                                approvePermissionRequested(task.id, true)
+                            }
+                        )
+                    }
                 }
-            )
+            } else {
+                statusControlButton(
+                    systemName: "checkmark.shield",
+                    label: "Approve Permission",
+                    isEnabled: true,
+                    action: {
+                        approvePermissionRequested(task.id, false)
+                    }
+                )
+            }
         case .interrupted:
             statusControlButton(
                 systemName: "arrow.triangle.2.circlepath",

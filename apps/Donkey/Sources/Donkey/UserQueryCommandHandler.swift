@@ -319,12 +319,14 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             registry: registry
         )
         let plannerDescriptors = await registry.descriptors()
+        let environmentSummary = await SystemToolCapabilityProbe.shared.summary()
         let planner = HostedHarnessStepPlanner(
             backend: backend,
             descriptors: plannerDescriptors,
             appName: appName,
             appGuidance: appGuidance,
-            understanding: understanding
+            understanding: understanding,
+            environmentSummary: environmentSummary
         )
         _ = await genericHarnessLifecycle.coordinator.startRunning(
             taskID: taskID,

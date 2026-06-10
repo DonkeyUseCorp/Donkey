@@ -627,8 +627,8 @@ final class UserQueryOverlayController {
             resumeRequested: { [weak self] taskID in
                 self?.model.resumeTask(id: taskID)
             },
-            approvePermissionRequested: { [weak self] taskID in
-                self?.model.approvePermissionGate(id: taskID)
+            approvePermissionRequested: { [weak self] taskID, alwaysAllow in
+                self?.model.approvePermissionGate(id: taskID, alwaysAllow: alwaysAllow)
             },
             updateRequested: { [weak self] in
                 self?.openAvailableUpdate()
