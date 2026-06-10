@@ -141,8 +141,38 @@ Waiting states are hard stops:
 
 Core tool families cover conversation, clarification, permission requests,
 memory, skills, app lookup, observation, UI element actions, text/keyboard
-input, AppleScript/script generation and execution, verification, learning, and
-lifecycle control.
+input, shell commands, AppleScript/script generation and execution,
+verification, learning, and lifecycle control.
+
+## System Tools First
+
+Donkey operates the Mac the way an expert terminal user would. The planner's
+first choice is `shell_exec` — a single-line shell command — for anything a
+power user solves without the GUI: finding files (`mdfind`, `find`, `ls -t`),
+launching or quitting apps (`open`, `osascript`), reading state (`pmset -g`,
+`system_profiler`, `defaults read`), and changing settings (`defaults write`,
+`networksetup`). Driving an app's GUI is the fallback, used only when the task
+truly needs it (canvas, Electron, or proprietary interfaces with no system-tool
+equivalent). This preference lives in the planner doctrine and a built-in
+`system-tools` skill; the understanding boundary leaves the target app empty for
+system-tool tasks so they are not pinned to a GUI app.
+
+Shell commands are not refused by a denylist. Each command is classified by its
+argv tokens into a risk tier, and nothing changes state without consent:
+
+- **read** (e.g. `mdfind`, `defaults read`, `pmset -g`) runs immediately.
+- **reversibleWrite** (e.g. `defaults write`, `open`, `networksetup -set…`)
+  stops at a consent gate offering allow-once or always-allow. An always-allow
+  rule is keyed on the command signature (e.g. `defaults write`) and persists.
+- **highRisk** (privileged, destructive, network-egress, or security/privacy
+  settings — `sudo`, `rm`, `dd`, `curl | sh`, `com.apple.TCC`) asks every time
+  and can never be remembered.
+
+Consent is surfaced in the pointer/notch overlay with Allow Once / Always Allow,
+reusing the `waitingForPermission` gate. The tier classifier matches typed argv
+fields only — never natural-language intent. A capability probe records which
+command-line tools are installed on the machine (and versions) so the planner
+reaches only for what exists.
 
 ## Computer Use
 
