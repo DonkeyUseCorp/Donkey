@@ -3,6 +3,7 @@ id: music-media
 description: Plan low-risk media playback in Apple Music or another supported media app.
 tags: media, music, playback, local-app
 keywords: play, listen, music, song, track, tune, album, playlist, artist, band, audio, podcast, radio, pause, resume, volume
+apps: Music, Apple Music, com.apple.Music
 tools: app.openOrFocus, app.observe, ui.focusSearch, ui.setText, ui.pressReturn, app.verifyVisibleText
 scripts: scripts-play-media-by-search
 
@@ -20,9 +21,9 @@ Set `metadata.mediaSelection.kind` to `explicit_song`, `explicit_album`, `explic
 
 Prefer the validated skill script path when the selected catalog entry supports it:
 
-- Load this skill with `skill.load` using `toolInputs.skillID=music-media`.
-- Execute `skill.script.execute` with `toolInputs.skillID=music-media`, `toolInputs.scriptID=scripts-play-media-by-search`, and `inputEntity=query`.
-- Verify the structured script evidence with `state.verify`; do not use screenshot verification unless the script cannot provide evidence.
+- This skill ships a validated script — `skillID=music-media`, `scriptID=scripts-play-media-by-search` — that searches Apple Music for the query and starts playback as one bounded step.
+- Execute it with your skill-script execution tool (`skill.script.execute`, or `skill_run` in the fast command layer), passing the structured `query` as the script input.
+- Verify the structured script evidence (`state.verify`, or the script's returned status fields); do not use screenshot verification unless the script cannot provide evidence.
 - The script input must be the same structured `query`; never pass raw user text separately.
 - Treat script output as structured evidence. `status=played` means the script submitted playback. `clarification.required=true` means stop and ask the included `clarification.question`.
 

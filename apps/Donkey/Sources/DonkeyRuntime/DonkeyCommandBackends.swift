@@ -27,9 +27,53 @@ public enum DonkeyCommandBackends {
             return await shellExec(context)
         case .appsList:
             return listApps(context)
-        case .musicPlay:
-            return await playMusic(context)
+        case .appSkill:
+            return appSkill(context)
+        case .skillRun:
+            return await runSkillScript(context)
         }
+    }
+
+    // MARK: - app_skill
+
+    /// Surface the installed operating playbook for an app, discovered from the
+    /// skill packs by display name or bundle id — never from a hardcoded app
+    /// list. Apps without a skill report that plainly so the model falls back to
+    /// its general tools.
+    private static func appSkill(_ context: HarnessToolExecutionContext) -> HarnessToolResult {
+        guard let app = trimmed(context.call.input["app"]) else {
+            return invalidInput(context, "app_skill requires an `app` display name or bundle identifier.")
+        }
+        guard let descriptor = BuiltInLocalAppSkillPacks.appSkillDescriptor(forApp: app, bundleIdentifier: app),
+              let guidance = BuiltInLocalAppSkillPacks.appOperatingGuidance(forApp: app, bundleIdentifier: app)
+        else {
+            return success(
+                context,
+                summary: "No operating skill is installed for \(app).",
+                facts: ["appSkill.\(app)": "notFound"],
+                metadata: ["found": "false", "app": app]
+            )
+        }
+        // Advertise the skill's validated scripts so the model can execute a
+        // covered workflow directly with skill_run instead of reinventing it.
+        let scriptLines = descriptor.scripts.map { script in
+            "- skillID=\(descriptor.id) scriptID=\(script.id)\(script.purpose.isEmpty ? "" : " — \(script.purpose)")"
+        }
+        let scriptsBlock = scriptLines.isEmpty
+            ? ""
+            : "\n\nValidated scripts (execute with skill_run):\n" + scriptLines.joined(separator: "\n")
+        return success(
+            context,
+            summary: guidance + scriptsBlock,
+            facts: ["appSkill.\(app)": "loaded"],
+            metadata: [
+                "found": "true",
+                "app": app,
+                "skillID": descriptor.id,
+                "scriptIDs": descriptor.scripts.map(\.id).joined(separator: ","),
+                "guidance": guidance
+            ]
+        )
     }
 
     // MARK: - apps_list
@@ -186,16 +230,26 @@ public enum DonkeyCommandBackends {
         return result
     }
 
-    // MARK: - music_play
+    // MARK: - skill_run
 
-    private static func playMusic(_ context: HarnessToolExecutionContext) async -> HarnessToolResult {
-        guard trimmed(context.call.input["query"]) != nil else {
-            return invalidInput(context, "music_play requires a `query`.")
+    /// Execute a validated script an installed skill ships, looked up by the
+    /// skill/script ids the model got from `app_skill` — the generic native
+    /// fast path for any skill-covered workflow, with nothing domain-specific.
+    private static func runSkillScript(_ context: HarnessToolExecutionContext) async -> HarnessToolResult {
+        guard let skillID = trimmed(context.call.input["skillID"]) else {
+            return invalidInput(context, "skill_run requires the `skillID` advertised by app_skill.")
+        }
+        guard let scriptID = trimmed(context.call.input["scriptID"]) else {
+            return invalidInput(context, "skill_run requires the `scriptID` advertised by app_skill.")
         }
         guard let artifact = LocalAppUserQueryHarnessServices
             .builtInValidatedScriptArtifacts()
-            .first(where: { $0.id == "scripts-play-media-by-search" }) else {
-            return failed(context, "The bundled music playback skill is unavailable.", reason: "musicSkillUnavailable")
+            .first(where: { $0.id == scriptID && $0.ownerSkillID == skillID }) else {
+            return failed(
+                context,
+                "No validated script \(scriptID) is installed for skill \(skillID). Look the app's skill up with app_skill for the available scripts.",
+                reason: "skillScriptUnavailable"
+            )
         }
         let outcome = await LocalAppUserQueryHarnessServices.executeSkillScript(artifact: artifact, context: context)
         if outcome.metadata["clarification.required"] == "true" {
@@ -203,18 +257,18 @@ public enum DonkeyCommandBackends {
                 callID: context.call.id,
                 toolName: context.call.name,
                 status: .waitingForUser,
-                summary: "The music app needs clarification before playing.",
-                question: outcome.metadata["clarification.question"] ?? "What would you like me to play?",
+                summary: "The script needs clarification before it can proceed.",
+                question: outcome.metadata["clarification.question"] ?? "What exactly should I use?",
                 metadata: outcome.metadata.merging(["gate": "clarification"]) { current, _ in current }
             )
         }
         guard outcome.succeeded else {
-            return failed(context, outcome.summary, reason: outcome.metadata["failureReason"] ?? "musicPlayFailed")
+            return failed(context, outcome.summary, reason: outcome.metadata["failureReason"] ?? "skillScriptFailed")
         }
         return success(
             context,
             summary: outcome.summary,
-            facts: ["musicStatus": outcome.metadata["status"] ?? "played"],
+            facts: ["skillRun.\(scriptID)": outcome.metadata["status"] ?? "succeeded"],
             metadata: outcome.metadata
         )
     }

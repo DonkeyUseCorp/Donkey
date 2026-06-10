@@ -57,6 +57,21 @@ public enum BuiltInLocalAppSkillPacks {
         bundleIdentifier: String? = nil,
         maxCharacters: Int = 4_000
     ) -> String? {
+        guard let match = appSkillDescriptor(forApp: appName, bundleIdentifier: bundleIdentifier) else {
+            return nil
+        }
+        let body = bounded(strippedSkillMetadata(from: match.description), maxCharacters: maxCharacters)
+        return body.isEmpty ? nil : body
+    }
+
+    /// The app-specific skill descriptor (one whose `apps:` frontmatter names this app by display
+    /// name or bundle identifier), or nil when no app-specific skill is installed. Exposes the
+    /// skill's id and validated scripts so callers can advertise runnable workflows alongside the
+    /// operating playbook.
+    public static func appSkillDescriptor(
+        forApp appName: String,
+        bundleIdentifier: String? = nil
+    ) -> HarnessSkillDescriptor? {
         let wanted = Set(
             ([appName, bundleIdentifier].compactMap { $0 })
                 .map { $0.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -64,16 +79,13 @@ public enum BuiltInLocalAppSkillPacks {
         )
         guard !wanted.isEmpty else { return nil }
 
-        let match = descriptors().first { descriptor in
+        return descriptors().first { descriptor in
             let apps = (descriptor.metadata["apps"] ?? "")
                 .split(separator: ",")
                 .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
             return apps.contains { app in wanted.contains { AppNameMatching.matches($0, app) } }
         }
-        guard let match else { return nil }
-        let body = bounded(strippedSkillMetadata(from: match.description), maxCharacters: maxCharacters)
-        return body.isEmpty ? nil : body
     }
 
     public static func scriptSource(
