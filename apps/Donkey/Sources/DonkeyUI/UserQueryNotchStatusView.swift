@@ -442,51 +442,55 @@ public struct UserQueryNotchStatusView: View {
     }
 
     private var currentTaskRow: some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .top, spacing: 12) {
             TaskArrowMark(color: accentColor)
                 .frame(width: 14, height: 14)
+                .padding(.top, 1)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(taskTitle)
                     .font(.system(size: 13, weight: .regular))
                     .foregroundStyle(Color.white.opacity(0.9))
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 Text(statusDescription)
                     .font(.system(size: 12, weight: .regular))
                     .foregroundStyle(Color.white.opacity(0.42))
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Spacer()
+            Spacer(minLength: 0)
 
             if isWorking {
                 activityBars(color: accentColor)
             }
         }
         .padding(.horizontal, 12)
-        .frame(height: 48)
+        .padding(.vertical, 12)
+        .frame(minHeight: 48)
         .background(Color.white.opacity(0.055))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private func taskRow(_ task: UserQueryNotchTask) -> some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .top, spacing: 12) {
             TaskArrowMark(color: accentColor(for: task.accentIndex))
                 .frame(width: 14, height: 14)
+                .padding(.top, 1)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(task.title)
                     .font(.system(size: 13, weight: .regular))
                     .foregroundStyle(Color.white.opacity(0.9))
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 Text(taskStatusDescription(task))
                     .font(.system(size: 12, weight: .regular))
                     .foregroundStyle(Color.white.opacity(0.42))
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Spacer()
+            Spacer(minLength: 0)
 
             if task.status == .running || task.status == .paused || task.status == .waitingForPermission || task.status == .interrupted {
                 activeTaskControls(for: task)
@@ -495,7 +499,8 @@ public struct UserQueryNotchStatusView: View {
             }
         }
         .padding(.horizontal, 12)
-        .frame(height: 48)
+        .padding(.vertical, 12)
+        .frame(minHeight: 48)
         .background(Color.white.opacity(0.055))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
