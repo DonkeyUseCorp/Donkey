@@ -234,19 +234,19 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     }
 
     private func submitCommand(_ text: String, source: AppHarnessTurnSource = .typedPrompt) {
-        // Gemini Live is the always-on brain when connected: text always goes to
-        // it (tool-first). When audio is streaming, a batch voice transcript is
-        // redundant — the model already heard it — so drop it.
-        if liveController.isConnected {
-            if source == .voiceTranscript, liveController.isAudioEnabled {
-                clearSubmissionInputs()
-                promptState.isActive = false
-                promptState.isVoiceInputActive = false
-                return
-            }
-            routeToLiveSession(text)
+        // A spoken turn while the mic is streaming was already heard by the Live session; running it
+        // again here would double-execute it, so drop it (the Live session answers it in real time).
+        if liveController.isConnected, source == .voiceTranscript, liveController.isAudioEnabled {
+            clearSubmissionInputs()
+            promptState.isActive = false
+            promptState.isVoiceInputActive = false
             return
         }
+        // Every actionable turn runs through the harness agent loop. The loop re-plans after each
+        // observation, verifies before completing, and adjusts on failure, so multi-step work ("note
+        // with all the album's songs", "play X and …") runs to completion instead of the one-shot Live
+        // tool path that does a single step and stops. The Live session stays connected for real-time
+        // voice; it is no longer the executor for typed/transcribed turns.
         runLocalCommand(text, source: source)
     }
 
