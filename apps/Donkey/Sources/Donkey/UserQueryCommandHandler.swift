@@ -351,10 +351,11 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         harnessServices.textGenerator = { prompt in
             await textGenerator.generate(prompt)
         }
-        // Web research: find current facts and read pages (e.g. an artist's latest album, then its
-        // tracklist), so tasks needing fresh information aren't stuck guessing.
+        // Web research: search goes through the backend (Google Search grounding on the
+        // service-account credential — no key in the app); fetch reads a page directly.
+        let hostedWebSearch = HostedWebSearch(backend: backend)
         let webTools = WebTools()
-        harnessServices.webSearcher = { query in await webTools.search(query) }
+        harnessServices.webSearcher = { query in await hostedWebSearch.search(query) }
         harnessServices.webFetcher = { url in await webTools.fetch(url) }
         let granted = Self.userQueryGrantedPermissions
         let replacedBuiltIns: Set<String> = ["screen.observe", "elements.get", "element.perform", "text.enter", "keyboard.press"]

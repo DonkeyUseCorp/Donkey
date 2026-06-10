@@ -151,6 +151,16 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
         return try JSONDecoder().decode(RemoteInferenceJSONValue.self, from: data)
     }
 
+    /// Web search via the backend's Google Search grounding (service-account credentials stay on the
+    /// server; no key in the app). Returns a grounded summary and the source pages it used.
+    public func searchWeb(query: String) async throws -> RemoteWebSearchResult {
+        var request = makeRequest(path: "/api/web/search/")
+        request.httpMethod = "POST"
+        request.httpBody = try JSONEncoder().encode(["query": query])
+        let data = try await send(request)
+        return try JSONDecoder().decode(RemoteWebSearchResult.self, from: data)
+    }
+
     public func parseScreenshot(
         _ understandingRequest: LocalUIUnderstandingRequest,
         imageData: Data? = nil,
