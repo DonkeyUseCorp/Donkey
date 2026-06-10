@@ -36,8 +36,9 @@ export async function searchWeb(query: string): Promise<WebSearchResult | null> 
         parts: [
           {
             text:
-              `Search the web and answer concisely: ${query}\n` +
-              "Base the answer only on current web results.",
+              `Search the web for: ${query}\n` +
+              "Answer in one or two sentences from current results. The caller will read the source " +
+              "pages itself, so keep it short.",
           },
         ],
       },
@@ -45,6 +46,10 @@ export async function searchWeb(query: string): Promise<WebSearchResult | null> 
     config: {
       tools: [{ googleSearch: {} }],
       temperature: 0,
+      // Cap synthesis: we mainly want the grounded sources, not a long essay. Less generation = less
+      // latency on the grounded call (the Google search itself is the unavoidable part).
+      maxOutputTokens: 400,
+      thinkingConfig: { thinkingBudget: 0 },
     },
   });
 
