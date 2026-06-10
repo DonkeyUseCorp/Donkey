@@ -462,7 +462,12 @@ public struct UserQueryNotchStatusView: View {
             Spacer(minLength: 0)
 
             if isWorking {
-                activityBars(color: accentColor)
+                HStack(spacing: 8) {
+                    if let started = primaryTask?.createdAt {
+                        elapsedTimer(since: started)
+                    }
+                    activityBars(color: accentColor)
+                }
             }
         }
         .padding(.horizontal, 12)
@@ -470,6 +475,16 @@ public struct UserQueryNotchStatusView: View {
         .frame(minHeight: 48)
         .background(Color.white.opacity(0.055))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    /// A count-up elapsed-time label for a running task — SwiftUI's `.timer` style ticks on its own,
+    /// no manual timer — so a long-running query visibly advances instead of looking stuck.
+    private func elapsedTimer(since start: Date) -> some View {
+        Text(start, style: .timer)
+            .font(.system(size: 11, weight: .regular).monospacedDigit())
+            .foregroundStyle(Color.white.opacity(0.5))
+            .lineLimit(1)
+            .fixedSize()
     }
 
     private func taskRow(_ task: UserQueryNotchTask) -> some View {
@@ -493,7 +508,12 @@ public struct UserQueryNotchStatusView: View {
             Spacer(minLength: 0)
 
             if task.status == .running || task.status == .paused || task.status == .waitingForPermission || task.status == .interrupted {
-                activeTaskControls(for: task)
+                HStack(spacing: 8) {
+                    if task.status == .running {
+                        elapsedTimer(since: task.createdAt)
+                    }
+                    activeTaskControls(for: task)
+                }
             } else {
                 taskStatusAccessory(task)
             }
