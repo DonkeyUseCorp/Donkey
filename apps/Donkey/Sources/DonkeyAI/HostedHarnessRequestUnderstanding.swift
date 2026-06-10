@@ -11,8 +11,10 @@ import Foundation
 public struct HarnessRequestUnderstanding: Sendable, Equatable {
     /// The user's request restated as one concrete imperative goal.
     public var restatedGoal: String
-    /// The macOS app the request is about, or nil/empty when it is pure conversation or clearly about
-    /// whatever app is already frontmost.
+    /// The macOS app the request needs to operate through its GUI. Left nil/empty for pure
+    /// conversation, for whatever app is already frontmost, and for tasks an expert would do with
+    /// system tools (finding files, launching/quitting apps, reading or changing settings/state) —
+    /// those have no GUI target and the planner drives them with shell_exec.
     public var targetAppName: String?
     /// Structured parameters extracted from the request (e.g. title, recipient, query).
     public var parameters: [String: String]
@@ -188,9 +190,11 @@ public final class HostedHarnessRequestUnderstanding {
 
         Fill the fields:
         - restatedGoal: one concrete imperative sentence capturing exactly what to accomplish.
-        - targetAppName: the macOS app the request is about. If the request names or clearly implies an
-          app, use that app's name. If it is clearly about the current app, use "\(frontmostAppName)".
-          Leave empty only for pure conversation with no desktop action.
+        - targetAppName: the macOS app that must be driven through its GUI to do this. Set it only when
+          the task genuinely needs a specific app's interface (e.g. composing in Mail, editing in a
+          design app). LEAVE IT EMPTY when an expert would use system tools instead — finding files,
+          opening or quitting apps, reading or changing settings or state — and for pure conversation.
+          If it clearly concerns the current app's UI, use "\(frontmostAppName)".
         - parameters: the concrete details needed to do it (e.g. title, recipient, query, value), as
           string key/values. Omit what is not specified.
         - successCriteria: what would be visible on screen once the goal is done.

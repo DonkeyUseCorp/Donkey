@@ -21,6 +21,9 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     /// clarify gate. nil when the upfront understanding call was skipped or failed, in which case the
     /// planner falls back to the raw task goal.
     private let understanding: HarnessRequestUnderstanding?
+    /// One-line summary of which command-line tools are installed on this Mac (and versions), so the
+    /// planner only reaches for tools that exist. Empty when the probe was skipped or found nothing.
+    private let environmentSummary: String?
     private let uptimeMS: @Sendable () -> Double
 
     /// Uptime (ms) at which the planner first chose an *action* tool (something that changes app
@@ -43,6 +46,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         appName: String,
         appGuidance: String?,
         understanding: HarnessRequestUnderstanding? = nil,
+        environmentSummary: String? = nil,
         uptimeMS: @escaping @Sendable () -> Double = { ProcessInfo.processInfo.systemUptime * 1_000 }
     ) {
         self.backend = backend
@@ -50,6 +54,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         self.appName = appName
         self.appGuidance = appGuidance
         self.understanding = understanding
+        self.environmentSummary = environmentSummary
         self.uptimeMS = uptimeMS
         self.readOnlyToolNames = Set(descriptors.filter { $0.safetyClass == .readOnly }.map(\.name))
     }
@@ -239,6 +244,10 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
             : "\nKnown state:\n" + task.worldModel.facts.sorted { $0.key < $1.key }
                 .map { "  \($0.key) = \($0.value)" }.joined(separator: "\n") + "\n"
 
+        let environmentBlock = (environmentSummary?.isEmpty == false)
+            ? "\nENVIRONMENT (command-line tools on this Mac — only reach for what's installed):\n  \(environmentSummary!)\n"
+            : ""
+
         let history = task.toolHistory.suffix(12).map { "  \($0.call.name): \($0.summary)" }
         let historyBlock = history.isEmpty
             ? "Nothing has been done yet."
@@ -270,32 +279,36 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         let understandingBlock = self.understandingBlock()
 
         return """
-        You operate the macOS app "\(appName)" by choosing ONE tool to run next, then you will see the
-        result and choose again. Work toward the goal in small, verifiable steps. If the goal targets a
-        different app than the one in front, focus it first with app.openOrFocus.
+        You are an expert macOS power user. Choose ONE tool to run next, then you will see the result
+        and choose again. Work toward the goal in small, verifiable steps. Many tasks are solved
+        entirely with system tools and have no on-screen UI target; reach for the GUI only when the task
+        truly needs it.
         GOAL: \(goalText)
         \(understandingBlock)
         \(historyBlock)
-        \(factsBlock)\(guidanceBlock)
+        \(factsBlock)\(environmentBlock)\(guidanceBlock)
         \(elementsBlock)
 
         AVAILABLE TOOLS:
         \(toolsBlock)
 
         Guidance:
-        - SEE before you act. Prefer ax.observe (fast, structured) for native apps; use vision.capture
-          when Accessibility is missing or insufficient (e.g. canvas/Electron content).
-        - To act on a specific element, pass its id from the list above in "input".
-        - Before an irreversible or destructive action (sending, deleting, purchasing, posting, moving
-          to trash, or overwriting), first ask the user to confirm with user.clarify (set
-          input.question), and only perform it after they approve.
-        - If the request is a question or chit-chat rather than a desktop action, answer with
+        - Solve it the way an expert terminal user would. Prefer shell_exec with system tools to find
+          files (mdfind, ls -t, find), launch or quit apps (open -a, osascript), read state (date,
+          pmset -g batt, system_profiler, defaults read), and change settings (defaults write,
+          networksetup). Read-only commands run instantly; state-changing ones ask the user for
+          one-time or always-allow consent, so propose them freely rather than avoiding them.
+        - Only operate the GUI when the task genuinely needs it (canvas/Electron/proprietary UI, or no
+          system-tool equivalent). When you do: SEE before you act — prefer ax.observe (fast,
+          structured) for native apps; use vision.capture when Accessibility is missing or insufficient
+          — then act on a specific element by passing its id from the list above in "input".
+        - If the request is a question or chit-chat rather than an action, answer with
           conversation.respond (set input.response), then run.complete.
         - If a required detail is missing and you cannot safely proceed, use user.clarify
           (set input.question).
-        - Verification must be evidence-backed: after acting, re-observe (ax.observe/vision.capture) or
-          state.verify and confirm the effect BEFORE choosing run.complete. A focused app is not
-          evidence; only complete once the goal is confirmed by what you can see.
+        - Verification must be evidence-backed: after acting, confirm the effect (a shell command's
+          output/exit code, a re-observe, or state.verify) BEFORE choosing run.complete. A focused app
+          is not evidence; only complete once the goal is confirmed by what you can see.
         Return JSON: {"tool": "<one tool name>", "input": {"key": "value", ...}, "reason": "<one sentence>"}.
         """
     }
