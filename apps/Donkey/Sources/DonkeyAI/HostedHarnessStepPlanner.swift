@@ -33,8 +33,6 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     /// Most recent one-line rationale, surfaced to the user as the run's narration.
     public private(set) var lastNarration: String?
 
-    /// At most this many world-model elements are described to the model (highest-signal first).
-    private static let maxElementsInPrompt = 150
     /// Names of the registered read-only tools (observe/verify/respond/lifecycle), derived from each
     /// descriptor's safety class. A tool counts as an "action" for first-action timing exactly when it
     /// is NOT read-only, so this stays in sync with the tools instead of a hand-maintained name list.
@@ -147,8 +145,16 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         }
     }
 
+    /// Deadline for one planning inference. Past it the step throws and the
+    /// caller fails safe instead of stalling the whole run on a hung provider.
+    private static let stepTimeoutSeconds: TimeInterval = 45
+
     private func decide(task: HarnessTaskState) async throws -> Decision {
-        let response = try await backend.createResponse(responseRequest(task: task))
+        let request = responseRequest(task: task)
+        let backend = self.backend
+        let response = try await AIDeadline.enforce(seconds: Self.stepTimeoutSeconds) {
+            try await backend.createResponse(request)
+        }
         guard let text = RemoteInferenceResponseHelpers.outputText(from: response), !text.isEmpty else {
             let raw = (try? JSONEncoder().encode(response)).flatMap { String(data: $0, encoding: .utf8) } ?? "<unencodable>"
             throw PlanningError.missingOutputText(String(raw.prefix(2_000)))
@@ -167,7 +173,14 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
                     "content": .array([
                         .object([
                             "type": .string("input_text"),
-                            "text": .string(prompt(task: task))
+                            "text": .string(DonkeyPrompts.harnessStep(
+                                task: task,
+                                descriptors: descriptors,
+                                appName: appName,
+                                appGuidance: appGuidance,
+                                understanding: understanding,
+                                environmentSummary: environmentSummary
+                            ))
                         ])
                     ])
                 ])
@@ -205,111 +218,4 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         )
     }
 
-    /// A compact, high-signal block describing the parsed request, rendered every step so the planner
-    /// keeps the precise target, parameters, and success criteria in view. Empty when no understanding
-    /// was produced.
-    private func understandingBlock() -> String {
-        guard let understanding else { return "" }
-        var lines: [String] = []
-        if let app = understanding.targetAppName, !app.isEmpty {
-            lines.append("  Target app: \(app)")
-        }
-        if !understanding.parameters.isEmpty {
-            let params = understanding.parameters.sorted { $0.key < $1.key }
-                .map { "\($0.key)=\($0.value)" }
-                .joined(separator: ", ")
-            lines.append("  Parameters: \(params)")
-        }
-        if let criteria = understanding.successCriteria, !criteria.isEmpty {
-            lines.append("  Success when: \(criteria)")
-        }
-        guard !lines.isEmpty else { return "" }
-        return "WHAT THE USER WANTS:\n" + lines.joined(separator: "\n") + "\n"
-    }
-
-    private func prompt(task: HarnessTaskState) -> String {
-        let elements = task.worldModel.elements
-        let elementsBlock: String
-        if elements.isEmpty {
-            elementsBlock = "Nothing has been observed yet. Use a SEE tool (e.g. ax.observe or vision.capture) before acting on an element."
-        } else {
-            let lines = elements.prefix(Self.maxElementsInPrompt).map { element -> String in
-                "  \(element.id): [\(element.role)] \"\(element.label)\""
-            }.joined(separator: "\n")
-            elementsBlock = "Elements currently observed (id: [role] \"label\"):\n\(lines)"
-        }
-
-        let factsBlock = task.worldModel.facts.isEmpty
-            ? ""
-            : "\nKnown state:\n" + task.worldModel.facts.sorted { $0.key < $1.key }
-                .map { "  \($0.key) = \($0.value)" }.joined(separator: "\n") + "\n"
-
-        let environmentBlock = (environmentSummary?.isEmpty == false)
-            ? "\nENVIRONMENT (command-line tools on this Mac — only reach for what's installed):\n  \(environmentSummary!)\n"
-            : ""
-
-        let history = task.toolHistory.suffix(12).map { "  \($0.call.name): \($0.summary)" }
-        let historyBlock = history.isEmpty
-            ? "Nothing has been done yet."
-            : "Steps already taken (most recent last):\n" + history.joined(separator: "\n")
-
-        let toolsBlock = descriptors
-            .sorted { $0.name < $1.name }
-            .map { descriptor -> String in
-                let inputs = descriptor.inputSchema.keys.sorted().map { key -> String in
-                    let optional = descriptor.optionalInputKeys.contains(key)
-                    return "\(key)\(optional ? "?" : "")"
-                }
-                let inputsText = inputs.isEmpty ? "" : " (input: \(inputs.joined(separator: ", ")))"
-                return "  - \(descriptor.name): \(descriptor.summary)\(inputsText)"
-            }
-            .joined(separator: "\n")
-
-        let guidanceBlock: String
-        if let appGuidance, !appGuidance.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            guidanceBlock = "\nAPP-SPECIFIC OPERATING GUIDE for \"\(appName)\":\n\(appGuidance)\n"
-        } else {
-            guidanceBlock = ""
-        }
-
-        // Prefer the restated goal parsed once up front; fall back to the raw task goal when no
-        // understanding was produced.
-        let restatedGoal = understanding?.restatedGoal
-        let goalText = (restatedGoal?.isEmpty == false ? restatedGoal : nil) ?? task.goal
-        let understandingBlock = self.understandingBlock()
-
-        return """
-        You are an expert macOS power user. Choose ONE tool to run next, then you will see the result
-        and choose again. Work toward the goal in small, verifiable steps. Many tasks are solved
-        entirely with system tools and have no on-screen UI target; reach for the GUI only when the task
-        truly needs it.
-        GOAL: \(goalText)
-        \(understandingBlock)
-        \(historyBlock)
-        \(factsBlock)\(environmentBlock)\(guidanceBlock)
-        \(elementsBlock)
-
-        AVAILABLE TOOLS:
-        \(toolsBlock)
-
-        Guidance:
-        - Solve it the way an expert terminal user would. Prefer shell_exec with system tools to find
-          files (mdfind, ls -t, find), launch or quit apps (open -a, osascript), read state (date,
-          pmset -g batt, system_profiler, defaults read), and change settings (defaults write,
-          networksetup). Read-only commands run instantly; state-changing ones ask the user for
-          one-time or always-allow consent, so propose them freely rather than avoiding them.
-        - Only operate the GUI when the task genuinely needs it (canvas/Electron/proprietary UI, or no
-          system-tool equivalent). When you do: SEE before you act — prefer ax.observe (fast,
-          structured) for native apps; use vision.capture when Accessibility is missing or insufficient
-          — then act on a specific element by passing its id from the list above in "input".
-        - If the request is a question or chit-chat rather than an action, answer with
-          conversation.respond (set input.response), then run.complete.
-        - If a required detail is missing and you cannot safely proceed, use user.clarify
-          (set input.question).
-        - Verification must be evidence-backed: after acting, confirm the effect (a shell command's
-          output/exit code, a re-observe, or state.verify) BEFORE choosing run.complete. A focused app
-          is not evidence; only complete once the goal is confirmed by what you can see.
-        Return JSON: {"tool": "<one tool name>", "input": {"key": "value", ...}, "reason": "<one sentence>"}.
-        """
-    }
 }

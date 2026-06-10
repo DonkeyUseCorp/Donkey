@@ -266,7 +266,9 @@ Start here:
 - `apps/Donkey/Sources/DonkeyRuntime/` for guarded local-app execution,
   Accessibility, screenshots, app/window observation, and input backends.
 - `apps/Donkey/Sources/DonkeyAI/` for hosted and fallback model routing and
-  adapters.
+  adapters. Agent prompt doctrine is consolidated in `DonkeyPrompts.swift`
+  (the Live session instruction, request understanding, and step planning);
+  narrow adapter prompts stay with their adapters.
 - `apps/Donkey/Sources/Donkey/` for user-query integration.
 
 Tests live in `apps/Donkey/Tests/DonkeyRuntimeTests/`. Use focused `swift test`

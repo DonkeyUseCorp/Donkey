@@ -140,7 +140,10 @@ public final class HostedHarnessRequestUnderstanding {
                     "content": .array([
                         .object([
                             "type": .string("input_text"),
-                            "text": .string(prompt(command: command, frontmostAppName: frontmostAppName))
+                            "text": .string(DonkeyPrompts.requestUnderstanding(
+                                command: command,
+                                frontmostAppName: frontmostAppName
+                            ))
                         ])
                     ])
                 ])
@@ -178,32 +181,4 @@ public final class HostedHarnessRequestUnderstanding {
         )
     }
 
-    private func prompt(command: String, frontmostAppName: String) -> String {
-        """
-        You are the first step of a macOS agent. Read the user's request and return a precise, structured
-        understanding of EXACTLY what they want. You do not act or choose tools here — a separate planner
-        does that. Be broad in what you accept and specific in what you capture.
-
-        The app currently in front of the user is "\(frontmostAppName)".
-
-        USER REQUEST: \(command)
-
-        Fill the fields:
-        - restatedGoal: one concrete imperative sentence capturing exactly what to accomplish.
-        - targetAppName: the macOS app that must be driven through its GUI to do this. Set it only when
-          the task genuinely needs a specific app's interface (e.g. composing in Mail, editing in a
-          design app). LEAVE IT EMPTY when an expert would use system tools instead — finding files,
-          opening or quitting apps, reading or changing settings or state — and for pure conversation.
-          If it clearly concerns the current app's UI, use "\(frontmostAppName)".
-        - parameters: the concrete details needed to do it (e.g. title, recipient, query, value), as
-          string key/values. Omit what is not specified.
-        - successCriteria: what would be visible on screen once the goal is done.
-        - needsClarification: set true ONLY when the request is genuinely ambiguous or missing detail
-          that you cannot reasonably resolve, or when it is destructive without a clear target. For an
-          under-specified but low-risk, reversible request, pick sensible specifics and set this false.
-        - clarifyingQuestion: the single question to ask when needsClarification is true; otherwise empty.
-
-        Return JSON only.
-        """
-    }
 }
