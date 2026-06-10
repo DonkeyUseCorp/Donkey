@@ -345,6 +345,12 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         harnessServices.appleScriptGenerator = { request in
             await appleScriptGenerationAdapter.generateAppleScript(request)
         }
+        // Generic LLM tool: lets the planner compose/transform text mid-task (build a tracklist,
+        // a clean note body, a friendly status line) through the same hosted route.
+        let textGenerator = HostedTextGenerator(backend: backend)
+        harnessServices.textGenerator = { prompt in
+            await textGenerator.generate(prompt)
+        }
         let granted = Self.userQueryGrantedPermissions
         let replacedBuiltIns: Set<String> = ["screen.observe", "elements.get", "element.perform", "text.enter", "keyboard.press"]
         let builtInDescriptors = BuiltInHarnessToolCatalog.descriptors.filter { descriptor in

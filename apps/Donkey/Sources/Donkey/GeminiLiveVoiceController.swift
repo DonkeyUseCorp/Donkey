@@ -75,20 +75,35 @@ final class GeminiLiveVoiceController {
         self.configuration = configuration
         self.systemInstruction = systemInstruction
         self.visionAuthProvider = visionAuthProvider
-        let services = HarnessBuiltInToolServices(commandExecutor: DonkeyCommandBackends.makeExecutor())
+        // Wire the generic LLM tool into the fast path too, so the Live model can compose/transform
+        // text mid-task (a tracklist, a clean note body) through the hosted route.
+        var services = HarnessBuiltInToolServices(commandExecutor: DonkeyCommandBackends.makeExecutor())
+        if let backendConfiguration = try? DonkeyBackendInferenceConfiguration.fromEnvironment() {
+            let textGenerator = HostedTextGenerator(
+                backend: DonkeyBackendInferenceClient(configuration: backendConfiguration)
+            )
+            services.textGenerator = { await textGenerator.generate($0) }
+        }
+        let llmDescriptors = BuiltInHarnessToolCatalog.descriptors.filter { $0.name == "llm.generate" }
+        let liveDescriptors = DonkeyCommandLayer.descriptors + llmDescriptors
+        self.liveToolDescriptors = liveDescriptors
         self.registry = HarnessToolRegistry(
             tools: BuiltInHarnessToolExecutors.tools(
-                descriptors: DonkeyCommandLayer.descriptors,
+                descriptors: liveDescriptors,
                 services: services
             )
         )
     }
 
+    /// The harness-registered tools the Live session exposes (command layer + the generic LLM tool).
+    /// Vision/agent escalation descriptors are added on top when the session starts.
+    private let liveToolDescriptors: [HarnessToolDescriptor]
+
     func start() async {
         guard configuration.enabled, session == nil else { return }
         let session = GeminiLiveSession(
             systemInstruction: systemInstruction,
-            functionDescriptors: DonkeyCommandLayer.descriptors + [Self.visionControlDescriptor, Self.agentRunDescriptor],
+            functionDescriptors: liveToolDescriptors + [Self.visionControlDescriptor, Self.agentRunDescriptor],
             connectionProvider: Self.makeConnectionProvider()
         )
         self.session = session

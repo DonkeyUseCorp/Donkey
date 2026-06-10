@@ -486,6 +486,24 @@ public enum BuiltInHarnessToolCatalog {
                 verification: ["skill pack includes SKILL.md, app-profile.json, workflows.json, evidence index, and only validated scripts"]
             ),
             descriptor(
+                "llm.generate",
+                pluginID: "core.model",
+                summary: "Run a one-off LLM call and return generated text. Use it to compose, transform, summarize, classify, rephrase, or massage text — e.g. produce a tracklist or a clean note body, or rewrite a raw status into a friendly one-line message. Set toFile=true for long output (a tracklist, lyrics, a long note body): the text is written to a temp file and the file path is returned, so it bypasses the shell command-length limit when you then build a note or document from it.",
+                input: [
+                    "prompt": "The instruction for the model (what to produce).",
+                    "input": "Optional source text the prompt operates on.",
+                    "toFile": "\"true\" to write the result to a temp file and return its path instead of inline text."
+                ],
+                output: [
+                    "text": "The generated text (a short preview when written to a file).",
+                    "filePath": "Path to the file holding the full output, when toFile=true."
+                ],
+                permissions: [],
+                safety: .sensitive,
+                verification: ["the returned text (or file) contains the requested content"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            descriptor(
                 "state.verify",
                 pluginID: "core.verification",
                 summary: "Verify the expected outcome using world-model evidence and task-specific success criteria.",

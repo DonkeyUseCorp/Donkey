@@ -15,6 +15,13 @@ Notes is fully scriptable; almost every "save … to Notes" step is one `osascri
 - Always give a concrete `name` — it is the note's title. Compose the full finished body yourself; never save placeholder text.
 - Escape any double quotes inside the text for the AppleScript string literal.
 
+## Long content (a tracklist, a list, lyrics, anything big)
+- A note body that won't fit in one short command — "all the songs from an album", "each song with its lyrics", a long summary — must NOT be jammed into one `osascript` string; shell commands are length-limited and the escaping breaks.
+- Instead, generate the content with the `llm.generate` tool and set `toFile=true`. It returns a `filePath` holding the full text. For knowledge content (an album's tracklist, lyrics), the prompt is e.g. `List every song on Taylor Swift's latest album, one per line` or `For each of these songs, write the title then its lyrics`.
+- Then create the note FROM that file (the command stays short, so no length limit), turning newlines into `<br>` so Notes renders the lines:
+  `osascript -e 'set f to (read POSIX file "/tmp/donkey-llm-XXX.txt" as «class utf8»)' -e 'set AppleScript'"'"'s text item delimiters to (ASCII character 10)' -e 'set parts to text items of f' -e 'set AppleScript'"'"'s text item delimiters to "<br>"' -e 'tell application "Notes" to make new note with properties {name:"Title", body:(parts as text)}'`
+- This is the general pattern for any "note with a lot in it": llm.generate(toFile) → read the file into the body. Build it up rather than giving up because "the list is too long".
+
 ## Putting computed values (date, battery, system state) in a note
 - Do this in two plain steps, not one fragile command. First READ each value with its own simple command (`date '+%Y-%m-%d'`, `pmset -g batt | grep -o '[0-9]*%' | head -1`, `df -h /`), look at the output, then create the note with those literal values pasted into the body.
 - Do NOT nest command substitutions (`$( … )`) inside the osascript string — the parentheses and quoting are error-prone and the parens also trip the safety classifier. Read first, then write the finished literal body.

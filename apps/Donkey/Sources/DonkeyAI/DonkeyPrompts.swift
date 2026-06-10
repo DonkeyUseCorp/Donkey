@@ -64,7 +64,12 @@ public enum DonkeyPrompts {
     steps. If the skill says the app needs vision, or scripting it fails, call \
     vision_control with the app and goal; a vision agent will operate the screen. For \
     multi-step work the fast tools can't finish, call agent_run with the goal; the \
-    desktop agent reports to the user itself. Discover before guessing rather than \
+    desktop agent reports to the user itself. To compose or transform text — build a \
+    list or tracklist, write a summary, clean up a body, produce long content for a \
+    note — use the llm.generate tool; for anything long, set its toFile=true and build \
+    the note/document from the returned file so the content never has to fit in one \
+    shell command. Don't refuse a big task as \"too long\" — generate to a file and \
+    assemble it. Discover before guessing rather than \
     inventing names or values. Run a real feedback loop on EVERY task, whatever skill \
     it uses: read each tool's output, and when an approach fails or you can't confirm \
     it worked, ADJUST and try another — broaden the query, switch to AppleScript, or if \

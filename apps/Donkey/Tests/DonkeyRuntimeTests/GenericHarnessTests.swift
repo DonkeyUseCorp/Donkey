@@ -212,6 +212,52 @@ struct GenericHarnessTests {
     }
 
     @Test
+    func llmGenerateReturnsInlineTextFromTheModelBoundary() async {
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(
+                textGenerator: { prompt in "RESULT for: \(prompt)" }
+            )
+        )
+        let result = await registry.execute(
+            HarnessToolCall(name: "llm.generate", input: ["prompt": "list 3 songs", "input": "Album X"]),
+            taskID: "t", worldModel: HarnessWorldModel(), grantedPermissions: []
+        )
+        #expect(result.status == .succeeded)
+        #expect(result.metadata["text"]?.contains("RESULT for: list 3 songs") == true)
+        // The input is folded into the prompt the generator sees.
+        #expect(result.metadata["text"]?.contains("Album X") == true)
+    }
+
+    @Test
+    func llmGenerateWritesLongOutputToAFileToBypassCommandLimits() async throws {
+        let long = String(repeating: "Song line\n", count: 500)
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(textGenerator: { _ in long })
+        )
+        let result = await registry.execute(
+            HarnessToolCall(name: "llm.generate", input: ["prompt": "tracklist", "toFile": "true"]),
+            taskID: "t", worldModel: HarnessWorldModel(), grantedPermissions: []
+        )
+        #expect(result.status == .succeeded)
+        let path = try #require(result.metadata["filePath"])
+        let written = try String(contentsOfFile: path, encoding: .utf8)
+        #expect(written == long)
+        #expect(result.metadata["characterCount"] == String(long.count))
+        try? FileManager.default.removeItem(atPath: path)
+    }
+
+    @Test
+    func llmGenerateFailsCleanlyWithoutAModelBoundary() async {
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        let result = await registry.execute(
+            HarnessToolCall(name: "llm.generate", input: ["prompt": "hi"]),
+            taskID: "t", worldModel: HarnessWorldModel(), grantedPermissions: []
+        )
+        #expect(result.status == .failed)
+        #expect(result.metadata["reason"] == "textGeneratorUnavailable")
+    }
+
+    @Test
     func runStopsWhenThePlannerLoopsOnTheSameCall() async {
         // A planner that keeps choosing the identical observation never converges. The runtime must
         // detect the exact repeat and fail safe quickly instead of burning the whole ceiling.

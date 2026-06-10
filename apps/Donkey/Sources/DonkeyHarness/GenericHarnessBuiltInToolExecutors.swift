@@ -191,6 +191,10 @@ public struct HarnessBuiltInToolServices: Sendable {
     /// Native Donkey Command Layer backend. Returns a result for a recognized
     /// command, or `nil` to let dispatch fall through to `unknownTool`.
     public var commandExecutor: (@Sendable (HarnessToolExecutionContext) async -> HarnessToolResult?)?
+    /// A one-off model completion: given a fully-formed prompt, return generated text (or nil on
+    /// failure). Backs the `llm.generate` tool, the model boundary the planner can reach for to
+    /// compose, transform, summarize, or massage text without leaving the harness.
+    public var textGenerator: (@Sendable (String) async -> String?)?
 
     public init(
         memoryEntries: [HarnessMemoryEntry] = [],
@@ -201,7 +205,8 @@ public struct HarnessBuiltInToolServices: Sendable {
         appleScriptGenerator: (@Sendable (HarnessScriptGenerationRequest) async -> HarnessScriptGenerationOutcome)? = nil,
         appleScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)? = nil,
         skillScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)? = nil,
-        commandExecutor: (@Sendable (HarnessToolExecutionContext) async -> HarnessToolResult?)? = nil
+        commandExecutor: (@Sendable (HarnessToolExecutionContext) async -> HarnessToolResult?)? = nil,
+        textGenerator: (@Sendable (String) async -> String?)? = nil
     ) {
         self.memoryEntries = memoryEntries
         self.skillRegistry = skillRegistry
@@ -212,6 +217,7 @@ public struct HarnessBuiltInToolServices: Sendable {
         self.appleScriptExecutor = appleScriptExecutor
         self.skillScriptExecutor = skillScriptExecutor
         self.commandExecutor = commandExecutor
+        self.textGenerator = textGenerator
     }
 }
 
@@ -282,6 +288,8 @@ public enum BuiltInHarnessToolExecutors {
             return await applicationLearningSaveSkillPack(context, services: services)
         case "state.verify":
             return stateVerify(context)
+        case "llm.generate":
+            return await llmGenerate(context, services: services)
         case "wait":
             return await timingWait(context)
         case "run.pause", "run.resume", "run.recover", "run.cancel", "run.complete", "run.failSafe":
@@ -1236,6 +1244,49 @@ public enum BuiltInHarnessToolExecutors {
         "app.list",
         "app.lookup"
     ]
+
+    /// Generic LLM call: compose/transform text via the model boundary. Long output can be written
+    /// to a temp file (toFile=true) so the caller builds a note/document from the file instead of
+    /// passing a huge string through a length-limited shell command.
+    private static func llmGenerate(
+        _ context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices
+    ) async -> HarnessToolResult {
+        guard let generator = services.textGenerator else {
+            return failed(context, "No model boundary is wired for llm.generate.", reason: "textGeneratorUnavailable")
+        }
+        guard let prompt = trimmed(context.call.input["prompt"]) else {
+            return invalidInput(context, "llm.generate requires a `prompt`.")
+        }
+        let source = context.call.input["input"].map { "\n\nINPUT:\n\($0)" } ?? ""
+        guard let text = await generator(prompt + source), !text.isEmpty else {
+            return failed(context, "The model returned no text.", reason: "emptyGeneration")
+        }
+
+        let toFile = (context.call.input["toFile"] ?? "").lowercased() == "true"
+        if toFile {
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("donkey-llm-\(context.call.id).txt")
+            do {
+                try text.write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                return failed(context, "Could not write generated text to a file: \(error)", reason: "fileWriteFailed")
+            }
+            let preview = String(text.prefix(200))
+            return success(
+                context,
+                summary: "Generated \(text.count) characters → \(url.path)",
+                facts: ["lastAcceptedTool": context.call.name],
+                metadata: ["filePath": url.path, "text": preview, "characterCount": String(text.count)]
+            )
+        }
+        return success(
+            context,
+            summary: text.count > 400 ? String(text.prefix(400)) + "…" : text,
+            facts: ["lastAcceptedTool": context.call.name],
+            metadata: ["text": text, "characterCount": String(text.count)]
+        )
+    }
 
     private static func timingWait(_ context: HarnessToolExecutionContext) async -> HarnessToolResult {
         let requested = context.call.input["seconds"].flatMap(Double.init) ?? 1
