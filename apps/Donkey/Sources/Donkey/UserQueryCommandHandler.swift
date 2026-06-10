@@ -351,12 +351,13 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         harnessServices.textGenerator = { prompt in
             await textGenerator.generate(prompt)
         }
-        // Web research: search goes through the backend (Google Search grounding on the
-        // service-account credential — no key in the app); fetch reads a page directly.
+        // Web research goes through the backend on the service-account credential — no key in the
+        // app. Search uses Google Search grounding; fetch reads a page and returns clean markdown
+        // (nav/ads/boilerplate stripped server-side) so the model gets the article, not raw HTML.
         let hostedWebSearch = HostedWebSearch(backend: backend)
-        let webTools = WebTools()
+        let hostedWebFetch = HostedWebFetch(backend: backend)
         harnessServices.webSearcher = { query in await hostedWebSearch.search(query) }
-        harnessServices.webFetcher = { url in await webTools.fetch(url) }
+        harnessServices.webFetcher = { url in await hostedWebFetch.fetch(url) }
         let granted = Self.userQueryGrantedPermissions
         let replacedBuiltIns: Set<String> = ["screen.observe", "elements.get", "element.perform", "text.enter", "keyboard.press"]
         let builtInDescriptors = BuiltInHarnessToolCatalog.descriptors.filter { descriptor in

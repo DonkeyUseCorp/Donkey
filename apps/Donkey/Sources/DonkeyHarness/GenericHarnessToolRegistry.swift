@@ -517,13 +517,13 @@ public enum BuiltInHarnessToolCatalog {
             descriptor(
                 "web.fetch",
                 pluginID: "core.web",
-                summary: "Fetch a web page and return its readable text (HTML stripped). Use it to read a page from web.search or a URL the user gave. Set toFile=true for a long page so you build a note/document from the file instead of a length-limited command.",
+                summary: "Read a web page and return its main content as clean markdown — nav, ads, and boilerplate removed, with the title, headings, links, and lists kept. Use it to read a page from web.search or a URL the user gave. Set toFile=true for a long page so you build a note/document from the file instead of a length-limited command.",
                 input: [
                     "url": "The page URL to read.",
-                    "toFile": "\"true\" to write the page text to a temp file and return its path."
+                    "toFile": "\"true\" to write the page content to a temp file and return its path."
                 ],
                 output: [
-                    "text": "The page's readable text (a preview when written to a file).",
+                    "text": "The page's main content as markdown (a preview when written to a file).",
                     "filePath": "Path to the file holding the full text, when toFile=true."
                 ],
                 permissions: [],

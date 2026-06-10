@@ -78,15 +78,16 @@ final class GeminiLiveVoiceController {
         // Wire the generic LLM tool into the fast path too, so the Live model can compose/transform
         // text mid-task (a tracklist, a clean note body) through the hosted route.
         var services = HarnessBuiltInToolServices(commandExecutor: DonkeyCommandBackends.makeExecutor())
-        let webTools = WebTools()
-        services.webFetcher = { await webTools.fetch($0) }
         if let backendConfiguration = try? DonkeyBackendInferenceConfiguration.fromEnvironment() {
             let backend = DonkeyBackendInferenceClient(configuration: backendConfiguration)
             let textGenerator = HostedTextGenerator(backend: backend)
             services.textGenerator = { await textGenerator.generate($0) }
-            // Search goes through the backend (service-account Google Search grounding).
+            // Web research goes through the backend on the service-account credential: search uses
+            // Google Search grounding; fetch returns the page as clean markdown (boilerplate stripped).
             let hostedWebSearch = HostedWebSearch(backend: backend)
             services.webSearcher = { await hostedWebSearch.search($0) }
+            let hostedWebFetch = HostedWebFetch(backend: backend)
+            services.webFetcher = { await hostedWebFetch.fetch($0) }
         }
         let extraToolNames: Set<String> = ["llm.generate", "web.search", "web.fetch"]
         let extraDescriptors = BuiltInHarnessToolCatalog.descriptors.filter { extraToolNames.contains($0.name) }

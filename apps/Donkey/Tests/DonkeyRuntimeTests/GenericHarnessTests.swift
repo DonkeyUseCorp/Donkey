@@ -288,17 +288,6 @@ struct GenericHarnessTests {
     }
 
     @Test
-    func htmlIsStrippedToReadableText() {
-        let html = "<html><head><style>.x{}</style><script>bad()</script></head><body><h1>Title</h1><p>First &amp; second.</p><p>Third</p></body></html>"
-        let text = WebTools.readableText(fromHTML: html)
-        #expect(text.contains("Title"))
-        #expect(text.contains("First & second."))
-        #expect(text.contains("Third"))
-        #expect(!text.contains("bad()"))
-        #expect(!text.contains("<"))
-    }
-
-    @Test
     func llmGenerateFailsCleanlyWithoutAModelBoundary() async {
         let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
         let result = await registry.execute(

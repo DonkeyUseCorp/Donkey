@@ -161,6 +161,18 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
         return try JSONDecoder().decode(RemoteWebSearchResult.self, from: data)
     }
 
+    /// Read a web page through the backend's reader (SSRF-guarded, fetch + cleanup run server-side).
+    /// Returns just the main content as clean markdown — nav/ads/boilerplate stripped — plus the title.
+    public func fetchWeb(url: String) async throws -> RemoteWebFetchResult {
+        var request = makeRequest(path: "/api/web/fetch/")
+        request.httpMethod = "POST"
+        // The backend caps its own fetch at 20s; give the round trip a little headroom over that.
+        request.timeoutInterval = 30
+        request.httpBody = try JSONEncoder().encode(["url": url])
+        let data = try await send(request)
+        return try JSONDecoder().decode(RemoteWebFetchResult.self, from: data)
+    }
+
     public func parseScreenshot(
         _ understandingRequest: LocalUIUnderstandingRequest,
         imageData: Data? = nil,
