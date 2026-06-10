@@ -91,8 +91,13 @@ public final class VisionComputerUseToolProvider {
             HarnessToolDescriptor(
                 name: ToolName.click,
                 pluginID: "core.computer-use.vision",
-                summary: "Click one element returned by vision.capture.",
-                inputSchema: ["elementID": "Element ID from the latest screen.captureAndAnalyze."],
+                summary: "Click one element returned by vision.capture. Supports right-click (context menus) and double/triple click.",
+                inputSchema: [
+                    "elementID": "Element ID from the latest screen.captureAndAnalyze.",
+                    "button": "\"left\" (default) or \"right\" for a context menu.",
+                    "clicks": "1 (default), 2 (double-click), or 3 (triple-click)."
+                ],
+                optionalInputKeys: ["button", "clicks"],
                 requiredPermissions: [.input],
                 safetyClass: .guardedInput,
                 requiredContext: ["frontmost target", "captured element"],
@@ -110,8 +115,12 @@ public final class VisionComputerUseToolProvider {
             HarnessToolDescriptor(
                 name: ToolName.pressKey,
                 pluginID: "core.computer-use.vision",
-                summary: "Press one key, e.g. return to submit.",
-                inputSchema: ["key": "Key name such as return, tab, escape, or an arrow."],
+                summary: "Press one key, optionally chorded with modifiers — e.g. return to submit, or key=c with modifiers=command to copy.",
+                inputSchema: [
+                    "key": "Key name such as return, tab, escape, an arrow, or a single letter/digit.",
+                    "modifiers": "Modifier chord such as \"command\", \"command+shift\", \"option\", \"control\"."
+                ],
+                optionalInputKeys: ["modifiers"],
                 requiredPermissions: [.input],
                 safetyClass: .guardedInput,
                 requiredContext: ["frontmost target"]
@@ -264,8 +273,8 @@ public final class VisionComputerUseToolProvider {
         guard let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier) else {
             return result(context, status: .failed, summary: "No window for \(appName).", reason: "noWindowForApp")
         }
-        guard isFrontmost(target) else {
-            return result(context, status: .failed, summary: "\(appName) is not frontmost.", reason: "targetNotFrontmost")
+        guard await ensureFrontmost(target) else {
+            return notFrontmost(context)
         }
         let normalized = Self.normalizedCenter(
             bbox: geometry.bbox,
@@ -278,12 +287,15 @@ public final class VisionComputerUseToolProvider {
         guard let point = VisionActionPlanner.screenPoint(action: plan, window: target.bounds) else {
             return result(context, status: .failed, summary: "Could not map element \(elementID) to a screen point.", reason: "unmappablePoint")
         }
-        MacPointerInput.moveAndClick(at: point)
+        let button: MacPointerInput.Button = context.call.input["button"] == "right" ? .right : .left
+        let clicks = context.call.input["clicks"].flatMap(Int.init) ?? 1
+        MacPointerInput.moveAndClick(at: point, button: button, clickCount: clicks)
+        let clickWord = button == .right ? "Right-clicked" : (clicks >= 3 ? "Triple-clicked" : (clicks == 2 ? "Double-clicked" : "Clicked"))
         return HarnessToolResult(
             callID: context.call.id,
             toolName: context.call.name,
             status: .succeeded,
-            summary: "Clicked \(element.label.isEmpty ? elementID : element.label).",
+            summary: "\(clickWord) \(element.label.isEmpty ? elementID : element.label).",
             observations: HarnessObservationDelta(facts: ["lastAcceptedTool": context.call.name]),
             metadata: [
                 "elementID": elementID,
@@ -298,8 +310,8 @@ public final class VisionComputerUseToolProvider {
             return result(context, status: .invalidInput, summary: "text.enter requires non-empty text.", reason: "missingText")
         }
         guard let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier),
-              isFrontmost(target) else {
-            return result(context, status: .failed, summary: "\(appName) is not frontmost.", reason: "targetNotFrontmost")
+              await ensureFrontmost(target) else {
+            return notFrontmost(context)
         }
         MacKeyboardInput.type(text)
         return HarnessToolResult(
@@ -317,17 +329,19 @@ public final class VisionComputerUseToolProvider {
             return result(context, status: .invalidInput, summary: "keyboard.press requires a key.", reason: "missingKey")
         }
         guard let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier),
-              isFrontmost(target) else {
-            return result(context, status: .failed, summary: "\(appName) is not frontmost.", reason: "targetNotFrontmost")
+              await ensureFrontmost(target) else {
+            return notFrontmost(context)
         }
-        MacKeyboardInput.pressKey(key)
+        let modifiers = trimmed(context.call.input["modifiers"]).map { [$0] } ?? []
+        MacKeyboardInput.pressKey(key, modifiers: modifiers)
+        let chord = modifiers.first.map { "\($0)+\(key)" } ?? key
         return HarnessToolResult(
             callID: context.call.id,
             toolName: context.call.name,
             status: .succeeded,
-            summary: "Pressed \(key).",
+            summary: "Pressed \(chord).",
             observations: HarnessObservationDelta(facts: ["lastAcceptedTool": context.call.name]),
-            metadata: ["key": key]
+            metadata: ["key": key, "modifiers": modifiers.joined(separator: "+")]
         )
     }
 
@@ -407,8 +421,18 @@ public final class VisionComputerUseToolProvider {
 
     // MARK: - Helpers
 
-    private func isFrontmost(_ target: MacWindowTargetCandidate) -> Bool {
-        NSWorkspace.shared.frontmostApplication?.processIdentifier == pid_t(target.processID)
+    /// Frontmost check with one recovery activation of the target app (never any other app).
+    private func ensureFrontmost(_ target: MacWindowTargetCandidate) async -> Bool {
+        await TargetFocusRecovery.ensureFrontmost(processID: pid_t(target.processID))
+    }
+
+    private func notFrontmost(_ context: HarnessToolExecutionContext) -> HarnessToolResult {
+        result(
+            context,
+            status: .failed,
+            summary: "\(appName) is not frontmost; \(TargetFocusRecovery.frontmostAppName()) is in front and refocusing failed.",
+            reason: "targetNotFrontmost"
+        )
     }
 
     private func trimmed(_ value: String?) -> String? {

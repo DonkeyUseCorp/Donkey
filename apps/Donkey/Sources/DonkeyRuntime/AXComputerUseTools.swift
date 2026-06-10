@@ -40,8 +40,13 @@ public final class AXComputerUseToolProvider {
             HarnessToolDescriptor(
                 name: ToolName.click,
                 pluginID: "core.computer-use.ax",
-                summary: "Click one control returned by ax.observe.",
-                inputSchema: ["elementID": "Element ID from the latest ax.observe."],
+                summary: "Click one control returned by ax.observe. Supports right-click (context menus) and double/triple click.",
+                inputSchema: [
+                    "elementID": "Element ID from the latest ax.observe.",
+                    "button": "\"left\" (default) or \"right\" for a context menu.",
+                    "clicks": "1 (default), 2 (double-click), or 3 (triple-click)."
+                ],
+                optionalInputKeys: ["button", "clicks"],
                 requiredPermissions: [.input],
                 safetyClass: .guardedInput,
                 requiredContext: ["frontmost target", "observed control"],
@@ -103,20 +108,29 @@ public final class AXComputerUseToolProvider {
         guard let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier) else {
             return result(context, status: .failed, summary: "No window for \(appName).", reason: "noWindowForApp")
         }
-        guard isFrontmost(target) else {
-            return result(context, status: .failed, summary: "\(appName) is not frontmost.", reason: "targetNotFrontmost")
+        guard await TargetFocusRecovery.ensureFrontmost(processID: pid_t(target.processID)) else {
+            return result(
+                context,
+                status: .failed,
+                summary: "\(appName) is not frontmost; \(TargetFocusRecovery.frontmostAppName()) is in front and refocusing failed.",
+                reason: "targetNotFrontmost"
+            )
         }
         let label = element.label.isEmpty ? elementID : element.label
+        let button: MacPointerInput.Button = context.call.input["button"] == "right" ? .right : .left
+        let clicks = context.call.input["clicks"].flatMap(Int.init) ?? 1
 
         // Prefer a native Accessibility press (AXPress): it activates the control directly, so it works
         // even when a coordinate click would miss (partially obscured, scrolled, zero-size hit area).
         // Falls back to a guarded coordinate click on the element's frame center when AX press isn't
-        // available (no bundle id, control doesn't support AXPress) or doesn't land.
-        if let bundleIdentifier, !bundleIdentifier.isEmpty, element.actions.contains("AXPress"),
+        // available (no bundle id, control doesn't support AXPress) or doesn't land. Right-clicks and
+        // multi-clicks have no AX action equivalent, so they always take the coordinate path.
+        if button == .left, clicks == 1,
+           let bundleIdentifier, !bundleIdentifier.isEmpty, element.actions.contains("AXPress"),
            await axPress(nodeID: element.id, bundleIdentifier: bundleIdentifier) {
             return clickSucceeded(context, elementID: elementID, label: label, strategy: "ax-press", point: nil)
         }
-        MacPointerInput.moveAndClick(at: center)
+        MacPointerInput.moveAndClick(at: center, button: button, clickCount: clicks)
         return clickSucceeded(context, elementID: elementID, label: label, strategy: "coordinate", point: center)
     }
 
@@ -186,7 +200,7 @@ public final class AXComputerUseToolProvider {
         )
     }
 
-    nonisolated static func screenCenter(from metadata: [String: String]) -> CGPoint? {
+    public nonisolated static func screenCenter(from metadata: [String: String]) -> CGPoint? {
         guard let x = metadata["ax.frame.x"].flatMap(Double.init),
               let y = metadata["ax.frame.y"].flatMap(Double.init),
               let width = metadata["ax.frame.width"].flatMap(Double.init),
@@ -198,10 +212,6 @@ public final class AXComputerUseToolProvider {
     }
 
     // MARK: - Helpers
-
-    private func isFrontmost(_ target: MacWindowTargetCandidate) -> Bool {
-        NSWorkspace.shared.frontmostApplication?.processIdentifier == pid_t(target.processID)
-    }
 
     private func trimmed(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
