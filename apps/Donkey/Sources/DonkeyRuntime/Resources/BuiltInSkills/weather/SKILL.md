@@ -1,5 +1,5 @@
-# Weather Lookup
-id: weather-lookup
+# Weather
+id: weather
 description: Plan low-risk weather lookup workflows when a weather capability is provided.
 tags: weather, lookup, local-app
 tools: app.openOrFocus, app.observe, ui.focusSearch, ui.setText, ui.pressReturn, app.verifyVisibleText

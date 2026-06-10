@@ -35,6 +35,35 @@ struct AppSkillCommandTests {
 
     @Test
     @MainActor
+    func discoversCorePlaybooksForHighTrafficApps() async {
+        // The built-in catalog covers the apps people actually drive daily, each
+        // matched by display name and bundle id from its `apps:` frontmatter.
+        let coverage: [(key: String, marker: String)] = [
+            ("Mail", "outgoing message"),
+            ("com.apple.mail", "mail attachment"),
+            ("Finder", "trash"),
+            ("Safari", "current tab"),
+            ("com.apple.Safari", "current tab"),
+            ("Calendar", "make new event"),
+            ("Messages", "iMessage"),
+            ("System Settings", "defaults write"),
+            ("Notes", "make new note"),
+            ("com.apple.Notes", "make new note"),
+            ("Reminders", "make new reminder"),
+            ("Preview", "kMDItemTextContent"),
+            ("Contacts", "formatted address"),
+            ("Numbers", "export front document"),
+            ("com.apple.iWork.Numbers", "export front document")
+        ]
+        for (key, marker) in coverage {
+            let result = await lookup(key)
+            #expect(result?.metadata["found"] == "true", "no skill found for \(key)")
+            #expect(result?.summary.contains(marker) == true, "playbook for \(key) is missing \(marker)")
+        }
+    }
+
+    @Test
+    @MainActor
     func reportsMissingSkillsPlainly() async {
         let result = await lookup("Some App Without A Skill")
         #expect(result?.status == .succeeded)
@@ -50,7 +79,7 @@ struct AppSkillCommandTests {
         for key in ["Music", "Apple Music", "com.apple.Music"] {
             let result = await lookup(key)
             #expect(result?.metadata["found"] == "true")
-            #expect(result?.metadata["skillID"] == "music-media")
+            #expect(result?.metadata["skillID"] == "music")
             #expect(result?.metadata["scriptIDs"]?.contains("scripts-play-media-by-search") == true)
             #expect(result?.summary.contains("skill_run") == true)
         }
@@ -79,7 +108,7 @@ struct AppSkillCommandTests {
         #expect(mismatched?.status == .failed)
         #expect(mismatched?.metadata["reason"] == "skillScriptUnavailable")
 
-        let unknown = await run(["skillID": "music-media", "scriptID": "no-such-script"])
+        let unknown = await run(["skillID": "music", "scriptID": "no-such-script"])
         #expect(unknown?.status == .failed)
         #expect(unknown?.metadata["reason"] == "skillScriptUnavailable")
     }

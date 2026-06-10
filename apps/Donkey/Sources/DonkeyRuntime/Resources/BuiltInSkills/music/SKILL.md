@@ -1,5 +1,5 @@
-# Music Media
-id: music-media
+# Music
+id: music
 description: Plan low-risk media playback in Apple Music or another supported media app.
 tags: media, music, playback, local-app
 keywords: play, listen, music, song, track, tune, album, playlist, artist, band, audio, podcast, radio, pause, resume, volume

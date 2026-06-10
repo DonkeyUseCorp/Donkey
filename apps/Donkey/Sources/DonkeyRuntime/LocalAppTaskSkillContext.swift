@@ -18,8 +18,40 @@ public enum BuiltInLocalAppSkillPacks {
         ).discover()
     }()
 
+    /// Learned application skill packs (saved by `application.learning.saveSkillPack`) can appear
+    /// mid-session, so unlike the bundled packs they are re-discovered with a short TTL. This is
+    /// what makes learning compound: a pack saved in one session is matched and preloaded like a
+    /// built-in in every later session.
+    private final class LearnedPackCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cached: (descriptors: [HarnessSkillDescriptor], at: Date)?
+
+        func descriptors(ttl: TimeInterval, discover: () -> [HarnessSkillDescriptor]) -> [HarnessSkillDescriptor] {
+            lock.lock()
+            defer { lock.unlock() }
+            if let cached, Date().timeIntervalSince(cached.at) < ttl {
+                return cached.descriptors
+            }
+            let fresh = discover()
+            cached = (fresh, Date())
+            return fresh
+        }
+    }
+
+    private static let learnedPackCache = LearnedPackCache()
+
+    public static func learnedDescriptors() -> [HarnessSkillDescriptor] {
+        learnedPackCache.descriptors(ttl: 30) {
+            HarnessSkillFileSystemSource(
+                roots: [HarnessApplicationSkillPackWriter.defaultRootDirectory()],
+                sourceKind: .userDirectory
+            ).discover()
+        }
+    }
+
+    /// Bundled packs first so a curated built-in wins over a learned pack for the same app.
     public static func descriptors() -> [HarnessSkillDescriptor] {
-        cachedDescriptors
+        cachedDescriptors + learnedDescriptors()
     }
 
     public static func instructionSnippet(
