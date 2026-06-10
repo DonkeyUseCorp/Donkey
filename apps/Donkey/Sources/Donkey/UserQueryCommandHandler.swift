@@ -410,29 +410,42 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // planner's one-line reason, falling back to the tool's own summary), and after each step that
         // physically moved the pointer (a click), animate the overlay cursor traveling to that exact
         // target, so the visualization tracks what the harness is actually doing.
-        var onStep: (@Sendable (HarnessStepExecutionResult) async -> Void)?
-        if visualize != nil || progress != nil {
-            onStep = { (step: HarnessStepExecutionResult) async -> Void in
-                await MainActor.run {
-                    // Every step narrates through the spawn label (a lightweight text update), so the
-                    // user is kept informed even on steps that don't move the pointer — observe, shell,
-                    // wait, verify. The cursor itself only travels (a heavier window-animating overlay
-                    // playback) on steps that actually moved it; re-running that playback every step
-                    // thrashes window layout, so it stays gated to real pointer moves.
-                    let narration = Self.stepNarration(for: step, planner: planner)
-                    if let progress, let narration {
-                        progress(narration)
-                    }
-                    guard let present = visualize else { return }
-                    let screenSize = (NSScreen.main ?? NSScreen.screens.first)?.frame.size ?? .zero
-                    guard let plan = Self.cursorVisualizationPlan(
-                        for: step,
-                        appName: appName,
-                        traceID: traceID,
-                        screenSize: screenSize
-                    ) else { return }
-                    present(plan)
+        // The thread: the real conversation record (like ChatGPT/Claude), written live as markdown —
+        // user request, the assistant's thinking, each tool call and result, and the final answer — so
+        // the full reasoning trace is readable (and renderable to the user later), and a stuck run is
+        // visible instead of a mystery.
+        let transcript = ThreadTranscript(id: taskID)
+        transcript.begin(id: taskID, app: appName)
+        transcript.userMessage(command)
+        VisionGroundingLog.emit("thread traceID=\(traceID) path=\(transcript.threadPath)")
+
+        // Always set onStep so every turn is recorded; the overlay narration/cursor is layered on top
+        // when a UI is attached.
+        let onStep: (@Sendable (HarnessStepExecutionResult) async -> Void)? = { (step: HarnessStepExecutionResult) async -> Void in
+            await MainActor.run {
+                let narration = Self.stepNarration(for: step, planner: planner)
+                if let result = step.toolResult {
+                    transcript.thinking(narration)
+                    transcript.toolCall(tool: result.toolName, input: step.task.toolHistory.last?.call.input ?? [:])
+                    transcript.toolResult(tool: result.toolName, status: result.status.rawValue, output: result.summary)
                 }
+                // Every step narrates through the spawn label (a lightweight text update), so the user
+                // is kept informed even on steps that don't move the pointer — observe, shell, wait,
+                // verify. The cursor itself only travels (a heavier window-animating overlay playback)
+                // on steps that actually moved it; re-running that playback every step thrashes window
+                // layout, so it stays gated to real pointer moves.
+                if let progress, let narration {
+                    progress(narration)
+                }
+                guard let present = visualize else { return }
+                let screenSize = (NSScreen.main ?? NSScreen.screens.first)?.frame.size ?? .zero
+                guard let plan = Self.cursorVisualizationPlan(
+                    for: step,
+                    appName: appName,
+                    traceID: traceID,
+                    screenSize: screenSize
+                ) else { return }
+                present(plan)
             }
         }
         // Step budget is progress-based, not a fixed count: the runtime keeps going while the task
@@ -463,6 +476,31 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         VisionGroundingLog.emit(
             "complete traceID=\(traceID) app=\(appName) completed=\(completed) reason=\(outcomeReason) turns=\(turns) usedCache=\(anyTurnUsedCache) parseMS=\(Self.formatLatency(totalParseMS)) e2eTotalMS=\(Self.formatLatency(e2eTotalMS)) timeToFirstActionMS=\(Self.formatLatency(timeToFirstActionMS ?? 0)) avgPerTurnMS=\(Self.formatLatency(averagePerTurnMS))"
         )
+
+        // Record the assistant's final answer to close the turn, then write a compacted, structured
+        // thread summary. A deterministic summary lands immediately; an LLM-written one replaces it in
+        // the background so the result isn't delayed by the summary call.
+        let finalDetail = runSteps.last?.toolResult?.summary ?? finalTask?.goal ?? command
+        transcript.response(finalDetail)
+        transcript.writeSummary(Self.deterministicThreadSummary(
+            command: command, app: appName, outcome: outcomeReason, steps: runSteps, finalDetail: finalDetail
+        ))
+        let threadText = (try? String(contentsOfFile: transcript.threadPath, encoding: .utf8)) ?? ""
+        if !threadText.isEmpty {
+            Task.detached {
+                let prompt = """
+                Summarize this conversation thread into a compact markdown brief with these exact \
+                sections (omit a section only if truly empty): ## Goal, ## Progress, ## Key Decisions, \
+                ## Next Steps, ## Critical Context. Be concrete and short.
+
+                THREAD:
+                \(threadText)
+                """
+                if let enhanced = await textGenerator.generate(prompt), !enhanced.isEmpty {
+                    transcript.writeSummary(enhanced)
+                }
+            }
+        }
 
         let baseMetadata = preparedTurnMetadata.merging([
             "appHarness.router": "harness",
@@ -628,6 +666,44 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
     }
 
     // MARK: - Generic Harness Task Execution
+
+    /// A compacted, structured thread summary built deterministically from the run — written
+    /// immediately, then replaced by an LLM-written version in the background. Mirrors the Hermes
+    /// compaction sections so the summary stays consistent whether or not the LLM call lands.
+    static func deterministicThreadSummary(
+        command: String,
+        app: String,
+        outcome: String,
+        steps: [HarnessStepExecutionResult],
+        finalDetail: String
+    ) -> String {
+        let keyDecisions = steps.compactMap { step -> String? in
+            guard let result = step.toolResult else { return nil }
+            return "- `\(result.toolName)` → \(result.status.rawValue): \(result.summary.prefix(120))"
+        }.joined(separator: "\n")
+        let progress = outcome == "ok" ? "Completed." : "Ended: \(outcome)."
+        let nextSteps = outcome == "ok"
+            ? "- None — task complete."
+            : "- Resume or retry; the task did not complete."
+        return """
+        # Thread Summary
+
+        ## Goal
+        \(command)
+
+        ## Progress
+        \(progress) \(steps.count) step(s)\(app.isEmpty ? "" : " in \(app)").
+
+        ## Key Decisions
+        \(keyDecisions.isEmpty ? "- (none)" : keyDecisions)
+
+        ## Next Steps
+        \(nextSteps)
+
+        ## Critical Context
+        \(finalDetail)
+        """
+    }
 
     private func logSubmittedCommand(
         _ command: String,

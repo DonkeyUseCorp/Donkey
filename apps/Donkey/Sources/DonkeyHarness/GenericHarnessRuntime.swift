@@ -234,6 +234,21 @@ public struct GenericHarnessRuntime: Sendable {
             return HarnessStepExecutionResult(task: updatedTask, toolResult: blocked, stoppedForGate: false)
         }
 
+        // Don't re-run a state-changing action that already succeeded with the exact same input —
+        // that just duplicates the effect (e.g. creating the same note 16 times). Block it before it
+        // executes and tell the planner to verify and complete instead. Read-only tools are exempt
+        // (re-observing is idempotent and useful).
+        if let blocked = await duplicateActionRejection(call: call, task: task) {
+            guard let updatedTask = await coordinator.recordToolResult(
+                taskID: taskID,
+                call: call,
+                result: blocked
+            ) else {
+                return nil
+            }
+            return HarnessStepExecutionResult(task: updatedTask, toolResult: blocked, stoppedForGate: false)
+        }
+
         let result = await registry.execute(
             call,
             taskID: taskID,
@@ -364,6 +379,34 @@ public struct GenericHarnessRuntime: Sendable {
             status: .failed,
             summary: "Not completing yet: the last action has not been verified. Run a read-only check first (re-observe, a read command, or state.verify) confirming the goal, then complete.",
             metadata: ["reason": "completionRequiresEvidence"]
+        )
+    }
+
+    /// Rejects a state-changing call whose exact (tool, input) already succeeded earlier in this run —
+    /// re-running it only duplicates the side effect. Read-only tools and lifecycle calls are exempt.
+    /// Returns a failed result that tells the planner to verify and complete instead of repeating.
+    private func duplicateActionRejection(
+        call: HarnessToolCall,
+        task: HarnessTaskState
+    ) async -> HarnessToolResult? {
+        guard !call.name.hasPrefix("run."), !call.name.hasPrefix("conversation.") else { return nil }
+        let readOnlyNames = Set(
+            await registry.descriptors().filter { $0.safetyClass == .readOnly }.map(\.name)
+        )
+        guard !readOnlyNames.contains(call.name) else { return nil }
+        let signature = Self.canonicalInput(call.input)
+        let alreadySucceeded = task.toolHistory.contains { record in
+            record.resultStatus == .succeeded
+                && record.call.name == call.name
+                && Self.canonicalInput(record.call.input) == signature
+        }
+        guard alreadySucceeded else { return nil }
+        return HarnessToolResult(
+            callID: call.id,
+            toolName: call.name,
+            status: .failed,
+            summary: "Already done: `\(call.name)` ran with this exact input and succeeded earlier in this run. Repeating it duplicates the effect. Verify the result (a read/observe or state.verify), then run.complete — do not run this again.",
+            metadata: ["reason": "duplicateAction"]
         )
     }
 

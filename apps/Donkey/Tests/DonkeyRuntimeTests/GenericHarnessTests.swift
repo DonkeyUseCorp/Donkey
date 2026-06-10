@@ -340,6 +340,29 @@ struct GenericHarnessTests {
     }
 
     @Test
+    func runBlocksRepeatingAnAlreadySucceededAction() async {
+        // A planner that keeps re-issuing the same successful state-changing call (the duplicate-note
+        // loop) must only execute it once; the repeats are blocked before they run, and the run stops.
+        struct StubDuplicatePlanner: HarnessNextStepPlanning {
+            func planNextStep(for task: HarnessTaskState) async -> HarnessToolCall? {
+                HarnessToolCall(name: "test.act", input: ["command": "make note"])
+            }
+        }
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(stubTool(name: "test.act", safetyClass: .guardedInput))
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(id: "task-dup", threadID: "t", goal: "dup", grantedPermissions: [.lifecycle])
+
+        let steps = await runtime.run(taskID: task.id, planner: StubDuplicatePlanner(), maxSteps: 30)
+
+        // The action executes exactly once; everything after is a blocked duplicate, so no 16 copies.
+        let realRuns = steps.filter { $0.toolResult?.toolName == "test.act" && $0.toolResult?.status == .succeeded }
+        #expect(realRuns.count == 1)
+        #expect(steps.contains { $0.toolResult?.metadata["reason"] == "duplicateAction" })
+    }
+
+    @Test
     func runStopsWhenStepsStopMakingProgress() async {
         // Distinct calls that each succeed but never change the world model are still a stall.
         struct StubBusyPlanner: HarnessNextStepPlanning {

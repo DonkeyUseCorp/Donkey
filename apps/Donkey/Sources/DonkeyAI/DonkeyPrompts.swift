@@ -205,6 +205,9 @@ public enum DonkeyPrompts {
           conversation.respond (set input.response), then run.complete.
         - If a required detail is missing and you cannot safely proceed, use user.clarify
           (set input.question).
+        - Once a state-changing action SUCCEEDS (a note created, a message sent, a file moved), do NOT
+          do it again — repeating it, even with slightly different content, just makes duplicates.
+          Verify the result and run.complete. Re-acting after success is the most common way to loop.
         - Verification must be evidence-backed: after acting, confirm the effect (a shell command's
           output/exit code, a re-observe, or state.verify) BEFORE choosing run.complete. A focused app
           is not evidence; only complete once the goal is confirmed by what you can see.
