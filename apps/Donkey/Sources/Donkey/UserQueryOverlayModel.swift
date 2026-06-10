@@ -750,7 +750,13 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         spawnState.label = Self.spawnCompletionLabel(for: result)
         spawnState.updatedAt = Date()
 
-        if UserQuerySpawnLifecycle.keepsVisibleResult(for: result.threadStatus) {
+        // Keep the cursor visible whenever there is a response to read — a clarification, a wait, a
+        // failure, OR a completed task that produced a summary (e.g. "Now playing …"). Only a
+        // completed action with no summary fades out, so the user always gets to see the result on
+        // the cursor and several recent results can stay on screen at once.
+        let hasReadableResult = UserQuerySpawnLifecycle.keepsVisibleResult(for: result.threadStatus)
+            || !result.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if hasReadableResult {
             spawnState.phase = .holding
             spawnStates[index] = spawnState
         } else {
@@ -1119,11 +1125,13 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         case .paused:
             return "Paused"
         case .chatting:
-            return result.summary.isEmpty ? "Answered" : result.summary
+            return result.summary.isEmpty ? "Answered" : collapsedDisplayText(for: result.summary)
         case .completed:
-            return "Done"
+            // Show what the agent actually did/answered on the cursor, not a generic "Done" — e.g.
+            // "Now playing Spies — Coldplay". Falls back to "Done" only for an action with no summary.
+            return result.summary.isEmpty ? "Done" : collapsedDisplayText(for: result.summary)
         case .failed:
-            return "Stopped"
+            return result.summary.isEmpty ? "Stopped" : collapsedDisplayText(for: result.summary)
         }
     }
 
