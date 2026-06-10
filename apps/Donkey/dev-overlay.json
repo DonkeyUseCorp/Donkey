@@ -1,5 +1,5 @@
 {
-  "enabled": true,
+  "enabled": false,
   "mode": "donkeyVision",
   "cadenceSeconds": 1.0,
   "screenScope": "main",
