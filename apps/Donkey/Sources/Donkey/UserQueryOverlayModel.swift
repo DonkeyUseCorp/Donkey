@@ -719,7 +719,10 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         }
         if let label,
            !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            spawnState.label = label
+            // Bound every label: a cursor label is a short status, never a tool's full output. A long
+            // result (e.g. app_skill returning a whole skill's instructions) must not blob over the
+            // screen — collapse whitespace and cap it.
+            spawnState.label = Self.truncated(Self.collapsedDisplayText(for: label), maxLength: Self.maxSpawnLabelLength)
         }
         if let accentIndex {
             spawnState.accentIndex = accentIndex
@@ -1154,11 +1157,16 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         return String(collapsed[..<endIndex]).trimmingCharacters(in: .whitespacesAndNewlines) + "..."
     }
 
+    /// A cursor label stays a short status line; cap it so a long tool result never blobs over the
+    /// screen. The overlay wraps within this, and the full text is always in the notch task list.
+    private static let maxSpawnLabelLength = 200
+
     private static func collapsedDisplayText(for text: String) -> String {
-        text
+        let collapsed = text
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")
+        return truncated(collapsed, maxLength: maxSpawnLabelLength)
     }
 
     private static func assetUploadEventText(_ assetNames: [String]) -> String {
