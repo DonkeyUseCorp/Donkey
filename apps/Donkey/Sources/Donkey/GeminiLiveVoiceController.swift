@@ -236,6 +236,23 @@ final class GeminiLiveVoiceController {
                 holdForConsent(call: toolCall, liveCall: call, session: session, result: result)
                 continue
             }
+            // Structural feedback loop: a tool that attempted an action but couldn't confirm it can
+            // signal escalation with `escalate.app`/`escalate.goal` (e.g. the music script searched
+            // but didn't start playback). Rather than trusting the fast model to retry, the controller
+            // itself hands off to the vision observe-act loop, which sees the screen and finishes the
+            // task. This makes the loop part of the system, not the prompt.
+            if let escalateApp = result.metadata["escalate.app"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !escalateApp.isEmpty {
+                let escalateGoal = result.metadata["escalate.goal"]?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                onActed?("Adjusting — having the vision agent finish \"\(toolName)\" in \(escalateApp).")
+                launchVision(AIRealtimeToolCall(
+                    id: call.id,
+                    name: Self.visionControlToolName,
+                    arguments: ["app": escalateApp, "goal": (escalateGoal?.isEmpty == false ? escalateGoal! : result.summary)]
+                ))
+                continue
+            }
             onActed?(result.summary)
             // Forward the full execution detail (stdout/stderr/exitCode/reason,
             // plus tool-specific facts) so the model can read output and

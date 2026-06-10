@@ -95,7 +95,13 @@ public enum LocalAppUserQueryHarnessServices {
         let output = result.metadata["appleScript.output"] ?? ""
         let outputMetadata = structuredOutputMetadata(output)
         let clarificationRequired = outputMetadata["clarification.required"] == "true"
-        let succeeded = result.executed && !clarificationRequired
+        // Honor a status the script reports about its own outcome: a script can run cleanly (executed)
+        // yet report `status=not_found`/`status=failed` because the real-world effect didn't happen
+        // (e.g. playback never started). Treating that as success is a false positive — the agent
+        // would claim it did something it didn't.
+        let scriptStatus = outputMetadata["status"]
+        let statusReportsFailure = scriptStatus == "not_found" || scriptStatus == "failed"
+        let succeeded = result.executed && !clarificationRequired && !statusReportsFailure
         return HarnessScriptExecutionOutcome(
             succeeded: succeeded,
             summary: succeeded

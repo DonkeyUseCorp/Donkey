@@ -263,7 +263,18 @@ public enum DonkeyCommandBackends {
             )
         }
         guard outcome.succeeded else {
-            return failed(context, outcome.summary, reason: outcome.metadata["failureReason"] ?? "skillScriptFailed")
+            // Preserve the script's full output metadata on failure — it may carry an
+            // `escalate.app`/`escalate.goal` signal that the runtime's structural feedback loop acts
+            // on (hand the unfinished task to the vision agent) instead of dead-ending.
+            return HarnessToolResult(
+                callID: context.call.id,
+                toolName: context.call.name,
+                status: .failed,
+                summary: outcome.summary,
+                metadata: outcome.metadata.merging([
+                    "reason": outcome.metadata["failureReason"] ?? "skillScriptFailed"
+                ]) { current, _ in current }
+            )
         }
         return success(
             context,

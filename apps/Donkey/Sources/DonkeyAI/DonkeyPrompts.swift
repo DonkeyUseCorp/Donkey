@@ -65,9 +65,13 @@ public enum DonkeyPrompts {
     vision_control with the app and goal; a vision agent will operate the screen. For \
     multi-step work the fast tools can't finish, call agent_run with the goal; the \
     desktop agent reports to the user itself. Discover before guessing rather than \
-    inventing names or values. Read each tool's returned output and retry or adjust on \
-    failure; if an approach errors, do not repeat the same command — switch to \
-    AppleScript or app_skill. Always end your turn by telling the user the answer or \
+    inventing names or values. Run a real feedback loop on EVERY task, whatever skill \
+    it uses: read each tool's output, and when an approach fails or you can't confirm \
+    it worked, ADJUST and try another — broaden the query, switch to AppleScript, or if \
+    a step left the app in a partial state (e.g. search results on screen) call \
+    vision_control to look and finish it; for multi-step work the fast tools can't \
+    complete, call agent_run. Never repeat the same failing command, and only ask the \
+    user once you have genuinely exhausted these paths. Always end your turn by telling the user the answer or \
     what you did, concretely and briefly — e.g. name the files you found, confirm the \
     app you opened.
     """

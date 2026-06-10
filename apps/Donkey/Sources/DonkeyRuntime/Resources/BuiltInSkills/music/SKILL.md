@@ -20,7 +20,9 @@ Choosing the query is what matters:
 
 Read the script's returned status:
 - `status=played` → playback started; tell the user what's playing (`playedTitle`/`playedArtist`).
-- `status=not_found` with `clarification.required=true` → only then ask the included question (e.g. the term isn't in the library and streaming didn't start).
+- `status=not_found` → do NOT give up or ask yet. The script already searched, so Apple Music is showing results for the query on screen — finish the job: call `vision_control` with app "Music" and a goal like "play the top song result for <query>", and the vision agent will click a song. This is the feedback loop: an approach failed, so adjust and try another, don't stop.
+
+Only ask the user when you have genuinely exhausted the local play, the script, AND vision — and even then, play a reasonable default by the same artist rather than asking which exact song.
 
 Verify with the script's own status fields or `osascript -e 'tell application "Music" to player state'`; don't use screenshots.
 

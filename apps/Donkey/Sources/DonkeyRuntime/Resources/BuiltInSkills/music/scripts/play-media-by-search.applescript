@@ -58,4 +58,8 @@ tell application id "com.apple.Music"
     end if
 end tell
 
-return "status=not_found" & linefeed & "query=" & trimmedQuery & linefeed & "clarification.required=true" & linefeed & "clarification.question=I couldn't find " & trimmedQuery & " to play. What would you like me to play?"
+-- The library had no match and the streaming keystrokes didn't confirm playback, but the search
+-- results ARE on screen now. Don't dead-end: signal the runtime to escalate to the vision agent,
+-- which sees the results and clicks a song. This is the structural feedback loop — the system
+-- adjusts, it doesn't give up.
+return "status=not_found" & linefeed & "query=" & trimmedQuery & linefeed & "escalate.app=Music" & linefeed & "escalate.goal=Play the top song result for " & trimmedQuery & " from the search results on screen"
