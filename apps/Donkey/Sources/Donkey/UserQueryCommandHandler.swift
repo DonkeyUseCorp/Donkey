@@ -506,21 +506,23 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 traceID: traceID,
                 metadata: ["structuredDecision": "true", "router": "harness"]
             )
+            let missingPermissions: String = (continuation?.missingPermissions ?? [])
+                .map(\.rawValue).joined(separator: ",")
+            let consentMetadata: [String: String] = [
+                "appHarness.decision": AppHarnessDecisionKind.respond.rawValue,
+                "genericHarness.shellConsent.command": continuation?.metadata["shell.command"] ?? "",
+                "genericHarness.shellConsent.tier": continuation?.metadata["shell.tier"] ?? "",
+                "genericHarness.shellConsent.reason": continuation?.metadata["shell.reason"] ?? "",
+                "genericHarness.shellConsent.allowAlways": continuation?.metadata["shell.allowAlways"] ?? "",
+                "genericHarness.missingPermissions": missingPermissions
+            ]
             let result = UserQueryCommandHandlingResult(
                 status: .needsConfirmation,
                 threadStatus: .waitingForPermission,
                 decision: decision,
                 summary: summary,
                 traceID: traceID,
-                metadata: baseMetadata.merging([
-                    "appHarness.decision": AppHarnessDecisionKind.respond.rawValue,
-                    "genericHarness.shellConsent.command": continuation?.metadata["shell.command"] ?? "",
-                    "genericHarness.shellConsent.tier": continuation?.metadata["shell.tier"] ?? "",
-                    "genericHarness.shellConsent.reason": continuation?.metadata["shell.reason"] ?? "",
-                    "genericHarness.shellConsent.allowAlways": continuation?.metadata["shell.allowAlways"] ?? "",
-                    "genericHarness.missingPermissions": (continuation?.missingPermissions ?? [])
-                        .map(\.rawValue).joined(separator: ",")
-                ]) { _, new in new }
+                metadata: baseMetadata.merging(consentMetadata) { _, new in new }
             )
             await coordinatorRegistry.finish(taskID: taskID)
             logHandlingResult(result, stage: "harness", hint: "Stopped at a permission gate.")
