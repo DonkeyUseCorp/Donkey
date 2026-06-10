@@ -28,6 +28,21 @@ struct ShellCommandClassifierTests {
     }
 
     @Test
+    func separatorsInsideQuotesDoNotEscalateAReadPipeline() {
+        // The `|` inside the grep pattern is a literal regex alternation, not a shell
+        // pipe — a read-only `ls | grep | head` must stay read, not be mis-scored as an
+        // unrecognized write because `\.jpg$` looked like a command segment.
+        #expect(tier("ls -t ~/Downloads | grep -iE '\\.png$|\\.jpg$|\\.heic$' | head -1") == .read)
+        #expect(tier("grep -E 'foo|bar|baz' file.txt") == .read)
+        // Parentheses inside a quoted argument are literal too.
+        #expect(tier("grep -E '(foo|bar)' file.txt") == .read)
+        #expect(tier("echo 'a; rm -rf /'") == .read)
+        // But a real unquoted pipe into a write still escalates.
+        #expect(tier("ls | rm") == .highRisk)
+        #expect(tier("cat x && open -a Safari") == .reversibleWrite)
+    }
+
+    @Test
     func readSubcommandsOfWriteCapableToolsAreRead() {
         #expect(tier("defaults read com.apple.dock") == .read)
         #expect(tier("pmset -g batt") == .read)

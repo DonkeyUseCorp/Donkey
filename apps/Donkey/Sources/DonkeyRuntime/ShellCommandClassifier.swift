@@ -74,8 +74,7 @@ public enum ShellCommandClassifier {
         // overall tier is the most restrictive segment; the signature/reason
         // come from the first segment that reached that tier.
         var worst: ShellCommandClassification?
-        let separators = CharacterSet(charactersIn: ";|&\n`(")
-        for rawSegment in command.components(separatedBy: separators) {
+        for rawSegment in splitSegments(command) {
             let tokens = tokenize(rawSegment)
             guard !tokens.isEmpty else { continue }
             let classified = classifySegment(tokens)
@@ -186,6 +185,50 @@ public enum ShellCommandClassifier {
     }
 
     // MARK: - Tokenization
+
+    /// Split a command into segments on shell separators (`;`, `|`, `&`, newline,
+    /// backtick) and subshell/substitution opens (`(`), but ONLY when the separator
+    /// is outside single/double quotes. A separator inside quotes is a literal part
+    /// of an argument — e.g. the `|` in `grep -iE 'a|b'` or the `(` in a quoted glob
+    /// pattern — and must not start a new "command" segment, or a read-only pipeline
+    /// would be mis-scored as an unrecognized write and gated needlessly.
+    static func splitSegments(_ command: String) -> [String] {
+        var segments: [String] = []
+        var current = ""
+        var inSingle = false
+        var inDouble = false
+        var escaped = false
+        for character in command {
+            if escaped {
+                current.append(character)
+                escaped = false
+                continue
+            }
+            if character == "\\", !inSingle {
+                current.append(character)
+                escaped = true
+                continue
+            }
+            if character == "'", !inDouble {
+                inSingle.toggle()
+                current.append(character)
+                continue
+            }
+            if character == "\"", !inSingle {
+                inDouble.toggle()
+                current.append(character)
+                continue
+            }
+            if !inSingle, !inDouble, ";|&\n`(".contains(character) {
+                segments.append(current)
+                current = ""
+                continue
+            }
+            current.append(character)
+        }
+        segments.append(current)
+        return segments
+    }
 
     /// Split a segment into whitespace-separated tokens. Leading environment
     /// assignments (e.g. `FOO=bar cmd`) are dropped so the executable is found.
