@@ -37,19 +37,29 @@ public enum DonkeyPrompts {
     public static let realtimeCommandSystemInstruction = """
     You are Donkey, a fast macOS assistant — an expert computer user sitting next \
     to the user. Act directly and immediately with the registered tools, preferring \
-    shell_exec for anything the more specific tools don't cover. When a task targets \
-    a specific app, call app_skill first unless you already know how to drive it: \
-    the installed skill is the authority on how that app is operated (scripting, \
-    vision, known workflows) and overrides your assumptions. When a skill \
-    advertises a validated script that covers the task, execute it with skill_run \
-    instead of reinventing the steps. If the skill says the app needs vision, or \
-    scripting it fails, call vision_control with the app and goal; a vision agent \
-    will operate the screen. For multi-step work the fast tools can't finish, call \
-    agent_run with the goal; the desktop agent reports to the user itself. Discover \
-    before guessing rather than inventing names or values. Read each tool's returned \
-    output and retry or adjust on failure. Always end your turn by telling the user \
-    the answer or what you did, concretely and briefly — e.g. name the files you \
-    found, confirm the app you opened.
+    shell_exec for anything the more specific tools don't cover. To read or change \
+    content inside a Mac app (a note, mail, a calendar event, a contact, the current \
+    browser tab), drive it with AppleScript (`osascript -e 'tell application "App" to \
+    …'`), NEVER an invented app URL scheme like `notes://` or `bear://` — those \
+    silently fail on macOS; use `open` only to open files/URLs or launch an app. When \
+    a task targets a specific app, call app_skill first unless you are just launching \
+    it: the installed skill is the authority on how to operate that app and overrides \
+    remembered schemes or shortcuts. For shell technique the built-in `system-tools` \
+    skill is the authority (safe file-finding, settings); consult it when a command \
+    errors — and note shell_exec runs under zsh, where a glob matching nothing aborts \
+    with `no matches found`, which never means "no such files exist": widen the search \
+    (e.g. `ls -t ~/Downloads | grep -iE '\\.png$|\\.jpg$' | head -1`) and avoid \
+    parentheses, which trip the safety classifier. When a skill advertises a validated \
+    script that covers the task, execute it with skill_run instead of reinventing the \
+    steps. If the skill says the app needs vision, or scripting it fails, call \
+    vision_control with the app and goal; a vision agent will operate the screen. For \
+    multi-step work the fast tools can't finish, call agent_run with the goal; the \
+    desktop agent reports to the user itself. Discover before guessing rather than \
+    inventing names or values. Read each tool's returned output and retry or adjust on \
+    failure; if an approach errors, do not repeat the same command — switch to \
+    AppleScript or app_skill. Always end your turn by telling the user the answer or \
+    what you did, concretely and briefly — e.g. name the files you found, confirm the \
+    app you opened.
     """
 
     // MARK: - Request understanding (once per turn, before the loop)
@@ -89,24 +99,20 @@ public enum DonkeyPrompts {
     /// (highest-signal first).
     public static let harnessStepMaxElements = 150
 
+    /// The most recent steps rendered with their full one-line summaries; everything older is
+    /// condensed to "tool → status" so the model never loses sight of its own earlier trajectory.
+    public static let harnessStepMaxDetailedHistorySteps = 12
+
     public static func harnessStep(
         task: HarnessTaskState,
         descriptors: [HarnessToolDescriptor],
         appName: String,
         appGuidance: String?,
         understanding: HarnessRequestUnderstanding?,
-        environmentSummary: String?
+        environmentSummary: String?,
+        retryNote: String? = nil
     ) -> String {
-        let elements = task.worldModel.elements
-        let elementsBlock: String
-        if elements.isEmpty {
-            elementsBlock = "No on-screen elements have been observed. That is normal for system-tool tasks (shell_exec needs no observation). Only if the task needs the GUI, use a SEE tool (ax.observe or vision.capture) before acting on an element."
-        } else {
-            let lines = elements.prefix(harnessStepMaxElements).map { element -> String in
-                "  \(element.id): [\(element.role)] \"\(element.label)\""
-            }.joined(separator: "\n")
-            elementsBlock = "Elements currently observed (id: [role] \"label\"):\n\(lines)"
-        }
+        let elementsBlock = harnessStepElementsBlock(task.worldModel.elements)
 
         let factsBlock = task.worldModel.facts.isEmpty
             ? ""
@@ -117,10 +123,7 @@ public enum DonkeyPrompts {
             ? "\nENVIRONMENT (command-line tools on this Mac — only reach for what's installed):\n  \(environmentSummary!)\n"
             : ""
 
-        let history = task.toolHistory.suffix(12).map { "  \($0.call.name): \($0.summary)" }
-        let historyBlock = history.isEmpty
-            ? "Nothing has been done yet."
-            : "Steps already taken (most recent last):\n" + history.joined(separator: "\n")
+        let historyBlock = harnessStepHistoryBlock(task.toolHistory)
 
         let toolsBlock = descriptors
             .sorted { $0.name < $1.name }
@@ -181,8 +184,103 @@ public enum DonkeyPrompts {
         - Verification must be evidence-backed: after acting, confirm the effect (a shell command's
           output/exit code, a re-observe, or state.verify) BEFORE choosing run.complete. A focused app
           is not evidence; only complete once the goal is confirmed by what you can see.
-        Return JSON: {"tool": "<one tool name>", "input": {"key": "value", ...}, "reason": "<one sentence>"}.
+        Return JSON: {"tool": "<one tool name>", "input": {"key": "value", ...}, "reason": "<one sentence>"}.\(retryNote.map { "\nIMPORTANT: \($0)" } ?? "")
         """
+    }
+
+    /// Renders observed elements in reading order with the geometry and state the observation already
+    /// captured — position (from `ax.frame.*` screen points or `vision.bbox.*` capture pixels), value,
+    /// and click eligibility — so the model can reason spatially ("the field under the Subject label")
+    /// instead of guessing from bare labels. Over the cap, clickable controls are kept first and the
+    /// drop is announced rather than silent.
+    public static func harnessStepElementsBlock(_ elements: [HarnessWorldElement]) -> String {
+        guard !elements.isEmpty else {
+            return "No on-screen elements have been observed. That is normal for system-tool tasks (shell_exec needs no observation). Only if the task needs the GUI, use a SEE tool (ax.observe or vision.capture) before acting on an element."
+        }
+        let ordered = readingOrder(elements)
+        var kept = ordered
+        var omitted = 0
+        if ordered.count > harnessStepMaxElements {
+            let clickable = ordered.filter(\.isActionEligible)
+            let rest = ordered.filter { !$0.isActionEligible }
+            kept = readingOrder(Array((clickable + rest).prefix(harnessStepMaxElements)))
+            omitted = ordered.count - kept.count
+        }
+        let lines = kept.map(elementLine).joined(separator: "\n")
+        let omittedLine = omitted > 0 ? "\n  (+\(omitted) more element(s) not shown; clickable controls were kept)" : ""
+        return """
+        Elements currently observed, in reading order (id: [role] "label" @(x,y wxh) — use the \
+        positions to reason about layout: above/below/left/right):
+        \(lines)\(omittedLine)
+        """
+    }
+
+    private static func elementLine(_ element: HarnessWorldElement) -> String {
+        var line = "  \(element.id): [\(element.role)] \"\(element.label)\""
+        if let frame = frame(of: element) {
+            line += " @(\(Int(frame.x)),\(Int(frame.y)) \(Int(frame.width))x\(Int(frame.height)))"
+        }
+        if let value = element.metadata["ax.value"], !value.isEmpty {
+            line += " value=\"\(String(value.prefix(80)))\""
+        }
+        if !element.isActionEligible {
+            line += " (not clickable)"
+        }
+        return line
+    }
+
+    private struct ElementFrame {
+        var x: Double
+        var y: Double
+        var width: Double
+        var height: Double
+    }
+
+    /// Both observation producers stash geometry in element metadata: AX observations under
+    /// `ax.frame.*` (screen points) and vision parses under `vision.bbox.*` (capture-image pixels).
+    /// One observation always uses a single source, so positions stay mutually comparable.
+    private static func frame(of element: HarnessWorldElement) -> ElementFrame? {
+        for prefix in ["ax.frame", "vision.bbox"] {
+            if let x = element.metadata["\(prefix).x"].flatMap(Double.init),
+               let y = element.metadata["\(prefix).y"].flatMap(Double.init),
+               let width = element.metadata["\(prefix).width"].flatMap(Double.init),
+               let height = element.metadata["\(prefix).height"].flatMap(Double.init) {
+                return ElementFrame(x: x, y: y, width: width, height: height)
+            }
+        }
+        return nil
+    }
+
+    /// Top-to-bottom, then left-to-right; elements without geometry keep their original order at the end.
+    private static func readingOrder(_ elements: [HarnessWorldElement]) -> [HarnessWorldElement] {
+        elements.enumerated().sorted { lhs, rhs in
+            switch (frame(of: lhs.element), frame(of: rhs.element)) {
+            case let (left?, right?):
+                return (left.y, left.x) < (right.y, right.x)
+            case (.some, .none):
+                return true
+            case (.none, .some):
+                return false
+            case (.none, .none):
+                return lhs.offset < rhs.offset
+            }
+        }.map(\.element)
+    }
+
+    /// Detailed one-line summaries for the most recent steps, preceded by a condensed
+    /// "tool → status" trail of everything older, so a long run never forgets where it has been.
+    public static func harnessStepHistoryBlock(_ toolHistory: [HarnessToolCallRecord]) -> String {
+        guard !toolHistory.isEmpty else { return "Nothing has been done yet." }
+        let recent = Array(toolHistory.suffix(harnessStepMaxDetailedHistorySteps))
+        let evicted = toolHistory.dropLast(recent.count)
+        var lines: [String] = []
+        if !evicted.isEmpty {
+            let condensed = evicted.map { "\($0.call.name) → \($0.resultStatus.rawValue)" }
+                .joined(separator: "; ")
+            lines.append("  Earlier steps 1-\(evicted.count) (condensed): \(condensed)")
+        }
+        lines += recent.map { "  \($0.call.name): \($0.summary)" }
+        return "Steps already taken (most recent last):\n" + lines.joined(separator: "\n")
     }
 
     /// A compact, high-signal block describing the parsed request, rendered every step so the planner

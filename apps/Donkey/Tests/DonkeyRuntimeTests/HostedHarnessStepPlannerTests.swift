@@ -86,10 +86,122 @@ struct HostedHarnessStepPlannerTests {
         #expect(!body.contains("WHAT THE USER WANTS"))
     }
 
+    @Test
+    func retriesOnceOnMalformedReplyThenUsesTheSecondDecision() async {
+        let httpClient = SequencedHTTPClient(responses: [
+            (Data(#"{"output_text":"not json at all"}"#.utf8), 200),
+            (cannedDecision(tool: "ax.observe"), 200)
+        ])
+        let planner = makePlanner(httpClient: httpClient, understanding: nil)
+
+        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
+
+        #expect(call?.name == "ax.observe")
+        #expect(httpClient.requests.count == 2)
+        // The retry prompt names the failure so the model can correct itself.
+        let retryBody = requestBodyString(httpClient, index: 1)
+        #expect(retryBody.contains("could not be used"))
+    }
+
+    @Test
+    func failsSafeAfterTwoFailedInferences() async {
+        let httpClient = SequencedHTTPClient(responses: [
+            (Data(), 500),
+            (Data(), 500)
+        ])
+        let planner = makePlanner(httpClient: httpClient, understanding: nil)
+
+        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
+
+        #expect(call?.name == "run.failSafe")
+        #expect(httpClient.requests.count == 2)
+    }
+
+    @Test
+    func emptyToolNameNeverReadsAsCompletion() async {
+        // A refusal or truncated reply decodes with no tool. That must re-ask once and then fail
+        // safe — never run.complete, which would record an unverified claim as success.
+        let httpClient = SequencedHTTPClient(responses: [
+            (Data(#"{"output_text":"{\"tool\":\"\",\"reason\":\"cannot help\"}"}"#.utf8), 200),
+            (Data(#"{"output_text":"{\"tool\":\"\",\"reason\":\"cannot help\"}"}"#.utf8), 200)
+        ])
+        let planner = makePlanner(httpClient: httpClient, understanding: nil)
+
+        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
+
+        #expect(call?.name == "run.failSafe")
+        #expect(call?.input["reason"] == "plannerReturnedNoTool")
+    }
+
+    @Test
+    func emptyToolNameRecoversWhenTheRetryNamesATool() async {
+        let httpClient = SequencedHTTPClient(responses: [
+            (Data(#"{"output_text":"{\"tool\":\"\",\"reason\":\"unsure\"}"}"#.utf8), 200),
+            (cannedDecision(tool: "ax.observe"), 200)
+        ])
+        let planner = makePlanner(httpClient: httpClient, understanding: nil)
+
+        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
+
+        #expect(call?.name == "ax.observe")
+        let retryBody = requestBodyString(httpClient, index: 1)
+        #expect(retryBody.contains("named no tool"))
+    }
+
+    @Test
+    func promptRendersElementGeometryValueAndEligibility() async {
+        let httpClient = FixtureHTTPClient(data: cannedDecision(tool: "ax.observe"), statusCode: 200)
+        let planner = makePlanner(httpClient: httpClient, understanding: nil)
+        var state = task(goal: "open settings", toolHistory: [])
+        state.worldModel.elements = [
+            HarnessWorldElement(
+                id: "btn1",
+                label: "Send",
+                role: "button",
+                isActionEligible: true,
+                metadata: [
+                    "ax.frame.x": "100", "ax.frame.y": "200",
+                    "ax.frame.width": "80", "ax.frame.height": "30",
+                    "ax.value": "ready"
+                ]
+            ),
+            HarnessWorldElement(id: "lbl1", label: "Banner", role: "staticText", isActionEligible: false)
+        ]
+
+        _ = await planner.planNextStep(for: state)
+
+        let body = requestBodyString(httpClient, index: 0)
+        #expect(body.contains("@(100,200 80x30)"))
+        #expect(body.contains(#"value=\"ready\""#))
+        #expect(body.contains("(not clickable)"))
+    }
+
+    @Test
+    func promptCondensesEvictedHistoryInsteadOfDroppingIt() async {
+        let httpClient = FixtureHTTPClient(data: cannedDecision(tool: "ax.observe"), statusCode: 200)
+        let planner = makePlanner(httpClient: httpClient, understanding: nil)
+        let history = (1...15).map { index in
+            HarnessToolCallRecord(
+                call: HarnessToolCall(name: "step\(index)", input: [:]),
+                resultStatus: index == 2 ? .failed : .succeeded,
+                summary: "Summary of step \(index)."
+            )
+        }
+
+        _ = await planner.planNextStep(for: task(goal: "open settings", toolHistory: history))
+
+        let body = requestBodyString(httpClient, index: 0)
+        // The first three steps fall outside the detailed window but stay visible condensed.
+        #expect(body.contains("Earlier steps 1-3 (condensed)"))
+        #expect(body.contains("step2 → failed"))
+        #expect(!body.contains("Summary of step 1."))
+        #expect(body.contains("Summary of step 15."))
+    }
+
     // MARK: - Helpers
 
     private func makePlanner(
-        httpClient: FixtureHTTPClient,
+        httpClient: any AIHTTPClient,
         understanding: HarnessRequestUnderstanding?
     ) -> HostedHarnessStepPlanner {
         HostedHarnessStepPlanner(
@@ -129,8 +241,17 @@ struct HostedHarnessStepPlannerTests {
         Data(#"{"output_text":"{\"tool\":\"\#(tool)\",\"reason\":\"step\"}"}"#.utf8)
     }
 
-    private func requestBodyString(_ httpClient: FixtureHTTPClient) -> String {
-        guard let body = httpClient.requests.first?.httpBody,
+    private func requestBodyString(_ httpClient: FixtureHTTPClient, index: Int = 0) -> String {
+        requestBodyString(requests: httpClient.requests, index: index)
+    }
+
+    private func requestBodyString(_ httpClient: SequencedHTTPClient, index: Int = 0) -> String {
+        requestBodyString(requests: httpClient.requests, index: index)
+    }
+
+    private func requestBodyString(requests: [URLRequest], index: Int) -> String {
+        guard requests.indices.contains(index),
+              let body = requests[index].httpBody,
               let string = String(data: body, encoding: .utf8) else {
             return ""
         }
@@ -153,6 +274,25 @@ private final class FixtureHTTPClient: AIHTTPClient, @unchecked Sendable {
         return (
             data,
             HTTPURLResponse(url: request.url!, statusCode: statusCode, httpVersion: nil, headerFields: [:])!
+        )
+    }
+}
+
+/// Returns each canned response once, in order, repeating the last one if called again.
+private final class SequencedHTTPClient: AIHTTPClient, @unchecked Sendable {
+    var responses: [(data: Data, statusCode: Int)]
+    var requests: [URLRequest] = []
+
+    init(responses: [(data: Data, statusCode: Int)]) {
+        self.responses = responses
+    }
+
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        requests.append(request)
+        let response = responses[min(requests.count - 1, responses.count - 1)]
+        return (
+            response.data,
+            HTTPURLResponse(url: request.url!, statusCode: response.statusCode, httpVersion: nil, headerFields: [:])!
         )
     }
 }

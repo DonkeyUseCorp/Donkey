@@ -69,20 +69,35 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
            descriptors.contains(where: { $0.name == "user.clarify" }) {
             return HarnessToolCall(name: "user.clarify", input: ["question": question])
         }
-        let decision: Decision
-        do {
-            decision = try await decide(task: task)
-        } catch {
-            return HarnessToolCall(name: "run.failSafe", input: ["reason": "harnessPlanFailed"])
+        // One bad model sample must not kill the run, and an empty tool name must never read as
+        // completion (a refusal or truncated reply would otherwise be recorded as success). Retry the
+        // inference once with the failure fed back; only then fail safe.
+        var retryNote: String?
+        for attempt in 0..<2 {
+            let decision: Decision
+            do {
+                decision = try await decide(task: task, retryNote: retryNote)
+            } catch {
+                guard attempt == 0 else { break }
+                retryNote = "Your previous reply could not be used (\(String(describing: error).prefix(200))). "
+                    + "Reply with exactly one JSON object naming one tool from AVAILABLE TOOLS."
+                continue
+            }
+            lastNarration = decision.reason.flatMap { $0.isEmpty ? nil : $0 } ?? lastNarration
+            guard let toolName = decision.tool.flatMap({ $0.isEmpty ? nil : $0 }) else {
+                guard attempt == 0 else {
+                    return HarnessToolCall(name: "run.failSafe", input: ["reason": "plannerReturnedNoTool"])
+                }
+                retryNote = "Your previous reply named no tool. Pick exactly one tool from AVAILABLE TOOLS; "
+                    + "choose run.complete only when the goal is already confirmed by observed evidence."
+                continue
+            }
+            if !readOnlyToolNames.contains(toolName), firstActionUptimeMS == nil {
+                firstActionUptimeMS = uptimeMS()
+            }
+            return HarnessToolCall(name: toolName, input: decision.input ?? [:])
         }
-        lastNarration = decision.reason.flatMap { $0.isEmpty ? nil : $0 } ?? lastNarration
-        guard let toolName = decision.tool.flatMap({ $0.isEmpty ? nil : $0 }) else {
-            return HarnessToolCall(name: "run.complete", input: ["reason": decision.reason ?? "Goal satisfied."])
-        }
-        if !readOnlyToolNames.contains(toolName), firstActionUptimeMS == nil {
-            firstActionUptimeMS = uptimeMS()
-        }
-        return HarnessToolCall(name: toolName, input: decision.input ?? [:])
+        return HarnessToolCall(name: "run.failSafe", input: ["reason": "harnessPlanFailed"])
     }
 
     // MARK: - Model call
@@ -149,8 +164,8 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     /// caller fails safe instead of stalling the whole run on a hung provider.
     private static let stepTimeoutSeconds: TimeInterval = 45
 
-    private func decide(task: HarnessTaskState) async throws -> Decision {
-        let request = responseRequest(task: task)
+    private func decide(task: HarnessTaskState, retryNote: String?) async throws -> Decision {
+        let request = responseRequest(task: task, retryNote: retryNote)
         let backend = self.backend
         let response = try await AIDeadline.enforce(seconds: Self.stepTimeoutSeconds) {
             try await backend.createResponse(request)
@@ -164,7 +179,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         return Decision(tool: wire.tool, input: wire.input, reason: wire.reason)
     }
 
-    private func responseRequest(task: HarnessTaskState) -> RemoteInferenceResponseCreateRequest {
+    private func responseRequest(task: HarnessTaskState, retryNote: String?) -> RemoteInferenceResponseCreateRequest {
         let toolNames = descriptors.map(\.name)
         return RemoteInferenceResponseCreateRequest(
             input: .array([
@@ -179,7 +194,8 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
                                 appName: appName,
                                 appGuidance: appGuidance,
                                 understanding: understanding,
-                                environmentSummary: environmentSummary
+                                environmentSummary: environmentSummary,
+                                retryNote: retryNote
                             ))
                         ])
                     ])
