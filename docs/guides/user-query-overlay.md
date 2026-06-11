@@ -1,111 +1,194 @@
 # User Query Overlay
 
-## Supported Behavior
+The user query overlay is Donkey's floating macOS surface: a top-center notch
+status area, a centered prompt composer, and spawned agent cursors that show
+what each task is doing. It is how every typed, voice, and follow-up turn
+enters the agent harness.
 
-Donkey supports a floating macOS overlay for conversational task threads and
-quick local-app actions:
+**The one rule:** the overlay narrates; it never acts. Overlay panels are
+non-interactive, non-activating visualization — cursor playback animates only
+to grounded evidence coordinates and never synthesizes real mouse movement.
+Live keyboard, Accessibility, and AppleScript actions run only through the
+guarded runtime (`docs/guides/agent-harness.md`).
 
-- On first launch, Donkey shows a native welcome screen, then a Google-only Mac
-  sign-in screen, then a native permission setup screen for Accessibility,
-  Screenshots, and Microphone before starting the overlay. Until the browser
-  returns through the `donkey://auth/callback` handoff, the app exchanges the
-  returned code for a Better Auth cookie, and the core permission setup is
-  complete, the notch surface is not shown and double-Command activation is not
-  registered.
-- Double-tap Command and release to open a centered prompt with keyboard focus.
-- Double-tap Command and hold the second press to open the prompt in voice mode.
-- Show a top-center notch status surface for task progress, recent tasks, follow-up input, file drops, updates, and per-task pause/resume.
-- When a typed prompt or notch follow-up is submitted, show a task spawn cue: the notch arrow rotates toward the exit direction, moves out of the notch, and a Donkey cursor overlay travels onto the desktop.
-- Spawned cursors travel to a known safe visible target window when one is available. Otherwise they hold about 250 px below the notch near screen center as a loading/thinking state, then retarget if the destination becomes visible.
-- Multiple spawned cursors can be present at the same time. The newest spawned cursor is selected by default, and clicking a cursor or its label selects it as the current agent.
-- A stationary spawned cursor shows the submitted turn while Donkey is waiting on routing, model, or runtime work; it uses the cursor tail animation as the waiting state instead of replacing the label with interim text. When a response, clarification, review wait, failure, or other attention state is available, that result text replaces the label and stays visible so the user can read it and follow up; completed action-only cursors may fade out. Labels render complete words and wrap to their measured size instead of revealing partial typewriter text or clipping at the panel edge. Spawn labels expand wider on hover when that reduces wrapping, and select the cursor on click. Clicking a tasked label turns the same agent-colored surface into an inline editor with the agent message above and a lighter color-matched user input area below; Return submits the typed follow-up to that spawn's task, Shift-Return inserts a newline, Escape returns to the label, and clicking outside the editor closes it.
-- Double-Command always opens the centered prompt, even when spawned cursors are visible. If a spawned cursor is selected, centered typed or voice input attaches to that task behind the scenes; otherwise Donkey uses the latest interactable spawned cursor before falling back to follow-up resolution.
-- Keep prompt submissions, voice transcripts, and follow-ups on the same agent-harness path: task-thread routing, context assembly, conversational response, clarification, review, catalog-backed action parsing, task validation, and guarded local-app execution when a turn is actionable.
-- Resolve model-classified local-item requests against local apps, files, and folders by querying the current Mac with the SQLite-backed agent memory store, Spotlight/`mdfind`, and bounded filesystem fallback. If the requested local item cannot be found, keep the task safe and report that it was not found instead of falling back to a vague clarification.
-- Handle scriptable app tasks as guarded AppleScript automation when possible. Commands may use task metadata, generated source, or compact templates; completion is verified through generic task verification policy instead of requiring visible result text for every app.
-- Visualize agent work with the spawned task cursor when a submitted turn already has one. Normal local-app tasks keep planning in the background and may create an `AgentVisualizationPlan` from the harness `agent.path.visualize` tool or from runtime evidence such as evidence-backed action steps, observations, and action traces. Cursor playback uses only grounded control bounds or action targets, so it does not animate to invented coordinates. Visual-only demonstration turns use the same plan shape without live input. Local-app visualizations use observed Accessibility or action-trace control bounds when available, convert target-window-normalized element centers into the active overlay screen's pixel coordinates, and only then move the overlay cursor. Before each travel segment, the pointer rotates toward the direction of travel; it then moves along a curved path and shows compact labels while keeping the real mouse untouched. A separate visualization-only cursor is only a fallback when no spawned cursor is available to attach to.
-- Maintain a background agent memory store in Application Support. The store records resolved and missing local-item lookups, prewarms apps, stores runtime task definitions, keeps metadata such as kind/path/bundle ID/source/task/action, indexes records with SQLite FTS5 plus local vectors, and passes a bounded set of matching hints into the agent harness memory section for classifier and model consideration. Protected file folders such as Desktop, Documents, and Downloads stay lazy and are searched only when a user-requested local-item lookup needs them. See `docs/guides/decision-system.md` for how those hints feed typed model decisions and guarded local-app plans.
-- Persist task threads as searchable Core Data conversations with event history, task assets, and per-run runtime coordination for any action work attached to the thread.
-- Keep the overlay non-invasive. Permission setup requests Accessibility, screenshot, and microphone access with user-visible reasons, but the overlay itself does not capture the screen or synthesize input directly. Bounded screenshots and Accessibility reads are used only by guarded local-app workflows.
-- A developer-only Donkey Vision overlay can be enabled by editing the
-  repo-tracked `apps/Donkey/dev-overlay.json` during debug runs, or by creating
-  `~/Library/Application Support/Donkey/dev-overlay.json`. Production builds do
-  not bundle the repo config and only honor the Application Support path. When
-  no config exists, the config is invalid, or `"enabled": false`, the debug
-  overlay is fully disabled. When enabled, Donkey Vision fuses Accessibility and
-  hosted AI screenshot parsing. Local geometry wins; AI boxes can be
-  interactable through guarded coordinate fallback and are visually marked as
-  `AI`. The overlay never sends a full
-  desktop screenshot to hosted AI: it captures safe app/window or
-  system-navigation surfaces only. See
-  `docs/guides/donkey-vision.md`.
+## Startup Gate
 
-```json
-{
-  "enabled": true,
-  "mode": "donkeyVision",
-  "cadenceSeconds": 1.0,
-  "screenScope": "main",
-  "minConfidence": 0.25
-}
-```
+First launch shows a native welcome screen, then a Google-only Mac sign-in,
+then a permission setup screen for Accessibility, Screenshots, and Microphone
+with user-visible reasons. Until the browser returns through
+`donkey://auth/callback`, the app exchanges the code for a Better Auth cookie,
+and core permission setup completes, the notch is not shown and double-Command
+activation is not registered. `DonkeyAuthCoordinator` and
+`DonkeyLoginWindowController` own the sign-in gate;
+`MacPermissionSetupWindowController` owns the permission gate. Protected
+folders (Desktop, Documents, Downloads) stay lazy and are requested only when
+a user-requested local-item lookup needs them.
 
-## Technical Guidelines
+## Activation and the Prompt
 
-- `UserQueryOverlayController` owns AppKit surfaces, placement, hover tracking, focus, keyboard shortcut recognition, dismissal, file-drop routing, and microphone level capture.
-- `DonkeyAuthCoordinator` and `DonkeyLoginWindowController` own the Mac sign-in
-  gate. `MacPermissionSetupWindowController` owns the post-auth core permission
-  gate. App startup should create the overlay controller only after a stored
-  Google session exists or a pending sign-in callback validates its state token
-  and stores a Better Auth cookie in the app cookie jar, and the permission
-  setup has completed.
-- SwiftUI rendering lives in `DonkeyUI` and consumes state/contracts from `DonkeyContracts`. It should not perform command parsing, model calls, input execution, screen capture, or microphone capture.
-- `UserQueryOverlayModel` owns product state. Durable task data is persisted through Core Data in Application Support.
-- Spawn display state is typed state. The model emits progress, target hints, and current selection; the overlay controller resolves hints against safe visible windows and keeps voice capture on the centered prompt; SwiftUI renders the notch cue, cursors, labels, label-to-editor transition, and selection state.
-- Notch geometry comes from the active `NSScreen`, preferring safe-area and auxiliary-top metrics over hardcoded notch sizes. Content must stay out of the physical notch void; displays without a physical notch should use the same top-center composition without reserving unavailable space.
-- `UserQueryNotchLayout` is the shared source for notch surface frames, content frames, corner radii, and notch-safe offsets. `canRenderTextInTopRow` describes whether text can draw in the top row, not whether that row exists.
-- The prompt is a compact black composer: single-line text is pill-shaped, multiline text becomes a bounded rounded rectangle, Return submits, Shift-Return inserts a newline, Escape and outside clicks dismiss, and non-input capsule areas can drag the modal.
-- The centered composer keeps text and voice modes on the same input surface. Double-Command release opens focused text input without initializing microphone capture, double-Command hold opens the same input with voice active, and typed text promotes the send button while the microphone affordance becomes secondary. Voice capture starts only from explicit voice activation such as holding the second Command tap or pressing the microphone affordance.
-- Voice capture and transcription remain separate. The controller records bounded local audio and publishes levels; transcription is model-backed through the hosted agent-harness boundary before transcript text enters the turn path.
-- Local item prewarming must run off the main actor and must not eagerly scan protected user folders. Agent memory is stored in SQLite under Application Support and uses FTS5 plus deterministic local embeddings for retrieval; JSONL is only an explicit export/debug format. Cached local-item hits must still point to an existing path or bundle before they are used as an execution target. Runtime task definitions are the generic open/local-app interaction seeds plus generated or user-reviewed definitions loaded from memory.
-- For scriptable apps, prefer app-native AppleScript task commands before falling back to Accessibility, AI visual targets, or keyboard input. Submit steps with an explicit structured `controlID` may execute as an Accessibility `AXPress` against button-like controls, or as a guarded coordinate click against an AI visual target when Accessibility is unavailable. Control bounds are carried into action traces.
-- Agent visualization overlays are non-interactive, non-activating panels. They may point, explain, and replay what the agent is doing or would do, but they do not synthesize mouse movement. Live keyboard or Accessibility actions remain separate guarded runtime actions. When a local-app action plan is based on an observation, preserve target-window geometry and control bounds on the evidence-backed steps so cursor replay can use pixel-grounded element positions instead of invented coordinates. Harness path playback should flow through `agent.path.visualize`, which returns a visual plan only after every waypoint is grounded.
-- The developer UI inspection overlay is separate from agent visualization. It
-  is a transparent, non-activating, click-through, keyboard-pass-through AppKit
-  panel at a lower window level than Donkey's interactive UI. It renders
-  CALayer rectangles and labels from local Accessibility or hover-probe detector
-  output only. Provider action calls such as click, type, scroll, drag,
-  navigation, `computer_call`, or `function_call` are rejected by the overlay
-  itself. Live input is executed only by the guarded local-app runtime.
-  Hover-only detections are visualization/read-only evidence and must not
-  become live input authority.
-- Task actions in the notch, including follow-up submission and pause/resume, must cross the model/controller command boundary with the selected task ID.
-- User-query command handling should emit actionable `com.donkey.app` route/result logs for submitted commands, routing decisions, intent resolution, local action traces, unsupported requests, unavailable apps, and final task status. Action trace logs should state the backend, input mode, whether an element click happened, the control or bounds target, and that the overlay pointer is visual-only.
+- Double-tap Command and release: centered prompt with keyboard focus, no
+  microphone capture.
+- Double-tap Command and hold the second press: the same prompt with voice
+  active.
+- Voice capture starts only from explicit activation — the hold, or pressing
+  the microphone affordance. The controller records bounded local audio and
+  publishes levels; transcription is model-backed through the hosted harness
+  boundary before transcript text enters the turn path.
+- The composer is a compact black surface: single-line text is pill-shaped,
+  multiline text becomes a bounded rounded rectangle. Return submits,
+  Shift-Return inserts a newline, Escape and outside clicks dismiss, and
+  non-input capsule areas drag the modal. Typed text promotes the send button
+  and makes the microphone affordance secondary.
+
+Double-Command always opens the centered prompt, even when spawned cursors are
+visible. If a cursor is selected, centered typed or voice input attaches to
+that task; otherwise Donkey uses the latest interactable cursor before falling
+back to follow-up resolution.
+
+## Notch Surface
+
+The notch shows task progress, recent tasks, follow-up input, file drops,
+update availability, and per-task pause/resume. File drops attach to the
+active or most recent task. Task actions — follow-up submission, pause/resume —
+cross the model/controller boundary with the selected task ID.
+
+Geometry comes from the active `NSScreen`, preferring safe-area and
+auxiliary-top metrics over hardcoded notch sizes. Content stays out of the
+physical notch void; displays without a notch use the same top-center
+composition without reserving unavailable space. `UserQueryNotchLayout` is the
+shared source for surface frames, content frames, corner radii, and notch-safe
+offsets; `canRenderTextInTopRow` describes whether text can draw in the top
+row, not whether that row exists.
+
+## Spawned Cursors
+
+Submitting a typed prompt or notch follow-up shows a spawn cue: the notch
+arrow rotates toward the exit direction, leaves the notch, and a Donkey cursor
+travels onto the desktop.
+
+- Cursors travel to a known safe visible target window when one exists;
+  otherwise they hold about 250 px below the notch near screen center as a
+  thinking state and retarget when the destination becomes visible.
+- A stationary cursor shows the submitted turn while Donkey works, using the
+  cursor tail animation as the waiting state instead of interim label text.
+  When a response, clarification, review wait, or failure arrives, that text
+  replaces the label and stays visible; completed action-only cursors may fade
+  out.
+- Labels render complete words and wrap to their measured size — no partial
+  typewriter text, no clipping at the panel edge. They expand wider on hover
+  when that reduces wrapping, and select the cursor on click.
+- Clicking a tasked label turns the same agent-colored surface into an inline
+  editor: the agent message above, a lighter color-matched input below. Return
+  submits the follow-up to that spawn's task, Shift-Return inserts a newline,
+  Escape returns to the label, and clicking outside closes the editor.
+- Multiple cursors can be present at once. The newest is selected by default;
+  clicking a cursor or its label selects it as the current agent.
+
+## Turn Path
+
+Prompt submissions, voice transcripts, and follow-ups all take the same
+agent-harness path: task-thread routing, context assembly, one-shot request
+understanding, then the per-step harness loop that responds, clarifies, or
+executes guarded action. See `docs/guides/decision-system.md` for how the
+decision is made.
+
+- Local-item requests resolve against installed apps, files, and folders using
+  the SQLite agent memory store, Spotlight/`mdfind`, and bounded filesystem
+  fallback. A missing item stays safe and reports not-found instead of falling
+  back to a vague clarification.
+- Scriptable app tasks prefer guarded AppleScript before Accessibility, AI
+  visual targets, or keyboard input. Completion is verified through the
+  generic verification policy, not visible result text for every app.
+- Thread contents persist as markdown under Application Support
+  (`Threads/<id>/thread.md`); Core Data stores durable task metadata, events,
+  and assets for per-run runtime coordination.
+- Command handling emits actionable `com.donkey.app` route/result logs:
+  submitted commands, routing decisions, action traces (backend, input mode,
+  whether an element click happened, the control or bounds target, and that
+  the overlay pointer is visual-only), unsupported requests, unavailable apps,
+  and final task status.
+
+## Agent Memory Store
+
+A background store in Application Support records resolved and missing
+local-item lookups, prewarms apps, and stores runtime task definitions with
+metadata such as kind, path, bundle ID, source, task, and action. It is SQLite
+with FTS5 plus deterministic local embeddings; JSONL is an explicit
+export/debug format only. A bounded set of matching hints feeds the harness
+memory section for model consideration. Prewarming runs off the main actor and
+never eagerly scans protected folders. Cached local-item hits must still point
+to an existing path or bundle before they are used as an execution target.
+
+## Visualization
+
+Cursor playback uses only grounded evidence: observed Accessibility or
+action-trace control bounds, converted from target-window-normalized centers
+into the active overlay screen's pixel coordinates. Before each travel segment
+the pointer rotates toward the direction of travel, then moves along a curved
+path with compact labels while the real mouse stays untouched. Harness
+playback flows through `agent.path.visualize`, which returns a plan only after
+every waypoint is grounded; ungrounded steps are omitted. Visual-only
+demonstration turns use the same plan shape without live input, and a
+visualization-only cursor is used only when no spawned cursor is available to
+attach to.
+
+The developer UI inspection overlay is separate from agent visualization: a
+transparent, non-activating, click-through, keyboard-pass-through panel at a
+lower window level than Donkey's interactive UI. It renders local detector
+output only and itself rejects provider action calls (click, type, scroll,
+drag, `computer_call`, `function_call`). Enable it by editing the repo-tracked
+`apps/Donkey/dev-overlay.json` during debug runs or by creating
+`~/Library/Application Support/Donkey/dev-overlay.json`; production builds do
+not bundle the repo config and honor only the Application Support path. No
+config, an invalid config, or `"enabled": false` fully disables it. See
+`docs/guides/donkey-vision.md` for the config shape and fusion behavior.
+
+## Division of Labor
+
+| Component | Owns |
+|---|---|
+| `UserQueryOverlayModel` | product state and typed intents |
+| `UserQueryOverlayController` | AppKit surfaces, placement, hover tracking, focus, shortcut recognition, dismissal, file-drop routing, microphone level capture |
+| `DonkeyUI` (SwiftUI) | rendering from `DonkeyContracts` state — no parsing, model calls, input execution, or screen/microphone capture |
+| `UserQueryCommandHandler` | turn routing, outcome handling, route/result logging |
+
+Spawn display state is typed state: the model emits progress, target hints,
+and current selection; the controller resolves hints against safe visible
+windows; SwiftUI renders the cue, cursors, labels, label-to-editor transition,
+and selection.
 
 ## Verification
 
-Manually verify:
+Manually verify after overlay changes:
 
-- The notch renders at the top center, respects physical notch safe areas, expands only from visible notch hover, and accepts expanded controls/clicks.
-- First launch shows the permission setup after sign-in, explains Accessibility, Screenshots, and Microphone before requesting them, enables Continue only when all three are ready, and does not trigger Desktop/Documents/Downloads prompts during startup.
-- Double-Command release opens a centered focused text prompt without starting microphone capture; double-Command hold opens the same prompt with voice active; pressing the microphone affordance starts voice capture; typed text shows a primary send button and a secondary microphone affordance; unrelated Command use does not activate the overlay.
-- Typed, voice, and follow-up submissions create or update durable task threads, answer non-actionable conversation without showing action failure, show action status in the notch when work runs, and preserve per-task pause/resume behavior.
-- Typed prompt and notch follow-up submissions show the spawn sequence: notch cue, desktop cursor emergence, direct travel to a known target or fallback holding point, typed submitted-turn label with tail-wag waiting animation, final response/result label, retargeting when the target becomes visible, persistent labels for conversational or attention states, and fade-out only for completed action-only turns.
-- Stationary spawn labels render complete text without typewriter clipping, wrap to fit available width, select the cursor on click, and transition in place into a same-styled inline editor for tasked follow-ups without clipping the carried-over label.
-- With multiple spawned cursors visible, clicking a cursor selects it; double-Command still opens the centered prompt, and the submitted typed or voice turn routes to the selected/latest cursor's task without opening the inline label editor.
-- Open requests for installed apps, files, and folders launch or open the local item; missing local items show a not-found result and log the lookup provider/reason.
-- LLM-classified visual-only prompts complete as visualization turns and show the animated cursor with typed labels without moving the real pointer.
-- Normal local-app tasks can produce final visualization steps for observed, navigated, acted, and verified runtime work. Planning stays in the background. Cursor playback should target observed control centers from Accessibility or action traces when those bounds exist, omit ungrounded steps, and must not claim completion unless the runtime verification state supports it.
-- The prompt supports wrapping, Shift-Return newline insertion, Return submission, Escape dismissal, outside-click dismissal, and dragging from non-input areas.
-- File drops on the notch attach to the active or most recent task.
-- With `dev-overlay.json` enabled, interact with underlying applications while
-  the debug boxes are visible; clicks, typing, scrolling, dragging, and Donkey
-  prompt activation should continue to target the underlying app or Donkey UI.
-  Removing the config file or setting `"enabled": false` should hide the debug
-  overlay without relaunching.
+- Startup: welcome → sign-in → permission setup; Continue enables only when
+  all three permissions are ready; no Desktop/Documents/Downloads prompts
+  during startup.
+- Activation: release opens focused text input without microphone capture;
+  hold opens voice mode; the microphone affordance starts capture; unrelated
+  Command use does not activate the overlay.
+- Notch: renders top-center, respects physical notch safe areas, expands only
+  from visible notch hover, accepts expanded controls and clicks; file drops
+  attach to the right task.
+- Spawn flow: cue → travel → tail-wag waiting → result label; retargeting when
+  the target becomes visible; persistent labels for attention states; fade-out
+  only for completed action-only turns; labels wrap without clipping; the
+  inline editor opens, submits, and closes correctly.
+- Multiple cursors: clicking selects; double-Command still opens the centered
+  prompt and routes the turn to the selected/latest cursor's task without
+  opening the inline editor.
+- Turns: conversation answers without action failure; local-item opens launch
+  the item and missing items report not-found with the lookup provider and
+  reason; visual-only prompts animate without moving the real pointer;
+  completion claims match the runtime verification state.
+- Dev overlay: with `dev-overlay.json` enabled, clicks, typing, scrolling,
+  dragging, and prompt activation still target the underlying app or Donkey
+  UI; removing the config or setting `"enabled": false` hides the overlay
+  without relaunching.
 
 ## Source Entry Points
 
 - App orchestration starts in `apps/Donkey/Sources/Donkey/`.
-- Typed prompt command handling lives in `apps/Donkey/Sources/Donkey/UserQueryCommandHandler.swift`.
+- Typed prompt command handling lives in
+  `apps/Donkey/Sources/Donkey/UserQueryCommandHandler.swift`.
 - Reusable SwiftUI rendering lives in `apps/Donkey/Sources/DonkeyUI/`.

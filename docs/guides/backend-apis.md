@@ -1,43 +1,56 @@
 # Backend API Guide
 
-Backend APIs live in `site/src/app/api/**/route.ts`.
+Backend APIs live in `site/src/app/api/**/route.ts`. They serve the Mac app
+(session cookie), the site's own client views, and third-party Vision API
+developers (API keys).
 
-## Rules
+**The one rule:** every route handler is wrapped in `withDonkeyAuth` from
+`@/lib/donkey-api-auth`. A public endpoint is a deliberate exception with an
+explicit product reason — today only Better Auth's own routes and the
+signature-verified Stripe webhook — never a default.
 
-- APIs are authenticated by default.
-- Always wrap route handlers with `withDonkeyAuth` from `@/lib/donkey-api-auth`.
-- Routes accept a Donkey session cookie by default. Third-party API keys are
-  opt-in per route: pass `withDonkeyAuth(handler, { allowApiKey: true })`. This
-  typed allowlist is the only way a key reaches a handler — never match on the
-  request path. `request.donkey.method` tells the handler how the caller
+## Authentication
+
+- `withDonkeyAuth` accepts a Donkey session cookie by default. Third-party API
+  keys are opt-in per route: `withDonkeyAuth(handler, { allowApiKey: true })`.
+  This typed allowlist is the only way a key reaches a handler — never match on
+  the request path. `request.donkey.method` tells the handler how the caller
   authenticated (`session-cookie`, `api-key`, or `dev-bypass`).
-- Treat public endpoints as exceptions that need an explicit product reason.
-- Better Auth is mounted as the public auth exception at `site/src/app/api/auth/[...all]/route.ts`; configure it through `@/lib/auth`.
-- The supported interactive login provider is Google OAuth only. Keep `emailAndPassword.enabled` false unless the product explicitly adds another login method.
-- Configure Google OAuth with `${BETTER_AUTH_URL}/api/auth/callback/google` as the redirect URI.
-- Keep the Mac app callback origin (`donkey://` by default) in Better Auth
-  trusted origins so `/mac-auth` can return successful Google sign-in to the
-  app.
+- Better Auth is mounted at `site/src/app/api/auth/[...all]/route.ts` and
+  configured through `@/lib/auth`. The supported interactive login provider is
+  Google OAuth only; keep `emailAndPassword.enabled` false unless the product
+  explicitly adds another login method. Configure Google OAuth with
+  `${BETTER_AUTH_URL}/api/auth/callback/google` as the redirect URI.
 - Mac app sign-in uses Better Auth's one-time-token plugin. `/mac-auth/callback`
   mints a short-lived code from the browser session, renders a browser handoff
   page that opens `donkey://auth/callback`, then the app exchanges the code at
   `/api/auth/one-time-token/verify` so `URLSession` stores the resulting Better
-  Auth cookie in the app-owned cookie jar. The code should remain short-lived
-  while still allowing a manual "Open Donkey" fallback click.
+  Auth cookie in the app-owned cookie jar. Keep the code short-lived while
+  still allowing a manual "Open Donkey" fallback click, and keep the Mac app
+  callback origin (`donkey://` by default) in Better Auth trusted origins.
 - In Vercel, configure `BETTER_AUTH_URL`, `BETTER_AUTH_SECRET`,
   `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and
   `DONKEY_MAC_AUTH_REDIRECT_ORIGINS`. Do not commit real OAuth credentials.
-- Validate request bodies, search params, and route params with Zod before using them.
+
+## Handler Rules
+
+- Validate request bodies, search params, and route params with Zod before
+  using them.
 - Verify resource ownership before reading or mutating scoped data.
-- Return explicit `NextResponse.json(...)` responses with the intended status code.
+- Return explicit `NextResponse.json(...)` responses with the intended status
+  code.
 - For access-control failures (missing session, missing/inactive subscription),
-  return a plain 401 via `unauthorizedResponse` from `@/lib/donkey-api-auth`; for
-  a missing resource, return a plain 404 via `notFoundResponse`. Do not write
-  per-case descriptive auth/not-found errors. Reserve distinct status codes for
-  genuinely different operational outcomes (e.g. 402 over quota, 429 rate limit).
+  return a plain 401 via `unauthorizedResponse`; for a missing resource, a
+  plain 404 via `notFoundResponse` (both from `@/lib/donkey-api-auth`). Do not
+  write per-case descriptive auth/not-found errors. Reserve distinct status
+  codes for genuinely different operational outcomes (e.g. 402 over quota, 429
+  rate limit).
 - Do not wrap route handlers in `try/catch` unless the handler can recover and
   return a different intentional response. Let unexpected errors surface to the
   framework's logging path.
+
+## Database
+
 - Keep Prisma access server-only through `@/lib/prisma`.
 - Keep Prisma table/model definitions in logically grouped sibling `.prisma`
   files under `site/prisma/`. Never put table/model definitions in
@@ -54,8 +67,9 @@ Backend APIs live in `site/src/app/api/**/route.ts`.
 
 The inference gateway lives under `site/src/app/api/inference/**`. It is a
 Mac-app-facing backend boundary for remote model and asset generation. Routes,
-shared schemas, stateless provider calls, and Swift contracts must stay provider-neutral;
-provider names are configuration/data inside private adapters only.
+shared schemas, stateless provider calls, and Swift contracts stay
+provider-neutral; provider names are configuration/data inside private adapters
+only.
 
 - Require `x-donkey-client-id` on inference routes.
 - Keep remote asset generation state on the Mac side. The backend can create or
@@ -64,7 +78,7 @@ provider names are configuration/data inside private adapters only.
   generation records, provider output references, or generated assets in
   Postgres.
 - Keep provider-specific request mapping behind the inference provider registry.
-  Route handlers should import the registry and neutral schemas, not individual
+  Route handlers import the registry and neutral schemas, not individual
   adapters.
 - Computer-use provider tools are registered as request tools and mapped by
   adapters. Browser interaction uses Gemini through
@@ -77,22 +91,21 @@ provider names are configuration/data inside private adapters only.
 - Screenshot parsing is available at `POST /api/inference/screenshots/parse/`.
   It accepts scoped app/window or system-navigation screenshots only, never
   whole-desktop captures, and returns read-only UI evidence in the Mac app's
-  local UI understanding shape. The default provider is Gemini Flash through
-  a dedicated screenshot-parsing module configured with hosted Google
-  credentials or `GEMINI_API_KEY`.
+  local UI understanding shape. The default provider is Gemini Flash through a
+  dedicated screenshot-parsing module configured with hosted Google credentials
+  or `GEMINI_API_KEY`.
 - The Gemini adapter uses the official `@google/genai` Node/TypeScript SDK for
   general non-streaming chat, structured Responses calls, and browser
   computer-use calls. It uses Vertex AI's global endpoint only when
-  `GOOGLE_APPLICATION_CREDENTIALS_JSON` includes a `project_id`. If the project
-  is missing, the provider is unavailable. The adapter's defaults should route
-  fast structured task-intent and follow-up decisions to `gemini-3.1-flash-lite`,
-  keep `gemini-3.5-flash` available for general chat and non-decision Responses
-  calls, and use `gemini-3-flash-preview` for browser Computer Use tool calls.
-  Keep model selection in code rather than environment overrides. Structured
+  `GOOGLE_APPLICATION_CREDENTIALS_JSON` includes a `project_id`; if the project
+  is missing, the provider is unavailable. The adapter's defaults route fast
+  structured task-intent and follow-up decisions to `gemini-3.1-flash-lite`,
+  keep `gemini-3.5-flash` for general chat and non-decision Responses calls,
+  and use `gemini-3-flash-preview` for browser Computer Use tool calls. Keep
+  model selection in code rather than environment overrides. Structured
   decision requests normalize JSON schemas for Gemini and retry without
   provider-enforced schema when Vertex rejects schema parameters; Mac-side
-  runtime validation still owns whether the returned JSON is executable. For
-  Google Cloud credits, set
+  runtime validation still owns whether the returned JSON is executable. Set
   `GOOGLE_APPLICATION_CREDENTIALS_JSON` as a hosted-deploy sensitive env var
   rather than storing Google provider credentials in the Mac app.
 - The OpenAI hosted Responses adapter uses `OPENAI_API_KEY` only for macOS
@@ -103,7 +116,7 @@ provider names are configuration/data inside private adapters only.
 ## Hosted Model Credits
 
 Hosted inference usage is metered per authenticated user in the backend. The
-Mac app still sends provider-neutral inference requests; the backend owns credit
+Mac app sends provider-neutral inference requests; the backend owns credit
 checks, provider/model rates, debits, and audit rows.
 
 - Keep one visible balance per user, with auditable grants, expirations, usage
@@ -134,13 +147,14 @@ checks, provider/model rates, debits, and audit rows.
 
 ## Third-Party Vision API
 
-`POST /api/vision` is also a self-serve product for outside
-developers, sold separately from the Mac app. It serves two audiences through
-the same handler, branching on `request.donkey.method`:
+`POST /api/vision` is also a self-serve product for outside developers, sold
+separately from the Mac app. It serves two audiences through the same handler,
+branching on `request.donkey.method`:
 
-- **Mac app** (`session-cookie`): gated by the hosted credit balance, as above.
-- **Third-party** (`api-key`): gated by an active subscription and a monthly
-  call quota — it never touches the money-credit balance.
+| Caller | `request.donkey.method` | Gate |
+|---|---|---|
+| Mac app | `session-cookie` | hosted credit balance, as above |
+| Third-party developer | `api-key` | active subscription + monthly call quota — never touches the money-credit balance |
 
 How the third-party path works:
 
@@ -149,8 +163,9 @@ How the third-party path works:
   `VisionApiSubscription` (`site/prisma/Billing.prisma`). The included call
   count comes from the Stripe price metadata (`monthlyCallQuota`).
 - Keys are issued by the Better Auth API-key plugin (`@better-auth/api-key`),
-  managed from the dashboard via `/api/api-keys`. Only a hash is stored; the
-  secret is shown once. Key creation requires an active subscription.
+  managed from the account settings UI via `/api/api-keys`. Only a hash is
+  stored; the secret is shown once. Key creation requires an active
+  subscription.
 - The vision route opts in with `allowApiKey: true`, enforces a per-key burst
   limit, and counts succeeded vision usage events in the current period against
   the quota. Covered calls are recorded with `billingMode: "included"` (zero
@@ -159,8 +174,9 @@ How the third-party path works:
   is signature-verified and therefore a deliberate public exception to the
   `withDonkeyAuth` rule; it syncs subscription lifecycle and the call quota.
   Checkout, portal, subscription, and usage live under `/api/billing/**`.
-- The dashboard (`/dashboard`) is client-rendered; all data access goes through
-  the audited TanStack Query hooks in `site/src/queries/`.
+- The per-user account views (`/app/settings`, including API keys and usage)
+  are client-rendered; all data access goes through the audited TanStack Query
+  hooks in `site/src/queries/`.
 
 ## Pattern
 
