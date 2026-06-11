@@ -2,6 +2,7 @@ import {
   ApiError,
   Environment,
   GoogleGenAI,
+  ThinkingLevel,
 } from "@google/genai";
 import { JWT, type JWTInput } from "google-auth-library";
 import type {
@@ -402,6 +403,25 @@ function dataURLToInlineData(value: string): JsonObject | null {
   };
 }
 
+// Maps a caller's `thinking_level` string to the SDK enum. Accepts the documented lowercase values
+// (and tolerates casing); returns undefined for anything unrecognized so the caller can fall back to
+// the legacy thinking_budget path.
+function thinkingLevelFromBody(body: JsonObject): ThinkingLevel | undefined {
+  const raw = stringValue(body.thinking_level) ?? stringValue(body.thinkingLevel);
+  switch (raw?.trim().toLowerCase()) {
+    case "minimal":
+      return ThinkingLevel.MINIMAL;
+    case "low":
+      return ThinkingLevel.LOW;
+    case "medium":
+      return ThinkingLevel.MEDIUM;
+    case "high":
+      return ThinkingLevel.HIGH;
+    default:
+      return undefined;
+  }
+}
+
 function generationConfigFromBody(body: JsonObject): Partial<GenerateContentConfig> {
   const config: Partial<GenerateContentConfig> = {};
   const temperature = numberValue(body.temperature);
@@ -420,9 +440,18 @@ function generationConfigFromBody(body: JsonObject): Partial<GenerateContentConf
   }
   // Bound reasoning so thinking tokens (which count against maxOutputTokens) can't starve the
   // structured output. Callers driving tight per-turn loops pass a small budget; 0 disables thinking.
+  // Gemini 3.x models (e.g. gemini-3.5-flash) take thinking_level (minimal|low|medium|high), NOT the
+  // integer thinking_budget — passing the budget to them is silently ignored. Prefer the level when the
+  // caller sets it; the two are mutually exclusive. Older 2.x models still use thinking_budget. In both
+  // cases request the thought summary so callers can persist the reasoning (the normalized response
+  // separates it from output_text).
+  const thinkingLevel = thinkingLevelFromBody(body);
   const thinkingBudget = numberValue(body.thinking_budget) ?? numberValue(body.thinkingBudget);
-  if (thinkingBudget !== undefined) {
-    config.thinkingConfig = { thinkingBudget };
+  if (thinkingLevel !== undefined) {
+    config.thinkingConfig = { thinkingLevel, includeThoughts: true };
+  } else if (thinkingBudget !== undefined) {
+    config.thinkingConfig =
+      thinkingBudget > 0 ? { thinkingBudget, includeThoughts: true } : { thinkingBudget };
   }
   const responseFormat = responseFormatFromBody(body);
   if (responseFormat?.json) {
@@ -636,12 +665,19 @@ function normalizedGeminiResponse(
     Array.isArray(firstCandidate.content.parts)
       ? firstCandidate.content.parts
       : [];
-  const textParts = parts
-    .filter(isJsonObject)
+  const partObjects = parts.filter(isJsonObject);
+  // Thought summaries (parts flagged `thought: true` when includeThoughts is on) must NOT land in
+  // output_text — that field carries the structured JSON the caller parses. Keep them separate so the
+  // reasoning can be persisted to the thread without corrupting the tool-call payload.
+  const reasoningParts = partObjects
+    .filter((part) => part.thought === true)
     .map((part) => stringValue(part.text))
     .filter((part): part is string => Boolean(part));
-  const calls = parts
-    .filter(isJsonObject)
+  const textParts = partObjects
+    .filter((part) => part.thought !== true)
+    .map((part) => stringValue(part.text))
+    .filter((part): part is string => Boolean(part));
+  const calls = partObjects
     .map(functionCallFromPart)
     .filter((part): part is JsonObject => Boolean(part));
 
@@ -649,6 +685,7 @@ function normalizedGeminiResponse(
     id: stringValue(isJsonObject(raw) ? raw.responseId : undefined) ?? `gemini-${Date.now()}`,
     object: "response",
     output_text: textParts.join("\n").trim(),
+    reasoning_text: reasoningParts.join("\n").trim(),
     output: [
       {
         type: "message",
