@@ -335,9 +335,19 @@ public enum DonkeyCommandBackends {
                 ]) { current, _ in current }
             )
         }
+        // Surface the script's OWN structured status block (e.g. `status=played\nplayedTitle=…\n
+        // playedArtist=…`) as the summary, not a generic "executed successfully". The script already
+        // verified its effect and reported it; showing that to the planner is the evidence it needs to
+        // run.complete directly, instead of reaching for a second tool to re-verify (which is where the
+        // run was looping). Falls back to the generic summary when the script reports nothing.
+        let status = outcome.output
+            .split(whereSeparator: { $0 == "\n" || $0 == "\r" })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "; ")
         return success(
             context,
-            summary: outcome.summary,
+            summary: status.isEmpty ? outcome.summary : status,
             facts: ["skillRun.\(scriptID)": outcome.metadata["status"] ?? "succeeded"],
             metadata: outcome.metadata
         )
@@ -345,8 +355,12 @@ public enum DonkeyCommandBackends {
 
     // MARK: - shell_exec
 
-    /// Max characters accepted for a one-line command.
-    private static let shellCommandMaxLength = 400
+    /// Max characters accepted for a one-line command. Sized for real `osascript` one-liners: a
+    /// macOS temp path (e.g. an `llm.generate` file under `/var/folders/.../T/`) is ~100 chars on its
+    /// own, and a multi-`-e` AppleScript that reads such a file into Notes/Mail/Calendar runs to
+    /// ~450+ chars before any content. A tighter cap silently rejected those legitimate commands; the
+    /// bound stays only as a backstop against pathological inline payloads.
+    private static let shellCommandMaxLength = 1_500
     /// Seconds before a command is terminated when the call does not set its own budget.
     private static let shellTimeout: TimeInterval = 12
     /// Upper bound for a caller-provided `timeoutSeconds`, so a planner mistake can never hang a run.
@@ -369,7 +383,12 @@ public enum DonkeyCommandBackends {
             return invalidInput(context, "shell_exec only runs a single-line command.")
         }
         guard command.count <= shellCommandMaxLength else {
-            return invalidInput(context, "shell_exec command is too long.")
+            return invalidInput(
+                context,
+                "shell_exec command is \(command.count) chars; the limit is \(shellCommandMaxLength). "
+                    + "Don't inline large content — generate it to a file with llm.generate (toFile=true), "
+                    + "then run a short command that reads from that file."
+            )
         }
 
         // Classify by risk tier. Reads run immediately; anything that changes
