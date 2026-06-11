@@ -15,6 +15,8 @@ Supported product and engineering guides live in `docs/guides/`.
 
 Add or update a guide there when behavior becomes supported. Do not maintain duplicate guide indexes in subdirectories or app folders; use descriptive filenames and link directly from related docs only when the relationship helps a maintainer.
 
+Write and edit docs following `docs/guides/eng-doc-style.md`. It defines the required structure, sentence-level rules, and the post-writing test for every engineering doc.
+
 ## Navigation Rules
 
 - Treat `plans/done/` as background only; do not use archived plans as active implementation instructions.

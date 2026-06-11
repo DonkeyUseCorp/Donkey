@@ -34,6 +34,7 @@ Before changing `site/` UI, routes, API handlers, or data access patterns:
 - Ask before creating any new plan document.
 - Manage plans deliberately: move a plan to `plans/done/` when its work is complete, and create or keep plans only for work that remains.
 - Over time, prefer shrinking active `plans/` by completing work and moving finished plans to `plans/done/`.
+- When writing or editing any engineering doc under `docs/`, follow `docs/guides/eng-doc-style.md`.
 - Update guides in `docs/guides/` only for major features or durable supported-behavior changes. Do not update guide docs for small styling tweaks, layout adjustments, copy changes, or implementation-only refactors.
 - When work completes a master-plan slice, update the master plan's supported/current-boundary language and next steps in the same change.
 - Keep guides explanatory. They should teach what the system is, how it works, and which boundaries matter; do not turn guides into feature inventories, implementation logs, duplicated code, or long file lists.
