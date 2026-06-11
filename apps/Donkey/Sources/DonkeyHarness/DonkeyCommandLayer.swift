@@ -19,6 +19,7 @@ public enum DonkeyCommandLayer {
         case shellExec = "shell_exec"
         case appsList = "apps_list"
         case appSkill = "app_skill"
+        case appCommands = "app_commands"
         case skillRun = "skill_run"
     }
 
@@ -77,6 +78,23 @@ public enum DonkeyCommandLayer {
                     "guidance": "The app's operating playbook, when found."
                 ],
                 requiredPermissions: [.skillLookup],
+                safetyClass: .readOnly
+            ),
+            HarnessToolDescriptor(
+                name: Command.appCommands.rawValue,
+                pluginID: pluginID,
+                summary: "Read an app's real AppleScript vocabulary — the commands, parameters, classes, and enumerations its scripting dictionary actually declares — before generating any AppleScript for it. Call this for any scriptable app you have no loaded skill for; scripts written from this digest use terminology the app is guaranteed to understand. When the digest marks a suite as condensed or truncated, call again with `suite` set to that suite's name for full detail. If `scriptable` comes back false, do not generate AppleScript; drive the app with accessibility/vision tools instead.",
+                inputSchema: [
+                    "app": "The app's display name or bundle identifier.",
+                    "suite": "Optional: a suite name from a previous result, to get that suite at full detail."
+                ],
+                optionalInputKeys: ["suite"],
+                outputSchema: [
+                    "scriptable": "\"true\", \"false\", or \"unknown\" — whether the app can be driven via AppleScript.",
+                    "digest": "The bounded scripting-dictionary digest (commands with parameter names/types/optionality, classes, enumerations).",
+                    "suites": "Comma-separated suite names available for the `suite` drill-down."
+                ],
+                requiredPermissions: [.appLookup],
                 safetyClass: .readOnly
             ),
             HarnessToolDescriptor(

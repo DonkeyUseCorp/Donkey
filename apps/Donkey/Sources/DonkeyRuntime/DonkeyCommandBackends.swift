@@ -29,9 +29,68 @@ public enum DonkeyCommandBackends {
             return listApps(context)
         case .appSkill:
             return appSkill(context)
+        case .appCommands:
+            return await appCommands(context)
         case .skillRun:
             return await runSkillScript(context)
         }
+    }
+
+    // MARK: - app_commands
+
+    /// Surface the app's REAL AppleScript vocabulary from its parsed scripting dictionary, so the
+    /// model writes scripts against declared terminology instead of guessing it. Non-scriptable
+    /// apps answer deterministically with the accessibility/vision redirection.
+    private static func appCommands(_ context: HarnessToolExecutionContext) async -> HarnessToolResult {
+        guard let app = trimmed(context.call.input["app"]) else {
+            return invalidInput(context, "app_commands requires an `app` display name or bundle identifier.")
+        }
+        let service = AppScriptingDictionaryService.shared
+        let lookup = await service.lookup(appName: app, bundleIdentifier: app)
+
+        guard lookup.scriptability != .notScriptable else {
+            return success(
+                context,
+                summary: "\(app) is not AppleScript-scriptable. Do not generate AppleScript for it; drive it with accessibility/vision tools instead.",
+                facts: ["appCommands.\(app)": "notScriptable"],
+                metadata: ["scriptable": "false", "app": app]
+            )
+        }
+        guard let dictionary = lookup.dictionary else {
+            let scriptable = lookup.scriptability == .scriptable ? "true" : "unknown"
+            return success(
+                context,
+                summary: "No scripting dictionary could be read for \(app). Prefer accessibility/vision tools, or shell_exec for system-level actions.",
+                facts: ["appCommands.\(app)": "noDictionary"],
+                metadata: ["scriptable": scriptable, "app": app]
+            )
+        }
+
+        let suiteNames = dictionary.suites.map(\.name).joined(separator: ", ")
+        if let suiteName = trimmed(context.call.input["suite"]) {
+            guard let suiteDigest = await service.suiteDigest(
+                appName: app, bundleIdentifier: app, suiteName: suiteName
+            ) else {
+                return failed(
+                    context,
+                    "\(app) has no suite named \"\(suiteName)\". Available suites: \(suiteNames).",
+                    reason: "suiteNotFound"
+                )
+            }
+            return success(
+                context,
+                summary: suiteDigest,
+                facts: ["appCommands.\(app)": "loaded"],
+                metadata: ["scriptable": "true", "app": app, "digest": suiteDigest, "suites": suiteNames]
+            )
+        }
+
+        return success(
+            context,
+            summary: lookup.digest,
+            facts: ["appCommands.\(app)": "loaded"],
+            metadata: ["scriptable": "true", "app": app, "digest": lookup.digest, "suites": suiteNames]
+        )
     }
 
     // MARK: - app_skill
