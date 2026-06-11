@@ -712,6 +712,8 @@ public final class UserQuerySpawnOverlayViewModel: ObservableObject {
 public struct UserQuerySpawnOverlayView: View {
     @ObservedObject private var viewModel: UserQuerySpawnOverlayViewModel
     @State private var haloPulseActive = false
+    @State private var isLabelHovered = false
+    @State private var isDismissButtonHovered = false
 
     public init(viewModel: UserQuerySpawnOverlayViewModel) {
         self.viewModel = viewModel
@@ -813,10 +815,23 @@ public struct UserQuerySpawnOverlayView: View {
         .onTapGesture {
             viewModel.beginInlineInput()
         }
+        .onHover { hovering in
+            isLabelHovered = hovering
+        }
         .overlay(alignment: .topTrailing) {
             dismissButton
                 .offset(x: 6, y: -6)
+                .opacity(showsDismissButton ? 1 : 0)
+                .allowsHitTesting(showsDismissButton)
+                .onHover { hovering in
+                    isDismissButtonHovered = hovering
+                }
+                .animation(.easeOut(duration: 0.12), value: showsDismissButton)
         }
+    }
+
+    private var showsDismissButton: Bool {
+        isLabelHovered || isDismissButtonHovered
     }
 
     private var dismissButton: some View {
