@@ -39,6 +39,10 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     /// The model's full thought summary for the most recent step, when thinking is enabled. Persisted
     /// to the thread transcript (not fed back into the per-step prompt, so context stays bounded).
     public private(set) var lastThinking: String?
+    /// Planning failures hit while choosing the most recent step (unusable replies, retries, the
+    /// reason a step fell back to run.failSafe). Cleared at the start of each planNextStep; the route
+    /// writes them into the thread transcript so a failed step is diagnosable from the thread alone.
+    public private(set) var lastPlanningErrors: [String] = []
 
     /// Names of the registered read-only tools (observe/verify/respond/lifecycle), derived from each
     /// descriptor's safety class. A tool counts as an "action" for first-action timing exactly when it
@@ -95,12 +99,16 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         // empty tool name never reads as completion (a refusal/truncation would otherwise record as
         // success); the runtime's stall guard remains the final backstop for genuine loops.
         var retryNote: String?
+        lastPlanningErrors = []
         let lastAttempt = Self.maxPlanAttempts - 1
         for attempt in 0...lastAttempt {
             let decision: Decision
             do {
                 decision = try await decide(task: task, retryNote: retryNote, attempt: attempt)
             } catch {
+                lastPlanningErrors.append(
+                    "planning attempt \(attempt + 1)/\(Self.maxPlanAttempts) failed: \(String(describing: error).prefix(300))"
+                )
                 guard attempt < lastAttempt else { break }
                 retryNote = "Your previous reply could not be used (\(String(describing: error).prefix(200))). "
                     + "Reply with exactly ONE JSON object naming one tool from AVAILABLE TOOLS, with every "
@@ -110,6 +118,9 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
             lastNarration = decision.reason.flatMap { $0.isEmpty ? nil : $0 } ?? lastNarration
             lastThinking = decision.thinking.flatMap { $0.isEmpty ? nil : $0 }
             guard let toolName = decision.tool.flatMap({ $0.isEmpty ? nil : $0 }) else {
+                lastPlanningErrors.append(
+                    "planning attempt \(attempt + 1)/\(Self.maxPlanAttempts): reply named no tool"
+                )
                 guard attempt < lastAttempt else {
                     return HarnessToolCall(name: "run.failSafe", input: ["reason": "plannerReturnedNoTool"])
                 }
@@ -125,6 +136,9 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
                let required = requiredInputKeys[toolName], !required.isEmpty,
                Set(providedInput.keys).isDisjoint(with: required) {
                 let keys = required.sorted().joined(separator: ", ")
+                lastPlanningErrors.append(
+                    "planning attempt \(attempt + 1)/\(Self.maxPlanAttempts): chose \(toolName) without its required input (\(keys))"
+                )
                 retryNote = "Your previous reply chose \(toolName) but included none of its required input "
                     + "(\(keys)). Re-issue \(toolName) with that input filled in, or choose a different tool."
                 continue

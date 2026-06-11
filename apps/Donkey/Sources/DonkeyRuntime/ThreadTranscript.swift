@@ -26,6 +26,8 @@ public final class ThreadTranscript: @unchecked Sendable {
         case toolCall      // the assistant invoking a tool
         case toolResult    // a tool's output
         case response      // the assistant's answer to the user
+        case event         // a session lifecycle event (understanding parsed, run finished, …)
+        case error         // something the session hit that wasn't a tool result (planner retry, aborted start, …)
     }
 
     public let directory: URL
@@ -96,6 +98,20 @@ public final class ThreadTranscript: @unchecked Sendable {
         appendEntry(role: .assistant, kind: .response, title: nil, body: text, fenced: false)
     }
 
+    /// A session lifecycle event. The thread file is the COMPLETE record of a session — not only the
+    /// tool turns — so things like the parsed understanding and the run's final outcome land here too.
+    public func systemEvent(_ text: String) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        appendEntry(role: .system, kind: .event, title: nil, body: Self.clip(text, 2_000), fenced: false)
+    }
+
+    /// An error the session hit outside a tool result — a planner reply that couldn't be used, a run
+    /// that aborted before it started. These must be readable in the thread, not buried in logs.
+    public func error(_ text: String) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        appendEntry(role: .system, kind: .error, title: nil, body: Self.clip(text, 2_000), fenced: false)
+    }
+
     /// Persist the compacted thread summary (callers generate it).
     public func writeSummary(_ markdown: String) {
         lock.lock(); defer { lock.unlock() }
@@ -131,6 +147,7 @@ public final class ThreadTranscript: @unchecked Sendable {
         case (.assistant, .toolCall): return "🔧"
         case (.assistant, .response): return "💬"
         case (.tool, _): return "📄"
+        case (.system, .error): return "⚠️"
         case (.system, _): return "⚙️"
         default: return "•"
         }

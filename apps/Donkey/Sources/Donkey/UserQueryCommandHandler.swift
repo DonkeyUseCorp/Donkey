@@ -267,6 +267,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
     ) async -> UserQueryCommandHandlingResult {
         guard permissionPolicy.allowedCapabilities.contains(.input) else {
             return await failHarnessRun(
+                command: command,
                 response: "Vision navigation needs input permission, which isn't granted.",
                 reason: "inputNotPermitted",
                 appName: "",
@@ -277,6 +278,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         }
         guard let target = MacWindowResolver().frontmostUserAppTarget() else {
             return await failHarnessRun(
+                command: command,
                 response: "I couldn't find a frontmost app window to navigate. Focus the app you want, then type your request.",
                 reason: "noFrontmostApp",
                 appName: "",
@@ -290,6 +292,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
 
         guard let configuration = try? DonkeyBackendInferenceConfiguration.fromEnvironment() else {
             return await failHarnessRun(
+                command: command,
                 response: "The vision backend isn't configured (set DONKEY_WEB_BASE_URL), so I couldn't navigate by vision.",
                 reason: "visionBackendUnavailable",
                 appName: frontmostAppName,
@@ -419,6 +422,20 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         let transcript = ThreadTranscript(id: taskID)
         transcript.begin(id: taskID, app: appName)
         transcript.userMessage(command)
+        // The thread is the COMPLETE session record: the parsed understanding (or its absence) is part
+        // of the conversation, not just an internal step.
+        if let understanding {
+            var understood = "Understood request: \(understanding.restatedGoal ?? command)"
+            if let app = understanding.targetAppName, !app.isEmpty {
+                understood += " · target app: \(app)"
+            }
+            if understanding.needsClarification, let question = understanding.clarifyingQuestion, !question.isEmpty {
+                understood += " · needs clarification: \(question)"
+            }
+            transcript.systemEvent(understood)
+        } else {
+            transcript.systemEvent("Understanding was unavailable (timed out or failed); driving the raw command.")
+        }
         VisionGroundingLog.emit("thread traceID=\(traceID) path=\(transcript.threadPath)")
 
         // Always set onStep so every turn is recorded; the overlay narration/cursor is layered on top
@@ -426,6 +443,11 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         let onStep: (@Sendable (HarnessStepExecutionResult) async -> Void)? = { (step: HarnessStepExecutionResult) async -> Void in
             await MainActor.run {
                 let narration = Self.stepNarration(for: step, planner: planner)
+                // Planning failures (unusable replies, retries) are part of the session and must be
+                // readable in the thread — a step that ends in run.failSafe is otherwise a mystery.
+                for planningError in planner.lastPlanningErrors {
+                    transcript.error(planningError)
+                }
                 if let result = step.toolResult {
                     // The thread file gets the model's full thought summary (when thinking is on);
                     // the overlay/progress gets only the clipped one-line narration below. The full
@@ -486,6 +508,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // thread summary. A deterministic summary lands immediately; an LLM-written one replaces it in
         // the background so the result isn't delayed by the summary call.
         let finalDetail = runSteps.last?.toolResult?.summary ?? finalTask?.goal ?? command
+        transcript.systemEvent("Run finished: \(outcomeReason) after \(turns) step(s).")
         transcript.response(finalDetail)
         transcript.writeSummary(Self.deterministicThreadSummary(
             command: command, app: appName, outcome: outcomeReason, steps: runSteps, finalDetail: finalDetail
@@ -630,7 +653,10 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
 
     /// Fail-safe exit for the vision-navigation route when it can't even start (no frontmost app,
     /// backend unconfigured, input not permitted). Mirrors the other non-local routes' lifecycle.
+    /// Even an aborted start gets a thread file: the thread is the session's complete record, and a
+    /// turn that produced nothing on disk is indistinguishable from a turn that never happened.
     private func failHarnessRun(
+        command: String,
         response: String,
         reason: String,
         appName: String,
@@ -639,6 +665,11 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         preparedTurnMetadata: [String: String]
     ) async -> UserQueryCommandHandlingResult {
         VisionGroundingLog.emit("aborted traceID=\(traceID) reason=\(reason) app=\(appName)")
+        let transcript = ThreadTranscript(id: taskID)
+        transcript.begin(id: taskID, app: appName)
+        transcript.userMessage(command)
+        transcript.error("Run could not start (\(reason)).")
+        transcript.response(response)
         let decision = AppHarnessDecision(
             kind: .respond,
             message: response,
