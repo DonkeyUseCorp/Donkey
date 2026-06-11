@@ -183,8 +183,11 @@ public enum VisionActionPlanner {
             metadata: ["source": "vision-action-planner", "prompt_version": "vision-action-v1"],
             parameters: [
                 "temperature": .number(0),
-                "max_output_tokens": .number(2_000),
-                "thinking_budget": .number(0)  // disable Gemini thinking; thinking tokens otherwise starve the JSON output
+                // Headroom for medium thinking PLUS the small action JSON, so thinking can't starve it.
+                "max_output_tokens": .number(3_000),
+                // Gemini 3.x honors thinking_level, not the integer thinking_budget (which it ignores).
+                // The thought summary returns separately from the JSON, so it can't corrupt the action.
+                "thinking_level": .string("medium")
             ]
         )
     }

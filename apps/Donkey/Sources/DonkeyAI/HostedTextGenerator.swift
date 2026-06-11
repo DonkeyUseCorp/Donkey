@@ -39,7 +39,8 @@ public struct HostedTextGenerator: Sendable {
             parameters: [
                 "temperature": .number(0.4),
                 "max_output_tokens": .number(Double(maxOutputTokens)),
-                "thinking_budget": .number(0)
+                // Gemini 3.x honors thinking_level, not the integer thinking_budget (which it ignores).
+                "thinking_level": .string("medium")
             ]
         )
         let backend = self.backend

@@ -175,8 +175,10 @@ public final class HostedHarnessRequestUnderstanding {
             metadata: ["source": "hosted-harness-request-understanding", "prompt_version": "harness-request-understanding-v1"],
             parameters: [
                 "temperature": .number(0),
-                "max_output_tokens": .number(800),
-                "thinking_budget": .number(0)
+                // Headroom for medium thinking PLUS the JSON understanding; tight caps starve the output.
+                "max_output_tokens": .number(2_500),
+                // Gemini 3.x honors thinking_level, not the integer thinking_budget (which it ignores).
+                "thinking_level": .string("medium")
             ]
         )
     }

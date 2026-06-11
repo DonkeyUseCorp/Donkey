@@ -79,11 +79,10 @@ public enum GeminiVertexVisionPlanner {
             "generationConfig": [
                 "temperature": 0,
                 "responseMimeType": "application/json",
-                // gemini-3.5-flash is a thinking model; left on, thinking tokens
-                // can consume the whole budget and starve the JSON output (the same
-                // failure VisionActionPlanner disables thinking to avoid). The raw
-                // Vertex API takes the nested thinkingConfig.thinkingBudget form.
-                "thinkingConfig": ["thinkingBudget": 0],
+                // gemini-3.5-flash takes thinking_level (the integer thinkingBudget is ignored on 3.x).
+                // No maxOutputTokens is set, so the large default leaves ample room for medium thinking
+                // plus the small action JSON. Vertex takes the proto enum name (uppercase).
+                "thinkingConfig": ["thinkingLevel": "MEDIUM"],
                 "responseSchema": [
                     "type": "object",
                     "properties": [
