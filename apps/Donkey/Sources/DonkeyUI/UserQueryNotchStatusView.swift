@@ -477,14 +477,30 @@ public struct UserQueryNotchStatusView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
-    /// A count-up elapsed-time label for a running task — SwiftUI's `.timer` style ticks on its own,
-    /// no manual timer — so a long-running query visibly advances instead of looking stuck.
+    /// A count-up elapsed-time label for a running task — the timeline ticks every second on its
+    /// own, so a long-running query visibly advances instead of looking stuck.
     private func elapsedTimer(since start: Date) -> some View {
-        Text(start, style: .timer)
-            .font(.system(size: 11, weight: .regular).monospacedDigit())
-            .foregroundStyle(Color.white.opacity(0.5))
-            .lineLimit(1)
-            .fixedSize()
+        TimelineView(.periodic(from: start, by: 1)) { context in
+            Text(Self.elapsedDescription(from: start, to: context.date))
+                .font(.system(size: 11, weight: .regular).monospacedDigit())
+                .foregroundStyle(Color.white.opacity(0.5))
+                .lineLimit(1)
+                .fixedSize()
+        }
+    }
+
+    /// Formats elapsed time as "45m 13s" (or "1h 45m 13s"), dropping any leading zero units.
+    static func elapsedDescription(from start: Date, to now: Date) -> String {
+        let totalSeconds = max(0, Int(now.timeIntervalSince(start)))
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+
+        var parts: [String] = []
+        if hours > 0 { parts.append("\(hours)h") }
+        if minutes > 0 { parts.append("\(minutes)m") }
+        parts.append("\(seconds)s")
+        return parts.joined(separator: " ")
     }
 
     private func taskRow(_ task: UserQueryNotchTask) -> some View {
