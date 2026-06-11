@@ -268,6 +268,32 @@ App-specific AppleScript belongs in skill-local scripts, generated artifacts,
 plugins, catalog entries, or user-reviewed definitions. Do not add app-named
 Swift helpers such as `musicPlaybackScript`.
 
+### Dictionary Grounding And The Compile Gate
+
+Generated AppleScript is grounded in the target app's real scripting
+dictionary, not the model's memory of AppleScript. The runtime parses an app's
+`.sdef` into a typed model (`AppScriptingDictionaryService`, cached per app
+version), and that vocabulary flows through the pipeline in three places:
+
+- The `app_commands` command gives the planner an app's declared commands,
+  parameters, classes, and enumerations as a bounded digest, with a per-suite
+  drill-down. Non-scriptable apps answer deterministically with a redirect to
+  the accessibility/vision path.
+- Generation receives the digest and must use only declared terminology, bind
+  every required parameter, and report the commands it used; if the goal does
+  not fit the dictionary, it declines instead of inventing syntax.
+- Validation is deterministic, not advisory: beyond the static safety checks,
+  it rejects unresolved template tokens, rejects reported commands the
+  dictionary does not declare, and compiles the script against the target app's
+  dictionary (`NSAppleScriptCompileGate`, no execution, never launches the
+  app). A compile failure carries the real compiler message back to the
+  planner for regeneration.
+
+A generated script that compiles, validates, and executes successfully is
+promoted into a learned skill pack (parameterized when a generation-reported
+binding can be turned back into an input slot), so the next run of the same
+task goes `app_skill` → `skill_run` with no model-generated script at all.
+
 ## Skills And Learning
 
 Skills are reusable harness extensions. Skill lookup gives the planner bounded
