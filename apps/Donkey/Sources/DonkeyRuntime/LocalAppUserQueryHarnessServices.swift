@@ -7,6 +7,29 @@ public enum LocalAppUserQueryHarnessServices {
         HarnessBuiltInToolServices(
             skillRegistry: HarnessSkillRegistry(skills: BuiltInLocalAppSkillPacks.descriptors()),
             generatedScripts: HarnessGeneratedScriptStore(artifacts: builtInValidatedScriptArtifacts()),
+            // Learned + promoted skill packs land under the default LearnedApplications root, where
+            // BuiltInLocalAppSkillPacks re-discovers them (30s TTL) for app_skill / skill_run.
+            applicationSkillPackWriter: HarnessApplicationSkillPackWriter(
+                rootDirectory: HarnessApplicationSkillPackWriter.defaultRootDirectory()
+            ),
+            scriptingDictionaryProvider: { targetApp, bundleIdentifier in
+                let lookup = await AppScriptingDictionaryService.shared.lookup(
+                    appName: targetApp,
+                    bundleIdentifier: bundleIdentifier ?? targetApp
+                )
+                guard lookup.dictionary != nil else { return nil }
+                return HarnessScriptingDictionarySnapshot(
+                    digest: lookup.digest,
+                    commandNames: lookup.commandNames
+                )
+            },
+            appleScriptCompiler: { source, targetApp, bundleIdentifier in
+                await NSAppleScriptCompileGate().compile(
+                    source: source,
+                    targetApp: targetApp,
+                    bundleIdentifier: bundleIdentifier
+                )
+            },
             appleScriptExecutor: { artifact, context in
                 await executeSkillScript(artifact: artifact, context: context)
             },

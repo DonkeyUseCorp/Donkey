@@ -366,13 +366,16 @@ public enum BuiltInHarnessToolCatalog {
             descriptor(
                 "automation.applescript.validate",
                 pluginID: "core.automation",
-                summary: "Validate a generated AppleScript artifact before execution.",
+                summary: "Validate a generated AppleScript artifact before execution: static safety checks, unresolved-parameter detection, and a real compile against the target app's scripting dictionary, so wrong terminology is rejected here with the actual compiler error instead of failing at execution.",
                 input: [
                     "scriptArtifactID": "Generated AppleScript artifact identifier.",
                     "targetApp": "Resolved app name and bundle identifier.",
                     "validationPolicy": "Static checks, allowed APIs, target app, permissions, and review state."
                 ],
-                output: ["validationStatus": "validated or rejected with reason."],
+                output: [
+                    "validationStatus": "validated or rejected with reason.",
+                    "compile.errorMessage": "The AppleScript compiler's actual error message when the compile gate rejects the script — regenerate with this error in context."
+                ],
                 permissions: [.appLookup],
                 safety: .readOnly,
                 requiredContext: ["generated AppleScript artifact", "validation policy"],

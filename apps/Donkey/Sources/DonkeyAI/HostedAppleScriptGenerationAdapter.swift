@@ -3,7 +3,7 @@ import DonkeyHarness
 import Foundation
 
 public struct HostedAppleScriptGenerationAdapter: Sendable {
-    public static let schemaID = "dynamic_applescript_generation_v1"
+    public static let schemaID = "dynamic_applescript_generation_v2"
 
     public var router: AIModelRouter
     public var configuration: DonkeyBackendInferenceConfiguration?
@@ -119,7 +119,9 @@ public struct HostedAppleScriptGenerationAdapter: Sendable {
                     "provider": entry.provider.rawValue,
                     "modelEntryID": entry.id,
                     "safetyNotes": wire.safetyNotes.joined(separator: "\n"),
-                    "expectedOutput": wire.expectedOutput
+                    "expectedOutput": wire.expectedOutput,
+                    "usedCommands": wire.usedCommands.joined(separator: "\n"),
+                    "parameterBindings": wire.parameterBindings.joined(separator: "\n")
                 ]
             )
         } catch is CancellationError {
@@ -164,7 +166,7 @@ public struct HostedAppleScriptGenerationAdapter: Sendable {
             ],
             metadata: [
                 "source_trace_id": request.sourceTraceID ?? "",
-                "prompt_version": "dynamic-applescript-generation-v1",
+                "prompt_version": "dynamic-applescript-generation-v2",
                 "privacy.store": "false",
                 "model_entry_id": entry.id
             ],
@@ -183,6 +185,7 @@ public struct HostedAppleScriptGenerationAdapter: Sendable {
             entities: request.entities,
             allowedActions: request.allowedActions,
             verification: request.verification,
+            scriptingDictionary: request.scriptingDictionaryDigest,
             worldFacts: request.worldFacts,
             metadata: request.metadata
         )
@@ -199,7 +202,10 @@ public struct HostedAppleScriptGenerationAdapter: Sendable {
         "Do not build a full automation pipeline; Donkey handles observation, clicking, recovery, and verification as separate harness steps.",
         "Use only the provided entities and allowed actions.",
         "Do not use shell commands, System Events, keystrokes, key codes, file deletion, quitting apps, network calls, credential access, or unrelated applications.",
-        "Prefer app dictionary commands and return a concise structured text result with key=value fields when possible.",
+        "When the task JSON includes a scriptingDictionary digest, it is the app's real declared vocabulary: use ONLY command, parameter, class, property, and enumeration names that appear in it, with their exact spelling. Never invent terminology that is not in the digest. If the goal cannot be expressed with the digest's commands, set canGenerate to false with a blockedReason instead of guessing.",
+        "Provide a concrete value for every required parameter of every command you use; never leave placeholders or template tokens in the script.",
+        "List every dictionary command the script uses in usedCommands, and every parameter you bound in parameterBindings as name=value entries.",
+        "Return a concise structured text result with key=value fields when possible.",
         "Do not execute anything. The harness will validate, permission-gate, execute, observe, and verify separately."
     ].joined(separator: " ")
 
@@ -207,7 +213,7 @@ public struct HostedAppleScriptGenerationAdapter: Sendable {
         [
             "type": "object",
             "additionalProperties": false,
-            "required": ["canGenerate", "blockedReason", "scriptSource", "summary", "safetyNotes", "expectedOutput"],
+            "required": ["canGenerate", "blockedReason", "scriptSource", "summary", "safetyNotes", "expectedOutput", "usedCommands", "parameterBindings"],
             "properties": [
                 "canGenerate": [
                     "type": "boolean",
@@ -233,6 +239,16 @@ public struct HostedAppleScriptGenerationAdapter: Sendable {
                 "expectedOutput": [
                     "type": "string",
                     "description": "Expected key=value style output or observation that should verify success."
+                ],
+                "usedCommands": [
+                    "type": "array",
+                    "items": ["type": "string"],
+                    "description": "Every scripting-dictionary command name the script uses, exactly as declared in the provided digest."
+                ],
+                "parameterBindings": [
+                    "type": "array",
+                    "items": ["type": "string"],
+                    "description": "Every parameter the script binds, as name=value entries, so the harness can verify no required parameter was left out."
                 ]
             ]
         ]
@@ -254,6 +270,8 @@ private struct AppleScriptGenerationWire: Decodable {
     var summary: String
     var safetyNotes: [String]
     var expectedOutput: String
+    var usedCommands: [String]
+    var parameterBindings: [String]
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -265,6 +283,8 @@ private struct AppleScriptGenerationWire: Decodable {
         summary = try container.decodeIfPresent(String.self, forKey: .summary) ?? ""
         safetyNotes = try container.decodeIfPresent([String].self, forKey: .safetyNotes) ?? []
         expectedOutput = try container.decodeIfPresent(String.self, forKey: .expectedOutput) ?? ""
+        usedCommands = try container.decodeIfPresent([String].self, forKey: .usedCommands) ?? []
+        parameterBindings = try container.decodeIfPresent([String].self, forKey: .parameterBindings) ?? []
         // Models name the script field inconsistently (`scriptSource`, `appleScript`, `script`,
         // `source`). Accept any of them so a correct script isn't dropped over a key name.
         scriptSource = try container.decodeIfPresent(String.self, forKey: .scriptSource)
@@ -276,6 +296,7 @@ private struct AppleScriptGenerationWire: Decodable {
 
     private enum CodingKeys: String, CodingKey {
         case canGenerate, blockedReason, scriptSource, summary, safetyNotes, expectedOutput
+        case usedCommands, parameterBindings
         case appleScript, script, source
     }
 }
@@ -287,6 +308,7 @@ private struct AppleScriptGenerationPromptPayload: Encodable {
     var entities: [String: String]
     var allowedActions: String
     var verification: String
+    var scriptingDictionary: String
     var worldFacts: [String: String]
     var metadata: [String: String]
 }

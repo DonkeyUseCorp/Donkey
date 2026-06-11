@@ -84,6 +84,9 @@ public struct HarnessScriptGenerationRequest: Equatable, Sendable {
     public var entities: [String: String]
     public var allowedActions: String
     public var verification: String
+    /// The target app's real scripting-dictionary terminology (bounded digest). When present, the
+    /// generator must write against these declared commands instead of guessing terminology.
+    public var scriptingDictionaryDigest: String
     public var worldFacts: [String: String]
     public var sourceTraceID: String?
     public var metadata: [String: String]
@@ -96,6 +99,7 @@ public struct HarnessScriptGenerationRequest: Equatable, Sendable {
         entities: [String: String] = [:],
         allowedActions: String = "",
         verification: String = "",
+        scriptingDictionaryDigest: String = "",
         worldFacts: [String: String] = [:],
         sourceTraceID: String? = nil,
         metadata: [String: String] = [:]
@@ -107,9 +111,23 @@ public struct HarnessScriptGenerationRequest: Equatable, Sendable {
         self.entities = entities
         self.allowedActions = allowedActions
         self.verification = verification
+        self.scriptingDictionaryDigest = scriptingDictionaryDigest
         self.worldFacts = worldFacts
         self.sourceTraceID = sourceTraceID
         self.metadata = metadata
+    }
+}
+
+/// What the runtime knows about the target app's scripting dictionary, handed to the harness so
+/// AppleScript generation is grounded in declared terminology and validation can cross-check the
+/// commands a generated script claims to use.
+public struct HarnessScriptingDictionarySnapshot: Equatable, Sendable {
+    public var digest: String
+    public var commandNames: [String]
+
+    public init(digest: String, commandNames: [String] = []) {
+        self.digest = digest
+        self.commandNames = commandNames
     }
 }
 
@@ -128,6 +146,29 @@ public struct HarnessScriptGenerationOutcome: Equatable, Sendable {
         self.succeeded = succeeded
         self.source = source
         self.summary = summary
+        self.metadata = metadata
+    }
+}
+
+/// Result of deterministically compiling an AppleScript artifact against the target app's real
+/// dictionary, without executing it. AppleScript resolves terminology at compile time, so this is
+/// a 100%-accurate syntax+terminology gate; failures carry the actual compiler message so the
+/// planner can regenerate with the precise error in context.
+public struct HarnessScriptCompileOutcome: Equatable, Sendable {
+    public var compiled: Bool
+    public var errorMessage: String
+    public var errorRangeDescription: String
+    public var metadata: [String: String]
+
+    public init(
+        compiled: Bool,
+        errorMessage: String = "",
+        errorRangeDescription: String = "",
+        metadata: [String: String] = [:]
+    ) {
+        self.compiled = compiled
+        self.errorMessage = errorMessage
+        self.errorRangeDescription = errorRangeDescription
         self.metadata = metadata
     }
 }
@@ -186,6 +227,12 @@ public struct HarnessBuiltInToolServices: Sendable {
     public var applicationLearningStore: HarnessApplicationLearningStore
     public var applicationSkillPackWriter: HarnessApplicationSkillPackWriter?
     public var appleScriptGenerator: (@Sendable (HarnessScriptGenerationRequest) async -> HarnessScriptGenerationOutcome)?
+    /// The target app's parsed scripting dictionary (digest + command names), or nil when no
+    /// dictionary can be read. Grounds `automation.applescript.generate` in real terminology.
+    public var scriptingDictionaryProvider: (@Sendable (_ targetApp: String, _ bundleIdentifier: String?) async -> HarnessScriptingDictionarySnapshot?)?
+    /// Compiles AppleScript source against the target app's dictionary without executing it.
+    /// When absent, validation runs the static checks only.
+    public var appleScriptCompiler: (@Sendable (_ source: String, _ targetApp: String?, _ bundleIdentifier: String?) async -> HarnessScriptCompileOutcome)?
     public var appleScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)?
     public var skillScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)?
     /// Native Donkey Command Layer backend. Returns a result for a recognized
@@ -209,6 +256,8 @@ public struct HarnessBuiltInToolServices: Sendable {
         applicationLearningStore: HarnessApplicationLearningStore = HarnessApplicationLearningStore(),
         applicationSkillPackWriter: HarnessApplicationSkillPackWriter? = nil,
         appleScriptGenerator: (@Sendable (HarnessScriptGenerationRequest) async -> HarnessScriptGenerationOutcome)? = nil,
+        scriptingDictionaryProvider: (@Sendable (_ targetApp: String, _ bundleIdentifier: String?) async -> HarnessScriptingDictionarySnapshot?)? = nil,
+        appleScriptCompiler: (@Sendable (_ source: String, _ targetApp: String?, _ bundleIdentifier: String?) async -> HarnessScriptCompileOutcome)? = nil,
         appleScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)? = nil,
         skillScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)? = nil,
         commandExecutor: (@Sendable (HarnessToolExecutionContext) async -> HarnessToolResult?)? = nil,
@@ -222,6 +271,8 @@ public struct HarnessBuiltInToolServices: Sendable {
         self.applicationLearningStore = applicationLearningStore
         self.applicationSkillPackWriter = applicationSkillPackWriter
         self.appleScriptGenerator = appleScriptGenerator
+        self.scriptingDictionaryProvider = scriptingDictionaryProvider
+        self.appleScriptCompiler = appleScriptCompiler
         self.appleScriptExecutor = appleScriptExecutor
         self.skillScriptExecutor = skillScriptExecutor
         self.commandExecutor = commandExecutor
@@ -530,10 +581,14 @@ public enum BuiltInHarnessToolExecutors {
             _ = await services.generatedScripts.reject(id: scriptID, reason: "emptyScriptSource")
             return failed(context, "Script artifact has no source to validate.", reason: "emptyScriptSource")
         }
-        if artifact.language == .appleScript,
-           let rejectionReason = appleScriptValidationRejectionReason(artifact: artifact, context: context) {
-            _ = await services.generatedScripts.reject(id: scriptID, reason: rejectionReason)
-            return failed(context, "AppleScript artifact failed validation.", reason: rejectionReason)
+        if artifact.language == .appleScript {
+            if let rejectionReason = appleScriptValidationRejectionReason(artifact: artifact, context: context) {
+                _ = await services.generatedScripts.reject(id: scriptID, reason: rejectionReason)
+                return failed(context, "AppleScript artifact failed validation.", reason: rejectionReason)
+            }
+            if let gateRejection = await appleScriptGateRejection(artifact: artifact, context: context, services: services) {
+                return gateRejection
+            }
         }
 
         let validated = await services.generatedScripts.validate(
@@ -602,6 +657,15 @@ public enum BuiltInHarnessToolExecutors {
             )
         }
         let status: HarnessToolResultStatus = outcome.succeeded ? .succeeded : .failed
+        var resultMetadata = outcome.metadata.merging([
+            "scriptArtifactID": scriptID,
+            "executor": "guardedScriptBackend"
+        ]) { current, _ in current }
+        if outcome.succeeded {
+            resultMetadata.merge(
+                await promoteVerifiedGeneratedScript(artifact: artifact, services: services)
+            ) { current, _ in current }
+        }
         return HarnessToolResult(
             callID: context.call.id,
             toolName: context.call.name,
@@ -615,11 +679,137 @@ public enum BuiltInHarnessToolExecutors {
                     "lastAcceptedTool": context.call.name
                 ]
             ),
-            metadata: outcome.metadata.merging([
-                "scriptArtifactID": scriptID,
-                "executor": "guardedScriptBackend"
-            ]) { current, _ in current }
+            metadata: resultMetadata
         )
+    }
+
+    // MARK: - Promotion of verified generated scripts
+
+    /// A dynamically generated AppleScript that compiled, executed, and reported success is proven
+    /// terminology for this app on this machine. Promote it into a learned skill pack so the next
+    /// run of the same task goes `app_skill` → `skill_run` with zero model-generated script: fully
+    /// deterministic on the second run. Returns promotion metadata for the tool result (empty when
+    /// promotion doesn't apply or no skill-pack writer is configured).
+    private static func promoteVerifiedGeneratedScript(
+        artifact: HarnessGeneratedScriptArtifact,
+        services: HarnessBuiltInToolServices
+    ) async -> [String: String] {
+        guard artifact.createdByToolName == "automation.applescript.generate",
+              artifact.validationStatus == .validated,
+              let writer = services.applicationSkillPackWriter,
+              let appName = trimmed(artifact.metadata["targetApp"])
+        else {
+            return [:]
+        }
+        let bundleIdentifier = trimmed(artifact.metadata["bundleIdentifier"])
+        let purpose = artifact.metadata["purpose"] ?? artifact.metadata["goal"] ?? artifact.id
+        let usedCommands = (artifact.metadata["generation.usedCommands"] ?? "")
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+
+        // Dedup key: same app + same dictionary-command signature lands in the same pack, so a
+        // repeat success updates the promoted script instead of accumulating duplicates.
+        let dedupSeed = usedCommands.isEmpty
+            ? "\(appName) \(purpose)"
+            : "\(appName) \(usedCommands.joined(separator: " "))"
+        let skillID = "promoted-\(stableIDSeed(from: dedupSeed))"
+
+        let bindings = (artifact.metadata["generation.parameterBindings"] ?? "")
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let (promotedSource, parameterized) = parameterizedPromotionSource(artifact.source, bindings: bindings)
+
+        let promoted = HarnessGeneratedScriptArtifact(
+            id: "\(skillID)-run",
+            language: .appleScript,
+            source: promotedSource,
+            validationStatus: .validated,
+            createdByToolName: artifact.createdByToolName,
+            ownerSkillID: skillID,
+            metadata: [
+                "purpose": purpose,
+                "targetApp": appName,
+                "bundleIdentifier": bundleIdentifier ?? "",
+                "generation.usedCommands": usedCommands.joined(separator: "\n"),
+                "promotion.sourceArtifactID": artifact.id,
+                "promotion.parameterized": parameterized ? "true" : "false",
+                "validation.policy": "promotedVerifiedScript",
+                "validation.provenance": artifact.metadata["generation.backend"] ?? "dynamicAppleScriptGenerator"
+            ]
+        )
+        let profile = HarnessApplicationProfile(
+            skillID: skillID,
+            appName: appName,
+            bundleIdentifier: bundleIdentifier,
+            learningGoal: purpose,
+            observations: [],
+            workflowRecipes: [
+                HarnessApplicationWorkflowRecipe(
+                    id: "\(skillID)-workflow",
+                    name: purpose,
+                    summary: "Run the promoted verified script via skill_run (skillID=\(skillID), scriptID=\(promoted.id))\(parameterized ? ", passing the task's value as `input`" : "").",
+                    steps: [
+                        HarnessApplicationWorkflowStep(
+                            id: "run-promoted-script",
+                            summary: "Execute the verified AppleScript for: \(purpose)",
+                            toolName: "skill_run",
+                            inputHints: parameterized
+                                ? ["skillID": skillID, "scriptID": promoted.id, "input": "the task's user-specific value"]
+                                : ["skillID": skillID, "scriptID": promoted.id],
+                            safetyClass: .guardedInput,
+                            verification: "the script reports a successful structured status"
+                        )
+                    ],
+                    verificationCriteria: ["script output reports success"],
+                    metadata: ["source": "appleScriptPromotion"]
+                )
+            ],
+            generatedScriptIDs: [promoted.id],
+            metadata: [
+                "source": "appleScriptPromotion",
+                "promotion.sourceArtifactID": artifact.id
+            ]
+        )
+        guard let saved = try? writer.save(profile: profile, scripts: [promoted]) else { return [:] }
+        return [
+            "promotion.skillID": saved.skill.id,
+            "promotion.scriptID": saved.skill.scripts.first?.id ?? promoted.id,
+            "promotion.parameterized": parameterized ? "true" : "false"
+        ]
+    }
+
+    /// Turns one task-specific value back into a reusable template: when a generator-reported
+    /// parameter binding's value appears as a quoted string literal in the source, replace it with
+    /// the `{query}` token the skill executor substitutes from `input` at run time. Matching is
+    /// quote-bounded so command words are never rewritten; with no recoverable binding the script
+    /// is promoted as-is (a fixed, still-deterministic workflow).
+    private static func parameterizedPromotionSource(
+        _ source: String,
+        bindings: [String]
+    ) -> (source: String, parameterized: Bool) {
+        for binding in bindings {
+            let parts = binding.split(separator: "=", maxSplits: 1)
+            guard parts.count == 2 else { continue }
+            let value = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard value.count >= 2 else { continue }
+            let quoted = "\"\(appleScriptStringEscaped(value))\""
+            if source.contains(quoted) {
+                return (source.replacingOccurrences(of: quoted, with: "\"{query}\""), true)
+            }
+        }
+        return (source, false)
+    }
+
+    /// Mirrors the runtime template renderer's escaping so a promoted `{query}` slot re-renders to
+    /// exactly the literal the verified script contained.
+    private static func appleScriptStringEscaped(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
     }
 
     // MARK: - Screen & Elements
@@ -862,6 +1052,16 @@ public enum BuiltInHarnessToolExecutors {
             guard let generator = services.appleScriptGenerator else {
                 return failed(context, "No dynamic AppleScript generation backend is configured.", reason: "missingAppleScriptGenerationBackend")
             }
+            // Ground generation in the app's real scripting dictionary when one can be read, and
+            // record the grounding on the artifact so validation can cross-check used commands.
+            let dictionary = await services.scriptingDictionaryProvider?(
+                targetApp,
+                trimmed(context.call.input["bundleIdentifier"])
+            )
+            input["generation.dictionaryGrounded"] = dictionary == nil ? "false" : "true"
+            if let dictionary, !dictionary.commandNames.isEmpty {
+                input["dictionary.commandNames"] = dictionary.commandNames.joined(separator: "\n")
+            }
             let outcome = await generator(
                 HarnessScriptGenerationRequest(
                     language: .appleScript,
@@ -871,6 +1071,7 @@ public enum BuiltInHarnessToolExecutors {
                     entities: scriptGenerationEntities(from: context),
                     allowedActions: context.call.input["allowedActions"] ?? "",
                     verification: context.call.input["verification"] ?? "",
+                    scriptingDictionaryDigest: dictionary?.digest ?? "",
                     worldFacts: context.worldModel.facts,
                     sourceTraceID: context.call.metadata["traceID"],
                     metadata: context.call.input
@@ -909,6 +1110,88 @@ public enum BuiltInHarnessToolExecutors {
         return await scriptGenerate(generatedContext, services: services, ownerSkillID: nil)
     }
 
+    /// Template tokens the runtime's script renderer substitutes. Matching is against this known
+    /// set only — never generic `{…}`, which AppleScript uses for list/record literals.
+    private static let appleScriptTemplateTokens = [
+        "{query}", "{rawQuery}", "{queryLiteral}",
+        "{entityValue}", "{rawEntityValue}",
+        "{targetApp}", "{rawTargetApp}",
+        "{bundleIdentifier}", "{rawBundleIdentifier}",
+        "{input}"
+    ]
+
+    /// Deterministic gates for dynamically generated AppleScript, beyond the static text checks:
+    /// unresolved template tokens (a parameter was never bound), commands the target app's
+    /// dictionary doesn't declare, and a real compile against the app's terminology. Skill-pack
+    /// template artifacts are exempt — they legitimately carry tokens until execution renders them.
+    private static func appleScriptGateRejection(
+        artifact: HarnessGeneratedScriptArtifact,
+        context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices
+    ) async -> HarnessToolResult? {
+        guard artifact.createdByToolName == "automation.applescript.generate" else { return nil }
+
+        if let token = appleScriptTemplateTokens.first(where: artifact.source.contains) {
+            let reason = "unresolvedTemplatePlaceholder:\(token)"
+            _ = await services.generatedScripts.reject(id: artifact.id, reason: reason)
+            return failed(
+                context,
+                "Generated AppleScript still contains the unresolved template token \(token); every parameter must be bound to a concrete value before validation.",
+                reason: reason
+            )
+        }
+
+        if let unknownCommand = commandNotInDictionary(artifact: artifact) {
+            let reason = "commandNotInDictionary:\(unknownCommand)"
+            _ = await services.generatedScripts.reject(id: artifact.id, reason: reason)
+            return failed(
+                context,
+                "Generated AppleScript uses the command \"\(unknownCommand)\", which the target app's scripting dictionary does not declare. Regenerate using only commands from the dictionary digest.",
+                reason: reason
+            )
+        }
+
+        guard let compiler = services.appleScriptCompiler else { return nil }
+        let targetApp = trimmed(context.call.input["targetApp"] ?? artifact.metadata["targetApp"])
+        let bundleIdentifier = trimmed(context.call.input["bundleIdentifier"] ?? artifact.metadata["bundleIdentifier"])
+        let compile = await compiler(artifact.source, targetApp, bundleIdentifier)
+        guard !compile.compiled else { return nil }
+        _ = await services.generatedScripts.reject(id: artifact.id, reason: "appleScriptCompileFailed")
+        return HarnessToolResult(
+            callID: context.call.id,
+            toolName: context.call.name,
+            status: .failed,
+            summary: compile.errorMessage.isEmpty
+                ? "AppleScript failed to compile against the target app's dictionary."
+                : "AppleScript failed to compile: \(compile.errorMessage)",
+            metadata: compile.metadata.merging([
+                "reason": "appleScriptCompileFailed",
+                "compile.errorMessage": compile.errorMessage,
+                "compile.errorRange": compile.errorRangeDescription
+            ]) { current, _ in current }
+        )
+    }
+
+    /// Cross-checks the commands the generator CLAIMED to use against the dictionary command list
+    /// stamped on the artifact at generation time. Structured-output-on-structured-data matching:
+    /// a cheap hallucination catch before the (heavier) compile gate.
+    private static func commandNotInDictionary(artifact: HarnessGeneratedScriptArtifact) -> String? {
+        guard let usedRaw = artifact.metadata["generation.usedCommands"],
+              let declaredRaw = artifact.metadata["dictionary.commandNames"]
+        else {
+            return nil
+        }
+        let declared = Set(
+            declaredRaw.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+        )
+        guard !declared.isEmpty else { return nil }
+        return usedRaw
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .first { !declared.contains($0.lowercased()) }
+    }
+
     private static func appleScriptValidationRejectionReason(
         artifact: HarnessGeneratedScriptArtifact,
         context: HarnessToolExecutionContext
@@ -933,7 +1216,8 @@ public enum BuiltInHarnessToolExecutors {
             "empty trash",
             "shutdown",
             "restart",
-            "quit "
+            "quit ",
+            "eppc://"
         ]
         if let denied = deniedFragments.first(where: lowercased.contains) {
             return "disallowedAppleScriptFragment:\(denied)"
