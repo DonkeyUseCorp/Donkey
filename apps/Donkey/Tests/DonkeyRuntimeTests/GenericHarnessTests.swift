@@ -642,6 +642,40 @@ struct GenericHarnessTests {
         #expect(script?.language == .appleScript)
     }
 
+    /// The summary is the tool-result body the planner reads, so a skill script's structured
+    /// self-report (`status=not_found`, `escalate.goal=…`) must travel inside it — collapsing a
+    /// failure to a generic one-liner left the planner retrying the identical call instead of
+    /// escalating to vision.
+    @Test
+    func skillScriptSummaryCarriesTheScriptSelfReport() {
+        let notFound = LocalAppUserQueryHarnessServices.skillScriptSummary(
+            succeeded: false,
+            executed: true,
+            output: "status=not_found\nquery=Baby Don't Cry\nescalate.app=Music\nescalate.goal=Play the top song result",
+            error: ""
+        )
+        #expect(notFound.contains("status=not_found"))
+        #expect(notFound.contains("escalate.goal=Play the top song result"))
+        #expect(notFound.contains("do not repeat the same call"))
+
+        let hardError = LocalAppUserQueryHarnessServices.skillScriptSummary(
+            succeeded: false,
+            executed: false,
+            output: "",
+            error: "Music got an error: AppleEvent timed out."
+        )
+        #expect(hardError.contains("AppleEvent timed out"))
+
+        let played = LocalAppUserQueryHarnessServices.skillScriptSummary(
+            succeeded: true,
+            executed: true,
+            output: "status=played\nplayedTitle=Baby Don't Cry\nplayedArtist=EXO",
+            error: ""
+        )
+        #expect(played.contains("succeeded"))
+        #expect(played.contains("playedTitle=Baby Don't Cry"))
+    }
+
     @Test
     func skillScriptExecuteUsesStructuredOutcomeForSuccessAndClarification() async throws {
         let generatedScripts = HarnessGeneratedScriptStore(artifacts: [

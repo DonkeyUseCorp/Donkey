@@ -1,8 +1,11 @@
 import DonkeyContracts
 import DonkeyHarness
 import Foundation
+import os
 
 public enum LocalAppUserQueryHarnessServices {
+    private static let logger = Logger(subsystem: "com.donkey.app", category: "skill-script")
+
     public static func builtInSkillBackedServices() -> HarnessBuiltInToolServices {
         HarnessBuiltInToolServices(
             skillRegistry: HarnessSkillRegistry(skills: BuiltInLocalAppSkillPacks.descriptors()),
@@ -125,11 +128,18 @@ public enum LocalAppUserQueryHarnessServices {
         let scriptStatus = outputMetadata["status"]
         let statusReportsFailure = scriptStatus == "not_found" || scriptStatus == "failed"
         let succeeded = result.executed && !clarificationRequired && !statusReportsFailure
+        let summary = skillScriptSummary(
+            succeeded: succeeded,
+            executed: result.executed,
+            output: output,
+            error: result.metadata["appleScript.error"] ?? ""
+        )
+        logger.log(
+            "skill script result skillID=\(artifact.ownerSkillID ?? "", privacy: .public) scriptID=\(artifact.id, privacy: .public) executed=\(result.executed) succeeded=\(succeeded) status=\(scriptStatus ?? "", privacy: .public) error=\(result.metadata["appleScript.error"] ?? "", privacy: .public)"
+        )
         return HarnessScriptExecutionOutcome(
             succeeded: succeeded,
-            summary: succeeded
-                ? "Skill script executed successfully."
-                : "Skill script did not complete successfully.",
+            summary: summary,
             output: output,
             metadata: result.metadata.merging(outputMetadata) { current, _ in current }.merging([
                 "skillID": artifact.ownerSkillID ?? "",
@@ -137,6 +147,28 @@ public enum LocalAppUserQueryHarnessServices {
                 "script.relativePath": artifact.metadata["relativePath"] ?? ""
             ]) { current, _ in current }
         )
+    }
+
+    /// The summary is the tool-result body the planner actually reads each step (history lines and
+    /// the thread both carry it; the structured output only lands in world-model facts). A skill
+    /// script's whole feedback loop — `status=not_found` → escalate to vision instead of retrying —
+    /// depends on its self-report traveling in this string, so never collapse a failure to a generic
+    /// one-liner.
+    public static func skillScriptSummary(
+        succeeded: Bool,
+        executed: Bool,
+        output: String,
+        error: String
+    ) -> String {
+        if !executed && output.isEmpty {
+            let detail = error.isEmpty ? "no output" : String(error.prefix(300))
+            return "Skill script errored before reporting a status: \(detail)"
+        }
+        let headline = succeeded
+            ? "Skill script succeeded."
+            : "Skill script ran but reported the goal was not achieved — read its status below and adjust your approach; do not repeat the same call."
+        guard !output.isEmpty else { return headline }
+        return headline + "\nScript report:\n" + String(output.prefix(500))
     }
 
     private static func structuredOutputMetadata(_ output: String) -> [String: String] {

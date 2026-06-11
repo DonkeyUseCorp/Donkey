@@ -103,8 +103,14 @@ public enum DonkeyCommandBackends {
         guard let app = trimmed(context.call.input["app"]) else {
             return invalidInput(context, "app_skill requires an `app` display name or bundle identifier.")
         }
+        // On-demand reads return the FULL playbook: app_skill is the model deliberately loading the
+        // guide, unlike the per-step ambient guidance which stays at the default 4k prompt budget.
         guard let descriptor = BuiltInLocalAppSkillPacks.appSkillDescriptor(forApp: app, bundleIdentifier: app),
-              let guidance = BuiltInLocalAppSkillPacks.appOperatingGuidance(forApp: app, bundleIdentifier: app)
+              let guidance = BuiltInLocalAppSkillPacks.appOperatingGuidance(
+                  forApp: app,
+                  bundleIdentifier: app,
+                  maxCharacters: 12_000
+              )
         else {
             return success(
                 context,
@@ -410,13 +416,24 @@ public enum DonkeyCommandBackends {
         let stdout = boundedOutput(result.stdout)
         guard result.exitCode == 0 else {
             let stderr = boundedOutput(result.stderr)
+            // The summary is what the model reads next step; a bare exit code hides WHY the command
+            // failed (e.g. an osascript error naming the real problem) and leaves the planner
+            // guessing, so carry the error text in it.
+            var failureLines = [
+                result.timedOut
+                    ? "Command timed out after \(Int(timeout))s and was terminated. Pass timeoutSeconds (max \(Int(shellTimeoutMax))) for known-slow commands."
+                    : "Command exited with code \(result.exitCode)."
+            ]
+            if !stderr.text.isEmpty {
+                failureLines.append("stderr: " + String(stderr.text.prefix(500)))
+            } else if !stdout.text.isEmpty {
+                failureLines.append("stdout: " + String(stdout.text.prefix(500)))
+            }
             return HarnessToolResult(
                 callID: context.call.id,
                 toolName: context.call.name,
                 status: .failed,
-                summary: result.timedOut
-                    ? "Command timed out after \(Int(timeout))s and was terminated. Pass timeoutSeconds (max \(Int(shellTimeoutMax))) for known-slow commands."
-                    : "Command exited with code \(result.exitCode).",
+                summary: failureLines.joined(separator: "\n"),
                 metadata: [
                     "executor": "donkeyCommandLayer",
                     "reason": result.timedOut ? "timedOut" : "nonZeroExit",
