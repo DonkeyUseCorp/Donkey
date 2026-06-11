@@ -664,8 +664,26 @@ final class UserQuerySpawnOverlayController {
             return
         }
 
-        let mouseLocation = surface.panel.convertPoint(fromScreen: NSEvent.mouseLocation)
+        let mouseLocation = overlayLocalPoint(
+            for: NSEvent.mouseLocation,
+            in: surface
+        )
         surface.panel.ignoresMouseEvents = !hitTestFrame.contains(mouseLocation)
+    }
+
+    /// Converts a global screen point into the overlay's top-left-origin local
+    /// space. `convertPoint(fromScreen:)` alone is not enough: it returns
+    /// bottom-left-origin window coordinates, and comparing those against the
+    /// flipped `localHitTestFrame` mirrors the interactive region vertically.
+    private func overlayLocalPoint(
+        for screenPoint: CGPoint,
+        in surface: UserQuerySpawnSurface
+    ) -> CGPoint {
+        let windowPoint = surface.panel.convertPoint(fromScreen: screenPoint)
+        return CGPoint(
+            x: windowPoint.x,
+            y: surface.panel.frame.height - windowPoint.y
+        )
     }
 
     /// `ignoresMouseEvents` is only as fresh as its last evaluation, which
@@ -847,7 +865,7 @@ final class UserQuerySpawnOverlayController {
     ) -> Bool {
         guard surface.panel.frame.contains(screenPoint) else { return false }
 
-        let localPoint = surface.panel.convertPoint(fromScreen: screenPoint)
+        let localPoint = overlayLocalPoint(for: screenPoint, in: surface)
         return surface.viewModel.localHitTestFrame.contains(localPoint)
     }
 
