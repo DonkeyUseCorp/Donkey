@@ -24,6 +24,10 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     /// One-line summary of which command-line tools are installed on this Mac (and versions), so the
     /// planner only reaches for tools that exist. Empty when the probe was skipped or found nothing.
     private let environmentSummary: String?
+    /// Compact catalog of every installed app skill (id, description, covered apps, validated scripts),
+    /// so the planner can route to an authoritative playbook even when no GUI app is the drive target —
+    /// e.g. playing music or saving a note by script. nil when no skills are installed.
+    private let skillCatalog: String?
     private let uptimeMS: @Sendable () -> Double
 
     /// Uptime (ms) at which the planner first chose an *action* tool (something that changes app
@@ -32,11 +36,20 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     public private(set) var firstActionUptimeMS: Double?
     /// Most recent one-line rationale, surfaced to the user as the run's narration.
     public private(set) var lastNarration: String?
+    /// The model's full thought summary for the most recent step, when thinking is enabled. Persisted
+    /// to the thread transcript (not fed back into the per-step prompt, so context stays bounded).
+    public private(set) var lastThinking: String?
 
     /// Names of the registered read-only tools (observe/verify/respond/lifecycle), derived from each
     /// descriptor's safety class. A tool counts as an "action" for first-action timing exactly when it
     /// is NOT read-only, so this stays in sync with the tools instead of a hand-maintained name list.
     private let readOnlyToolNames: Set<String>
+
+    /// Per-tool required input keys (every declared input minus the optional ones). Used to catch a
+    /// malformed decision that names a tool but omits all of its required input — emitting that only
+    /// yields `invalidInput`, and repeated it fails the run (a real failure mode: an empty `shell_exec`
+    /// looping until failSafe). The planner retries once with a corrective note instead.
+    private let requiredInputKeys: [String: Set<String>]
 
     public init(
         backend: DonkeyBackendInferenceClient,
@@ -45,6 +58,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         appGuidance: String?,
         understanding: HarnessRequestUnderstanding? = nil,
         environmentSummary: String? = nil,
+        skillCatalog: String? = nil,
         uptimeMS: @escaping @Sendable () -> Double = { ProcessInfo.processInfo.systemUptime * 1_000 }
     ) {
         self.backend = backend
@@ -53,8 +67,13 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         self.appGuidance = appGuidance
         self.understanding = understanding
         self.environmentSummary = environmentSummary
+        self.skillCatalog = skillCatalog
         self.uptimeMS = uptimeMS
         self.readOnlyToolNames = Set(descriptors.filter { $0.safetyClass == .readOnly }.map(\.name))
+        self.requiredInputKeys = Dictionary(
+            descriptors.map { ($0.name, Set($0.inputSchema.keys).subtracting($0.optionalInputKeys)) },
+            uniquingKeysWith: { current, _ in current }
+        )
     }
 
     public func planNextStep(for task: HarnessTaskState) async -> HarnessToolCall? {
@@ -69,36 +88,59 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
            descriptors.contains(where: { $0.name == "user.clarify" }) {
             return HarnessToolCall(name: "user.clarify", input: ["question": question])
         }
-        // One bad model sample must not kill the run, and an empty tool name must never read as
-        // completion (a refusal or truncated reply would otherwise be recorded as success). Retry the
-        // inference once with the failure fed back; only then fail safe.
+        // One bad model sample must not kill the run. Following the Hermes agent's recovery model, a
+        // malformed, empty, or under-specified decision is fed back to the model and re-asked up to
+        // `maxPlanAttempts` times — and each retry boosts the output-token budget, so a reply truncated
+        // at the cap can complete on the next try. Only after the budget is spent do we fail safe. An
+        // empty tool name never reads as completion (a refusal/truncation would otherwise record as
+        // success); the runtime's stall guard remains the final backstop for genuine loops.
         var retryNote: String?
-        for attempt in 0..<2 {
+        let lastAttempt = Self.maxPlanAttempts - 1
+        for attempt in 0...lastAttempt {
             let decision: Decision
             do {
-                decision = try await decide(task: task, retryNote: retryNote)
+                decision = try await decide(task: task, retryNote: retryNote, attempt: attempt)
             } catch {
-                guard attempt == 0 else { break }
+                guard attempt < lastAttempt else { break }
                 retryNote = "Your previous reply could not be used (\(String(describing: error).prefix(200))). "
-                    + "Reply with exactly one JSON object naming one tool from AVAILABLE TOOLS."
+                    + "Reply with exactly ONE JSON object naming one tool from AVAILABLE TOOLS, with every "
+                    + "required input field filled. For a tool that needs no input, use an empty object: {}."
                 continue
             }
             lastNarration = decision.reason.flatMap { $0.isEmpty ? nil : $0 } ?? lastNarration
+            lastThinking = decision.thinking.flatMap { $0.isEmpty ? nil : $0 }
             guard let toolName = decision.tool.flatMap({ $0.isEmpty ? nil : $0 }) else {
-                guard attempt == 0 else {
+                guard attempt < lastAttempt else {
                     return HarnessToolCall(name: "run.failSafe", input: ["reason": "plannerReturnedNoTool"])
                 }
                 retryNote = "Your previous reply named no tool. Pick exactly one tool from AVAILABLE TOOLS; "
                     + "choose run.complete only when the goal is already confirmed by observed evidence."
                 continue
             }
+            // Catch a malformed decision that names a tool but supplies none of its required input.
+            // Re-ask with a corrective note; once the retry budget is spent, let it through and rely on
+            // the runtime's invalidInput + stall handling so we never loop here.
+            let providedInput = decision.input ?? [:]
+            if attempt < lastAttempt,
+               let required = requiredInputKeys[toolName], !required.isEmpty,
+               Set(providedInput.keys).isDisjoint(with: required) {
+                let keys = required.sorted().joined(separator: ", ")
+                retryNote = "Your previous reply chose \(toolName) but included none of its required input "
+                    + "(\(keys)). Re-issue \(toolName) with that input filled in, or choose a different tool."
+                continue
+            }
             if !readOnlyToolNames.contains(toolName), firstActionUptimeMS == nil {
                 firstActionUptimeMS = uptimeMS()
             }
-            return HarnessToolCall(name: toolName, input: decision.input ?? [:])
+            return HarnessToolCall(name: toolName, input: providedInput)
         }
         return HarnessToolCall(name: "run.failSafe", input: ["reason": "harnessPlanFailed"])
     }
+
+    /// Max planning samples per step before failing safe. The first is the normal call; the rest are
+    /// feedback-driven retries (malformed JSON, empty tool, missing required input, or a reply truncated
+    /// at the token cap). Mirrors the Hermes agent's "retry up to 3 with feedback" recovery.
+    private static let maxPlanAttempts = 3
 
     // MARK: - Model call
 
@@ -106,6 +148,9 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         var tool: String?
         var input: [String: String]?
         var reason: String?
+        /// The model's full thought summary for this step (thinking enabled), persisted to the thread.
+        /// Separate from `reason`, which is the one-line rationale shown live in the overlay.
+        var thinking: String?
     }
 
     private struct DecisionWire: Decodable {
@@ -164,8 +209,24 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     /// caller fails safe instead of stalling the whole run on a hung provider.
     private static let stepTimeoutSeconds: TimeInterval = 45
 
-    private func decide(task: HarnessTaskState, retryNote: String?) async throws -> Decision {
-        let request = responseRequest(task: task, retryNote: retryNote)
+    /// Thinking level for each planning step. The planner runs on a Gemini 3.x model, which takes a
+    /// `thinking_level` (minimal | low | medium | high), NOT the legacy integer `thinking_budget` —
+    /// that knob is silently ignored on these models. `medium` is the model's own default and gives the
+    /// strongest everyday decision quality on the one call that decides everything (which tool, what
+    /// input, act-vs-verify-vs-complete); we set it explicitly so the choice is intentional rather than
+    /// an accident of an ignored parameter. The reasoning summary is persisted to the thread; it is
+    /// never fed back into the prompt, so context stays bounded.
+    private static let plannerThinkingLevel = "medium"
+
+    /// Base output-token budget for a planning reply, and the ceiling a boosted retry may reach. Sized
+    /// with headroom for both the thinking and the tool-call JSON. Each retry raises the budget
+    /// (`base * (attempt + 1)`, capped) so a reply truncated at the cap can complete — the Hermes
+    /// agent's truncation-recovery boost.
+    private static let baseMaxOutputTokens = 3_000
+    private static let maxOutputTokensCap = 8_000
+
+    private func decide(task: HarnessTaskState, retryNote: String?, attempt: Int) async throws -> Decision {
+        let request = responseRequest(task: task, retryNote: retryNote, attempt: attempt)
         let backend = self.backend
         let response = try await AIDeadline.enforce(seconds: Self.stepTimeoutSeconds) {
             try await backend.createResponse(request)
@@ -176,11 +237,17 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         }
         let json = DebugUIInspectionResponseDecoder.jsonObjectSubstring(text)
         let wire = try JSONDecoder().decode(DecisionWire.self, from: Data(json.utf8))
-        return Decision(tool: wire.tool, input: wire.input, reason: wire.reason)
+        return Decision(
+            tool: wire.tool,
+            input: wire.input,
+            reason: wire.reason,
+            thinking: RemoteInferenceResponseHelpers.reasoningText(from: response)
+        )
     }
 
-    private func responseRequest(task: HarnessTaskState, retryNote: String?) -> RemoteInferenceResponseCreateRequest {
+    private func responseRequest(task: HarnessTaskState, retryNote: String?, attempt: Int) -> RemoteInferenceResponseCreateRequest {
         let toolNames = descriptors.map(\.name)
+        let maxOutputTokens = min(Self.baseMaxOutputTokens * (attempt + 1), Self.maxOutputTokensCap)
         return RemoteInferenceResponseCreateRequest(
             input: .array([
                 .object([
@@ -195,6 +262,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
                                 appGuidance: appGuidance,
                                 understanding: understanding,
                                 environmentSummary: environmentSummary,
+                                skillCatalog: skillCatalog,
                                 retryNote: retryNote
                             ))
                         ])
@@ -228,8 +296,8 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
             metadata: ["source": "hosted-harness-step-planner", "prompt_version": "harness-step-v1"],
             parameters: [
                 "temperature": .number(0),
-                "max_output_tokens": .number(2_000),
-                "thinking_budget": .number(0)
+                "max_output_tokens": .number(Double(maxOutputTokens)),
+                "thinking_level": .string(Self.plannerThinkingLevel)
             ]
         )
     }

@@ -129,6 +129,7 @@ public enum DonkeyPrompts {
         appGuidance: String?,
         understanding: HarnessRequestUnderstanding?,
         environmentSummary: String?,
+        skillCatalog: String? = nil,
         retryNote: String? = nil
     ) -> String {
         let elementsBlock = harnessStepElementsBlock(task.worldModel.elements)
@@ -163,6 +164,16 @@ public enum DonkeyPrompts {
             guidanceBlock = ""
         }
 
+        // The full installed-skill catalog, so the planner can route to an authoritative playbook even
+        // when the task has no GUI target app (e.g. playing music or saving a note by script): those
+        // skills are not preloaded above because no specific app window is being driven.
+        let skillCatalogBlock: String
+        if let skillCatalog, !skillCatalog.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            skillCatalogBlock = "\nINSTALLED APP SKILLS (authoritative playbooks for these apps/domains — when the task maps to one, get its full guide with app_skill and run its validated scripts with skill_run instead of improvising raw commands):\n\(skillCatalog)\n"
+        } else {
+            skillCatalogBlock = ""
+        }
+
         // Prefer the restated goal parsed once up front; fall back to the raw task goal when no
         // understanding was produced.
         let restatedGoal = understanding?.restatedGoal
@@ -177,7 +188,7 @@ public enum DonkeyPrompts {
         GOAL: \(goalText)
         \(understandingBlock)
         \(historyBlock)
-        \(factsBlock)\(environmentBlock)\(guidanceBlock)
+        \(factsBlock)\(environmentBlock)\(guidanceBlock)\(skillCatalogBlock)
         \(elementsBlock)
 
         AVAILABLE TOOLS:
@@ -193,9 +204,11 @@ public enum DonkeyPrompts {
           system-tool equivalent). When you do: SEE before you act — prefer ax.observe (fast,
           structured) for native apps; use vision.capture when Accessibility is missing or insufficient
           — then act on a specific element by passing its id from the list above in "input".
-        - Driving a specific app with no operating guide above? Look its skill up first (app_skill, or
-          skill.search for workflows) — the installed skill is the authority on how that app is
-          operated and overrides assumptions.
+        - Operating a specific app — even by script (playing music, saving a note, sending mail)? If it
+          appears in INSTALLED APP SKILLS above, consult that skill FIRST (app_skill) and run its
+          validated scripts (skill_run) before hand-writing osascript: the skill is the authority and
+          far more reliable than improvising commands. With no guide and no listed skill, use
+          skill.search for a workflow. This is the most common way to avoid looping on a fragile command.
         - Need a current fact you can't be sure of (an artist's latest album, today's news, a price, an
           address)? Use web.search to find it and web.fetch to read a result in full — don't guess and
           don't drive a browser GUI for this. To build a long note/document (a tracklist, lyrics, a
@@ -211,6 +224,10 @@ public enum DonkeyPrompts {
         - Verification must be evidence-backed: after acting, confirm the effect (a shell command's
           output/exit code, a re-observe, or state.verify) BEFORE choosing run.complete. A focused app
           is not evidence; only complete once the goal is confirmed by what you can see.
+        - But do NOT re-verify what a tool already confirmed: a skill_run that returns a success status
+          (e.g. status=played with what's now playing), or a shell command whose exit-0 output already
+          shows the goal is met, IS your evidence — go straight to run.complete with that as the reason.
+          Running a second tool just to re-check an already-confirmed result is how runs stall.
         Return JSON: {"tool": "<one tool name>", "input": {"key": "value", ...}, "reason": "<one sentence>"}.\(retryNote.map { "\nIMPORTANT: \($0)" } ?? "")
         """
     }

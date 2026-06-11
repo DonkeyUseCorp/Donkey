@@ -104,8 +104,12 @@ struct HostedHarnessStepPlannerTests {
     }
 
     @Test
-    func failsSafeAfterTwoFailedInferences() async {
+    func failsSafeAfterThreeFailedInferences() async {
+        // Following Hermes' "retry up to 3 with feedback", the planner re-asks twice before failing
+        // safe — three model round-trips total — and each retry boosts the output-token budget so a
+        // reply truncated at the cap can complete on a later attempt.
         let httpClient = SequencedHTTPClient(responses: [
+            (Data(), 500),
             (Data(), 500),
             (Data(), 500)
         ])
@@ -114,7 +118,10 @@ struct HostedHarnessStepPlannerTests {
         let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
 
         #expect(call?.name == "run.failSafe")
-        #expect(httpClient.requests.count == 2)
+        #expect(httpClient.requests.count == 3)
+        // The retried requests raise max_output_tokens (2000 → 4000 → 6000) to recover truncation.
+        #expect(maxOutputTokens(httpClient, index: 1) > maxOutputTokens(httpClient, index: 0))
+        #expect(maxOutputTokens(httpClient, index: 2) > maxOutputTokens(httpClient, index: 1))
     }
 
     @Test
@@ -146,6 +153,66 @@ struct HostedHarnessStepPlannerTests {
         #expect(call?.name == "ax.observe")
         let retryBody = requestBodyString(httpClient, index: 1)
         #expect(retryBody.contains("named no tool"))
+    }
+
+    @Test
+    func capturesThinkingFromResponseAndRequestsAThinkingLevel() async {
+        // Thinking is enabled on the planning call via thinking_level (the param Gemini 3.x honors, not
+        // the legacy integer budget), and the model's thought summary (returned separately from
+        // output_text so it can't corrupt the decision JSON) is captured for the thread transcript.
+        let httpClient = FixtureHTTPClient(
+            data: Data(#"{"output_text":"{\"tool\":\"ax.observe\",\"reason\":\"look first\"}","reasoning_text":"The window state is unknown, so I observe before acting."}"#.utf8),
+            statusCode: 200
+        )
+        let planner = makePlanner(httpClient: httpClient, understanding: nil)
+
+        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
+
+        #expect(call?.name == "ax.observe")
+        #expect(planner.lastThinking == "The window state is unknown, so I observe before acting.")
+        let body = requestBodyString(httpClient, index: 0)
+        #expect(body.contains("thinking_level"))
+        #expect(!body.contains("thinking_budget"))
+    }
+
+    @Test
+    func retriesOnceWhenChosenToolMissesAllRequiredInput() async {
+        // The exact loop the user hit: the model chose shell_exec with NO command (its required input),
+        // which only yields invalidInput and, repeated, fails the run. The planner must retry once with
+        // a corrective note, then use the corrected call.
+        let httpClient = SequencedHTTPClient(responses: [
+            (Data(#"{"output_text":"{\"tool\":\"shell_exec\",\"reason\":\"verify\"}"}"#.utf8), 200),
+            (Data(#"{"output_text":"{\"tool\":\"shell_exec\",\"input\":{\"command\":\"date\"},\"reason\":\"verify\"}"}"#.utf8), 200)
+        ])
+        let planner = HostedHarnessStepPlanner(
+            backend: DonkeyBackendInferenceClient(
+                configuration: DonkeyBackendInferenceConfiguration(
+                    baseURL: URL(string: "https://donkey.example")!,
+                    clientID: "client-1"
+                ),
+                httpClient: httpClient
+            ),
+            descriptors: [
+                HarnessToolDescriptor(
+                    name: "shell_exec",
+                    pluginID: "core",
+                    summary: "Run a single-line command.",
+                    inputSchema: ["command": "The command.", "timeoutSeconds": "Budget."],
+                    optionalInputKeys: ["timeoutSeconds"],
+                    safetyClass: .guardedInput
+                )
+            ],
+            appName: "Notes",
+            appGuidance: nil,
+            understanding: nil
+        )
+
+        let call = await planner.planNextStep(for: task(goal: "confirm what is playing", toolHistory: []))
+
+        #expect(call?.name == "shell_exec")
+        #expect(call?.input["command"] == "date")
+        #expect(httpClient.requests.count == 2)
+        #expect(requestBodyString(httpClient, index: 1).contains("none of its required input"))
     }
 
     @Test
@@ -247,6 +314,17 @@ struct HostedHarnessStepPlannerTests {
 
     private func requestBodyString(_ httpClient: SequencedHTTPClient, index: Int = 0) -> String {
         requestBodyString(requests: httpClient.requests, index: index)
+    }
+
+    /// Pulls the numeric `max_output_tokens` out of a captured request body, to assert the per-retry
+    /// boost. Returns 0 when absent so a missing key fails the comparison loudly.
+    private func maxOutputTokens(_ httpClient: SequencedHTTPClient, index: Int) -> Int {
+        let body = requestBodyString(httpClient, index: index)
+        guard let range = body.range(of: #""max_output_tokens"\s*:\s*"#, options: .regularExpression) else {
+            return 0
+        }
+        let digits = body[range.upperBound...].prefix { $0.isNumber }
+        return Int(digits) ?? 0
     }
 
     private func requestBodyString(requests: [URLRequest], index: Int) -> String {

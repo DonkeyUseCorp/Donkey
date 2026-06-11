@@ -68,10 +68,12 @@ public final class ThreadTranscript: @unchecked Sendable {
         appendEntry(role: .user, kind: .message, title: nil, body: text, fenced: false)
     }
 
-    /// The assistant's reasoning before a tool call.
+    /// The assistant's reasoning before a tool call — the model's thought summary when thinking is on,
+    /// otherwise the one-line rationale. Bounded so a verbose chain of thought can't bloat the thread
+    /// file; the full reasoning lives only here, never in the per-step planning prompt.
     public func thinking(_ text: String?) {
         guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return }
-        appendEntry(role: .assistant, kind: .thinking, title: nil, body: text, fenced: false)
+        appendEntry(role: .assistant, kind: .thinking, title: nil, body: Self.clip(text, 4_000), fenced: false)
     }
 
     /// The assistant invoking a tool, with its input.

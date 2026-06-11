@@ -393,7 +393,8 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             appName: appName,
             appGuidance: appGuidance,
             understanding: understanding,
-            environmentSummary: environmentSummary
+            environmentSummary: environmentSummary,
+            skillCatalog: Self.installedSkillCatalog()
         )
         _ = await genericHarnessLifecycle.coordinator.startRunning(
             taskID: taskID,
@@ -426,7 +427,10 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             await MainActor.run {
                 let narration = Self.stepNarration(for: step, planner: planner)
                 if let result = step.toolResult {
-                    transcript.thinking(narration)
+                    // The thread file gets the model's full thought summary (when thinking is on);
+                    // the overlay/progress gets only the clipped one-line narration below. The full
+                    // reasoning is persisted here and nowhere else, so the planning context stays bounded.
+                    transcript.thinking(planner.lastThinking ?? narration)
                     transcript.toolCall(tool: result.toolName, input: step.task.toolHistory.last?.call.input ?? [:])
                     transcript.toolResult(tool: result.toolName, status: result.status.rawValue, output: result.summary)
                 }
@@ -800,6 +804,27 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             return (frontmostAppName, frontmostBundleIdentifier)
         }
         return (resolved.appName ?? requested, resolved.bundleIdentifier)
+    }
+
+    /// A compact, one-line-per-skill catalog of every installed app skill — id, description, the apps it
+    /// covers, and any validated `skill_run` scripts — surfaced to the planner each step. App-specific
+    /// guidance is only preloaded for the resolved GUI drive target, so without this the planner never
+    /// learns that a script-driven skill (e.g. Music playback, Notes capture) exists when the task has no
+    /// GUI target app — and it improvises fragile commands instead of running the validated script.
+    /// Lists every skill unconditionally; the planner does the routing, so no intent is matched here.
+    private static func installedSkillCatalog() -> String? {
+        let skills = BuiltInLocalAppSkillPacks.descriptors().sorted { $0.id < $1.id }
+        guard !skills.isEmpty else { return nil }
+        let lines = skills.map { skill -> String in
+            let apps = (skill.metadata["apps"]?.isEmpty == false) ? " · apps: \(skill.metadata["apps"]!)" : ""
+            let scripts = skill.scripts.isEmpty
+                ? ""
+                : " · skill_run: " + skill.scripts.map { script in
+                    script.purpose.isEmpty ? script.id : "\(script.id) (\(script.purpose))"
+                }.joined(separator: ", ")
+            return "  - \(skill.id) — \(skill.description)\(apps)\(scripts)"
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// Builds a one-step cursor-path visualization toward the exact screen point a just-executed action
