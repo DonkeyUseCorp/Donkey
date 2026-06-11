@@ -14,6 +14,8 @@ final class UserQuerySpawnOverlayController {
     private var windowResolver = MacWindowResolver()
     private var localOutsideClickMonitor: Any?
     private var globalOutsideClickMonitor: Any?
+    private var localMouseMoveMonitor: Any?
+    private var globalMouseMoveMonitor: Any?
 
     var followUpSubmitted: ((String, String, String) -> Void)? {
         didSet {
@@ -70,6 +72,7 @@ final class UserQuerySpawnOverlayController {
 
     func close() {
         removeOutsideClickMonitoring()
+        removeMouseMoveMonitoring()
         for surface in surfacesByID.values {
             surface.travelWorkItem?.cancel()
             surface.removalWorkItem?.cancel()
@@ -640,6 +643,15 @@ final class UserQuerySpawnOverlayController {
     }
 
     private func updateMouseEventPassthrough(for surface: UserQuerySpawnSurface) {
+        defer { updateMouseMoveMonitoring() }
+
+        // A drag in progress must keep receiving events even when the pointer
+        // briefly outruns the panel frame; going click-through would kill it.
+        if surface.viewModel.isCursorDragging {
+            surface.panel.ignoresMouseEvents = false
+            return
+        }
+
         let hitTestFrame = surface.viewModel.localHitTestFrame
         guard !hitTestFrame.isNull, !hitTestFrame.isEmpty else {
             surface.panel.ignoresMouseEvents = true
@@ -648,6 +660,58 @@ final class UserQuerySpawnOverlayController {
 
         let mouseLocation = surface.panel.convertPoint(fromScreen: NSEvent.mouseLocation)
         surface.panel.ignoresMouseEvents = !hitTestFrame.contains(mouseLocation)
+    }
+
+    /// `ignoresMouseEvents` is only as fresh as its last evaluation, which
+    /// otherwise happens on model updates and layout changes. Without a
+    /// movement monitor, mousing over a quiet holding pointer leaves its panel
+    /// click-through, so hover and drags never start.
+    private func updateMouseMoveMonitoring() {
+        guard surfacesByID.values.contains(where: {
+            !$0.viewModel.localHitTestFrame.isNull
+        }) else {
+            removeMouseMoveMonitoring()
+            return
+        }
+
+        installMouseMoveMonitoringIfNeeded()
+    }
+
+    private func installMouseMoveMonitoringIfNeeded() {
+        let mask: NSEvent.EventTypeMask = [.mouseMoved]
+        if localMouseMoveMonitor == nil {
+            localMouseMoveMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
+                Task { @MainActor [weak self] in
+                    self?.refreshMouseEventPassthroughForAllSurfaces()
+                }
+                return event
+            }
+        }
+        if globalMouseMoveMonitor == nil {
+            globalMouseMoveMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.refreshMouseEventPassthroughForAllSurfaces()
+                }
+            }
+        }
+    }
+
+    private func removeMouseMoveMonitoring() {
+        if let localMouseMoveMonitor {
+            NSEvent.removeMonitor(localMouseMoveMonitor)
+            self.localMouseMoveMonitor = nil
+        }
+        if let globalMouseMoveMonitor {
+            NSEvent.removeMonitor(globalMouseMoveMonitor)
+            self.globalMouseMoveMonitor = nil
+        }
+    }
+
+    private func refreshMouseEventPassthroughForAllSurfaces() {
+        for surface in surfacesByID.values {
+            updateMouseEventPassthrough(for: surface)
+        }
+        updateMouseMoveMonitoring()
     }
 
     func cueState(
@@ -936,6 +1000,13 @@ private final class UserQuerySpawnPanel: NSPanel {
 
 private final class UserQuerySpawnHostingView<Content: View>: NSHostingView<Content> {
     var hitTestRegionProvider: (() -> [CGRect])?
+
+    /// The first click on an inactive panel must reach the SwiftUI gestures
+    /// directly; without this it only focuses the panel and the user has to
+    /// click again to drag or dismiss.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         if let hitTestRegionProvider,
