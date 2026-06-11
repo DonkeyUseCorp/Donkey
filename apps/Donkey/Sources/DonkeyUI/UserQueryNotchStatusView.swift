@@ -26,6 +26,7 @@ public struct UserQueryNotchStatusView: View {
     private let assetsDropped: @MainActor ([UserQueryTaskAssetDraft]) -> Void
     private let pauseRequested: @MainActor (String) -> Void
     private let resumeRequested: @MainActor (String) -> Void
+    private let taskSelected: @MainActor (String) -> Void
     /// (taskID, alwaysAllow). `alwaysAllow` persists a standing rule for the
     /// command signature; it is only offered for non-highRisk shell consent.
     private let approvePermissionRequested: @MainActor (String, Bool) -> Void
@@ -51,6 +52,7 @@ public struct UserQueryNotchStatusView: View {
         assetsDropped: @escaping @MainActor ([UserQueryTaskAssetDraft]) -> Void,
         pauseRequested: @escaping @MainActor (String) -> Void,
         resumeRequested: @escaping @MainActor (String) -> Void,
+        taskSelected: @escaping @MainActor (String) -> Void,
         approvePermissionRequested: @escaping @MainActor (String, Bool) -> Void,
         updateRequested: @escaping @MainActor () -> Void
     ) {
@@ -73,6 +75,7 @@ public struct UserQueryNotchStatusView: View {
         self.assetsDropped = assetsDropped
         self.pauseRequested = pauseRequested
         self.resumeRequested = resumeRequested
+        self.taskSelected = taskSelected
         self.approvePermissionRequested = approvePermissionRequested
         self.updateRequested = updateRequested
     }
@@ -475,6 +478,12 @@ public struct UserQueryNotchStatusView: View {
         .frame(minHeight: 48)
         .background(Color.white.opacity(0.055))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .onTapGesture {
+            if let taskID = primaryTask?.id {
+                taskSelected(taskID)
+            }
+        }
     }
 
     /// A count-up elapsed-time label for a running task — the timeline ticks every second on its
@@ -539,6 +548,10 @@ public struct UserQueryNotchStatusView: View {
         .frame(minHeight: 48)
         .background(Color.white.opacity(0.055))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .onTapGesture {
+            taskSelected(task.id)
+        }
     }
 
     private var commandRow: some View {

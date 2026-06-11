@@ -116,6 +116,12 @@ final class UserQuerySpawnOverlayController {
         return true
     }
 
+    /// Clears a user dismissal so the next update re-creates the pointer
+    /// surface, emerging from the notch again.
+    func restoreSpawn(id spawnID: String) {
+        dismissedSpawnIDs.remove(spawnID)
+    }
+
     private func updateSurface(
         for spawnState: UserQuerySpawnState,
         selectedSpawnID: String?,

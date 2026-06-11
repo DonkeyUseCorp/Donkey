@@ -627,6 +627,9 @@ final class UserQueryOverlayController {
             resumeRequested: { [weak self] taskID in
                 self?.model.resumeTask(id: taskID)
             },
+            taskSelected: { [weak self] taskID in
+                self?.restoreSpawnPointer(forTaskID: taskID)
+            },
             approvePermissionRequested: { [weak self] taskID, alwaysAllow in
                 self?.model.approvePermissionGate(id: taskID, alwaysAllow: alwaysAllow)
             },
@@ -646,6 +649,18 @@ final class UserQueryOverlayController {
 
     private func openAvailableUpdate() {
         model.showUpdateUI()
+    }
+
+    /// Brings back a pointer the user dismissed when its task is clicked in
+    /// the notch; the surface re-emerges and travels to its target again.
+    private func restoreSpawnPointer(forTaskID taskID: String) {
+        guard let spawnID = model.spawnStates.first(where: { $0.taskID == taskID })?.id else {
+            return
+        }
+
+        spawnOverlayController.restoreSpawn(id: spawnID)
+        model.selectSpawn(id: spawnID)
+        updateSpawnOverlay()
     }
 
     private func presentAgentVisualization(
