@@ -1,278 +1,91 @@
 # Donkey Architecture
 
-This document is a compact map of Donkey's supported runtime architecture. The
-source of truth for behavior and boundaries remains
-[`docs/guides/agent-harness.md`](guides/agent-harness.md).
+A compact map of Donkey's supported runtime: what the major components are,
+how a turn flows between them, and which guide owns each one. The source of
+truth for behavior and boundaries is the guide linked in each row; this doc
+only connects them.
 
-## App-Level Components
+**The one rule:** two boundaries carry everything. Model-backed decisions
+cross the authenticated hosted backend (typed requests, `store=false`,
+provider credentials never in the app); OS side effects cross the guarded
+runtime (focus, permission, safety-class checks). Code that skips either
+boundary — a direct provider call from the app, an input event outside the
+guarded executor — is wrong by construction.
 
-```text
-+--------------------------------------------------------------------------------+
-|                                  Donkey.app                                    |
-|                                                                                |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | User Query UI        |      | Runtime Setup UI     |      | Debug CLI     | |
-|  | text/voice/assets    |      | install runtimes     |      | smoke tools   | |
-|  +----------+-----------+      +----------+-----------+      +-------+-------+ |
-|             |                             |                          |         |
-|             v                             v                          v         |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Task Thread Intake   |      | Local Runtime Setup  |      | Manual Target | |
-|  | route + persist      |      | manifests/cache      |      | Capture       | |
-|  +----------+-----------+      +----------+-----------+      +-------+-------+ |
-|             |                             |                          |         |
-|             v                             v                          v         |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Follow-up Resolver   |<---->| Runtime Registry     |      | Artifact Store| |
-|  | recent task match    |      | sidecar executables  |      | traces/files  | |
-|  +----------+-----------+      +----------------------+      +-------+-------+ |
-|             |                                                        ^         |
-|             v                                                        |         |
-|  +----------------------+      +----------------------+      +-------+-------+ |
-|  | Core Data Task Store |----->| Notch Task List      |----->| Status/Reports| |
-|  | tasks/events/assets  |      | recent threads       |      | latency/replay| |
-|  +----------+-----------+      +----------------------+      +-------+-------+ |
-|             |                                                        ^         |
-|             v                                                        |         |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Agent Harness        |<---->| Agent Memory Store   |<---->| Per-Task Coord | |
-|  | context + routing    |      | SQLite FTS/vector    |      | lifecycle     | |
-|  +----------+-----------+      +----------+-----------+      +-------+-------+ |
-|             |                             |                          |         |
-|             v                             v                          v         |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Local App Runner     |----->| Capture/Observation  |----->| Action Engine | |
-|  | dry-run or guarded   |      | AX/window/screenshot |      | keyboard/AX   | |
-|  +----------------------+      +----------------------+      +---------------+ |
-|                                                                                |
-+--------------------------------------------------------------------------------+
-```
-
-The app shell owns entrypoints, durable task threads, setup, shared agent
-memory, and per-task runtime coordination. Capture, observation, hosted model
-adapters, task adaptation, and input execution stay behind narrow runtime
-boundaries.
-
-## User Query Task Threads
+## Component Map
 
 ```text
-+--------------------------------------------------------------------------------+
-|                              Durable Task Threads                               |
-+--------------------------------------------------------------------------------+
-|                                                                                |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Cmd-Cmd Input        |      | Notch Composer       |      | File Drop     | |
-|  | text/voice           |      | follow-up text       |      | collapsed ok  | |
-|  +----------+-----------+      +----------+-----------+      +-------+-------+ |
-|             |                             |                          |         |
-|             +-------------+---------------+                          |         |
-|                           |                                          |         |
-|                           v                                          v         |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Recent Tasks         |----->| Follow-up LLM        |----->| Task Select   | |
-|  | updatedAt order      |      | match or new         |      | existing/new  | |
-|  +----------+-----------+      +----------------------+      +-------+-------+ |
-|             ^                                                        |         |
-|             |                                                        v         |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Core Data            |<-----| Task Events          |<-----| Harness Turn  | |
-|  | task/event/asset     |      | user/assistant/tool  |      | chat/action   | |
-|  +----------+-----------+      +----------------------+      +-------+-------+ |
-|             ^                                                        |         |
-|             |                                                        v         |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Asset Files          |      | Coordinator Registry |----->| RunCoordinator| |
-|  | App Support          |      | taskID -> run        |      | pause/resume  | |
-|  +----------------------+      +----------------------+      +---------------+ |
-|                                                                                |
-+--------------------------------------------------------------------------------+
+                              macOS user
+                                  |
++------------------------------ Donkey.app ------------------------------+
+|                                 |                                      |
+|  User Query Overlay             v                                      |
+|  notch + prompt + spawned   typed turns (text, voice, follow-ups,      |
+|  agent cursors              file drops)                                |
+|         |                                                              |
+|         v                                                              |
+|  Thread/task lifecycle — durable threads, task state, compaction       |
+|         |                                                              |
+|         v                                                              |
+|  Decision boundaries — understand the turn once, then plan one         |
+|  tool call per step                                                    |
+|         |                                                              |
+|         v                                                              |
+|  Generic harness loop — validate, execute, observe, verify             |
+|     |            |                                                     |
+|     |            +--> Guarded runtime: Accessibility, screenshots,     |
+|     |                 keyboard/pointer input, shell, AppleScript       |
+|     |                                                                  |
+|  feeds on:                                                             |
+|   - UI understanding engine (always-on AX + hosted vision fusion)      |
+|   - Agent memory (SQLite FTS5 + local vectors)                         |
+|   - Skills (built-in and learned packs)                                |
++-------------------------------------------------------------------------+
+                                  |
+                                  v
+              Donkey backend (site/) — auth, credits,
+              inference gateway, vision parsing
+                                  |
+                                  v
+              Hosted model providers (credentials live
+              here, never in the Mac app)
 ```
 
-## Fast Local Runloop
+The overlay narrates; the harness decides; the guarded runtime acts; the
+backend owns every provider. For the step-by-step turn loop, see the diagram
+in `guides/agent-harness.md` — it is not repeated here.
 
-```text
-+--------------------------------------------------------------------------------+
-|                         Fast Local Navigation Hot Path                         |
-+--------------------------------------------------------------------------------+
-|                                                                                |
-|  actionable harness turn                                                       |
-|             |                                                                  |
-|             v                                                                  |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Harness Context      |----->| Local LLM Parser     |----->| TaskIntent    | |
-|  | turn/events/assets   |      | sidecar JSON schema  |      | validated     | |
-|  +----------+-----------+      +----------------------+      +-------+-------+ |
-|             |                                                        |         |
-|             v                                                        v         |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Agent Memory         |----->| Catalog Resolution   |----->| Local App     | |
-|  | task defs/local item |      | app/task available   |      | Adapter       | |
-|  +----------+-----------+      +----------------------+      +-------+-------+ |
-|             |                                                        |         |
-|             v                                                        v         |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Launch / Focus       |----->| Observation          |----->| Task Run      | |
-|  | target app/window    |      | AX + metadata + UI   |      | per-task coord| |
-|  +----------------------+      +----------+-----------+      +-------+-------+ |
-|                                           |                          |         |
-|                                           v                          v         |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Local Item Validate  |----->| World State          |----->| Reflex Trace  | |
-|  | path/bundle exists   |      | typed compact        |      | source-linked | |
-|  +----------------------+      +----------+-----------+      +-------+-------+ |
-|                                           |                          |         |
-|                                           v                          v         |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Reflex Frame Source  |----->| Perception Projector |----->| Controller    | |
-|  | latest frame wins    |      | typed affordances    |      | semantic act  | |
-|  +----------------------+      +----------------------+      +-------+-------+ |
-|                                                                      |         |
-|                                                                      v         |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Action Projection    |----->| Guardrails           |----->| Input Backend | |
-|  | dry-run or live      |      | policy/focus/rate    |      | keyboard/AX   | |
-|  +----------+-----------+      +----------------------+      +-------+-------+ |
-|             |                                                        |         |
-|             v                                                        v         |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Reflex Trace         |----->| Latency Report       |<-----| Verification  | |
-|  | monotonic timings    |      | p50/p95/p99          |      | visible text  | |
-|  +----------------------+      +----------------------+      +---------------+ |
-|                                                                                |
-+--------------------------------------------------------------------------------+
-```
+## Components and Their Guides
 
-Every prompt turn enters the agent harness as conversation first. The harness
-builds bounded context from thread history, assets, target state, memory,
-runtime capabilities, policy, and trace ids, then routes the turn to
-conversation, clarification, review, planning, or action execution. The hot path
-must keep working without a remote model call. Local model output is validated
-into typed contracts before execution, controller output is semantic, and the
-action engine is the only boundary allowed to issue guarded OS input.
+| Component | Owns | Guide |
+|---|---|---|
+| User query overlay | notch surface, prompt composer, spawned cursors, turn entry, visualization | [`guides/user-query-overlay.md`](guides/user-query-overlay.md) |
+| Decision boundaries | one-shot request understanding, per-step tool planning, outcome states | [`guides/decision-system.md`](guides/decision-system.md) |
+| Agent harness | task state, tool registry, skills, the plan/act/verify loop, model adapters | [`guides/agent-harness.md`](guides/agent-harness.md) |
+| UI understanding (Donkey Vision) | always-on fusion of Accessibility and hosted vision evidence | [`guides/donkey-vision.md`](guides/donkey-vision.md) |
+| Skills | app-specific operating knowledge and validated scripts | [`guides/authoring-skills.md`](guides/authoring-skills.md) |
+| Swift app structure | MVC split across `Donkey`, `DonkeyUI`, `DonkeyContracts`, `DonkeyRuntime`, `DonkeyAI` | [`guides/swift-mvc.md`](guides/swift-mvc.md) |
+| Backend | auth, hosted credits, inference gateway, third-party Vision API | [`guides/backend-apis.md`](guides/backend-apis.md) |
+| Site frontend | landing page and account views | [`guides/frontend-nextjs-guidelines.md`](guides/frontend-nextjs-guidelines.md) |
+| Packaging and updates | app bundle, DMG, Sparkle, release workflows | [`guides/install-donkey.md`](guides/install-donkey.md), [`guides/releasing-donkey.md`](guides/releasing-donkey.md) |
 
-## Agent Memory System
+## Durable Storage
 
-```text
-+--------------------------------------------------------------------------------+
-|                              Agent Memory Store                                |
-+--------------------------------------------------------------------------------+
-|                                                                                |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Runtime Writes       |----->| Approval / Validate  |----->| SQLite Store  | |
-|  | lookup/task/provider |      | source/privacy/ttl   |      | records       | |
-|  +----------+-----------+      +----------------------+      +-------+-------+ |
-|             |                                                        |         |
-|             v                                                        v         |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Negative Lookups     |      | FTS5 Index           |<-----| Vector Blobs  | |
-|  | expiry required      |      | lexical candidates   |      | Float32 local | |
-|  +----------------------+      +----------+-----------+      +-------+-------+ |
-|                                           |                          |         |
-|                                           v                          v         |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Scoped Query         |----->| Rank + Budget        |----->| Harness Hints | |
-|  | target/kind/text     |      | FTS/vector/recency   |      | bounded text  | |
-|  +----------+-----------+      +----------------------+      +-------+-------+ |
-|             |                                                        |         |
-|             v                                                        v         |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Local Item Check     |      | Task Definitions     |      | JSONL Export  | |
-|  | path/bundle exists   |      | generated/reviewed   |      | debug only    | |
-|  +----------------------+      +----------------------+      +---------------+ |
-|                                                                                |
-+--------------------------------------------------------------------------------+
-```
+| Store | Holds |
+|---|---|
+| Thread markdown (`App Support/Donkey/Threads/<id>/thread.md`) | conversation contents and full reasoning/tool trace |
+| Core Data | durable task metadata, events, and assets for per-run coordination |
+| Task and compaction snapshots | execution state, and exactly what context each model decision saw |
+| Agent memory (SQLite, FTS5 + local vectors) | local-item records, negative lookups, runtime task definitions, bounded harness hints |
+| Learned skill packs (app-support skills directory) | promoted playbooks and validated scripts |
 
-Agent memory is the durable store for local item records, negative lookups,
-runtime task definitions, target facts, user instructions, safety stops, and
-workflow memory. SQLite is the source of truth; JSONL is only an explicit export
-format for support and debugging. Retrieval always applies scope/kind filters,
-prompt budgets, and availability validation before a record influences planning
-or execution.
+## Legacy Subsystems
 
-## Local Stack And Hosted Models
-
-```text
-+--------------------------------------------------------------------------------+
-|                              Local Machine Stack                               |
-+--------------------------------------------------------------------------------+
-|                                                                                |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Donkey Swift Runtime |----->| Donkey Backend Proxy |----->| Hosted Models | |
-|  | contracts/controllers|      | typed HTTPS requests |      | providers     | |
-|  +----------+-----------+      +----------+-----------+      +-------+-------+ |
-|             |                             |                          |         |
-|             |                             v                          |         |
-|             |                  +----------------------+              |         |
-|             |                  | Provider Config      |<-------------+         |
-|             |                  | model selection      |                        |
-|             |                  +----------+-----------+                        |
-|             |                             |                                    |
-|             v                             v                                    |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | macOS Services       |      | TaskIntent JSON      |      | Voice Input   | |
-|  | AX/SCK/LaunchServices|      | structured outputs   |      | transcription | |
-|  +----------+-----------+      +----------------------+      +---------------+ |
-|             |                                                                  |
-|             v                                                                  |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Target Apps          |      | Computer Use         |      | UI Context    | |
-|  | Weather/Music/docs   |      | hosted decisions     |      | evidence      | |
-|  +----------------------+      +----------------------+      +---------------+ |
-|                                                                                |
-+--------------------------------------------------------------------------------+
-```
-
-Runtime setup does not install model sidecars or model weights after app
-install. Model-backed behavior uses authenticated backend routes; the backend
-owns provider credentials, provider selection, and concrete model selection.
-The Mac app keeps local execution, permissions, Accessibility, screenshot
-capture, and target-app control, but not local model hosting.
-Computer-use support is exposed through backend tool registrations:
-`donkey_gemini_browser_interaction` routes browser control to Gemini, while
-`donkey_openai_mac_desktop_interaction` routes guarded macOS desktop control to
-OpenAI's Responses `computer` tool.
-
-## Slower AI Harness
-
-```text
-+--------------------------------------------------------------------------------+
-|                         Slow Models And Advisory Sidecars                      |
-+--------------------------------------------------------------------------------+
-|                                                                                |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Reflex Loop          |----->| Slow Planner Trigger |----->| Snapshot      | |
-|  | does not await model |      | scene/failure/etc.   |      | compact state | |
-|  +----------+-----------+      +----------------------+      +-------+-------+ |
-|             |                                                        |         |
-|             |                                                        v         |
-|             |                  +----------------------+      +---------------+ |
-|             |                  | Agent Memory         |----->| Redaction     | |
-|             |                  | SQLite FTS/vector    |      | remote-bound  | |
-|             |                  +----------+-----------+      +-------+-------+ |
-|             |                             |                          |         |
-|             |                             v                          v         |
-|             |                  +----------------------+      +---------------+ |
-|             |                  | AI Model Router      |----->| Providers     | |
-|             |                  | role/privacy/risk    |      | local/online  | |
-|             |                  +----------+-----------+      +-------+-------+ |
-|             |                             |                          |         |
-|             |                             v                          v         |
-|             |                  +----------------------+      +---------------+ |
-|             |                  | Planner Hint         |<-----| Model Trace   | |
-|             |                  | structured JSON      |      | latency/cost  | |
-|             |                  +----------+-----------+      +---------------+ |
-|             |                             |                                    |
-|             v                             v                                    |
-|  +----------------------+      +----------------------+      +---------------+ |
-|  | Existing Controller  |<-----| Hint Validator/Bus   |----->| Replay/Eval   | |
-|  | can run without hint |      | expiry + safety      |      | promotion     | |
-|  +----------------------+      +----------------------+      +---------------+ |
-|                                                                                |
-+--------------------------------------------------------------------------------+
-```
-
-Slow models can help with ambiguous commands, recovery, planner hints, memory
-proposals, and observability. Their outputs remain advisory: planner hints expire
-and are validated, memory writes pass deterministic approval into agent memory,
-and provider failure leaves the fast local loop running on existing state.
+Some compiled code predates the hosted-model boundary and is not part of the
+supported turn path. `DryRunReflexLoop`, `SlowPlannerSidecar`, the
+planner-hint adapters, and the local JSON sidecar runner are referenced only
+by themselves and debug tooling; live turns in `UserQueryCommandHandler` never
+touch them. The local runtime onboarding window
+(`LocalRuntimeOnboardingWindowController`) still runs at startup but conflicts
+with the supported hosted boundary — treat all of these as legacy, not as
+patterns to extend.
