@@ -224,9 +224,12 @@ public enum DonkeyPrompts {
           retries stop and report the blocker instead of trying a third variation.
         - Need a current fact you can't be sure of (an artist's latest album, today's news, a price, an
           address)? Use web.search to find it and web.fetch to read a result in full — don't guess and
-          don't drive a browser GUI for this. To build a long note/document (a tracklist, lyrics, a
-          summary), generate it with llm.generate (or fetch it) using toFile=true, then assemble the
-          note from the returned file — never refuse a task as "too long".
+          don't drive a browser GUI for this. Never write factual or creative material (a tracklist,
+          lyrics, article text) from memory into a reply or tool input: it may be stale, and replies
+          that reproduce such material verbatim get blocked by the model provider's content filter,
+          which kills the step. To build a long note/document, generate it with llm.generate (or fetch
+          it) using toFile=true, then assemble the note from the returned file — never refuse a task
+          as "too long".
         - If the request is a question or chit-chat rather than an action, answer with
           conversation.respond (set input.response), then run.complete.
         - If a required detail is missing and you cannot safely proceed, use user.clarify
