@@ -156,13 +156,30 @@ fi
 
 # Trim the unified-log boilerplate down to "HH:MM:SS.mmm  message": drop the date,
 # the message-type letter, the "Process[pid:tid]" column, and the "[subsystem:category]"
-# tag, which are identical on every Donkey line and just add noise.
+# tag, which are identical on every Donkey line and just add noise. When writing to a
+# terminal, also wrap path=... values in OSC 8 file:// hyperlinks (percent-encoded, so
+# spaces like "Application Support" don't break link detection) so Cmd+click opens
+# them via the terminal's semantic-history handler.
 reformat_log_stream() {
-  sed -E \
-    -e '/^Filtering the log data using /d' \
-    -e '/^Timestamp[[:space:]]+Ty/d' \
-    -e 's/^[0-9]{4}-[0-9]{2}-[0-9]{2} //' \
-    -e 's/^([0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+) +[A-Za-z]+ +[^[]*\[[0-9]+:[0-9a-fx]+\] +(\[[^]]*\] )?/\1  /'
+  local linkify=0
+  if [ -t 1 ]; then
+    linkify=1
+  fi
+  LINKIFY_PATHS="$linkify" perl -ne '
+    BEGIN { $| = 1 }
+    next if /^Filtering the log data using /;
+    next if /^Timestamp\s+Ty/;
+    s/^\d{4}-\d{2}-\d{2} //;
+    s/^(\d{2}:\d{2}:\d{2}\.\d+) +[A-Za-z]+ +[^\[]*\[\d+:[0-9a-fx]+\] +(\[[^\]]*\] )?/$1  /;
+    if ($ENV{LINKIFY_PATHS}) {
+      s{path=(/.+?)(?=\s+\w+=|$)}{
+        my $path = $1;
+        (my $url = $path) =~ s|([^A-Za-z0-9\-._~/])|sprintf("%%%02X", ord($1))|ge;
+        "path=\033]8;;file://$url\007$path\033]8;;\007"
+      }ge;
+    }
+    print;
+  '
 }
 
 exec "${LOG_COMMAND[@]}" > >(reformat_log_stream) 2> >(reformat_log_stream >&2)
