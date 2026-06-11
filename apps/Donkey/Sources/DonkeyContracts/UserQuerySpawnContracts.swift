@@ -39,6 +39,7 @@ public struct UserQuerySpawnState: Codable, Equatable, Identifiable, Sendable {
     public var phase: UserQuerySpawnPhase
     public var notchCueAngleDegrees: Double
     public var targetHint: UserQuerySpawnTargetHint?
+    public var createdAt: Date
     public var updatedAt: Date
 
     public init(
@@ -50,6 +51,7 @@ public struct UserQuerySpawnState: Codable, Equatable, Identifiable, Sendable {
         phase: UserQuerySpawnPhase = .notchCue,
         notchCueAngleDegrees: Double = UserQuerySpawnGeometry.defaultExitAngleDegrees,
         targetHint: UserQuerySpawnTargetHint? = nil,
+        createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
         self.id = id
@@ -60,6 +62,7 @@ public struct UserQuerySpawnState: Codable, Equatable, Identifiable, Sendable {
         self.phase = phase
         self.notchCueAngleDegrees = notchCueAngleDegrees
         self.targetHint = targetHint
+        self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
 }

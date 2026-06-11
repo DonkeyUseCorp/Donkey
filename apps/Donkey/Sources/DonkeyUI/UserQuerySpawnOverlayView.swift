@@ -828,6 +828,31 @@ public struct UserQuerySpawnOverlayView: View {
                 }
                 .animation(.easeOut(duration: 0.12), value: showsDismissButton)
         }
+        .overlay(alignment: .bottomTrailing) {
+            if !viewModel.isLabelEditing {
+                elapsedTimer(since: state.createdAt)
+                    .offset(
+                        x: -UserQuerySpawnOverlayViewModel.labelHorizontalPadding,
+                        y: 16
+                    )
+            }
+        }
+    }
+
+    /// A faint count-up timer hanging below the label bubble. It floats over
+    /// arbitrary screen content, so legibility on both light and dark
+    /// backgrounds comes from white text with a soft dark shadow rather than
+    /// from color-scheme adaptation.
+    private func elapsedTimer(since start: Date) -> some View {
+        TimelineView(.periodic(from: start, by: 1)) { context in
+            Text(UserQueryNotchStatusView.elapsedDescription(from: start, to: context.date))
+                .font(.system(size: 9, weight: .medium).monospacedDigit())
+                .foregroundStyle(Color.white.opacity(0.62))
+                .shadow(color: Color.black.opacity(0.55), radius: 1.5, x: 0, y: 0.5)
+                .lineLimit(1)
+                .fixedSize()
+        }
+        .allowsHitTesting(false)
     }
 
     private var showsDismissButton: Bool {
