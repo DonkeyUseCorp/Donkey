@@ -125,6 +125,63 @@ struct HostedHarnessStepPlannerTests {
     }
 
     @Test
+    func contentFilterBlockRetriesWithStrategyNoteThenFailsSafeNamingTheFilter() async {
+        // The model writes protected material (e.g. a tracklist) from memory and the provider's
+        // recitation filter withholds every reply: empty output_text with finishReason=RECITATION in
+        // the echoed provider payload. The retry must redirect strategy (obtain the content as data)
+        // rather than re-ask verbatim — the filter is deterministic on content — and the terminal
+        // failSafe must name the filter so the failure is exact, not a guess.
+        let blocked = Data(
+            #"{"output_text":"","output":[],"provider_output":{"candidates":[{"content":{"role":"model"},"finishReason":"RECITATION"}]}}"#.utf8
+        )
+        let httpClient = SequencedHTTPClient(responses: [(blocked, 200), (blocked, 200), (blocked, 200)])
+        let planner = makePlanner(httpClient: httpClient, understanding: nil)
+
+        let call = await planner.planNextStep(for: task(goal: "note the album tracklist", toolHistory: []))
+
+        #expect(call?.name == "run.failSafe")
+        #expect(call?.input["reason"] == "plannerContentFiltered(RECITATION)")
+        #expect(planner.lastNarration?.contains("RECITATION") == true)
+        // Every thread-bound planning error names the exact finish reason.
+        #expect(!planner.lastPlanningErrors.isEmpty)
+        #expect(planner.lastPlanningErrors.allSatisfy { $0.contains("finishReason=RECITATION") })
+        // The retry note changes strategy instead of re-asking for the same blocked reply.
+        let retryBody = requestBodyString(httpClient, index: 1)
+        #expect(retryBody.contains("content filter"))
+        #expect(retryBody.contains("Do not write such content from memory"))
+    }
+
+    @Test
+    func emptyReplyFailsSafeWithExactReason() async {
+        // No content filter in play — the provider just returned nothing. The failSafe reason and
+        // narration say exactly that instead of a generic plan failure.
+        let empty = Data(#"{"output_text":""}"#.utf8)
+        let httpClient = SequencedHTTPClient(responses: [(empty, 200), (empty, 200), (empty, 200)])
+        let planner = makePlanner(httpClient: httpClient, understanding: nil)
+
+        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
+
+        #expect(call?.name == "run.failSafe")
+        #expect(call?.input["reason"] == "plannerEmptyReply")
+        #expect(planner.lastNarration?.contains("empty reply") == true)
+    }
+
+    @Test
+    func backendHTTPFailureSurfacesTheExactErrorInTheNarration() async {
+        // An auth failure must not read as a generic plan failure: the narration carries the exact
+        // backend error (status code and body) so the user sees what broke without guessing.
+        let unauthorized = (Data("unauthorized".utf8), 401)
+        let httpClient = SequencedHTTPClient(responses: [unauthorized, unauthorized, unauthorized])
+        let planner = makePlanner(httpClient: httpClient, understanding: nil)
+
+        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
+
+        #expect(call?.name == "run.failSafe")
+        #expect(call?.input["reason"] == "harnessPlanFailed")
+        #expect(planner.lastNarration?.contains("401") == true)
+    }
+
+    @Test
     func emptyToolNameNeverReadsAsCompletion() async {
         // A refusal or truncated reply decodes with no tool. That must re-ask once and then fail
         // safe — never run.complete, which would record an unverified claim as success.

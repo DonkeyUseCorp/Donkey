@@ -99,6 +99,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         // empty tool name never reads as completion (a refusal/truncation would otherwise record as
         // success); the runtime's stall guard remains the final backstop for genuine loops.
         var retryNote: String?
+        var lastFailure: Error?
         lastPlanningErrors = []
         let lastAttempt = Self.maxPlanAttempts - 1
         for attempt in 0...lastAttempt {
@@ -106,13 +107,12 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
             do {
                 decision = try await decide(task: task, retryNote: retryNote, attempt: attempt)
             } catch {
+                lastFailure = error
                 lastPlanningErrors.append(
                     "planning attempt \(attempt + 1)/\(Self.maxPlanAttempts) failed: \(String(describing: error).prefix(300))"
                 )
                 guard attempt < lastAttempt else { break }
-                retryNote = "Your previous reply could not be used (\(String(describing: error).prefix(200))). "
-                    + "Reply with exactly ONE JSON object naming one tool from AVAILABLE TOOLS, with every "
-                    + "required input field filled. For a tool that needs no input, use an empty object: {}."
+                retryNote = Self.retryNote(after: error)
                 continue
             }
             lastNarration = decision.reason.flatMap { $0.isEmpty ? nil : $0 } ?? lastNarration
@@ -148,7 +148,50 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
             }
             return HarnessToolCall(name: toolName, input: providedInput)
         }
-        return HarnessToolCall(name: "run.failSafe", input: ["reason": "harnessPlanFailed"])
+        return failSafeCall(after: lastFailure)
+    }
+
+    /// The corrective note fed back on the next attempt. A content-filter block gets a
+    /// strategy-changing note — the filter is deterministic on the content, so re-asking for the same
+    /// reply verbatim just re-trips it; the model must obtain the content as data instead of writing
+    /// it from memory. Everything else gets the generic format re-ask.
+    private static func retryNote(after error: Error) -> String {
+        if case let PlanningError.blockedByContentFilter(finishReason, _) = error {
+            return "The model provider's content filter blocked your previous reply before any of it "
+                + "reached the harness (finish reason: \(finishReason)). That usually means the reply "
+                + "wrote memorized material (a tracklist, lyrics, article text) verbatim. Do not write "
+                + "such content from memory. Obtain it as data instead — web.search/web.fetch for "
+                + "current facts, llm.generate with toFile=true for long content — then use the "
+                + "returned file in later steps."
+        }
+        return "Your previous reply could not be used (\(String(describing: error).prefix(200))). "
+            + "Reply with exactly ONE JSON object naming one tool from AVAILABLE TOOLS, with every "
+            + "required input field filled. For a tool that needs no input, use an empty object: {}."
+    }
+
+    /// Terminal fail-safe once the planning budget is spent. The reason and narration carry the exact
+    /// failure — a provider content block with its finish reason, an empty reply, an HTTP/auth error,
+    /// a timeout — so the thread and the user-facing summary name what actually broke instead of a
+    /// generic plan failure the user has to guess at.
+    private func failSafeCall(after error: Error?) -> HarnessToolCall {
+        switch error as? PlanningError {
+        case let .blockedByContentFilter(finishReason, _):
+            lastNarration = "The model provider's content filter blocked every planning reply "
+                + "(finish reason: \(finishReason)) — usually from reproducing protected material like "
+                + "a tracklist or lyrics from memory instead of fetching it."
+            return HarnessToolCall(name: "run.failSafe", input: ["reason": "plannerContentFiltered(\(finishReason))"])
+        case let .missingOutputText(finishReason, _):
+            let detail = finishReason.map { " (provider finish reason: \($0))" } ?? ""
+            lastNarration = "The model returned an empty reply on all \(Self.maxPlanAttempts) "
+                + "planning attempts\(detail), so I stopped."
+            return HarnessToolCall(name: "run.failSafe", input: ["reason": "plannerEmptyReply"])
+        case nil:
+            if let error {
+                lastNarration = "Planning failed on all \(Self.maxPlanAttempts) attempts — last error: "
+                    + "\(String(describing: error).prefix(200))"
+            }
+            return HarnessToolCall(name: "run.failSafe", input: ["reason": "harnessPlanFailed"])
+        }
     }
 
     /// Max planning samples per step before failing safe. The first is the normal call; the rest are
@@ -211,13 +254,33 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     }
 
     public enum PlanningError: Error, CustomStringConvertible {
-        case missingOutputText(String)
+        /// The reply carried no output text. `finishReason` is the provider's reported finish reason
+        /// when one was present (e.g. MAX_TOKENS), kept as its own field so the exact cause survives
+        /// even when the clipped raw JSON would cut it off.
+        case missingOutputText(finishReason: String?, raw: String)
+        /// The provider's content filter withheld the reply (RECITATION, SAFETY, …) — the model wrote
+        /// something, the provider blocked it, and no text reached the harness. Distinct from
+        /// `missingOutputText` because retrying the same prompt verbatim re-trips the filter: the
+        /// retry must change strategy, and the failure must surface as a content block, not a
+        /// transport mystery.
+        case blockedByContentFilter(finishReason: String, raw: String)
         public var description: String {
             switch self {
-            case let .missingOutputText(raw): return "missingOutputText raw=\(raw)"
+            case let .missingOutputText(finishReason, raw):
+                let detail = finishReason.map { "finishReason=\($0) " } ?? ""
+                return "missingOutputText \(detail)raw=\(raw)"
+            case let .blockedByContentFilter(finishReason, raw):
+                return "providerContentFilterBlocked finishReason=\(finishReason) raw=\(raw)"
             }
         }
     }
+
+    /// Provider finish reasons that mean a content filter withheld the generated reply. Matching is on
+    /// this typed provider enum field, never on user text. The set is provider-specific wire
+    /// vocabulary, which is exactly what an adapter is allowed to know.
+    private static let contentFilterFinishReasons: Set<String> = [
+        "RECITATION", "SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY"
+    ]
 
     /// Deadline for one planning inference. Past it the step throws and the
     /// caller fails safe instead of stalling the whole run on a hung provider.
@@ -247,7 +310,11 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         }
         guard let text = RemoteInferenceResponseHelpers.outputText(from: response), !text.isEmpty else {
             let raw = (try? JSONEncoder().encode(response)).flatMap { String(data: $0, encoding: .utf8) } ?? "<unencodable>"
-            throw PlanningError.missingOutputText(String(raw.prefix(2_000)))
+            let finishReason = RemoteInferenceResponseHelpers.providerFinishReason(from: response)
+            if let finishReason, Self.contentFilterFinishReasons.contains(finishReason) {
+                throw PlanningError.blockedByContentFilter(finishReason: finishReason, raw: String(raw.prefix(500)))
+            }
+            throw PlanningError.missingOutputText(finishReason: finishReason, raw: String(raw.prefix(2_000)))
         }
         let json = DebugUIInspectionResponseDecoder.jsonObjectSubstring(text)
         let wire = try JSONDecoder().decode(DecisionWire.self, from: Data(json.utf8))
