@@ -425,7 +425,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // The thread is the COMPLETE session record: the parsed understanding (or its absence) is part
         // of the conversation, not just an internal step.
         if let understanding {
-            var understood = "Understood request: \(understanding.restatedGoal ?? command)"
+            var understood = "Understood request: \(understanding.restatedGoal)"
             if let app = understanding.targetAppName, !app.isEmpty {
                 understood += " · target app: \(app)"
             }
