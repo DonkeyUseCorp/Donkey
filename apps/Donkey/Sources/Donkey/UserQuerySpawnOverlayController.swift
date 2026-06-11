@@ -10,6 +10,7 @@ final class UserQuerySpawnOverlayController {
     private var surfacesByID: [String: UserQuerySpawnSurface] = [:]
     private var viewModelsByID: [String: UserQuerySpawnOverlayViewModel] = [:]
     private var pendingGuideRequestsBySpawnID: [String: PointerCoachCursorGuideRequest] = [:]
+    private var dismissedSpawnIDs: Set<String> = []
     private var windowResolver = MacWindowResolver()
     private var localOutsideClickMonitor: Any?
     private var globalOutsideClickMonitor: Any?
@@ -38,7 +39,11 @@ final class UserQuerySpawnOverlayController {
     ) {
         guard let screen else { return }
 
-        let visibleSpawnStates = spawnStates.filter { $0.phase != .notchCue }
+        let allSpawnIDs = Set(spawnStates.map(\.id))
+        dismissedSpawnIDs.formIntersection(allSpawnIDs)
+        let visibleSpawnStates = spawnStates.filter {
+            $0.phase != .notchCue && !dismissedSpawnIDs.contains($0.id)
+        }
         guard !visibleSpawnStates.isEmpty else {
             if spawnStates.isEmpty {
                 pendingGuideRequestsBySpawnID = [:]
@@ -47,7 +52,6 @@ final class UserQuerySpawnOverlayController {
             return
         }
 
-        let allSpawnIDs = Set(spawnStates.map(\.id))
         let visibleIDs = Set(visibleSpawnStates.map(\.id))
         pendingGuideRequestsBySpawnID = pendingGuideRequestsBySpawnID.filter { allSpawnIDs.contains($0.key) }
         for spawnState in visibleSpawnStates {
@@ -76,6 +80,7 @@ final class UserQuerySpawnOverlayController {
         surfacesByID = [:]
         viewModelsByID = [:]
         pendingGuideRequestsBySpawnID = [:]
+        dismissedSpawnIDs = []
     }
 
     @discardableResult
@@ -89,6 +94,10 @@ final class UserQuerySpawnOverlayController {
               let screen else {
             return false
         }
+
+        // Swallow guides for a pointer the user dismissed so the fallback
+        // overlay does not resurrect it.
+        guard !dismissedSpawnIDs.contains(spawnID) else { return true }
 
         guard let surface = surfacesByID[spawnID] else {
             pendingGuideRequestsBySpawnID[spawnID] = request
@@ -211,19 +220,22 @@ final class UserQuerySpawnOverlayController {
             return
         }
 
+        // A user-dragged cursor keeps its spot through model updates; only an
+        // explicit new guide step moves it again.
+        let effectiveDestination = surface.isUserPositioned ? surface.destination : destination
         let shouldRetarget = !surface.viewModel.freezesMovement &&
-            distance(from: surface.destination, to: destination) > 1
+            distance(from: surface.destination, to: effectiveDestination) > 1
 
         surface.viewModel.update(
             state: spawnState,
-            destination: destination,
+            destination: effectiveDestination,
             screenSize: screen.frame.size
         )
 
         if shouldRetarget {
             animateSurfaceTravel(
                 surface,
-                to: destination,
+                to: effectiveDestination,
                 on: screen
             )
             return
@@ -347,6 +359,47 @@ final class UserQuerySpawnOverlayController {
                 animated: false
             )
         }
+        surface.viewModel.dismissed = { [weak self] spawnID in
+            guard let self else { return }
+
+            self.dismissedSpawnIDs.insert(spawnID)
+            self.fadeAndRemove(id: spawnID)
+        }
+        surface.viewModel.cursorDragged = { [weak self, weak surface] globalPoint in
+            guard let self,
+                  let surface else {
+                return
+            }
+
+            self.moveSurfaceCursor(surface, toGlobalPoint: globalPoint)
+        }
+    }
+
+    /// Repositions a holding cursor under the user's drag. The global AppKit
+    /// mouse point (bottom-left origin) is converted to the overlay's
+    /// top-left-origin screen-local space before being applied.
+    private func moveSurfaceCursor(
+        _ surface: UserQuerySpawnSurface,
+        toGlobalPoint globalPoint: CGPoint
+    ) {
+        let screenFrame = surface.screen.frame
+        let localPoint = UserQuerySpawnGeometry.clampedPoint(
+            CGPoint(
+                x: globalPoint.x - screenFrame.minX,
+                y: screenFrame.maxY - globalPoint.y
+            ),
+            in: screenFrame.size
+        )
+        surface.travelWorkItem?.cancel()
+        surface.isTraveling = false
+        surface.isUserPositioned = true
+        surface.destination = localPoint
+        surface.viewModel.setPosition(localPoint)
+        layoutSurface(
+            surface,
+            on: surface.screen,
+            animated: false
+        )
     }
 
     private func animateSurfaceTravel(
@@ -494,6 +547,11 @@ final class UserQuerySpawnOverlayController {
             preRotateDuration: step.preRotateDuration,
             travelDuration: step.travelDuration
         )
+        // The view model refuses to move while the user drags the cursor or
+        // edits the label; moving the panel anyway would tear the two apart.
+        guard !surface.viewModel.freezesMovement else { return }
+
+        surface.isUserPositioned = false
         animateSurfaceTravel(
             surface,
             to: destination,
@@ -628,9 +686,12 @@ final class UserQuerySpawnOverlayController {
 
     private func fadeAndRemove(id spawnID: String) {
         guard let surface = surfacesByID[spawnID] else { return }
+        // Already fading out — restarting would keep postponing the close on
+        // every model update, leaving an invisible panel that swallows clicks.
+        guard surface.removalWorkItem == nil else { return }
 
         surface.travelWorkItem?.cancel()
-        surface.removalWorkItem?.cancel()
+        surface.panel.ignoresMouseEvents = true
         pendingGuideRequestsBySpawnID[spawnID] = nil
         cancelGuide(for: surface)
         surface.viewModel.fadeOut()
@@ -839,6 +900,7 @@ private final class UserQuerySpawnSurface {
     var screen: NSScreen
     var destination: CGPoint
     var isTraveling = false
+    var isUserPositioned = false
     var travelWorkItem: DispatchWorkItem?
     var removalWorkItem: DispatchWorkItem?
     var isPlayingGuide = false

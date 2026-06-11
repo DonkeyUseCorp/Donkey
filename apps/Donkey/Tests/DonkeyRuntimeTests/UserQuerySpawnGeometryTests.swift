@@ -189,39 +189,66 @@ struct UserQuerySpawnGeometryTests {
     }
 
     @Test @MainActor
-    func spawnLabelOnlyExpandsOnHoverWhenCollapsedTextOverflows() {
+    func spawnCursorDragFreezesMovementAndRepositionsInPlace() async throws {
         let viewModel = UserQuerySpawnOverlayViewModel()
-        let shortState = UserQuerySpawnState(
-            id: "spawn-1",
-            commandText: "hi there",
-            label: "hi there",
-            accentIndex: 1,
-            phase: .holding
-        )
-
         viewModel.show(
-            state: shortState,
+            state: UserQuerySpawnState(
+                id: "spawn-1",
+                commandText: "plan",
+                label: "checking",
+                accentIndex: 1,
+                phase: .holding
+            ),
             origin: CGPoint(x: 600, y: 282),
             destination: CGPoint(x: 600, y: 282),
             screenSize: CGSize(width: 1200, height: 800)
         )
-        viewModel.setLabelHovered(true)
-        #expect(!viewModel.isLabelHovered)
-
-        let longState = UserQuerySpawnState(
-            id: "spawn-1",
-            commandText: "long",
-            label: Array(repeating: "details", count: 30).joined(separator: " "),
-            accentIndex: 1,
-            phase: .holding
+        let landedDelay = UInt64(
+            (UserQuerySpawnOverlayViewModel.travelDuration + 0.05) * 1_000_000_000
         )
-        viewModel.update(
-            state: longState,
+        try await Task.sleep(nanoseconds: landedDelay)
+        #expect(viewModel.isHolding)
+
+        var reportedPoint: CGPoint?
+        viewModel.cursorDragged = { reportedPoint = $0 }
+        viewModel.reportCursorDrag(at: CGPoint(x: 400, y: 300))
+        #expect(viewModel.isCursorDragging)
+        #expect(viewModel.freezesMovement)
+        #expect(reportedPoint == CGPoint(x: 400, y: 300))
+
+        viewModel.setPosition(CGPoint(x: 400, y: 500))
+        #expect(viewModel.position == CGPoint(x: 400, y: 500))
+        #expect(viewModel.destination == CGPoint(x: 400, y: 500))
+        #expect(viewModel.isHolding)
+
+        viewModel.endCursorDrag()
+        #expect(!viewModel.isCursorDragging)
+        #expect(!viewModel.freezesMovement)
+    }
+
+    @Test @MainActor
+    func spawnDismissReportsSpawnID() {
+        let viewModel = UserQuerySpawnOverlayViewModel()
+        var dismissedID: String?
+        viewModel.dismissed = { dismissedID = $0 }
+
+        viewModel.dismiss()
+        #expect(dismissedID == nil)
+
+        viewModel.show(
+            state: UserQuerySpawnState(
+                id: "spawn-1",
+                commandText: "plan",
+                label: "checking",
+                accentIndex: 1,
+                phase: .holding
+            ),
+            origin: CGPoint(x: 600, y: 282),
             destination: CGPoint(x: 600, y: 282),
             screenSize: CGSize(width: 1200, height: 800)
         )
-        viewModel.setLabelHovered(true)
-        #expect(viewModel.isLabelHovered)
+        viewModel.dismiss()
+        #expect(dismissedID == "spawn-1")
     }
 
     @Test @MainActor

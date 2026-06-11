@@ -18,7 +18,7 @@ public final class UserQuerySpawnOverlayViewModel: ObservableObject {
         UserQuerySpawnGeometry.defaultExitAngleDegrees
     @Published public private(set) var terminalTailAngleDegrees = 0.0
     @Published public private(set) var isWorking = false
-    @Published public private(set) var isLabelHovered = false
+    @Published public private(set) var isCursorDragging = false
     @Published public private(set) var isLabelEditing = false
     @Published public var draftText = ""
     @Published public private(set) var draftTextHeight: CGFloat = UserQuerySpawnOverlayViewModel.inlineEditorMinimumTextHeight
@@ -28,6 +28,8 @@ public final class UserQuerySpawnOverlayViewModel: ObservableObject {
     public var followUpSubmitted: ((String, String, String) -> Void)?
     public var selected: ((String) -> Void)?
     public var travelCompleted: (() -> Void)?
+    public var dismissed: ((String) -> Void)?
+    public var cursorDragged: ((CGPoint) -> Void)?
 
     private var animationGeneration = 0
 
@@ -82,7 +84,9 @@ public final class UserQuerySpawnOverlayViewModel: ObservableObject {
     }
 
     public var freezesMovement: Bool {
-        isLabelEditing || !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        isCursorDragging ||
+            isLabelEditing ||
+            !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var isAwaitingResponse: Bool {
@@ -102,8 +106,10 @@ public final class UserQuerySpawnOverlayViewModel: ObservableObject {
     }
 
     public var displayLabelContentWidth: CGFloat {
-        let maximumWidth = isLabelHovered ? Self.expandedCollapsedLabelWidth : Self.collapsedLabelContentWidth
-        return Self.displayLabelContentSize(for: state?.label ?? "", maximumWidth: maximumWidth).width
+        Self.displayLabelContentSize(
+            for: state?.label ?? "",
+            maximumWidth: Self.collapsedLabelContentWidth
+        ).width
     }
 
     public func cursorOnlyVisualFrame(at point: CGPoint) -> CGRect {
@@ -210,18 +216,14 @@ public final class UserQuerySpawnOverlayViewModel: ObservableObject {
         if isLabelEditing {
             return Self.inlineEditorLabelSize(for: state?.label ?? "")
         }
-        guard isLabelHovered else {
-            return Self.collapsedLabelSize(for: state?.label ?? "")
-        }
 
-        return Self.expandedCollapsedLabelSize(for: state?.label ?? "")
+        return Self.collapsedLabelSize(for: state?.label ?? "")
     }
 
     private func reservedPanelLabelSizes() -> [CGSize] {
         let text = state?.label ?? ""
         return [
             Self.collapsedLabelSize(for: text),
-            Self.expandedCollapsedLabelSize(for: text),
             Self.inlineEditorLabelSize(for: text)
         ]
     }
@@ -250,7 +252,7 @@ public final class UserQuerySpawnOverlayViewModel: ObservableObject {
         self.isWorking = false
         self.viewportOrigin = .zero
         self.viewportSize = .zero
-        self.isLabelHovered = false
+        self.isCursorDragging = false
         self.isLabelEditing = false
         self.draftText = ""
         self.draftTextHeight = Self.inlineEditorMinimumTextHeight
@@ -363,7 +365,7 @@ public final class UserQuerySpawnOverlayViewModel: ObservableObject {
             self.isHolding = false
             self.isWorking = false
             self.terminalTailAngleDegrees = 0
-            self.isLabelHovered = false
+            self.isCursorDragging = false
             self.isLabelEditing = false
             self.draftText = ""
             self.draftTextHeight = Self.inlineEditorMinimumTextHeight
@@ -380,14 +382,33 @@ public final class UserQuerySpawnOverlayViewModel: ObservableObject {
         self.isSelected = isSelected
     }
 
-    public func setLabelHovered(_ isHovered: Bool) {
-        guard !isLabelEditing else { return }
+    public func dismiss() {
+        guard let state else { return }
 
-        let shouldExpand = isHovered && Self.collapsedLabelNeedsExpansion(state?.label ?? "")
-        guard isLabelHovered != shouldExpand else { return }
+        dismissed?(state.id)
+    }
 
-        isLabelHovered = shouldExpand
-        labelLayoutChanged?()
+    /// Reports a user drag of the cursor at a global AppKit screen point; the
+    /// controller owning the panel converts it to overlay coordinates and calls
+    /// `setPosition`.
+    public func reportCursorDrag(at globalPoint: CGPoint) {
+        guard isHolding else { return }
+
+        isCursorDragging = true
+        cursorDragged?(globalPoint)
+    }
+
+    public func endCursorDrag() {
+        isCursorDragging = false
+    }
+
+    /// Moves the holding cursor directly to a point (top-left-origin screen-local
+    /// coordinates), bypassing travel animation — used while the user drags it.
+    public func setPosition(_ point: CGPoint) {
+        animationGeneration += 1
+        position = point
+        destination = point
+        isHolding = true
     }
 
     public func select() {
@@ -405,7 +426,6 @@ public final class UserQuerySpawnOverlayViewModel: ObservableObject {
         }
 
         selected?(state.id)
-        isLabelHovered = false
         draftText = ""
         draftTextHeight = Self.inlineEditorMinimumTextHeight
         isLabelEditing = true
@@ -597,8 +617,7 @@ public final class UserQuerySpawnOverlayViewModel: ObservableObject {
     fileprivate static let collapsedLabelContentWidth: CGFloat = 240
     fileprivate static let collapsedLabelMinimumHeight: CGFloat = 48
     fileprivate static let collapsedLabelBottomGap: CGFloat = 22
-    fileprivate static let expandedCollapsedLabelWidth: CGFloat = 480
-    fileprivate static let inlineEditorContentWidth: CGFloat = expandedCollapsedLabelWidth
+    fileprivate static let inlineEditorContentWidth: CGFloat = 480
     fileprivate static let inlineEditorInputHeight: CGFloat = 64
     fileprivate static let inlineEditorHorizontalPadding: CGFloat = 16
     fileprivate static let inlineEditorVerticalPadding: CGFloat = 14
@@ -612,10 +631,6 @@ public final class UserQuerySpawnOverlayViewModel: ObservableObject {
 
     private static func collapsedLabelSize(for text: String) -> CGSize {
         displayLabelSize(for: text, maximumWidth: collapsedLabelContentWidth)
-    }
-
-    private static func expandedCollapsedLabelSize(for text: String) -> CGSize {
-        displayLabelSize(for: text, maximumWidth: expandedCollapsedLabelWidth)
     }
 
     private static func displayLabelSize(for text: String, maximumWidth: CGFloat) -> CGSize {
@@ -658,15 +673,6 @@ public final class UserQuerySpawnOverlayViewModel: ObservableObject {
         )
         let lineHeight = NSLayoutManager().defaultLineHeight(for: font)
         return max(ceil(rect.height), ceil(lineHeight))
-    }
-
-    private static func collapsedLabelNeedsExpansion(_ text: String) -> Bool {
-        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedText.isEmpty else { return false }
-
-        let collapsed = displayLabelSize(for: text, maximumWidth: collapsedLabelContentWidth)
-        let expanded = displayLabelSize(for: text, maximumWidth: expandedCollapsedLabelWidth)
-        return expanded.height < collapsed.height - 0.5
     }
 
     fileprivate static func displayLabelContentSize(
@@ -756,6 +762,9 @@ public struct UserQuerySpawnOverlayView: View {
             }
 
             cursor(state: state)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+                .gesture(cursorDragGesture)
                 .position(viewModel.localCursorCenter)
 
             if viewModel.isHolding {
@@ -804,9 +813,43 @@ public struct UserQuerySpawnOverlayView: View {
         .onTapGesture {
             viewModel.beginInlineInput()
         }
-        .onHover { isHovered in
-            viewModel.setLabelHovered(isHovered)
+        .overlay(alignment: .topTrailing) {
+            dismissButton
+                .offset(x: 6, y: -6)
         }
+    }
+
+    private var dismissButton: some View {
+        Button {
+            viewModel.dismiss()
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 7, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 16, height: 16)
+                .background {
+                    Circle()
+                        .fill(Color.black.opacity(0.45))
+                }
+                .overlay {
+                    Circle()
+                        .stroke(Color.white.opacity(0.35), lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Lets the user grab the cursor and reposition it; gesture coordinates are
+    /// unreliable because the panel follows the cursor, so the real mouse
+    /// location is reported instead.
+    private var cursorDragGesture: some Gesture {
+        DragGesture(minimumDistance: 2)
+            .onChanged { _ in
+                viewModel.reportCursorDrag(at: NSEvent.mouseLocation)
+            }
+            .onEnded { _ in
+                viewModel.endCursorDrag()
+            }
     }
 
     private func displayLabel(state: UserQuerySpawnState) -> some View {
