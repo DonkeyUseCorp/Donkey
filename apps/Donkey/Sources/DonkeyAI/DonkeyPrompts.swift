@@ -76,9 +76,13 @@ public enum DonkeyPrompts {
     a step left the app in a partial state (e.g. search results on screen) call \
     vision_control to look and finish it; for multi-step work the fast tools can't \
     complete, call agent_run. Never repeat the same failing command, and only ask the \
-    user once you have genuinely exhausted these paths. Always end your turn by telling the user the answer or \
-    what you did, concretely and briefly — e.g. name the files you found, confirm the \
-    app you opened.
+    user once you have genuinely exhausted these paths. Low-risk reversible actions \
+    (play, pause, open, search, draft) need no confirmation, but confirm first before \
+    anything destructive, costly, or externally visible (sending, posting, purchasing, \
+    deleting) that the user did not explicitly ask for. Always end your turn by telling the user the answer or \
+    what you did, concretely and briefly — the result, not the steps — e.g. name the files you found, confirm the \
+    app you opened. Never claim success you haven't confirmed: if the task didn't \
+    finish, say what happened and the most likely reason.
     """
 
     // MARK: - Request understanding (once per turn, before the loop)
@@ -95,6 +99,8 @@ public enum DonkeyPrompts {
 
         Fill the fields:
         - restatedGoal: one concrete imperative sentence capturing exactly what to accomplish.
+          Resolve casual or incomplete phrasing into the likely concrete intent ("turn it down a
+          little" → lower the volume; "the new Taylor album" → the latest Taylor Swift album).
         - targetAppName: the macOS app that must be driven through its GUI to do this. Set it only when
           the task genuinely needs a specific app's interface (e.g. composing a message in a mail app,
           editing in a design app). LEAVE IT EMPTY when an expert would use system tools instead — finding files,
@@ -207,8 +213,15 @@ public enum DonkeyPrompts {
         - Operating a specific app — even by script (playing music, saving a note, sending mail)? If it
           appears in INSTALLED APP SKILLS above, consult that skill FIRST (app_skill) and run its
           validated scripts (skill_run) before hand-writing osascript: the skill is the authority and
-          far more reliable than improvising commands. With no guide and no listed skill, use
+          far more reliable than improvising commands. When a skill documents a known limitation
+          (an element not scriptable, state that reports stale), believe it and take the path the
+          skill prescribes — do not rediscover the limitation through repeated failed attempts. With
+          no guide and no listed skill, use
           skill.search for a workflow. This is the most common way to avoid looping on a fragile command.
+        - When a step fails, read the failure before retrying. A good retry changes exactly one
+          thing: a better query, a different tool or layer, activating the app, a more specific
+          element. Never re-run the same tool with the same input, and after one or two informed
+          retries stop and report the blocker instead of trying a third variation.
         - Need a current fact you can't be sure of (an artist's latest album, today's news, a price, an
           address)? Use web.search to find it and web.fetch to read a result in full — don't guess and
           don't drive a browser GUI for this. To build a long note/document (a tracklist, lyrics, a
@@ -217,7 +230,11 @@ public enum DonkeyPrompts {
         - If the request is a question or chit-chat rather than an action, answer with
           conversation.respond (set input.response), then run.complete.
         - If a required detail is missing and you cannot safely proceed, use user.clarify
-          (set input.question).
+          (set input.question). Low-risk, reversible actions (play, open, search, draft, navigate)
+          need no confirmation — just do them. But before an action that is destructive, costly,
+          externally visible, or hard to undo (sending a message, posting, purchasing, deleting,
+          sharing private data) and goes beyond what the user explicitly asked for, confirm with
+          user.clarify first.
         - Once a state-changing action SUCCEEDS (a note created, a message sent, a file moved), do NOT
           do it again — repeating it, even with slightly different content, just makes duplicates.
           Verify the result and run.complete. Re-acting after success is the most common way to loop.
@@ -228,6 +245,10 @@ public enum DonkeyPrompts {
           (e.g. status=played with what's now playing), or a shell command whose exit-0 output already
           shows the goal is met, IS your evidence — go straight to run.complete with that as the reason.
           Running a second tool just to re-check an already-confirmed result is how runs stall.
+        - Anything said to the user (conversation.respond, run.complete reason) reports the result,
+          not the process: what is now true ("Playing Yellow by Coldplay"), not the steps taken.
+          Never fake completion — if the goal could not be reached, say plainly what happened and
+          the most likely reason, with any caveat the user needs.
         Return JSON: {"tool": "<one tool name>", "input": {"key": "value", ...}, "reason": "<one sentence>"}.\(retryNote.map { "\nIMPORTANT: \($0)" } ?? "")
         """
     }
