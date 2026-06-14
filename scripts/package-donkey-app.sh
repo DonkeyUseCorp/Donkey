@@ -240,7 +240,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>CFBundleExecutable</key>
   <string>Donkey</string>
   <key>CFBundleIdentifier</key>
-  <string>ai.donkey.Donkey</string>
+  <string>com.donkeyuse.Donkey</string>
   <key>CFBundleName</key>
   <string>Donkey</string>
   <key>CFBundleDisplayName</key>
@@ -263,7 +263,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <array>
     <dict>
       <key>CFBundleURLName</key>
-      <string>ai.donkey.Donkey.auth</string>
+      <string>com.donkeyuse.Donkey.auth</string>
       <key>CFBundleURLSchemes</key>
       <array>
         <string>$AUTH_CALLBACK_SCHEME</string>
@@ -282,6 +282,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <string>Donkey may search Documents files only when you ask it to find or open a local item.</string>
   <key>NSDownloadsFolderUsageDescription</key>
   <string>Donkey may search Downloads files only when you ask it to find or open a local item.</string>
+  <key>NSAppleMusicUsageDescription</key>
+  <string>Donkey plays Apple Music natively when you ask for music.</string>
 $SPARKLE_PLIST_KEYS
 </dict>
 </plist>

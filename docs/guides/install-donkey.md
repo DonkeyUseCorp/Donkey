@@ -117,7 +117,7 @@ The dev script starts the local site when `DONKEY_WEB_BASE_URL` points at
 localhost, builds Donkey, wraps the debug executable in
 `apps/Donkey/.build/debug/Donkey Dev.app`, registers that bundle for
 `donkey://auth/callback`, and launches it. The debug wrapper uses the
-`Donkey Dev` display name and `ai.donkey.Donkey.dev` bundle identifier by
+`Donkey Dev` display name and `com.donkeyuse.Donkey.dev` bundle identifier by
 default so macOS privacy settings do not collide with packaged `Donkey.app`
 builds. Development builds use the same hosted-model boundary as packaged
 builds; to test provider behavior, configure the site/backend environment and

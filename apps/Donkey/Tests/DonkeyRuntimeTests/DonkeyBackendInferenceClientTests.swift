@@ -1058,7 +1058,7 @@ struct DonkeyBackendInferenceClientTests {
         try FileManager.default.createDirectory(at: bundleURL, withIntermediateDirectories: true)
 
         var plist: [String: Any] = [
-            "CFBundleIdentifier": "ai.donkey.tests.\(UUID().uuidString)",
+            "CFBundleIdentifier": "com.donkeyuse.tests.\(UUID().uuidString)",
             "CFBundlePackageType": "BNDL"
         ]
         for (key, value) in info {

@@ -6,7 +6,7 @@ APP_DIR="$ROOT_DIR/apps/Donkey"
 LOG_SCRIPT="$ROOT_DIR/scripts/tail-donkey-logs.sh"
 BUILD_PRODUCTS_DIR="$APP_DIR/.build/debug"
 DONKEY_BIN="$BUILD_PRODUCTS_DIR/Donkey"
-DEV_BUNDLE_IDENTIFIER="${DONKEY_DEV_BUNDLE_IDENTIFIER:-ai.donkey.Donkey.dev}"
+DEV_BUNDLE_IDENTIFIER="${DONKEY_DEV_BUNDLE_IDENTIFIER:-com.donkeyuse.Donkey.dev}"
 DEV_DISPLAY_NAME="${DONKEY_DEV_DISPLAY_NAME:-Donkey Dev}"
 DEV_EXECUTABLE_NAME="${DONKEY_DEV_EXECUTABLE_NAME:-$DEV_DISPLAY_NAME}"
 DEV_APP_DIR="$BUILD_PRODUCTS_DIR/$DEV_DISPLAY_NAME.app"
@@ -342,6 +342,8 @@ write_info_plist() {
   <string>Donkey may search Documents files only when you ask it to find or open a local item.</string>
   <key>NSDownloadsFolderUsageDescription</key>
   <string>Donkey may search Downloads files only when you ask it to find or open a local item.</string>
+  <key>NSAppleMusicUsageDescription</key>
+  <string>Donkey plays Apple Music natively when you ask for music.</string>
 </dict>
 </plist>
 PLIST
