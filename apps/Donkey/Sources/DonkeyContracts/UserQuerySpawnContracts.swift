@@ -41,6 +41,9 @@ public struct UserQuerySpawnState: Codable, Equatable, Identifiable, Sendable {
     public var targetHint: UserQuerySpawnTargetHint?
     public var createdAt: Date
     public var updatedAt: Date
+    /// When the spawn's work last came to rest (run finished or is waiting on
+    /// the user). Nil while a run is in flight; cleared when work resumes.
+    public var finishedAt: Date?
 
     public init(
         id: String = UUID().uuidString,
@@ -52,7 +55,8 @@ public struct UserQuerySpawnState: Codable, Equatable, Identifiable, Sendable {
         notchCueAngleDegrees: Double = UserQuerySpawnGeometry.defaultExitAngleDegrees,
         targetHint: UserQuerySpawnTargetHint? = nil,
         createdAt: Date = Date(),
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        finishedAt: Date? = nil
     ) {
         self.id = id
         self.taskID = taskID
@@ -64,6 +68,7 @@ public struct UserQuerySpawnState: Codable, Equatable, Identifiable, Sendable {
         self.targetHint = targetHint
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.finishedAt = finishedAt
     }
 }
 

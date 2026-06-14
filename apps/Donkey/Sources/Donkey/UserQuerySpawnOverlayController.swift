@@ -280,10 +280,7 @@ final class UserQuerySpawnOverlayController {
         hostingView.wantsLayer = true
         hostingView.layer?.backgroundColor = NSColor.clear.cgColor
         hostingView.hitTestRegionProvider = { [weak viewModel] in
-            guard let viewModel else { return [] }
-
-            let frame = viewModel.localHitTestFrame
-            return frame.isNull || frame.isEmpty ? [] : [frame]
+            viewModel?.localHitTestFrames ?? []
         }
 
         let panel = UserQuerySpawnPanel(
@@ -658,8 +655,8 @@ final class UserQuerySpawnOverlayController {
             return
         }
 
-        let hitTestFrame = surface.viewModel.localHitTestFrame
-        guard !hitTestFrame.isNull, !hitTestFrame.isEmpty else {
+        let hitTestFrames = surface.viewModel.localHitTestFrames
+        guard !hitTestFrames.isEmpty else {
             surface.panel.ignoresMouseEvents = true
             return
         }
@@ -668,13 +665,13 @@ final class UserQuerySpawnOverlayController {
             for: NSEvent.mouseLocation,
             in: surface
         )
-        surface.panel.ignoresMouseEvents = !hitTestFrame.contains(mouseLocation)
+        surface.panel.ignoresMouseEvents = !hitTestFrames.contains { $0.contains(mouseLocation) }
     }
 
     /// Converts a global screen point into the overlay's top-left-origin local
     /// space. `convertPoint(fromScreen:)` alone is not enough: it returns
     /// bottom-left-origin window coordinates, and comparing those against the
-    /// flipped `localHitTestFrame` mirrors the interactive region vertically.
+    /// flipped `localHitTestFrames` mirrors the interactive regions vertically.
     private func overlayLocalPoint(
         for screenPoint: CGPoint,
         in surface: UserQuerySpawnSurface
@@ -692,7 +689,7 @@ final class UserQuerySpawnOverlayController {
     /// click-through, so hover and drags never start.
     private func updateMouseMoveMonitoring() {
         guard surfacesByID.values.contains(where: {
-            !$0.viewModel.localHitTestFrame.isNull
+            !$0.viewModel.localHitTestFrames.isEmpty
         }) else {
             removeMouseMoveMonitoring()
             return
@@ -866,7 +863,7 @@ final class UserQuerySpawnOverlayController {
         guard surface.panel.frame.contains(screenPoint) else { return false }
 
         let localPoint = overlayLocalPoint(for: screenPoint, in: surface)
-        return surface.viewModel.localHitTestFrame.contains(localPoint)
+        return surface.viewModel.localHitTestFrames.contains { $0.contains(localPoint) }
     }
 
     private func spawnOrigin(in screen: NSScreen, index: Int) -> CGPoint {

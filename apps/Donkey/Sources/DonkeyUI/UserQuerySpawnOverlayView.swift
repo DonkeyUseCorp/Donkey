@@ -35,16 +35,19 @@ public final class UserQuerySpawnOverlayViewModel: ObservableObject {
 
     public init() {}
 
-    public var hitTestFrame: CGRect {
-        guard state != nil, isHolding else { return .null }
+    /// The interactive regions: the grabbable cursor and the label bubble,
+    /// as two separate rects. The transparent panel area between and around
+    /// them must stay click-through for whatever is beneath it.
+    public var hitTestFrames: [CGRect] {
+        guard state != nil, isHolding else { return [] }
 
-        return contentFrame(at: position, includesLabel: true)
+        let labelRect = labelFrame(for: position, labelSize: labelSize())
+            .insetBy(dx: -Self.contentOverdrawPadding, dy: -Self.contentOverdrawPadding)
+        return [cursorHitTestFrame, labelRect]
     }
 
-    public var localHitTestFrame: CGRect {
-        guard !hitTestFrame.isNull else { return .null }
-
-        return hitTestFrame.offsetBy(dx: -viewportOrigin.x, dy: -viewportOrigin.y)
+    public var localHitTestFrames: [CGRect] {
+        hitTestFrames.map { $0.offsetBy(dx: -viewportOrigin.x, dy: -viewportOrigin.y) }
     }
 
     public var visualFrame: CGRect {
@@ -614,6 +617,7 @@ public final class UserQuerySpawnOverlayViewModel: ObservableObject {
     private static let panelOverdrawPadding: CGFloat = 28
     fileprivate static let labelHorizontalPadding: CGFloat = 10
     fileprivate static let labelVerticalPadding: CGFloat = 3
+    fileprivate static let labelTimerLaneHeight: CGFloat = 11
     fileprivate static let collapsedLabelContentWidth: CGFloat = 240
     fileprivate static let collapsedLabelMinimumHeight: CGFloat = 48
     fileprivate static let collapsedLabelBottomGap: CGFloat = 22
@@ -637,7 +641,10 @@ public final class UserQuerySpawnOverlayViewModel: ObservableObject {
         let contentSize = displayLabelContentSize(for: text, maximumWidth: maximumWidth)
         return CGSize(
             width: contentSize.width + Self.labelHorizontalPadding * 2,
-            height: max(collapsedLabelMinimumHeight, contentSize.height + Self.labelVerticalPadding * 2)
+            height: max(
+                collapsedLabelMinimumHeight,
+                contentSize.height + Self.labelVerticalPadding * 2 + Self.labelTimerLaneHeight
+            )
         )
     }
 
@@ -709,6 +716,21 @@ public final class UserQuerySpawnOverlayViewModel: ObservableObject {
     }
 }
 
+private extension View {
+    /// SwiftUI gestures normally drop the click that activates the window, so
+    /// even with `acceptsFirstMouse` the user had to click an inactive pointer
+    /// once before dragging it. On macOS 15+ gestures can claim that
+    /// activating click, making the pointer draggable immediately.
+    @ViewBuilder
+    func handlesWindowActivationGestures() -> some View {
+        if #available(macOS 15.0, *) {
+            allowsWindowActivationEvents()
+        } else {
+            self
+        }
+    }
+}
+
 public struct UserQuerySpawnOverlayView: View {
     @ObservedObject private var viewModel: UserQuerySpawnOverlayViewModel
     @State private var haloPulseActive = false
@@ -734,6 +756,7 @@ public struct UserQuerySpawnOverlayView: View {
             }
         }
         .ignoresSafeArea()
+        .handlesWindowActivationGestures()
     }
 
     private func spawnSurface(
@@ -830,29 +853,36 @@ public struct UserQuerySpawnOverlayView: View {
         }
         .overlay(alignment: .bottomTrailing) {
             if !viewModel.isLabelEditing {
-                elapsedTimer(since: state.createdAt)
-                    .offset(
-                        x: -UserQuerySpawnOverlayViewModel.labelHorizontalPadding,
-                        y: 16
-                    )
+                elapsedTimer(since: state.createdAt, frozenAt: state.finishedAt)
+                    .padding(.trailing, UserQuerySpawnOverlayViewModel.labelHorizontalPadding)
+                    .padding(.bottom, UserQuerySpawnOverlayViewModel.labelVerticalPadding)
             }
         }
     }
 
-    /// A faint count-up timer hanging below the label bubble. It floats over
-    /// arbitrary screen content, so legibility on both light and dark
-    /// backgrounds comes from white text with a soft dark shadow rather than
-    /// from color-scheme adaptation.
-    private func elapsedTimer(since start: Date) -> some View {
-        TimelineView(.periodic(from: start, by: 1)) { context in
-            Text(UserQueryNotchStatusView.elapsedDescription(from: start, to: context.date))
-                .font(.system(size: 9, weight: .medium).monospacedDigit())
-                .foregroundStyle(Color.white.opacity(0.62))
-                .shadow(color: Color.black.opacity(0.55), radius: 1.5, x: 0, y: 0.5)
-                .lineLimit(1)
-                .fixedSize()
+    /// A faint count-up timer tucked into the label bubble's bottom-right
+    /// corner. The display label reserves a lane below the text for it, so it
+    /// never overlaps the last line. Once the spawn's work comes to rest the
+    /// timer freezes at the total elapsed time instead of ticking on.
+    private func elapsedTimer(since start: Date, frozenAt: Date?) -> some View {
+        Group {
+            if let frozenAt {
+                elapsedTimerText(from: start, to: frozenAt)
+            } else {
+                TimelineView(.periodic(from: start, by: 1)) { context in
+                    elapsedTimerText(from: start, to: context.date)
+                }
+            }
         }
         .allowsHitTesting(false)
+    }
+
+    private func elapsedTimerText(from start: Date, to end: Date) -> some View {
+        Text(UserQueryNotchStatusView.elapsedDescription(from: start, to: end))
+            .font(.system(size: 9, weight: .medium).monospacedDigit())
+            .foregroundStyle(Color.white.opacity(0.65))
+            .lineLimit(1)
+            .fixedSize()
     }
 
     private var showsDismissButton: Bool {
@@ -904,7 +934,12 @@ public struct UserQuerySpawnOverlayView: View {
             alignment: .leading
         )
         .padding(.horizontal, UserQuerySpawnOverlayViewModel.labelHorizontalPadding)
-        .padding(.vertical, UserQuerySpawnOverlayViewModel.labelVerticalPadding)
+        .padding(.top, UserQuerySpawnOverlayViewModel.labelVerticalPadding)
+        .padding(
+            .bottom,
+            UserQuerySpawnOverlayViewModel.labelVerticalPadding +
+                UserQuerySpawnOverlayViewModel.labelTimerLaneHeight
+        )
     }
 
     private func inlineLabelEditor(state: UserQuerySpawnState) -> some View {

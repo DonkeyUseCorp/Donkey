@@ -275,17 +275,21 @@ struct UserQuerySpawnGeometryTests {
         try await Task.sleep(nanoseconds: landedDelay)
 
         let panelFrame = viewModel.visualFrame
-        let hitTestFrame = viewModel.hitTestFrame
+        let hitTestFrames = viewModel.hitTestFrames
         viewModel.updateViewport(origin: panelFrame.origin, size: panelFrame.size)
 
         #expect(!panelFrame.isNull)
-        #expect(!hitTestFrame.isNull)
-        #expect(panelFrame.contains(hitTestFrame))
-        #expect(panelFrame.width > hitTestFrame.width)
-        #expect(viewModel.localHitTestFrame.minX >= 0)
-        #expect(viewModel.localHitTestFrame.maxX <= viewModel.viewportSize.width)
-        #expect(viewModel.localHitTestFrame.minY >= 0)
-        #expect(viewModel.localHitTestFrame.maxY <= viewModel.viewportSize.height)
+        #expect(!hitTestFrames.isEmpty)
+        for hitTestFrame in hitTestFrames {
+            #expect(panelFrame.contains(hitTestFrame))
+            #expect(panelFrame.width > hitTestFrame.width)
+        }
+        for localFrame in viewModel.localHitTestFrames {
+            #expect(localFrame.minX >= 0)
+            #expect(localFrame.maxX <= viewModel.viewportSize.width)
+            #expect(localFrame.minY >= 0)
+            #expect(localFrame.maxY <= viewModel.viewportSize.height)
+        }
     }
 
     @Test @MainActor

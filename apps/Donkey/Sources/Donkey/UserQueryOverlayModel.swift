@@ -297,6 +297,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             spawnState.label = Self.collapsedDisplayText(for: detail ?? spawnState.label)
         }
         spawnState.updatedAt = Date()
+        spawnState.finishedAt = Date()
         spawnStates[index] = spawnState
         if !UserQuerySpawnLifecycle.keepsVisibleResult(for: status) {
             scheduleSpawnFade(id: spawnID, after: 2.0)
@@ -352,7 +353,8 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
                 id: promptFollowUpTarget.spawnID,
                 commandText: text,
                 label: Self.collapsedDisplayText(for: text),
-                phase: .holding
+                phase: .holding,
+                resumesWork: true
             )
             spawnID = promptFollowUpTarget.spawnID
         } else {
@@ -458,7 +460,8 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             id: spawnID,
             commandText: trimmedText,
             label: Self.collapsedDisplayText(for: trimmedText),
-            phase: .holding
+            phase: .holding,
+            resumesWork: true
         )
         startCommandRun(
             text: trimmedText,
@@ -570,6 +573,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         activeTaskIDs.insert(taskID)
         lastActiveTaskID = taskID
         updateTask(id: taskID, detail: "Running", status: .running)
+        updateSpawn(id: spawnStates.first { $0.taskID == taskID }?.id, resumesWork: true)
         appendTaskEvent(taskID: taskID, role: .system, text: "Resumed")
         promptState.leadingSignalLevel = .thinking
         promptState.promptText = task.title
@@ -595,7 +599,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         if task.metadata["live.shellConsent"] == "true" {
             updateTask(id: taskID, detail: "Approved — running", status: .running, metadata: [:])
             if let turn = liveTurn, turn.taskID == taskID {
-                updateSpawn(id: turn.spawnID, label: "Approved — running")
+                updateSpawn(id: turn.spawnID, label: "Approved — running", resumesWork: true)
                 restartLiveTurnWatchdog()
             }
             syncPrimaryTaskPausedFlag()
@@ -614,6 +618,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         promptState.promptText = task.title
         syncPrimaryTaskPausedFlag()
         let spawnID = spawnStates.first { $0.taskID == taskID }?.id
+        updateSpawn(id: spawnID, resumesWork: true)
         let context = commandContext(taskID: taskID, isFollowUp: true, spawnID: spawnID)
         Task { [weak self, commandHandler] in
             let approved = await commandHandler.approvePermissionGate(taskID: taskID, alwaysAllow: alwaysAllow)
@@ -703,7 +708,8 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         label: String? = nil,
         accentIndex: Int? = nil,
         targetHint: UserQuerySpawnTargetHint? = nil,
-        phase: UserQuerySpawnPhase? = nil
+        phase: UserQuerySpawnPhase? = nil,
+        resumesWork: Bool = false
     ) {
         guard let spawnID,
               let index = spawnIndex(id: spawnID) else {
@@ -711,6 +717,9 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         }
 
         var spawnState = spawnStates[index]
+        if resumesWork {
+            spawnState.finishedAt = nil
+        }
         if let taskID {
             spawnState.taskID = taskID
         }
@@ -752,6 +761,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         var spawnState = spawnStates[index]
         spawnState.label = Self.spawnCompletionLabel(for: result)
         spawnState.updatedAt = Date()
+        spawnState.finishedAt = Date()
 
         // Keep the cursor visible whenever there is a response to read — a clarification, a wait, a
         // failure, OR a completed task that produced a summary (e.g. "Now playing …"). Only a
