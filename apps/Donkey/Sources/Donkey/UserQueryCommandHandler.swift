@@ -316,9 +316,9 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             progress?(restated)
         }
 
-        // Drive the understood target app when it names one that resolves to a running window; else the
-        // frontmost app. resolveTarget never falls back to an unrelated window, so a miss keeps us on
-        // the frontmost app and the planner can app.openOrFocus the target itself.
+        // Drive the understood target app whenever it names a running or installed app; else the
+        // frontmost app. An installed-but-not-running target stays pinned by name — the see/act tools
+        // re-resolve its window each call, so it works as soon as the planner launches it.
         let driveTarget = Self.resolveDriveTarget(
             understanding: understanding,
             frontmostAppName: frontmostAppName,
@@ -378,9 +378,14 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             analyzer: analyzer
         )
         let pointerProvider = PointerComputerUseToolProvider(appName: appName, bundleIdentifier: bundleIdentifier)
-        // Register the AX/vision/pointer see/act tools only when this turn holds their permissions,
-        // mirroring the built-in descriptor filter so the planner is never offered a tool it can't run.
+        // Native music playback (MusicKit): search/play/transport/status with no Music-app GUI or
+        // AppleScript. Declares no harness permissions — MusicKit runs its own consent flow.
+        let musicProvider = MusicPlaybackToolProvider(service: MusicKitPlaybackService())
+        // Register the AX/vision/pointer/music see/act tools only when this turn holds their
+        // permissions, mirroring the built-in descriptor filter so the planner is never offered a
+        // tool it can't run.
         for tool in axProvider.makeTools() + visionProvider.makeTools() + pointerProvider.makeTools()
+            + musicProvider.makeTools()
         where Set(tool.descriptor.requiredPermissions).isSubset(of: granted) {
             await registry.register(tool)
         }
@@ -422,17 +427,17 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         let transcript = ThreadTranscript(id: taskID)
         transcript.begin(id: taskID, app: appName)
         transcript.userMessage(command)
-        // The thread is the COMPLETE session record: the parsed understanding (or its absence) is part
-        // of the conversation, not just an internal step.
+        // The thread is the COMPLETE session record: the turn's upfront planning (or its absence) is
+        // part of the conversation, not just an internal step. A follow-up turn (clarification
+        // answer, permission grant) appends its own planning block mid-thread.
         if let understanding {
-            var understood = "Understood request: \(understanding.restatedGoal)"
-            if let app = understanding.targetAppName, !app.isEmpty {
-                understood += " · target app: \(app)"
-            }
-            if understanding.needsClarification, let question = understanding.clarifyingQuestion, !question.isEmpty {
-                understood += " · needs clarification: \(question)"
-            }
-            transcript.systemEvent(understood)
+            transcript.planning(
+                goal: understanding.restatedGoal,
+                targetApp: understanding.targetAppName,
+                parameters: understanding.parameters,
+                successCriteria: understanding.successCriteria,
+                clarification: understanding.needsClarification ? understanding.clarifyingQuestion : nil
+            )
         } else {
             transcript.systemEvent("Understanding was unavailable (timed out or failed); driving the raw command.")
         }
@@ -443,18 +448,29 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         let onStep: (@Sendable (HarnessStepExecutionResult) async -> Void)? = { (step: HarnessStepExecutionResult) async -> Void in
             await MainActor.run {
                 let narration = Self.stepNarration(for: step, planner: planner)
-                // Planning failures (unusable replies, retries) are part of the session and must be
-                // readable in the thread — a step that ends in run.failSafe is otherwise a mystery.
-                for planningError in planner.lastPlanningErrors {
-                    transcript.error(planningError)
-                }
                 if let result = step.toolResult {
-                    // The thread file gets the model's full thought summary (when thinking is on);
-                    // the overlay/progress gets only the clipped one-line narration below. The full
-                    // reasoning is persisted here and nowhere else, so the planning context stays bounded.
-                    transcript.thinking(planner.lastThinking ?? narration)
-                    transcript.toolCall(tool: result.toolName, input: step.task.toolHistory.last?.call.input ?? [:])
-                    transcript.toolResult(tool: result.toolName, status: result.status.rawValue, output: result.summary)
+                    // One grouped block per step: the model's full thought summary (persisted here
+                    // and nowhere else, so the planning context stays bounded), its one-line reason,
+                    // the action with its input, and the output — plus any planning retries hit
+                    // while choosing this step, so a step that needed recovery reads as one unit.
+                    // The overlay/progress gets only the clipped one-line narration below.
+                    transcript.step(
+                        number: step.task.toolHistory.count,
+                        thought: planner.lastThinking,
+                        reason: planner.lastNarration,
+                        tool: result.toolName,
+                        input: step.task.toolHistory.last?.call.input ?? [:],
+                        status: result.status.rawValue,
+                        output: result.summary,
+                        planningErrors: planner.lastPlanningErrors
+                    )
+                } else {
+                    // No tool executed (the call never ran), but planning failures are still part of
+                    // the session and must be readable in the thread — a step that ends in
+                    // run.failSafe is otherwise a mystery.
+                    for planningError in planner.lastPlanningErrors {
+                        transcript.error(planningError)
+                    }
                 }
                 // Every step narrates through the spawn label (a lightweight text update), so the user
                 // is kept informed even on steps that don't move the pointer — observe, shell, wait,
@@ -817,31 +833,46 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         ]
     }
 
-    /// Picks the app the harness drive operates: the understood target app when it names one that
-    /// resolves to a running window, otherwise the frontmost app. `AccessibilityObserver.resolveTarget`
-    /// only ever returns the named app's window (never an unrelated frontmost one), so a non-running or
-    /// misnamed target safely falls back to the frontmost app.
+    /// Picks the app the harness drive operates. The understood target app wins whenever it names a
+    /// real app: a running window resolves to its exact name and bundle id, and an installed-but-not-
+    /// running app is still pinned by name — the see/act providers re-resolve the target window on
+    /// every call, so the target starts working the moment the planner launches it. Pinning to the
+    /// frontmost app instead aims every observe/click (and the focus guard's recovery activation) at
+    /// an unrelated window for the whole run, and preloads the wrong app's guidance. Only a name that
+    /// matches nothing running and nothing installed falls back to the frontmost app.
     @MainActor
-    private static func resolveDriveTarget(
+    static func resolveDriveTarget(
         understanding: HarnessRequestUnderstanding?,
         frontmostAppName: String,
-        frontmostBundleIdentifier: String?
+        frontmostBundleIdentifier: String?,
+        resolveRunningWindow: (String) -> (appName: String?, bundleIdentifier: String?)? = { requested in
+            AccessibilityObserver.resolveTarget(appName: requested, bundleIdentifier: nil)
+                .map { ($0.appName, $0.bundleIdentifier) }
+        },
+        resolveInstalledBundle: (String) -> URL? = { requested in
+            MacAppScriptabilityProbe().bundleURL(bundleIdentifier: nil, appName: requested)
+        }
     ) -> (appName: String, bundleIdentifier: String?) {
         guard let requested = understanding?.targetAppName,
               !requested.isEmpty,
-              requested.caseInsensitiveCompare(frontmostAppName) != .orderedSame,
-              let resolved = AccessibilityObserver.resolveTarget(appName: requested, bundleIdentifier: nil)
+              requested.caseInsensitiveCompare(frontmostAppName) != .orderedSame
         else {
             return (frontmostAppName, frontmostBundleIdentifier)
         }
-        return (resolved.appName ?? requested, resolved.bundleIdentifier)
+        if let resolved = resolveRunningWindow(requested) {
+            return (resolved.appName ?? requested, resolved.bundleIdentifier)
+        }
+        if let bundleURL = resolveInstalledBundle(requested) {
+            return (requested, Bundle(url: bundleURL)?.bundleIdentifier)
+        }
+        return (frontmostAppName, frontmostBundleIdentifier)
     }
 
     /// A compact, one-line-per-skill catalog of every installed app skill — id, description, the apps it
     /// covers, and any validated `skill_run` scripts — surfaced to the planner each step. App-specific
     /// guidance is only preloaded for the resolved GUI drive target, so without this the planner never
-    /// learns that a script-driven skill (e.g. Music playback, Notes capture) exists when the task has no
-    /// GUI target app — and it improvises fragile commands instead of running the validated script.
+    /// learns that a skill owns a domain (e.g. native music playback, Notes capture by script) when the
+    /// task has no GUI target app — and it improvises fragile commands instead of following the skill.
     /// Lists every skill unconditionally; the planner does the routing, so no intent is matched here.
     private static func installedSkillCatalog() -> String? {
         let skills = BuiltInLocalAppSkillPacks.descriptors().sorted { $0.id < $1.id }
