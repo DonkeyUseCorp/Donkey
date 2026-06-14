@@ -72,16 +72,16 @@ struct AppSkillCommandTests {
 
     @Test
     @MainActor
-    func advertisesValidatedScriptsForScriptBackedSkills() async {
-        // The music skill is discovered like any other app skill (its `apps:`
-        // frontmatter, no hardcoded list) and advertises its validated script
-        // so the model can execute the workflow with skill_run.
+    func musicSkillRoutesToNativePlaybackTools() async {
+        // The music skill is discovered like any other app skill (its `apps:` frontmatter, no
+        // hardcoded list). It ships no scripts — playback is owned by the native music.* tools —
+        // and its playbook must say so.
         for key in ["Music", "Apple Music", "com.apple.Music"] {
             let result = await lookup(key)
             #expect(result?.metadata["found"] == "true")
             #expect(result?.metadata["skillID"] == "music")
-            #expect(result?.metadata["scriptIDs"]?.contains("scripts-play-media-by-search") == true)
-            #expect(result?.summary.contains("skill_run") == true)
+            #expect(result?.metadata["scriptIDs"]?.isEmpty != false)
+            #expect(result?.summary.contains("music.play") == true)
         }
     }
 

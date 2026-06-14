@@ -10,13 +10,13 @@ struct HarnessStepPromptTests {
     }
 
     /// The installed-skill catalog must reach the planner prompt verbatim, with routing instructions —
-    /// this is what lets the planner run a validated `skill_run` script for "play music"/"save a note"
+    /// this is what lets the planner route "save a note"/"play music" to a skill's documented tools
     /// instead of improvising osascript when no GUI app is the drive target (the loop the user hit).
     @Test
     func includesSkillCatalogAndRoutingInstruction() {
-        let catalog = "  - music — Play music locally in Apple Music · apps: Music · skill_run: scripts-play-media-by-search (Play Media By Search)"
+        let catalog = "  - notes — Capture notes by script · apps: Notes · skill_run: scripts-save-note (Save Note)"
         let prompt = DonkeyPrompts.harnessStep(
-            task: task(goal: "play some coldplay"),
+            task: task(goal: "note this down"),
             descriptors: [],
             appName: "iTerm2",
             appGuidance: nil,
@@ -25,7 +25,7 @@ struct HarnessStepPromptTests {
             skillCatalog: catalog
         )
         #expect(prompt.contains("authoritative playbooks for these apps/domains"))
-        #expect(prompt.contains("scripts-play-media-by-search"))
+        #expect(prompt.contains("scripts-save-note"))
         #expect(prompt.contains("skill_run"))
     }
 

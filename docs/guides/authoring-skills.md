@@ -87,7 +87,7 @@ Three kinds of app-specific facts deserve explicit statements:
 ## Compactness
 
 Several skills can load in the same turn, so every line costs context.
-Built-in packs run 11–75 lines (`music`, the fullest, is 75). Prefer short
+Built-in packs run 11–65 lines (`music`, the fullest, is ~65). Prefer short
 rules, exact commands, known pitfalls, and script statuses; cut long examples,
 edge-case inventories, and anything the global prompt already says. If a
 section keeps growing, the content probably belongs in a validated script or a
@@ -103,7 +103,7 @@ script that takes raw input safely.
 A skill may ship validated scripts in a `scripts/` subfolder — discovery picks
 them up automatically, with no frontmatter line. The script id is the slugged
 relative path without extension
-(`scripts/play-media-by-search.applescript` → `scripts-play-media-by-search`).
+(`scripts/save-note.applescript` → `scripts-save-note`).
 AppleScript, shell, and JavaScript files are recognized; bundled scripts count
 as validated, learned ones start as pending validation.
 
@@ -113,15 +113,17 @@ returns, and what to do for each status — including whether fallback is
 allowed:
 
 ```text
-`skill_run` with `scriptID=scripts-play-media-by-search`, input = the
-normalized query. `status=played` → verified, report what's playing.
-`status=not_found` → read `hint=`; do not rerun the same query.
+`skill_run` with `scriptID=scripts-save-note`, input = the note body.
+`status=saved` → verified, report the note title.
+`status=error` → read `hint=`; do not rerun the same input.
 ```
 
 Scripts are bounded and deterministic: one search-and-play, one note created,
 one export. No open-ended browsing, retry loops, or unbounded polling.
 
-See existing packs under `BuiltInSkills/` for the shape — `music` is the
-fullest example (script statuses, an AX limitation, verification, failure
-behavior); `notes` and `mail` are simpler app skills; `system-tools` is an
-other-skill.
+A skill may instead route to native harness tools when the capability is built
+into the app: `music` ships no scripts and directs the planner to the
+`music.*` playback tools. See existing packs under `BuiltInSkills/` for the
+shape — `music` is a tool-backed skill (query shaping, verification doctrine,
+failure behavior); `notes` and `mail` are simpler app skills; `system-tools`
+is an other-skill.

@@ -7,6 +7,13 @@ public struct HarnessToolDescriptor: Codable, Equatable, Sendable {
     /// need a later read-only observation before `run.complete` is accepted.
     public static let resultIsEvidenceMetadataKey = "resultIsEvidence"
 
+    /// Descriptor metadata key for a multi-action tool (one whose `action` input selects the
+    /// operation) naming, comma-separated, the `action` values that are pure reads. The runtime's
+    /// duplicate-action guard exempts those calls: re-listing or re-reading is legitimate
+    /// verification even when the tool's overall safety class is state-changing, and the guard
+    /// must never block the re-read its own rejection message asks for.
+    public static let readOnlyActionsMetadataKey = "readOnlyActions"
+
     public var name: String
     public var pluginID: String
     public var summary: String

@@ -408,8 +408,8 @@ public struct HarnessSkillFileSystemSource: Sendable {
             let relativePath = relativePath(of: url, from: skillDirectory)
             let basename = url.deletingPathExtension().lastPathComponent
             // Derive the script ID from the path WITHOUT the file extension so it matches the
-            // `scripts:` IDs declared in SKILL.md (e.g. `scripts-play-media-by-search`, not
-            // `scripts-play-media-by-search-applescript`).
+            // `scripts:` IDs declared in SKILL.md (e.g. `scripts-save-note`, not
+            // `scripts-save-note-applescript`).
             let relativePathWithoutExtension = (relativePath as NSString).deletingPathExtension
             return HarnessSkillScriptDescriptor(
                 id: slug(relativePathWithoutExtension),
