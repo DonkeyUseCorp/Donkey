@@ -379,6 +379,262 @@ struct GenericHarnessTests {
     }
 
     @Test
+    func duplicateGuardIgnoresActionsFromAFinishedRun() async {
+        // A task resumed for a new user turn keeps its history, but "already done in this run" must
+        // not match a run that already ended — the live failure: a verification re-list was blocked
+        // because the same call succeeded hours earlier in a run that failed safe.
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(stubTool(name: "test.act", safetyClass: .guardedInput))
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(id: "task-rerun", threadID: "t", goal: "rerun", grantedPermissions: [.lifecycle])
+
+        let call = HarnessToolCall(name: "test.act", input: ["command": "make note"])
+        let first = await runtime.executeToolCall(taskID: task.id, call: call)
+        #expect(first?.toolResult?.status == .succeeded)
+        _ = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "run.failSafe", input: ["reason": "test"]))
+
+        _ = await coordinator.startRunning(taskID: task.id, reason: "follow-up turn")
+        let repeated = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "test.act", input: ["command": "make note"]))
+
+        #expect(repeated?.toolResult?.status == .succeeded)
+        #expect(repeated?.toolResult?.metadata["reason"] != "duplicateAction")
+    }
+
+    @Test
+    func duplicateGuardExemptsDeclaredReadOnlyActions() async {
+        // A multi-action tool (music.playlist style) is state-changing overall, but its declared
+        // read actions are verification — repeating them must never be blocked, while repeating a
+        // state-changing action of the same tool still is.
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(
+            HarnessTool(
+                descriptor: HarnessToolDescriptor(
+                    name: "test.multi",
+                    pluginID: "test",
+                    summary: "multi-action",
+                    inputSchema: ["action": "list | create"],
+                    safetyClass: .reversible,
+                    metadata: [HarnessToolDescriptor.readOnlyActionsMetadataKey: "list,entries"]
+                )
+            ) { context in
+                HarnessToolResult(callID: context.call.id, toolName: context.call.name, status: .succeeded, summary: "ok")
+            }
+        )
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(id: "task-multi", threadID: "t", goal: "multi", grantedPermissions: [.lifecycle])
+
+        let list = HarnessToolCall(name: "test.multi", input: ["action": "list"])
+        _ = await runtime.executeToolCall(taskID: task.id, call: list)
+        let repeatedList = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "test.multi", input: ["action": "list"]))
+        #expect(repeatedList?.toolResult?.status == .succeeded)
+        #expect(repeatedList?.toolResult?.metadata["reason"] != "duplicateAction")
+
+        let create = HarnessToolCall(name: "test.multi", input: ["action": "create"])
+        _ = await runtime.executeToolCall(taskID: task.id, call: create)
+        let repeatedCreate = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "test.multi", input: ["action": "create"]))
+        #expect(repeatedCreate?.toolResult?.metadata["reason"] == "duplicateAction")
+    }
+
+    @Test
+    func runCompleteOnAResumedTaskRequiresFreshEvidence() async {
+        // The live false-completion: a new turn resumed a task whose previous run had created and
+        // verified everything, the user had since undone the result, and the model re-completed
+        // from stale world facts without a single observation this run. A fresh run must succeed
+        // at least one step (an observe is enough) before run.complete is accepted.
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(stubTool(name: "test.act", safetyClass: .guardedInput))
+        await registry.register(
+            HarnessTool(
+                descriptor: HarnessToolDescriptor(name: "test.observe", pluginID: "test", summary: "observe", safetyClass: .readOnly)
+            ) { context in
+                HarnessToolResult(callID: context.call.id, toolName: context.call.name, status: .succeeded, summary: "observed")
+            }
+        )
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(id: "task-stale", threadID: "t", goal: "stale", grantedPermissions: [.lifecycle])
+
+        // Previous run: act, verify, complete.
+        _ = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "test.act", input: ["command": "do it"]))
+        _ = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "test.observe"))
+        _ = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "run.complete", input: ["reason": "done"]))
+
+        // A follow-up turn resumes the task; completing on stale facts alone is rejected.
+        _ = await coordinator.startRunning(taskID: task.id, reason: "follow-up turn")
+        let premature = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "run.complete", input: ["reason": "already done"]))
+        #expect(premature?.toolResult?.status == .failed)
+        #expect(premature?.toolResult?.metadata["reason"] == "completionRequiresEvidence")
+        #expect(premature?.toolResult?.summary.contains("previous run") == true)
+
+        // One succeeded observation this run unlocks completion.
+        _ = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "test.observe"))
+        let completed = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "run.complete", input: ["reason": "verified again"]))
+        #expect(completed?.toolResult?.status == .succeeded)
+        let finalTask = await coordinator.task(id: task.id)
+        #expect(finalTask?.status == .completed)
+    }
+
+    @Test
+    func runStopsWhenTheSameToolKeepsFailingTheSameWayDespiteInterleavedSuccesses() async {
+        // The live failure mode: a broken tool fails identically on every call, but the planner
+        // varies a minor input field and interleaves successful diagnostics that reset the
+        // consecutive streaks. The history-based guard must still stop the run at the third
+        // identical failure.
+        struct StubAlternatingPlanner: HarnessNextStepPlanning {
+            func planNextStep(for task: HarnessTaskState) async -> HarnessToolCall? {
+                task.toolHistory.count.isMultiple(of: 2)
+                    ? HarnessToolCall(name: "test.fail", input: ["attempt": String(task.toolHistory.count)])
+                    : HarnessToolCall(name: "test.observe")
+            }
+        }
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(
+            HarnessTool(
+                descriptor: HarnessToolDescriptor(name: "test.fail", pluginID: "test", summary: "fail", safetyClass: .guardedInput)
+            ) { context in
+                HarnessToolResult(
+                    callID: context.call.id, toolName: context.call.name, status: .failed,
+                    summary: "create returned no item"
+                )
+            }
+        )
+        await registry.register(
+            HarnessTool(
+                descriptor: HarnessToolDescriptor(name: "test.observe", pluginID: "test", summary: "observe", safetyClass: .readOnly)
+            ) { context in
+                HarnessToolResult(
+                    callID: context.call.id, toolName: context.call.name, status: .succeeded,
+                    summary: "observed",
+                    observations: HarnessObservationDelta(facts: ["seen": context.call.id])
+                )
+            }
+        )
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(id: "task-refail", threadID: "t", goal: "refail", grantedPermissions: [.lifecycle])
+
+        let steps = await runtime.run(taskID: task.id, planner: StubAlternatingPlanner(), maxSteps: 100)
+
+        // Three identical failures with successful observes between them — stops at the third
+        // failure (5 steps), far below what the no-progress streak alone would allow.
+        let failures = steps.filter { $0.toolResult?.toolName == "test.fail" }
+        #expect(failures.count == 3)
+        #expect(steps.count == 5)
+        let finalTask = await coordinator.task(id: task.id)
+        #expect(finalTask?.status == .failedSafe)
+    }
+
+    @Test
+    func startRunningClearsFactsCarriedOverFromAFinishedRun() async {
+        // The live failure: a stale "added 10 songs" fact from a finished run convinced the planner
+        // a brand-new playlist was already populated. A fresh run starts with fresh facts; a gate
+        // resume (history not ending in a terminal lifecycle call) keeps them.
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(
+            HarnessTool(
+                descriptor: HarnessToolDescriptor(
+                    name: "test.act",
+                    pluginID: "test",
+                    summary: "act",
+                    safetyClass: .guardedInput,
+                    metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+                )
+            ) { context in
+                HarnessToolResult(
+                    callID: context.call.id, toolName: context.call.name, status: .succeeded,
+                    summary: "did it",
+                    observations: HarnessObservationDelta(facts: ["added.count": "10"])
+                )
+            }
+        )
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(id: "task-fresh-facts", threadID: "t", goal: "facts", grantedPermissions: [.lifecycle])
+
+        _ = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "test.act", input: ["n": "1"]))
+        let midRun = await coordinator.startRunning(taskID: task.id, reason: "not a new run")
+        #expect(midRun?.worldModel.facts["added.count"] == "10")
+
+        _ = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "run.complete", input: ["reason": "done"]))
+        let freshRun = await coordinator.startRunning(taskID: task.id, reason: "follow-up turn")
+        #expect(freshRun?.worldModel.facts.isEmpty == true)
+        #expect(freshRun?.toolHistory.isEmpty == false)
+    }
+
+    @Test
+    func runStopsWhenIdenticalReadsLoopWithoutNewInformation() async {
+        // The live loop: identical succeeded list reads, each reporting the same facts, counted as
+        // progress and reset every streak. An exact repeat that leaves the world model unchanged
+        // must not count as progress, even though it reports observations.
+        struct StubRereadingPlanner: HarnessNextStepPlanning {
+            func planNextStep(for task: HarnessTaskState) async -> HarnessToolCall? {
+                HarnessToolCall(name: "test.list", input: ["action": "list"])
+            }
+        }
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(
+            HarnessTool(
+                descriptor: HarnessToolDescriptor(name: "test.list", pluginID: "test", summary: "list", safetyClass: .readOnly)
+            ) { context in
+                HarnessToolResult(
+                    callID: context.call.id, toolName: context.call.name, status: .succeeded,
+                    summary: "Library playlists (1): Favorite Songs",
+                    observations: HarnessObservationDelta(facts: ["playlist.count": "1"])
+                )
+            }
+        )
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(id: "task-reread", threadID: "t", goal: "reread", grantedPermissions: [.lifecycle])
+
+        let steps = await runtime.run(taskID: task.id, planner: StubRereadingPlanner(), maxSteps: 100)
+
+        // The first read adds the fact (real progress); repeats teach nothing and trip the
+        // identical-call guard instead of looping.
+        #expect(steps.count <= 4)
+        let finalTask = await coordinator.task(id: task.id)
+        #expect(finalTask?.status == .failedSafe)
+        // The repeated record carries the warning the planner reads on its next step, so the model
+        // gets one explicit chance to change course before the guard ends the run.
+        #expect(finalTask?.toolHistory.contains { $0.summary.contains("Do not repeat it") } == true)
+    }
+
+    @Test
+    func runStopsOnInvalidInputCallsAlternatingBetweenTools() async {
+        // A degraded planner emitting malformed calls for different tools defeats the
+        // identical-signature guard; the trailing invalid-input run must stop it anyway.
+        struct StubMalformedPlanner: HarnessNextStepPlanning {
+            func planNextStep(for task: HarnessTaskState) async -> HarnessToolCall? {
+                HarnessToolCall(name: task.toolHistory.count.isMultiple(of: 2) ? "test.a" : "test.b")
+            }
+        }
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        for name in ["test.a", "test.b"] {
+            await registry.register(
+                HarnessTool(
+                    descriptor: HarnessToolDescriptor(name: name, pluginID: "test", summary: name, safetyClass: .readOnly)
+                ) { context in
+                    HarnessToolResult(
+                        callID: context.call.id, toolName: context.call.name, status: .invalidInput,
+                        summary: "\(context.call.name) requires an action"
+                    )
+                }
+            )
+        }
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(id: "task-malformed", threadID: "t", goal: "malformed", grantedPermissions: [.lifecycle])
+
+        let steps = await runtime.run(taskID: task.id, planner: StubMalformedPlanner(), maxSteps: 100)
+
+        #expect(steps.count == 3)
+        let finalTask = await coordinator.task(id: task.id)
+        #expect(finalTask?.status == .failedSafe)
+    }
+
+    @Test
     func longProgressingRunIsNotCutOffByAFixedCap() async {
         // Each step changes the world model (real progress), so a run longer than the old 40-step cap
         // completes instead of being truncated — the point of progress-based budgeting.
@@ -631,15 +887,14 @@ struct GenericHarnessTests {
     }
 
     @Test
-    func userQueryHarnessServicesExposeBuiltInMusicSkillScript() async throws {
+    func builtInMusicSkillIsScriptFree() async throws {
+        // Music playback is owned by the native music.* tools; the skill is guidance-only. A script
+        // reappearing here would re-introduce the retired AppleScript/GUI playback path.
         let services = LocalAppUserQueryHarnessServices.builtInSkillBackedServices()
         let musicSkill = await services.skillRegistry?.descriptor(id: "music")
-        let script = await services.generatedScripts.artifact(id: "scripts-play-media-by-search")
 
-        #expect(musicSkill?.scripts.contains { $0.id == "scripts-play-media-by-search" } == true)
-        #expect(script?.ownerSkillID == "music")
-        #expect(script?.validationStatus == .validated)
-        #expect(script?.language == .appleScript)
+        #expect(musicSkill != nil)
+        #expect(musicSkill?.scripts.isEmpty == true)
     }
 
     /// The summary is the tool-result body the planner reads, so a skill script's structured

@@ -218,6 +218,18 @@ public actor HarnessTaskCoordinator {
     public func startRunning(taskID: String, reason: String = "Task running") async -> HarnessTaskState? {
         await mutate(taskID: taskID, status: .running, summary: reason) { task in
             task.pendingContinuation = nil
+            // A new run on a task whose previous run already ended must not inherit that run's
+            // facts as current truth — observed live: a stale "10 songs added" fact convinced the
+            // planner a brand-new playlist was already populated, so it skipped the add and then
+            // spiraled on the (truthful) empty read. The tool history keeps the full record for
+            // context; the facts re-derive from the fresh reads the completion gate already
+            // requires. Gate resumes (clarify/permission) continue the SAME run — their history
+            // does not end in a terminal lifecycle call — and keep their facts.
+            let terminalNames: Set<String> = ["run.complete", "run.failSafe", "run.cancel"]
+            if let last = task.toolHistory.last,
+               terminalNames.contains(last.call.name), last.resultStatus == .succeeded {
+                task.worldModel.facts = [:]
+            }
         }
     }
 
@@ -330,6 +342,17 @@ public actor HarnessTaskCoordinator {
                 )
             )
             task.worldModel = task.worldModel.merging(result: result)
+            task.worldModel.attemptedToolCalls = task.toolHistory
+        }
+    }
+
+    /// Appends a note to the most recent tool record's summary. The runtime uses this to warn the
+    /// planner — in the history it reads every step — that it just repeated a call without learning
+    /// anything, one step before the stall guard would end the run.
+    public func annotateLastToolRecord(taskID: String, note: String) async -> HarnessTaskState? {
+        await mutate(taskID: taskID, status: nil, summary: "Tool record annotated") { task in
+            guard !task.toolHistory.isEmpty else { return }
+            task.toolHistory[task.toolHistory.count - 1].summary += "\n\(note)"
             task.worldModel.attemptedToolCalls = task.toolHistory
         }
     }

@@ -60,6 +60,7 @@ public struct GenericHarnessRuntime: Sendable {
         maxSteps: Int = 200,
         maxNoProgressSteps: Int = 6,
         maxIdenticalRepeats: Int = 3,
+        maxRepeatedFailures: Int = 3,
         onStep: (@Sendable (HarnessStepExecutionResult) async -> Void)? = nil
     ) async -> [HarnessStepExecutionResult] {
         var results: [HarnessStepExecutionResult] = []
@@ -85,17 +86,36 @@ public struct GenericHarnessRuntime: Sendable {
             }
 
             // Stall detection — a step that changes the world or records a succeeded action is
-            // progress and resets the streaks, so an arbitrarily long advancing run continues. Two
+            // progress and resets the streaks, so an arbitrarily long advancing run continues. Three
             // signals end a stuck run: enough consecutive no-progress steps (busy but going nowhere),
-            // or the SAME call repeated with no progress (looping on one action). Lifecycle calls are
-            // exempt from the repeat signal — they legitimately end the run themselves.
-            if Self.stepMadeProgress(before: task, after: step.task, result: step.toolResult) {
+            // the SAME call repeated with no progress (looping on one action), or — over the whole
+            // tool history, immune to interleaved successes and varied input fields — the same tool
+            // failing the same way again and again, or a trailing run of invalid calls across any
+            // tools. Lifecycle calls are exempt from the repeat signal — they legitimately end the
+            // run themselves.
+            let repeatedSameCall = signature == lastCallSignature
+            if Self.stepMadeProgress(
+                before: task,
+                after: step.task,
+                result: step.toolResult,
+                repeatedSameCall: repeatedSameCall
+            ) {
                 noProgressStreak = 0
                 identicalNoProgressStreak = 0
             } else {
                 noProgressStreak += 1
                 if !call.name.hasPrefix("run."), signature == lastCallSignature {
                     identicalNoProgressStreak += 1
+                    // One deterministic warning before the stall guard ends the run: annotate the
+                    // repeated record so the next planning prompt shows the model it is re-running
+                    // what it already knows (observed live: a planner re-read identical playlist
+                    // entries out of disbelief until the guard killed the run).
+                    _ = await coordinator.annotateLastToolRecord(
+                        taskID: taskID,
+                        note: "NOTE: this exact call already ran and returned the same result — you "
+                            + "already have this information. Do not repeat it; take the next action "
+                            + "toward the goal, or report the blocker honestly."
+                    )
                 } else {
                     identicalNoProgressStreak = 0
                 }
@@ -105,6 +125,10 @@ public struct GenericHarnessRuntime: Sendable {
                 }
                 if identicalNoProgressStreak + 1 >= maxIdenticalRepeats {
                     await failSafeStall(taskID: taskID, reason: "stuckRepeatingCall")
+                    break
+                }
+                if let reason = Self.repeatedFailureStallReason(after: step, threshold: maxRepeatedFailures) {
+                    await failSafeStall(taskID: taskID, reason: reason)
                     break
                 }
             }
@@ -119,7 +143,8 @@ public struct GenericHarnessRuntime: Sendable {
     private static func stepMadeProgress(
         before: HarnessTaskState,
         after: HarnessTaskState,
-        result: HarnessToolResult?
+        result: HarnessToolResult?,
+        repeatedSameCall: Bool
     ) -> Bool {
         guard let result else { return false }
         guard result.status == .succeeded else { return false }
@@ -127,11 +152,53 @@ public struct GenericHarnessRuntime: Sendable {
             || before.worldModel.facts != after.worldModel.facts
             || before.worldModel.visibleText != after.worldModel.visibleText
         if worldChanged { return true }
+        // Repeating the exact same call and learning nothing new is not progress, no matter what
+        // the result reports — observed live: nine identical succeeded playlist-list reads, each
+        // returning the same facts, kept resetting the streaks until the model hallucinated
+        // completion.
+        if repeatedSameCall { return false }
         // A succeeded action that reports observations (a click, a shell command) counts as progress
         // even when the merged world model looks unchanged.
         return !result.observations.facts.isEmpty
             || !result.observations.elements.isEmpty
             || !result.observations.visibleText.isEmpty
+    }
+
+    /// Repeated-failure detection over the task's durable tool history, so it survives interleaved
+    /// successes that reset the consecutive streaks. Matches only typed fields — tool names, result
+    /// statuses, and tool-produced failure summaries (structured output, never user text). Catches
+    /// two loops the consecutive-signature guard misses: the same tool failing the same way with
+    /// other calls interleaved or minor input fields varied, and invalid calls alternating between
+    /// tools. Summaries that embed variable data (positions, timestamps) won't match — acceptable;
+    /// the streak guards remain the backstop.
+    private static func repeatedFailureStallReason(
+        after step: HarnessStepExecutionResult,
+        threshold: Int
+    ) -> String? {
+        guard let result = step.toolResult,
+              result.status == .failed || result.status == .invalidInput else { return nil }
+        let history = Self.currentRunHistory(step.task.toolHistory)
+        let identicalFailures = history.filter {
+            $0.call.name == result.toolName
+                && ($0.resultStatus == .failed || $0.resultStatus == .invalidInput)
+                && $0.summary == result.summary
+        }.count
+        if identicalFailures >= threshold { return "stuckRepeatingFailure" }
+        let trailingInvalidInput = history.reversed().prefix { $0.resultStatus == .invalidInput }.count
+        if trailingInvalidInput >= threshold { return "repeatedInvalidInput" }
+        return nil
+    }
+
+    /// The slice of tool history belonging to the current run: everything after the last succeeded
+    /// terminal lifecycle call (run.complete / run.failSafe / run.cancel). A task resumed for a new
+    /// user turn keeps its full history for context, but guards that reason about "this run" —
+    /// duplicate actions, repeated failures — must not match records from a run that already ended.
+    private static func currentRunHistory(_ history: [HarnessToolCallRecord]) -> ArraySlice<HarnessToolCallRecord> {
+        let terminalNames: Set<String> = ["run.complete", "run.failSafe", "run.cancel"]
+        guard let lastTerminal = history.lastIndex(where: {
+            terminalNames.contains($0.call.name) && $0.resultStatus == .succeeded
+        }) else { return history[...] }
+        return history[history.index(after: lastTerminal)...]
     }
 
     /// Canonical, order-independent serialization of a tool call's input, so the same call is
@@ -350,11 +417,26 @@ public struct GenericHarnessRuntime: Sendable {
     /// descriptors declare their result is itself evidence (e.g. a shell command's output and exit
     /// code). Conversation-only and pure-read tasks have no state-changing step and complete freely.
     /// Tools the registry no longer knows count as evidence so stale history can never wedge
-    /// completion.
+    /// completion. Both rules are scoped to the CURRENT run: a fresh turn on a resumed task must
+    /// observe at least once before completing — world-model facts carried over from a previous run
+    /// can be stale (observed live: the agent re-completed "create a playlist" from old facts after
+    /// the user had deleted the playlist).
     private func completionEvidenceRejection(
         call: HarnessToolCall,
         task: HarnessTaskState
     ) async -> HarnessToolResult? {
+        let history = Self.currentRunHistory(task.toolHistory)
+        if !task.toolHistory.isEmpty, !history.contains(where: { $0.resultStatus == .succeeded }) {
+            return HarnessToolResult(
+                callID: call.id,
+                toolName: call.name,
+                status: .failed,
+                summary: "Not completing yet: nothing has been verified in this run — facts carried "
+                    + "over from a previous run may be stale. Run a read-only check confirming the "
+                    + "goal still holds (re-observe, a read command, or state.verify), then complete.",
+                metadata: ["reason": "completionRequiresEvidence"]
+            )
+        }
         let descriptors = await registry.descriptors()
         let knownNames = Set(descriptors.map(\.name))
         let evidenceNames = Set(
@@ -366,11 +448,11 @@ public struct GenericHarnessRuntime: Sendable {
         func isEvidence(_ record: HarnessToolCallRecord) -> Bool {
             evidenceNames.contains(record.call.name) || !knownNames.contains(record.call.name)
         }
-        let lastActionIndex = task.toolHistory.lastIndex {
+        let lastActionIndex = history.lastIndex {
             $0.resultStatus == .succeeded && !isEvidence($0)
         }
         guard let lastActionIndex else { return nil }
-        let hasEvidenceAfterAction = task.toolHistory[task.toolHistory.index(after: lastActionIndex)...]
+        let hasEvidenceAfterAction = history[history.index(after: lastActionIndex)...]
             .contains { $0.resultStatus == .succeeded && isEvidence($0) }
         guard !hasEvidenceAfterAction else { return nil }
         return HarnessToolResult(
@@ -383,19 +465,28 @@ public struct GenericHarnessRuntime: Sendable {
     }
 
     /// Rejects a state-changing call whose exact (tool, input) already succeeded earlier in this run —
-    /// re-running it only duplicates the side effect. Read-only tools and lifecycle calls are exempt.
+    /// re-running it only duplicates the side effect. Read-only tools, a multi-action tool's declared
+    /// read actions, lifecycle calls, and records from previous runs of a resumed task are exempt.
     /// Returns a failed result that tells the planner to verify and complete instead of repeating.
     private func duplicateActionRejection(
         call: HarnessToolCall,
         task: HarnessTaskState
     ) async -> HarnessToolResult? {
         guard !call.name.hasPrefix("run."), !call.name.hasPrefix("conversation.") else { return nil }
-        let readOnlyNames = Set(
-            await registry.descriptors().filter { $0.safetyClass == .readOnly }.map(\.name)
-        )
+        let descriptors = await registry.descriptors()
+        let readOnlyNames = Set(descriptors.filter { $0.safetyClass == .readOnly }.map(\.name))
         guard !readOnlyNames.contains(call.name) else { return nil }
+        // A multi-action tool's read actions (list/entries style) are verification, not side
+        // effects — exempt them by the descriptor's declared read-only action values, matched on
+        // the typed `action` input.
+        if let action = call.input["action"],
+           let declared = descriptors.first(where: { $0.name == call.name })?
+               .metadata[HarnessToolDescriptor.readOnlyActionsMetadataKey],
+           declared.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespaces) }).contains(action) {
+            return nil
+        }
         let signature = Self.canonicalInput(call.input)
-        let alreadySucceeded = task.toolHistory.contains { record in
+        let alreadySucceeded = Self.currentRunHistory(task.toolHistory).contains { record in
             record.resultStatus == .succeeded
                 && record.call.name == call.name
                 && Self.canonicalInput(record.call.input) == signature
