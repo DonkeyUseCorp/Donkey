@@ -252,7 +252,8 @@ public enum DonkeyPrompts {
           not the process: what is now true ("Playing Yellow by Coldplay"), not the steps taken.
           Never fake completion — if the goal could not be reached, say plainly what happened and
           the most likely reason, with any caveat the user needs.
-        Return JSON: {"tool": "<one tool name>", "input": {"key": "value", ...}, "reason": "<one sentence>"}.\(retryNote.map { "\nIMPORTANT: \($0)" } ?? "")
+        Return JSON: {"tool": "<one tool name>", "input": {"key": "value", ...}, "reason": "<one sentence>"}. \
+        ALWAYS include "input" with every required field for the chosen tool filled, exactly as its schema names them; use {} only for a tool that needs no input.\(retryNote.map { "\nIMPORTANT: \($0)" } ?? "")
         """
     }
 

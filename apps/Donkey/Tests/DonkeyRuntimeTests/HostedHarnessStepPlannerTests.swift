@@ -273,6 +273,67 @@ struct HostedHarnessStepPlannerTests {
     }
 
     @Test
+    func failsSafeInsteadOfExecutingACallMissingAllRequiredInput() async {
+        // When every planning attempt names a tool but omits all of its required input, the planner
+        // must fail safe rather than execute a call it already knows is invalid — running it only
+        // yields invalidInput, which tells the model nothing the retry notes didn't. Each attempt's
+        // raw reply is recorded so the thread shows whether the model emitted an empty input object
+        // or the field was lost in response mapping.
+        let inputlessReply = (Data(#"{"output_text":"{\"tool\":\"shell_exec\",\"reason\":\"verify\"}"}"#.utf8), 200)
+        let httpClient = SequencedHTTPClient(responses: [inputlessReply, inputlessReply, inputlessReply])
+        let planner = HostedHarnessStepPlanner(
+            backend: DonkeyBackendInferenceClient(
+                configuration: DonkeyBackendInferenceConfiguration(
+                    baseURL: URL(string: "https://donkey.example")!,
+                    clientID: "client-1"
+                ),
+                httpClient: httpClient
+            ),
+            descriptors: [
+                HarnessToolDescriptor(
+                    name: "shell_exec",
+                    pluginID: "core",
+                    summary: "Run a single-line command.",
+                    inputSchema: ["command": "The command.", "timeoutSeconds": "Budget."],
+                    optionalInputKeys: ["timeoutSeconds"],
+                    safetyClass: .guardedInput
+                )
+            ],
+            appName: "Notes",
+            appGuidance: nil,
+            understanding: nil
+        )
+
+        let call = await planner.planNextStep(for: task(goal: "confirm what is playing", toolHistory: []))
+
+        #expect(call?.name == "run.failSafe")
+        #expect(call?.input["reason"] == "plannerOmittedRequiredInput(shell_exec)")
+        #expect(httpClient.requests.count == 3)
+        #expect(planner.lastPlanningErrors.count == 3)
+        #expect(planner.lastPlanningErrors.allSatisfy { $0.contains("required input (command)") && $0.contains("reply:") })
+        #expect(planner.lastNarration?.contains("command") == true)
+    }
+
+    @Test
+    func requestsPlainJSONModeWithoutAResponseSchema() async throws {
+        // Constrained decoding broke the decision's `input` object two ways live (omitted entirely
+        // with an additionalProperties-only schema; junk keys from unrelated tools with the union
+        // enumerated), so the planner asks for plain JSON mode and relies on the prompt's stated
+        // shape plus the lenient parse and retry/failSafe machinery.
+        let httpClient = FixtureHTTPClient(data: cannedDecision(tool: "ax.observe"), statusCode: 200)
+        let planner = makePlanner(httpClient: httpClient, understanding: nil)
+
+        _ = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
+
+        let body = try #require(
+            try JSONSerialization.jsonObject(with: Data(requestBodyString(httpClient, index: 0).utf8)) as? [String: Any]
+        )
+        let format = try #require(((body["text"] as? [String: Any])?["format"]) as? [String: Any])
+        #expect(format["type"] as? String == "json_object")
+        #expect(format["schema"] == nil)
+    }
+
+    @Test
     func promptRendersElementGeometryValueAndEligibility() async {
         let httpClient = FixtureHTTPClient(data: cannedDecision(tool: "ax.observe"), statusCode: 200)
         let planner = makePlanner(httpClient: httpClient, understanding: nil)

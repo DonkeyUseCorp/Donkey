@@ -52,7 +52,8 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     /// Per-tool required input keys (every declared input minus the optional ones). Used to catch a
     /// malformed decision that names a tool but omits all of its required input — emitting that only
     /// yields `invalidInput`, and repeated it fails the run (a real failure mode: an empty `shell_exec`
-    /// looping until failSafe). The planner retries once with a corrective note instead.
+    /// looping until failSafe). The planner retries with a corrective note, then fails safe instead
+    /// of ever executing a call it already knows is invalid.
     private let requiredInputKeys: [String: Set<String>]
 
     public init(
@@ -129,16 +130,25 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
                 continue
             }
             // Catch a malformed decision that names a tool but supplies none of its required input.
-            // Re-ask with a corrective note; once the retry budget is spent, let it through and rely on
-            // the runtime's invalidInput + stall handling so we never loop here.
+            // Re-ask with a corrective note; once the retry budget is spent, fail safe instead of
+            // executing a call we already know is invalid — the run-side invalidInput result tells the
+            // model nothing the retry notes didn't, and each wasted step costs a full planning
+            // inference. The raw reply prefix is recorded so the thread shows whether the model
+            // emitted an empty input object or the field was lost in response mapping.
             let providedInput = decision.input ?? [:]
-            if attempt < lastAttempt,
-               let required = requiredInputKeys[toolName], !required.isEmpty,
+            if let required = requiredInputKeys[toolName], !required.isEmpty,
                Set(providedInput.keys).isDisjoint(with: required) {
                 let keys = required.sorted().joined(separator: ", ")
                 lastPlanningErrors.append(
-                    "planning attempt \(attempt + 1)/\(Self.maxPlanAttempts): chose \(toolName) without its required input (\(keys))"
+                    "planning attempt \(attempt + 1)/\(Self.maxPlanAttempts): chose \(toolName) without its "
+                        + "required input (\(keys)) — reply: \(String(decision.raw.prefix(300)))"
                 )
+                guard attempt < lastAttempt else {
+                    lastNarration = "The model chose \(toolName) without any of its required input (\(keys)) "
+                        + "on all \(Self.maxPlanAttempts) planning attempts, so I stopped instead of "
+                        + "executing an invalid call."
+                    return HarnessToolCall(name: "run.failSafe", input: ["reason": "plannerOmittedRequiredInput(\(toolName))"])
+                }
                 retryNote = "Your previous reply chose \(toolName) but included none of its required input "
                     + "(\(keys)). Re-issue \(toolName) with that input filled in, or choose a different tool."
                 continue
@@ -208,6 +218,9 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         /// The model's full thought summary for this step (thinking enabled), persisted to the thread.
         /// Separate from `reason`, which is the one-line rationale shown live in the overlay.
         var thinking: String?
+        /// The reply's decision JSON as received, kept for failure diagnostics (e.g. proving whether
+        /// a missing tool input was omitted by the model or lost in response mapping).
+        var raw: String
     }
 
     private struct DecisionWire: Decodable {
@@ -322,12 +335,12 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
             tool: wire.tool,
             input: wire.input,
             reason: wire.reason,
-            thinking: RemoteInferenceResponseHelpers.reasoningText(from: response)
+            thinking: RemoteInferenceResponseHelpers.reasoningText(from: response),
+            raw: json
         )
     }
 
     private func responseRequest(task: HarnessTaskState, retryNote: String?, attempt: Int) -> RemoteInferenceResponseCreateRequest {
-        let toolNames = descriptors.map(\.name)
         let maxOutputTokens = min(Self.baseMaxOutputTokens * (attempt + 1), Self.maxOutputTokensCap)
         return RemoteInferenceResponseCreateRequest(
             input: .array([
@@ -351,27 +364,17 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
                 ])
             ]),
             store: false,
+            // Plain JSON mode, deliberately WITHOUT a response schema. Constrained decoding broke
+            // the decision's `input` object two ways live: with `input` described only by
+            // `additionalProperties` the decoder omitted the whole object once context grew, and
+            // with the union of tool input keys enumerated it emitted junk keys from unrelated
+            // tools while dropping the intended ones — both while the thinking clearly named the
+            // right call. The prompt states the exact reply shape, the parse is lenient, and the
+            // retry/failSafe machinery catches the rare malformed reply, which a schema cannot
+            // guarantee anyway.
             text: [
                 "format": .object([
-                    "type": .string("json_schema"),
-                    "name": .string("harness_step_v1"),
-                    "strict": .bool(false),
-                    "schema": .object([
-                        "type": .string("object"),
-                        "additionalProperties": .bool(false),
-                        "required": .array([.string("tool"), .string("reason")]),
-                        "properties": .object([
-                            "tool": .object([
-                                "type": .string("string"),
-                                "enum": .array(toolNames.map(RemoteInferenceJSONValue.string))
-                            ]),
-                            "input": .object([
-                                "type": .string("object"),
-                                "additionalProperties": .object(["type": .string("string")])
-                            ]),
-                            "reason": .object(["type": .string("string")])
-                        ])
-                    ])
+                    "type": .string("json_object")
                 ])
             ],
             metadata: ["source": "hosted-harness-step-planner", "prompt_version": "harness-step-v1"],
