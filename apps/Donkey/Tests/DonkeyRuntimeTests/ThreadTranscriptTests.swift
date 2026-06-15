@@ -110,6 +110,70 @@ struct ThreadTranscriptTests {
         #expect(text.contains("💬 assistant · response"))
     }
 
+    @Test
+    func stepRendersTimingLineWithModalityCacheAndElements() throws {
+        let transcript = makeTranscript()
+        transcript.step(
+            number: 2,
+            thought: nil,
+            reason: "Reading the screen.",
+            tool: "vision.capture",
+            input: [:],
+            status: "succeeded",
+            output: "Captured 31 element(s).",
+            decisionMS: 8_400,
+            toolMS: 320,
+            modality: "vision",
+            cacheHit: false,
+            elementCount: 31
+        )
+
+        let text = try threadText(transcript)
+        #expect(text.contains("⏱ decision 8.4s · tool 320ms · 👁️ vision · cache miss · 31 elems"))
+    }
+
+    @Test
+    func stepOmitsTimingLineWhenNothingIsKnown() throws {
+        let transcript = makeTranscript()
+        transcript.step(
+            number: 1,
+            thought: nil,
+            reason: nil,
+            tool: "shell_exec",
+            input: ["command": "ls"],
+            status: "succeeded",
+            output: "ok"
+        )
+
+        let text = try threadText(transcript)
+        #expect(!text.contains("⏱"))
+    }
+
+    @Test
+    func modelCallRendersClippedPromptResponseAndMeta() throws {
+        let transcript = makeTranscript()
+        transcript.modelCall(
+            kindLabel: "planner step",
+            prompt: "GOAL: do the thing\nHISTORY: ...",
+            response: "{\"tool\":\"ax.observe\",\"input\":{}}",
+            finishReason: "STOP",
+            attempt: 2,
+            durationMS: 1_240,
+            status: "ok"
+        )
+
+        let text = try threadText(transcript)
+        #expect(text.contains("### 🔮 model · planner step"))
+        #expect(text.contains("**Duration:** 1.2s"))
+        #expect(text.contains("**Attempt:** 2"))
+        #expect(text.contains("**Finish:** STOP"))
+        #expect(text.contains("**Status:** ok"))
+        #expect(text.contains("**Prompt:**"))
+        #expect(text.contains("GOAL: do the thing"))
+        #expect(text.contains("**Response:**"))
+        #expect(text.contains("\"tool\":\"ax.observe\""))
+    }
+
     private func makeTranscript() -> ThreadTranscript {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("thread-transcript-tests-\(UUID().uuidString)", isDirectory: true)

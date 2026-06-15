@@ -106,6 +106,12 @@ public final class ThreadTranscript: @unchecked Sendable {
     /// retries hit while choosing this step open the block, so a step that needed recovery reads as
     /// one unit instead of scattered entries. The thought is also where the model interprets the
     /// previous step's output, so each block's output is reasoned about at the top of the next.
+    ///
+    /// The optional timing line closes the block with where the step's time went: how long the
+    /// model spent deciding vs. how long the tool took to run, which sensing modality the step used
+    /// (Accessibility vs. AI vision), whether that sensing came from cache, and how many elements it
+    /// saw. The trace manager fills these from real spans and the executed tool's own facts; all are
+    /// omitted when unknown so a non-sensing step (shell, wait, respond) stays clean.
     public func step(
         number: Int,
         thought: String?,
@@ -114,7 +120,12 @@ public final class ThreadTranscript: @unchecked Sendable {
         input: [String: String],
         status: String,
         output: String,
-        planningErrors: [String] = []
+        planningErrors: [String] = [],
+        decisionMS: Double? = nil,
+        toolMS: Double? = nil,
+        modality: String? = nil,
+        cacheHit: Bool? = nil,
+        elementCount: Int? = nil
     ) {
         var block = "\n## Step \(number)  \(Self.shortStamp(Date()))\n"
         for planningError in planningErrors {
@@ -130,6 +141,45 @@ public final class ThreadTranscript: @unchecked Sendable {
         }
         block += "\n**Action:** `\(tool)`\n```\n\(Self.inputBody(input))\n```\n"
         block += "\n### 📄 Output — `\(status)`\n\n```\n\(Self.clip(output, 2_000))\n```\n"
+        if let timing = Self.timingLine(
+            decisionMS: decisionMS,
+            toolMS: toolMS,
+            modality: modality,
+            cacheHit: cacheHit,
+            elementCount: elementCount
+        ) {
+            block += "\n\(timing)\n"
+        }
+        write(block, append: true)
+    }
+
+    /// One model call, recorded so every decision and every piece of data exchanged with the model is
+    /// traceable in the thread: the clipped prompt that went out, the clipped reply that came back, the
+    /// provider's finish reason, the attempt index for retried planning, the outcome, and the call's
+    /// duration. The clip keeps a verbose prompt (full element list, tool descriptors, history) from
+    /// bloating the file while still showing what was asked. The duration is how a slow turn is pinned
+    /// to a specific call rather than a coarse end-to-end number.
+    public func modelCall(
+        kindLabel: String,
+        prompt: String,
+        response: String,
+        finishReason: String? = nil,
+        attempt: Int? = nil,
+        durationMS: Double? = nil,
+        status: String
+    ) {
+        var meta: [String] = []
+        if let duration = Self.durationLabel(durationMS) { meta.append("**Duration:** \(duration)") }
+        if let attempt { meta.append("**Attempt:** \(attempt)") }
+        if let finishReason = finishReason?.trimmingCharacters(in: .whitespacesAndNewlines), !finishReason.isEmpty {
+            meta.append("**Finish:** \(finishReason)")
+        }
+        meta.append("**Status:** \(status)")
+
+        var block = "\n### 🔮 model · \(kindLabel)  \(Self.shortStamp(Date()))\n"
+        block += "\n\(meta.joined(separator: "  ·  "))\n"
+        block += "\n**Prompt:**\n```\n\(Self.clip(prompt, 3_000))\n```\n"
+        block += "\n**Response:**\n```\n\(Self.clip(response, 2_000))\n```\n"
         write(block, append: true)
     }
 
@@ -196,6 +246,40 @@ public final class ThreadTranscript: @unchecked Sendable {
             : input.sorted { $0.key < $1.key }
                 .map { "\($0.key): \(clip($0.value, 600))" }
                 .joined(separator: "\n")
+    }
+
+    /// The compact "where did the time go" line that closes a step block, e.g.
+    /// `⏱ decision 8.4s · tool 0.3s · 👁️ vision · cache miss · 31 elems`. Returns nil when nothing is
+    /// known, so a step with no timing or sensing prints no trailing line.
+    private static func timingLine(
+        decisionMS: Double?,
+        toolMS: Double?,
+        modality: String?,
+        cacheHit: Bool?,
+        elementCount: Int?
+    ) -> String? {
+        var segments: [String] = []
+        if let decision = durationLabel(decisionMS) { segments.append("decision \(decision)") }
+        if let tool = durationLabel(toolMS) { segments.append("tool \(tool)") }
+        switch modality {
+        case "accessibility": segments.append("🌲 AX")
+        case "vision": segments.append("👁️ vision")
+        default: break
+        }
+        if let cacheHit, modality != nil, modality != "none" {
+            segments.append(cacheHit ? "cache hit" : "cache miss")
+        }
+        if let elementCount, modality != nil, modality != "none" {
+            segments.append("\(elementCount) elems")
+        }
+        guard !segments.isEmpty else { return nil }
+        return "<sub>⏱ \(segments.joined(separator: " · "))</sub>"
+    }
+
+    /// Human duration: `8.4s` for a second or more, `320ms` below that. nil for unknown/negative.
+    private static func durationLabel(_ ms: Double?) -> String? {
+        guard let ms, ms >= 0 else { return nil }
+        return ms >= 1_000 ? String(format: "%.1fs", ms / 1_000) : String(format: "%.0fms", ms)
     }
 
     private static func clip(_ text: String, _ max: Int) -> String {

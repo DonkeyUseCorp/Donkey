@@ -49,19 +49,33 @@ public struct HarnessRequestUnderstanding: Sendable, Equatable {
 @MainActor
 public final class HostedHarnessRequestUnderstanding {
     private let backend: DonkeyBackendInferenceClient
+    /// Optional turn-trace sink. The one understanding call is recorded here with its clipped prompt,
+    /// clipped reply, and span, so even the pre-loop "what does this request mean?" decision is traceable
+    /// in the thread. nil means tracing is off.
+    private let trace: (any HarnessTurnTracing)?
 
-    public init(backend: DonkeyBackendInferenceClient) {
+    public init(backend: DonkeyBackendInferenceClient, trace: (any HarnessTurnTracing)? = nil) {
         self.backend = backend
+        self.trace = trace
     }
 
     /// Returns the parsed understanding, or `nil` on any provider/decode failure so the caller can
     /// degrade to driving the raw command directly rather than dead-ending.
     public func understand(command: String, frontmostAppName: String) async -> HarnessRequestUnderstanding? {
+        let prompt = DonkeyPrompts.requestUnderstanding(command: command, frontmostAppName: frontmostAppName)
+        let startedAt = RunTraceTimestamp.now()
         do {
             let response = try await backend.createResponse(responseRequest(command: command, frontmostAppName: frontmostAppName))
+            let endedAt = RunTraceTimestamp.now()
             guard let text = RemoteInferenceResponseHelpers.outputText(from: response), !text.isEmpty else {
+                recordCall(prompt: prompt, response: "<no output text>",
+                           finishReason: RemoteInferenceResponseHelpers.providerFinishReason(from: response),
+                           status: .empty, startedAt: startedAt, endedAt: endedAt)
                 return nil
             }
+            recordCall(prompt: prompt, response: text,
+                       finishReason: RemoteInferenceResponseHelpers.providerFinishReason(from: response),
+                       status: .ok, startedAt: startedAt, endedAt: endedAt)
             let json = DebugUIInspectionResponseDecoder.jsonObjectSubstring(text)
             let wire = try JSONDecoder().decode(UnderstandingWire.self, from: Data(json.utf8))
             let restated = wire.restatedGoal?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -75,8 +89,29 @@ public final class HostedHarnessRequestUnderstanding {
                 clarifyingQuestion: wire.clarifyingQuestion.flatMap { $0.isEmpty ? nil : $0 }
             )
         } catch {
+            recordCall(prompt: prompt, response: String(String(describing: error).prefix(500)),
+                       finishReason: nil, status: .failed, startedAt: startedAt, endedAt: .now())
             return nil
         }
+    }
+
+    private func recordCall(
+        prompt: String,
+        response: String,
+        finishReason: String?,
+        status: TraceModelCallStatus,
+        startedAt: RunTraceTimestamp,
+        endedAt: RunTraceTimestamp
+    ) {
+        trace?.recordModelCall(TraceModelCall(
+            kind: .understanding,
+            prompt: prompt,
+            response: response,
+            finishReason: finishReason,
+            status: status,
+            startedAt: startedAt,
+            endedAt: endedAt
+        ))
     }
 
     // MARK: - Wire
