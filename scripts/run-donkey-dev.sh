@@ -257,6 +257,60 @@ resolve_codesign_identity() {
   printf '%s\n' "-"
 }
 
+# Xcode-issued "Apple Development" certs chain through Apple's WWDR G3 intermediate. The old G3
+# intermediate expired in Feb 2023; a keychain that holds only the expired copy makes codesign
+# unable to build a chain, which silently drops signing to ad-hoc and breaks the TCC screen-
+# recording grant across rebuilds. Make sure a current intermediate is present before we resolve
+# an identity, since `find-identity -v` reports the cert as invalid until the chain is whole.
+ensure_apple_wwdr_intermediate() {
+  # Only relevant when a real Apple Development cert exists and ad-hoc isn't forced; pure ad-hoc
+  # dev needs no chain.
+  [ "${DONKEY_CODESIGN_IDENTITY:-}" = "-" ] && return
+  command -v security >/dev/null 2>&1 || return
+  security find-identity -p codesigning 2>/dev/null | grep -q "Apple Development" || return
+
+  if wwdr_intermediate_is_current; then
+    return
+  fi
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "Warning: missing the current Apple WWDR intermediate and curl is unavailable; signing may fall back to ad-hoc." >&2
+    return
+  fi
+
+  echo "Installing the current Apple WWDR intermediate (the cached one is missing or expired)..."
+  local tmp
+  tmp="$(mktemp -t AppleWWDRCAG3.XXXXXX)" || return
+  if curl -fsSL -o "$tmp" "https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer"; then
+    security import "$tmp" -k "$HOME/Library/Keychains/login.keychain-db" >/dev/null 2>&1 || true
+  else
+    echo "Warning: could not download the Apple WWDR intermediate; signing may fall back to ad-hoc." >&2
+  fi
+  rm -f "$tmp"
+}
+
+# True when the keychain holds at least one non-expired WWDR intermediate.
+wwdr_intermediate_is_current() {
+  command -v openssl >/dev/null 2>&1 || return 1
+  local dir cert result
+  dir="$(mktemp -d)" || return 1
+  security find-certificate -a -c "Worldwide Developer Relations" -p 2>/dev/null |
+    awk -v d="$dir" '
+      /BEGIN CERTIFICATE/ { n++; f = d "/c" n ".pem" }
+      n { print > f }
+    '
+  result=1
+  for cert in "$dir"/c*.pem; do
+    [ -e "$cert" ] || continue
+    if openssl x509 -in "$cert" -checkend 0 >/dev/null 2>&1; then
+      result=0
+      break
+    fi
+  done
+  rm -rf "$dir"
+  return $result
+}
+
 prepare_app_icon() {
   local destination="$RESOURCES_DIR/Donkey.icns"
 
@@ -383,6 +437,7 @@ create_debug_app_bundle() {
   write_info_plist
 
   if command -v codesign >/dev/null 2>&1; then
+    ensure_apple_wwdr_intermediate
     codesign_identity="$(resolve_codesign_identity)"
     if [ "$codesign_identity" = "-" ]; then
       echo "Signing debug app ad-hoc with a stable dev requirement."
