@@ -98,6 +98,15 @@ final class MacPermissionSetupModel: ObservableObject {
         statuses[kind] = status
         refresh()
         requestingKind = nil
+
+        // CGRequestScreenCaptureAccess() silently no-ops when a stale TCC record already
+        // exists — common after rebuilding the ad-hoc-signed dev app — so no system prompt
+        // appears and the app never lands in the Screen Recording list. When the request
+        // leaves us short of a grant, open the settings pane so there is always a visible,
+        // reliable path to flip the toggle.
+        if kind == .screenRecording, statuses[kind] != .granted {
+            requester.openSystemSettings(for: kind)
+        }
     }
 
     func openSystemSettings(for kind: MacPermissionKind) {
