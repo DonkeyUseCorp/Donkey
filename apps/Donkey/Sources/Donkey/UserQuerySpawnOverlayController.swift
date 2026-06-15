@@ -1017,6 +1017,30 @@ private final class UserQuerySpawnPanel: NSPanel {
     override var canBecomeMain: Bool {
         true
     }
+
+    /// Make the standard editing shortcuts work in the composer. It's an NSTextView inside an
+    /// NSScrollView, and NSScrollView doesn't forward `performKeyEquivalent` to its document view, so
+    /// Cmd+V/C/X/A/Z never reach the field on their own — the user can type but not paste. The window
+    /// always receives `performKeyEquivalent` for a key equivalent (before the main menu), so route the
+    /// shortcut to the focused text here. Returns true to consume it so nothing else double-handles it.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if super.performKeyEquivalent(with: event) { return true }
+        guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+              let text = firstResponder as? NSText,
+              let key = event.charactersIgnoringModifiers?.lowercased() else {
+            return false
+        }
+        switch key {
+        case "v": text.paste(nil); return true
+        case "c": text.copy(nil); return true
+        case "x": text.cut(nil); return true
+        case "a": text.selectAll(nil); return true
+        case "z":
+            if event.modifierFlags.contains(.shift) { text.undoManager?.redo() } else { text.undoManager?.undo() }
+            return true
+        default: return false
+        }
+    }
 }
 
 private final class UserQuerySpawnHostingView<Content: View>: NSHostingView<Content> {
