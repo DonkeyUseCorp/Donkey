@@ -1,6 +1,8 @@
+@preconcurrency import ApplicationServices
 import CoreGraphics
 import DonkeyContracts
 import Foundation
+import OSLog
 
 /// Low-level keyboard input via CGEvent. Real input — gate behind explicit permission/guards.
 public enum MacKeyboardInput {
@@ -277,5 +279,174 @@ public enum AccessibilityActionExecutor {
     /// Center of a screen-space control frame (top-left origin global coordinates, as CGEvent uses).
     nonisolated static func clickPoint(for frame: WindowTargetBounds) -> CGPoint {
         CGPoint(x: frame.x + frame.width / 2, y: frame.y + frame.height / 2)
+    }
+
+    // MARK: - Deterministic list-row deletion primitives
+
+    private static let log = Logger(subsystem: "com.donkeyuse.Donkey", category: "ax-delete")
+
+    /// Selects a list/outline/table row whose label matches `label`, and gives its enclosing list
+    /// keyboard focus — the deterministic equivalent of a user clicking the row. Returns the row's
+    /// screen frame (top-left origin) on success so the caller can also coordinate-click it. This is
+    /// what a synthetic coordinate click alone fails to do reliably for AppKit sidebars: the row ends
+    /// up genuinely selected AND its container holds key focus, so a following Delete key acts on it.
+    public static func selectListRow(processID: pid_t, label: String) -> WindowTargetBounds? {
+        let app = AXUIElementCreateApplication(processID)
+        guard let window = primaryWindow(of: app) else {
+            log.error("selectListRow: no window for pid \(processID)")
+            return nil
+        }
+        guard let list = firstDescendant(of: window, role: kAXOutlineRole as String)
+            ?? firstDescendant(of: window, role: kAXTableRole as String)
+            ?? firstDescendant(of: window, role: kAXListRole as String) else {
+            log.error("selectListRow: no outline/table/list in window")
+            return nil
+        }
+        guard let row = matchingRow(in: list, label: label) else {
+            log.error("selectListRow: no row labeled \(label, privacy: .public)")
+            return nil
+        }
+        // Select the row and focus its container — the two halves a real click does.
+        AXUIElementSetAttributeValue(row, kAXSelectedAttribute as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(list, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        let frame = elementFrame(row)
+        log.info("selectListRow: selected \(label, privacy: .public) frame=\(String(describing: frame), privacy: .public)")
+        return frame
+    }
+
+    /// Presses (AXPress) the button titled `title` inside the app's frontmost modal — a separate dialog
+    /// window (subrole `AXDialog`/`AXSystemDialog`) or an attached sheet. Music's delete confirmation has
+    /// NO default button, so a Return keystroke can't dismiss it; a direct AX press is the reliable
+    /// confirm. Matches only inside a modal subtree so a same-named button elsewhere can't be hit.
+    @discardableResult
+    public static func pressModalButton(processID: pid_t, title: String) -> Bool {
+        let app = AXUIElementCreateApplication(processID)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
+              let windows = value as? [AXUIElement] else { return false }
+        for window in windows {
+            if let button = modalButton(in: window, title: title, inModal: false, depth: 0),
+               AXUIElementPerformAction(button, kAXPressAction as CFString) == .success {
+                log.info("pressModalButton: pressed \(title, privacy: .public)")
+                return true
+            }
+        }
+        return false
+    }
+
+    /// True if the app has a modal popup open (separate `AXDialog`/`AXSystemDialog` window or `AXModal`).
+    public static func hasModalPopup(processID: pid_t) -> Bool {
+        let app = AXUIElementCreateApplication(processID)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
+              let windows = value as? [AXUIElement] else { return false }
+        for window in windows {
+            let subrole = axString(window, kAXSubroleAttribute as CFString)
+            if subrole == (kAXDialogSubrole as String) || subrole == (kAXSystemDialogSubrole as String) {
+                return true
+            }
+            var modal: CFTypeRef?
+            if AXUIElementCopyAttributeValue(window, kAXModalAttribute as CFString, &modal) == .success,
+               (modal as? Bool) == true { return true }
+        }
+        return false
+    }
+
+    // MARK: - Raw AX helpers
+
+    private static func primaryWindow(of app: AXUIElement) -> AXUIElement? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
+              let windows = value as? [AXUIElement] else { return nil }
+        // Prefer the standard window (skip dialogs/panels); fall back to the first window.
+        return windows.first { axString($0, kAXSubroleAttribute as CFString) == (kAXStandardWindowSubrole as String) }
+            ?? windows.first
+    }
+
+    private static func matchingRow(in list: AXUIElement, label: String) -> AXUIElement? {
+        for row in descendants(of: list, role: kAXRowRole as String, limit: 400) {
+            if rowText(row).contains(label) { return row }
+        }
+        return nil
+    }
+
+    /// All visible text under a row (its static texts / value), joined — so we can match by label.
+    private static func rowText(_ row: AXUIElement) -> String {
+        var parts: [String] = []
+        if let v = axString(row, kAXValueAttribute as CFString) { parts.append(v) }
+        if let t = axString(row, kAXTitleAttribute as CFString) { parts.append(t) }
+        for text in descendants(of: row, role: kAXStaticTextRole as String, limit: 20) {
+            if let v = axString(text, kAXValueAttribute as CFString) { parts.append(v) }
+        }
+        return parts.joined(separator: " ")
+    }
+
+    private static func firstDescendant(of element: AXUIElement, role: String, depth: Int = 0) -> AXUIElement? {
+        guard depth < 12 else { return nil }
+        for child in children(element) {
+            if axString(child, kAXRoleAttribute as CFString) == role { return child }
+            if let found = firstDescendant(of: child, role: role, depth: depth + 1) { return found }
+        }
+        return nil
+    }
+
+    private static func descendants(of element: AXUIElement, role: String, limit: Int, depth: Int = 0, found: Int = 0) -> [AXUIElement] {
+        guard depth < 14, found < limit else { return [] }
+        var result: [AXUIElement] = []
+        for child in children(element) {
+            if axString(child, kAXRoleAttribute as CFString) == role { result.append(child) }
+            if result.count + found >= limit { break }
+            result.append(contentsOf: descendants(of: child, role: role, limit: limit, depth: depth + 1, found: found + result.count))
+            if result.count + found >= limit { break }
+        }
+        return result
+    }
+
+    private static func children(_ element: AXUIElement) -> [AXUIElement] {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value) == .success,
+              let kids = value as? [AXUIElement] else { return [] }
+        return kids
+    }
+
+    private static func elementFrame(_ element: AXUIElement) -> WindowTargetBounds? {
+        var posValue: CFTypeRef?
+        var sizeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posValue) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeValue) == .success,
+              let posValue, let sizeValue,
+              CFGetTypeID(posValue) == AXValueGetTypeID(), CFGetTypeID(sizeValue) == AXValueGetTypeID()
+        else { return nil }
+        var point = CGPoint.zero
+        var size = CGSize.zero
+        AXValueGetValue(posValue as! AXValue, .cgPoint, &point)
+        AXValueGetValue(sizeValue as! AXValue, .cgSize, &size)
+        guard size.width > 0, size.height > 0 else { return nil }
+        return WindowTargetBounds(x: Double(point.x), y: Double(point.y), width: Double(size.width), height: Double(size.height))
+    }
+
+    private static func modalButton(in element: AXUIElement, title: String, inModal: Bool, depth: Int) -> AXUIElement? {
+        guard depth < 8 else { return nil }
+        let role = axString(element, kAXRoleAttribute as CFString)
+        let subrole = axString(element, kAXSubroleAttribute as CFString)
+        let nowModal = inModal
+            || role == (kAXSheetRole as String)
+            || subrole == (kAXDialogSubrole as String)
+            || subrole == (kAXSystemDialogSubrole as String)
+        if nowModal, role == (kAXButtonRole as String), axString(element, kAXTitleAttribute as CFString) == title {
+            return element
+        }
+        for child in children(element) {
+            if let found = modalButton(in: child, title: title, inModal: nowModal, depth: depth + 1) { return found }
+        }
+        return nil
+    }
+
+    private static func axString(_ element: AXUIElement, _ attribute: CFString) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else { return nil }
+        if let s = value as? String { return s }
+        if let n = value as? NSNumber { return n.stringValue }
+        return nil
     }
 }

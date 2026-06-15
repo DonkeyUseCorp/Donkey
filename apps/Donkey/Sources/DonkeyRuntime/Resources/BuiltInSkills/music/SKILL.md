@@ -1,15 +1,15 @@
 # Music
 
 id: music
-description: Play and control Apple Music natively with the music.* tools — never the Music app GUI, AppleScript, or a web player.
+description: Play and control Apple Music natively with the music.* tools — playback never uses the Music app GUI, AppleScript, or a web player. Deleting a playlist is the lone exception: no API exists, so it is done through the GUI with the general see/act tools.
 tags: media, music, playback, local-app
 keywords: play, listen, music, song, track, tune, album, playlist, artist, band, audio, radio, pause, resume, skip, volume, shuffle, repeat, queue, seek, rewind
 apps: Music, Apple Music, com.apple.Music
 tools: music.play, music.search, music.transport, music.status, music.playlist, shell_exec, web.search
 
-Use this for any music request: "play baby don't cry", "play top 80s hits", "play the latest album from Taylor Swift", "play something by Coldplay", "pause the music", "skip this", "what's playing?", "make me a workout playlist", "add this song to my mix".
+Use this for any music request: playing tracks/albums/artists/genres, transport (pause, skip, what's playing), and the user's own playlists.
 
-Playback is low-risk and reversible: act directly, don't ask for confirmation. Everything goes through the native music tools — never launch, focus, script, or click the Music app, and never open YouTube, Spotify web, Apple Music web, or any browser player. Do not over-explain — the user wants the music to start.
+Playback goes entirely through the native music tools — for playback never launch, focus, script, or click the Music app, and never open YouTube, Spotify web, Apple Music web, or any browser player. (Deleting a playlist is the one task that does use the Music GUI — see Playlists.)
 
 ## Step 1: Pick the tool
 
@@ -33,7 +33,7 @@ Bad queries: `play baby don't cry` · `listen to coldplay` — no command phrase
 
 ## Step 4: Trust the tool's verification
 
-A successful `music.play` already verified playback — the play position was sampled until it advanced. Report what's playing and `run.complete`; do not re-verify with another tool. A failure summary states the exact cause (permission not granted, no Apple Music subscription, app signing/token problem, item unavailable). Relay that cause plainly, do not retry the same call, and never fall back to driving the Music app's GUI.
+A successful `music.play` already verified playback — position was sampled until it advanced; report what's playing and `run.complete` without re-verifying. A failure summary names the exact cause (permission, no subscription, signing/token, item unavailable) — relay it plainly.
 
 ## Transport, volume, now playing
 
@@ -52,15 +52,12 @@ A successful `music.play` already verified playback — the play position was sa
 - "add this song to X" → the currently playing song's id is in the world model facts (`music.playing.id`) when this run started it; otherwise `music.search` for it. Then action=add.
 - "what's in X" → action=entries.
 - A successful create/add is confirmed by the Apple Music API — that is the evidence; report it and complete. Use action=entries only when the user asks what's inside.
-- Removing tracks, deleting playlists, and renaming are NOT possible — Apple provides no API. Say so plainly and point the user to the Music app; never claim success and never fall back to the GUI.
-
-## Ambiguity
-
-Pick the best likely match for ordinary ambiguity: "play hello" → the most popular likely match; "play drake" → a popular Drake result; "play 80s music" → `kind=playlist` or `kind=station`. Ask only when the user explicitly wants to choose between versions, when interpretations are equally likely AND very different, or when the request isn't actually about music. Keep it short: "Which one did you mean: Adele, Lionel Richie, or another artist?"
+- Removing individual tracks and renaming have no Apple API and no GUI path worth driving — say so plainly, point the user to the Music app, don't fake success.
+- Deleting a WHOLE playlist has no API (no MusicKit delete; AppleScript `delete playlist` errors -1708), so do it in the GUI with the general row tool, in one call: `ax.select_and_press` with `label=<playlist name>`, `key=delete`, `confirm=Delete`. That selects the sidebar row, presses Delete, and confirms the dialog atomically; then `ax.observe` to verify the row is gone. The sidebar is the source of truth, not `music.playlist action=list` (the MusicKit list can lag). If the row isn't found, the playlist was just created and hasn't synced from iCloud yet — `wait` briefly and retry.
 
 ## Failure behavior
 
-Never fail silently; never say playback started unless the tool verified it; never retry the same query repeatedly; never open a web player; never drive the Music app GUI. The tool's failure summary names the exact blocker — pass it on, e.g. "I couldn't start playback: this Mac's Apple ID has no active Apple Music subscription."
+Never open a web player; never drive the Music GUI for playback (deleting a playlist is the lone sanctioned GUI use). The tool's failure summary names the exact blocker — pass it on, e.g. "I couldn't start playback: this Mac's Apple ID has no active Apple Music subscription."
 
 ## Response style
 

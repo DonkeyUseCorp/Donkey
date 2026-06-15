@@ -437,8 +437,8 @@ struct MusicPlaybackToolsTests {
 
     @Test
     func playlistRemoveIsHonestlyUnsupported() async {
-        // Apple ships no API for removing tracks or deleting playlists. The tool must say so
-        // plainly instead of failing generically or pretending.
+        // Apple ships no API for removing individual tracks. The tool must say so plainly and send the
+        // user to the Music app instead of failing generically or pretending.
         let provider = MusicPlaybackToolProvider(service: FakeMusicService())
 
         let result = await run(
@@ -450,6 +450,24 @@ struct MusicPlaybackToolsTests {
         #expect(result.status == .failed)
         #expect(result.metadata["reason"] == "unsupportedByPlatform")
         #expect(result.summary.contains("no API"))
+    }
+
+    @Test
+    func playlistDeleteHasNoAPIAndPointsToTheGeneralRowTool() async {
+        // Deleting a whole playlist has no Apple API. It is a general GUI row action, not a music tool —
+        // `music.playlist` rejects `delete` and points the planner at the app-agnostic `ax.select_and_press`
+        // (select the sidebar row + Delete key + confirm dialog), so there is no bespoke per-app delete here.
+        let provider = MusicPlaybackToolProvider(service: FakeMusicService())
+
+        let result = await run(
+            provider,
+            tool: MusicPlaybackToolProvider.ToolName.playlist,
+            input: ["action": "delete", "name": "My Mix"]
+        )
+
+        #expect(result.status == .failed)
+        #expect(result.metadata["reason"] == "noDeleteAPI")
+        #expect(result.summary.contains("ax.select_and_press"))
     }
 
     @Test

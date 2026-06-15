@@ -99,10 +99,10 @@ public final class MusicPlaybackToolProvider {
             HarnessToolDescriptor(
                 name: ToolName.playlist,
                 pluginID: "media.music",
-                summary: "Manage Apple Music library playlists natively: list them, create one, add catalog songs (ids from music.search), or read a playlist's entries. Play one via music.play kind=playlist id=<id>. Removing tracks and deleting playlists are NOT possible (no Apple API) — tell the user instead of attempting it.",
+                summary: "Manage Apple Music library playlists through Apple's API: list them, create one, add catalog songs (ids from music.search), or read a playlist's entries. Play one via music.play kind=playlist id=<id>. Deleting a whole playlist has no API — do it in the GUI with ax.select_and_press (label=<playlist name> key=delete confirm=Delete). Removing individual tracks has no Apple API either (tell the user).",
                 inputSchema: [
                     "action": PlaylistAction.schemaList,
-                    "name": "Playlist name (create).",
+                    "name": "Playlist name (create, delete).",
                     "description": "Playlist description (create, optional).",
                     "playlistID": "Library playlist id from action=list or create (add, entries).",
                     "songIDs": "Comma-separated catalog song ids from music.search (add).",
@@ -447,14 +447,26 @@ public final class MusicPlaybackToolProvider {
             )
         }
         guard let action = PlaylistAction(rawValue: rawAction) else {
-            // remove/delete are real Apple-platform gaps (no API); anything else is a typo.
-            if rawAction == "remove" || rawAction == "delete" {
+            // `music.playlist` covers only the operations Apple exposes through an API. Matching is on the
+            // typed action field, never raw user text.
+            if rawAction == "remove" {
+                // Removing individual tracks has no Apple API and no GUI affordance worth driving.
                 return result(
                     context,
                     status: .failed,
-                    summary: "Removing tracks or deleting playlists is not possible — Apple provides no API for it. "
+                    summary: "Removing individual tracks is not possible — Apple provides no API for it. "
                         + "Tell the user to do that in the Music app; do not retry.",
                     reason: "unsupportedByPlatform"
+                )
+            }
+            if rawAction == "delete" {
+                // Deleting a whole playlist has no API — it's a general GUI row action, not a music tool.
+                return result(
+                    context,
+                    status: .failed,
+                    summary: "music.playlist has no delete (Apple exposes no playlist-delete API). Delete it in the GUI "
+                        + "with ax.select_and_press: label=<playlist name>, key=delete, confirm=Delete.",
+                    reason: "noDeleteAPI"
                 )
             }
             return result(
