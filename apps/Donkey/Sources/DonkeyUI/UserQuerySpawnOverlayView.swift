@@ -842,8 +842,12 @@ public struct UserQuerySpawnOverlayView: View {
             isLabelHovered = hovering
         }
         .overlay(alignment: .topTrailing) {
+            // Keep the button inside the label's bounds. An `.offset` that pushes it
+            // past the top-trailing corner still renders but is not hit-testable
+            // outside the parent frame, leaving only a sliver of the X clickable.
             dismissButton
-                .offset(x: 6, y: -6)
+                .padding(.top, 2)
+                .padding(.trailing, 2)
                 .opacity(showsDismissButton ? 1 : 0)
                 .allowsHitTesting(showsDismissButton)
                 .onHover { hovering in

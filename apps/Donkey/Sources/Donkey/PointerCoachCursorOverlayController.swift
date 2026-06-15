@@ -27,6 +27,9 @@ final class PointerCoachCursorOverlayController {
         viewModel.updateViewport(origin: localFrame.origin, size: localFrame.size)
 
         let hostingView = NSHostingView(rootView: PointerCoachCursorOverlayView(viewModel: viewModel))
+        // The controller owns the panel frame; stop the hosting view from also bridging its content size
+        // to the window, which re-enters layout mid display-cycle and crashes (see the spawn overlay).
+        hostingView.sizingOptions = []
         hostingView.frame = CGRect(origin: .zero, size: localFrame.size)
         hostingView.autoresizingMask = [.width, .height]
         hostingView.wantsLayer = true

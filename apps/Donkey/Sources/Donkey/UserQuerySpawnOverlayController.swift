@@ -275,6 +275,13 @@ final class UserQuerySpawnOverlayController {
         let hostingView = UserQuerySpawnHostingView(
             rootView: UserQuerySpawnOverlayView(viewModel: viewModel)
         )
+        // This controller drives the panel frame itself (travel animation, label-layout callbacks). Let
+        // the hosting view ALSO bridge its SwiftUI content size to the window and the two re-enter
+        // layout — `NSHostingView.windowDidLayout` → `updateAnimatedWindowSize` resizes the window mid
+        // display-cycle and AppKit throws an uncaught exception (SIGABRT) during a cursor-travel step.
+        // Empty sizingOptions makes the hosting view a passive content view, so only our explicit frame
+        // updates move the panel.
+        hostingView.sizingOptions = []
         hostingView.frame = CGRect(origin: .zero, size: globalFrame.size)
         hostingView.autoresizingMask = [.width, .height]
         hostingView.wantsLayer = true

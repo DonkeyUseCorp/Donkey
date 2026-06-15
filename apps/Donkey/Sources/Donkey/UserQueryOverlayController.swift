@@ -105,6 +105,10 @@ final class UserQueryOverlayController {
                 }
             )
         )
+        // The controller positions and sizes this panel itself; stop the hosting view from also bridging
+        // its SwiftUI content size to the window, which re-enters layout mid display-cycle and throws an
+        // uncaught AppKit exception (see the spawn overlay).
+        hostingView.sizingOptions = []
         hostingView.frame = CGRect(origin: .zero, size: size)
         hostingView.autoresizingMask = [.width, .height]
         hostingView.wantsLayer = true
@@ -153,6 +157,11 @@ final class UserQueryOverlayController {
     private func makeStatusPanel() -> NSPanel {
         let metrics = notchMetrics()
         let hostingView = UserQueryHostingView(rootView: notchStatusView(metrics: metrics))
+        // The notch status panel is resized explicitly on every step (narration updates, expand/collapse
+        // animations). Letting the hosting view ALSO animate the window size from content re-enters layout
+        // during the display cycle and crashes the app (uncaught AppKit exception) — the exact failure seen
+        // while driving a vision step. Empty sizingOptions makes our explicit frame the only sizing path.
+        hostingView.sizingOptions = []
         hostingView.frame = CGRect(origin: .zero, size: metrics.surfaceSize)
         hostingView.autoresizingMask = [.width, .height]
         hostingView.wantsLayer = true
