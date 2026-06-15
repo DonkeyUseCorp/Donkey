@@ -62,12 +62,18 @@ Every task carries its own durable state:
 State is task-local. Pausing, clarifying, gating, interrupting, or cancelling
 one task never touches another.
 
-Storage is split three ways so decisions stay inspectable:
+Storage keeps decisions inspectable:
 
-- **Threads** store conversation events and active task ids.
+- **Threads** store the conversation *and* the turn trace, in the same thread
+  file. The trace records every model call (clipped prompt and reply, finish
+  reason, attempt, outcome, and duration), which sensing modality each step used
+  (Accessibility vs. AI vision), and the per-step split of decision time vs.
+  tool time. Timestamps are wall-clock plus monotonic, so a slow turn is pinned
+  to a specific call instead of a coarse end-to-end number.
 - **Task snapshots** store execution state.
-- **Compaction snapshots** record exactly what context was sent to the model
-  for each decision.
+
+One turn-trace manager is the single sink every model call and the step loop
+report to — the substrate a later self-correcting pass would learn from.
 
 ## Turn Understanding
 
@@ -181,15 +187,26 @@ Seeing and acting are plain tools the planner picks per step — not a fixed
 pipeline. The harness re-plans after every observation: look, see the result,
 pick the next tool.
 
-**To see**, the planner picks one of two paths. Accessibility tree reads are
-fast, structured, and preferred for native apps. Screenshot + vision works on
-any pixels (canvas, Electron) and is the fallback when Accessibility isn't
-enough. Both return elements into the world model. Screenshots never go to
-hosted model providers: the planner reads AX and vision annotations rendered
-as text — each element with its geometry, value, and click eligibility, in
-reading order. A non-LLM monitor watches the frontmost window's screenshot
-fingerprint and re-parses on large changes, keeping the vision cache warm so
-captures are usually free at decision time.
+**To see**, the planner draws on two paths: Accessibility reads (fast,
+structured, preferred for native apps) and screenshot + vision (any pixels —
+canvas, Electron). Both return elements into the world model, which the planner
+reads as text: each element with its geometry, value, and click eligibility, in
+reading order. With a multimodal model the compressed screenshot goes too
+(`ScreenshotCompression.compressedForModel` — ~896px JPEG), so the planner can
+point at pixels AX and the vision parse miss. A non-LLM monitor re-parses on
+large screen changes, keeping the vision cache warm so captures are usually free
+at decision time.
+
+Three things keep the planner aware of the whole screen, not just the front
+window. Capture widens in scopes, smallest first — `scope=window` (default),
+`scope=screen` (the display, for things drawn outside the window like a modal
+sheet or right-click menu), `scope=desktop` (all displays, when the target is on
+another monitor); detected elements carry the rect they were found in, so a
+click maps through it the same way at any scope. When a modal popup is open the
+Accessibility read surfaces *that* window — its buttons and fields are what the
+planner needs. And the world model lists every open window (app, title, bounds),
+so a request living in a background window exists before the planner navigates
+to it.
 
 **To act**, the planner can click an element, type or press keys (including
 modifier chords), scroll, drag one observed element onto another, wait for the

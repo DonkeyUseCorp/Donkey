@@ -136,9 +136,11 @@ public enum DonkeyPrompts {
         understanding: HarnessRequestUnderstanding?,
         environmentSummary: String?,
         skillCatalog: String? = nil,
-        retryNote: String? = nil
+        retryNote: String? = nil,
+        openWindows: [MacWindowTargetCandidate] = []
     ) -> String {
         let elementsBlock = harnessStepElementsBlock(task.worldModel.elements)
+        let windowsBlock = harnessStepWindowsBlock(openWindows)
 
         let factsBlock = task.worldModel.facts.isEmpty
             ? ""
@@ -194,7 +196,7 @@ public enum DonkeyPrompts {
         GOAL: \(goalText)
         \(understandingBlock)
         \(historyBlock)
-        \(factsBlock)\(environmentBlock)\(guidanceBlock)\(skillCatalogBlock)
+        \(factsBlock)\(environmentBlock)\(guidanceBlock)\(skillCatalogBlock)\(windowsBlock)
         \(elementsBlock)
 
         AVAILABLE TOOLS:
@@ -209,7 +211,20 @@ public enum DonkeyPrompts {
         - Only operate the GUI when the task genuinely needs it (canvas/Electron/proprietary UI, or no
           system-tool equivalent). When you do: SEE before you act — prefer ax.observe (fast,
           structured) for native apps; use vision.capture when Accessibility is missing or insufficient
-          — then act on a specific element by passing its id from the list above in "input".
+          — then act on a specific element by passing its id from the list above in "input". The see/act
+          tools focus the target app for you, so do NOT `open -a`/activate it first as a prerequisite —
+          go straight to ax.observe. Re-issuing a focus/open step instead of advancing is a loop that
+          burns the run.
+        - The action you need may not be a visible button. Figure it out like a person would, using the
+          general actions: RIGHT-CLICK an item (ax.click/vision.click button=right) to open its full
+          context menu — that is where Delete / Remove / Rename / "…from Library" usually live; or
+          select/open the item first and use its focused "⋯" / "More" / gear OVERFLOW menu; mouse.scroll
+          to bring offscreen items or controls into view; use the menu bar; or select an item and press
+          the matching key. After any of these, SEE again and read the
+          WHOLE menu before clicking — a context menu, popup, or confirmation dialog is just more
+          elements to observe, and the right entry is often a small labeled row near the bottom of a long
+          menu. Don't conclude something is impossible until you've tried these; only report it
+          unsupported if a skill says so or the paths are exhausted.
         - Operating a specific app — even by script (playing music, saving a note, sending mail)? If it
           appears in INSTALLED APP SKILLS above, consult that skill FIRST (app_skill) and run its
           validated scripts (skill_run) before hand-writing osascript: the skill is the authority and
@@ -255,6 +270,24 @@ public enum DonkeyPrompts {
         Return JSON: {"tool": "<one tool name>", "input": {"key": "value", ...}, "reason": "<one sentence>"}. \
         ALWAYS include "input" with every required field for the chosen tool filled, exactly as its schema names them; use {} only for a tool that needs no input.\(retryNote.map { "\nIMPORTANT: \($0)" } ?? "")
         """
+    }
+
+    /// Renders the other windows currently on screen — across every app and display — so the planner
+    /// knows what *else* exists in the world and can switch to or target a window that isn't in front.
+    /// A request often lives in a window the user isn't looking at; the planner needs it to exist here
+    /// before it can navigate to it. Bounds are global screen points (the same space tools act in).
+    public static func harnessStepWindowsBlock(_ windows: [MacWindowTargetCandidate]) -> String {
+        let onScreen = windows.filter { $0.isOnScreen && $0.bounds.width > 1 && $0.bounds.height > 1 }
+        guard !onScreen.isEmpty else { return "" }
+        let lines = onScreen.prefix(14).map { window -> String in
+            let app = window.appName ?? "?"
+            let title = (window.title?.isEmpty == false) ? " — \"\(window.title!)\"" : ""
+            let front = window.isFrontmost ? " [frontmost]" : ""
+            let bounds = window.bounds
+            return "  - \(app)\(title)\(front) at \(Int(bounds.x)),\(Int(bounds.y)) \(Int(bounds.width))x\(Int(bounds.height))"
+        }
+        return "\nOPEN WINDOWS (every window on screen, any app or display — switch to or target one that isn't in front; widen vision.capture scope to screen or desktop to see a window off the active display):\n"
+            + lines.joined(separator: "\n") + "\n"
     }
 
     /// Renders observed elements in reading order with the geometry and state the observation already

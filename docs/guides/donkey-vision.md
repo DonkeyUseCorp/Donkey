@@ -117,7 +117,12 @@ cadence, scope, and filters, not which evidence source runs.
 
 1. **Model boxes are never pixel-perfect.** Do not add global coordinate
    offsets to compensate for AI localization.
-2. **Scoped captures only.** Never send full-desktop screenshots to hosted AI.
+2. **Smallest scope that works, escalate when needed.** Screenshots may go to
+   hosted models (the harness sends compressed captures to multimodal models).
+   Start with the target window; widen to a display for cross-window surfaces
+   like modals; fall back to the whole desktop only when the thing to act on
+   isn't visible at a tighter scope. Always compress before sending, and prefer
+   the tightest scope that still shows what the model needs.
 3. **No provider switch.** Provider selection is not the UI or config model
    for Donkey Vision.
 4. **AI evidence stays marked.** Keep AI boxes visually distinct and tagged so

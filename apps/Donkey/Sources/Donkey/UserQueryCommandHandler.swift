@@ -303,12 +303,25 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         }
         let backend = DonkeyBackendInferenceClient(configuration: configuration)
 
+        // The thread is the COMPLETE, human-readable record of the turn (like ChatGPT/Claude), written
+        // live as markdown. It is opened here — before the very first model call — so the trace manager
+        // can record even the pre-loop understanding decision into it. The header uses the frontmost app
+        // (the app in front when the user asked); the resolved drive target is shown in the planning
+        // block below.
+        let transcript = ThreadTranscript(id: taskID)
+        transcript.begin(id: taskID, app: frontmostAppName)
+        transcript.userMessage(command)
+        // The turn-trace manager: the single sink every model call and every executed step reports to,
+        // so the whole decision path — prompts, replies, sensing modality, and per-call timing — is
+        // traceable in the thread file. The model boundaries hold it as `any HarnessTurnTracing`.
+        let trace = HarnessTurnTrace(transcript: transcript)
+
         // Understand the request ONCE before the loop: restate the goal, identify the target app,
         // extract parameters, and decide whether to clarify. Degrades to driving the raw command when
         // it returns nil — or when the call outlives its deadline — so a backend hiccup never
         // dead-ends or silently stalls the run.
         progress?("Working out what you need")
-        let understandingBoundary = HostedHarnessRequestUnderstanding(backend: backend)
+        let understandingBoundary = HostedHarnessRequestUnderstanding(backend: backend, trace: trace)
         let understanding = await AIDeadline.race(seconds: Self.understandingTimeoutSeconds) {
             await understandingBoundary.understand(command: command, frontmostAppName: frontmostAppName)
         }
@@ -395,6 +408,10 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         )
         let plannerDescriptors = await registry.descriptors()
         let environmentSummary = await SystemToolCapabilityProbe.shared.summary()
+        // Every step, surface the other windows on screen (all apps/displays) to the planner so a
+        // request that lives in a window the user isn't looking at can be found and switched to. Donkey's
+        // own windows are filtered out by bundle id so the agent never targets its own overlay.
+        let ownBundleID = Bundle.main.bundleIdentifier
         let planner = HostedHarnessStepPlanner(
             backend: backend,
             descriptors: plannerDescriptors,
@@ -402,7 +419,24 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             appGuidance: appGuidance,
             understanding: understanding,
             environmentSummary: environmentSummary,
-            skillCatalog: Self.installedSkillCatalog()
+            skillCatalog: Self.installedSkillCatalog(),
+            trace: trace,
+            openWindows: {
+                MacWindowResolver().enumerateCandidates().filter { candidate in
+                    guard let ownBundleID, let candidateBundle = candidate.bundleIdentifier else { return true }
+                    return candidateBundle.caseInsensitiveCompare(ownBundleID) != .orderedSame
+                }
+            },
+            // Attach a compressed screenshot of the user's frontmost window to every step so a multimodal
+            // planner always sees the screen, not just AX/vision text. Best-effort: a capture failure
+            // returns nil and the step proceeds text-only, never breaking the planner.
+            captureScreenshot: {
+                guard let target = MacWindowResolver().frontmostUserAppTarget(),
+                      let shot = try? await ScreenCaptureKitWindowScreenshotCapturer().capture(target: target) else {
+                    return nil
+                }
+                return ScreenshotCompression.compressedForModel(shot).base64DataURL
+            }
         )
         _ = await genericHarnessLifecycle.coordinator.startRunning(
             taskID: taskID,
@@ -420,13 +454,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // planner's one-line reason, falling back to the tool's own summary), and after each step that
         // physically moved the pointer (a click), animate the overlay cursor traveling to that exact
         // target, so the visualization tracks what the harness is actually doing.
-        // The thread: the real conversation record (like ChatGPT/Claude), written live as markdown —
-        // user request, the assistant's thinking, each tool call and result, and the final answer — so
-        // the full reasoning trace is readable (and renderable to the user later), and a stuck run is
-        // visible instead of a mystery.
-        let transcript = ThreadTranscript(id: taskID)
-        transcript.begin(id: taskID, app: appName)
-        transcript.userMessage(command)
+        //
         // The thread is the COMPLETE session record: the turn's upfront planning (or its absence) is
         // part of the conversation, not just an internal step. A follow-up turn (clarification
         // answer, permission grant) appends its own planning block mid-thread.
@@ -449,12 +477,13 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             await MainActor.run {
                 let narration = Self.stepNarration(for: step, planner: planner)
                 if let result = step.toolResult {
-                    // One grouped block per step: the model's full thought summary (persisted here
-                    // and nowhere else, so the planning context stays bounded), its one-line reason,
-                    // the action with its input, and the output — plus any planning retries hit
-                    // while choosing this step, so a step that needed recovery reads as one unit.
-                    // The overlay/progress gets only the clipped one-line narration below.
-                    transcript.step(
+                    // One grouped block per step through the trace manager: the model's full thought
+                    // summary (persisted here and nowhere else, so the planning context stays bounded),
+                    // its one-line reason, the action with its input, the output, any planning retries
+                    // hit while choosing this step, and the timing the manager attaches — decision time
+                    // vs. tool time plus which sensing modality the step used. The overlay/progress gets
+                    // only the clipped one-line narration below.
+                    trace.recordStep(
                         number: step.task.toolHistory.count,
                         thought: planner.lastThinking,
                         reason: planner.lastNarration,
@@ -462,7 +491,10 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                         input: step.task.toolHistory.last?.call.input ?? [:],
                         status: result.status.rawValue,
                         output: result.summary,
-                        planningErrors: planner.lastPlanningErrors
+                        planningErrors: planner.lastPlanningErrors,
+                        modality: Self.sensingModality(forTool: result.toolName),
+                        cacheHit: result.metadata["usedCache"].map { $0 == "true" },
+                        elementCount: result.metadata["elementCount"].flatMap(Int.init)
                     )
                 } else {
                     // No tool executed (the call never ran), but planning failures are still part of
@@ -480,6 +512,11 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 if let progress, let narration {
                     progress(narration)
                 }
+                // The animated cursor playback is cosmetic and separate from the real input. It animates
+                // an overlay panel's window frame, which can re-enter AppKit's layout cycle on some macOS
+                // builds; this escape hatch turns the playback off (text narration still updates) so a
+                // run can proceed without it.
+                guard !Self.cursorVisualizationDisabled else { return }
                 guard let present = visualize else { return }
                 let screenSize = (NSScreen.main ?? NSScreen.screens.first)?.frame.size ?? .zero
                 guard let plan = Self.cursorVisualizationPlan(
@@ -520,6 +557,10 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             "complete traceID=\(traceID) app=\(appName) completed=\(completed) reason=\(outcomeReason) turns=\(turns) usedCache=\(anyTurnUsedCache) parseMS=\(Self.formatLatency(totalParseMS)) e2eTotalMS=\(Self.formatLatency(e2eTotalMS)) timeToFirstActionMS=\(Self.formatLatency(timeToFirstActionMS ?? 0)) avgPerTurnMS=\(Self.formatLatency(averagePerTurnMS))"
         )
 
+        // Close the per-step trace with a compact whole-turn timing line, so the run's total cost and
+        // time-to-first-action sit at the foot of the thread next to the per-step breakdown.
+        trace.recordTurnTiming(e2eTotalMS: e2eTotalMS, timeToFirstActionMS: timeToFirstActionMS, steps: turns)
+
         // Record the assistant's final answer to close the turn, then write a compacted, structured
         // thread summary. A deterministic summary lands immediately; an LLM-written one replaces it in
         // the background so the result isn't delayed by the summary call.
@@ -540,7 +581,17 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 THREAD:
                 \(threadText)
                 """
-                if let enhanced = await textGenerator.generate(prompt), !enhanced.isEmpty {
+                let summaryStartedAt = RunTraceTimestamp.now()
+                let enhanced = await textGenerator.generate(prompt)
+                trace.recordModelCall(TraceModelCall(
+                    kind: .threadSummary,
+                    prompt: prompt,
+                    response: enhanced ?? "<no output>",
+                    status: (enhanced?.isEmpty == false) ? .ok : .empty,
+                    startedAt: summaryStartedAt,
+                    endedAt: .now()
+                ))
+                if let enhanced, !enhanced.isEmpty {
                     transcript.writeSummary(enhanced)
                 }
             }
@@ -808,6 +859,25 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             narration = String(narration.prefix(maxLength)).trimmingCharacters(in: .whitespaces) + "…"
         }
         return narration
+    }
+
+    /// Which sensing modality a step used, matched on the executed tool's typed registry name (never on
+    /// user text). Only the two observation tools sense fresh elements; everything else (clicks, input,
+    /// shell, wait, verify) senses nothing, so its step shows no modality.
+    private static func sensingModality(forTool toolName: String) -> TraceModality {
+        switch toolName {
+        case "ax.observe": return .accessibility
+        case "vision.capture": return .vision
+        default: return .none
+        }
+    }
+
+    /// Escape hatch to suppress the cosmetic animated-cursor playback (set `DONKEY_DISABLE_CURSOR_VIZ=1`).
+    /// The playback animates an overlay window's frame, which can trip a re-entrant AppKit layout crash on
+    /// some macOS builds; turning it off lets a run proceed (the harness still does the real vision input
+    /// and the text narration still updates).
+    static var cursorVisualizationDisabled: Bool {
+        ProcessInfo.processInfo.environment["DONKEY_DISABLE_CURSOR_VIZ"] == "1"
     }
 
     private static func uptimeMilliseconds() -> Double {

@@ -29,6 +29,18 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     /// e.g. playing music or saving a note by script. nil when no skills are installed.
     private let skillCatalog: String?
     private let uptimeMS: @Sendable () -> Double
+    /// Optional turn-trace sink. Every planning call — the first sample, each retry, and the failure
+    /// shapes (empty reply, content filter, transport error) — is recorded here with its clipped prompt,
+    /// clipped reply, finish reason, attempt index, and span, so the whole decision path is traceable in
+    /// the thread. nil means tracing is off and the hot path is untouched.
+    private let trace: (any HarnessTurnTracing)?
+    /// Live snapshot of every window on screen (all apps/displays), rendered into the prompt each step
+    /// so the planner knows what else exists in the world and can target a window that isn't in front.
+    private let openWindows: @Sendable () -> [MacWindowTargetCandidate]
+    /// Best-effort compressed screenshot data URL attached to every step's request as an image so a
+    /// multimodal planner always SEES the screen, not just read AX/vision text. Returns nil only when
+    /// capture fails — the step then proceeds text-only, never breaking on a missing image.
+    private let captureScreenshot: @Sendable () async -> String?
 
     /// Uptime (ms) at which the planner first chose an *action* tool (something that changes app
     /// state, i.e. not a read-only observation). The route turns this into the "time to first action"
@@ -64,6 +76,9 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         understanding: HarnessRequestUnderstanding? = nil,
         environmentSummary: String? = nil,
         skillCatalog: String? = nil,
+        trace: (any HarnessTurnTracing)? = nil,
+        openWindows: @escaping @Sendable () -> [MacWindowTargetCandidate] = { [] },
+        captureScreenshot: @escaping @Sendable () async -> String? = { nil },
         uptimeMS: @escaping @Sendable () -> Double = { ProcessInfo.processInfo.systemUptime * 1_000 }
     ) {
         self.backend = backend
@@ -73,6 +88,9 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         self.understanding = understanding
         self.environmentSummary = environmentSummary
         self.skillCatalog = skillCatalog
+        self.trace = trace
+        self.openWindows = openWindows
+        self.captureScreenshot = captureScreenshot
         self.uptimeMS = uptimeMS
         self.readOnlyToolNames = Set(descriptors.filter { $0.safetyClass == .readOnly }.map(\.name))
         self.requiredInputKeys = Dictionary(
@@ -316,19 +334,64 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     private static let maxOutputTokensCap = 8_000
 
     private func decide(task: HarnessTaskState, retryNote: String?, attempt: Int) async throws -> Decision {
-        let request = responseRequest(task: task, retryNote: retryNote, attempt: attempt)
+        let prompt = DonkeyPrompts.harnessStep(
+            task: task,
+            descriptors: descriptors,
+            appName: appName,
+            appGuidance: appGuidance,
+            understanding: understanding,
+            environmentSummary: environmentSummary,
+            skillCatalog: skillCatalog,
+            retryNote: retryNote,
+            openWindows: openWindows()
+        )
+        let imageDataURL = await captureScreenshot()
+        let request = responseRequest(prompt: prompt, attempt: attempt, imageDataURL: imageDataURL)
         let backend = self.backend
-        let response = try await AIDeadline.enforce(seconds: Self.stepTimeoutSeconds) {
-            try await backend.createResponse(request)
+        let startedAt = RunTraceTimestamp.now()
+        let response: RemoteInferenceJSONValue
+        do {
+            response = try await AIDeadline.enforce(seconds: Self.stepTimeoutSeconds) {
+                try await backend.createResponse(request)
+            }
+        } catch {
+            recordPlannerCall(
+                prompt: prompt,
+                response: String(String(describing: error).prefix(500)),
+                finishReason: nil,
+                attempt: attempt,
+                status: .failed,
+                startedAt: startedAt,
+                endedAt: .now()
+            )
+            throw error
         }
+        let endedAt = RunTraceTimestamp.now()
         guard let text = RemoteInferenceResponseHelpers.outputText(from: response), !text.isEmpty else {
             let raw = (try? JSONEncoder().encode(response)).flatMap { String(data: $0, encoding: .utf8) } ?? "<unencodable>"
             let finishReason = RemoteInferenceResponseHelpers.providerFinishReason(from: response)
             if let finishReason, Self.contentFilterFinishReasons.contains(finishReason) {
+                recordPlannerCall(
+                    prompt: prompt, response: String(raw.prefix(500)), finishReason: finishReason,
+                    attempt: attempt, status: .filtered, startedAt: startedAt, endedAt: endedAt
+                )
                 throw PlanningError.blockedByContentFilter(finishReason: finishReason, raw: String(raw.prefix(500)))
             }
+            recordPlannerCall(
+                prompt: prompt, response: String(raw.prefix(2_000)), finishReason: finishReason,
+                attempt: attempt, status: .empty, startedAt: startedAt, endedAt: endedAt
+            )
             throw PlanningError.missingOutputText(finishReason: finishReason, raw: String(raw.prefix(2_000)))
         }
+        recordPlannerCall(
+            prompt: prompt,
+            response: text,
+            finishReason: RemoteInferenceResponseHelpers.providerFinishReason(from: response),
+            attempt: attempt,
+            status: .ok,
+            startedAt: startedAt,
+            endedAt: endedAt
+        )
         let json = DebugUIInspectionResponseDecoder.jsonObjectSubstring(text)
         let wire = try JSONDecoder().decode(DecisionWire.self, from: Data(json.utf8))
         return Decision(
@@ -340,27 +403,50 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         )
     }
 
-    private func responseRequest(task: HarnessTaskState, retryNote: String?, attempt: Int) -> RemoteInferenceResponseCreateRequest {
+    /// Record one planning call into the turn trace. `attempt` is the 0-based loop index; the trace
+    /// shows it 1-based so the first sample reads as attempt 1.
+    private func recordPlannerCall(
+        prompt: String,
+        response: String,
+        finishReason: String?,
+        attempt: Int,
+        status: TraceModelCallStatus,
+        startedAt: RunTraceTimestamp,
+        endedAt: RunTraceTimestamp
+    ) {
+        trace?.recordModelCall(TraceModelCall(
+            kind: .plannerStep,
+            prompt: prompt,
+            response: response,
+            finishReason: finishReason,
+            attempt: attempt + 1,
+            status: status,
+            startedAt: startedAt,
+            endedAt: endedAt
+        ))
+    }
+
+    private func responseRequest(prompt: String, attempt: Int, imageDataURL: String? = nil) -> RemoteInferenceResponseCreateRequest {
         let maxOutputTokens = min(Self.baseMaxOutputTokens * (attempt + 1), Self.maxOutputTokensCap)
+        // Text part always; the compressed screenshot is appended as an image part when available so a
+        // multimodal model sees the screen. Both server adapters accept `input_image` + `image_url`.
+        var content: [RemoteInferenceJSONValue] = [
+            .object([
+                "type": .string("input_text"),
+                "text": .string(prompt)
+            ])
+        ]
+        if let imageDataURL, !imageDataURL.isEmpty {
+            content.append(.object([
+                "type": .string("input_image"),
+                "image_url": .string(imageDataURL)
+            ]))
+        }
         return RemoteInferenceResponseCreateRequest(
             input: .array([
                 .object([
                     "role": .string("user"),
-                    "content": .array([
-                        .object([
-                            "type": .string("input_text"),
-                            "text": .string(DonkeyPrompts.harnessStep(
-                                task: task,
-                                descriptors: descriptors,
-                                appName: appName,
-                                appGuidance: appGuidance,
-                                understanding: understanding,
-                                environmentSummary: environmentSummary,
-                                skillCatalog: skillCatalog,
-                                retryNote: retryNote
-                            ))
-                        ])
-                    ])
+                    "content": .array(content)
                 ])
             ]),
             store: false,

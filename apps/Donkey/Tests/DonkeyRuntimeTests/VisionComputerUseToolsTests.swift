@@ -49,6 +49,47 @@ struct VisionComputerUseToolsTests {
     }
 
     @Test
+    func screenScopeElementMapsThroughDisplayRectNotWindow() {
+        // A modal/dialog detected in a full-screen (scope=screen) capture carries the DISPLAY rect it
+        // was found in, so its click maps through that rect — even on a second display offset from the
+        // origin. Center of a 1920x1080 parse image, against a display at x-offset 1920, lands dead
+        // center of that display: (1920 + 960, 0 + 540).
+        let display = WindowTargetBounds(x: 1920, y: 0, width: 1920, height: 1080)
+        let detected = element(id: "delete-btn", bbox: DebugUIBoundingBox(x: 910, y: 490, width: 100, height: 100))
+        let world = VisionComputerUseToolProvider.worldElement(
+            from: detected, imageWidth: 1920, imageHeight: 1080, region: display
+        )
+
+        #expect(world.metadata["vision.scope"] == "screen")
+        let geometry = VisionComputerUseToolProvider.geometry(from: world.metadata)
+        #expect(geometry?.region == display)
+
+        if let geo = geometry, let region = geo.region {
+            let normalized = VisionComputerUseToolProvider.normalizedCenter(
+                bbox: geo.bbox, imageWidth: geo.imageWidth, imageHeight: geo.imageHeight
+            )
+            let plan = VisionActionPlanner.PlannedAction(
+                action: "click", x: normalized.x, y: normalized.y, text: nil, reason: nil, screenPoint: nil
+            )
+            let point = VisionActionPlanner.screenPoint(action: plan, window: region)
+            #expect(abs((point?.x ?? 0) - 2880) < 0.5)
+            #expect(abs((point?.y ?? 0) - 540) < 0.5)
+        } else {
+            Issue.record("expected screen-scope geometry with a region")
+        }
+    }
+
+    @Test
+    func windowScopeElementHasNoRegion() {
+        // A normal window capture carries no region, so the click falls back to the window's current
+        // bounds (re-resolved at click time, so it stays correct if the window moved).
+        let detected = element(id: "e1", bbox: DebugUIBoundingBox(x: 10, y: 10, width: 20, height: 20))
+        let world = VisionComputerUseToolProvider.worldElement(from: detected, imageWidth: 100, imageHeight: 100)
+        #expect(world.metadata["vision.scope"] == nil)
+        #expect(VisionComputerUseToolProvider.geometry(from: world.metadata)?.region == nil)
+    }
+
+    @Test
     func zeroAreaElementIsNotActionEligible() {
         let detected = element(id: "e2", bbox: DebugUIBoundingBox(x: 0, y: 0, width: 0, height: 0))
         let world = VisionComputerUseToolProvider.worldElement(from: detected, imageWidth: 100, imageHeight: 100)

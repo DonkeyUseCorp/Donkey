@@ -47,7 +47,16 @@ public final class VisionComputerUseToolProvider {
     let minConfidence: Double
     let reuseChangedFractionThreshold: Double
     let capture: VisionActionDriver.ScreenshotCapture
+    /// Full-display capture, used by `vision.capture scope=screen` to see things drawn OUTSIDE the
+    /// target window — modal confirmation sheets, system dialogs, right-click menus.
+    let displayCapture: DisplayCapture
+    /// Whole-desktop capture across all displays, used by `vision.capture scope=desktop` — the widest
+    /// fallback for when the target isn't on the active display (another monitor, a background window).
+    let desktopCapture: DesktopCapture
     let uptimeMS: @Sendable () -> Double
+
+    public typealias DisplayCapture = @MainActor (CGDirectDisplayID) async throws -> CapturedDisplayScreenshot
+    public typealias DesktopCapture = @MainActor () async throws -> CapturedDisplayScreenshot
 
     /// Metrics from the most recent `screen.captureAndAnalyze`, so the loop can roll up parse time
     /// and cache-hit telemetry without re-parsing the tool result.
@@ -63,6 +72,8 @@ public final class VisionComputerUseToolProvider {
         minConfidence: Double = 0.25,
         reuseChangedFractionThreshold: Double = VisionComputerUseToolProvider.reuseChangedFractionThreshold,
         capture: @escaping VisionActionDriver.ScreenshotCapture = { try await ScreenCaptureKitWindowScreenshotCapturer().capture(target: $0) },
+        displayCapture: @escaping DisplayCapture = { try await ScreenCaptureKitWindowScreenshotCapturer().captureDisplay(displayID: $0) },
+        desktopCapture: @escaping DesktopCapture = { try await ScreenCaptureKitWindowScreenshotCapturer().captureDesktop() },
         uptimeMS: @escaping @Sendable () -> Double = { ProcessInfo.processInfo.systemUptime * 1_000 }
     ) {
         self.appName = appName
@@ -74,6 +85,8 @@ public final class VisionComputerUseToolProvider {
         self.minConfidence = minConfidence
         self.reuseChangedFractionThreshold = reuseChangedFractionThreshold
         self.capture = capture
+        self.displayCapture = displayCapture
+        self.desktopCapture = desktopCapture
         self.uptimeMS = uptimeMS
     }
 
@@ -82,7 +95,9 @@ public final class VisionComputerUseToolProvider {
             HarnessToolDescriptor(
                 name: ToolName.captureAndAnalyze,
                 pluginID: "core.computer-use.vision",
-                summary: "Screenshot the frontmost window and detect its UI elements with vision. Use when Accessibility is missing or insufficient (canvas/Electron content).",
+                summary: "Screenshot and detect UI elements with vision. Three scopes, smallest first: scope=window (default) captures the frontmost window; scope=screen captures the WHOLE display the window is on — use it for things drawn outside the window like a modal confirmation dialog/sheet or a system prompt; scope=desktop captures the ENTIRE desktop across all displays — the fallback when what you need isn't on the active display (another monitor, a background app's window). Widen only as far as you must. vision.click works the same on elements from any scope.",
+                inputSchema: ["scope": "\"window\" (default), \"screen\" (whole display) for modals/dialogs, or \"desktop\" (all displays) when the target is off the active screen."],
+                optionalInputKeys: ["scope"],
                 outputSchema: ["elements": "Detected element IDs, labels, roles, and click eligibility."],
                 requiredPermissions: [.screenCapture],
                 safetyClass: .readOnly,
@@ -152,6 +167,11 @@ public final class VisionComputerUseToolProvider {
     private func captureAndAnalyze(_ context: HarnessToolExecutionContext) async -> HarnessToolResult {
         guard let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier) else {
             return result(context, status: .failed, summary: "No window for \(appName).", reason: "noWindowForApp")
+        }
+        switch trimmed(context.call.input["scope"])?.lowercased() {
+        case "screen": return await captureWideAndAnalyze(context, target: target, scope: "screen")
+        case "desktop": return await captureWideAndAnalyze(context, target: target, scope: "desktop")
+        default: break
         }
         let shot: CapturedWindowScreenshot
         do {
@@ -257,6 +277,101 @@ public final class VisionComputerUseToolProvider {
         )
     }
 
+    /// Capture wider than the target window and analyze it. `scope=screen` grabs the whole display the
+    /// window sits on (modal sheets, system prompts, right-click menus drawn outside the window);
+    /// `scope=desktop` grabs the entire desktop across all displays (a target on another monitor or a
+    /// background app). The capture's screen-space frame is stamped onto each element as its mapping
+    /// `region`, so a click maps the element's box through that rect exactly as a window capture maps
+    /// through the window rect. No cache: these surfaces are transient, so each wide capture parses fresh.
+    private func captureWideAndAnalyze(
+        _ context: HarnessToolExecutionContext,
+        target: MacWindowTargetCandidate,
+        scope: String
+    ) async -> HarnessToolResult {
+        let shot: CapturedDisplayScreenshot
+        do {
+            switch scope {
+            case "desktop": shot = try await desktopCapture()
+            default: shot = try await displayCapture(Self.displayID(forWindowBounds: target.bounds))
+            }
+        } catch {
+            let label = scope == "desktop" ? "Full-desktop" : "Full-screen"
+            return result(context, status: .failed, summary: "\(label) capture failed.", reason: "screenCaptureFailed")
+        }
+        let asWindow = CapturedWindowScreenshot(
+            pngData: shot.pngData,
+            imageWidth: shot.imageWidth,
+            imageHeight: shot.imageHeight,
+            captureMethod: .boundsCrop,
+            coordinateSpace: "display.points"
+        )
+        let compressed = ScreenshotCompression.compressedForModel(asWindow)
+        let imageWidth = max(1, Int(compressed.pixelSize.width.rounded()))
+        let imageHeight = max(1, Int(compressed.pixelSize.height.rounded()))
+        let started = uptimeMS()
+        let frame: DebugUIInspectionFrame
+        do {
+            frame = try await analyzer.inspect(
+                DebugUIInspectionRequest(
+                    imageDataURL: compressed.base64DataURL,
+                    pixelSize: compressed.pixelSize,
+                    minConfidence: minConfidence
+                )
+            )
+        } catch {
+            return result(context, status: .failed, summary: "Vision parse failed.", reason: "visionParseFailed")
+        }
+        let parseMS = uptimeMS() - started
+        let region = WindowTargetBounds(
+            x: Double(shot.displayBounds.minX),
+            y: Double(shot.displayBounds.minY),
+            width: Double(shot.displayBounds.width),
+            height: Double(shot.displayBounds.height)
+        )
+        let worldElements = frame.elements
+            .filter { $0.bbox.hasPositiveArea }
+            .map { Self.worldElement(from: $0, imageWidth: imageWidth, imageHeight: imageHeight, region: region) }
+        lastCaptureMetrics = CaptureMetrics(usedCache: false, parseMS: parseMS, elementCount: worldElements.count)
+
+        let where_ = scope == "desktop" ? "the whole desktop" : "the full screen"
+        return HarnessToolResult(
+            callID: context.call.id,
+            toolName: context.call.name,
+            status: .succeeded,
+            summary: "Captured \(worldElements.count) element(s) across \(where_).",
+            observations: HarnessObservationDelta(
+                focusedApp: appName,
+                elements: worldElements,
+                facts: [
+                    "vision.capture.scope": scope,
+                    "vision.capture.usedCache": "false",
+                    "vision.capture.parseMS": String(format: "%.0f", parseMS),
+                    "vision.capture.elementCount": String(worldElements.count),
+                    "lastAcceptedTool": context.call.name
+                ]
+            ),
+            metadata: [
+                "scope": scope,
+                "usedCache": "false",
+                "parseMS": String(format: "%.0f", parseMS),
+                "elementCount": String(worldElements.count)
+            ]
+        )
+    }
+
+    /// The display whose frame contains the target window's center (the one a modal will appear on),
+    /// falling back to the main display. Window bounds and `CGDisplayBounds` share the same top-left
+    /// global coordinate space, so the center point can be tested directly.
+    nonisolated static func displayID(forWindowBounds bounds: WindowTargetBounds) -> CGDirectDisplayID {
+        let center = CGPoint(x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2)
+        var ids = [CGDirectDisplayID](repeating: 0, count: 8)
+        var count: UInt32 = 0
+        if CGGetDisplaysWithPoint(center, 8, &ids, &count) == .success, count > 0, ids[0] != 0 {
+            return ids[0]
+        }
+        return CGMainDisplayID()
+    }
+
     // MARK: - Guarded input
 
     private func click(_ context: HarnessToolExecutionContext) async -> HarnessToolResult {
@@ -284,7 +399,11 @@ public final class VisionComputerUseToolProvider {
         let plan = VisionActionPlanner.PlannedAction(
             action: "click", x: normalized.x, y: normalized.y, text: nil, reason: nil, screenPoint: nil
         )
-        guard let point = VisionActionPlanner.screenPoint(action: plan, window: target.bounds) else {
+        // A screen-scope element carries the display rect it was detected in; map through that. A
+        // window-scope element has no region, so map through the window's CURRENT bounds (re-resolved
+        // above) to stay correct if the window moved between the capture and this click.
+        let mappingRegion = geometry.region ?? target.bounds
+        guard let point = VisionActionPlanner.screenPoint(action: plan, window: mappingRegion) else {
             return result(context, status: .failed, summary: "Could not map element \(elementID) to a screen point.", reason: "unmappablePoint")
         }
         let button: MacPointerInput.Button = context.call.input["button"] == "right" ? .right : .left
@@ -295,7 +414,7 @@ public final class VisionComputerUseToolProvider {
             callID: context.call.id,
             toolName: context.call.name,
             status: .succeeded,
-            summary: "\(clickWord) \(element.label.isEmpty ? elementID : element.label).",
+            summary: "\(clickWord) \(element.label.isEmpty ? elementID : element.label) at screen (\(Int(point.x)),\(Int(point.y))).",
             observations: HarnessObservationDelta(facts: ["lastAcceptedTool": context.call.name]),
             metadata: [
                 "elementID": elementID,
@@ -373,10 +492,38 @@ public final class VisionComputerUseToolProvider {
         )
     }
 
+    /// Screen-scope variant: same mapping metadata plus the display rect the image covered, so a later
+    /// `vision.click` maps the element's box through that display rect instead of the window's bounds.
+    nonisolated static func worldElement(
+        from element: DebugUIElement,
+        imageWidth: Int,
+        imageHeight: Int,
+        region: WindowTargetBounds
+    ) -> HarnessWorldElement {
+        let base = worldElement(from: element, imageWidth: imageWidth, imageHeight: imageHeight)
+        var metadata = base.metadata
+        metadata["vision.region.x"] = String(region.x)
+        metadata["vision.region.y"] = String(region.y)
+        metadata["vision.region.width"] = String(region.width)
+        metadata["vision.region.height"] = String(region.height)
+        metadata["vision.scope"] = "screen"
+        return HarnessWorldElement(
+            id: base.id,
+            label: base.label,
+            role: base.role,
+            isActionEligible: base.isActionEligible,
+            actions: base.actions,
+            metadata: metadata
+        )
+    }
+
     struct ElementGeometry: Sendable {
         var bbox: DebugUIBoundingBox
         var imageWidth: Int
         var imageHeight: Int
+        /// The screen-space rect the parse image covered, for a `scope=screen` capture. nil for a
+        /// window capture, where the click maps through the window's re-resolved bounds instead.
+        var region: WindowTargetBounds?
     }
 
     nonisolated static func geometry(from metadata: [String: String]) -> ElementGeometry? {
@@ -388,10 +535,18 @@ public final class VisionComputerUseToolProvider {
               let imageHeight = metadata["vision.image.height"].flatMap(Int.init) else {
             return nil
         }
+        var region: WindowTargetBounds?
+        if let rx = metadata["vision.region.x"].flatMap(Double.init),
+           let ry = metadata["vision.region.y"].flatMap(Double.init),
+           let rw = metadata["vision.region.width"].flatMap(Double.init),
+           let rh = metadata["vision.region.height"].flatMap(Double.init) {
+            region = WindowTargetBounds(x: rx, y: ry, width: rw, height: rh)
+        }
         return ElementGeometry(
             bbox: DebugUIBoundingBox(x: x, y: y, width: width, height: height),
             imageWidth: imageWidth,
-            imageHeight: imageHeight
+            imageHeight: imageHeight,
+            region: region
         )
     }
 
