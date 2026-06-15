@@ -86,12 +86,26 @@ Three kinds of app-specific facts deserve explicit statements:
 
 ## Compactness
 
-Several skills can load in the same turn, so every line costs context.
-Built-in packs run 11–65 lines (`music`, the fullest, is ~65). Prefer short
-rules, exact commands, known pitfalls, and script statuses; cut long examples,
-edge-case inventories, and anything the global prompt already says. If a
-section keeps growing, the content probably belongs in a validated script or a
-separate capability skill.
+Several skills can load in the same turn, so every line costs context. Be
+ruthless: a skill is the few things an expert knows about THIS app that aren't
+obvious, not a tutorial. Built-in packs run 11–65 lines; treat ~65 as a ceiling,
+not a target, and if you're adding to the longest skill, cut something first.
+
+Prefer short rules, exact commands, known pitfalls, and script statuses; cut
+long examples (one beats five), edge-case inventories, restated tool schemas,
+and anything the global prompt already says.
+
+The sharpest test for every line: **would this be true for other apps too?** If
+yes, it's generic doctrine — it belongs in `DonkeyPrompts.swift` (or is already
+there), not in the skill. "Right-click to find hidden actions," "confirm the
+dialog," "don't activate the app before observing," "verify before completing"
+are all generic. The skill keeps only the app-specific version: the exact menu
+item, the API that doesn't exist, the state that lies. When a GUI task is just
+the generic see/act loop, name the app-specific landmarks (which pane, which
+menu label) and let the prompt carry the mechanics.
+
+If a section keeps growing, the content probably belongs in a validated script
+or a separate capability skill.
 
 Keep commands single-line, copyable, and parenthesis-free where possible (see
 `system-tools`). If user text can carry apostrophes, quotes, or newlines, do
