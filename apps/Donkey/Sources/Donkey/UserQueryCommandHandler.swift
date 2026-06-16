@@ -374,6 +374,10 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         let hostedWebFetch = HostedWebFetch(backend: backend)
         harnessServices.webSearcher = { query in await hostedWebSearch.search(query) }
         harnessServices.webFetcher = { url in await hostedWebFetch.fetch(url) }
+        // File understanding behind files.describe: OCR + dimensions for images/screenshots, text for
+        // PDFs, Foundation content for text files. Cached per file so the describe pass and any later
+        // operation reuse one understanding.
+        harnessServices.fileUnderstanding = { url in await FileUnderstandingProvider.understand(url) }
         let granted = Self.userQueryGrantedPermissions
         let replacedBuiltIns: Set<String> = ["screen.observe", "elements.get", "element.perform", "text.enter", "keyboard.press"]
         let builtInDescriptors = BuiltInHarnessToolCatalog.descriptors.filter { descriptor in

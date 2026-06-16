@@ -514,6 +514,25 @@ public enum BuiltInHarnessToolCatalog {
                 metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
             ),
             descriptor(
+                "files.describe",
+                pluginID: "core.files",
+                summary: "Understand a batch of files: for a `directory` (or explicit `paths`) it returns one structured description per file — kind (text/image/pdf/audio/video/binary), a summary, extracted text (OCR for images, text for PDFs), byte size, and attributes like dimensions. This is the file-understanding layer every file task builds on: call it first to learn what files contain, then carry out the operation yourself with general tools — `llm.generate` to decide new names/labels from the content, `shell_exec` to apply (`mv` to rename, `sips`/`ffmpeg` to resize/convert), and verify. Read-only — it changes nothing.",
+                input: [
+                    "directory": "Folder whose files should be described (every regular, non-hidden file in it).",
+                    "paths": "Explicit comma/newline-separated file paths to describe instead of a whole directory.",
+                    "maxFiles": "Optional cap on how many files to process (default 50, max 200)."
+                ],
+                output: [
+                    "understanding": "JSON array of {path, fileName, kind, summary, textContent, byteSize, attributes} per file.",
+                    "count": "How many files were described."
+                ],
+                optionalInputKeys: ["directory", "paths", "maxFiles"],
+                permissions: [],
+                safety: .sensitive,
+                verification: ["the returned understanding covers the requested files"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            descriptor(
                 "web.search",
                 pluginID: "core.web",
                 summary: "Search the web and return ranked results (title, URL, snippet). Use it for current facts the model can't be sure of — an artist's latest album, today's news, a product spec, an address. Follow up with web.fetch to read a result in full.",
@@ -624,6 +643,7 @@ public enum BuiltInHarnessToolCatalog {
         summary: String,
         input: [String: String] = [:],
         output: [String: String] = [:],
+        optionalInputKeys: [String] = [],
         permissions: [HarnessPermission],
         safety: HarnessToolSafetyClass,
         requiredContext: [String] = [],
@@ -635,6 +655,7 @@ public enum BuiltInHarnessToolCatalog {
             pluginID: pluginID,
             summary: summary,
             inputSchema: input,
+            optionalInputKeys: optionalInputKeys,
             outputSchema: output,
             requiredPermissions: permissions,
             safetyClass: safety,

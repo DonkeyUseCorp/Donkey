@@ -248,6 +248,11 @@ public struct HarnessBuiltInToolServices: Sendable {
     /// Web fetch/navigation: a URL in, the page's readable text out, or nil on failure. Backs the
     /// `web.fetch` tool so the agent can read a page it found or was given.
     public var webFetcher: (@Sendable (String) async -> String?)?
+    /// The file-understanding layer behind `files.describe`: a file URL in, a structured
+    /// `FileUnderstanding` out (OCR for images, text for PDFs, dimensions/metadata), or nil to fall
+    /// back to the built-in Foundation understanding. The runtime supplies this; without it the tool
+    /// still understands text files from their content.
+    public var fileUnderstanding: (@Sendable (URL) async -> FileUnderstanding?)?
 
     public init(
         memoryEntries: [HarnessMemoryEntry] = [],
@@ -263,7 +268,8 @@ public struct HarnessBuiltInToolServices: Sendable {
         commandExecutor: (@Sendable (HarnessToolExecutionContext) async -> HarnessToolResult?)? = nil,
         textGenerator: (@Sendable (String) async -> String?)? = nil,
         webSearcher: (@Sendable (String) async -> String?)? = nil,
-        webFetcher: (@Sendable (String) async -> String?)? = nil
+        webFetcher: (@Sendable (String) async -> String?)? = nil,
+        fileUnderstanding: (@Sendable (URL) async -> FileUnderstanding?)? = nil
     ) {
         self.memoryEntries = memoryEntries
         self.skillRegistry = skillRegistry
@@ -279,6 +285,7 @@ public struct HarnessBuiltInToolServices: Sendable {
         self.textGenerator = textGenerator
         self.webSearcher = webSearcher
         self.webFetcher = webFetcher
+        self.fileUnderstanding = fileUnderstanding
     }
 }
 
@@ -355,6 +362,8 @@ public enum BuiltInHarnessToolExecutors {
             return await webSearch(context, services: services)
         case "web.fetch":
             return await webFetch(context, services: services)
+        case "files.describe":
+            return await filesDescribe(context, services: services)
         case "wait":
             return await timingWait(context)
         case "run.pause", "run.resume", "run.recover", "run.cancel", "run.complete", "run.failSafe":
