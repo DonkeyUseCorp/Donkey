@@ -72,14 +72,6 @@ function taskRowsForState(state: NotchState, activeTaskId: TaskId): TaskRow[] {
   ];
 }
 
-function collapsedStatusText(state: NotchState) {
-  if (state === 'idle') return 'Idle';
-  if (state === 'complete') return 'Done';
-  if (state === 'needs-input') return 'Ask';
-
-  return 'Run';
-}
-
 function spawnCueExitTransform(angleDegrees: number) {
   const radians = (angleDegrees * Math.PI) / 180;
   const distance = 28;
@@ -93,7 +85,6 @@ function spawnCueExitTransform(angleDegrees: number) {
 export function Notch({ state, activeTaskId, expanded, setExpanded, spawnCue, onRequestSpawn }: Props) {
   const rows = taskRowsForState(state, activeTaskId);
   const activeColor = rows[0]?.color ?? 'rgb(29,158,117)';
-  const isResting = state === 'idle' && rows.length === 0;
   const spawnCueOffset = spawnCue ? spawnCueExitTransform(spawnCue.notchCueAngleDegrees) : null;
 
   const handleFollowUpSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -179,11 +170,6 @@ export function Notch({ state, activeTaskId, expanded, setExpanded, spawnCue, on
           }}
         >
           <DonkeyCursor color={activeColor} size={13} className="absolute left-[10.5px] top-[9.5px]" />
-          {!isResting && (
-            <span className="absolute right-0 top-0 grid h-8 w-[34px] place-items-center text-[9px] leading-none text-white/[0.72]">
-              {collapsedStatusText(state)}
-            </span>
-          )}
         </div>
 
         {spawnCueArrow}
