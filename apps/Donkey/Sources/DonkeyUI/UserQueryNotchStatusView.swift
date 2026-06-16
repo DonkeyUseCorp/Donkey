@@ -161,7 +161,7 @@ public struct UserQueryNotchStatusView: View {
     }
 
     private var restingCollapsedContent: some View {
-        TaskArrowMark(color: accentColor)
+        DonkeyCursorMark(color: accentColor)
             .frame(width: 13, height: 13)
             .padding(.leading, 10)
             .frame(width: animatingSurfaceWidth, height: animatingSurfaceHeight, alignment: .leading)
@@ -207,7 +207,7 @@ public struct UserQueryNotchStatusView: View {
 
     private var fullWidthCollapsedContent: some View {
         HStack(spacing: 7) {
-            TaskArrowMark(color: accentColor)
+            DonkeyCursorMark(color: accentColor)
                 .frame(width: 13, height: 13)
 
             Text(taskTitle)
@@ -232,7 +232,7 @@ public struct UserQueryNotchStatusView: View {
 
     private var voidAwareCollapsedContent: some View {
         ZStack {
-            TaskArrowMark(color: accentColor)
+            DonkeyCursorMark(color: accentColor)
                 .frame(width: 13, height: 13)
                 .position(x: collapsedLeadingLaneCenterX, y: layout.collapsedVisibleHeight / 2)
 
@@ -313,7 +313,7 @@ public struct UserQueryNotchStatusView: View {
     }
 
     private var expandedNotchArrow: some View {
-        TaskArrowMark(color: accentColor)
+        DonkeyCursorMark(color: accentColor)
             .frame(width: 15, height: 15)
             .position(x: expandedNotchArrowX, y: expandedNotchArrowY)
     }
@@ -321,7 +321,7 @@ public struct UserQueryNotchStatusView: View {
     private func spawnCueArrow(_ cue: UserQuerySpawnState) -> some View {
         let exitOffset = spawnCueExitOffset(for: cue.notchCueAngleDegrees)
 
-        return TaskArrowMark(
+        return DonkeyCursorMark(
             color: accentColor(for: cue.accentIndex),
             rotationDegrees: spawnCueIsExiting ? cue.notchCueAngleDegrees : -45
         )
@@ -446,7 +446,7 @@ public struct UserQueryNotchStatusView: View {
 
     private var currentTaskRow: some View {
         HStack(alignment: .top, spacing: 12) {
-            TaskArrowMark(color: accentColor)
+            DonkeyCursorMark(color: accentColor)
                 .frame(width: 14, height: 14)
                 .padding(.top, 1)
 
@@ -514,7 +514,7 @@ public struct UserQueryNotchStatusView: View {
 
     private func taskRow(_ task: UserQueryNotchTask) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            TaskArrowMark(color: accentColor(for: task.accentIndex))
+            DonkeyCursorMark(color: accentColor(for: task.accentIndex))
                 .frame(width: 14, height: 14)
                 .padding(.top, 1)
 
@@ -947,26 +947,66 @@ public struct UserQueryNotchStatusView: View {
     private static let taskListCommandSpacing: CGFloat = 8
 }
 
-private struct TaskArrowMark: View {
+/// The donkey cursor glyph. Geometry is ported verbatim from the prototype's
+/// `DonkeyCursor` SVG (100x100 viewBox) so the app and landing-page prototype
+/// stay visually identical. The cursor's tip points up-right at `rotationDegrees`
+/// 0, so resting/list usages need no rotation; only the spawn cue rotates it.
+private struct DonkeyCursorMark: View {
     var color: Color
-    var rotationDegrees: Double = -45
+    var rotationDegrees: Double = 0
 
     var body: some View {
         GeometryReader { proxy in
-            let width = proxy.size.width
-            let height = proxy.size.height
-            Path { path in
-                path.move(to: CGPoint(x: width * 0.18, y: height * 0.06))
-                path.addLine(to: CGPoint(x: width * 0.88, y: height * 0.5))
-                path.addLine(to: CGPoint(x: width * 0.18, y: height * 0.94))
-                path.addLine(to: CGPoint(x: width * 0.34, y: height * 0.5))
-                path.closeSubpath()
-            }
-            .fill(color)
+            let scale = min(proxy.size.width, proxy.size.height) / 100
+            let path = Self.cursorPath(scale: scale)
+            path
+                .fill(color)
+                .overlay(
+                    path.stroke(
+                        Color.white.opacity(0.92),
+                        style: StrokeStyle(lineWidth: 5.36 * scale, lineJoin: .round)
+                    )
+                )
+                .shadow(color: Color.black.opacity(0.34), radius: 2 * scale, x: 0, y: 2 * scale)
         }
         .aspectRatio(1, contentMode: .fit)
         .rotationEffect(.degrees(rotationDegrees))
         .accessibilityHidden(true)
+    }
+
+    private static func cursorPath(scale: CGFloat) -> Path {
+        Path { path in
+            func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+                CGPoint(x: x * scale, y: y * scale)
+            }
+
+            path.move(to: point(83.086, 5.6406))
+            path.addLine(to: point(10.453, 34.6836))
+            path.addCurve(
+                to: point(11.1327, 51.0276),
+                control1: point(2.8514, 37.7227),
+                control2: point(3.3085, 48.6326)
+            )
+            path.addLine(to: point(35.6947, 58.5471))
+            path.addCurve(
+                to: point(41.4486, 64.301),
+                control1: point(38.4486, 59.3909),
+                control2: point(40.6049, 61.5471)
+            )
+            path.addLine(to: point(48.9681, 88.863))
+            path.addCurve(
+                to: point(65.3121, 89.5427),
+                control1: point(51.3665, 96.6911),
+                control2: point(62.2731, 97.1442)
+            )
+            path.addLine(to: point(94.3551, 16.9097))
+            path.addCurve(
+                to: point(83.0821, 5.6367),
+                control1: point(97.1871, 9.8316),
+                control2: point(90.1598, 2.8077)
+            )
+            path.closeSubpath()
+        }
     }
 }
 
