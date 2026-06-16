@@ -1,6 +1,6 @@
 import { Check, Trash2 } from 'lucide-react';
 
-import { TaskArrow } from '@/app/prototype/_components/TaskArrow';
+import { DonkeyCursor } from '@/app/prototype/_components/DonkeyCursor';
 import { ALL_TASK_IDS, TASKS } from '@/app/prototype/_components/tasks';
 import type { NotchState, TaskId } from '@/app/prototype/_components/types';
 
@@ -80,7 +80,7 @@ export function DemoControls({
               }}
               aria-label={task.label}
             >
-              {active ? <Check size={14} color={task.color} /> : <TaskArrow color={task.color} size={15} />}
+              {active ? <Check size={14} color={task.color} /> : <DonkeyCursor color={task.color} size={15} />}
             </button>
           );
         })}

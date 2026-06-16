@@ -2,7 +2,7 @@ import { ArrowUp, Check, MessageCircle, Pause, Play } from 'lucide-react';
 import type { FormEvent } from 'react';
 
 import { ActivityBars } from '@/app/prototype/_components/ActivityBars';
-import { TaskArrow } from '@/app/prototype/_components/TaskArrow';
+import { DonkeyCursor } from '@/app/prototype/_components/DonkeyCursor';
 import { TASKS } from '@/app/prototype/_components/tasks';
 import type { NotchState, Spawn, TaskId } from '@/app/prototype/_components/types';
 
@@ -133,7 +133,7 @@ export function Notch({ state, activeTaskId, expanded, setExpanded, spawnCue, on
         }}
         aria-hidden="true"
       >
-        <TaskArrow color={spawnCue.color} size={15} />
+        <DonkeyCursor color={spawnCue.color} size={15} />
       </div>
     </>
   );
@@ -178,7 +178,7 @@ export function Notch({ state, activeTaskId, expanded, setExpanded, spawnCue, on
             pointerEvents: 'none',
           }}
         >
-          <TaskArrow color={activeColor} size={13} className="absolute left-[10.5px] top-[9.5px] -rotate-45" />
+          <DonkeyCursor color={activeColor} size={13} className="absolute left-[10.5px] top-[9.5px]" />
           {!isResting && (
             <span className="absolute right-0 top-0 grid h-8 w-[34px] place-items-center text-[9px] leading-none text-white/[0.72]">
               {collapsedStatusText(state)}
@@ -208,7 +208,7 @@ export function Notch({ state, activeTaskId, expanded, setExpanded, spawnCue, on
                     key={task.id}
                     className="flex h-12 items-center gap-3 rounded-lg bg-white/[0.055] px-3"
                   >
-                    <TaskArrow color={task.color} size={14} className="-rotate-45" />
+                    <DonkeyCursor color={task.color} size={14} />
                     <div className="min-w-0 flex-1">
                       <h2 className="truncate text-[13px] font-normal leading-4 text-white/[0.9]">{task.title}</h2>
                       <p className="mt-1 truncate text-[12px] font-normal leading-[14px] text-white/[0.42]">

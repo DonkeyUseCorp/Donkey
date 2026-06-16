@@ -1,11 +1,12 @@
 type Props = {
   color: string;
   size?: number;
+  className?: string;
 };
 
-export function DonkeyCursor({ color, size = 28 }: Props) {
+export function DonkeyCursor({ color, size = 28, className }: Props) {
   return (
-    <div className="relative" style={{ width: size, height: size }}>
+    <div className={`relative flex-shrink-0 ${className ?? ''}`} style={{ width: size, height: size }}>
       <svg
         viewBox="0 0 100 100"
         width={size}
