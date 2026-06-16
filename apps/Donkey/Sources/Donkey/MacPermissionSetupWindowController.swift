@@ -6,10 +6,11 @@ import DonkeyRuntime
 import SwiftUI
 
 @MainActor
-final class MacPermissionSetupWindowController: NSWindowController {
+final class MacPermissionSetupWindowController: NSWindowController, NSWindowDelegate {
     var completed: (() -> Void)?
 
     private let model: MacPermissionSetupModel
+    private var didComplete = false
 
     init(model: MacPermissionSetupModel = MacPermissionSetupModel()) {
         self.model = model
@@ -21,15 +22,24 @@ final class MacPermissionSetupWindowController: NSWindowController {
         window.setContentSize(NSSize(width: 640, height: 600))
         window.isReleasedWhenClosed = false
         super.init(window: window)
+        window.delegate = self
 
+        // Continue/Skip just closes the window. Closing — whether from those buttons or the X — is the
+        // single place that fires `completed`, so the overlay (notch) starts up regardless of how the
+        // user dismisses this window.
         model.completed = { [weak self] in
             self?.close()
-            self?.completed?()
         }
     }
 
     required init?(coder: NSCoder) {
         nil
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard !didComplete else { return }
+        didComplete = true
+        completed?()
     }
 
     var permissionsAreReady: Bool {
