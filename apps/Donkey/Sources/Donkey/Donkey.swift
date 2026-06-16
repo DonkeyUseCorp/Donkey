@@ -13,7 +13,6 @@ struct Donkey: App {
 
 private struct LocalRuntimeSettingsView: View {
     @State private var permissionSetupController: MacPermissionSetupWindowController?
-    @State private var runtimeSetupController: LocalRuntimeOnboardingWindowController?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -29,21 +28,6 @@ private struct LocalRuntimeSettingsView: View {
                     controller.completed = {
                         permissionSetupController = nil
                     }
-                    controller.showSetup()
-                }
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Local Runtimes")
-                    .font(.headline)
-                Text("Reopen setup to install, repair, or recheck Donkey's local model sidecars.")
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button("Set Up Local Runtimes") {
-                    let controller = LocalRuntimeOnboardingWindowController()
-                    runtimeSetupController = controller
                     controller.showSetup()
                 }
             }

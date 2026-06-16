@@ -10,9 +10,9 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     private var authCoordinator: DonkeyAuthCoordinator?
     private var loginWindowController: DonkeyLoginWindowController?
     private var permissionSetupController: MacPermissionSetupWindowController?
+    private var manualPermissionSetupController: MacPermissionSetupWindowController?
     private var overlayController: UserQueryOverlayController?
     private var uiUnderstandingCoordinator: UIUnderstandingCoordinator?
-    private var runtimeOnboardingController: LocalRuntimeOnboardingWindowController?
     private var frontmostVisionWarmCache: FrontmostVisionWarmCache?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -138,10 +138,6 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         self.uiUnderstandingCoordinator = uiUnderstandingCoordinator
         uiUnderstandingCoordinator.start()
 
-        let runtimeOnboardingController = LocalRuntimeOnboardingWindowController()
-        self.runtimeOnboardingController = runtimeOnboardingController
-        runtimeOnboardingController.showIfSetupNeeded()
-
         // Keep ParsedVisionStore warm: watch the frontmost window and re-parse on big changes, so a
         // typed vision command reuses a fresh parse instead of paying for one inline. No-ops when the
         // vision backend isn't configured.
@@ -154,6 +150,20 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func signOutMenuAction(_ sender: Any?) {
         signOut()
+    }
+
+    // MARK: - Permissions setup
+
+    /// Reopens the Accessibility / screenshot / microphone permission walkthrough on demand. Uses a
+    /// dedicated retain so it never collides with the launch-time `permissionSetupController`, which the
+    /// startup state machine keys off of.
+    @objc private func permissionsSetupMenuAction(_ sender: Any?) {
+        let controller = MacPermissionSetupWindowController()
+        manualPermissionSetupController = controller
+        controller.completed = { [weak self] in
+            self?.manualPermissionSetupController = nil
+        }
+        controller.showSetup()
     }
 
     private func signOut() {
@@ -171,8 +181,6 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         uiUnderstandingCoordinator = nil
         overlayController?.stop()
         overlayController = nil
-        runtimeOnboardingController?.close()
-        runtimeOnboardingController = nil
         permissionSetupController = nil
     }
 
@@ -200,6 +208,15 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         )
         signOutItem.target = self
         appMenu.addItem(signOutItem)
+
+        let permissionsSetupItem = NSMenuItem(
+            title: "Permissions Setup…",
+            action: #selector(permissionsSetupMenuAction(_:)),
+            keyEquivalent: ""
+        )
+        permissionsSetupItem.target = self
+        appMenu.addItem(permissionsSetupItem)
+
         appMenu.addItem(.separator())
         appMenu.addItem(
             withTitle: "Quit \(Self.appDisplayName)",
