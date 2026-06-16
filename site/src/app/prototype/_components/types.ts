@@ -1,5 +1,3 @@
-import type { Dispatch, RefObject, SetStateAction } from 'react';
-
 export type TaskId = 'compare' | 'research' | 'reply' | 'schedule' | 'update';
 
 export type NotchState =
@@ -10,6 +8,10 @@ export type NotchState =
   | 'needs-input'
   | 'expanded-pinned';
 
+// 'real' targets devices with a hardware notch (content flanks the void, chin hangs below).
+// 'simulated' targets devices without one (external displays); a free-floating pill.
+export type NotchVariant = 'real' | 'simulated';
+
 export type TaskSample = {
   id: TaskId;
   label: string;
@@ -17,29 +19,21 @@ export type TaskSample = {
   detail: string;
 };
 
-export type Point = {
-  x: number;
-  y: number;
-};
+// 'running' ticks; 'stopped' is paused (resume or close); 'done' is finished (close only).
+export type LiveTaskStatus = 'running' | 'stopped' | 'done';
 
-export type DesktopSize = {
-  w: number;
-  h: number;
-};
-
-export type SpawnPhase = 'notch-cue' | 'traveling' | 'holding' | 'fading';
-
-export type Spawn = {
-  id: string;
-  taskId: string;
+// The streaming update currently surfaced in the collapsed notch chin (with its task's color).
+export type NotchUpdate = {
   color: string;
-  label: string;
-  target: Point;
-  phase: SpawnPhase;
-  notchCueAngleDegrees: number;
-  startedAt: number;
+  message: string;
 };
 
-export type SetHovering = Dispatch<SetStateAction<boolean>>;
-
-export type DesktopRef = RefObject<HTMLDivElement | null>;
+// A task shown in the expanded notch list.
+export type LiveTask = {
+  id: string;
+  title: string;
+  detail: string;
+  color: string;
+  seconds: number;
+  status: LiveTaskStatus;
+};

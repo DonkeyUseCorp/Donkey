@@ -1,91 +1,162 @@
-import { ArrowUp, Check, MessageCircle, Pause, Play } from 'lucide-react';
-import type { FormEvent } from 'react';
+import { ArrowUp, CloudSync, MessageCircleWarning, Shield } from 'lucide-react';
+import { type FormEvent, useEffect, useRef, useState } from 'react';
 
-import { ActivityBars } from '@/app/prototype/_components/ActivityBars';
 import { DonkeyCursor } from '@/app/prototype/_components/DonkeyCursor';
-import { TASKS } from '@/app/prototype/_components/tasks';
-import type { NotchState, Spawn, TaskId } from '@/app/prototype/_components/types';
+import { ExpandedTaskRow } from '@/app/prototype/_components/ExpandedTaskRow';
+import type { LiveTask, NotchState, NotchUpdate, NotchVariant } from '@/app/prototype/_components/types';
 
 type Props = {
   state: NotchState;
-  activeTaskId: TaskId;
+  variant: NotchVariant;
+  updateAvailable: boolean;
+  onRestart: () => void;
+  missingPermissions: boolean;
+  onReviewPermissions: () => void;
   expanded: boolean;
   setExpanded: (expanded: boolean) => void;
-  spawnCue: Spawn | null;
-  onRequestSpawn: (taskText: string) => void;
+  liveTasks: LiveTask[];
+  chinUpdate: NotchUpdate | null;
+  onAddTask: (title: string) => void;
+  onStopTask: (id: string) => void;
+  onResumeTask: (id: string) => void;
+  onCloseTask: (id: string) => void;
 };
 
 const METRICS = {
-  collapsedWidth: 248,
+  collapsedWidth: 253,
   collapsedHeight: 32,
+  // The MacBook notch void sits between two 34px content areas (left arrow, right time).
+  contentAreaWidth: 34,
+  // Chin hangs below the real notch: single streaming line, 9px font, no top padding.
+  chinHeight: 20,
+  // Simulated notch grows to fit a two-line message inline.
+  simulatedMessageHeight: 50,
   expandedWidth: 604,
   expandedHeight: 312,
   expandedContentHeight: 280,
   collapsedCornerRadius: 14,
-  expandedCornerRadius: 26,
+  simulatedCornerRadius: 16,
+  // Spec: the expanded notch window and its input box both use a 14px radius.
+  expandedCornerRadius: 14,
   contentInset: 14,
 } as const;
 
-type RowStatus = 'running' | 'completed' | 'needsAttention';
+// The follow-up input starts as one line and grows with content up to a scroll cap.
+const FOLLOWUP_MIN_HEIGHT = 20;
+const FOLLOWUP_MAX_HEIGHT = 120;
 
-type TaskRow = {
-  id: string;
-  title: string;
-  detail: string;
-  color: string;
-  status: RowStatus;
-};
+// Expanded rows have room for the full elapsed time.
+function formatRunningTime(totalSeconds: number) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
 
-function taskRowsForState(state: NotchState, activeTaskId: TaskId): TaskRow[] {
-  const activeTask = TASKS[activeTaskId];
-  const activeTitle = activeTask.label;
-
-  if (state === 'idle') {
-    return [];
-  }
-
-  if (state === 'running-multi') {
-    return [
-      { id: 'compare', title: TASKS.compare.label, detail: 'Running', color: TASKS.compare.color, status: 'running' },
-      { id: 'research', title: TASKS.research.label, detail: 'Running', color: TASKS.research.color, status: 'running' },
-      { id: 'schedule', title: TASKS.schedule.label, detail: 'Running', color: TASKS.schedule.color, status: 'running' },
-    ];
-  }
-
-  if (state === 'complete') {
-    return [
-      { id: activeTask.id, title: activeTitle, detail: 'Done', color: activeTask.color, status: 'completed' },
-      { id: 'weather', title: "Find tomorrow's weather", detail: 'Done', color: TASKS.schedule.color, status: 'completed' },
-    ];
-  }
-
-  if (state === 'needs-input') {
-    return [
-      { id: activeTask.id, title: activeTitle, detail: 'Needs attention', color: activeTask.color, status: 'needsAttention' },
-      { id: 'weather', title: "Find tomorrow's weather", detail: 'Done', color: TASKS.schedule.color, status: 'completed' },
-    ];
-  }
-
-  return [
-    { id: activeTask.id, title: activeTitle, detail: 'Running', color: activeTask.color, status: 'running' },
-    { id: 'weather', title: "Find tomorrow's weather", detail: 'Done', color: TASKS.schedule.color, status: 'completed' },
-  ];
+  return `${minutes}m ${seconds}s`;
 }
 
-function spawnCueExitTransform(angleDegrees: number) {
-  const radians = (angleDegrees * Math.PI) / 180;
-  const distance = 28;
+// The collapsed right slot is only 34px wide, so keep elapsed time to ~3 chars: seconds, then minutes, then hours.
+function formatCompactTime(totalSeconds: number) {
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
 
-  return {
-    x: Math.cos(radians) * distance,
-    y: Math.sin(radians) * distance,
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${seconds}s`;
+}
+
+// Running states stream a message into the chin and pulse the arrow.
+function isRunningState(state: NotchState) {
+  return state === 'running-single' || state === 'running-multi';
+}
+
+// Any state other than idle has an active task worth showing run time / a message for.
+function hasActiveTask(state: NotchState) {
+  return state !== 'idle';
+}
+
+export function Notch({
+  state,
+  variant,
+  updateAvailable,
+  onRestart,
+  missingPermissions,
+  onReviewPermissions,
+  expanded,
+  setExpanded,
+  liveTasks,
+  chinUpdate,
+  onAddTask,
+  onStopTask,
+  onResumeTask,
+  onCloseTask,
+}: Props) {
+  const isRunning = isRunningState(state);
+  const isActive = hasActiveTask(state);
+  const isComplete = state === 'complete';
+  const needsAttention = state === 'needs-input';
+  // The collapsed arrow + chin follow the streaming task update; silhouette when nothing is streaming.
+  const streaming = chinUpdate !== null;
+  const activeColor = chinUpdate?.color ?? 'rgb(29,158,117)';
+
+  // Collapsed run clock — drives the right-slot elapsed time while a task is active.
+  const [runningSeconds, setRunningSeconds] = useState(0);
+  const [wasActive, setWasActive] = useState(isActive);
+  if (wasActive !== isActive) {
+    setWasActive(isActive);
+    if (!isActive) setRunningSeconds(0);
+  }
+
+  useEffect(() => {
+    if (!isRunning) return;
+
+    const interval = window.setInterval(() => setRunningSeconds((seconds) => seconds + 1), 1000);
+
+    return () => window.clearInterval(interval);
+  }, [isRunning]);
+
+  // The chin (real) / inline (simulated) shows the current streaming update; hidden when expanded.
+  const message = !expanded && chinUpdate ? chinUpdate.message : '';
+  const collapsedTime = formatCompactTime(runningSeconds);
+
+  // App-level notices share a single slot; permissions outranks update since it blocks functionality.
+  const appNotice: 'permissions' | 'update' | null = missingPermissions
+    ? 'permissions'
+    : updateAvailable
+      ? 'update'
+      : null;
+  const showChin = variant === 'real' && message !== '';
+  const isSimulatedExpandedMessage = variant === 'simulated' && message !== '';
+
+  const collapsedHeight = expanded
+    ? METRICS.expandedHeight
+    : variant === 'real'
+      ? METRICS.collapsedHeight + (showChin ? METRICS.chinHeight : 0)
+      : isSimulatedExpandedMessage
+        ? METRICS.simulatedMessageHeight
+        : METRICS.collapsedHeight;
+  const collapsedWidth = expanded ? METRICS.expandedWidth : METRICS.collapsedWidth;
+
+  // Both variants keep a flush top edge (no top corner radius) and round only the bottom.
+  const cornerRadius = expanded
+    ? METRICS.expandedCornerRadius
+    : variant === 'simulated'
+      ? METRICS.simulatedCornerRadius
+      : METRICS.collapsedCornerRadius;
+
+  // Arrow and run time sit in the real notch's 32px bar, but center in the full simulated pill.
+  const contentRowHeight = variant === 'real' ? METRICS.collapsedHeight : collapsedHeight;
+
+  const followUpRef = useRef<HTMLTextAreaElement | null>(null);
+  const [canSendFollowUp, setCanSendFollowUp] = useState(false);
+
+  const resizeFollowUp = () => {
+    const input = followUpRef.current;
+    if (!input) return;
+
+    input.style.height = 'auto';
+    input.style.height = `${Math.min(Math.max(input.scrollHeight, FOLLOWUP_MIN_HEIGHT), FOLLOWUP_MAX_HEIGHT)}px`;
+    setCanSendFollowUp(input.value.trim().length > 0);
   };
-}
-
-export function Notch({ state, activeTaskId, expanded, setExpanded, spawnCue, onRequestSpawn }: Props) {
-  const rows = taskRowsForState(state, activeTaskId);
-  const activeColor = rows[0]?.color ?? 'rgb(29,158,117)';
-  const spawnCueOffset = spawnCue ? spawnCueExitTransform(spawnCue.notchCueAngleDegrees) : null;
 
   const handleFollowUpSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -95,49 +166,21 @@ export function Notch({ state, activeTaskId, expanded, setExpanded, spawnCue, on
     const taskText = String(formData.get('followUp') ?? '').trim();
     if (!taskText) return;
 
-    onRequestSpawn(taskText);
+    onAddTask(taskText);
     form.reset();
+    setCanSendFollowUp(false);
+    if (followUpRef.current) followUpRef.current.style.height = `${FOLLOWUP_MIN_HEIGHT}px`;
   };
-
-  const spawnCueArrow = spawnCue && spawnCueOffset && (
-    <>
-      <style>{`
-        @keyframes notchSpawnCue-${spawnCue.id} {
-          0%, 30% {
-            transform: translate(-50%, -50%) rotate(-45deg);
-            opacity: 1;
-          }
-          100% {
-            transform: translate(calc(-50% + ${spawnCueOffset.x}px), calc(-50% + ${spawnCueOffset.y}px)) rotate(${spawnCue.notchCueAngleDegrees}deg);
-            opacity: 0;
-          }
-        }
-      `}</style>
-      <div
-        className="absolute z-10"
-        style={{
-          left: 17,
-          top: Math.max(14, METRICS.collapsedHeight / 2),
-          width: 15,
-          height: 15,
-          animation: `notchSpawnCue-${spawnCue.id} 260ms ease-in-out both`,
-        }}
-        aria-hidden="true"
-      >
-        <DonkeyCursor color={spawnCue.color} size={15} />
-      </div>
-    </>
-  );
 
   return (
     <section
       aria-label="Donkey status"
       className="absolute left-1/2 top-0 z-30 -translate-x-1/2 overflow-hidden focus:outline-none"
       style={{
-        width: expanded ? METRICS.expandedWidth : METRICS.collapsedWidth,
-        height: expanded ? METRICS.expandedHeight : METRICS.collapsedHeight,
-        borderBottomLeftRadius: expanded ? METRICS.expandedCornerRadius : METRICS.collapsedCornerRadius,
-        borderBottomRightRadius: expanded ? METRICS.expandedCornerRadius : METRICS.collapsedCornerRadius,
+        width: collapsedWidth,
+        height: collapsedHeight,
+        borderBottomLeftRadius: cornerRadius,
+        borderBottomRightRadius: cornerRadius,
         transition: 'width 220ms ease-out, height 220ms ease-out, border-radius 220ms ease-out',
       }}
       tabIndex={0}
@@ -148,14 +191,20 @@ export function Notch({ state, activeTaskId, expanded, setExpanded, spawnCue, on
       onMouseEnter={() => setExpanded(true)}
       onMouseLeave={() => setExpanded(false)}
     >
+      <style>{`
+        @keyframes notchArrowPulse {
+          0%, 100% { transform: scale(1); opacity: 1; }
+          50% { transform: scale(1.12); opacity: 0.74; }
+        }
+      `}</style>
       <div
         className="absolute left-1/2 top-0 overflow-hidden bg-black text-white"
         style={{
-          width: expanded ? METRICS.expandedWidth : METRICS.collapsedWidth,
-          height: expanded ? METRICS.expandedHeight : METRICS.collapsedHeight,
+          width: collapsedWidth,
+          height: collapsedHeight,
           transform: 'translateX(-50%)',
-          borderBottomLeftRadius: expanded ? METRICS.expandedCornerRadius : METRICS.collapsedCornerRadius,
-          borderBottomRightRadius: expanded ? METRICS.expandedCornerRadius : METRICS.collapsedCornerRadius,
+          borderBottomLeftRadius: cornerRadius,
+          borderBottomRightRadius: cornerRadius,
           boxShadow: expanded ? '0 12px 24px rgba(0,0,0,0.5)' : '0 0 0 rgba(0,0,0,0)',
           transition:
             'width 550ms cubic-bezier(0.2,0.9,0.24,1), height 550ms cubic-bezier(0.2,0.9,0.24,1), border-radius 550ms cubic-bezier(0.2,0.9,0.24,1), box-shadow 300ms ease-out',
@@ -164,15 +213,117 @@ export function Notch({ state, activeTaskId, expanded, setExpanded, spawnCue, on
         <div
           className="absolute inset-0"
           style={{
-            opacity: expanded || spawnCue ? 0 : 1,
+            opacity: expanded ? 0 : 1,
             transition: 'opacity 150ms ease-out',
             pointerEvents: 'none',
           }}
         >
-          <DonkeyCursor color={activeColor} size={13} className="absolute left-[10.5px] top-[9.5px]" />
+          {/* Left content area — arrow silhouette when not active; colored, pulsing while running. */}
+          <div
+            className="absolute left-0 top-0 grid place-items-center"
+            style={{ width: METRICS.contentAreaWidth, height: contentRowHeight }}
+          >
+            <div style={{ animation: streaming ? 'notchArrowPulse 1.6s ease-in-out infinite' : undefined }}>
+              <DonkeyCursor color={activeColor} size={14} silhouette={!streaming} />
+            </div>
+          </div>
+
+          {/* Right content area — notifications surface here only when needed, otherwise run time. */}
+          {needsAttention ? (
+            // Chat-bubble alert: the LLM needs the user's attention (e.g. clarification).
+            <div
+              className="absolute right-0 top-0 grid place-items-center text-white/[0.85]"
+              style={{ width: METRICS.contentAreaWidth, height: contentRowHeight }}
+            >
+              <MessageCircleWarning size={15} strokeWidth={1.9} />
+            </div>
+          ) : isActive ? (
+            <div
+              className="absolute right-0 top-0 flex flex-col justify-center whitespace-nowrap text-[9px] leading-[11px] text-white/[0.72]"
+              style={{ width: METRICS.contentAreaWidth, height: contentRowHeight }}
+            >
+              {isComplete && <span className="text-white/[0.92]">Done</span>}
+              <span>{collapsedTime}</span>
+            </div>
+          ) : appNotice ? (
+            // Shield = missing permissions; cloud-sync = app update available (detected on launch).
+            <div
+              className="absolute right-0 top-0 grid place-items-center text-white/[0.85]"
+              style={{ width: METRICS.contentAreaWidth, height: contentRowHeight }}
+            >
+              {appNotice === 'permissions' ? (
+                <Shield size={15} strokeWidth={1.9} />
+              ) : (
+                <CloudSync size={15} strokeWidth={1.9} />
+              )}
+            </div>
+          ) : null}
+
+          {/* Real notch: chin hangs below with the single streaming line (ellipsis if too long). */}
+          {variant === 'real' && showChin && (
+            <div
+              className="absolute left-0 overflow-hidden"
+              style={{
+                top: METRICS.collapsedHeight,
+                width: METRICS.collapsedWidth,
+                height: METRICS.chinHeight,
+                padding: '0 12px',
+              }}
+            >
+              <p className="truncate text-[9px] leading-[12px] text-white/[0.72]">{message}</p>
+            </div>
+          )}
+
+          {/* Simulated notch: message sits inline between the arrow and the run time (two lines max). */}
+          {variant === 'simulated' && message !== '' && (
+            <div
+              className="absolute flex items-center"
+              style={{
+                left: METRICS.contentAreaWidth,
+                top: 0,
+                width: METRICS.collapsedWidth - METRICS.contentAreaWidth * 2,
+                height: collapsedHeight,
+              }}
+            >
+              <p
+                className="text-[9px] leading-[12px] text-white/[0.72]"
+                style={{
+                  display: '-webkit-box',
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: 'vertical',
+                  overflow: 'hidden',
+                }}
+              >
+                {message}
+              </p>
+            </div>
+          )}
         </div>
 
-        {spawnCueArrow}
+        {/* Expanded right gutter — the only content on the notch row: an app-level action (update / permissions). */}
+        {appNotice && (
+          <div
+            className="absolute right-0 top-0 z-10 flex items-center justify-end gap-2"
+            style={{
+              height: METRICS.collapsedHeight,
+              paddingRight: METRICS.contentInset,
+              opacity: expanded ? 1 : 0,
+              pointerEvents: expanded ? 'auto' : 'none',
+              transition: expanded ? 'opacity 300ms ease-out 150ms' : 'opacity 100ms ease-out',
+            }}
+          >
+            <span className="whitespace-nowrap text-[11px] leading-none text-white/[0.7]">
+              {appNotice === 'permissions' ? 'Missing Permissions' : 'Update Available'}
+            </span>
+            <button
+              type="button"
+              onClick={appNotice === 'permissions' ? onReviewPermissions : onRestart}
+              className="flex items-center rounded bg-white px-2 py-1 text-[11px] font-medium leading-none text-black/[0.82] transition hover:bg-white/[0.92]"
+            >
+              {appNotice === 'permissions' ? 'Review' : 'Restart'}
+            </button>
+          </div>
+        )}
 
         <div
           className="absolute left-0 flex flex-col gap-2"
@@ -186,55 +337,28 @@ export function Notch({ state, activeTaskId, expanded, setExpanded, spawnCue, on
             transition: expanded ? 'opacity 300ms ease-out 150ms' : 'opacity 100ms ease-out',
           }}
         >
-          {rows.length > 0 && (
-            <div className="min-h-0 flex-1 overflow-hidden pt-2.5">
-              <div className="flex flex-col gap-2">
-                {rows.map((task) => (
-                  <article
-                    key={task.id}
-                    className="flex h-12 items-center gap-3 rounded-lg bg-white/[0.055] px-3"
-                  >
-                    <DonkeyCursor color={task.color} size={14} />
-                    <div className="min-w-0 flex-1">
-                      <h2 className="truncate text-[13px] font-normal leading-4 text-white/[0.9]">{task.title}</h2>
-                      <p className="mt-1 truncate text-[12px] font-normal leading-[14px] text-white/[0.42]">
-                        {task.detail}
-                      </p>
-                    </div>
-                    {task.status === 'running' ? (
-                      <div className="flex gap-1.5">
-                        <button
-                          type="button"
-                          className="grid h-6 w-6 place-items-center rounded-full bg-white/[0.055] text-white/[0.3]"
-                          aria-label="Resume"
-                          disabled
-                        >
-                          <Play size={10} fill="currentColor" />
-                        </button>
-                        <button
-                          type="button"
-                          className="grid h-6 w-6 place-items-center rounded-full bg-white/[0.12] text-white/[0.88]"
-                          aria-label="Pause"
-                        >
-                          <Pause size={10} fill="currentColor" />
-                        </button>
-                      </div>
-                    ) : task.status === 'completed' ? (
-                      <Check size={18} color={task.color} strokeWidth={1.35} />
-                    ) : task.status === 'needsAttention' ? (
-                      <MessageCircle size={18} color={task.color} strokeWidth={1.35} />
-                    ) : (
-                      <ActivityBars color={task.color} />
-                    )}
-                  </article>
-                ))}
-              </div>
+          {/* Scrollable task list fills the space above the always-visible input. */}
+          <div className="min-h-0 flex-1 overflow-y-auto pt-2.5">
+            <div className="flex flex-col gap-2">
+              {liveTasks.map((task) => (
+                <ExpandedTaskRow
+                  key={task.id}
+                  title={task.title}
+                  detail={task.detail}
+                  color={task.color}
+                  status={task.status}
+                  timeText={formatRunningTime(task.seconds)}
+                  onStop={() => onStopTask(task.id)}
+                  onResume={() => onResumeTask(task.id)}
+                  onClose={() => onCloseTask(task.id)}
+                />
+              ))}
             </div>
-          )}
+          </div>
 
+          {/* Input box is pinned to the bottom and always visible — one line that grows with its text. */}
           <form
-            className="relative h-[92px] w-[576px] rounded-[22px] bg-white/[0.085]"
-            style={{ marginTop: rows.length === 0 ? 16 : 0 }}
+            className="relative flex min-h-[56px] w-[576px] shrink-0 items-center rounded-[14px] bg-white/[0.085] px-5 py-3"
             onSubmit={handleFollowUpSubmit}
           >
             <label className="sr-only" htmlFor="donkey-follow-up-input">
@@ -242,11 +366,19 @@ export function Notch({ state, activeTaskId, expanded, setExpanded, spawnCue, on
             </label>
             <textarea
               id="donkey-follow-up-input"
+              ref={followUpRef}
               name="followUp"
               rows={1}
-              placeholder="What can donkey do for you?"
-              className="absolute left-6 top-3 h-[19.2px] w-[528px] resize-none overflow-hidden border-0 bg-transparent p-0 text-[16px] font-light leading-[19.2px] text-white outline-none placeholder:text-white/[0.58]"
-              style={{ caretColor: 'white', fontVariantLigatures: 'none' }}
+              placeholder="What can Donkey do for you?"
+              onInput={resizeFollowUp}
+              className="flex-1 resize-none border-0 bg-transparent p-0 pr-12 text-[16px] font-light leading-[20px] text-white outline-none placeholder:text-white/[0.58]"
+              style={{
+                height: FOLLOWUP_MIN_HEIGHT,
+                maxHeight: FOLLOWUP_MAX_HEIGHT,
+                overflowY: 'auto',
+                caretColor: 'white',
+                fontVariantLigatures: 'none',
+              }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && !event.shiftKey) {
                   event.preventDefault();
@@ -254,9 +386,15 @@ export function Notch({ state, activeTaskId, expanded, setExpanded, spawnCue, on
                 }
               }}
             />
+            {/* Send button stays pinned in the lower-right corner, inset from the radius; disabled when empty. */}
             <button
               type="submit"
-              className="absolute bottom-4 right-4 grid h-8 w-8 place-items-center rounded-full bg-white/[0.9] text-black/[0.75]"
+              disabled={!canSendFollowUp}
+              className="absolute bottom-3 right-3 grid h-8 w-8 place-items-center rounded-full transition disabled:cursor-default"
+              style={{
+                background: canSendFollowUp ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.32)',
+                color: canSendFollowUp ? 'rgba(0,0,0,0.75)' : 'rgba(0,0,0,0.4)',
+              }}
               aria-label="Send follow-up"
             >
               <ArrowUp size={16} strokeWidth={2} />
