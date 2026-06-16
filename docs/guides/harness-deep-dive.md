@@ -1,0 +1,90 @@
+# Harness Deep Dive
+
+How individual parts of the harness work, one area per section. This guide sits
+one level below the harness architecture guide, which covers the overall loop,
+how a task keeps its state, where the model gets to make decisions, and how the
+tools are organized. Read that first; everything here builds on it.
+
+**The one rule:** these sections describe how a part works, not new
+architecture. Each one follows the same rules the architecture guide already
+sets out: requests arrive as structured fields rather than raw text, the model
+proposes an action and protected code carries it out, and a step counts as done
+only once something checks that it worked. Anything that needs a brand-new rule
+of its own does not belong here.
+
+## Working With Files
+
+File work splits into two parts. Understanding a file — figuring out what is
+actually in it — is the hard, reusable part. The operation on it (rename,
+resize) is just the model deciding what to do from that understanding.
+
+The flow is the same every time:
+
+```text
+look at the file → build a description of it → model decides what to do → carry it out → confirm it worked
+```
+
+**Understanding is worth a dedicated step; the operation is not.** Reading the
+contents of many different file types is genuinely hard, so it earns its own
+reusable step. "Rename these" or "resize those," on the other hand, is just the
+model working out what to do from the request, built from general-purpose
+actions. There is no built-in "rename" or "suggest names" feature — that would
+freeze one request into the system instead of letting the model compose it.
+
+### Understanding
+
+Describing a file produces, for each one: what kind it is (text, image, PDF,
+audio, video, or something unrecognized), a short summary, any text found in it,
+its size, and details such as image dimensions. A fixed, predictable step does
+the classifying and the text reading — it asks the operating system what the
+file is, and for files with no extension it peeks at the first few bytes
+instead. None of this involves the model. A separate step then fills in the
+harder types, such as images and PDFs.
+
+| Type | How it's read | What comes out |
+|---|---|---|
+| text, code, markdown | read the file's contents | the text of the file |
+| image | recognize any text in the picture, read its size | the text found, the pixel dimensions |
+| PDF | pull the text out | the document's text |
+| audio, video | only classified for now | nothing yet — reading their contents is still to come |
+| other, unknown | basic file info | type, size, dates |
+
+Each description is remembered per file (by its path, size, and last-changed
+time) in one shared place, so describing a file and later acting on it reuse the
+same result instead of reading it twice. Editing a file changes those details,
+which throws the old description away.
+
+### Operations
+
+There is no separate feature per operation. The model reads the description and
+acts:
+
+- **Rename, tag, or sort** — the model turns the understood content into a name
+  or label, a protected command applies it after asking you to confirm (since
+  it's a change that can be undone), and the result is checked by listing the
+  folder again. This is the same split used for app automation: the model
+  proposes, and the protected step makes the change.
+- **Resize, convert, or compress** — fixed image and video commands do the work,
+  using the description only to fill in details like the current size or the
+  original format.
+
+### What stays fixed
+
+A few boundaries hold this together:
+
+- **Understanding is reusable; operations are not.** A new file request is just
+  the model combining the describe step with its general actions. Building a
+  one-off "rename" feature would freeze a single request into the system, which
+  is exactly what to avoid.
+- **Every change goes through a protected command.** Files are only ever changed
+  by a command that asks for confirmation and then verifies the result.
+  Describing a file never changes it.
+- **A file's type is looked up, not guessed.** The type comes from the operating
+  system, or from the file's first few bytes when it has no extension — never
+  from a hand-kept list of extensions, and never from the model.
+
+### Where it lives
+
+All of this lives together in the file-handling part of the harness: classifying
+and reading a file, building its description, and handling the richer types like
+images and PDFs along with the shared cache. Start there.

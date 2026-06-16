@@ -29,8 +29,8 @@ remembers only that sentence still makes correct decisions.
 
 **5. Rules become tables; stories stay prose.**
 Anything that is a lookup — states and their outcomes, risk tiers and their
-behaviors, modules and what they own — goes in a table. Prose is for reasoning
-and intent; tables are for facts you check against.
+behaviors, file types and what's read from each — goes in a table. Prose is for
+reasoning and intent; tables are for facts you check against.
 
 **6. State invariants as numbered, named rules.**
 Don't smear a constraint across four paragraphs. Extract it:
@@ -46,10 +46,11 @@ The fastest way to make a rule concrete is to show the violation:
 "If you're tempted to write `if command.contains(\"music\")`, the logic belongs
 in a skill." One forbidden snippet teaches more than a paragraph of abstraction.
 
-**8. Prefer the concrete word.**
-"Typed fields — tool names, app ids, file paths" beats "structured semantic
-representations." When a generalization is needed, follow it immediately with
-two or three real examples in code font.
+**8. Prefer the concrete word, in plain English.**
+"The model proposes a name and a protected command applies it" beats "the
+generator emits a candidate the executor commits." Be concrete about what
+happens, but say it in plain words — not by naming internal tools, types, or
+file paths, which read as jargon and churn on every refactor.
 
 ## Sentence-Level Rules
 
@@ -63,9 +64,10 @@ two or three real examples in code font.
   paragraph is bold, nothing is.
 - **Italics only for word-level contrast** (*what* vs *whether*), never for
   emphasis-shouting.
-- **Code font for anything that exists in the codebase**: tool names, states
-  (`waitingForPermission`), commands, paths. If a reader could grep for it, set
-  it in backticks.
+- **Code font only for what a reader will actually type or run** — a real
+  command or flag. Don't set internal tool names, types, states, or paths in
+  backticks just because they exist in the code; describe what they do in plain
+  English instead.
 
 ## Structure Template
 
@@ -78,12 +80,14 @@ What this is + why it exists (2–4 sentences).
 ## How It Works        — the canonical diagram + the division-of-labor sentence
 ## [Core nouns]        — one section per major concept (state, boundaries, tools)
 ## [Hard constraints]  — invariants as numbered named rules, lookups as tables
-## Source Map          — table of module → what it owns, plus how to test
+## Where it lives      — one short sentence naming the area to start in
 ```
 
 Sections are nouns ("Task State," "Model Boundary"), not gerunds ("Managing
-Task State"). Order by what a new reader needs first, ending with the source
-map so the doc lands on "where to go next."
+Task State"). Order by what a new reader needs first, ending with a short
+pointer to where the code lives so the doc lands on "where to go next." That
+pointer is prose, not a catalog: name the area, skip the exact paths, class
+names, and test names — they churn and the reader can grep.
 
 ## What to Cut
 
@@ -92,6 +96,13 @@ map so the doc lands on "where to go next."
 - Anticipatory caveats for situations no reader is in
 - Meta-commentary about the doc itself ("this section describes…")
 - Anything a table header already says
+- Code symbols and jargon when plain English works. Internal tool names, type
+  names, file paths, and coined compound terms ("reversible-write consent")
+  churn and read as jargon — describe what the thing does instead. Keep a symbol
+  or exact command only when a reader genuinely must type or grep it.
+- Catalogs that churn. No Source Map tables, no file-path lists, no test-name
+  lists, no exact line numbers. Point with one short sentence naming the area to
+  start in, and only when it helps.
 
 ## The Test
 
