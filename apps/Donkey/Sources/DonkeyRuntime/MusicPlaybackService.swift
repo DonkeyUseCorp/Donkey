@@ -1,5 +1,5 @@
 import Foundation
-import MusicKit
+@preconcurrency import MusicKit
 
 /// One catalog search result the planner can play: a typed kind plus the catalog id, so later calls
 /// match on structured fields, never on free text.
