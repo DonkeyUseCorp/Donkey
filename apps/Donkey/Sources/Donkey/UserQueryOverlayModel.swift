@@ -50,9 +50,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         commandHandler: any UserQueryCommandHandling = LocalAppUserQueryCommandHandler(),
         taskStore: any UserQueryTaskStoring = CoreDataUserQueryTaskStore(),
         followUpResolver: any UserQueryFollowUpResolving = HostedTaskFollowUpResolver(),
-        voiceTranscriber: LocalVoiceTranscriptionAdapter = LocalVoiceTranscriptionAdapter(
-            runtime: ProcessBackedParakeetTranscriptionRuntime()
-        ),
+        voiceTranscriber: LocalVoiceTranscriptionAdapter = LocalVoiceTranscriptionAdapter(),
         updateChecker: any DonkeyUpdateChecking = SparkleUpdateController(),
         liveController: GeminiLiveVoiceController = GeminiLiveVoiceController(),
         theme: UserQueryTheme = UserQueryOverlayModel.bundledTheme()

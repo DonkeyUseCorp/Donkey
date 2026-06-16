@@ -59,44 +59,6 @@ struct ManualCaptureDebugCommandTests {
     }
 
     @Test
-    func localRuntimeInstallCommandsParseStatusInstructionsAndInstall() throws {
-        #expect(try ManualCaptureDebugCommandParser.parse(
-            arguments: ["Donkey", "--local-runtime-status"]
-        ) == .localRuntimeStatus)
-        #expect(try ManualCaptureDebugCommandParser.parse(
-            arguments: ["Donkey", "--local-runtime-support"]
-        ) == .localRuntimeSupport)
-        #expect(try ManualCaptureDebugCommandParser.parse(
-            arguments: ["Donkey", "--local-runtime-instructions"]
-        ) == .localRuntimeInstructions)
-
-        let command = try ManualCaptureDebugCommandParser.parse(
-            arguments: [
-                "Donkey",
-                "--install-local-runtime",
-                "--runtime-id",
-                "screenshot-segmentation-stub",
-                "--runtime-source",
-                "/tmp/segmentation-stub-runtime"
-            ]
-        )
-
-        #expect(command == .installLocalRuntime(
-            LocalRuntimeInstallDebugOptions(
-                runtimeID: .screenshotSegmentationStub,
-                sourceDirectory: URL(fileURLWithPath: "/tmp/segmentation-stub-runtime")
-            )
-        ))
-
-        #expect(try ManualCaptureDebugCommandParser.parse(
-            arguments: ["Donkey", "--repair-local-runtime", "--runtime-id", "screenshot-segmentation-stub"]
-        ) == .repairLocalRuntime(.screenshotSegmentationStub))
-        #expect(try ManualCaptureDebugCommandParser.parse(
-            arguments: ["Donkey", "--remove-local-runtime", "--runtime-id", "screenshot-segmentation-stub"]
-        ) == .removeLocalRuntime(.screenshotSegmentationStub))
-    }
-
-    @Test
     func localAppTaskCommandParsesSubmittedCommand() throws {
         let command = try ManualCaptureDebugCommandParser.parse(
             arguments: [
@@ -110,21 +72,6 @@ struct ManualCaptureDebugCommandTests {
         #expect(command == .localAppTask(
             LocalAppTaskDebugOptions(command: "show me the weather for SF")
         ))
-    }
-
-    @Test
-    func invalidLocalRuntimeIDReturnsCommandError() throws {
-        #expect(throws: ManualCaptureDebugCommandParseError.invalidRuntimeID("weather")) {
-            _ = try ManualCaptureDebugCommandParser.parse(
-                arguments: [
-                    "--install-local-runtime",
-                    "--runtime-id",
-                    "weather",
-                    "--runtime-source",
-                    "/tmp/runtime"
-                ]
-            )
-        }
     }
 
     @Test
@@ -191,29 +138,6 @@ struct ManualCaptureDebugCommandTests {
             "window 1 | windowID=11 | app=Terminal | title=Shell | safety=allowed | iPhoneMirroring=false",
             "window 2 | windowID=22 | app=Safari | title=Docs | safety=allowed | iPhoneMirroring=false"
         ])
-    }
-
-    @Test
-    func runtimeSetupFormattersPrintInstructionsAndStatus() throws {
-        let manager = try LocalModelRuntimeSetupManager(baseDirectory: temporaryDirectory())
-        let instructionLines = ManualCaptureDebugCommandFormatter.lines(
-            for: manager.instructions()
-        )
-        let statusLines = ManualCaptureDebugCommandFormatter.lines(
-            for: try manager.statuses()
-        )
-
-        #expect(instructionLines.contains("local runtime setup instructions"))
-        #expect(instructionLines.contains("runtime=parakeet-transcriber"))
-        #expect(instructionLines.contains("expectedExecutable=bin/donkey-parakeet-transcriber"))
-        #expect(statusLines.contains("local runtime status"))
-        #expect(statusLines.contains("runtime=screenshot-segmentation-stub | state=notInstalled | env=DONKEY_SCREENSHOT_SEGMENTATION_STUB | executable=- | reason=noRegisteredRuntime"))
-
-        let supportLines = ManualCaptureDebugCommandFormatter.lines(
-            for: try manager.supportSnapshot()
-        )
-        #expect(supportLines.contains("local runtime support snapshot"))
-        #expect(supportLines.contains { $0.contains("runtime=local-llm") })
     }
 
     @Test

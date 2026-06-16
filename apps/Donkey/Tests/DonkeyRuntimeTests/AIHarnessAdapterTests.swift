@@ -208,91 +208,6 @@ struct AIHarnessAdapterTests {
     }
 
     @Test
-    func processBackedParakeetRuntimeDecodesSidecarTranscript() async throws {
-        let runtime = ProcessBackedParakeetTranscriptionRuntime(
-            sidecarRunner: FakeSidecarRunner(
-                result: LocalJSONSidecarResult(
-                    status: .completed,
-                    outputData: Data("""
-                    {"text":"show weather","language":"en","confidence":0.94,"segments":["show weather"],"metadata":{"decoder":"fake-parakeet"}}
-                    """.utf8),
-                    metadata: ["sidecar.reason": "completed"]
-                )
-            )
-        )
-        let transcript = try await runtime.transcribe(
-            audio: LocalVoiceAudioBuffer(
-                id: "audio-sidecar",
-                durationMS: 800,
-                data: Data([1, 2, 3])
-            ),
-            model: try AIModelRouter(registry: localVoiceRegistry()).route(
-                AIModelRouteRequest(
-                    jobType: .voiceTranscription,
-                    requiredCapabilities: [.audioInput],
-                    allowedProviders: [.localRuntime]
-                )
-            )
-        )
-
-        #expect(transcript.text == "show weather")
-        #expect(transcript.language == "en")
-        #expect(transcript.metadata["decoder"] == "fake-parakeet")
-    }
-
-    @Test
-    func processBackedParakeetRuntimeFailsClearlyWhenUnavailable() async throws {
-        let runtime = ProcessBackedParakeetTranscriptionRuntime(
-            sidecarRunner: FakeSidecarRunner(
-                result: LocalJSONSidecarResult(
-                    status: .unavailable,
-                    metadata: ["sidecar.reason": "missingEnvironmentVariable"]
-                )
-            )
-        )
-
-        await #expect(throws: LocalVoiceTranscriptionRuntimeError.runtimeUnavailable("missingEnvironmentVariable")) {
-            _ = try await runtime.transcribe(
-                audio: LocalVoiceAudioBuffer(id: "audio-missing", durationMS: 10, data: Data()),
-                model: try AIModelRouter(registry: localVoiceRegistry()).route(
-                    AIModelRouteRequest(
-                        jobType: .voiceTranscription,
-                        requiredCapabilities: [.audioInput],
-                        allowedProviders: [.localRuntime]
-                    )
-                )
-            )
-        }
-    }
-
-    @Test
-    func localJSONSidecarRunnerReportsMissingEnvAndNonzeroExit() async {
-        let missing = await ProcessBackedLocalJSONSidecarRunner(environment: [:]).run(
-            LocalJSONSidecarRequest(
-                environmentVariableName: "DONKEY_PARAKEET_TRANSCRIBER",
-                inputData: Data("{}".utf8),
-                timeoutMS: 100
-            )
-        )
-        #expect(missing.status == .unavailable)
-        #expect(missing.metadata["sidecar.reason"] == "missingEnvironmentVariable")
-
-        let failed = await ProcessBackedLocalJSONSidecarRunner(
-            environment: ["DONKEY_TEST_SIDECAR": "/bin/false"]
-        )
-        .run(
-            LocalJSONSidecarRequest(
-                environmentVariableName: "DONKEY_TEST_SIDECAR",
-                inputData: Data("{}".utf8),
-                timeoutMS: 100
-            )
-        )
-        #expect(failed.status == .failed)
-        #expect(failed.exitCode != 0)
-        #expect(failed.metadata["sidecar.reason"] == "nonZeroExit")
-    }
-
-    @Test
     func hostedFollowUpResolverLetsBackendSelectResponsesModel() async throws {
         let httpClient = FakeAIHTTPClient(
             data: Data(#"{"output_text":"{\"isFollowUp\":true,\"taskID\":\"task-1\",\"confidence\":0.82,\"reason\":\"same task\"}"}"#.utf8),
@@ -1038,14 +953,6 @@ private actor RecordingVoiceRuntime: LocalVoiceTranscriptionRuntime {
     ) async throws -> LocalVoiceTranscript {
         lastAudio = audio
         return transcript
-    }
-}
-
-private struct FakeSidecarRunner: LocalJSONSidecarRunning {
-    var result: LocalJSONSidecarResult
-
-    func run(_ request: LocalJSONSidecarRequest) async -> LocalJSONSidecarResult {
-        result
     }
 }
 
