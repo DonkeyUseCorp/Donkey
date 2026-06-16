@@ -95,16 +95,16 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         loginWindowController = nil
         NSApp.setActivationPolicy(.regular)
 
+        // The notch overlay renders immediately on launch, so it's always present. When permissions
+        // still need granting, the setup window opens alongside the notch rather than gating it.
+        startOverlaySurfaces()
+
         let permissionSetupController = MacPermissionSetupWindowController()
-        if permissionSetupController.permissionsAreReady {
-            startOverlaySurfaces()
-            return
-        }
+        guard !permissionSetupController.permissionsAreReady else { return }
 
         self.permissionSetupController = permissionSetupController
         permissionSetupController.completed = { [weak self] in
             self?.permissionSetupController = nil
-            self?.startOverlaySurfaces()
         }
         permissionSetupController.showSetup()
     }
