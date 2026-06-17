@@ -210,9 +210,13 @@ to it.
 
 **To act**, the planner can click an element, type or press keys (including
 modifier chords), scroll, drag one observed element onto another, wait for the
-app to settle, or generate and run an AppleScript. Clicking an Accessibility
-control prefers a native `AXPress` and falls back to a guarded coordinate
-click on the control's frame; vision elements click by coordinate. Responding
+app to settle, or generate and run an AppleScript. Acting on an Accessibility
+control resolves against the live element captured when it was observed — so it
+stays correct even if a list reordered underneath it — and prefers a native
+semantic action (press, open on a double-click, show-menu on a right-click)
+that the control actually advertises, falling back to a guarded coordinate
+click on the control's frame otherwise; vision elements click by coordinate.
+Responding
 conversationally and asking for clarification are also tools — sometimes the
 right "action" is a question.
 
