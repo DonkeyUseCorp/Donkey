@@ -18,6 +18,7 @@ public struct UserQueryNotchStatusView: View {
     private let commandInputTextHeight: CGFloat
     private let isCommandInputExpanded: Bool
     private let tasks: [UserQueryNotchTask]
+    private let surfacedTasks: [UserQueryNotchTask]
     private let accentIndex: Int
     private let spawnState: UserQuerySpawnState?
     private let commandSubmitted: @MainActor (String) -> Void
@@ -46,6 +47,7 @@ public struct UserQueryNotchStatusView: View {
         commandInputTextHeight: CGFloat,
         isCommandInputExpanded: Bool,
         tasks: [UserQueryNotchTask] = [],
+        surfacedTasks: [UserQueryNotchTask] = [],
         accentIndex: Int,
         spawnState: UserQuerySpawnState? = nil,
         commandSubmitted: @escaping @MainActor (String) -> Void,
@@ -71,6 +73,7 @@ public struct UserQueryNotchStatusView: View {
         self.commandInputTextHeight = commandInputTextHeight
         self.isCommandInputExpanded = isCommandInputExpanded
         self.tasks = tasks
+        self.surfacedTasks = surfacedTasks
         self.accentIndex = accentIndex
         self.spawnState = spawnState
         self.commandSubmitted = commandSubmitted
@@ -168,9 +171,35 @@ public struct UserQueryNotchStatusView: View {
 
     private var restingCollapsedContent: some View {
         DonkeyCursorMark(color: accentColor, silhouette: true)
-            .frame(width: 13, height: 13)
+            .frame(width: 14, height: 14)
             .padding(.leading, 10)
             .frame(width: animatingSurfaceWidth, height: animatingSurfaceHeight, alignment: .leading)
+    }
+
+    /// The leading-lane pointer(s). A single surfaced task shows one colored pointer; several surfaced
+    /// tasks (running plus undismissed completions) overlap as a cascading stack, newest on top, capped
+    /// so the lane never crowds. With nothing surfaced it falls back to the idle silhouette.
+    @ViewBuilder
+    private func pointerCluster(size: CGFloat) -> some View {
+        let cluster = Array(surfacedTasks.prefix(Self.maxClusterPointers))
+        if cluster.isEmpty {
+            DonkeyCursorMark(color: accentColor, silhouette: true)
+                .frame(width: size, height: size)
+        } else {
+            let count = cluster.count
+            let width = size + Self.clusterStepX * CGFloat(count - 1)
+            let height = size + Self.clusterStepY * CGFloat(count - 1)
+            ZStack(alignment: .topLeading) {
+                // Oldest first so the newest pointer lands on top, furthest along the cascade.
+                ForEach(Array(cluster.reversed().enumerated()), id: \.element.id) { index, task in
+                    DonkeyCursorMark(color: accentColor(for: task.accentIndex))
+                        .frame(width: size, height: size)
+                        .offset(x: Self.clusterStepX * CGFloat(index), y: Self.clusterStepY * CGFloat(index))
+                        .zIndex(Double(index))
+                }
+            }
+            .frame(width: width, height: height)
+        }
     }
 
     private func notchSurfaceShape(cornerRadius: CGFloat) -> UnevenRoundedRectangle {
@@ -213,8 +242,7 @@ public struct UserQueryNotchStatusView: View {
 
     private var fullWidthCollapsedContent: some View {
         HStack(spacing: 7) {
-            DonkeyCursorMark(color: accentColor, silhouette: !hasRunningTask)
-                .frame(width: 13, height: 13)
+            pointerCluster(size: 14)
 
             Text(taskTitle)
                 .font(.system(size: 12, weight: .regular))
@@ -242,12 +270,8 @@ public struct UserQueryNotchStatusView: View {
         TimelineView(.periodic(from: Self.chinRotationAnchor, by: Self.chinRotationInterval)) { context in
             let speaker = rotatingChinTask(at: context.date)
             ZStack {
-                DonkeyCursorMark(
-                    color: speaker.map { accentColor(for: $0.accentIndex) } ?? accentColor,
-                    silhouette: speaker == nil
-                )
-                .frame(width: 13, height: 13)
-                .position(x: collapsedLeadingLaneCenterX, y: layout.collapsedVisibleHeight / 2)
+                pointerCluster(size: 14)
+                    .position(x: collapsedLeadingLaneCenterX, y: layout.collapsedVisibleHeight / 2)
 
                 collapsedRightSlot
                     .frame(width: collapsedSideLaneWidth, height: layout.collapsedVisibleHeight)
@@ -271,12 +295,15 @@ public struct UserQueryNotchStatusView: View {
         }
     }
 
-    /// The running task currently surfaced in the chin. Running tasks (newest first) rotate
-    /// round-robin; the clock is anchored to the newest task's start, so a freshly added task
-    /// shows first (the view re-renders on the task change) and then yields to the others.
+    /// The task currently surfaced in the chin. Running tasks (newest first) rotate round-robin; the
+    /// clock is anchored to the newest task's start, so a freshly added task shows first (the view
+    /// re-renders on the task change) and then yields to the others. When nothing is running, the most
+    /// recent undismissed completion keeps narrating its result instead of leaving the chin empty.
     private func rotatingChinTask(at date: Date) -> UserQueryNotchTask? {
-        let running = tasks.filter { $0.status == .running }
-        guard !running.isEmpty else { return nil }
+        let running = surfacedTasks.filter { $0.status == .running }
+        guard !running.isEmpty else {
+            return surfacedTasks.first { $0.status == .completed }
+        }
         let anchor = running.map(\.createdAt).max() ?? date
         let slot = Int(max(0, date.timeIntervalSince(anchor)) / Self.chinRotationInterval)
         let index = ((slot % running.count) + running.count) % running.count
@@ -844,12 +871,12 @@ public struct UserQueryNotchStatusView: View {
         }
     }
 
-    /// The collapsed right gutter follows the prototype exactly: it can only ever show one of the
-    /// three supported notifications — an attention glyph, a missing-permissions shield, or an
-    /// update cloud — the live run time while a task runs, "Done" once it finishes, otherwise
-    /// nothing. The time only ever rides alongside the chin (a running task always narrates), so the
-    /// gutter never shows a lonely clock without a chin; every state's full elapsed total lives in
-    /// the expanded row.
+    /// The collapsed right gutter follows the prototype exactly: it only ever carries an icon or the
+    /// live clock — one of the three supported notifications (an attention glyph, a missing-permissions
+    /// shield, or an update cloud) or the run time while a task runs, otherwise nothing. A finished task
+    /// is never labelled here; it keeps surfacing as a colored pointer + chin line instead. The time
+    /// only rides alongside the chin (a running task always narrates), so the gutter never shows a
+    /// lonely clock; every state's full elapsed total lives in the expanded row.
     @ViewBuilder
     private var collapsedRightSlot: some View {
         if let task = primaryTask {
@@ -862,11 +889,9 @@ public struct UserQueryNotchStatusView: View {
                 slotIcon("shield")
             case .running:
                 compactLiveTime(since: task.createdAt)
-            case .completed:
-                // A finished task shows a status, not a clock.
-                slotText("Done", opacity: 0.92)
-            case .paused, .interrupted, .failed, .chatting:
-                // No chin in these states, so no time: they surface in the expanded list instead.
+            case .completed, .paused, .interrupted, .failed, .chatting:
+                // The gutter only ever carries icons or the live clock — a completed task keeps
+                // surfacing as a colored pointer + chin line instead, and the rest surface in the list.
                 EmptyView()
             }
         } else if updateState.isActionable {
@@ -943,13 +968,6 @@ public struct UserQueryNotchStatusView: View {
         tasks.first
     }
 
-    private var hasRunningTask: Bool {
-        tasks.contains { $0.status == .running }
-    }
-
-    private func isPrimaryTask(_ task: UserQueryNotchTask) -> Bool {
-        task.id == primaryTask?.id
-    }
 
     /// The task's status line, resolved through the centralized activity vocabulary so the notch and
     /// the future conversation view speak the same language.
@@ -989,6 +1007,11 @@ public struct UserQueryNotchStatusView: View {
     private static let expandedContentDismissAnimation = Animation.easeOut(duration: 0.1)
     private static let contentInset: CGFloat = 14
     private static let taskListCommandSpacing: CGFloat = 8
+    /// The collapsed leading lane shows at most this many overlapping pointers; extra surfaced tasks
+    /// are still listed when the notch is expanded.
+    private static let maxClusterPointers = 3
+    private static let clusterStepX: CGFloat = 8
+    private static let clusterStepY: CGFloat = 3
     /// The chin advances to the next running task every 2.6s, on a clock shared by all tasks.
     private static let chinRotationInterval: TimeInterval = 2.6
     private static let chinRotationAnchor = Date(timeIntervalSinceReferenceDate: 0)

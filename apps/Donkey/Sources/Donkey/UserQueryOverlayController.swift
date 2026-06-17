@@ -588,6 +588,7 @@ final class UserQueryOverlayController {
             notchCommandInputTextHeight: model.notchCommandInputTextHeight,
             isNotchCommandInputExpanded: model.isNotchCommandInputExpanded,
             notchTasks: model.notchTasks,
+            notchSurfacedTasks: model.notchSurfacedTasks,
             accentIndex: model.notchAccentIndex,
             spawnState: spawnCue,
             spawnStates: model.spawnStates,
@@ -616,6 +617,7 @@ final class UserQueryOverlayController {
             commandInputTextHeight: model.notchCommandInputTextHeight,
             isCommandInputExpanded: model.isNotchCommandInputExpanded,
             tasks: model.notchTasks,
+            surfacedTasks: model.notchSurfacedTasks,
             accentIndex: model.notchAccentIndex,
             spawnState: spawnCue,
             commandSubmitted: { [weak self] text in
@@ -793,6 +795,8 @@ final class UserQueryOverlayController {
                 self.isStatusExpanded = true
                 self.statusHoverPhase = .expanded
                 self.statusExpansionWorkItem = nil
+                // Opening the notch dismisses the completed pointers piled up in the collapsed surface.
+                self.model.acknowledgeSurfacedCompletions()
                 self.updateStatusPanelView()
                 self.focusStatusComposerTextInputIfAvailable()
             }
@@ -978,10 +982,10 @@ final class UserQueryOverlayController {
         )
     }
 
-    /// The collapsed chin hangs below the notch whenever any task is running; the notch view
-    /// rotates which running task's progress line it shows. It only grows the real-notch surface.
+    /// The collapsed chin hangs below the notch whenever a task is surfaced — running, or a completion
+    /// the user hasn't dismissed yet. The notch view rotates which one's line it shows. Real notch only.
     private var statusChinHeight: CGFloat {
-        model.notchTasks.contains { $0.status == .running } ? Self.statusChinBandHeight : 0
+        model.notchSurfacedTasks.isEmpty ? 0 : Self.statusChinBandHeight
     }
 
     private static let statusChinBandHeight: CGFloat = 20
@@ -1431,6 +1435,7 @@ private struct StatusPanelViewSnapshot: Equatable {
     var notchCommandInputTextHeight: CGFloat
     var isNotchCommandInputExpanded: Bool
     var notchTasks: [UserQueryNotchTask]
+    var notchSurfacedTasks: [UserQueryNotchTask]
     var accentIndex: Int
     var spawnState: UserQuerySpawnState?
     var spawnStates: [UserQuerySpawnState]

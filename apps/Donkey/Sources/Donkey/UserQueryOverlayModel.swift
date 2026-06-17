@@ -33,6 +33,10 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     private var updateChecker: any DonkeyUpdateChecking
     private let appCatalogRefreshLoop: LocalAppDynamicCatalogRefreshLoop
     private var activeTaskIDs: Set<String> = []
+    /// Completed tasks the user has already seen surfaced in the collapsed notch. Expanding the notch
+    /// acknowledges them so their colored pointers stop floating in the collapsed surface; the tasks
+    /// themselves stay in the expanded list until closed.
+    private var acknowledgedCompletionIDs: Set<String> = []
     private var lastActiveTaskID: String?
     /// The task/spawn the in-flight Gemini Live turn reports into, so the user
     /// sees the same cursor-and-task feedback as a local pipeline run.
@@ -582,6 +586,23 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             await MainActor.run {
                 self?.startCommandRun(text: "Continue", matchedTaskID: taskID)
             }
+        }
+    }
+
+    /// The tasks the collapsed notch keeps surfaced as floating pointers: anything running, plus
+    /// completed tasks the user hasn't dismissed yet by expanding the notch.
+    var notchSurfacedTasks: [UserQueryNotchTask] {
+        notchTasks.filter { task in
+            task.status == .running ||
+                (task.status == .completed && !acknowledgedCompletionIDs.contains(task.id))
+        }
+    }
+
+    /// Marks every currently-completed task as seen so it stops surfacing in the collapsed notch.
+    /// Called when the notch expands — the user is now looking at the full list.
+    func acknowledgeSurfacedCompletions() {
+        for task in notchTasks where task.status == .completed {
+            acknowledgedCompletionIDs.insert(task.id)
         }
     }
 
