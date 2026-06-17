@@ -49,8 +49,8 @@ export function ExpandedTaskRow({ title, detail, color, status, timeText, onStop
         )}
       </div>
 
-      {/* Elapsed time is pinned underneath the controls (with a clear gap) so it never shifts. */}
-      <span className="absolute right-3 top-[36px] whitespace-nowrap text-[10px] leading-none text-white/[0.55]">
+      {/* Elapsed time is pinned to the bottom-right of the cell so it never moves as the cell grows. */}
+      <span className="absolute bottom-2.5 right-3 whitespace-nowrap text-[10px] leading-none text-white/[0.55]">
         {timeText}
       </span>
     </article>
