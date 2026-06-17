@@ -371,6 +371,19 @@ final class ApplicationServicesMacAccessibilitySnapshotCapturer: MacAccessibilit
         limits: MacAccessibilitySnapshotLimits,
         onNode: (MacAccessibilitySnapshotNode) -> Void
     ) throws -> MacAccessibilitySnapshotTree {
+        try captureTree(target: target, limits: limits, onNode: onNode, onLiveElement: { _, _ in })
+    }
+
+    /// Like `captureTree(target:limits:onNode:)`, but also hands each visited node's live `AXUIElement`
+    /// (paired with its nodeID) to `onLiveElement` so a caller can retain handles for later, identity-
+    /// stable action resolution. Not part of the capture protocol — only the concrete capturer and the
+    /// observe path use it, so the overlay/inspection callers and their test fakes are untouched.
+    func captureTree(
+        target: MacWindowTargetCandidate,
+        limits: MacAccessibilitySnapshotLimits,
+        onNode: (MacAccessibilitySnapshotNode) -> Void,
+        onLiveElement: (String, AXUIElement) -> Void
+    ) throws -> MacAccessibilitySnapshotTree {
         let application = AXUIElementCreateApplication(target.processID)
         let deadlineUptime = ProcessInfo.processInfo.systemUptime
             + Double(maximumTraversalNanoseconds) / 1_000_000_000
@@ -388,7 +401,8 @@ final class ApplicationServicesMacAccessibilitySnapshotCapturer: MacAccessibilit
             deadlineUptime: deadlineUptime,
             remainingNodeCount: &remainingNodeCount,
             isTreeTruncated: &isTreeTruncated,
-            onNode: onNode
+            onNode: onNode,
+            onLiveElement: onLiveElement
         ) ?? RawMacAccessibilitySnapshotNode(
             role: "AXUnknown",
             title: target.title,
@@ -455,7 +469,8 @@ final class ApplicationServicesMacAccessibilitySnapshotCapturer: MacAccessibilit
         deadlineUptime: TimeInterval,
         remainingNodeCount: inout Int,
         isTreeTruncated: inout Bool,
-        onNode: (MacAccessibilitySnapshotNode) -> Void
+        onNode: (MacAccessibilitySnapshotNode) -> Void,
+        onLiveElement: (String, AXUIElement) -> Void
     ) -> RawMacAccessibilitySnapshotNode? {
         guard !hasTimedOut(deadlineUptime) else {
             isTreeTruncated = true
@@ -492,6 +507,7 @@ final class ApplicationServicesMacAccessibilitySnapshotCapturer: MacAccessibilit
                 }
             )
         )
+        onLiveElement(path, element)
 
         let children = childNodes(
             for: element,
@@ -501,7 +517,8 @@ final class ApplicationServicesMacAccessibilitySnapshotCapturer: MacAccessibilit
             deadlineUptime: deadlineUptime,
             remainingNodeCount: &remainingNodeCount,
             isTreeTruncated: &isTreeTruncated,
-            onNode: onNode
+            onNode: onNode,
+            onLiveElement: onLiveElement
         )
 
         return RawMacAccessibilitySnapshotNode(
@@ -525,7 +542,8 @@ final class ApplicationServicesMacAccessibilitySnapshotCapturer: MacAccessibilit
         deadlineUptime: TimeInterval,
         remainingNodeCount: inout Int,
         isTreeTruncated: inout Bool,
-        onNode: (MacAccessibilitySnapshotNode) -> Void
+        onNode: (MacAccessibilitySnapshotNode) -> Void,
+        onLiveElement: (String, AXUIElement) -> Void
     ) -> [RawMacAccessibilitySnapshotNode] {
         guard !hasTimedOut(deadlineUptime) else {
             isTreeTruncated = true
@@ -563,7 +581,8 @@ final class ApplicationServicesMacAccessibilitySnapshotCapturer: MacAccessibilit
                     deadlineUptime: deadlineUptime,
                     remainingNodeCount: &remainingNodeCount,
                     isTreeTruncated: &isTreeTruncated,
-                    onNode: onNode
+                    onNode: onNode,
+                    onLiveElement: onLiveElement
                 )
             }
     }
