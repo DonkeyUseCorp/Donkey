@@ -861,6 +861,14 @@ final class UserQueryOverlayController {
     private func flushStatusHostLayout() {
         guard let statusPanel else { return }
 
+        // The host uses `sizingOptions = []` (see makeStatusPanel) to keep its SwiftUI content
+        // from re-driving the window size. A side effect is that assigning `rootView` no longer
+        // invalidates the hosting view's AppKit layout, so `layoutSubtreeIfNeeded()` alone won't
+        // flush the pending SwiftUI render. The two-phase open depends on the collapsed render
+        // committing *before* `isStatusExpanded` flips — otherwise the two passes coalesce and the
+        // notch snaps open instead of springing. Mark the host dirty so the flush forces it through.
+        statusHostingView?.needsLayout = true
+        statusHostingView?.needsDisplay = true
         flushPanelLayout(statusPanel)
     }
 
