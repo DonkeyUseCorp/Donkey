@@ -130,16 +130,7 @@ import sys
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
     config = json.load(handle)
 
-print(
-    "enabled={enabled} mode={mode} cadenceSeconds={cadence} "
-    "screenScope={scope} minConfidence={confidence}".format(
-        enabled=config.get("enabled", False),
-        mode=config.get("mode", "donkeyVision"),
-        cadence=config.get("cadenceSeconds", 1.0),
-        scope=config.get("screenScope", "main"),
-        confidence=config.get("minConfidence", 0.25),
-    )
-)
+print("enabled={enabled}".format(enabled=config.get("enabled", False)))
 PY
   )"
 
@@ -505,7 +496,8 @@ fi
 
 echo "Starting Donkey..."
 print_dev_overlay_status
-echo "Hosted inference auth: login-based session (dev-bypass=${DONKEY_DEV_AUTH_BYPASS:-0}) baseURL=$DONKEY_WEB_BASE_URL"
-echo "Vision navigation (typed query -> vision click): hardcoded ON in the app"
+if [ "${DONKEY_DEV_AUTH_BYPASS:-0}" != "0" ]; then
+  echo "Hosted inference auth: DEV BYPASS ON (no login) baseURL=$DONKEY_WEB_BASE_URL"
+fi
 start_logger
 open -W -n "$DEV_APP_DIR"
