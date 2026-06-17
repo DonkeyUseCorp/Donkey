@@ -293,16 +293,24 @@ public struct MacAccessibilityActionEngineInputBackend: ActionEngineInputBackend
             return result(command, executed: false, reason: "targetAppNotFrontmost")
         }
 
-        let appElement = AXUIElementCreateApplication(application.processIdentifier)
-        guard let element = resolveElement(nodeID: nodeID, application: appElement) else {
-            return result(command, executed: false, reason: "accessibilityNodeNotFound")
+        // Prefer the live handle captured at observe time: it stays bound to the same logical control
+        // even if the tree reordered, so we act on what we observed rather than whatever now sits at the
+        // old node index. Fall back to the positional re-walk, and surface a distinct "stale" reason when
+        // neither resolves so the planner re-observes instead of retrying a vanished node.
+        let element: AXUIElement
+        if let cached = cachedElement(processID: application.processIdentifier, nodeID: nodeID),
+           isAlive(cached) {
+            element = cached
+        } else if let walked = resolveElement(
+            nodeID: nodeID,
+            application: AXUIElementCreateApplication(application.processIdentifier)
+        ) {
+            element = walked
+        } else {
+            return result(command, executed: false, reason: "accessibilityNodeStale")
         }
 
-        switch action {
-        case "AXPress":
-            let error = AXUIElementPerformAction(element, kAXPressAction as CFString)
-            return result(command, executed: error == .success, reason: String(describing: error))
-        case "AXSetValue":
+        if action == "AXSetValue" {
             guard let value = command.metadata["accessibility.value"] ?? command.key else {
                 return result(command, executed: false, reason: "missingAccessibilityValue")
             }
@@ -312,8 +320,71 @@ public struct MacAccessibilityActionEngineInputBackend: ActionEngineInputBackend
                 value as CFTypeRef
             )
             return result(command, executed: error == .success, reason: String(describing: error))
-        default:
+        }
+
+        guard let performAction = Self.performAction(for: action) else {
             return result(command, executed: false, reason: "unsupportedAccessibilityAction")
+        }
+        // Re-check at dispatch that the live element still advertises this action and is enabled; the
+        // observe-time action list can go stale. On a miss the caller falls back to a coordinate click.
+        guard advertises(element, action: action), isEnabled(element) else {
+            return result(command, executed: false, reason: "accessibilityActionNotAdvertised")
+        }
+        let error = AXUIElementPerformAction(element, performAction)
+        return result(command, executed: error == .success, reason: String(describing: error))
+    }
+
+    /// The live handle observed for `nodeID`, read on the main actor (the cache is MainActor-confined and
+    /// `AXUIElement` is not Sendable). Mirrors `frontmostApplication()`'s main-thread hop.
+    private func cachedElement(processID: pid_t, nodeID: String) -> AXUIElement? {
+        let lookup = {
+            MainActor.assumeIsolated {
+                MacAccessibilityElementHandleCache.shared.handle(processID: processID, nodeID: nodeID)
+            }
+        }
+        return Thread.isMainThread ? lookup() : DispatchQueue.main.sync(execute: lookup)
+    }
+
+    /// Whether the AX handle still points at a live control — a cheap attribute read fails once the
+    /// element is destroyed, which is exactly when a cached handle must be discarded.
+    private func isAlive(_ element: AXUIElement) -> Bool {
+        var value: CFTypeRef?
+        return AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &value) == .success
+    }
+
+    private func advertises(_ element: AXUIElement, action: String) -> Bool {
+        var names: CFArray?
+        guard AXUIElementCopyActionNames(element, &names) == .success,
+              let actions = names as? [String]
+        else {
+            return false
+        }
+        return actions.contains(action)
+    }
+
+    /// Treats a missing `AXEnabled` attribute as enabled: many container/menu elements never expose it,
+    /// and only an explicit `false` should block the action.
+    private func isEnabled(_ element: AXUIElement) -> Bool {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXEnabledAttribute as CFString, &value) == .success else {
+            return true
+        }
+        return (value as? Bool) ?? true
+    }
+
+    /// Maps a supported perform-style action name to its AX constant. `AXSetValue` is handled separately
+    /// because it sets an attribute rather than performing an action.
+    private static func performAction(for action: String) -> CFString? {
+        switch action {
+        case "AXPress": return kAXPressAction as CFString
+        case "AXShowMenu": return kAXShowMenuAction as CFString
+        // No SDK constant ships for the open action, but apps (e.g. Finder) advertise the "AXOpen"
+        // string; AX matches on the name, so the literal is exactly what a constant would resolve to.
+        case "AXOpen": return "AXOpen" as CFString
+        case "AXPick": return kAXPickAction as CFString
+        case "AXConfirm": return kAXConfirmAction as CFString
+        case "AXCancel": return kAXCancelAction as CFString
+        default: return nil
         }
     }
 

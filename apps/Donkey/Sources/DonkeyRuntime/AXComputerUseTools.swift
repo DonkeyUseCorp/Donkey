@@ -21,10 +21,33 @@ public final class AXComputerUseToolProvider {
 
     private let appName: String
     private let bundleIdentifier: String?
+    private let actionBackend: ActionEngineInputBackend
 
-    public init(appName: String, bundleIdentifier: String?) {
+    public init(
+        appName: String,
+        bundleIdentifier: String?,
+        actionBackend: ActionEngineInputBackend = MacAccessibilityActionEngineInputBackend()
+    ) {
         self.appName = appName
         self.bundleIdentifier = bundleIdentifier
+        self.actionBackend = actionBackend
+    }
+
+    /// The semantic AX action to attempt for a click gesture, or nil to take the coordinate path. Gated
+    /// on the control advertising the action so we never claim a press that the control can't perform.
+    /// Right-click maps to the context-menu action and double-click to open; single left-click keeps the
+    /// existing press. Triple-clicks and unadvertised gestures fall through to coordinates.
+    nonisolated static func semanticAction(
+        button: MacPointerInput.Button,
+        clicks: Int,
+        advertised: Set<String>
+    ) -> String? {
+        switch (button, clicks) {
+        case (.right, _): return advertised.contains("AXShowMenu") ? "AXShowMenu" : nil
+        case (.left, 2): return advertised.contains("AXOpen") ? "AXOpen" : nil
+        case (.left, 1): return advertised.contains("AXPress") ? "AXPress" : nil
+        default: return nil
+        }
     }
 
     public static var descriptors: [HarnessToolDescriptor] {
@@ -138,15 +161,22 @@ public final class AXComputerUseToolProvider {
         let button: MacPointerInput.Button = context.call.input["button"] == "right" ? .right : .left
         let clicks = context.call.input["clicks"].flatMap(Int.init) ?? 1
 
-        // Prefer a native Accessibility press (AXPress): it activates the control directly, so it works
-        // even when a coordinate click would miss (partially obscured, scrolled, zero-size hit area).
-        // Falls back to a guarded coordinate click on the element's frame center when AX press isn't
-        // available (no bundle id, control doesn't support AXPress) or doesn't land. Right-clicks and
-        // multi-clicks have no AX action equivalent, so they always take the coordinate path.
-        if button == .left, clicks == 1,
-           let bundleIdentifier, !bundleIdentifier.isEmpty, element.actions.contains("AXPress"),
-           await axPress(nodeID: element.id, bundleIdentifier: bundleIdentifier) {
-            return clickSucceeded(context, elementID: elementID, label: label, strategy: "ax-press", point: nil)
+        // Prefer a native Accessibility action: it activates the control directly, so it works even when
+        // a coordinate click would miss (partially obscured, scrolled, zero-size hit area). Single
+        // left-click presses, right-click shows the context menu, and double-click opens — each only when
+        // the control advertises that action. Falls back to a guarded coordinate click on the frame
+        // center when no semantic action applies, there's no bundle id, or the AX action doesn't land.
+        let advertised = Set(element.actions)
+        if let bundleIdentifier, !bundleIdentifier.isEmpty,
+           let action = Self.semanticAction(button: button, clicks: clicks, advertised: advertised),
+           await axPerform(nodeID: element.id, action: action, bundleIdentifier: bundleIdentifier) {
+            return clickSucceeded(
+                context,
+                elementID: elementID,
+                label: label,
+                strategy: "ax-" + action.dropFirst(2).lowercased(),
+                point: nil
+            )
         }
         MacPointerInput.moveAndClick(at: center, button: button, clickCount: clicks)
         return clickSucceeded(context, elementID: elementID, label: label, strategy: "coordinate", point: center)
@@ -221,10 +251,10 @@ public final class AXComputerUseToolProvider {
         )
     }
 
-    /// Performs an `AXPress` on the control identified by `nodeID` via the Accessibility action backend,
-    /// which re-checks that `bundleIdentifier` is the frontmost app before acting. Returns whether the
-    /// press landed.
-    private func axPress(nodeID: String, bundleIdentifier: String) async -> Bool {
+    /// Performs an AX `action` (e.g. `AXPress`, `AXShowMenu`, `AXOpen`) on the control identified by
+    /// `nodeID` via the action backend, which re-checks that `bundleIdentifier` is the frontmost app and
+    /// that the control still advertises the action before acting. Returns whether the action landed.
+    private func axPerform(nodeID: String, action: String, bundleIdentifier: String) async -> Bool {
         let command = ActionEngineCommand(
             id: UUID().uuidString,
             traceID: "ax-click",
@@ -236,12 +266,12 @@ public final class AXComputerUseToolProvider {
             ),
             metadata: [
                 "accessibility.nodeID": nodeID,
-                "accessibility.action": "AXPress",
+                "accessibility.action": action,
                 "bundleIdentifier": bundleIdentifier,
                 "controlID": nodeID
             ]
         )
-        let outcome = await MacAccessibilityActionEngineInputBackend().execute(command)
+        let outcome = await actionBackend.execute(command)
         return outcome.executed
     }
 
