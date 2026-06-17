@@ -67,6 +67,9 @@ final class MacPermissionSetupModel: ObservableObject {
     private let requester: any MacPermissionRequesting
     private let defaults: UserDefaults
     private let requestedDefaultsKey = "MacPermissionSetup.RequestedKinds"
+    /// True once the screen-recording system prompt has been triggered in this app session. The
+    /// first Enable tap should let that prompt stand; only a later tap falls back to System Settings.
+    private var didTriggerScreenRecordingPrompt = false
 
     init(
         requester: any MacPermissionRequesting = SystemMacPermissionRequester(),
@@ -102,6 +105,19 @@ final class MacPermissionSetupModel: ObservableObject {
     func request(_ kind: MacPermissionKind) async {
         guard requestingKind == nil else { return }
 
+        // Screen recording is special: macOS shows its prompt only on the first
+        // CGRequestScreenCaptureAccess() from a not-determined state, and the call returns
+        // synchronously still "not granted" while that prompt is on screen. Re-calling it on a
+        // later tap just stacks a second identical prompt, and opening System Settings right after
+        // the first call would pop the settings window on top of the prompt before the user can
+        // answer it. So request exactly once; on any later tap (still not granted) skip the request
+        // and route straight to System Settings. That fallback also covers the stale-record case
+        // where the first request silently no-ops and no prompt ever appears.
+        if kind == .screenRecording, didTriggerScreenRecordingPrompt, statuses[kind] != .granted {
+            requester.openSystemSettings(for: kind)
+            return
+        }
+
         requestingKind = kind
         rememberRequested(kind)
         let status = await requester.request(kind)
@@ -109,13 +125,8 @@ final class MacPermissionSetupModel: ObservableObject {
         refresh()
         requestingKind = nil
 
-        // CGRequestScreenCaptureAccess() silently no-ops when a stale TCC record already
-        // exists — common after rebuilding the ad-hoc-signed dev app — so no system prompt
-        // appears and the app never lands in the Screen Recording list. When the request
-        // leaves us short of a grant, open the settings pane so there is always a visible,
-        // reliable path to flip the toggle.
         if kind == .screenRecording, statuses[kind] != .granted {
-            requester.openSystemSettings(for: kind)
+            didTriggerScreenRecordingPrompt = true
         }
     }
 
