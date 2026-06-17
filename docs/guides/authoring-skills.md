@@ -36,10 +36,34 @@ browser, `weather`).
 
 Built-in skills live in
 `apps/Donkey/Sources/DonkeyRuntime/Resources/BuiltInSkills/<id>/SKILL.md`.
-Learned skills are written to the app-support learned directory and discovered
-the same way. The folder name is the skill id; keep it the clean app or
-capability name (`music`), not a description
+Learned skills are written to the app-support learned directory, and skills the
+user installs from the catalog land in the app-support install directory; all
+three are discovered the same way. The folder name is the skill id; keep it the
+clean app or capability name (`music`), not a description
 (`play-music-in-apple-music-with-search`).
+
+## Install & distribution
+
+A skill does not have to ship inside the app. The same folder — `SKILL.md` plus
+an optional `scripts/` — is also the installable unit: it can be downloaded and
+added at runtime. There is no separate "plugin" concept; a skill that ships
+scripts is still just a skill.
+
+An installable skill may include a `manifest.json` at its root carrying only
+distribution metadata: `skillID`, `version`, an optional SHA-256 `checksum`, and
+an optional Ed25519 `signature`. The operating content stays in `SKILL.md` — the
+manifest never duplicates it, and a skill with no manifest still installs (its
+identity then comes from the `id:` frontmatter).
+
+On install the bundle is verified before it touches the live tree: the content
+checksum must match the manifest, a present signature must verify against a
+trusted key, then the skill is placed under
+`…/Skills/Installed/<id>/<version>/` with a `current` symlink. A failed
+verification leaves any previously installed version untouched. Discovery merges
+installed skills between built-in and learned, and a built-in always wins an id
+collision — installing a skill can never shadow a curated one. Installed scripts
+are treated as validated (they were verified at install), but still run through
+the normal per-action consent gates.
 
 ## Frontmatter
 

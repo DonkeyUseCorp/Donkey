@@ -327,6 +327,14 @@ Learned packs compound across sessions: a saved pack declares its app in
 later run driving that app preloads its learned playbook exactly like a
 built-in. Bundled packs win when both name the same app.
 
+Skills come from three discovered sources, merged in priority order: **built-in**
+(shipped in the app bundle), **installed** (added from the catalog into the
+on-disk install directory and verified at install time), and **learned**. A
+built-in always wins an id collision, so installing a skill can never break a
+curated one. Installed skills need not ship with the app — they are downloaded,
+checksum/signature-verified, placed under a versioned `current` directory, and
+picked up by the same discovery, so a turn can use them on its next step.
+
 ## Source Map
 
 | Module | Owns |
