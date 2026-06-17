@@ -1,8 +1,11 @@
 import Foundation
 
 public enum HarnessSkillSourceKind: String, Codable, Equatable, Sendable {
+    /// Curated skill shipped inside the app bundle.
     case builtIn
-    case plugin
+    /// A skill the user installed from the catalog into the on-disk install directory.
+    case installed
+    /// A skill the app authored by learning an app (the learned-applications directory).
     case userDirectory
     case workspace
     case remoteCatalog
@@ -245,6 +248,14 @@ public struct HarnessSkillFileSystemSource: Sendable {
         self.sourceKind = sourceKind
     }
 
+    private var validationProvenance: String {
+        switch sourceKind {
+        case .builtIn: return "bundleResource"
+        case .installed: return "installedCatalog"
+        default: return ""
+        }
+    }
+
     public func discover() -> [HarnessSkillDescriptor] {
         roots.flatMap { root in
             discover(in: root)
@@ -411,18 +422,22 @@ public struct HarnessSkillFileSystemSource: Sendable {
             // `scripts:` IDs declared in SKILL.md (e.g. `scripts-save-note`, not
             // `scripts-save-note-applescript`).
             let relativePathWithoutExtension = (relativePath as NSString).deletingPathExtension
+            // Built-in scripts are vetted in the repo; installed scripts are verified at install time
+            // (checksum + optional signature) before they ever reach this directory, so both are
+            // trusted-validated. Learned scripts start pending until the learning flow promotes them.
+            let trustedAtRest = sourceKind == .builtIn || sourceKind == .installed
             return HarnessSkillScriptDescriptor(
                 id: slug(relativePathWithoutExtension),
                 language: language,
                 purpose: titleCased(basename),
                 relativePath: relativePath,
-                validationStatus: sourceKind == .builtIn ? .validated : .pendingValidation,
+                validationStatus: trustedAtRest ? .validated : .pendingValidation,
                 requiredPermissions: requiredPermissions(for: language),
                 safetyClass: language == .appleScript ? .guardedInput : .sensitive,
                 metadata: [
                     "source": "filesystem",
                     "scriptDirectory": scriptsDirectory.path,
-                    "validation.provenance": sourceKind == .builtIn ? "bundleResource" : ""
+                    "validation.provenance": validationProvenance
                 ]
             )
         }

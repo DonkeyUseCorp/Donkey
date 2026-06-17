@@ -22,7 +22,7 @@ public enum BuiltInLocalAppSkillPacks {
     /// mid-session, so unlike the bundled packs they are re-discovered with a short TTL. This is
     /// what makes learning compound: a pack saved in one session is matched and preloaded like a
     /// built-in in every later session.
-    private final class LearnedPackCache: @unchecked Sendable {
+    private final class TTLDescriptorCache: @unchecked Sendable {
         private let lock = NSLock()
         private var cached: (descriptors: [HarnessSkillDescriptor], at: Date)?
 
@@ -36,9 +36,16 @@ public enum BuiltInLocalAppSkillPacks {
             cached = (fresh, Date())
             return fresh
         }
+
+        func invalidate() {
+            lock.lock()
+            defer { lock.unlock() }
+            cached = nil
+        }
     }
 
-    private static let learnedPackCache = LearnedPackCache()
+    private static let learnedPackCache = TTLDescriptorCache()
+    private static let installedPackCache = TTLDescriptorCache()
 
     public static func learnedDescriptors() -> [HarnessSkillDescriptor] {
         learnedPackCache.descriptors(ttl: 30) {
@@ -49,9 +56,38 @@ public enum BuiltInLocalAppSkillPacks {
         }
     }
 
-    /// Bundled packs first so a curated built-in wins over a learned pack for the same app.
+    /// Skills the user installed from the catalog. Each lives at `Installed/<id>/current`; like
+    /// learned packs they can appear mid-session, so they are re-discovered with a short TTL.
+    public static func installedDescriptors() -> [HarnessSkillDescriptor] {
+        installedPackCache.descriptors(ttl: 30) {
+            let roots = HarnessSkillInstaller().currentBundleRoots()
+            guard !roots.isEmpty else { return [] }
+            return HarnessSkillFileSystemSource(roots: roots, sourceKind: .installed).discover()
+        }
+    }
+
+    /// Drop the installed-skill cache so a just-installed/uninstalled skill is visible immediately
+    /// rather than after the TTL. Called by `HarnessSkillInstallManager` after a change.
+    public static func invalidateInstalledCache() {
+        installedPackCache.invalidate()
+    }
+
+    /// Built-in first, then installed, then learned, so a curated built-in always wins on an id
+    /// collision and an installed catalog skill wins over a learned one. Dedup by id also guards the
+    /// `HarnessSkillRegistry` (which keys uniquely on id) against a duplicate-id crash.
     public static func descriptors() -> [HarnessSkillDescriptor] {
-        cachedDescriptors + learnedDescriptors()
+        dedupedByID(cachedDescriptors + installedDescriptors() + learnedDescriptors())
+    }
+
+    private static func dedupedByID(
+        _ descriptors: [HarnessSkillDescriptor]
+    ) -> [HarnessSkillDescriptor] {
+        var seen = Set<String>()
+        var result: [HarnessSkillDescriptor] = []
+        for descriptor in descriptors where seen.insert(descriptor.id).inserted {
+            result.append(descriptor)
+        }
+        return result
     }
 
     public static func instructionSnippet(
