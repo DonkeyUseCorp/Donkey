@@ -780,7 +780,7 @@ struct GenericHarnessTests {
                 name: "Desktop Browser",
                 summary: "Operate browser tabs and inspect web pages.",
                 description: "Use for browser automation, screenshots, forms, and navigation.",
-                sourceKind: .plugin,
+                sourceKind: .installed,
                 tags: ["browser", "computer-use"],
                 providedToolNames: ["screen.observe", "element.perform"],
                 scripts: [
