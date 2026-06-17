@@ -57,8 +57,11 @@ instead of guessing.
 ## Validation
 
 Every planned tool call is validated before execution: the tool must exist in
-the registry, its permissions must be granted, the target window must hold
-focus, and its safety class must allow the action. AppleScript runs only as
+the registry, its permissions must be granted, its safety class must allow the
+action, and the target must pass the focus guard — frontmost for a foreground
+turn, or a safe on-screen window driven cursor-neutrally (a focus-neutral
+Accessibility action, or input delivered to the target process) for a
+background turn. AppleScript runs only as
 validated generated artifacts — free-form planner text is never executed
 directly. Completion requires evidence: the runtime rejects a completion whose
 last state-changing step has no later succeeded verification step.

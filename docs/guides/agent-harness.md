@@ -86,9 +86,14 @@ Accessibility roles — but never the raw string.
 
 **2. Understand once, then loop.** Before the per-step loop starts, an
 understanding boundary restates the goal, names the target app (or leaves it
-empty for system-tool tasks), extracts parameters and success criteria, and
-flags whether clarification is needed. Every later step plans against this
-stable, typed goal instead of re-reading the user's words.
+empty for system-tool tasks), extracts parameters and success criteria, flags
+whether clarification is needed, and chooses whether the work runs in the
+background (the agent acts without taking over the cursor or raising the app)
+or the foreground (the user is meant to watch — pulling something up, a
+walkthrough). Background is the default; foreground is the typed exception, and
+like every other field it is decided here, never matched from raw text. Every
+later step plans against this stable, typed goal instead of re-reading the
+user's words.
 
 Context sent to the model is always bounded. Compaction keeps the current
 turn, relevant task state, recent useful evidence, summaries, memory snippets,
@@ -228,7 +233,14 @@ Two invariants:
    these checks. If the target window lost focus between observe and act, the
    guard attempts one recovery activation of the target app (never any other
    app) before denying — and a denial names whatever is in front, so the
-   planner can react to the blocking window instead of failing opaquely.
+   planner can react to the blocking window instead of failing opaquely. On a
+   background turn, the guard skips activation for a safe, on-screen target:
+   a native Accessibility action runs as a focus-neutral cross-process call,
+   and coordinate clicks, scrolling, dragging, and keystrokes are delivered to
+   the target process directly — neither path raises the app or moves the
+   cursor. The guard still refuses background for a sensitive surface (login,
+   password, payment, system), falling back to the foreground activation path
+   so the work still completes.
 2. **Done means evidence.** A task isn't complete because the right app is
    focused. The harness needs post-action proof: a guarded command trace,
    visible text, selected state, an app-reported result, or a
@@ -241,7 +253,9 @@ labeling its path) is cosmetic and separate from input. AX, AppleScript,
 keyboard input, or guarded coordinate fallback do the real work. The overlay
 narrates every step, not just clicks: steps that move the pointer animate the
 cursor, and steps that don't (observe, shell, wait, verify) hold it in place
-and update its label, so a silent step never looks like a hang.
+and update its label, so a silent step never looks like a hang. On a background
+turn the agent moves no real pointer, so the traveling cursor is suppressed and
+progress is narrated through the notch text alone.
 
 ## AppleScript
 
