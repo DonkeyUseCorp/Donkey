@@ -71,13 +71,10 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
     public static let expandedTaskContentHeight: CGFloat = 280
     public static let inputHorizontalMargin: CGFloat = 14
     public static let compactCommandContentVerticalPadding: CGFloat = 30
-    /// Gap between rendering the collapsed baseline inside the expanded host and flipping
-    /// `isExpanded` to spring the surface open. The collapsed render must fully commit first —
-    /// otherwise the two passes coalesce and the notch snaps open instead of springing. One frame
-    /// was too tight once the collapsed surface grew heavier content (pointer cluster + chin), whose
-    /// SwiftUI render lands a frame late, so give the baseline a few frames to settle.
-    public static let openHostPreparationDelay: TimeInterval = 0.08
-    public static let closeAnimationDuration: TimeInterval = 0.22
+    /// How long the open window lingers after the content has animated out, before it closes
+    /// instantly. Just past the content-dismiss fade so the window holds its size until the content
+    /// is gone, then snaps shut.
+    public static let closeAnimationDuration: TimeInterval = 0.12
 
     public var voidWidth: CGFloat
     public var voidHeight: CGFloat

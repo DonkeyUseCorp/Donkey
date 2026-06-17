@@ -12,6 +12,9 @@ public struct UserQueryNotchStatusView: View {
     private let layout: UserQueryNotchLayout
     private let surfaceWidth: CGFloat
     private let surfaceHeight: CGFloat
+    /// Whether the host window is open. The window opens/closes instantly (no animation); only the
+    /// content animates. The collapsed chrome belongs to the closed window, so it tracks this.
+    private let isHostExpanded: Bool
     private let isExpanded: Bool
     private let isCurrentTaskPaused: Bool
     @Binding private var commandText: String
@@ -41,6 +44,7 @@ public struct UserQueryNotchStatusView: View {
         layout: UserQueryNotchLayout,
         surfaceWidth: CGFloat,
         surfaceHeight: CGFloat,
+        isHostExpanded: Bool,
         isExpanded: Bool,
         isCurrentTaskPaused: Bool,
         commandText: Binding<String>,
@@ -67,6 +71,7 @@ public struct UserQueryNotchStatusView: View {
         self.layout = layout
         self.surfaceWidth = surfaceWidth
         self.surfaceHeight = surfaceHeight
+        self.isHostExpanded = isHostExpanded
         self.isExpanded = isExpanded
         self.isCurrentTaskPaused = isCurrentTaskPaused
         _commandText = commandText
@@ -111,8 +116,9 @@ public struct UserQueryNotchStatusView: View {
             Color.black
 
             collapsedContentLayer
-                .opacity(isExpanded ? 0 : 1)
-                .animation(Self.restContentAnimation, value: isExpanded)
+                // The collapsed chrome belongs to the closed window; it appears/disappears with the
+                // window itself (instant), not with the animated content.
+                .opacity(isHostExpanded ? 0 : 1)
 
             expandedContent
                 .opacity(isExpanded ? 1 : 0)
@@ -137,12 +143,13 @@ public struct UserQueryNotchStatusView: View {
         .frame(width: animatingSurfaceWidth, height: animatingSurfaceHeight, alignment: .top)
         .clipShape(notchSurfaceShape(cornerRadius: animatingSurfaceCornerRadius))
         .shadow(
-            color: Color.black.opacity(isExpanded ? 0.5 : 0),
-            radius: isExpanded ? 24 : 0,
+            color: Color.black.opacity(isHostExpanded ? 0.5 : 0),
+            radius: isHostExpanded ? 24 : 0,
             x: 0,
-            y: isExpanded ? 12 : 0
+            y: isHostExpanded ? 12 : 0
         )
-        .animation(isExpanded ? Self.openEnvelopeAnimation : Self.closeEnvelopeAnimation, value: isExpanded)
+        // The window (black surface) snaps to its host size with no animation; only the content
+        // inside animates. This is the whole interaction: open the window instantly, animate content.
         .contentShape(Rectangle())
         .onDrop(
             of: [UTType.fileURL],
@@ -222,12 +229,15 @@ public struct UserQueryNotchStatusView: View {
         animatingSurfaceFrame.height
     }
 
+    /// The visible black surface fills the host window, which is resized instantly on open/close.
+    /// It is no longer animated — the spring lived here and is gone; only the content animates.
+    /// Collapsed chrome only renders while the host is collapsed, so this stays the collapsed size then.
     private var animatingSurfaceFrame: CGRect {
-        isExpanded ? layout.expandedSurfaceFrame : layout.collapsedSurfaceFrame
+        CGRect(x: 0, y: 0, width: surfaceWidth, height: surfaceHeight)
     }
 
     private var animatingSurfaceCornerRadius: CGFloat {
-        isExpanded ? layout.expandedCornerRadius : layout.collapsedCornerRadius
+        isHostExpanded ? layout.expandedCornerRadius : layout.collapsedCornerRadius
     }
 
     private var collapsedContent: some View {
@@ -1003,16 +1013,9 @@ public struct UserQueryNotchStatusView: View {
         layout.cornerRadius
     }
 
-    private static let openEnvelopeAnimation = Animation.spring(
-        response: 0.55,
-        dampingFraction: 0.82,
-        blendDuration: 0
-    )
-    private static let closeEnvelopeAnimation = Animation.easeOut(duration: 0.22)
-    private static let restContentAnimation = Animation.easeOut(duration: 0.15)
-    private static let expandedContentAnimation = Animation
-        .easeOut(duration: 0.3)
-        .delay(0.15)
+    // The window opens/closes instantly; only the content animates. These drive the content fade in
+    // and out — the surface (window) itself is no longer animated.
+    private static let expandedContentAnimation = Animation.easeOut(duration: 0.3)
     private static let expandedContentDismissAnimation = Animation.easeOut(duration: 0.1)
     private static let contentInset: CGFloat = 14
     private static let taskListCommandSpacing: CGFloat = 8

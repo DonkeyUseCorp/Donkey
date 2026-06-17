@@ -34,9 +34,7 @@ final class UserQueryOverlayController {
     // are cancelled in order instead of racing into a stale animation origin.
     private var statusHoverPhase: StatusHoverPhase = .collapsed
     private var statusCollapseWorkItem: DispatchWorkItem?
-    private var statusExpansionWorkItem: DispatchWorkItem?
     private var statusHostShrinkWorkItem: DispatchWorkItem?
-    private var statusSurfacedAckWorkItem: DispatchWorkItem?
     private var spawnDesktopEmergeWorkItems: [String: DispatchWorkItem] = [:]
     private var hasPrewarmedInputPanel = false
     private var hasPrewarmedStatusPanelExpansion = false
@@ -208,12 +206,8 @@ final class UserQueryOverlayController {
         timer = nil
         statusCollapseWorkItem?.cancel()
         statusCollapseWorkItem = nil
-        statusExpansionWorkItem?.cancel()
-        statusExpansionWorkItem = nil
         statusHostShrinkWorkItem?.cancel()
         statusHostShrinkWorkItem = nil
-        statusSurfacedAckWorkItem?.cancel()
-        statusSurfacedAckWorkItem = nil
         cancelSpawnDesktopEmergeWorkItems()
         statusHoverPhase = .collapsed
         stopActivationMonitoring()
@@ -607,6 +601,7 @@ final class UserQueryOverlayController {
             layout: metrics.layout,
             surfaceWidth: metrics.surfaceSize.width,
             surfaceHeight: metrics.surfaceSize.height,
+            isHostExpanded: isStatusHostExpanded,
             isExpanded: isStatusExpanded,
             isCurrentTaskPaused: model.isCurrentTaskPaused,
             commandText: Binding(
@@ -772,7 +767,7 @@ final class UserQueryOverlayController {
             statusCollapseWorkItem = nil
             statusHostShrinkWorkItem?.cancel()
             statusHostShrinkWorkItem = nil
-            guard statusHoverPhase != .preparingOpen, statusHoverPhase != .expanded else { return }
+            guard statusHoverPhase != .expanded else { return }
             applyStatusExpanded(true)
             return
         }
@@ -782,41 +777,21 @@ final class UserQueryOverlayController {
 
     private func applyStatusExpanded(_ isExpanded: Bool) {
         if isExpanded {
-            guard statusHoverPhase != .preparingOpen, statusHoverPhase != .expanded else { return }
+            guard statusHoverPhase != .expanded else { return }
 
-            statusHoverPhase = .preparingOpen
-            isStatusExpanded = false
-            // First render the collapsed visual notch inside the already-expanded
-            // host. The delayed flip below is the only step that should animate.
-            prepareStatusHostForExpansion()
-
-            let workItem = DispatchWorkItem { [weak self] in
-                guard let self,
-                      self.statusHoverPhase == .preparingOpen,
-                      self.isStatusHostExpanded,
-                      !self.isStatusExpanded else { return }
-                self.isStatusExpanded = true
-                self.statusHoverPhase = .expanded
-                self.statusExpansionWorkItem = nil
-                self.updateStatusPanelView()
-                self.focusStatusComposerTextInputIfAvailable()
-                // Opening the notch dismisses the completed pointers piled up in the collapsed
-                // surface — but only once the open spring has settled. Clearing them inside this
-                // expand transaction pulls the collapsed pointer cluster out of the animated
-                // subtree mid-spring, which makes SwiftUI snap the surface open instead of
-                // springing it. Deferring keeps the expand a pure `isExpanded` toggle.
-                self.scheduleSurfacedCompletionDismissal()
-            }
-            statusExpansionWorkItem = workItem
-            DispatchQueue.main.asyncAfter(
-                deadline: .now() + NotchMetrics.openHostPreparationDelay,
-                execute: workItem
-            )
+            // Mouse enter: open the window as fast as possible, with no animation, then animate the
+            // content in. The host jumps to its expanded size inside updateStatusPanelView and the
+            // black surface follows it instantly; only the expanded content animates, off the
+            // `isStatusExpanded` change. No two-phase spring, so nothing to race.
+            statusHoverPhase = .expanded
+            isStatusHostExpanded = true
+            isStatusExpanded = true
+            // Opening the notch dismisses the completed pointers piled up in the collapsed surface.
+            model.acknowledgeSurfacedCompletions()
+            updateStatusPanelView()
+            focusStatusComposerTextInputIfAvailable()
             return
         }
-
-        statusExpansionWorkItem?.cancel()
-        statusExpansionWorkItem = nil
 
         guard statusHoverPhase != .collapsed else { return }
         guard statusHoverPhase != .closing else {
@@ -827,53 +802,15 @@ final class UserQueryOverlayController {
         }
 
         if isStatusExpanded {
-            // The open already showed the full list; dismiss the surfaced completions now (the
-            // deferred post-spring dismissal may not have fired yet on a quick close) so the
-            // collapsing surface settles without the stale pointer cluster.
-            dismissSurfacedCompletionsForOpenedNotch()
+            // Mouse exit is the reverse: animate the content out first. The host stays expanded so
+            // the window keeps its size; it collapses instantly once the content has gone, when the
+            // host shrink fires below.
             isStatusExpanded = false
             updateStatusPanelView()
         }
 
         statusHoverPhase = .closing
         scheduleStatusHostShrink()
-    }
-
-    /// Dismisses the completed pointers surfaced in the collapsed notch once the open spring has
-    /// settled. Runs outside the expand transaction so opening stays a pure `isExpanded` toggle —
-    /// the collapsed surface is hidden behind the expanded content by the time it updates, so the
-    /// cluster's removal is never visible.
-    private func scheduleSurfacedCompletionDismissal() {
-        statusSurfacedAckWorkItem?.cancel()
-        guard model.notchSurfacedTasks.contains(where: { $0.status == .completed }) else {
-            statusSurfacedAckWorkItem = nil
-            return
-        }
-
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self, self.statusHoverPhase == .expanded else { return }
-            self.statusSurfacedAckWorkItem = nil
-            self.model.acknowledgeSurfacedCompletions()
-            self.updateStatusPanelView()
-        }
-        statusSurfacedAckWorkItem = workItem
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + Self.surfacedCompletionDismissDelay,
-            execute: workItem
-        )
-    }
-
-    private func dismissSurfacedCompletionsForOpenedNotch() {
-        statusSurfacedAckWorkItem?.cancel()
-        statusSurfacedAckWorkItem = nil
-        model.acknowledgeSurfacedCompletions()
-    }
-
-    private func prepareStatusHostForExpansion() {
-        isStatusHostExpanded = true
-        positionStatusPanel()
-        updateStatusPanelView()
-        flushStatusHostLayout()
     }
 
     private func prewarmStatusPanelExpansion() {
@@ -1030,10 +967,6 @@ final class UserQueryOverlayController {
     }
 
     private static let statusChinBandHeight: CGFloat = 20
-
-    /// How long after the notch starts opening to dismiss its surfaced completion pointers. Sits just
-    /// past the open spring's settle so the dismissal never perturbs the expand animation.
-    private static let surfacedCompletionDismissDelay: TimeInterval = 0.6
 
     private var statusExpandedContentHeight: CGFloat {
         if hasStatusTaskDisplayText || !model.notchTasks.isEmpty || model.updateState.headerButtonTitle != nil {
@@ -1492,7 +1425,6 @@ private enum StatusHoverPhase {
     // the SwiftUI notch surface. These phases keep quick hover churn from leaving
     // one layer expanded while the other is still opening or closing.
     case collapsed
-    case preparingOpen
     case expanded
     case closing
 }
