@@ -604,7 +604,11 @@ public struct UserQueryNotchStatusView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .frame(minHeight: 48)
+        // Tall enough that the bottom-pinned elapsed time always clears the top-pinned controls: a
+        // single-line row would otherwise be short enough to crowd the time right under the close
+        // button, while a multi-line row sits them comfortably apart — so short and tall rows space
+        // the time identically.
+        .frame(minHeight: 64)
         .background(Color.white.opacity(0.07))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
