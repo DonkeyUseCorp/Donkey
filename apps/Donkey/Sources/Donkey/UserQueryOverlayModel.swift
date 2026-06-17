@@ -968,7 +968,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
                 task.metadata["genericHarness.taskStatus"] = "interrupted"
                 task.metadata["genericHarness.newGoal"] = text
             } else {
-                task.detail = "Running"
+                task.detail = Self.runningSeedDetail
                 task.status = .running
             }
             task.updatedAt = Date()
@@ -984,7 +984,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         let task = UserQueryNotchTask(
             id: UUID().uuidString,
             title: taskLabel,
-            detail: "Running",
+            detail: Self.runningSeedDetail,
             commandText: text,
             status: .running,
             accentIndex: nextAccentIndex
@@ -1046,23 +1046,36 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             assets: taskStore.loadAssets(taskID: taskID),
             isFollowUp: isFollowUp,
             turnSource: source,
-            spawnProgressChanged: spawnProgressHandler(for: spawnID),
+            spawnProgressChanged: runProgressHandler(taskID: taskID, spawnID: spawnID),
             agentVisualizationChanged: agentVisualizationHandler(for: spawnID)
         )
     }
 
-    private func spawnProgressHandler(
-        for spawnID: String?
+    /// Streams the agent's live narration into the running task's status line — the planner's per-step
+    /// reason as it works ("Working out what you need", the restated goal, each tool's one-line summary)
+    /// — so the notch shows what the model is doing now instead of a static seed. The task title keeps
+    /// showing the user's prompt; only the status subtext advances. When a spawn pointer is present its
+    /// cursor label follows the same narration. Returned unconditionally (even with pointers disabled)
+    /// so the status line always advances past its "Thinking" seed.
+    private func runProgressHandler(
+        taskID: String,
+        spawnID: String?
     ) -> (@MainActor @Sendable (UserQuerySpawnProgressUpdate) -> Void)? {
-        guard let spawnID else { return nil }
-
         return { [weak self] update in
-            self?.updateSpawn(
-                id: spawnID,
-                label: update.label,
-                targetHint: update.targetHint,
-                phase: update.phase
-            )
+            guard let self else { return }
+
+            let label = update.label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !label.isEmpty, self.task(withID: taskID)?.status == .running {
+                self.updateTask(id: taskID, detail: label)
+            }
+            if let spawnID {
+                self.updateSpawn(
+                    id: spawnID,
+                    label: update.label,
+                    targetHint: update.targetHint,
+                    phase: update.phase
+                )
+            }
         }
     }
 
@@ -1261,6 +1274,11 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
 
         return UserQueryAccentPalette.index(after: mostRecentAccentIndex)
     }
+
+    /// The status line a freshly-started task shows before the agent's first narration lands. Uses the
+    /// centralized activity vocabulary ("Thinking") rather than a bare "Running", and is replaced step
+    /// by step as `runProgressHandler` streams the planner's narration in.
+    private static let runningSeedDetail = UserQueryActivity.Kind.working.label
 
     private static func taskLabel(for text: String) -> String {
         let collapsed = collapsedDisplayText(for: text)
