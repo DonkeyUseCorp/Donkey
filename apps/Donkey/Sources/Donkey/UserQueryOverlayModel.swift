@@ -569,7 +569,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
 
         activeTaskIDs.insert(taskID)
         lastActiveTaskID = taskID
-        // The live line falls back to the running activity ("Working"); the record logs "Resuming".
+        // The live line falls back to the running activity ("Thinking"); the record logs "Resuming".
         announceLifecycle(taskID: taskID, UserQueryActivity(kind: .resumed), status: .running, liveDetail: "")
         updateSpawn(id: spawnStates.first { $0.taskID == taskID }?.id, resumesWork: true)
         promptState.leadingSignalLevel = .thinking
@@ -633,7 +633,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         activeTaskIDs.insert(taskID)
         lastActiveTaskID = taskID
         // After approval the task simply resumes; the live line falls back to the running activity
-        // ("Working") rather than narrating an internal "approving permission" step.
+        // ("Thinking") rather than narrating an internal "approving permission" step.
         announceLifecycle(taskID: taskID, UserQueryActivity(kind: .resumed), status: .running, liveDetail: "")
         promptState.leadingSignalLevel = .thinking
         promptState.promptText = task.title
@@ -1216,7 +1216,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         case .needsAttention:
             return "Needs your attention"
         case .running:
-            return "Working"
+            return "Thinking"
         case .paused:
             return "Paused"
         case .chatting:

@@ -15,13 +15,12 @@ public struct UserQueryActivity: Equatable, Sendable {
     /// `systemImage`, and `transcriptIcon` — those switches are exhaustive so the compiler flags any
     /// case left unpresented.
     public enum Kind: String, Codable, Equatable, Sendable, CaseIterable {
-        case working          // generic in-progress / thinking
+        case working          // generic in-progress / thinking (the planner deciding a next step)
         case observing        // reading the screen (accessibility / vision)
         case reading          // reading a file or document
-        case editing          // changing UI state (click, type, drag)
+        case editing          // operating the UI (click, type, press, drag, scroll)
         case searching        // looking something up
         case running          // running a shell command / skill
-        case browsing         // navigating the web or an app
         case verifying        // checking the result holds
         case message          // a conversational reply
         case waitingForInput  // needs the user to answer
@@ -64,13 +63,12 @@ public extension UserQueryActivity.Kind {
     /// The concise label shown when an activity has no specifics of its own.
     var label: String {
         switch self {
-        case .working: return "Working"
+        case .working: return "Thinking"
         case .observing: return "Looking at the screen"
         case .reading: return "Reading"
-        case .editing: return "Making changes"
+        case .editing: return "Acting on screen"
         case .searching: return "Searching"
         case .running: return "Running a command"
-        case .browsing: return "Browsing"
         case .verifying: return "Verifying"
         case .message: return "Conversation"
         case .waitingForInput: return "Waiting for your reply"
@@ -91,10 +89,9 @@ public extension UserQueryActivity.Kind {
         case .working: return "ellipsis"
         case .observing: return "eye"
         case .reading: return "doc.text"
-        case .editing: return "pencil"
+        case .editing: return "cursorarrow.rays"
         case .searching: return "magnifyingglass"
         case .running: return "terminal"
-        case .browsing: return "safari"
         case .verifying: return "checkmark.seal"
         case .message: return "text.bubble"
         case .waitingForInput: return "questionmark.circle"
@@ -112,13 +109,12 @@ public extension UserQueryActivity.Kind {
     /// Emoji used in the markdown conversation record (`thread.md`).
     var transcriptIcon: String {
         switch self {
-        case .working: return "⚙️"
+        case .working: return "💭"
         case .observing: return "👀"
         case .reading: return "📄"
-        case .editing: return "✏️"
+        case .editing: return "🖱️"
         case .searching: return "🔍"
         case .running: return "⌨️"
-        case .browsing: return "🧭"
         case .verifying: return "✅"
         case .message: return "💬"
         case .waitingForInput: return "❓"

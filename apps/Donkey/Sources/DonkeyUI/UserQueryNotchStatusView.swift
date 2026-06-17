@@ -821,7 +821,7 @@ public struct UserQueryNotchStatusView: View {
         case .ready:
             return "Ready"
         case .thinking:
-            return "Working"
+            return "Thinking"
         }
     }
 

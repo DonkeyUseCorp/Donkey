@@ -35,12 +35,12 @@ struct UserQueryActivityTests {
     }
 
     @Test
-    func runningStatusWithNoNarrationReadsAsWorkingNotAnInternalString() {
+    func runningStatusWithNoNarrationReadsAsThinkingNotAnInternalString() {
         // The post-approval / post-resume state: status running, no detail. The line must derive a
         // clean activity label, never a hardcoded "Approved — continuing".
         let activity = UserQueryActivity.current(for: task(status: .running))
         #expect(activity.kind == .working)
-        #expect(activity.displayText == "Working")
+        #expect(activity.displayText == "Thinking")
     }
 
     @Test
