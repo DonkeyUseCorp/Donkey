@@ -872,26 +872,30 @@ public struct UserQueryNotchStatusView: View {
     }
 
     /// The collapsed right gutter follows the prototype exactly: it only ever carries an icon or the
-    /// live clock — one of the three supported notifications (an attention glyph, a missing-permissions
-    /// shield, or an update cloud) or the run time while a task runs, otherwise nothing. A finished task
-    /// is never labelled here; it keeps surfacing as a colored pointer + chin line instead. The time
-    /// only rides alongside the chin (a running task always narrates), so the gutter never shows a
+    /// live clock — and the icon shows ONLY when a task is actively blocked on the user (a question to
+    /// answer, a review to give, or a permission to approve), the run time while a task runs, or an
+    /// update cloud, otherwise nothing. A finished task is never labelled here; it keeps surfacing as a
+    /// colored pointer + chin line instead. Crucially, a benign `needsAttention` task (an interrupted
+    /// run restored across launches, an upload, a failed resume) does NOT raise the attention glyph —
+    /// it is not waiting on the user, so it stays out of the gutter and surfaces only in the list. The
+    /// time only rides alongside the chin (a running task always narrates), so the gutter never shows a
     /// lonely clock; every state's full elapsed total lives in the expanded row.
     @ViewBuilder
     private var collapsedRightSlot: some View {
         if let task = primaryTask {
             switch task.status {
-            case .waitingForClarification, .needsAttention, .waitingForReview:
-                // Attention: the agent needs the user to look at or answer something.
+            case .waitingForClarification, .waitingForReview:
+                // Attention: the agent is blocked waiting for the user to answer or review something.
                 slotIcon("exclamationmark.bubble")
             case .waitingForPermission:
                 // Missing permission to continue.
                 slotIcon("shield")
             case .running:
                 compactLiveTime(since: task.createdAt)
-            case .completed, .paused, .interrupted, .failed, .chatting:
-                // The gutter only ever carries icons or the live clock — a completed task keeps
-                // surfacing as a colored pointer + chin line instead, and the rest surface in the list.
+            case .completed, .paused, .interrupted, .failed, .chatting, .needsAttention:
+                // The gutter only ever carries the waiting-on-user icons or the live clock — a completed
+                // task keeps surfacing as a colored pointer + chin line, and the rest (including a benign
+                // needsAttention) surface in the list without nagging the collapsed gutter.
                 EmptyView()
             }
         } else if updateState.isActionable {
