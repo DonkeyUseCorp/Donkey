@@ -15,6 +15,7 @@ type Props = {
   expanded: boolean;
   setExpanded: (expanded: boolean) => void;
   liveTasks: LiveTask[];
+  surfacedTasks: LiveTask[];
   chinUpdate: NotchUpdate | null;
   onAddTask: (title: string) => void;
   onStopTask: (id: string) => void;
@@ -29,6 +30,11 @@ const METRICS = {
   contentAreaWidth: 34,
   // Chin hangs below the real notch: single streaming line, 9px font, no top padding.
   chinHeight: 20,
+  // Surfaced pointers (running + undismissed completions) stack as an overlapping cluster.
+  pointerSize: 14,
+  pointerStepX: 8,
+  pointerStepY: 3,
+  maxClusterPointers: 3,
   // Simulated notch grows to fit a two-line message inline.
   simulatedMessageHeight: 50,
   expandedWidth: 604,
@@ -85,6 +91,7 @@ export function Notch({
   expanded,
   setExpanded,
   liveTasks,
+  surfacedTasks,
   chinUpdate,
   onAddTask,
   onStopTask,
@@ -93,11 +100,18 @@ export function Notch({
 }: Props) {
   const isRunning = isRunningState(state);
   const isActive = hasActiveTask(state);
-  const isComplete = state === 'complete';
   const needsAttention = state === 'needs-input';
   // The collapsed arrow + chin follow the streaming task update; silhouette when nothing is streaming.
   const streaming = chinUpdate !== null;
   const activeColor = chinUpdate?.color ?? 'rgb(29,158,117)';
+
+  // The left content area surfaces a cluster of pointers — running tasks plus completions the user
+  // hasn't dismissed yet. One pointer renders alone; several overlap as a centered, cascading stack
+  // (newest on top), capped so the notch never crowds. A completed pointer is colored but still.
+  const clusterTasks = surfacedTasks.slice(0, METRICS.maxClusterPointers);
+  const clusterCount = clusterTasks.length;
+  const clusterWidth = METRICS.pointerSize + METRICS.pointerStepX * Math.max(0, clusterCount - 1);
+  const clusterHeight = METRICS.pointerSize + METRICS.pointerStepY * Math.max(0, clusterCount - 1);
 
   // Collapsed run clock — drives the right-slot elapsed time while a task is active.
   const [runningSeconds, setRunningSeconds] = useState(0);
@@ -115,8 +129,9 @@ export function Notch({
     return () => window.clearInterval(interval);
   }, [isRunning]);
 
-  // The chin (real) / inline (simulated) shows the current streaming update; hidden when expanded.
-  const message = !expanded && chinUpdate ? chinUpdate.message : '';
+  // The chin (real) / inline (simulated) shows the current streaming update; hidden when expanded or
+  // once nothing is surfaced, so it never lingers a beat after the last pointer is dismissed.
+  const message = !expanded && chinUpdate && surfacedTasks.length > 0 ? chinUpdate.message : '';
   const collapsedTime = formatCompactTime(runningSeconds);
 
   // App-level notices share a single slot; permissions outranks update since it blocks functionality.
@@ -219,14 +234,43 @@ export function Notch({
             pointerEvents: 'none',
           }}
         >
-          {/* Left content area — arrow silhouette when not active; colored, pulsing while running. */}
+          {/* Left content area — a silhouette when nothing is surfaced, otherwise the pointer cluster
+              centered in the lane: one colored pointer, or an overlapping stack for several tasks. */}
           <div
-            className="absolute left-0 top-0 grid place-items-center"
+            className="absolute left-0 top-0"
             style={{ width: METRICS.contentAreaWidth, height: contentRowHeight }}
           >
-            <div style={{ animation: streaming ? 'notchArrowPulse 1.6s ease-in-out infinite' : undefined }}>
-              <DonkeyCursor color={activeColor} size={14} silhouette={!streaming} />
-            </div>
+            {clusterCount === 0 ? (
+              <div className="grid h-full w-full place-items-center">
+                <DonkeyCursor color={activeColor} size={METRICS.pointerSize} silhouette />
+              </div>
+            ) : (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: (METRICS.contentAreaWidth - clusterWidth) / 2,
+                  top: (contentRowHeight - clusterHeight) / 2,
+                  width: clusterWidth,
+                  height: clusterHeight,
+                }}
+              >
+                {/* Oldest first so the newest pointer lands on top, furthest along the cascade. */}
+                {[...clusterTasks].reverse().map((task, index) => (
+                  <div
+                    key={task.id}
+                    style={{
+                      position: 'absolute',
+                      left: index * METRICS.pointerStepX,
+                      top: index * METRICS.pointerStepY,
+                      zIndex: index,
+                      animation: task.status === 'running' ? 'notchArrowPulse 1.6s ease-in-out infinite' : undefined,
+                    }}
+                  >
+                    <DonkeyCursor color={task.color} size={METRICS.pointerSize} />
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Right content area — notifications surface here only when needed, otherwise run time. */}
@@ -237,14 +281,6 @@ export function Notch({
               style={{ width: METRICS.contentAreaWidth, height: contentRowHeight }}
             >
               <MessageCircleWarning size={15} strokeWidth={1.9} />
-            </div>
-          ) : isComplete ? (
-            // A finished task shows a status, not a clock — the elapsed total lives in the expanded row.
-            <div
-              className="absolute right-0 top-0 grid place-items-center whitespace-nowrap text-[11px] leading-none text-white/[0.92]"
-              style={{ width: METRICS.contentAreaWidth, height: contentRowHeight }}
-            >
-              Done
             </div>
           ) : isRunning && streaming ? (
             // Live run time only rides alongside the chin narration; without a chin the gutter stays empty.

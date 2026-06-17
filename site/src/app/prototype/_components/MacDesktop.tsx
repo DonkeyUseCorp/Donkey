@@ -20,6 +20,7 @@ type Props = {
   promptTextHeight: number;
   onPromptSubmit: (event: FormEvent<HTMLFormElement>) => void;
   liveTasks: LiveTask[];
+  surfacedTasks: LiveTask[];
   chinUpdate: NotchUpdate | null;
   onAddTask: (title: string) => void;
   onStopTask: (id: string) => void;
@@ -56,6 +57,7 @@ export function MacDesktop({
   promptTextHeight,
   onPromptSubmit,
   liveTasks,
+  surfacedTasks,
   chinUpdate,
   onAddTask,
   onStopTask,
@@ -110,6 +112,7 @@ export function MacDesktop({
         expanded={notchExpanded}
         setExpanded={setNotchExpanded}
         liveTasks={liveTasks}
+        surfacedTasks={surfacedTasks}
         chinUpdate={chinUpdate}
         onAddTask={onAddTask}
         onStopTask={onStopTask}

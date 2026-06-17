@@ -31,6 +31,10 @@ export default function App() {
   const [liveTasks, setLiveTasks] = useState<LiveTask[]>(INITIAL_LIVE_TASKS);
   // The update currently streaming into the collapsed notch chin (rotates across running tasks).
   const [chinUpdate, setChinUpdate] = useState<NotchUpdate | null>(INITIAL_UPDATE);
+  // Completed tasks keep surfacing in the collapsed notch until the user expands; expanding marks
+  // them acknowledged so they stop surfacing as floating pointers (they stay in the expanded list).
+  const [acknowledgedDoneIds, setAcknowledgedDoneIds] = useState<Set<string>>(() => new Set());
+  const acknowledgedDoneRef = useRef(acknowledgedDoneIds);
   const [activeTaskId, setActiveTaskId] = useState<TaskId>('compare');
   const [notchExpanded, setNotchExpanded] = useState(false);
   // Center composer is summoned with a double-tap of Cmd (like the app), hidden otherwise.
@@ -114,18 +118,26 @@ export default function App() {
     liveTasksRef.current = liveTasks;
   }, [liveTasks]);
 
-  // Rotate the collapsed chin through running tasks' streaming updates, one at a time.
+  // Keep a ref of the acknowledged set so the rotation timer can read it without re-subscribing.
+  useEffect(() => {
+    acknowledgedDoneRef.current = acknowledgedDoneIds;
+  }, [acknowledgedDoneIds]);
+
+  // Rotate the collapsed chin through running tasks' streaming updates, one at a time. When nothing
+  // is running, keep surfacing the most recent completed task's result until the user dismisses it.
   useEffect(() => {
     const interval = window.setInterval(() => {
-      const running = liveTasksRef.current.filter((task) => task.status === 'running');
-      if (running.length === 0) {
-        setChinUpdate(null);
+      const tasks = liveTasksRef.current;
+      const running = tasks.filter((task) => task.status === 'running');
+      if (running.length > 0) {
+        updateCounterRef.current += 1;
+        const task = running[updateCounterRef.current % running.length];
+        const message = UPDATE_MESSAGES[updateCounterRef.current % UPDATE_MESSAGES.length];
+        setChinUpdate({ color: task.color, message });
         return;
       }
-      updateCounterRef.current += 1;
-      const task = running[updateCounterRef.current % running.length];
-      const message = UPDATE_MESSAGES[updateCounterRef.current % UPDATE_MESSAGES.length];
-      setChinUpdate({ color: task.color, message });
+      const done = tasks.find((task) => task.status === 'done' && !acknowledgedDoneRef.current.has(task.id));
+      setChinUpdate(done ? { color: done.color, message: done.detail } : null);
     }, 2600);
 
     return () => window.clearInterval(interval);
@@ -168,6 +180,29 @@ export default function App() {
 
   const isNotchExpanded = notchExpanded || state === 'expanded-pinned';
 
+  // Expanding the notch dismisses the surfaced completions: the running tasks keep streaming, but the
+  // completed pointers that piled up in the collapsed notch are acknowledged and stop floating there.
+  useEffect(() => {
+    if (!isNotchExpanded) return;
+
+    setAcknowledgedDoneIds((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const task of liveTasksRef.current) {
+        if (task.status === 'done' && !next.has(task.id)) {
+          next.add(task.id);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [isNotchExpanded]);
+
+  // The collapsed notch surfaces running tasks and completed-but-undismissed tasks as a pointer cluster.
+  const surfacedTasks = liveTasks.filter(
+    (task) => task.status === 'running' || (task.status === 'done' && !acknowledgedDoneIds.has(task.id)),
+  );
+
   return (
     <div className="relative min-h-screen">
       <MacDesktop
@@ -186,6 +221,7 @@ export default function App() {
         promptTextHeight={promptTextHeight}
         onPromptSubmit={handleSubmit}
         liveTasks={liveTasks}
+        surfacedTasks={surfacedTasks}
         chinUpdate={chinUpdate}
         onAddTask={addLiveTask}
         onStopTask={stopLiveTask}
