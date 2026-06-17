@@ -506,14 +506,14 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 if let result = step.toolResult {
                     // One grouped block per step through the trace manager: the model's full thought
                     // summary (persisted here and nowhere else, so the planning context stays bounded),
-                    // its one-line reason, the action with its input, the output, any planning retries
+                    // its warm one-line narration, the action with its input, the output, any planning retries
                     // hit while choosing this step, and the timing the manager attaches — decision time
                     // vs. tool time plus which sensing modality the step used. The overlay/progress gets
                     // only the clipped one-line narration below.
                     trace.recordStep(
                         number: step.task.toolHistory.count,
                         thought: planner.lastThinking,
-                        reason: planner.lastNarration,
+                        narration: planner.lastNarration,
                         tool: result.toolName,
                         input: step.task.toolHistory.last?.call.input ?? [:],
                         status: result.status.rawValue,

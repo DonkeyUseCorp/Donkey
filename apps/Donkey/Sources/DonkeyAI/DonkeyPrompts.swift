@@ -272,8 +272,16 @@ public enum DonkeyPrompts {
           not the process: what is now true ("Playing Yellow by Coldplay"), not the steps taken.
           Never fake completion — if the goal could not be reached, say plainly what happened and
           the most likely reason, with any caveat the user needs.
-        Return JSON: {"tool": "<one tool name>", "input": {"key": "value", ...}, "reason": "<one sentence>"}. \
-        ALWAYS include "input" with every required field for the chosen tool filled, exactly as its schema names them; use {} only for a tool that needs no input.\(retryNote.map { "\nIMPORTANT: \($0)" } ?? "")
+        Return JSON: {"tool": "<one tool name>", "input": {"key": "value", ...}, "narration": "<one warm sentence>"}. \
+        ALWAYS include "input" with every required field for the chosen tool filled, exactly as its schema names them; use {} only for a tool that needs no input.
+        "narration" is the one line the user reads for this step, shown live and saved to the conversation. \
+        Write it in the first person, present or near tense, as if you were narrating your work to the person \
+        watching — warm and plain, never robotic ("I'll start by reading the attached screenshots and finding \
+        the relevant notch UI code.", "Let me check what's already on screen before I click.", "Found the file — \
+        now I'll make the edit."). Say what you're doing this step and why in one breath. This narrates the \
+        process; it is NOT the result. Reporting what is now true for the user is done only in conversation.respond \
+        and run.complete, which still report the result, not the steps. Keep narration to one sentence; do not \
+        restate the whole plan or repeat the previous step.\(retryNote.map { "\nIMPORTANT: \($0)" } ?? "")
         """
     }
 

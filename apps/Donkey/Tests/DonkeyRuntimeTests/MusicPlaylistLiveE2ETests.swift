@@ -139,7 +139,7 @@ struct MusicPlaylistLiveE2ETests {
             transcript.step(
                 number: step.task.toolHistory.count,
                 thought: nil,
-                reason: nil,
+                narration: nil,
                 tool: result.toolName,
                 input: step.task.toolHistory.last?.call.input ?? [:],
                 status: result.status.rawValue,

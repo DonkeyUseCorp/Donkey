@@ -10,7 +10,7 @@ struct ThreadTranscriptTests {
         transcript.step(
             number: 3,
             thought: "Search worked, so now I create the playlist container before adding songs.",
-            reason: "Creating the \"Best of 2000\" playlist.",
+            narration: "Creating the \"Best of 2000\" playlist.",
             tool: "music.playlist",
             input: ["action": "create", "name": "Best of 2000"],
             status: "failed",
@@ -23,7 +23,12 @@ struct ThreadTranscriptTests {
         #expect(text.contains("⚠️ planning attempt 1/3"))
         #expect(text.contains("### 🧠 Decision"))
         #expect(text.contains("**Thought:** Search worked"))
-        #expect(text.contains("**Reason:** Creating the \"Best of 2000\" playlist."))
+        // The narration is the warm lead line of the block — rendered plainly, not behind a label.
+        #expect(text.contains("\nCreating the \"Best of 2000\" playlist.\n"))
+        // It leads the decision block, above the fuller thought summary.
+        let narrationRange = try #require(text.range(of: "Creating the \"Best of 2000\" playlist."))
+        let thoughtRange = try #require(text.range(of: "**Thought:**"))
+        #expect(narrationRange.lowerBound < thoughtRange.lowerBound)
         #expect(text.contains("**Action:** `music.playlist`"))
         #expect(text.contains("action: create\nname: Best of 2000"))
         #expect(text.contains("### 📄 Output — `failed`"))
@@ -36,12 +41,12 @@ struct ThreadTranscriptTests {
     }
 
     @Test
-    func stepOmitsAbsentThoughtAndReasonLabels() throws {
+    func stepOmitsAbsentThoughtAndNarration() throws {
         let transcript = makeTranscript()
         transcript.step(
             number: 1,
             thought: nil,
-            reason: "  ",
+            narration: "  ",
             tool: "music.status",
             input: [:],
             status: "succeeded",
@@ -50,8 +55,8 @@ struct ThreadTranscriptTests {
 
         let text = try threadText(transcript)
         #expect(!text.contains("**Thought:**"))
-        #expect(!text.contains("**Reason:**"))
-        #expect(text.contains("**Action:** `music.status`"))
+        // Blank narration is dropped: the decision block goes straight to the action.
+        #expect(text.contains("### 🧠 Decision\n\n**Action:** `music.status`"))
         #expect(text.contains("(no input)"))
         #expect(text.contains("### 📄 Output — `succeeded`"))
     }
@@ -116,7 +121,7 @@ struct ThreadTranscriptTests {
         transcript.step(
             number: 2,
             thought: nil,
-            reason: "Reading the screen.",
+            narration: "Reading the screen.",
             tool: "vision.capture",
             input: [:],
             status: "succeeded",
@@ -138,7 +143,7 @@ struct ThreadTranscriptTests {
         transcript.step(
             number: 1,
             thought: nil,
-            reason: nil,
+            narration: nil,
             tool: "shell_exec",
             input: ["command": "ls"],
             status: "succeeded",

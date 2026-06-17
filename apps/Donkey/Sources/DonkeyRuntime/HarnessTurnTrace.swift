@@ -67,7 +67,7 @@ public final class HarnessTurnTrace: HarnessTurnTracing, @unchecked Sendable {
     public func recordStep(
         number: Int,
         thought: String?,
-        reason: String?,
+        narration: String?,
         tool: String,
         input: [String: String],
         status: String,
@@ -87,7 +87,7 @@ public final class HarnessTurnTrace: HarnessTurnTracing, @unchecked Sendable {
         transcript.step(
             number: number,
             thought: thought,
-            reason: reason,
+            narration: narration,
             tool: tool,
             input: input,
             status: status,

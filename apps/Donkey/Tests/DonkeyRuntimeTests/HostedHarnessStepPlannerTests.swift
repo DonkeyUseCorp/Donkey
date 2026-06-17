@@ -186,8 +186,8 @@ struct HostedHarnessStepPlannerTests {
         // A refusal or truncated reply decodes with no tool. That must re-ask once and then fail
         // safe — never run.complete, which would record an unverified claim as success.
         let httpClient = SequencedHTTPClient(responses: [
-            (Data(#"{"output_text":"{\"tool\":\"\",\"reason\":\"cannot help\"}"}"#.utf8), 200),
-            (Data(#"{"output_text":"{\"tool\":\"\",\"reason\":\"cannot help\"}"}"#.utf8), 200)
+            (Data(#"{"output_text":"{\"tool\":\"\",\"narration\":\"cannot help\"}"}"#.utf8), 200),
+            (Data(#"{"output_text":"{\"tool\":\"\",\"narration\":\"cannot help\"}"}"#.utf8), 200)
         ])
         let planner = makePlanner(httpClient: httpClient, understanding: nil)
 
@@ -200,7 +200,7 @@ struct HostedHarnessStepPlannerTests {
     @Test
     func emptyToolNameRecoversWhenTheRetryNamesATool() async {
         let httpClient = SequencedHTTPClient(responses: [
-            (Data(#"{"output_text":"{\"tool\":\"\",\"reason\":\"unsure\"}"}"#.utf8), 200),
+            (Data(#"{"output_text":"{\"tool\":\"\",\"narration\":\"unsure\"}"}"#.utf8), 200),
             (cannedDecision(tool: "ax.observe"), 200)
         ])
         let planner = makePlanner(httpClient: httpClient, understanding: nil)
@@ -218,7 +218,7 @@ struct HostedHarnessStepPlannerTests {
         // the legacy integer budget), and the model's thought summary (returned separately from
         // output_text so it can't corrupt the decision JSON) is captured for the thread transcript.
         let httpClient = FixtureHTTPClient(
-            data: Data(#"{"output_text":"{\"tool\":\"ax.observe\",\"reason\":\"look first\"}","reasoning_text":"The window state is unknown, so I observe before acting."}"#.utf8),
+            data: Data(#"{"output_text":"{\"tool\":\"ax.observe\",\"narration\":\"look first\"}","reasoning_text":"The window state is unknown, so I observe before acting."}"#.utf8),
             statusCode: 200
         )
         let planner = makePlanner(httpClient: httpClient, understanding: nil)
@@ -238,8 +238,8 @@ struct HostedHarnessStepPlannerTests {
         // which only yields invalidInput and, repeated, fails the run. The planner must retry once with
         // a corrective note, then use the corrected call.
         let httpClient = SequencedHTTPClient(responses: [
-            (Data(#"{"output_text":"{\"tool\":\"shell_exec\",\"reason\":\"verify\"}"}"#.utf8), 200),
-            (Data(#"{"output_text":"{\"tool\":\"shell_exec\",\"input\":{\"command\":\"date\"},\"reason\":\"verify\"}"}"#.utf8), 200)
+            (Data(#"{"output_text":"{\"tool\":\"shell_exec\",\"narration\":\"verify\"}"}"#.utf8), 200),
+            (Data(#"{"output_text":"{\"tool\":\"shell_exec\",\"input\":{\"command\":\"date\"},\"narration\":\"verify\"}"}"#.utf8), 200)
         ])
         let planner = HostedHarnessStepPlanner(
             backend: DonkeyBackendInferenceClient(
@@ -279,7 +279,7 @@ struct HostedHarnessStepPlannerTests {
         // yields invalidInput, which tells the model nothing the retry notes didn't. Each attempt's
         // raw reply is recorded so the thread shows whether the model emitted an empty input object
         // or the field was lost in response mapping.
-        let inputlessReply = (Data(#"{"output_text":"{\"tool\":\"shell_exec\",\"reason\":\"verify\"}"}"#.utf8), 200)
+        let inputlessReply = (Data(#"{"output_text":"{\"tool\":\"shell_exec\",\"narration\":\"verify\"}"}"#.utf8), 200)
         let httpClient = SequencedHTTPClient(responses: [inputlessReply, inputlessReply, inputlessReply])
         let planner = HostedHarnessStepPlanner(
             backend: DonkeyBackendInferenceClient(
@@ -423,7 +423,7 @@ struct HostedHarnessStepPlannerTests {
     }
 
     private func cannedDecision(tool: String) -> Data {
-        Data(#"{"output_text":"{\"tool\":\"\#(tool)\",\"reason\":\"step\"}"}"#.utf8)
+        Data(#"{"output_text":"{\"tool\":\"\#(tool)\",\"narration\":\"step\"}"}"#.utf8)
     }
 
     private func requestBodyString(_ httpClient: FixtureHTTPClient, index: Int = 0) -> String {

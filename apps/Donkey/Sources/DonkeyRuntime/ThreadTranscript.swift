@@ -2,7 +2,7 @@ import Foundation
 
 /// The canonical, human-readable record of a thread — the real conversation, the way ChatGPT or
 /// Claude keeps one, not a debug dump. The user's request, session events, and the assistant's
-/// answer are flat entries; each executed step is one grouped block (the decision — thought, reason,
+/// answer are flat entries; each executed step is one grouped block (the decision — narration, thought,
 /// action with its input — then that action's output), so the whole reasoning trace reads
 /// decision → output → next decision.
 ///
@@ -102,7 +102,7 @@ public final class ThreadTranscript: @unchecked Sendable {
     /// One executed step, rendered as a single grouped block so the trace reads decision → output →
     /// next decision. The decision carries the model's full thought summary (bounded so a verbose
     /// chain of thought can't bloat the file — it is persisted only here, never in the per-step
-    /// planning prompt), its one-line reason, and the action with its complete input. Planning
+    /// planning prompt), its warm one-line narration, and the action with its complete input. Planning
     /// retries hit while choosing this step open the block, so a step that needed recovery reads as
     /// one unit instead of scattered entries. The thought is also where the model interprets the
     /// previous step's output, so each block's output is reasoned about at the top of the next.
@@ -115,7 +115,7 @@ public final class ThreadTranscript: @unchecked Sendable {
     public func step(
         number: Int,
         thought: String?,
-        reason: String?,
+        narration: String?,
         tool: String,
         input: [String: String],
         status: String,
@@ -133,11 +133,13 @@ public final class ThreadTranscript: @unchecked Sendable {
             if !text.isEmpty { block += "\n⚠️ \(text)\n" }
         }
         block += "\n### 🧠 Decision\n"
+        // The warm, first-person narration leads the block — it's the line the user reads as the agent's
+        // own account of this step — with the fuller thought summary kept beneath it for the record.
+        if let narration = narration?.trimmingCharacters(in: .whitespacesAndNewlines), !narration.isEmpty {
+            block += "\n\(Self.clip(narration, 600))\n"
+        }
         if let thought = thought?.trimmingCharacters(in: .whitespacesAndNewlines), !thought.isEmpty {
             block += "\n**Thought:** \(Self.clip(thought, 4_000))\n"
-        }
-        if let reason = reason?.trimmingCharacters(in: .whitespacesAndNewlines), !reason.isEmpty {
-            block += "\n**Reason:** \(Self.clip(reason, 600))\n"
         }
         block += "\n**Action:** `\(tool)`\n```\n\(Self.inputBody(input))\n```\n"
         block += "\n### 📄 Output — `\(status)`\n\n```\n\(Self.clip(output, 2_000))\n```\n"

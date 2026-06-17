@@ -48,7 +48,7 @@ struct HarnessTurnTraceTests {
         trace.recordStep(
             number: 1,
             thought: nil,
-            reason: "Reading the screen.",
+            narration: "Reading the screen.",
             tool: "vision.capture",
             input: [:],
             status: "succeeded",
@@ -81,7 +81,7 @@ struct HarnessTurnTraceTests {
         trace.recordModelCall(plannerCall(attempt: 1, started: p0, ended: p1))
         clock.advance(by: 50)
         trace.recordStep(
-            number: 1, thought: nil, reason: nil, tool: "ax.observe", input: [:],
+            number: 1, thought: nil, narration: nil, tool: "ax.observe", input: [:],
             status: "succeeded", output: "ok", planningErrors: [], modality: .accessibility,
             cacheHit: nil, elementCount: 7
         )
@@ -103,7 +103,7 @@ struct HarnessTurnTraceTests {
         trace.recordModelCall(plannerCall(attempt: 1, started: p0, ended: p1))
         clock.advance(by: 20)
         trace.recordStep(
-            number: 1, thought: nil, reason: nil, tool: "shell_exec", input: ["command": "ls"],
+            number: 1, thought: nil, narration: nil, tool: "shell_exec", input: ["command": "ls"],
             status: "succeeded", output: "ok", planningErrors: [], modality: .none,
             cacheHit: true, elementCount: 99
         )

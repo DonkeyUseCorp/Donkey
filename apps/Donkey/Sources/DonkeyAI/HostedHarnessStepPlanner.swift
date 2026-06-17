@@ -46,7 +46,8 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     /// state, i.e. not a read-only observation). The route turns this into the "time to first action"
     /// telemetry; nil until the first action is planned.
     public private(set) var firstActionUptimeMS: Double?
-    /// Most recent one-line rationale, surfaced to the user as the run's narration.
+    /// The most recent step's warm, first-person narration line, surfaced live to the user and saved to
+    /// the conversation record as the run's account of what it is doing.
     public private(set) var lastNarration: String?
     /// The model's full thought summary for the most recent step, when thinking is enabled. Persisted
     /// to the thread transcript (not fed back into the per-step prompt, so context stays bounded).
@@ -134,7 +135,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
                 retryNote = Self.retryNote(after: error)
                 continue
             }
-            lastNarration = decision.reason.flatMap { $0.isEmpty ? nil : $0 } ?? lastNarration
+            lastNarration = decision.narration.flatMap { $0.isEmpty ? nil : $0 } ?? lastNarration
             lastThinking = decision.thinking.flatMap { $0.isEmpty ? nil : $0 }
             guard let toolName = decision.tool.flatMap({ $0.isEmpty ? nil : $0 }) else {
                 lastPlanningErrors.append(
@@ -232,9 +233,10 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     private struct Decision: Sendable {
         var tool: String?
         var input: [String: String]?
-        var reason: String?
+        var narration: String?
         /// The model's full thought summary for this step (thinking enabled), persisted to the thread.
-        /// Separate from `reason`, which is the one-line rationale shown live in the overlay.
+        /// Separate from `narration`, which is the warm one-line account of the step shown live and saved
+        /// to the conversation record.
         var thinking: String?
         /// The reply's decision JSON as received, kept for failure diagnostics (e.g. proving whether
         /// a missing tool input was omitted by the model or lost in response mapping).
@@ -244,14 +246,14 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     private struct DecisionWire: Decodable {
         var tool: String?
         var input: [String: String]?
-        var reason: String?
+        var narration: String?
 
-        private enum CodingKeys: String, CodingKey { case tool, input, reason }
+        private enum CodingKeys: String, CodingKey { case tool, input, narration }
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             tool = try container.decodeIfPresent(String.self, forKey: .tool)
-            reason = try container.decodeIfPresent(String.self, forKey: .reason)
+            narration = try container.decodeIfPresent(String.self, forKey: .narration)
             // The response schema is non-strict, so the model can emit a numeric or boolean input value
             // (e.g. {"elementID": 3}). Coerce scalars to strings instead of failing the whole turn.
             input = try container.decodeIfPresent([String: ScalarString].self, forKey: .input)?
@@ -397,7 +399,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         return Decision(
             tool: wire.tool,
             input: wire.input,
-            reason: wire.reason,
+            narration: wire.narration,
             thinking: RemoteInferenceResponseHelpers.reasoningText(from: response),
             raw: json
         )
