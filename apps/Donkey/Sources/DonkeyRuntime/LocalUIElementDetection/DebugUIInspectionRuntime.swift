@@ -662,10 +662,9 @@ public struct DebugUIScreenCaptureService: Sendable {
     }
 
     private static func screenCaptureAccessGranted() -> Bool {
-        if CGPreflightScreenCaptureAccess() {
-            return true
-        }
-        return CGRequestScreenCaptureAccess()
+        // Preflight only — never prompt here. The system dialog is requested through the in-notch
+        // pre-gate (on user approval); runtime capture just checks and falls back if not granted.
+        CGPreflightScreenCaptureAccess()
     }
 
     private func capture(screen: NSScreen) throws -> DebugUIScreenCaptureSnapshot {

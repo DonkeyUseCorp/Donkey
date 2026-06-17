@@ -176,12 +176,37 @@ public struct AppHarnessGenericLifecycle: Sendable {
             return await coordinator.resume(taskID: taskID, reason: reason)
         }
 
+        // System (TCC) permission gate: the user approved in the notch, so NOW trigger the macOS
+        // permission request. Only on a successful grant do we resume the loop to re-run the tool.
+        if continuation.metadata["gate"] == "systemPermission" {
+            guard let permission = Self.systemPermission(from: continuation.metadata) else { return nil }
+            let granted = await SystemPermissionCoordinator.request(permission)
+            guard granted else { return nil }
+            return await coordinator.resume(taskID: taskID, reason: reason)
+        }
+
         guard !continuation.missingPermissions.isEmpty else { return nil }
         return await coordinator.grantPermissions(
             taskID: taskID,
             permissions: Set(continuation.missingPermissions),
             reason: reason
         )
+    }
+
+    private static func systemPermission(from metadata: [String: String]) -> SystemPermission? {
+        switch metadata["system.permission"] {
+        case "automation":
+            let target = metadata["system.target"]
+            return .automation(targetBundleID: (target?.isEmpty == false) ? target : nil)
+        case "screenRecording":
+            return .screenRecording
+        case "accessibility":
+            return .accessibility
+        case "microphone":
+            return .microphone
+        default:
+            return nil
+        }
     }
 
     private func loadOrCreateTask(

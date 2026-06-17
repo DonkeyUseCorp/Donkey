@@ -235,6 +235,10 @@ public struct HarnessBuiltInToolServices: Sendable {
     public var appleScriptCompiler: (@Sendable (_ source: String, _ targetApp: String?, _ bundleIdentifier: String?) async -> HarnessScriptCompileOutcome)?
     public var appleScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)?
     public var skillScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)?
+    /// Preflights macOS Automation (Apple Events) consent for a target app bundle id, WITHOUT
+    /// prompting. When this returns false, AppleScript execution raises the in-notch permission gate
+    /// instead of letting the system dialog fire mid-task. nil means "skip the pre-gate".
+    public var automationConsentGranted: (@Sendable (_ bundleIdentifier: String?) async -> Bool)?
     /// Native Donkey Command Layer backend. Returns a result for a recognized
     /// command, or `nil` to let dispatch fall through to `unknownTool`.
     public var commandExecutor: (@Sendable (HarnessToolExecutionContext) async -> HarnessToolResult?)?
@@ -265,6 +269,7 @@ public struct HarnessBuiltInToolServices: Sendable {
         appleScriptCompiler: (@Sendable (_ source: String, _ targetApp: String?, _ bundleIdentifier: String?) async -> HarnessScriptCompileOutcome)? = nil,
         appleScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)? = nil,
         skillScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)? = nil,
+        automationConsentGranted: (@Sendable (_ bundleIdentifier: String?) async -> Bool)? = nil,
         commandExecutor: (@Sendable (HarnessToolExecutionContext) async -> HarnessToolResult?)? = nil,
         textGenerator: (@Sendable (String) async -> String?)? = nil,
         webSearcher: (@Sendable (String) async -> String?)? = nil,
@@ -281,6 +286,7 @@ public struct HarnessBuiltInToolServices: Sendable {
         self.appleScriptCompiler = appleScriptCompiler
         self.appleScriptExecutor = appleScriptExecutor
         self.skillScriptExecutor = skillScriptExecutor
+        self.automationConsentGranted = automationConsentGranted
         self.commandExecutor = commandExecutor
         self.textGenerator = textGenerator
         self.webSearcher = webSearcher
@@ -639,6 +645,28 @@ public enum BuiltInHarnessToolExecutors {
         }
         guard let executor else {
             return failed(context, "No guarded script execution backend is configured.", reason: "missingScriptExecutionBackend")
+        }
+
+        // Pre-gate: never let Automation (Apple Events) consent fire as a bare system dialog mid-task.
+        // If the target app's automation isn't already granted, raise the in-notch permission gate;
+        // the system prompt only happens after the user approves it (then the loop re-runs this tool).
+        let targetBundleID = trimmed(artifact.metadata["bundleIdentifier"])
+        if let automationConsentGranted = services.automationConsentGranted,
+           await automationConsentGranted(targetBundleID) == false {
+            let appName = trimmed(artifact.metadata["targetApp"]) ?? "this app"
+            return HarnessToolResult(
+                callID: context.call.id,
+                toolName: context.call.name,
+                status: .waitingForPermission,
+                summary: "Needs your approval to control \(appName).",
+                metadata: [
+                    "executor": "guardedScriptBackend",
+                    "gate": "systemPermission",
+                    "system.permission": "automation",
+                    "system.target": targetBundleID ?? "",
+                    "scriptArtifactID": scriptID
+                ]
+            )
         }
 
         let outcome = await executor(artifact, context)

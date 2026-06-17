@@ -39,6 +39,11 @@ public enum LocalAppUserQueryHarnessServices {
             skillScriptExecutor: { artifact, context in
                 await executeSkillScript(artifact: artifact, context: context)
             },
+            // Preflight Automation consent (no prompt) so mid-task AppleScript routes through the
+            // in-notch permission gate instead of firing a bare system dialog.
+            automationConsentGranted: { bundleIdentifier in
+                SystemPermissionCoordinator.isGranted(.automation(targetBundleID: bundleIdentifier))
+            },
             // The Command Layer (incl. shell_exec) is intentionally available to
             // the local planner as well as the Gemini Live session; both go
             // through the same DonkeyCommandBackends guardrails.

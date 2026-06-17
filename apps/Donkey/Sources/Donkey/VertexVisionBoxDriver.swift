@@ -158,7 +158,7 @@ enum VertexVisionBoxDriver {
             end if
         end tell
         """
-        var error: NSDictionary?
-        NSAppleScript(source: source)?.executeAndReturnError(&error)
+        // Never prompt mid-task for this internal nicety; skip it if Automation isn't already granted.
+        SystemPermissionCoordinator.runSystemEventsScriptIfGranted(source)
     }
 }
