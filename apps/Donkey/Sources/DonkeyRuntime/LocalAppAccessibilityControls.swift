@@ -286,11 +286,24 @@ public struct MacAccessibilityActionEngineInputBackend: ActionEngineInputBackend
         else {
             return result(command, executed: false, reason: "missingAccessibilityTarget")
         }
-        guard let bundleIdentifier = command.metadata["bundleIdentifier"],
-              let application = frontmostApplication(),
-              application.bundleIdentifier == bundleIdentifier
-        else {
-            return result(command, executed: false, reason: "targetAppNotFrontmost")
+        // Resolve the process to act on. In the default (foreground) mode the target must be frontmost
+        // and its pid comes from the frontmost app, preserving the original guard exactly. In background
+        // mode the guard upstream has already confirmed the pinned target is a safe, on-active-Space
+        // surface, so we trust the supplied pid and drop the frontmost requirement — AXUIElementPerformAction
+        // is a focus-neutral cross-process RPC that needs neither frontmost status nor a cursor move.
+        let processID: pid_t
+        if command.metadata["accessibility.executionMode"] == "background",
+           let pidString = command.metadata["accessibility.processID"],
+           let backgroundProcessID = pid_t(pidString) {
+            processID = backgroundProcessID
+        } else {
+            guard let bundleIdentifier = command.metadata["bundleIdentifier"],
+                  let application = frontmostApplication(),
+                  application.bundleIdentifier == bundleIdentifier
+            else {
+                return result(command, executed: false, reason: "targetAppNotFrontmost")
+            }
+            processID = application.processIdentifier
         }
 
         // Prefer the live handle captured at observe time: it stays bound to the same logical control
@@ -298,12 +311,12 @@ public struct MacAccessibilityActionEngineInputBackend: ActionEngineInputBackend
         // old node index. Fall back to the positional re-walk, and surface a distinct "stale" reason when
         // neither resolves so the planner re-observes instead of retrying a vanished node.
         let element: AXUIElement
-        if let cached = cachedElement(processID: application.processIdentifier, nodeID: nodeID),
+        if let cached = cachedElement(processID: processID, nodeID: nodeID),
            isAlive(cached) {
             element = cached
         } else if let walked = resolveElement(
             nodeID: nodeID,
-            application: AXUIElementCreateApplication(application.processIdentifier)
+            application: AXUIElementCreateApplication(processID)
         ) {
             element = walked
         } else {

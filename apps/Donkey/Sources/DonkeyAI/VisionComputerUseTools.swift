@@ -39,6 +39,7 @@ public final class VisionComputerUseToolProvider {
     let appName: String
     let appKey: String
     let bundleIdentifier: String?
+    let executionPreference: ExecutionPreference
     let analyzer: any DebugUIInspectionAnalyzing
     let store: ParsedVisionStore
     /// Fused accessibility + vision understanding kept warm by the always-on `UIUnderstandingCoordinator`.
@@ -66,6 +67,7 @@ public final class VisionComputerUseToolProvider {
         appName: String,
         appKey: String,
         bundleIdentifier: String?,
+        executionPreference: ExecutionPreference = .foreground,
         analyzer: any DebugUIInspectionAnalyzing,
         store: ParsedVisionStore = .shared,
         understandingStore: WindowUIUnderstandingStore = .shared,
@@ -79,6 +81,7 @@ public final class VisionComputerUseToolProvider {
         self.appName = appName
         self.appKey = appKey
         self.bundleIdentifier = bundleIdentifier
+        self.executionPreference = executionPreference
         self.analyzer = analyzer
         self.store = store
         self.understandingStore = understandingStore
@@ -388,9 +391,10 @@ public final class VisionComputerUseToolProvider {
         guard let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier) else {
             return result(context, status: .failed, summary: "No window for \(appName).", reason: "noWindowForApp")
         }
-        guard await ensureFrontmost(target) else {
+        guard let routing = await inputRouting(for: target) else {
             return notFrontmost(context)
         }
+        let inputTarget = routing.inputTarget
         let normalized = Self.normalizedCenter(
             bbox: geometry.bbox,
             imageWidth: geometry.imageWidth,
@@ -408,7 +412,7 @@ public final class VisionComputerUseToolProvider {
         }
         let button: MacPointerInput.Button = context.call.input["button"] == "right" ? .right : .left
         let clicks = context.call.input["clicks"].flatMap(Int.init) ?? 1
-        MacPointerInput.moveAndClick(at: point, button: button, clickCount: clicks)
+        MacPointerInput.moveAndClick(at: point, button: button, clickCount: clicks, target: inputTarget)
         let clickWord = button == .right ? "Right-clicked" : (clicks >= 3 ? "Triple-clicked" : (clicks == 2 ? "Double-clicked" : "Clicked"))
         return HarnessToolResult(
             callID: context.call.id,
@@ -429,10 +433,10 @@ public final class VisionComputerUseToolProvider {
             return result(context, status: .invalidInput, summary: "text.enter requires non-empty text.", reason: "missingText")
         }
         guard let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier),
-              await ensureFrontmost(target) else {
+              let routing = await inputRouting(for: target) else {
             return notFrontmost(context)
         }
-        MacKeyboardInput.type(text)
+        MacKeyboardInput.type(text, target: routing.inputTarget)
         return HarnessToolResult(
             callID: context.call.id,
             toolName: context.call.name,
@@ -448,11 +452,11 @@ public final class VisionComputerUseToolProvider {
             return result(context, status: .invalidInput, summary: "keyboard.press requires a key.", reason: "missingKey")
         }
         guard let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier),
-              await ensureFrontmost(target) else {
+              let routing = await inputRouting(for: target) else {
             return notFrontmost(context)
         }
         let modifiers = trimmed(context.call.input["modifiers"]).map { [$0] } ?? []
-        MacKeyboardInput.pressKey(key, modifiers: modifiers)
+        MacKeyboardInput.pressKey(key, modifiers: modifiers, target: routing.inputTarget)
         let chord = modifiers.first.map { "\($0)+\(key)" } ?? key
         return HarnessToolResult(
             callID: context.call.id,
@@ -575,6 +579,32 @@ public final class VisionComputerUseToolProvider {
     }
 
     // MARK: - Helpers
+
+    /// How input should reach the resolved target.
+    private enum InputRouting {
+        /// Deliver to the pinned target cursor-neutrally (no focus steal).
+        case background(InputTarget)
+        /// The target was brought frontmost; deliver via the HID tap as before.
+        case foreground
+
+        /// The pinned target for background delivery, or nil for the foreground HID path.
+        var inputTarget: InputTarget? {
+            if case .background(let target) = self { return target }
+            return nil
+        }
+    }
+
+    /// Decides how to deliver input to `target`: a pinned background target (no cursor move, no app
+    /// raise) when the turn asked for background and the surface is safe, otherwise foreground after one
+    /// recovery activation. Returns nil only when a required foreground activation failed.
+    private func inputRouting(for target: MacWindowTargetCandidate) async -> InputRouting? {
+        switch TargetActionGuard.resolve(candidate: target, preference: executionPreference, lane: .pidEventPost) {
+        case .background(let inputTarget):
+            return .background(inputTarget)
+        case .foreground:
+            return await ensureFrontmost(target) ? .foreground : nil
+        }
+    }
 
     /// Frontmost check with one recovery activation of the target app (never any other app).
     private func ensureFrontmost(_ target: MacWindowTargetCandidate) async -> Bool {

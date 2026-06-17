@@ -387,14 +387,30 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         let registry = HarnessToolRegistry(
             tools: BuiltInHarnessToolExecutors.tools(descriptors: builtInDescriptors, services: harnessServices)
         )
-        let axProvider = AXComputerUseToolProvider(appName: appName, bundleIdentifier: bundleIdentifier)
+        // Background is the default operating mode: the agent acts on a safe, on-active-Space window
+        // without raising the app or moving the cursor — the AX action lane for advertised controls, the
+        // pid-routed event-post lane for coordinate/scroll/drag/keystroke input. The understanding
+        // boundary flips this to foreground only when the turn's point is for the user to watch. When
+        // understanding is unavailable we still default to background (each lane degrades to foreground on
+        // its own when an action can't be delivered that way).
+        let executionPreference = understanding?.executionPreference ?? .background
+        let axProvider = AXComputerUseToolProvider(
+            appName: appName,
+            bundleIdentifier: bundleIdentifier,
+            executionPreference: executionPreference
+        )
         let visionProvider = VisionComputerUseToolProvider(
             appName: appName,
             appKey: appKey,
             bundleIdentifier: bundleIdentifier,
+            executionPreference: executionPreference,
             analyzer: analyzer
         )
-        let pointerProvider = PointerComputerUseToolProvider(appName: appName, bundleIdentifier: bundleIdentifier)
+        let pointerProvider = PointerComputerUseToolProvider(
+            appName: appName,
+            bundleIdentifier: bundleIdentifier,
+            executionPreference: executionPreference
+        )
         // Native music playback (MusicKit): search/play/transport/status with no Music-app GUI or
         // AppleScript. Declares no harness permissions — MusicKit runs its own consent flow.
         let musicProvider = MusicPlaybackToolProvider(service: MusicKitPlaybackService())
@@ -475,6 +491,13 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         }
         VisionGroundingLog.emit("thread traceID=\(traceID) path=\(transcript.threadPath)")
 
+        // On a background turn the agent acts without taking over the user's cursor, so the cosmetic
+        // traveling cursor is suppressed and progress is narrated through the notch text only. (AX-lane
+        // background actions already report no screen point, so they produce no cursor plan; this also
+        // covers background coordinate/scroll/drag posts, which move no real pointer.) The overlay never
+        // drives real input either way — realPointerMoved stays false.
+        let suppressBackgroundCursorPlayback = (understanding?.executionPreference ?? .background) == .background
+
         // Always set onStep so every turn is recorded; the overlay narration/cursor is layered on top
         // when a UI is attached.
         let onStep: (@Sendable (HarnessStepExecutionResult) async -> Void)? = { (step: HarnessStepExecutionResult) async -> Void in
@@ -521,6 +544,9 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 // builds; this escape hatch turns the playback off (text narration still updates) so a
                 // run can proceed without it.
                 guard !Self.cursorVisualizationDisabled else { return }
+                // Background turns narrate through the notch only; no traveling cursor on a window the
+                // user isn't driving. Text narration above still fires every step.
+                guard !suppressBackgroundCursorPlayback else { return }
                 guard let present = visualize else { return }
                 let screenSize = (NSScreen.main ?? NSScreen.screens.first)?.frame.size ?? .zero
                 guard let plan = Self.cursorVisualizationPlan(

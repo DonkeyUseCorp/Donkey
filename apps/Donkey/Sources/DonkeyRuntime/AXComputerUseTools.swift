@@ -21,15 +21,18 @@ public final class AXComputerUseToolProvider {
 
     private let appName: String
     private let bundleIdentifier: String?
+    private let executionPreference: ExecutionPreference
     private let actionBackend: ActionEngineInputBackend
 
     public init(
         appName: String,
         bundleIdentifier: String?,
+        executionPreference: ExecutionPreference = .foreground,
         actionBackend: ActionEngineInputBackend = MacAccessibilityActionEngineInputBackend()
     ) {
         self.appName = appName
         self.bundleIdentifier = bundleIdentifier
+        self.executionPreference = executionPreference
         self.actionBackend = actionBackend
     }
 
@@ -149,6 +152,37 @@ public final class AXComputerUseToolProvider {
         guard let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier) else {
             return result(context, status: .failed, summary: "No window for \(appName).", reason: "noWindowForApp")
         }
+        let label = element.label.isEmpty ? elementID : element.label
+        let button: MacPointerInput.Button = context.call.input["button"] == "right" ? .right : .left
+        let clicks = context.call.input["clicks"].flatMap(Int.init) ?? 1
+        let advertised = Set(element.actions)
+
+        // Background Accessibility action first: AXUIElementPerformAction is a focus-neutral cross-process
+        // RPC, so when the turn asked for background work, the surface is safe, and the control advertises
+        // a semantic action, we act without raising the app or moving the cursor. Anything the background
+        // lane can't drive (no advertised action, an unsafe surface, or a foreground turn) falls through to
+        // the foreground path below, which is always available.
+        if case .background(let inputTarget) = TargetActionGuard.resolve(
+            candidate: target,
+            preference: executionPreference,
+            lane: .axAction
+        ),
+           let bundleIdentifier, !bundleIdentifier.isEmpty,
+           let action = Self.semanticAction(button: button, clicks: clicks, advertised: advertised),
+           await axPerform(nodeID: element.id, action: action, bundleIdentifier: bundleIdentifier, background: inputTarget) {
+            return clickSucceeded(
+                context,
+                elementID: elementID,
+                label: label,
+                strategy: "ax-" + action.dropFirst(2).lowercased() + "-background",
+                point: nil
+            )
+        }
+
+        // Foreground path (unchanged behavior): activate the target, then prefer a native Accessibility
+        // action — it works even when a coordinate click would miss (partially obscured, scrolled,
+        // zero-size hit area) — and fall back to a guarded coordinate click on the frame center when no
+        // semantic action applies, there's no bundle id, or the AX action doesn't land.
         guard await TargetFocusRecovery.ensureFrontmost(processID: pid_t(target.processID)) else {
             return result(
                 context,
@@ -157,19 +191,9 @@ public final class AXComputerUseToolProvider {
                 reason: "targetNotFrontmost"
             )
         }
-        let label = element.label.isEmpty ? elementID : element.label
-        let button: MacPointerInput.Button = context.call.input["button"] == "right" ? .right : .left
-        let clicks = context.call.input["clicks"].flatMap(Int.init) ?? 1
-
-        // Prefer a native Accessibility action: it activates the control directly, so it works even when
-        // a coordinate click would miss (partially obscured, scrolled, zero-size hit area). Single
-        // left-click presses, right-click shows the context menu, and double-click opens — each only when
-        // the control advertises that action. Falls back to a guarded coordinate click on the frame
-        // center when no semantic action applies, there's no bundle id, or the AX action doesn't land.
-        let advertised = Set(element.actions)
         if let bundleIdentifier, !bundleIdentifier.isEmpty,
            let action = Self.semanticAction(button: button, clicks: clicks, advertised: advertised),
-           await axPerform(nodeID: element.id, action: action, bundleIdentifier: bundleIdentifier) {
+           await axPerform(nodeID: element.id, action: action, bundleIdentifier: bundleIdentifier, background: nil) {
             return clickSucceeded(
                 context,
                 elementID: elementID,
@@ -252,9 +276,26 @@ public final class AXComputerUseToolProvider {
     }
 
     /// Performs an AX `action` (e.g. `AXPress`, `AXShowMenu`, `AXOpen`) on the control identified by
-    /// `nodeID` via the action backend, which re-checks that `bundleIdentifier` is the frontmost app and
-    /// that the control still advertises the action before acting. Returns whether the action landed.
-    private func axPerform(nodeID: String, action: String, bundleIdentifier: String) async -> Bool {
+    /// `nodeID` via the action backend. Foreground (`background: nil`) re-checks that `bundleIdentifier`
+    /// is the frontmost app before acting; passing a pinned `background` target instead routes the RPC to
+    /// that process id with no frontmost requirement. Either way the backend re-checks the live control
+    /// still advertises the action. Returns whether the action landed.
+    private func axPerform(
+        nodeID: String,
+        action: String,
+        bundleIdentifier: String,
+        background: InputTarget?
+    ) async -> Bool {
+        var metadata = [
+            "accessibility.nodeID": nodeID,
+            "accessibility.action": action,
+            "bundleIdentifier": bundleIdentifier,
+            "controlID": nodeID
+        ]
+        if let background {
+            metadata["accessibility.executionMode"] = "background"
+            metadata["accessibility.processID"] = String(background.processID)
+        }
         let command = ActionEngineCommand(
             id: UUID().uuidString,
             traceID: "ax-click",
@@ -264,12 +305,7 @@ public final class AXComputerUseToolProvider {
                 wallClock: Date(),
                 monotonicUptimeNanoseconds: DispatchTime.now().uptimeNanoseconds
             ),
-            metadata: [
-                "accessibility.nodeID": nodeID,
-                "accessibility.action": action,
-                "bundleIdentifier": bundleIdentifier,
-                "controlID": nodeID
-            ]
+            metadata: metadata
         )
         let outcome = await actionBackend.execute(command)
         return outcome.executed
@@ -284,11 +320,21 @@ public final class AXComputerUseToolProvider {
     ) -> HarnessToolResult {
         var metadata = ["elementID": elementID, "label": label, "inputStrategy": strategy]
         if let point { metadata["screenPoint"] = "\(Int(point.x)),\(Int(point.y))" }
+        let viaAccessibility = strategy.hasPrefix("ax-")
+        let inBackground = strategy.hasSuffix("-background")
+        let summary: String
+        if viaAccessibility {
+            summary = inBackground
+                ? "Pressed \(label) via Accessibility in the background."
+                : "Pressed \(label) via Accessibility."
+        } else {
+            summary = "Clicked \(label)."
+        }
         return HarnessToolResult(
             callID: context.call.id,
             toolName: context.call.name,
             status: .succeeded,
-            summary: strategy == "ax-press" ? "Pressed \(label) via Accessibility." : "Clicked \(label).",
+            summary: summary,
             observations: HarnessObservationDelta(facts: ["lastAcceptedTool": context.call.name]),
             metadata: metadata
         )

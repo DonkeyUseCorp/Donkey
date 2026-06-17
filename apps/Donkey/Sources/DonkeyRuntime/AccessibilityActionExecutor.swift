@@ -5,9 +5,14 @@ import Foundation
 import OSLog
 
 /// Low-level keyboard input via CGEvent. Real input — gate behind explicit permission/guards.
+///
+/// Each entry point takes an optional `target`: with none (the default) the event posts to the HID tap
+/// and lands on the frontmost app, exactly as before; with a background `InputTarget` it is delivered to
+/// that process WITHOUT moving the cursor or stealing focus — via the SkyLight bridge when available,
+/// else the public per-process post.
 public enum MacKeyboardInput {
     /// Types arbitrary text by posting per-character unicode key events.
-    public static func type(_ text: String) {
+    public static func type(_ text: String, target: InputTarget? = nil) {
         guard let source = CGEventSource(stateID: .hidSystemState) else { return }
         // Post one event per Character, using its full UTF-16 representation. Characters outside the
         // Basic Multilingual Plane (emoji, CJK extensions, …) encode as a surrogate pair, so we send
@@ -21,32 +26,44 @@ public enum MacKeyboardInput {
             else { continue }
             down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
             up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
-            down.post(tap: .cghidEventTap)
-            up.post(tap: .cghidEventTap)
+            post(down, to: target)
+            post(up, to: target)
         }
     }
 
     /// Posts a Return keypress (virtual key 36).
-    public static func pressReturn() {
-        pressKey("return")
+    public static func pressReturn(target: InputTarget? = nil) {
+        pressKey("return", target: target)
     }
 
     /// Posts a single named key (return, escape, tab, arrows, letters, …), optionally chorded with
     /// modifiers (e.g. Cmd+C). Unknown unmodified names that look like a single character are typed
     /// as text rather than silently firing the wrong key; truly unknown multi-char names fall back
     /// to Return so a "submit"-style intent still does something sane.
-    public static func pressKey(_ name: String, modifiers: [String] = []) {
+    public static func pressKey(_ name: String, modifiers: [String] = [], target: InputTarget? = nil) {
         let normalized = name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         let flags = eventFlags(for: modifiers)
         guard let keyCode = virtualKeyCode(for: normalized) else {
             if normalized.count == 1, flags.isEmpty {
-                type(name)
+                type(name, target: target)
             } else {
-                postKey(36, flags: flags) // unknown key name → Return
+                postKey(36, flags: flags, target: target) // unknown key name → Return
             }
             return
         }
-        postKey(keyCode, flags: flags)
+        postKey(keyCode, flags: flags, target: target)
+    }
+
+    /// Delivers a built keyboard event: to the HID tap (frontmost) when `target` is nil, otherwise to the
+    /// target process cursor-neutrally — SkyLight bridge first (adds the macOS-14 auth envelope), then the
+    /// public per-process post. Never the HID tap for a background target, which would warp the cursor.
+    private static func post(_ event: CGEvent, to target: InputTarget?) {
+        guard let target else {
+            event.post(tap: .cghidEventTap)
+            return
+        }
+        if SkyLightEventPost.shared.postKey(event, toPid: target.processID) { return }
+        event.postToPid(target.processID)
     }
 
     /// Maps typed modifier tokens (split on `+`, `,`, or whitespace) to CGEvent flags. Unknown
@@ -69,7 +86,7 @@ public enum MacKeyboardInput {
         return flags
     }
 
-    private static func postKey(_ keyCode: CGKeyCode, flags: CGEventFlags = []) {
+    private static func postKey(_ keyCode: CGKeyCode, flags: CGEventFlags = [], target: InputTarget? = nil) {
         guard let source = CGEventSource(stateID: .hidSystemState),
               let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
               let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
@@ -78,8 +95,8 @@ public enum MacKeyboardInput {
             down.flags = flags
             up.flags = flags
         }
-        down.post(tap: .cghidEventTap)
-        up.post(tap: .cghidEventTap)
+        post(down, to: target)
+        post(up, to: target)
     }
 
     static func virtualKeyCode(for name: String) -> CGKeyCode? {
@@ -119,6 +136,11 @@ public enum MacKeyboardInput {
 
 /// Low-level pointer input via CGEvent (move, click variants, scroll, drag at screen points). Real
 /// input — callers must gate this behind explicit permission/guards.
+///
+/// Each entry point takes an optional `target`: with none (the default) events post to the HID tap and
+/// the real cursor moves to the point, exactly as before; with a background `InputTarget` the leading
+/// cursor move is skipped and events are delivered to that process cursor-neutrally — via the SkyLight
+/// bridge (which stamps a window-local hit-test point) when available, else the public per-process post.
 public enum MacPointerInput {
     public enum Button: String, Sendable {
         case left
@@ -126,10 +148,14 @@ public enum MacPointerInput {
     }
 
     @discardableResult
-    public static func moveAndClick(at point: CGPoint, button: Button = .left, clickCount: Int = 1) -> Bool {
+    public static func moveAndClick(at point: CGPoint, button: Button = .left, clickCount: Int = 1, target: InputTarget? = nil) -> Bool {
         guard let source = CGEventSource(stateID: .hidSystemState) else { return false }
-        CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)?
-            .post(tap: .cghidEventTap)
+        // Foreground moves the real cursor to the point first; background delivery is pid-routed and
+        // never warps the cursor, so the move is skipped.
+        if target == nil {
+            CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)?
+                .post(tap: .cghidEventTap)
+        }
         let mouseButton: CGMouseButton = button == .right ? .right : .left
         let downType: CGEventType = button == .right ? .rightMouseDown : .leftMouseDown
         let upType: CGEventType = button == .right ? .rightMouseUp : .leftMouseUp
@@ -144,20 +170,22 @@ public enum MacPointerInput {
             }
             down.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
             up.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
-            down.post(tap: .cghidEventTap)
-            up.post(tap: .cghidEventTap)
+            post(down, screenPoint: point, to: target)
+            post(up, screenPoint: point, to: target)
         }
         return true
     }
 
     /// Scrolls by line deltas at a screen point (positive y scrolls up, positive x scrolls left,
-    /// matching CGEvent wheel conventions). Moves the pointer there first so the scroll lands on
-    /// the intended view.
+    /// matching CGEvent wheel conventions). Moves the pointer there first (foreground only) so the
+    /// scroll lands on the intended view.
     @discardableResult
-    public static func scroll(at point: CGPoint, deltaX: Int = 0, deltaY: Int = 0) -> Bool {
+    public static func scroll(at point: CGPoint, deltaX: Int = 0, deltaY: Int = 0, target: InputTarget? = nil) -> Bool {
         guard let source = CGEventSource(stateID: .hidSystemState) else { return false }
-        CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)?
-            .post(tap: .cghidEventTap)
+        if target == nil {
+            CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)?
+                .post(tap: .cghidEventTap)
+        }
         guard let event = CGEvent(
             scrollWheelEvent2Source: source,
             units: .line,
@@ -169,21 +197,23 @@ public enum MacPointerInput {
             return false
         }
         event.location = point
-        event.post(tap: .cghidEventTap)
+        post(event, screenPoint: point, to: target)
         return true
     }
 
     /// Drags from one screen point to another: press, interpolated dragged moves so drop targets
     /// see continuous motion, then release at the destination.
     @discardableResult
-    public static func drag(from start: CGPoint, to end: CGPoint, steps: Int = 16) -> Bool {
+    public static func drag(from start: CGPoint, to end: CGPoint, steps: Int = 16, target: InputTarget? = nil) -> Bool {
         guard let source = CGEventSource(stateID: .hidSystemState) else { return false }
-        CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: start, mouseButton: .left)?
-            .post(tap: .cghidEventTap)
+        if target == nil {
+            CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: start, mouseButton: .left)?
+                .post(tap: .cghidEventTap)
+        }
         guard let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: start, mouseButton: .left) else {
             return false
         }
-        down.post(tap: .cghidEventTap)
+        post(down, screenPoint: start, to: target)
         usleep(40_000)
         let stepCount = max(steps, 2)
         for step in 1...stepCount {
@@ -192,16 +222,39 @@ public enum MacPointerInput {
                 x: start.x + (end.x - start.x) * fraction,
                 y: start.y + (end.y - start.y) * fraction
             )
-            CGEvent(mouseEventSource: source, mouseType: .leftMouseDragged, mouseCursorPosition: point, mouseButton: .left)?
-                .post(tap: .cghidEventTap)
+            if let dragged = CGEvent(mouseEventSource: source, mouseType: .leftMouseDragged, mouseCursorPosition: point, mouseButton: .left) {
+                post(dragged, screenPoint: point, to: target)
+            }
             usleep(8_000)
         }
         guard let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: end, mouseButton: .left) else {
             return false
         }
         usleep(40_000)
-        up.post(tap: .cghidEventTap)
+        post(up, screenPoint: end, to: target)
         return true
+    }
+
+    /// Delivers a built mouse event: to the HID tap (frontmost, real cursor) when `target` is nil,
+    /// otherwise to the target process cursor-neutrally — SkyLight bridge first (stamping the window-local
+    /// hit-test point derived from the target's bounds), then the public per-process post. Never the HID
+    /// tap for a background target, which would warp the user's cursor to the point.
+    private static func post(_ event: CGEvent, screenPoint: CGPoint, to target: InputTarget?) {
+        guard let target else {
+            event.post(tap: .cghidEventTap)
+            return
+        }
+        let windowLocalPoint = CGPoint(
+            x: screenPoint.x - target.bounds.x,
+            y: screenPoint.y - target.bounds.y
+        )
+        if SkyLightEventPost.shared.postMouse(
+            event,
+            toPid: target.processID,
+            windowID: target.windowID,
+            windowLocalPoint: windowLocalPoint
+        ) { return }
+        event.postToPid(target.processID)
     }
 }
 

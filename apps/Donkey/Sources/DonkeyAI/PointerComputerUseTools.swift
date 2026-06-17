@@ -22,10 +22,16 @@ public final class PointerComputerUseToolProvider {
 
     private let appName: String
     private let bundleIdentifier: String?
+    private let executionPreference: ExecutionPreference
 
-    public init(appName: String, bundleIdentifier: String?) {
+    public init(
+        appName: String,
+        bundleIdentifier: String?,
+        executionPreference: ExecutionPreference = .foreground
+    ) {
         self.appName = appName
         self.bundleIdentifier = bundleIdentifier
+        self.executionPreference = executionPreference
     }
 
     public static var descriptors: [HarnessToolDescriptor] {
@@ -83,9 +89,10 @@ public final class PointerComputerUseToolProvider {
         guard ["up", "down", "left", "right"].contains(direction) else {
             return result(context, status: .invalidInput, summary: "mouse.scroll requires direction up, down, left, or right.", reason: "invalidDirection")
         }
-        guard let target = await frontmostTarget() else {
+        guard let routing = await resolveRouting() else {
             return notFrontmost(context)
         }
+        let target = routing.target
         let point: CGPoint
         if let elementID = context.call.input["elementID"], !elementID.isEmpty {
             guard let element = context.worldModel.elements.first(where: { $0.id == elementID }),
@@ -107,7 +114,7 @@ public final class PointerComputerUseToolProvider {
         case "left": (deltaX, deltaY) = (amount, 0)
         default: (deltaX, deltaY) = (-amount, 0)
         }
-        MacPointerInput.scroll(at: point, deltaX: deltaX, deltaY: deltaY)
+        MacPointerInput.scroll(at: point, deltaX: deltaX, deltaY: deltaY, target: routing.inputTarget)
         return HarnessToolResult(
             callID: context.call.id,
             toolName: context.call.name,
@@ -123,9 +130,10 @@ public final class PointerComputerUseToolProvider {
               let toID = context.call.input["toElementID"], !toID.isEmpty else {
             return result(context, status: .invalidInput, summary: "mouse.drag requires fromElementID and toElementID.", reason: "missingElementIDs")
         }
-        guard let target = await frontmostTarget() else {
+        guard let routing = await resolveRouting() else {
             return notFrontmost(context)
         }
+        let target = routing.target
         guard let fromElement = context.worldModel.elements.first(where: { $0.id == fromID }),
               let start = Self.screenPoint(for: fromElement, window: target.bounds) else {
             return result(context, status: .failed, summary: "Element \(fromID) has no resolvable position.", reason: "fromElementNotFound")
@@ -134,7 +142,7 @@ public final class PointerComputerUseToolProvider {
               let end = Self.screenPoint(for: toElement, window: target.bounds) else {
             return result(context, status: .failed, summary: "Element \(toID) has no resolvable position.", reason: "toElementNotFound")
         }
-        MacPointerInput.drag(from: start, to: end)
+        MacPointerInput.drag(from: start, to: end, target: routing.inputTarget)
         return HarnessToolResult(
             callID: context.call.id,
             toolName: context.call.name,
@@ -173,14 +181,23 @@ public final class PointerComputerUseToolProvider {
 
     // MARK: - Helpers
 
-    /// Resolves the target window and ensures it is frontmost, attempting one recovery activation
-    /// of the target app (never any other app) when focus drifted between observe and act.
-    private func frontmostTarget() async -> MacWindowTargetCandidate? {
-        guard let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier),
-              await TargetFocusRecovery.ensureFrontmost(processID: pid_t(target.processID)) else {
+    /// Resolves the target window and decides how to deliver input. On a background turn over a safe
+    /// surface it returns a pinned target for cursor-neutral pid-routed delivery (no app raise);
+    /// otherwise it brings the target frontmost (one recovery activation, never any other app) and
+    /// returns a nil input target for the HID path. Returns nil only when a required activation failed.
+    private func resolveRouting() async -> (target: MacWindowTargetCandidate, inputTarget: InputTarget?)? {
+        guard let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier) else {
             return nil
         }
-        return target
+        switch TargetActionGuard.resolve(candidate: target, preference: executionPreference, lane: .pidEventPost) {
+        case .background(let inputTarget):
+            return (target, inputTarget)
+        case .foreground:
+            guard await TargetFocusRecovery.ensureFrontmost(processID: pid_t(target.processID)) else {
+                return nil
+            }
+            return (target, nil)
+        }
     }
 
     private func notFrontmost(_ context: HarnessToolExecutionContext) -> HarnessToolResult {
