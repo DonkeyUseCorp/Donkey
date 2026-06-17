@@ -13,16 +13,11 @@ guarded runtime (`docs/guides/agent-harness.md`).
 
 ## Startup Gate
 
-First launch shows a native welcome screen, then a Google-only Mac sign-in,
-then a permission setup screen for Accessibility, Screenshots, and Microphone
-with user-visible reasons. Until the browser returns through
-`donkey://auth/callback`, the app exchanges the code for a Better Auth cookie,
-and core permission setup completes, the notch is not shown and double-Command
-activation is not registered. `DonkeyAuthCoordinator` and
-`DonkeyLoginWindowController` own the sign-in gate;
-`MacPermissionSetupWindowController` owns the permission gate. Protected
-folders (Desktop, Documents, Downloads) stay lazy and are requested only when
-a user-requested local-item lookup needs them.
+First launch shows a native welcome screen, then a Google-only Mac sign-in.
+Until the browser returns through `donkey://auth/callback` and the app
+exchanges the code for a Better Auth cookie, the notch is not shown and
+double-Command activation is not registered. `DonkeyAuthCoordinator` and
+`DonkeyLoginWindowController` own the sign-in gate.
 
 ## Activation and the Prompt
 
@@ -161,9 +156,8 @@ and selection.
 
 Manually verify after overlay changes:
 
-- Startup: welcome → sign-in → permission setup; Continue enables only when
-  all three permissions are ready; no Desktop/Documents/Downloads prompts
-  during startup.
+- Startup: welcome → sign-in; the notch and double-Command activation appear
+  only after sign-in completes.
 - Activation: release opens focused text input without microphone capture;
   hold opens voice mode; the microphone affordance starts capture; unrelated
   Command use does not activate the overlay.
