@@ -35,7 +35,10 @@ struct LocalAppTaskTests {
     func appFinderProfilesLoadFromBundledJSON() throws {
         let store = LocalAppFinderProfileStore.defaultStore
 
-        #expect(store.profile(appName: "Music", bundleIdentifier: "com.apple.Music") == nil)
+        let music = try #require(store.profile(appName: "Music", bundleIdentifier: "com.apple.Music"))
+        #expect(music.supportStatus == .supported)
+        #expect(music.capabilities.map(\.id) == ["play_media"])
+        #expect(music.capabilities.first?.controlProfiles == ["search_then_enter"])
         #expect(store.profile(appName: "Chrome", bundleIdentifier: nil) == nil)
 
         let terminal = try #require(store.profile(appName: "Terminal", bundleIdentifier: "com.apple.Terminal"))
