@@ -53,13 +53,14 @@ function formatRunningTime(totalSeconds: number) {
   return `${minutes}m ${seconds}s`;
 }
 
-// The collapsed right slot is only 34px wide, so keep elapsed time to ~3 chars: seconds, then minutes, then hours.
+// The collapsed right slot is only 34px wide, so it shows a single unit — the largest non-zero
+// value (hours, else minutes, else seconds). The full elapsed breakdown lives in the expanded row.
 function formatCompactTime(totalSeconds: number) {
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
 
-  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h`;
   if (minutes > 0) return `${minutes}m`;
   return `${seconds}s`;
 }
@@ -237,13 +238,21 @@ export function Notch({
             >
               <MessageCircleWarning size={15} strokeWidth={1.9} />
             </div>
-          ) : isActive ? (
+          ) : isComplete ? (
+            // A finished task shows a status, not a clock — the elapsed total lives in the expanded row.
             <div
-              className="absolute right-0 top-0 flex flex-col justify-center whitespace-nowrap text-[9px] leading-[11px] text-white/[0.72]"
+              className="absolute right-0 top-0 grid place-items-center whitespace-nowrap text-[11px] leading-none text-white/[0.92]"
               style={{ width: METRICS.contentAreaWidth, height: contentRowHeight }}
             >
-              {isComplete && <span className="text-white/[0.92]">Done</span>}
-              <span>{collapsedTime}</span>
+              Done
+            </div>
+          ) : isRunning && streaming ? (
+            // Live run time only rides alongside the chin narration; without a chin the gutter stays empty.
+            <div
+              className="absolute right-0 top-0 grid place-items-center whitespace-nowrap text-[11px] leading-none text-white/[0.72]"
+              style={{ width: METRICS.contentAreaWidth, height: contentRowHeight }}
+            >
+              {collapsedTime}
             </div>
           ) : appNotice ? (
             // Shield = missing permissions; cloud-sync = app update available (detected on launch).
