@@ -37,7 +37,7 @@ The collapsed notch is three zones across one row. The middle is the **void** �
 
 | Zone | Collapsed | Expanded |
 | --- | --- | --- |
-| Left gutter | The pointer arrow: colored and gently pulsing while a task streams, a gray silhouette when nothing is active. | Empty. |
+| Left gutter | The surfaced pointers: a colored arrow per active or just-finished task, gently pulsing while one streams. Several stack as a small overlapping cluster — up to three, the group centered — and a gray silhouette shows when nothing is surfaced. | Empty. |
 | Void | The hardware notch. Always empty. | Empty. |
 | Right gutter | One status only: the running clock, or a single notification icon. | One app-level action button (see Notifications). |
 
@@ -55,7 +55,8 @@ Tasks form a queue, and the collapsed notch narrates that queue one update at a 
 2. **Running tasks stream updates.** Every couple of seconds the chin advances to the next running task's latest update.
 3. **The arrow color follows the speaker.** Whichever task produced the current chin line, the left arrow takes that task's color.
 4. **A new task announces itself, then yields.** On add, the chin briefly shows the new task's own color and subtext, then the rotation resumes with the next update.
-5. **Quiet means quiet.** When no task is running, the chin disappears and the arrow returns to a silhouette.
+5. **Finished work lingers.** A completed task keeps its colored pointer, and its last line in the chin, on the collapsed bar after it stops — a result is never dropped the instant it lands. Several completions stack as the overlapping cluster.
+6. **Expanding clears it.** Opening the notch dismisses those finished pointers: the tasks stay in the expanded list, but the collapsed bar stops surfacing them. Once nothing is surfaced the chin disappears and the arrow returns to a silhouette.
 
 ## Expanded Panel
 
