@@ -844,21 +844,23 @@ public struct UserQueryNotchStatusView: View {
         }
     }
 
-    /// The collapsed right gutter: a notification icon when one is needed, the live run time
-    /// while working, an update glyph when idle, otherwise empty — mirroring the prototype.
+    /// The collapsed right gutter follows the prototype exactly: it can only ever show one of the
+    /// three supported notifications — an attention glyph, a missing-permissions shield, or an
+    /// update cloud — the live run time while a task is active, otherwise nothing. No other status
+    /// (failed, review, …) gets its own gutter glyph; those fall back to the task's elapsed time.
     @ViewBuilder
     private var collapsedRightSlot: some View {
         if let task = primaryTask {
             switch task.status {
-            case .waitingForClarification, .needsAttention:
+            case .waitingForClarification, .needsAttention, .waitingForReview:
+                // Attention: the agent needs the user to look at or answer something.
                 slotIcon("exclamationmark.bubble")
             case .waitingForPermission:
-                slotIcon("exclamationmark.shield")
-            case .waitingForReview:
-                slotIcon("doc.text.magnifyingglass")
+                // Missing permission to continue.
+                slotIcon("shield")
             case .running:
                 compactLiveTime(since: task.createdAt)
-            case .paused, .interrupted:
+            case .paused, .interrupted, .failed:
                 slotText(Self.compactElapsed(from: task.createdAt, to: task.updatedAt))
             case .completed:
                 VStack(spacing: 0) {
@@ -866,12 +868,11 @@ public struct UserQueryNotchStatusView: View {
                     slotText(Self.compactElapsed(from: task.createdAt, to: task.updatedAt))
                 }
                 .font(.system(size: 9, weight: .regular).monospacedDigit())
-            case .failed:
-                slotIcon("xmark")
             case .chatting:
                 EmptyView()
             }
         } else if updateState.isActionable {
+            // App update available.
             slotIcon("icloud.and.arrow.down")
         } else {
             EmptyView()
