@@ -621,6 +621,9 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         if let spawnID = spawnStates.first(where: { $0.taskID == taskID })?.id {
             removeSpawn(id: spawnID)
         }
+        // Drop the persisted row (and its events/assets) too, so the task does not
+        // reappear when the notch reloads recent tasks on the next launch.
+        taskStore.deleteTask(id: taskID)
         syncPrimaryTaskPausedFlag()
     }
 
