@@ -25,6 +25,10 @@ public struct HarnessRequestUnderstanding: Sendable, Equatable {
     public var needsClarification: Bool
     /// The question to ask when `needsClarification` is true.
     public var clarifyingQuestion: String?
+    /// Whether the turn's work should run in the background (the agent acts without stealing the
+    /// cursor or raising the app) or in the foreground (the user is meant to watch). Set by this
+    /// boundary from the request's intent — never matched from raw text. Defaults to background.
+    public var executionPreference: ExecutionPreference
 
     public init(
         restatedGoal: String,
@@ -32,7 +36,8 @@ public struct HarnessRequestUnderstanding: Sendable, Equatable {
         parameters: [String: String] = [:],
         successCriteria: String? = nil,
         needsClarification: Bool = false,
-        clarifyingQuestion: String? = nil
+        clarifyingQuestion: String? = nil,
+        executionPreference: ExecutionPreference = .background
     ) {
         self.restatedGoal = restatedGoal
         self.targetAppName = targetAppName
@@ -40,6 +45,7 @@ public struct HarnessRequestUnderstanding: Sendable, Equatable {
         self.successCriteria = successCriteria
         self.needsClarification = needsClarification
         self.clarifyingQuestion = clarifyingQuestion
+        self.executionPreference = executionPreference
     }
 }
 
@@ -86,7 +92,9 @@ public final class HostedHarnessRequestUnderstanding {
                 parameters: wire.parameters ?? [:],
                 successCriteria: wire.successCriteria.flatMap { $0.isEmpty ? nil : $0 },
                 needsClarification: wire.needsClarification ?? false,
-                clarifyingQuestion: wire.clarifyingQuestion.flatMap { $0.isEmpty ? nil : $0 }
+                clarifyingQuestion: wire.clarifyingQuestion.flatMap { $0.isEmpty ? nil : $0 },
+                executionPreference: wire.executionPreference
+                    .flatMap { ExecutionPreference(rawValue: $0) } ?? .background
             )
         } catch {
             recordCall(prompt: prompt, response: String(String(describing: error).prefix(500)),
@@ -123,9 +131,11 @@ public final class HostedHarnessRequestUnderstanding {
         var successCriteria: String?
         var needsClarification: Bool?
         var clarifyingQuestion: String?
+        var executionPreference: String?
 
         private enum CodingKeys: String, CodingKey {
             case restatedGoal, targetAppName, parameters, successCriteria, needsClarification, clarifyingQuestion
+            case executionPreference
         }
 
         init(from decoder: Decoder) throws {
@@ -135,6 +145,7 @@ public final class HostedHarnessRequestUnderstanding {
             successCriteria = try container.decodeIfPresent(String.self, forKey: .successCriteria)
             clarifyingQuestion = try container.decodeIfPresent(String.self, forKey: .clarifyingQuestion)
             needsClarification = try container.decodeIfPresent(Bool.self, forKey: .needsClarification)
+            executionPreference = try container.decodeIfPresent(String.self, forKey: .executionPreference)
             // The schema is non-strict, so a parameter value may arrive as a number or boolean. Coerce
             // scalars to strings instead of failing the whole decode.
             parameters = try container.decodeIfPresent([String: ScalarString].self, forKey: .parameters)?
@@ -202,7 +213,11 @@ public final class HostedHarnessRequestUnderstanding {
                             ]),
                             "successCriteria": .object(["type": .string("string")]),
                             "needsClarification": .object(["type": .string("boolean")]),
-                            "clarifyingQuestion": .object(["type": .string("string")])
+                            "clarifyingQuestion": .object(["type": .string("string")]),
+                            "executionPreference": .object([
+                                "type": .string("string"),
+                                "enum": .array([.string("foreground"), .string("background")])
+                            ])
                         ])
                     ])
                 ])

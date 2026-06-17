@@ -113,6 +113,11 @@ public enum DonkeyPrompts {
           that you cannot reasonably resolve, or when it is destructive without a clear target. For an
           under-specified but low-risk, reversible request, pick sensible specifics and set this false.
         - clarifyingQuestion: the single question to ask when needsClarification is true; otherwise empty.
+        - executionPreference: "background" or "foreground". Choose "foreground" ONLY when the point of
+          the request is for the user to watch or be shown the result on screen — e.g. "pull up…",
+          "show me…", "open … so I can see it", "walk me through…", "how do I…", or any turn whose
+          value is the user looking at the app. Choose "background" for everything else: the user wants
+          the work done, not to watch it happen. When unsure, prefer "background".
 
         Return JSON only.
         """
