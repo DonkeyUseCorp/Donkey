@@ -17,6 +17,9 @@ public struct UserQueryNotchLayout: Equatable, Sendable {
     public var collapsedCornerRadius: CGFloat
     public var expandedCornerRadius: CGFloat
     public var canRenderTextInTopRow: Bool
+    /// Height of the chin band that hangs below the collapsed notch row while a task streams
+    /// (0 when there is nothing to stream). The notch row itself stays `collapsedVisibleHeight`.
+    public var chinHeight: CGFloat
 
     public init(
         voidWidth: CGFloat,
@@ -31,7 +34,8 @@ public struct UserQueryNotchLayout: Equatable, Sendable {
         expandedContentFrame: CGRect,
         collapsedCornerRadius: CGFloat,
         expandedCornerRadius: CGFloat,
-        canRenderTextInTopRow: Bool
+        canRenderTextInTopRow: Bool,
+        chinHeight: CGFloat = 0
     ) {
         self.voidWidth = voidWidth
         self.voidHeight = voidHeight
@@ -46,6 +50,7 @@ public struct UserQueryNotchLayout: Equatable, Sendable {
         self.collapsedCornerRadius = collapsedCornerRadius
         self.expandedCornerRadius = expandedCornerRadius
         self.canRenderTextInTopRow = canRenderTextInTopRow
+        self.chinHeight = chinHeight
     }
 
     public var shouldRenderExpandedTopRowVoidMarker: Bool {
@@ -75,6 +80,8 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
     public var isExpanded: Bool
     public var isHostExpanded: Bool
     public var screenWidth: CGFloat
+    /// Chin band below the collapsed notch row while a task streams (0 otherwise).
+    public var chinHeight: CGFloat
 
     public init(
         voidWidth: CGFloat,
@@ -82,7 +89,8 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
         expandedContentHeight: CGFloat,
         isExpanded: Bool,
         isHostExpanded: Bool,
-        screenWidth: CGFloat
+        screenWidth: CGFloat,
+        chinHeight: CGFloat = 0
     ) {
         self.voidWidth = voidWidth
         self.voidHeight = voidHeight
@@ -90,6 +98,7 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
         self.isExpanded = isExpanded
         self.isHostExpanded = isHostExpanded
         self.screenWidth = screenWidth
+        self.chinHeight = chinHeight
     }
 
     public var surfaceSize: CGSize {
@@ -123,8 +132,15 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
             expandedContentFrame: expandedContentFrame,
             collapsedCornerRadius: Self.collapsedCornerRadius,
             expandedCornerRadius: Self.expandedCornerRadius,
-            canRenderTextInTopRow: canRenderTextInTopRow
+            canRenderTextInTopRow: canRenderTextInTopRow,
+            chinHeight: effectiveChinHeight
         )
+    }
+
+    /// Only the real notch (with a void) grows a chin; no-notch displays show the
+    /// streaming line inline in the collapsed row instead.
+    private var effectiveChinHeight: CGFloat {
+        canRenderTextInTopRow ? 0 : chinHeight
     }
 
     private var visibleHeight: CGFloat {
@@ -162,7 +178,7 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
             x: 0,
             y: 0,
             width: collapsedSurfaceWidth,
-            height: collapsedVisibleHeight
+            height: collapsedVisibleHeight + effectiveChinHeight
         )
     }
 
@@ -233,6 +249,7 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
     )
     private static let collapsedSideLaneWidth: CGFloat = 34
     private static let collapsedCornerRadius: CGFloat = 14
-    private static let expandedCornerRadius: CGFloat = 26
+    // Prototype spec: the expanded notch window and its input box both use a 14px radius.
+    private static let expandedCornerRadius: CGFloat = 14
     private static let maximumExpandedContentTopInset: CGFloat = 44
 }

@@ -636,11 +636,17 @@ final class UserQueryOverlayController {
             resumeRequested: { [weak self] taskID in
                 self?.model.resumeTask(id: taskID)
             },
+            dismissRequested: { [weak self] taskID in
+                self?.model.dismissTask(id: taskID)
+            },
             taskSelected: { [weak self] taskID in
                 self?.restoreSpawnPointer(forTaskID: taskID)
             },
             approvePermissionRequested: { [weak self] taskID, alwaysAllow in
                 self?.model.approvePermissionGate(id: taskID, alwaysAllow: alwaysAllow)
+            },
+            denyPermissionRequested: { [weak self] taskID in
+                self?.model.denyPermissionGate(id: taskID)
             },
             updateRequested: { [weak self] in
                 self?.openAvailableUpdate()
@@ -959,9 +965,18 @@ final class UserQueryOverlayController {
             expandedContentHeight: statusExpandedContentHeight,
             isExpanded: isStatusExpanded,
             isHostExpanded: isStatusHostExpanded,
-            screenWidth: screen.frame.width
+            screenWidth: screen.frame.width,
+            chinHeight: statusChinHeight
         )
     }
+
+    /// The collapsed chin hangs below the notch whenever any task is running; the notch view
+    /// rotates which running task's progress line it shows. It only grows the real-notch surface.
+    private var statusChinHeight: CGFloat {
+        model.notchTasks.contains { $0.status == .running } ? Self.statusChinBandHeight : 0
+    }
+
+    private static let statusChinBandHeight: CGFloat = 20
 
     private var statusExpandedContentHeight: CGFloat {
         if hasStatusTaskDisplayText || !model.notchTasks.isEmpty || model.updateState.headerButtonTitle != nil {

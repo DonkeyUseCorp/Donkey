@@ -259,7 +259,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         let task = taskForSubmittedCommand(
             text: text,
             matchedTaskID: nil,
-            reservedAccentIndex: spawn(withID: spawnID)?.accentIndex
+            reservedAccentIndex: spawnID.flatMap { spawn(withID: $0)?.accentIndex }
         )
         updateSpawn(id: spawnID, taskID: task.id, accentIndex: task.accentIndex)
         activeTaskIDs.insert(task.id)
@@ -586,6 +586,24 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         }
     }
 
+    /// Closes a task: removes it from the notch list and tears down its pointer.
+    /// Offered only for stopped (paused/interrupted/failed) and completed tasks —
+    /// the same affordance the prototype calls "close".
+    func dismissTask(id taskID: String) {
+        guard let task = task(withID: taskID) else { return }
+        guard task.status != .running else { return }
+
+        notchTasks.removeAll { $0.id == taskID }
+        activeTaskIDs.remove(taskID)
+        if lastActiveTaskID == taskID {
+            lastActiveTaskID = notchTasks.first?.id
+        }
+        if let spawnID = spawnStates.first(where: { $0.taskID == taskID })?.id {
+            removeSpawn(id: spawnID)
+        }
+        syncPrimaryTaskPausedFlag()
+    }
+
     func approvePermissionGate(id taskID: String, alwaysAllow: Bool = false) {
         guard let task = task(withID: taskID),
               task.status == .waitingForPermission else {
@@ -650,6 +668,31 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         }
     }
 
+    /// User denied a pending permission. The harness loop already exited at the consent gate, so this
+    /// stops the task into a resumable (paused) state — resuming re-runs it and asks again. A Live-path
+    /// consent is also told "no" so it stops re-trying.
+    func denyPermissionGate(id taskID: String) {
+        guard let task = task(withID: taskID),
+              task.status == .waitingForPermission else {
+            return
+        }
+
+        if task.metadata["live.shellConsent"] == "true" {
+            Task { [liveController] in
+                await liveController.resolvePendingConsent(approved: false, alwaysAllow: false)
+            }
+            if liveTurn?.taskID == taskID {
+                finishLiveTurn(detail: "Permission denied", status: .paused)
+                return
+            }
+        }
+
+        updateTask(id: taskID, detail: "Permission denied", status: .paused)
+        appendTaskEvent(taskID: taskID, role: .system, text: "Permission denied")
+        activeTaskIDs.remove(taskID)
+        syncPrimaryTaskPausedFlag()
+    }
+
     func updateNotchCommandInputTextHeight(_ height: CGFloat) {
         let clampedHeight = UserQueryLayout.clampedComposerInputTextHeight(height)
         guard abs(notchCommandInputTextHeight - clampedHeight) > 0.5 else { return }
@@ -668,12 +711,18 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         max(92, notchCommandInputTextHeight + 60)
     }
 
+    /// Desktop pointer spawning is temporarily disabled. Submissions no longer launch a
+    /// traveling cursor; accent assignment and task tracking continue without one. Flip to re-enable.
+    private static let spawnPointersEnabled = false
+
     private func beginSpawn(
         for text: String,
         label: String? = nil,
         taskID: String? = nil,
         accentIndex: Int? = nil
-    ) -> String {
+    ) -> String? {
+        guard Self.spawnPointersEnabled else { return nil }
+
         let spawnID = UUID().uuidString
         let displayText = Self.taskLabel(for: text)
         let labelText = label ?? Self.collapsedDisplayText(for: text)

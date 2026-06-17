@@ -26,10 +26,12 @@ public struct UserQueryNotchStatusView: View {
     private let assetsDropped: @MainActor ([UserQueryTaskAssetDraft]) -> Void
     private let pauseRequested: @MainActor (String) -> Void
     private let resumeRequested: @MainActor (String) -> Void
+    private let dismissRequested: @MainActor (String) -> Void
     private let taskSelected: @MainActor (String) -> Void
     /// (taskID, alwaysAllow). `alwaysAllow` persists a standing rule for the
     /// command signature; it is only offered for non-highRisk shell consent.
     private let approvePermissionRequested: @MainActor (String, Bool) -> Void
+    private let denyPermissionRequested: @MainActor (String) -> Void
     private let updateRequested: @MainActor () -> Void
 
     public init(
@@ -52,8 +54,10 @@ public struct UserQueryNotchStatusView: View {
         assetsDropped: @escaping @MainActor ([UserQueryTaskAssetDraft]) -> Void,
         pauseRequested: @escaping @MainActor (String) -> Void,
         resumeRequested: @escaping @MainActor (String) -> Void,
+        dismissRequested: @escaping @MainActor (String) -> Void,
         taskSelected: @escaping @MainActor (String) -> Void,
         approvePermissionRequested: @escaping @MainActor (String, Bool) -> Void,
+        denyPermissionRequested: @escaping @MainActor (String) -> Void,
         updateRequested: @escaping @MainActor () -> Void
     ) {
         self.state = state
@@ -75,8 +79,10 @@ public struct UserQueryNotchStatusView: View {
         self.assetsDropped = assetsDropped
         self.pauseRequested = pauseRequested
         self.resumeRequested = resumeRequested
+        self.dismissRequested = dismissRequested
         self.taskSelected = taskSelected
         self.approvePermissionRequested = approvePermissionRequested
+        self.denyPermissionRequested = denyPermissionRequested
         self.updateRequested = updateRequested
     }
 
@@ -161,7 +167,7 @@ public struct UserQueryNotchStatusView: View {
     }
 
     private var restingCollapsedContent: some View {
-        DonkeyCursorMark(color: accentColor)
+        DonkeyCursorMark(color: accentColor, silhouette: true)
             .frame(width: 13, height: 13)
             .padding(.leading, 10)
             .frame(width: animatingSurfaceWidth, height: animatingSurfaceHeight, alignment: .leading)
@@ -207,7 +213,7 @@ public struct UserQueryNotchStatusView: View {
 
     private var fullWidthCollapsedContent: some View {
         HStack(spacing: 7) {
-            DonkeyCursorMark(color: accentColor)
+            DonkeyCursorMark(color: accentColor, silhouette: !hasRunningTask)
                 .frame(width: 13, height: 13)
 
             Text(taskTitle)
@@ -231,26 +237,50 @@ public struct UserQueryNotchStatusView: View {
     }
 
     private var voidAwareCollapsedContent: some View {
-        ZStack {
-            DonkeyCursorMark(color: accentColor)
+        // The chin narrates running tasks one at a time, advancing every couple of seconds;
+        // the left arrow takes the color of whichever task is currently speaking.
+        TimelineView(.periodic(from: Self.chinRotationAnchor, by: Self.chinRotationInterval)) { context in
+            let speaker = rotatingChinTask(at: context.date)
+            ZStack {
+                DonkeyCursorMark(
+                    color: speaker.map { accentColor(for: $0.accentIndex) } ?? accentColor,
+                    silhouette: speaker == nil
+                )
                 .frame(width: 13, height: 13)
                 .position(x: collapsedLeadingLaneCenterX, y: layout.collapsedVisibleHeight / 2)
 
-            if let compactTopRowStatusText {
-                Text(compactTopRowStatusText)
-                    .font(.system(size: 9, weight: .regular))
-                    .foregroundStyle(Color.white.opacity(0.72))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+                collapsedRightSlot
                     .frame(width: collapsedSideLaneWidth, height: layout.collapsedVisibleHeight)
                     .position(x: collapsedTrailingLaneCenterX, y: layout.collapsedVisibleHeight / 2)
+
+                if layout.chinHeight > 0, let speaker {
+                    Text(speaker.detail.isEmpty ? speaker.title : speaker.detail)
+                        .font(.system(size: 9, weight: .regular))
+                        .foregroundStyle(Color.white.opacity(0.72))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(width: max(0, animatingSurfaceWidth - 24), alignment: .leading)
+                        .position(x: animatingSurfaceWidth / 2, y: layout.collapsedVisibleHeight + layout.chinHeight / 2)
+                }
             }
+            .frame(
+                width: animatingSurfaceWidth,
+                height: animatingSurfaceHeight,
+                alignment: .center
+            )
         }
-        .frame(
-            width: animatingSurfaceWidth,
-            height: animatingSurfaceHeight,
-            alignment: .center
-        )
+    }
+
+    /// The running task currently surfaced in the chin. Running tasks (newest first) rotate
+    /// round-robin; the clock is anchored to the newest task's start, so a freshly added task
+    /// shows first (the view re-renders on the task change) and then yields to the others.
+    private func rotatingChinTask(at date: Date) -> UserQueryNotchTask? {
+        let running = tasks.filter { $0.status == .running }
+        guard !running.isEmpty else { return nil }
+        let anchor = running.map(\.createdAt).max() ?? date
+        let slot = Int(max(0, date.timeIntervalSince(anchor)) / Self.chinRotationInterval)
+        let index = ((slot % running.count) + running.count) % running.count
+        return running[index]
     }
 
     private var expandedContent: some View {
@@ -336,30 +366,29 @@ public struct UserQueryNotchStatusView: View {
         .accessibilityHidden(true)
     }
 
+    // The right-gutter app action, styled like the prototype: a label + a white pill button.
     private var expandedUpdateHeader: some View {
-        HStack {
+        HStack(spacing: 8) {
             Spacer()
 
-            if let updateTitle = updateState.headerButtonTitle {
-                Button(action: updateRequested) {
-                    HStack(spacing: 7) {
-                        Circle()
-                            .fill(Color(red: 0.94, green: 0.62, blue: 0.15))
-                            .frame(width: 7, height: 7)
+            if updateState.isActionable {
+                Text("Update Available")
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(Color.white.opacity(0.7))
 
-                        Text(updateTitle)
-                            .font(.system(size: 12, weight: .regular))
-                    }
-                    .foregroundStyle(Color.white.opacity(0.9))
-                    .padding(.horizontal, 11)
-                    .frame(height: 28)
-                    .background(Color(red: 0.94, green: 0.62, blue: 0.15).opacity(0.22))
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                Button(action: updateRequested) {
+                    Text("Restart")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.black.opacity(0.82))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, 14)
         .frame(height: 40)
         .overlay(alignment: .bottom) {
             Rectangle()
@@ -513,45 +542,159 @@ public struct UserQueryNotchStatusView: View {
     }
 
     private func taskRow(_ task: UserQueryNotchTask) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            DonkeyCursorMark(color: accentColor(for: task.accentIndex))
-                .frame(width: 14, height: 14)
-                .padding(.top, 1)
+        let isPermission = task.status == .waitingForPermission
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 12) {
+                // Colored pointer only while actively running; silhouette once stopped or finished.
+                DonkeyCursorMark(color: accentColor(for: task.accentIndex), silhouette: task.status != .running)
+                    .frame(width: 14, height: 14)
+                    .padding(.top, 1)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(task.title)
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(Color.white.opacity(0.9))
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(task.title)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(Color.white.opacity(0.9))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
 
-                Text(taskStatusDescription(task))
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(Color.white.opacity(0.42))
-                    .fixedSize(horizontal: false, vertical: true)
+                    if !isPermission {
+                        Text(taskStatusDescription(task))
+                            .font(.system(size: 12, weight: .regular))
+                            .foregroundStyle(Color.white.opacity(0.42))
+                            .lineLimit(5)
+                            .truncationMode(.tail)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                // Reserve room so long text never slides under the pinned controls / time.
+                .padding(.trailing, isPermission ? 0 : 60)
             }
 
-            Spacer(minLength: 0)
-
-            if task.status == .running || task.status == .paused || task.status == .waitingForPermission || task.status == .interrupted {
-                HStack(spacing: 8) {
-                    if task.status == .running {
-                        elapsedTimer(since: task.createdAt)
-                    }
-                    activeTaskControls(for: task)
-                }
-            } else {
-                taskStatusAccessory(task)
+            if isPermission {
+                permissionBanner(for: task)
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 12)
         .frame(minHeight: 48)
-        .background(Color.white.opacity(0.055))
+        .background(Color.white.opacity(0.07))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .onTapGesture {
             taskSelected(task.id)
         }
+        // Pinned to the full cell: controls in the top-right corner; elapsed time at the bottom-right
+        // so it stays near the bottom of the cell and never moves as the subtext grows.
+        .overlay(alignment: .topTrailing) {
+            if !isPermission { topRightControls(task).padding(12) }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if !isPermission { taskElapsedLabel(task).padding(12) }
+        }
+    }
+
+    /// Controls pinned to the row's top-right: stop / resume+close / close, or a status glyph.
+    @ViewBuilder
+    private func topRightControls(_ task: UserQueryNotchTask) -> some View {
+        switch task.status {
+        case .running, .paused, .interrupted, .completed, .failed:
+            stateControls(for: task)
+        case .chatting, .waitingForClarification, .waitingForReview, .needsAttention:
+            taskStatusAccessory(task)
+        case .waitingForPermission:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private func stateControls(for task: UserQueryNotchTask) -> some View {
+        switch task.status {
+        case .running:
+            // Stop = pause (same affordance the prototype uses for a running task).
+            statusControlButton(systemName: "stop.fill", label: "Stop", isEnabled: true) {
+                pauseRequested(task.id)
+            }
+        case .paused, .interrupted:
+            HStack(spacing: 6) {
+                statusControlButton(systemName: "play.fill", label: "Resume", isEnabled: true) {
+                    resumeRequested(task.id)
+                }
+                statusControlButton(systemName: "xmark", label: "Close", isEnabled: true) {
+                    dismissRequested(task.id)
+                }
+            }
+        case .completed, .failed:
+            statusControlButton(systemName: "xmark", label: "Close", isEnabled: true) {
+                dismissRequested(task.id)
+            }
+        default:
+            EmptyView()
+        }
+    }
+
+    /// Live ticking time while running; a frozen total once the task has stopped or finished.
+    @ViewBuilder
+    private func taskElapsedLabel(_ task: UserQueryNotchTask) -> some View {
+        if task.status == .running {
+            elapsedTimer(since: task.createdAt)
+        } else {
+            Text(Self.elapsedDescription(from: task.createdAt, to: task.updatedAt))
+                .font(.system(size: 10, weight: .regular).monospacedDigit())
+                .foregroundStyle(Color.white.opacity(0.5))
+                .lineLimit(1)
+                .fixedSize()
+        }
+    }
+
+    /// A permission request banner below the task text: the request reads on the left, Approve / Deny
+    /// on the right. The system permission is only requested once the user taps Approve; Deny stops
+    /// the task — the harness never reaches the system without the user's go-ahead.
+    private func permissionBanner(for task: UserQueryNotchTask) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "lock.shield")
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.7))
+
+            Text(permissionRequestText(task))
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.7))
+                .lineLimit(2)
+                .truncationMode(.tail)
+
+            Spacer(minLength: 8)
+
+            permissionButton(label: "Approve", prominent: true) {
+                approvePermissionRequested(task.id, false)
+            }
+            permissionButton(label: "Deny", prominent: false) {
+                denyPermissionRequested(task.id)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.05))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func permissionRequestText(_ task: UserQueryNotchTask) -> String {
+        let detail = task.detail.trimmingCharacters(in: .whitespacesAndNewlines)
+        return detail.isEmpty ? "Requesting permission to continue" : detail
+    }
+
+    private func permissionButton(label: String, prominent: Bool, action: @escaping @MainActor () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(prominent ? Color.black.opacity(0.82) : Color.white.opacity(0.85))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(prominent ? AnyShapeStyle(Color.white) : AnyShapeStyle(Color.white.opacity(0.12)))
+                .clipShape(Capsule(style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(label) permission")
     }
 
     private var commandRow: some View {
@@ -619,75 +762,6 @@ public struct UserQueryNotchStatusView: View {
             voiceWaveformLevels: state.voiceWaveformLevels,
             isVoiceInputActive: false
         )
-    }
-
-    @ViewBuilder
-    private func activeTaskControls(for task: UserQueryNotchTask) -> some View {
-        switch task.status {
-        case .waitingForPermission:
-            let isShellConsent = !(task.metadata["genericHarness.shellConsent.command"] ?? "").isEmpty
-            let allowAlways = task.metadata["genericHarness.shellConsent.allowAlways"] == "true"
-            if isShellConsent {
-                HStack(spacing: 6) {
-                    statusControlButton(
-                        systemName: "checkmark.shield",
-                        label: "Allow Once",
-                        isEnabled: true,
-                        action: {
-                            approvePermissionRequested(task.id, false)
-                        }
-                    )
-                    if allowAlways {
-                        statusControlButton(
-                            systemName: "checkmark.shield.fill",
-                            label: "Always Allow",
-                            isEnabled: true,
-                            action: {
-                                approvePermissionRequested(task.id, true)
-                            }
-                        )
-                    }
-                }
-            } else {
-                statusControlButton(
-                    systemName: "checkmark.shield",
-                    label: "Approve Permission",
-                    isEnabled: true,
-                    action: {
-                        approvePermissionRequested(task.id, false)
-                    }
-                )
-            }
-        case .interrupted:
-            statusControlButton(
-                systemName: "arrow.triangle.2.circlepath",
-                label: "Resume Changed Task",
-                isEnabled: true,
-                action: {
-                    resumeRequested(task.id)
-                }
-            )
-        default:
-            HStack(spacing: 6) {
-                statusControlButton(
-                    systemName: "play.fill",
-                    label: "Resume",
-                    isEnabled: task.status == .paused,
-                    action: {
-                        resumeRequested(task.id)
-                    }
-                )
-
-                statusControlButton(
-                    systemName: "pause.fill",
-                    label: "Pause",
-                    isEnabled: task.status == .running,
-                    action: {
-                        pauseRequested(task.id)
-                    }
-                )
-            }
-        }
     }
 
     private func statusControlButton(
@@ -811,44 +885,70 @@ public struct UserQueryNotchStatusView: View {
         }
     }
 
-    private var compactTopRowStatusText: String? {
-        if let primaryTask {
-            switch primaryTask.status {
-            case .chatting:
-                return nil
-            case .running:
-                return "Run"
-            case .paused:
-                return "Hld"
-            case .completed:
-                return "Done"
-            case .waitingForClarification:
-                return "Ask"
+    /// The collapsed right gutter: a notification icon when one is needed, the live run time
+    /// while working, an update glyph when idle, otherwise empty — mirroring the prototype.
+    @ViewBuilder
+    private var collapsedRightSlot: some View {
+        if let task = primaryTask {
+            switch task.status {
+            case .waitingForClarification, .needsAttention:
+                slotIcon("exclamationmark.bubble")
             case .waitingForPermission:
-                return "Perm"
+                slotIcon("exclamationmark.shield")
             case .waitingForReview:
-                return "Rev"
-            case .interrupted:
-                return "Chg"
-            case .needsAttention:
-                return "Ask"
+                slotIcon("doc.text.magnifyingglass")
+            case .running:
+                compactLiveTime(since: task.createdAt)
+            case .paused, .interrupted:
+                slotText(Self.compactElapsed(from: task.createdAt, to: task.updatedAt))
+            case .completed:
+                VStack(spacing: 0) {
+                    Text("Done").foregroundStyle(Color.white.opacity(0.92))
+                    slotText(Self.compactElapsed(from: task.createdAt, to: task.updatedAt))
+                }
+                .font(.system(size: 9, weight: .regular).monospacedDigit())
             case .failed:
-                return "Fail"
+                slotIcon("xmark")
+            case .chatting:
+                EmptyView()
             }
+        } else if updateState.isActionable {
+            slotIcon("icloud.and.arrow.down")
+        } else {
+            EmptyView()
         }
+    }
 
-        if isCurrentTaskPaused {
-            return "Hld"
-        }
+    private func slotIcon(_ systemName: String) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 11, weight: .regular))
+            .foregroundStyle(Color.white.opacity(0.85))
+    }
 
-        switch state.leadingSignalLevel {
-        case .idle:
-            return "Idle"
-        case .ready:
-            return "Rdy"
-        case .thinking:
-            return "Run"
+    private func slotText(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 9, weight: .regular).monospacedDigit())
+            .foregroundStyle(Color.white.opacity(0.72))
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+    }
+
+    private func compactLiveTime(since start: Date) -> some View {
+        TimelineView(.periodic(from: start, by: 1)) { context in
+            slotText(Self.compactElapsed(from: start, to: context.date))
         }
+    }
+
+    /// Compact elapsed time for the 34px right slot: seconds, then minutes, then "Xh Ym".
+    static func compactElapsed(from start: Date, to now: Date) -> String {
+        let totalSeconds = max(0, Int(now.timeIntervalSince(start)))
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        if minutes > 0 { return "\(minutes)m" }
+        return "\(seconds)s"
     }
 
     private var isWorking: Bool {
@@ -882,6 +982,10 @@ public struct UserQueryNotchStatusView: View {
 
     private var primaryTask: UserQueryNotchTask? {
         tasks.first
+    }
+
+    private var hasRunningTask: Bool {
+        tasks.contains { $0.status == .running }
     }
 
     private func isPrimaryTask(_ task: UserQueryNotchTask) -> Bool {
@@ -945,6 +1049,9 @@ public struct UserQueryNotchStatusView: View {
     private static let expandedContentDismissAnimation = Animation.easeOut(duration: 0.1)
     private static let contentInset: CGFloat = 14
     private static let taskListCommandSpacing: CGFloat = 8
+    /// The chin advances to the next running task every 2.6s, on a clock shared by all tasks.
+    private static let chinRotationInterval: TimeInterval = 2.6
+    private static let chinRotationAnchor = Date(timeIntervalSinceReferenceDate: 0)
 }
 
 /// The donkey cursor glyph. Geometry is ported verbatim from the prototype's
@@ -954,20 +1061,30 @@ public struct UserQueryNotchStatusView: View {
 private struct DonkeyCursorMark: View {
     var color: Color
     var rotationDegrees: Double = 0
+    /// Silhouette = hollow gray outline (prototype's inactive/idle arrow); otherwise filled + shadowed.
+    var silhouette: Bool = false
 
     var body: some View {
         GeometryReader { proxy in
             let scale = min(proxy.size.width, proxy.size.height) / 100
             let path = Self.cursorPath(scale: scale)
-            path
-                .fill(color)
-                .overlay(
-                    path.stroke(
-                        Color.white.opacity(0.92),
-                        style: StrokeStyle(lineWidth: 5.36 * scale, lineJoin: .round)
+            if silhouette {
+                path
+                    .stroke(
+                        Color.white.opacity(0.5),
+                        style: StrokeStyle(lineWidth: 6 * scale, lineJoin: .round)
                     )
-                )
-                .shadow(color: Color.black.opacity(0.34), radius: 2 * scale, x: 0, y: 2 * scale)
+            } else {
+                path
+                    .fill(color)
+                    .overlay(
+                        path.stroke(
+                            Color.white.opacity(0.92),
+                            style: StrokeStyle(lineWidth: 5.36 * scale, lineJoin: .round)
+                        )
+                    )
+                    .shadow(color: Color.black.opacity(0.34), radius: 2 * scale, x: 0, y: 2 * scale)
+            }
         }
         .aspectRatio(1, contentMode: .fit)
         .rotationEffect(.degrees(rotationDegrees))
