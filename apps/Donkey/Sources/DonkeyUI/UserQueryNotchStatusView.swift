@@ -951,29 +951,10 @@ public struct UserQueryNotchStatusView: View {
         task.id == primaryTask?.id
     }
 
+    /// The task's status line, resolved through the centralized activity vocabulary so the notch and
+    /// the future conversation view speak the same language.
     private func taskStatusDescription(_ task: UserQueryNotchTask) -> String {
-        switch task.status {
-        case .chatting:
-            return task.detail.isEmpty ? "Conversation" : task.detail
-        case .running:
-            return task.detail.isEmpty ? "Running" : task.detail
-        case .paused:
-            return "Paused"
-        case .completed:
-            return task.detail.isEmpty ? "Done" : task.detail
-        case .waitingForClarification:
-            return task.detail.isEmpty ? "Waiting for detail" : task.detail
-        case .waitingForPermission:
-            return task.detail.isEmpty ? "Waiting for approval" : task.detail
-        case .waitingForReview:
-            return task.detail.isEmpty ? "Waiting for review" : task.detail
-        case .interrupted:
-            return task.detail.isEmpty ? "Changed course" : task.detail
-        case .needsAttention:
-            return task.detail.isEmpty ? "Needs attention" : task.detail
-        case .failed:
-            return task.detail.isEmpty ? "Stopped" : task.detail
-        }
+        UserQueryActivity.current(for: task).displayText
     }
 
     private func accentColor(for index: Int) -> Color {

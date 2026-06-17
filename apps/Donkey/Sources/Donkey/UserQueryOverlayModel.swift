@@ -554,8 +554,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
 
         activeTaskIDs.insert(taskID)
         lastActiveTaskID = taskID
-        updateTask(id: taskID, detail: "Paused", status: .paused)
-        appendTaskEvent(taskID: taskID, role: .system, text: "Paused")
+        announceLifecycle(taskID: taskID, UserQueryActivity(kind: .paused), status: .paused)
         syncPrimaryTaskPausedFlag()
         Task { [commandHandler] in
             _ = await commandHandler.pauseCommand(taskID: taskID)
@@ -570,9 +569,9 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
 
         activeTaskIDs.insert(taskID)
         lastActiveTaskID = taskID
-        updateTask(id: taskID, detail: "Running", status: .running)
+        // The live line falls back to the running activity ("Working"); the record logs "Resuming".
+        announceLifecycle(taskID: taskID, UserQueryActivity(kind: .resumed), status: .running, liveDetail: "")
         updateSpawn(id: spawnStates.first { $0.taskID == taskID }?.id, resumesWork: true)
-        appendTaskEvent(taskID: taskID, role: .system, text: "Resumed")
         promptState.leadingSignalLevel = .thinking
         promptState.promptText = task.title
         syncPrimaryTaskPausedFlag()
@@ -613,9 +612,15 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         // A Live-path shell consent resolves through the Live controller, which
         // re-executes the held command and reports back via onActed/onResponse.
         if task.metadata["live.shellConsent"] == "true" {
-            updateTask(id: taskID, detail: "Approved — running", status: .running, metadata: [:])
+            announceLifecycle(
+                taskID: taskID,
+                UserQueryActivity(kind: .resumed),
+                status: .running,
+                liveDetail: "",
+                metadata: [:]
+            )
             if let turn = liveTurn, turn.taskID == taskID {
-                updateSpawn(id: turn.spawnID, label: "Approved — running", resumesWork: true)
+                updateSpawn(id: turn.spawnID, label: UserQueryActivity.Kind.resumed.label, resumesWork: true)
                 restartLiveTurnWatchdog()
             }
             syncPrimaryTaskPausedFlag()
@@ -627,9 +632,9 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
 
         activeTaskIDs.insert(taskID)
         lastActiveTaskID = taskID
-        let detail = Self.permissionApprovalDetail(for: task)
-        updateTask(id: taskID, detail: detail, status: .running)
-        appendTaskEvent(taskID: taskID, role: .system, text: detail)
+        // After approval the task simply resumes; the live line falls back to the running activity
+        // ("Working") rather than narrating an internal "approving permission" step.
+        announceLifecycle(taskID: taskID, UserQueryActivity(kind: .resumed), status: .running, liveDetail: "")
         promptState.leadingSignalLevel = .thinking
         promptState.promptText = task.title
         syncPrimaryTaskPausedFlag()
@@ -687,8 +692,11 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             }
         }
 
-        updateTask(id: taskID, detail: "Permission denied", status: .paused)
-        appendTaskEvent(taskID: taskID, role: .system, text: "Permission denied")
+        announceLifecycle(
+            taskID: taskID,
+            UserQueryActivity(kind: .paused, summary: "Permission denied"),
+            status: .paused
+        )
         activeTaskIDs.remove(taskID)
         syncPrimaryTaskPausedFlag()
     }
@@ -1089,6 +1097,33 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         return eventID
     }
 
+    /// The single place a lifecycle transition announces itself. It sets the task's live status line
+    /// from the typed activity, records the event in the in-app conversation store, and appends the
+    /// same line to `thread.md` — so the conversation record stays the complete history we can render
+    /// back to the user. New transitions pass a different `UserQueryActivity` kind; nothing else moves.
+    private func announceLifecycle(
+        taskID: String,
+        _ activity: UserQueryActivity,
+        status: UserQueryTaskStatus,
+        liveDetail: String? = nil,
+        metadata: [String: String]? = nil
+    ) {
+        updateTask(id: taskID, detail: liveDetail ?? activity.displayText, status: status, metadata: metadata)
+        // In-app event store keeps plain text (structured data for the conversation view); thread.md
+        // gets the icon-prefixed markdown line.
+        _ = appendTaskEvent(taskID: taskID, role: .system, text: activity.displayText)
+        recordThreadActivity(taskID: taskID, activity)
+    }
+
+    /// Appends a typed activity line to the task's `thread.md` conversation record. The thread file
+    /// already exists from the run, so this only ever appends (off the main thread — small file IO).
+    private func recordThreadActivity(taskID: String, _ activity: UserQueryActivity) {
+        let line = activity.transcriptLine
+        Task.detached {
+            ThreadTranscript(id: taskID).systemEvent(line)
+        }
+    }
+
     private func updateTask(
         id: String,
         title: String? = nil,
@@ -1233,18 +1268,6 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         guard !displayNames.isEmpty else { return "Uploaded assets" }
 
         return "Uploaded assets: \(displayNames)"
-    }
-
-    private static func permissionApprovalDetail(for task: UserQueryNotchTask) -> String {
-        let permissions = task.metadata["genericHarness.missingPermissions"]?
-            .split(separator: ",")
-            .map(String.init)
-            .filter { !$0.isEmpty } ?? []
-        guard !permissions.isEmpty else {
-            return "Approving permission"
-        }
-
-        return "Approving \(permissions.joined(separator: ", "))"
     }
 
     private static func shouldShowChangedCourseState(for task: UserQueryNotchTask) -> Bool {
