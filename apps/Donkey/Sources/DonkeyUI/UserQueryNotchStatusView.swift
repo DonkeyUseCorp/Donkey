@@ -846,8 +846,10 @@ public struct UserQueryNotchStatusView: View {
 
     /// The collapsed right gutter follows the prototype exactly: it can only ever show one of the
     /// three supported notifications — an attention glyph, a missing-permissions shield, or an
-    /// update cloud — the live run time while a task is active, otherwise nothing. No other status
-    /// (failed, review, …) gets its own gutter glyph; those fall back to the task's elapsed time.
+    /// update cloud — the live run time while a task runs, "Done" once it finishes, otherwise
+    /// nothing. The time only ever rides alongside the chin (a running task always narrates), so the
+    /// gutter never shows a lonely clock without a chin; every state's full elapsed total lives in
+    /// the expanded row.
     @ViewBuilder
     private var collapsedRightSlot: some View {
         if let task = primaryTask {
@@ -860,15 +862,11 @@ public struct UserQueryNotchStatusView: View {
                 slotIcon("shield")
             case .running:
                 compactLiveTime(since: task.createdAt)
-            case .paused, .interrupted, .failed:
-                slotText(Self.compactElapsed(from: task.createdAt, to: task.updatedAt))
             case .completed:
-                VStack(spacing: 0) {
-                    Text("Done").foregroundStyle(Color.white.opacity(0.92))
-                    slotText(Self.compactElapsed(from: task.createdAt, to: task.updatedAt))
-                }
-                .font(.system(size: 9, weight: .regular).monospacedDigit())
-            case .chatting:
+                // A finished task shows a status, not a clock.
+                slotText("Done", opacity: 0.92)
+            case .paused, .interrupted, .failed, .chatting:
+                // No chin in these states, so no time: they surface in the expanded list instead.
                 EmptyView()
             }
         } else if updateState.isActionable {
@@ -885,12 +883,12 @@ public struct UserQueryNotchStatusView: View {
             .foregroundStyle(Color.white.opacity(0.85))
     }
 
-    private func slotText(_ text: String) -> some View {
+    private func slotText(_ text: String, opacity: Double = 0.72) -> some View {
         Text(text)
-            .font(.system(size: 9, weight: .regular).monospacedDigit())
-            .foregroundStyle(Color.white.opacity(0.72))
+            .font(.system(size: 11, weight: .regular).monospacedDigit())
+            .foregroundStyle(Color.white.opacity(opacity))
             .lineLimit(1)
-            .minimumScaleFactor(0.7)
+            .fixedSize()
     }
 
     private func compactLiveTime(since start: Date) -> some View {
@@ -899,14 +897,15 @@ public struct UserQueryNotchStatusView: View {
         }
     }
 
-    /// Compact elapsed time for the 34px right slot: seconds, then minutes, then "Xh Ym".
+    /// Compact elapsed time for the ~34px right slot: a single unit — the largest non-zero value
+    /// (hours, else minutes, else seconds) — so it stays legible instead of being shrunk to fit.
     static func compactElapsed(from start: Date, to now: Date) -> String {
         let totalSeconds = max(0, Int(now.timeIntervalSince(start)))
         let hours = totalSeconds / 3600
         let minutes = (totalSeconds % 3600) / 60
         let seconds = totalSeconds % 60
 
-        if hours > 0 { return "\(hours)h \(minutes)m" }
+        if hours > 0 { return "\(hours)h" }
         if minutes > 0 { return "\(minutes)m" }
         return "\(seconds)s"
     }
