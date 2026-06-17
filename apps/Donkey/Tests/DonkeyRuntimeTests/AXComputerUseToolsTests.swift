@@ -57,4 +57,21 @@ struct AXComputerUseToolsTests {
         #expect(AXComputerUseToolProvider.screenCenter(from: ["ax.frame.x": "1"]) == nil)
         #expect(AXComputerUseToolProvider.screenCenter(from: [:]) == nil)
     }
+
+    @Test
+    func semanticActionRoutesEachGestureToItsAXAction() {
+        let advertised: Set<String> = ["AXPress", "AXShowMenu", "AXOpen"]
+        #expect(AXComputerUseToolProvider.semanticAction(button: .left, clicks: 1, advertised: advertised) == "AXPress")
+        #expect(AXComputerUseToolProvider.semanticAction(button: .right, clicks: 1, advertised: advertised) == "AXShowMenu")
+        #expect(AXComputerUseToolProvider.semanticAction(button: .left, clicks: 2, advertised: advertised) == "AXOpen")
+        // Triple-click has no semantic equivalent and falls through to the coordinate path.
+        #expect(AXComputerUseToolProvider.semanticAction(button: .left, clicks: 3, advertised: advertised) == nil)
+    }
+
+    @Test
+    func semanticActionFallsBackWhenActionNotAdvertised() {
+        #expect(AXComputerUseToolProvider.semanticAction(button: .left, clicks: 1, advertised: []) == nil)
+        #expect(AXComputerUseToolProvider.semanticAction(button: .right, clicks: 1, advertised: ["AXPress"]) == nil)
+        #expect(AXComputerUseToolProvider.semanticAction(button: .left, clicks: 2, advertised: ["AXPress"]) == nil)
+    }
 }
