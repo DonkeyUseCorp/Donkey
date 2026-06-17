@@ -38,6 +38,34 @@ public enum UserQueryLayout {
     public static let composerExpandedToolbarHeight: CGFloat = 54
     public static let composerExpandedMinimumHeight: CGFloat = 156
 
+    // The notch follow-up box starts as a single line and grows with its text. Send button sits
+    // in the bottom-right corner of the same box (no separate toolbar row), mirroring the prototype.
+    public static let followUpComposerCornerRadius: CGFloat = 14
+    public static let followUpComposerSendButtonSize: CGFloat = 32
+    public static let followUpComposerLeadingPadding: CGFloat = 20
+    /// Right inset large enough to keep wrapped text clear of the corner send button.
+    public static let followUpComposerTrailingPadding: CGFloat = 48
+    public static let followUpComposerVerticalInset: CGFloat = 12
+    /// One-line resting height: tall enough to seat the corner send button (12 + 32 + 12).
+    public static let followUpComposerMinimumHeight: CGFloat = 56
+
+    public static var followUpComposerTextWidth: CGFloat {
+        composerInputSurfaceWidth - followUpComposerLeadingPadding - followUpComposerTrailingPadding
+    }
+
+    /// Clamped height of the editable text area inside the follow-up box (one line up to the scroll cap).
+    public static func followUpComposerTextAreaHeight(inputTextHeight: CGFloat) -> CGFloat {
+        clampedComposerInputTextHeight(inputTextHeight)
+    }
+
+    /// Outer follow-up box height: the text area plus vertical insets, never below the one-line resting height.
+    public static func followUpComposerHeight(inputTextHeight: CGFloat) -> CGFloat {
+        max(
+            followUpComposerMinimumHeight,
+            followUpComposerTextAreaHeight(inputTextHeight: inputTextHeight) + followUpComposerVerticalInset * 2
+        )
+    }
+
     public static let contentSize = contentSize(inputTextHeight: composerInputTextMinimumHeight)
     public static let composerSize = CGSize(
         width: composerWidth,

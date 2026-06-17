@@ -708,7 +708,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     }
 
     var notchCommandInputSurfaceHeight: CGFloat {
-        max(92, notchCommandInputTextHeight + 60)
+        UserQueryLayout.followUpComposerHeight(inputTextHeight: notchCommandInputTextHeight)
     }
 
     /// Desktop pointer spawning is temporarily disabled. Submissions no longer launch a
