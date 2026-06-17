@@ -36,6 +36,7 @@ final class UserQueryOverlayController {
     private var statusCollapseWorkItem: DispatchWorkItem?
     private var statusExpansionWorkItem: DispatchWorkItem?
     private var statusHostShrinkWorkItem: DispatchWorkItem?
+    private var statusSurfacedAckWorkItem: DispatchWorkItem?
     private var spawnDesktopEmergeWorkItems: [String: DispatchWorkItem] = [:]
     private var hasPrewarmedInputPanel = false
     private var hasPrewarmedStatusPanelExpansion = false
@@ -211,6 +212,8 @@ final class UserQueryOverlayController {
         statusExpansionWorkItem = nil
         statusHostShrinkWorkItem?.cancel()
         statusHostShrinkWorkItem = nil
+        statusSurfacedAckWorkItem?.cancel()
+        statusSurfacedAckWorkItem = nil
         cancelSpawnDesktopEmergeWorkItems()
         statusHoverPhase = .collapsed
         stopActivationMonitoring()
@@ -795,10 +798,14 @@ final class UserQueryOverlayController {
                 self.isStatusExpanded = true
                 self.statusHoverPhase = .expanded
                 self.statusExpansionWorkItem = nil
-                // Opening the notch dismisses the completed pointers piled up in the collapsed surface.
-                self.model.acknowledgeSurfacedCompletions()
                 self.updateStatusPanelView()
                 self.focusStatusComposerTextInputIfAvailable()
+                // Opening the notch dismisses the completed pointers piled up in the collapsed
+                // surface — but only once the open spring has settled. Clearing them inside this
+                // expand transaction pulls the collapsed pointer cluster out of the animated
+                // subtree mid-spring, which makes SwiftUI snap the surface open instead of
+                // springing it. Deferring keeps the expand a pure `isExpanded` toggle.
+                self.scheduleSurfacedCompletionDismissal()
             }
             statusExpansionWorkItem = workItem
             DispatchQueue.main.asyncAfter(
@@ -820,12 +827,46 @@ final class UserQueryOverlayController {
         }
 
         if isStatusExpanded {
+            // The open already showed the full list; dismiss the surfaced completions now (the
+            // deferred post-spring dismissal may not have fired yet on a quick close) so the
+            // collapsing surface settles without the stale pointer cluster.
+            dismissSurfacedCompletionsForOpenedNotch()
             isStatusExpanded = false
             updateStatusPanelView()
         }
 
         statusHoverPhase = .closing
         scheduleStatusHostShrink()
+    }
+
+    /// Dismisses the completed pointers surfaced in the collapsed notch once the open spring has
+    /// settled. Runs outside the expand transaction so opening stays a pure `isExpanded` toggle —
+    /// the collapsed surface is hidden behind the expanded content by the time it updates, so the
+    /// cluster's removal is never visible.
+    private func scheduleSurfacedCompletionDismissal() {
+        statusSurfacedAckWorkItem?.cancel()
+        guard model.notchSurfacedTasks.contains(where: { $0.status == .completed }) else {
+            statusSurfacedAckWorkItem = nil
+            return
+        }
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, self.statusHoverPhase == .expanded else { return }
+            self.statusSurfacedAckWorkItem = nil
+            self.model.acknowledgeSurfacedCompletions()
+            self.updateStatusPanelView()
+        }
+        statusSurfacedAckWorkItem = workItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.surfacedCompletionDismissDelay,
+            execute: workItem
+        )
+    }
+
+    private func dismissSurfacedCompletionsForOpenedNotch() {
+        statusSurfacedAckWorkItem?.cancel()
+        statusSurfacedAckWorkItem = nil
+        model.acknowledgeSurfacedCompletions()
     }
 
     private func prepareStatusHostForExpansion() {
@@ -989,6 +1030,10 @@ final class UserQueryOverlayController {
     }
 
     private static let statusChinBandHeight: CGFloat = 20
+
+    /// How long after the notch starts opening to dismiss its surfaced completion pointers. Sits just
+    /// past the open spring's settle so the dismissal never perturbs the expand animation.
+    private static let surfacedCompletionDismissDelay: TimeInterval = 0.6
 
     private var statusExpandedContentHeight: CGFloat {
         if hasStatusTaskDisplayText || !model.notchTasks.isEmpty || model.updateState.headerButtonTitle != nil {
