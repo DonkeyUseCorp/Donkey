@@ -87,19 +87,14 @@ The overlay is enabled through `dev-overlay.json` (see
 
 ```json
 {
-  "enabled": true,
-  "mode": "donkeyVision",
-  "cadenceSeconds": 1.0,
-  "screenScope": "main",
-  "minConfidence": 0.25,
-  "activeWindowOnly": true
+  "enabled": true
 }
 ```
 
-Optional `targetBundleIdentifiers` / `targetAppNames` fields narrow the
-overlay to specific apps. Do not add a provider field to this config. Donkey
-Vision is always local evidence plus hosted AI enrichment; the config controls
-cadence, scope, and filters, not which evidence source runs.
+`enabled` is the only knob: it flips the visible overlay on or off. Cadence,
+scope, confidence, and app filters are fixed sensible defaults in code, not
+config. Do not add a provider field either — Donkey Vision is always local
+evidence plus hosted AI enrichment.
 
 ## Source Map
 

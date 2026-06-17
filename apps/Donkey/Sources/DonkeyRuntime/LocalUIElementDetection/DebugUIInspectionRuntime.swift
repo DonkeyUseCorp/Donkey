@@ -7,33 +7,20 @@ import ImageIO
 import UniformTypeIdentifiers
 
 public struct DebugUIOverlayConfiguration: Equatable, Sendable {
+    /// The only knob the dev-overlay JSON file controls: flip the debug overlay on or off.
+    /// Everything else below is a fixed, sensible default — the old tuning fields were never used.
     public var enabled: Bool
-    public var mode: String
-    public var cadenceSeconds: TimeInterval
-    public var screenScope: DebugUIInspectionScreenScope
-    public var minConfidence: Double
-    public var activeWindowOnly: Bool
-    public var targetBundleIdentifiers: [String]
-    public var targetAppNames: [String]
 
-    public init(
-        enabled: Bool = false,
-        mode: String = "donkeyVision",
-        cadenceSeconds: TimeInterval = 1.0,
-        screenScope: DebugUIInspectionScreenScope = .main,
-        minConfidence: Double = 0.25,
-        activeWindowOnly: Bool = false,
-        targetBundleIdentifiers: [String] = [],
-        targetAppNames: [String] = []
-    ) {
+    public var mode: String { "donkeyVision" }
+    public var cadenceSeconds: TimeInterval { 1.0 }
+    public var screenScope: DebugUIInspectionScreenScope { .main }
+    public var minConfidence: Double { 0.25 }
+    public var activeWindowOnly: Bool { true }
+    public var targetBundleIdentifiers: [String] { [] }
+    public var targetAppNames: [String] { [] }
+
+    public init(enabled: Bool = false) {
         self.enabled = enabled
-        self.mode = mode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "donkeyVision" : mode
-        self.cadenceSeconds = min(max(cadenceSeconds, 0.25), 10.0)
-        self.screenScope = screenScope
-        self.minConfidence = min(max(minConfidence, 0), 1)
-        self.activeWindowOnly = activeWindowOnly
-        self.targetBundleIdentifiers = Self.normalizedList(targetBundleIdentifiers)
-        self.targetAppNames = Self.normalizedList(targetAppNames)
     }
 
     public static let disabled = DebugUIOverlayConfiguration(enabled: false)
@@ -64,39 +51,17 @@ public struct DebugUIOverlayConfiguration: Equatable, Sendable {
             urls = candidateConfigURLs(fileManager: fileManager)
         }
 
-        guard let raw = urls.lazy.compactMap({ url -> RawDebugUIOverlayConfiguration? in
+        let enabled = urls.lazy.compactMap { url -> Bool? in
             guard fileManager.fileExists(atPath: url.path),
-                  let data = try? Data(contentsOf: url)
+                  let data = try? Data(contentsOf: url),
+                  let raw = try? JSONDecoder().decode(RawDebugUIOverlayConfiguration.self, from: data)
             else {
                 return nil
             }
-            return try? JSONDecoder().decode(RawDebugUIOverlayConfiguration.self, from: data)
-        }).first else {
-            return .disabled
-        }
+            return raw.enabled ?? false
+        }.first ?? false
 
-        let mode = raw.mode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return DebugUIOverlayConfiguration(
-            enabled: raw.enabled ?? false,
-            mode: mode.isEmpty ? "donkeyVision" : mode,
-            cadenceSeconds: raw.cadenceSeconds ?? 1.0,
-            screenScope: raw.screenScope.flatMap(DebugUIInspectionScreenScope.init(rawValue:)) ?? .main,
-            minConfidence: raw.minConfidence ?? 0.25,
-            activeWindowOnly: raw.activeWindowOnly ?? false,
-            targetBundleIdentifiers: raw.targetBundleIdentifiers ?? [],
-            targetAppNames: raw.targetAppNames ?? []
-        )
-    }
-
-    private static func normalizedList(_ values: [String]) -> [String] {
-        var seen = Set<String>()
-        return values.compactMap { value in
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return nil }
-            let key = trimmed.lowercased()
-            guard seen.insert(key).inserted else { return nil }
-            return trimmed
-        }
+        return DebugUIOverlayConfiguration(enabled: enabled)
     }
 
     public static func candidateConfigURLs(
@@ -153,13 +118,6 @@ public struct DebugUIOverlayConfiguration: Equatable, Sendable {
 
 private struct RawDebugUIOverlayConfiguration: Codable {
     var enabled: Bool?
-    var mode: String?
-    var cadenceSeconds: TimeInterval?
-    var screenScope: String?
-    var minConfidence: Double?
-    var activeWindowOnly: Bool?
-    var targetBundleIdentifiers: [String]?
-    var targetAppNames: [String]?
 }
 
 public struct DebugUIElementTracker: Equatable, Sendable {

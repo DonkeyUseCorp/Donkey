@@ -132,7 +132,7 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         #else
         let uiUnderstandingCoordinator = UIUnderstandingCoordinator(
             rendersOverlay: false,
-            defaultConfiguration: DebugUIOverlayConfiguration(enabled: true, activeWindowOnly: true)
+            defaultConfiguration: DebugUIOverlayConfiguration(enabled: true)
         )
         #endif
         self.uiUnderstandingCoordinator = uiUnderstandingCoordinator

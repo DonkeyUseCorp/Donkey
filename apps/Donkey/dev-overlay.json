@@ -1,8 +1,3 @@
 {
-  "enabled": false,
-  "mode": "donkeyVision",
-  "cadenceSeconds": 1.0,
-  "screenScope": "main",
-  "minConfidence": 0.25,
-  "activeWindowOnly": true
+  "enabled": false
 }

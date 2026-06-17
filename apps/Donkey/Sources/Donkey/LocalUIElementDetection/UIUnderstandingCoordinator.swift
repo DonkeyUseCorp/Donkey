@@ -168,28 +168,21 @@ final class UIUnderstandingCoordinator {
     }
 
     private func reloadConfigAndReschedule(force: Bool = false) {
-        // The dev-overlay config file turns the visible overlay on and tunes it. When it does not
+        // The dev-overlay config file only flips the visible overlay on or off. When it does not
         // enable the engine, fall back to `defaultConfiguration` — production passes an enabled
         // configuration there so AX + AI parsing runs even though nothing is rendered.
         let loaded = DebugUIOverlayConfiguration.load(fileURL: configURL)
         let newConfig = loaded.enabled ? loaded : defaultConfiguration
-        let cadenceChanged = newConfig.cadenceSeconds != currentConfig.cadenceSeconds
         let enablementChanged = newConfig.enabled != currentConfig.enabled
-        let scopeChanged = newConfig.screenScope != currentConfig.screenScope
-        let modeChanged = newConfig.mode != currentConfig.mode
-        let confidenceChanged = newConfig.minConfidence != currentConfig.minConfidence
-        let activeWindowChanged = newConfig.activeWindowOnly != currentConfig.activeWindowOnly
-        let targetFilterChanged = newConfig.targetBundleIdentifiers != currentConfig.targetBundleIdentifiers
-            || newConfig.targetAppNames != currentConfig.targetAppNames
         currentConfig = newConfig
 
-        if force || enablementChanged || scopeChanged || modeChanged || confidenceChanged || activeWindowChanged || targetFilterChanged {
+        if force || enablementChanged {
             UIUnderstandingLog.overlay.info(
-                "debug inspection config enabled=\(String(newConfig.enabled), privacy: .public) mode=\(newConfig.mode, privacy: .public) cadence=\(newConfig.cadenceSeconds, privacy: .public) scope=\(newConfig.screenScope.rawValue, privacy: .public) minConfidence=\(newConfig.minConfidence, privacy: .public) activeWindowOnly=\(String(newConfig.activeWindowOnly), privacy: .public) targetBundles=\(newConfig.targetBundleIdentifiers.joined(separator: ","), privacy: .public) targetApps=\(newConfig.targetAppNames.joined(separator: ","), privacy: .public)"
+                "debug inspection config enabled=\(String(newConfig.enabled), privacy: .public)"
             )
         }
 
-        if cadenceChanged || timer == nil || force {
+        if timer == nil || force {
             timer?.invalidate()
             let newTimer = Timer(timeInterval: newConfig.cadenceSeconds, repeats: true) { [weak self] _ in
                 Task { @MainActor in
@@ -219,7 +212,7 @@ final class UIUnderstandingCoordinator {
             activeAccessibilityTimer = nil
         }
 
-        if enablementChanged || scopeChanged || modeChanged || confidenceChanged || activeWindowChanged || targetFilterChanged {
+        if enablementChanged {
             lastFingerprints.removeAll()
             trackers.removeAll()
             lastRenderedFrames.removeAll()

@@ -32,7 +32,7 @@ struct DebugUIInspectionTests {
     }
 
     @Test
-    func enabledConfigUsesSafeDefaults() throws {
+    func enabledConfigUsesFixedDefaults() throws {
         let url = temporaryDirectory()
             .appendingPathComponent("enabled-dev-overlay.json", isDirectory: false)
         try Data(#"{"enabled":true}"#.utf8).write(to: url, options: .atomic)
@@ -45,21 +45,25 @@ struct DebugUIInspectionTests {
         #expect(config.cadenceSeconds == 1.0)
         #expect(config.screenScope == .main)
         #expect(config.minConfidence == 0.25)
-        #expect(config.activeWindowOnly == false)
+        #expect(config.activeWindowOnly == true)
         #expect(config.targetBundleIdentifiers.isEmpty)
         #expect(config.targetAppNames.isEmpty)
     }
 
     @Test
-    func configLoadsTargetFilters() throws {
+    func configIgnoresEverythingExceptEnabled() throws {
+        // `enabled` is the only knob the file controls; any other tuning fields are ignored and the
+        // fixed defaults stand.
         let url = temporaryDirectory()
-            .appendingPathComponent("targeted-dev-overlay.json", isDirectory: false)
+            .appendingPathComponent("noisy-dev-overlay.json", isDirectory: false)
         try Data(
             """
             {
-              "enabled": true,
-              "activeWindowOnly": true,
-              "targetBundleIdentifiers": ["com.apple.Music", " com.apple.Music "],
+              "enabled": false,
+              "cadenceSeconds": 0.05,
+              "screenScope": "all",
+              "minConfidence": 2,
+              "activeWindowOnly": false,
               "targetAppNames": ["Music"]
             }
             """.utf8
@@ -68,34 +72,12 @@ struct DebugUIInspectionTests {
 
         let config = DebugUIOverlayConfiguration.load(fileURL: url)
 
-        #expect(config.targetBundleIdentifiers == ["com.apple.Music"])
-        #expect(config.targetAppNames == ["Music"])
-        #expect(config.activeWindowOnly == true)
-    }
-
-    @Test
-    func disabledRepoStyleConfigKeepsOverlayOff() throws {
-        let url = temporaryDirectory()
-            .appendingPathComponent("disabled-dev-overlay.json", isDirectory: false)
-        try Data(
-            """
-            {
-              "enabled": false,
-              "cadenceSeconds": 0.05,
-              "screenScope": "all",
-              "minConfidence": 2
-            }
-            """.utf8
-        ).write(to: url, options: .atomic)
-        defer { try? FileManager.default.removeItem(at: url) }
-
-        let config = DebugUIOverlayConfiguration.load(fileURL: url)
-
         #expect(config.enabled == false)
-        #expect(config.mode == "donkeyVision")
-        #expect(config.cadenceSeconds == 0.25)
-        #expect(config.screenScope == .all)
-        #expect(config.minConfidence == 1)
+        #expect(config.cadenceSeconds == 1.0)
+        #expect(config.screenScope == .main)
+        #expect(config.minConfidence == 0.25)
+        #expect(config.activeWindowOnly == true)
+        #expect(config.targetAppNames.isEmpty)
     }
 
     @Test
