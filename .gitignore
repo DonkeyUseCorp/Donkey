@@ -15,5 +15,8 @@ xcuserdata/
 __pycache__/
 *.pyc
 
+## Bundled capability tools (large arm64 binaries; fetched by scripts/fetch-bundled-tools.sh)
+/vendor/
+
 ## Project policy
 # Keep Package.resolved tracked for reproducible dependency resolution.

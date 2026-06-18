@@ -2,6 +2,7 @@ import AppKit
 import DonkeyContracts
 import DonkeyHarness
 import Foundation
+import WebKit
 
 /// Native implementations for the Donkey Command Layer (`DonkeyCommandLayer`).
 ///
@@ -33,7 +34,128 @@ public enum DonkeyCommandBackends {
             return await appCommands(context)
         case .skillRun:
             return await runSkillScript(context)
+        case .webSnapshot:
+            return await webSnapshot(context)
         }
+    }
+
+    // MARK: - web_snapshot
+
+    /// Render a URL in an offscreen `WKWebView` and save it as a PDF or full-page
+    /// PNG. The free, in-app rung of the web-capture ladder: no external browser,
+    /// no hosted service. It only reads the page and writes the output file, so it
+    /// runs without consent (like `web.fetch`).
+    @MainActor
+    private static func webSnapshot(_ context: HarnessToolExecutionContext) async -> HarnessToolResult {
+        guard let raw = trimmed(context.call.input["url"]),
+              let url = URL(string: raw),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            return invalidInput(context, "web_snapshot requires a valid http(s) `url`.")
+        }
+        let format = (trimmed(context.call.input["format"]) ?? "pdf").lowercased()
+        guard format == "pdf" || format == "png" else {
+            return invalidInput(context, "web_snapshot `format` must be \"pdf\" or \"png\".")
+        }
+        let destination = snapshotDestination(trimmed(context.call.input["destination"]), url: url, format: format)
+
+        // An offscreen window backs the web view so layout and rendering actually
+        // run (an unattached WKWebView can snapshot blank).
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1280, height: 1600))
+        let window = NSWindow(
+            contentRect: webView.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = webView
+        let loader = WebSnapshotLoader()
+        webView.navigationDelegate = loader
+
+        let loaded = await loader.load(url, in: webView, timeout: 25)
+        guard loaded else {
+            return failed(context, "Could not load \(url.absoluteString).", reason: "webSnapshotLoadFailed")
+        }
+        // Give late layout/JS a brief beat to settle before capturing.
+        try? await Task.sleep(nanoseconds: 700_000_000)
+
+        do {
+            let data = try await (format == "pdf" ? exportPDF(webView) : exportPNG(webView))
+            guard !data.isEmpty else {
+                return failed(context, "web_snapshot produced an empty \(format).", reason: "webSnapshotEmpty")
+            }
+            try FileManager.default.createDirectory(
+                at: destination.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: destination, options: .atomic)
+        } catch {
+            return failed(
+                context,
+                "web_snapshot could not save the \(format): \(error.localizedDescription)",
+                reason: "webSnapshotExportFailed"
+            )
+        }
+        withExtendedLifetime(window) {}
+        return success(
+            context,
+            summary: "Saved \(format.uppercased()) of \(url.absoluteString) → \(destination.path)",
+            facts: ["webSnapshot.format": format],
+            metadata: ["filePath": destination.path, "format": format]
+        )
+    }
+
+    /// Resolve the output file URL: an explicit `destination` (absolute, or a bare
+    /// name placed in ~/Downloads), else a generated `~/Downloads/<host>.<ext>`.
+    private static func snapshotDestination(_ destination: String?, url: URL, format: String) -> URL {
+        let downloads = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Downloads", isDirectory: true)
+        if let destination {
+            let candidate = (destination as NSString).isAbsolutePath
+                ? URL(fileURLWithPath: destination)
+                : downloads.appendingPathComponent(destination)
+            return candidate.pathExtension.isEmpty
+                ? candidate.appendingPathExtension(format)
+                : candidate
+        }
+        let host = url.host?.replacingOccurrences(of: ".", with: "-") ?? "page"
+        return downloads.appendingPathComponent("\(host).\(format)")
+    }
+
+    @MainActor
+    private static func exportPDF(_ webView: WKWebView) async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            webView.createPDF(configuration: WKPDFConfiguration()) { result in
+                continuation.resume(with: result)
+            }
+        }
+    }
+
+    @MainActor
+    private static func exportPNG(_ webView: WKWebView) async throws -> Data {
+        // Resize to the full scrollable height so the snapshot captures the whole page.
+        if let height = try? await webView.evaluateJavaScript("document.body.scrollHeight") as? CGFloat,
+           height > 0 {
+            webView.frame.size.height = min(height, 20_000)
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+        let config = WKSnapshotConfiguration()
+        config.rect = CGRect(origin: .zero, size: webView.bounds.size)
+        let image: NSImage = try await withCheckedThrowingContinuation { continuation in
+            webView.takeSnapshot(with: config) { image, error in
+                if let image {
+                    continuation.resume(returning: image)
+                } else {
+                    continuation.resume(throwing: error ?? CocoaError(.fileWriteUnknown))
+                }
+            }
+        }
+        guard let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        return png
     }
 
     // MARK: - app_commands
@@ -505,6 +627,7 @@ public enum DonkeyCommandBackends {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-c", command]
+        process.environment = shellEnvironment()
         let outPipe = Pipe()
         let errPipe = Pipe()
         process.standardOutput = outPipe
@@ -544,6 +667,35 @@ public enum DonkeyCommandBackends {
             stderr: String(data: errData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
             timedOut: timedOut
         )
+    }
+
+    /// The bundled command-line tools directory inside the packaged app
+    /// (`…/Contents/Resources/donkey-tools`). Skills invoke `ffmpeg`/`yt-dlp` and the
+    /// other bundled tools by bare name and rely on this being on the shell PATH.
+    /// `nil` in dev/test builds (SwiftPM) where no packaged tools directory exists,
+    /// so the environment is left to inherit unchanged there.
+    static let bundledToolsDirectory: URL? = {
+        guard let dir = Bundle.main.resourceURL?
+            .appendingPathComponent("donkey-tools", isDirectory: true),
+            FileManager.default.fileExists(atPath: dir.path)
+        else {
+            return nil
+        }
+        return dir
+    }()
+
+    /// The environment for a `shell_exec` child: the app's environment with the bundled
+    /// tools directory appended to PATH. Appended, not prepended, so a tool the user has
+    /// installed (e.g. a newer Homebrew `yt-dlp`) still wins, while the bundled copy is the
+    /// guaranteed fallback that keeps a capability working with nothing installed. Returns
+    /// `nil` when there is no bundled tools directory, so `Process` inherits the environment
+    /// exactly as before.
+    static func shellEnvironment() -> [String: String]? {
+        guard let toolsDirectory = bundledToolsDirectory else { return nil }
+        var environment = ProcessInfo.processInfo.environment
+        let existing = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+        environment["PATH"] = existing + ":" + toolsDirectory.path
+        return environment
     }
 
     // MARK: - Result helpers
@@ -597,5 +749,44 @@ public enum DonkeyCommandBackends {
         guard let value else { return nil }
         let result = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return result.isEmpty ? nil : result
+    }
+}
+
+/// Drives a one-shot `WKWebView` load to completion (or a timeout) for
+/// `web_snapshot`. Resolves `true` on `didFinish`, `false` on failure or timeout;
+/// the `settled` guard keeps the continuation from resuming twice.
+@MainActor
+private final class WebSnapshotLoader: NSObject, WKNavigationDelegate {
+    private var continuation: CheckedContinuation<Bool, Never>?
+    private var settled = false
+
+    func load(_ url: URL, in webView: WKWebView, timeout: TimeInterval) async -> Bool {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+            webView.load(URLRequest(url: url))
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                self.settle(false)
+            }
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        settle(true)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        settle(false)
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        settle(false)
+    }
+
+    private func settle(_ value: Bool) {
+        guard !settled else { return }
+        settled = true
+        continuation?.resume(returning: value)
+        continuation = nil
     }
 }

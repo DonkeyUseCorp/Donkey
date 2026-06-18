@@ -190,6 +190,34 @@ cd "$BUILD_DIR"
 echo "Compiling Donkey for Mac ..."
 swift build -c release --product Donkey
 
+# Stage the bundled command-line tools (yt-dlp, ffmpeg, pandoc, qpdf, exiftool,
+# tesseract, magick) into the app so the capability skills work with nothing
+# installed. The arm64 binaries are NOT committed to the repo; point
+# DONKEY_TOOLS_DIR at a directory containing them (default: vendor/donkey-tools).
+# When that directory is absent this is a no-op, so a normal build still succeeds
+# and the skills fall back to whatever the user has installed.
+stage_bundled_tools() {
+  local source_dir="${DONKEY_TOOLS_DIR:-$ROOT_DIR/vendor/donkey-tools}"
+  if [ ! -d "$source_dir" ]; then
+    echo "No bundled tools at $source_dir; skipping (capability skills will use installed tools)."
+    return 0
+  fi
+  local dest_dir="$RESOURCES_DIR/donkey-tools"
+  rm -rf "$dest_dir"
+  mkdir -p "$dest_dir"
+  cp -R "$source_dir/." "$dest_dir/"
+  # Ad-hoc sign each executable so the outer --deep sign stays consistent. Release
+  # builds re-sign these with Developer ID + hardened runtime and notarize the DMG
+  # (see docs/guides/releasing-donkey.md); a non-Mach-O script just no-ops here.
+  if command -v codesign >/dev/null 2>&1; then
+    find "$dest_dir" -type f -perm -u+x -print0 | while IFS= read -r -d '' tool; do
+      chmod +x "$tool"
+      codesign --force --sign - "$tool" >/dev/null 2>&1 || true
+    done
+  fi
+  echo "Staged bundled tools from $source_dir into $dest_dir."
+}
+
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$FRAMEWORKS_DIR"
 cp "$EXECUTABLE" "$MACOS_DIR/Donkey"
@@ -219,6 +247,8 @@ fi
 if [ -n "$SPARKLE_FRAMEWORK" ]; then
   cp -R "$SPARKLE_FRAMEWORK" "$FRAMEWORKS_DIR/"
 fi
+
+stage_bundled_tools
 
 SPARKLE_PLIST_KEYS=""
 if [ -n "$SPARKLE_FEED_URL" ] && [ -n "$SPARKLE_PUBLIC_ED_KEY" ]; then

@@ -21,6 +21,7 @@ public enum DonkeyCommandLayer {
         case appSkill = "app_skill"
         case appCommands = "app_commands"
         case skillRun = "skill_run"
+        case webSnapshot = "web_snapshot"
     }
 
     public static var descriptors: [HarnessToolDescriptor] {
@@ -111,6 +112,22 @@ public enum DonkeyCommandLayer {
                 requiredPermissions: [.appControl, .input],
                 safetyClass: .guardedInput,
                 verificationHints: ["the script reports a successful structured status"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            HarnessToolDescriptor(
+                name: Command.webSnapshot.rawValue,
+                pluginID: pluginID,
+                summary: "Render a web page in a built-in headless browser and save it as a PDF or a full-page PNG — no external browser needed. Use this to capture a page to a file (\"save this page as a PDF\", \"screenshot this page\") when the user does not need to watch it happen. It only reads the page and writes the output file. For static text, prefer `web.fetch` (markdown); for pages behind a login or heavy bot-protection that fail to render here, fall back to the hosted browser tool.",
+                inputSchema: [
+                    "url": "The http(s) page URL to capture.",
+                    "format": "\"pdf\" (default) or \"png\" (full-page screenshot).",
+                    "destination": "Optional output file path; defaults to ~/Downloads."
+                ],
+                optionalInputKeys: ["format", "destination"],
+                outputSchema: ["filePath": "Path to the saved PDF or PNG."],
+                requiredPermissions: [],
+                safetyClass: .readOnly,
+                verificationHints: ["the saved file exists and is non-empty"],
                 metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
             )
         ]
