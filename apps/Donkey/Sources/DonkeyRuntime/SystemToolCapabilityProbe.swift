@@ -11,9 +11,12 @@ public actor SystemToolCapabilityProbe {
     public static let shared = SystemToolCapabilityProbe()
 
     /// Curated tools an expert might reach for that are NOT guaranteed present.
-    /// (Ubiquitous system tools like `mdfind`/`defaults`/`open` are assumed.)
+    /// (Ubiquitous system tools like `mdfind`/`defaults`/`open` are assumed, and the
+    /// tools Donkey bundles — ffmpeg, yt-dlp, qpdf, exiftool, lit — are always present,
+    /// so the skills assert them directly rather than probing.)
     private static let probedTools = [
-        "gh", "git", "jq", "python3", "node", "brew", "rg", "swift", "ffmpeg", "docker", "go", "cargo"
+        "gh", "git", "jq", "python3", "node", "brew", "rg", "swift", "docker", "go", "cargo",
+        "pandoc", "magick", "sqlite3", "pdftotext", "mlr"
     ]
 
     private let cacheURL: URL

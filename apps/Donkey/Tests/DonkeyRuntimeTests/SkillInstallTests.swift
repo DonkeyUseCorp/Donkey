@@ -258,4 +258,14 @@ struct SkillInstallTests {
         let ids = descriptors.map(\.id)
         #expect(Set(ids).count == ids.count)
     }
+
+    @Test
+    func broadCapabilitySkillsAreDiscovered() {
+        // The five capability skills (media, images, pdf, data, web-capture) ship built-in and are
+        // discovered by walking the tree — no enumerated list to keep in sync.
+        let ids = Set(BuiltInLocalAppSkillPacks.descriptors().map(\.id))
+        for id in ["media", "images", "pdf", "data", "web-capture"] {
+            #expect(ids.contains(id))
+        }
+    }
 }

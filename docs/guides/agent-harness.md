@@ -191,6 +191,12 @@ Consent surfaces in the pointer/notch overlay and reuses the standard
 tools (and versions) exist on the machine, so the planner only reaches for
 what's installed.
 
+Broad capability skills extend this power-user surface beyond the tools macOS
+ships — media (`yt-dlp`, `ffmpeg`), images, PDF/document conversion, data
+manipulation, and web capture. The uncommon command-line tools those skills
+rely on are bundled inside the signed app, so the capability works without the
+user installing anything.
+
 ## Observation and Action (Computer Use)
 
 Seeing and acting are plain tools the planner picks per step — not a fixed
