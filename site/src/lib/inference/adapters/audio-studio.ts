@@ -4,6 +4,7 @@ import {
   type ElevenLabs,
 } from "@elevenlabs/elevenlabs-js";
 
+import { elevenLabsModels } from "@/lib/inference/elevenlabs-models";
 import { ensureConfigured } from "@/lib/inference/http";
 import { toJsonObject, toJsonValue } from "@/lib/inference/json";
 import {
@@ -127,7 +128,7 @@ function createMusic(
     () =>
       client.music.compose({
         ...parameters,
-        modelId: request.model === "music_v1" ? "music_v1" : undefined,
+        modelId: request.model === elevenLabsModels.music ? elevenLabsModels.music : undefined,
         prompt: request.prompt,
       } as ElevenLabs.BodyComposeMusicV1MusicPost),
   );

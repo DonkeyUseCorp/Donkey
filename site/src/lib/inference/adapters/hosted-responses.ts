@@ -6,6 +6,7 @@ import {
   type FetchLike,
 } from "@/lib/inference/http";
 import { toJsonValue } from "@/lib/inference/json";
+import { openaiModels } from "@/lib/inference/openai-models";
 import {
   InferenceProviderError,
   type InferenceModality,
@@ -24,8 +25,8 @@ const openAIProviderID = "openai";
 const openAIBaseURL = "https://api.openai.com/v1";
 const openAIMacDesktopInteractionToolType = "donkey_openai_mac_desktop_interaction";
 const debugUIInspectionToolType = "donkey_debug_ui_inspection";
-const defaultOpenAIComputerUseModel = "gpt-5.5";
-const defaultOpenAIDebugInspectionModel = "gpt-5.4";
+const defaultOpenAIComputerUseModel = openaiModels.computerUse;
+const defaultOpenAIDebugInspectionModel = openaiModels.debugInspection;
 const unsupportedOpenAIComputerUseParameters = ["temperature", "top_p", "topP"];
 
 export function createHostedResponsesProvider(

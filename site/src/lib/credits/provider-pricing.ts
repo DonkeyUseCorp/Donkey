@@ -2,7 +2,12 @@ import {
   creditStringToMicros,
   zeroCreditMicros,
 } from "@/lib/credits/amounts";
+import {
+  elevenLabsModels,
+  type ElevenLabsRunModel,
+} from "@/lib/inference/elevenlabs-models";
 import { geminiModels, type GeminiModel } from "@/lib/inference/gemini-models";
+import { openaiModels, type OpenAIRunModel } from "@/lib/inference/openai-models";
 
 export type ProviderCreditPricing = {
   inputTokenCostMicrosPerMillion?: bigint;
@@ -43,10 +48,35 @@ export function providerCreditPricing(
   return undefined;
 }
 
+// Every OpenAI model the gateway selects must appear here: the Record is keyed by the
+// OpenAIRunModel union, so adding a run model without a price fails the type-check (and the
+// build). Matched exactly (not by prefix) so it never shadows a more specific table entry.
+const openaiRunModelPricing: Record<OpenAIRunModel, ProviderCreditPricing> = {
+  [openaiModels.computerUse]: textTokenPricing({
+    model: "gpt-5.5",
+    input: "5",
+    cachedInput: "0.5",
+    output: "30",
+    longContext: { input: "10", cachedInput: "1", output: "45" },
+  }),
+  [openaiModels.debugInspection]: textTokenPricing({
+    model: "gpt-5.4",
+    input: "2.5",
+    cachedInput: "0.25",
+    output: "15",
+    longContext: { input: "5", cachedInput: "0.5", output: "22.5" },
+  }),
+};
+
 function openAICreditPricing(model: string): ProviderCreditPricing | undefined {
   const audioPricing = openAIAudioCreditPricing(model);
   if (audioPricing) {
     return audioPricing;
+  }
+
+  const runModelPricing = openaiRunModelPricing[model as OpenAIRunModel];
+  if (runModelPricing) {
+    return runModelPricing;
   }
 
   const matched = openAITextCreditRates.find((rate) => modelMatches(model, rate.model));
@@ -162,17 +192,7 @@ const openAITextCreditRates: {
       output: "270",
     },
   },
-  {
-    model: "gpt-5.5",
-    input: "5",
-    cachedInput: "0.5",
-    output: "30",
-    longContext: {
-      input: "10",
-      cachedInput: "1",
-      output: "45",
-    },
-  },
+  // gpt-5.5 and gpt-5.4 are gateway-run models — priced in openaiRunModelPricing.
   {
     model: "gpt-5.4-pro",
     input: "30",
@@ -193,17 +213,6 @@ const openAITextCreditRates: {
     input: "0.2",
     cachedInput: "0.02",
     output: "1.25",
-  },
-  {
-    model: "gpt-5.4",
-    input: "2.5",
-    cachedInput: "0.25",
-    output: "15",
-    longContext: {
-      input: "5",
-      cachedInput: "0.5",
-      output: "22.5",
-    },
   },
   { model: "gpt-5.2-pro", input: "21", output: "168" },
   { model: "gpt-5.2", input: "1.75", cachedInput: "0.175", output: "14" },
@@ -266,11 +275,16 @@ function geminiCreditPricing(model: string): ProviderCreditPricing | undefined {
   return undefined;
 }
 
+// Every ElevenLabs model the gateway selects must appear here: the Record is keyed by the
+// ElevenLabsRunModel union, so adding a run model without a price fails the build.
+const elevenLabsRunModelPricing: Record<ElevenLabsRunModel, ProviderCreditPricing> = {
+  [elevenLabsModels.music]: { durationSecondCostMicros: usdWithMargin("0.005") },
+};
+
 function elevenLabsCreditPricing(model: string): ProviderCreditPricing | undefined {
-  if (modelMatches(model, "music_v1")) {
-    return {
-      durationSecondCostMicros: usdWithMargin("0.005"),
-    };
+  const runModelPricing = elevenLabsRunModelPricing[model as ElevenLabsRunModel];
+  if (runModelPricing) {
+    return runModelPricing;
   }
   if (modelMatches(model, "eleven_text_to_sound_v2")) {
     return {
