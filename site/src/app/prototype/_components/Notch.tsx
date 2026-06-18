@@ -403,7 +403,7 @@ export function Notch({
 
           {/* Input box is pinned to the bottom and always visible — one line that grows with its text. */}
           <form
-            className="relative flex min-h-[56px] w-[576px] shrink-0 items-center rounded-[14px] bg-white/[0.085] px-5 py-3"
+            className="relative flex min-h-[40px] w-[576px] shrink-0 items-center rounded-[14px] bg-white/[0.085] px-5 py-1.5"
             onSubmit={handleFollowUpSubmit}
           >
             <label className="sr-only" htmlFor="donkey-follow-up-input">
@@ -416,7 +416,7 @@ export function Notch({
               rows={1}
               placeholder="What can Donkey do for you?"
               onInput={resizeFollowUp}
-              className="flex-1 resize-none border-0 bg-transparent p-0 pr-12 text-[16px] font-light leading-[20px] text-white outline-none placeholder:text-white/[0.58]"
+              className="flex-1 resize-none border-0 bg-transparent p-0 pr-11 text-[16px] font-light leading-[20px] text-white outline-none placeholder:text-white/[0.58]"
               style={{
                 height: FOLLOWUP_MIN_HEIGHT,
                 maxHeight: FOLLOWUP_MAX_HEIGHT,
@@ -435,14 +435,14 @@ export function Notch({
             <button
               type="submit"
               disabled={!canSendFollowUp}
-              className="absolute bottom-3 right-3 grid h-8 w-8 place-items-center rounded-full transition disabled:cursor-default"
+              className="absolute bottom-1.5 right-1.5 grid h-7 w-7 place-items-center rounded-full transition disabled:cursor-default"
               style={{
                 background: canSendFollowUp ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.32)',
                 color: canSendFollowUp ? 'rgba(0,0,0,0.75)' : 'rgba(0,0,0,0.4)',
               }}
               aria-label="Send follow-up"
             >
-              <ArrowUp size={16} strokeWidth={2} />
+              <ArrowUp size={15} strokeWidth={2} />
             </button>
           </form>
         </div>
