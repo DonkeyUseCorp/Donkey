@@ -10,7 +10,6 @@ public struct UserQueryNotchLayout: Equatable, Sendable {
     public var expandedVisibleHeight: CGFloat
     public var contentHorizontalInset: CGFloat
     public var visibleHeight: CGFloat
-    public var cornerRadius: CGFloat
     public var collapsedSurfaceFrame: CGRect
     public var expandedSurfaceFrame: CGRect
     public var expandedContentFrame: CGRect
@@ -28,7 +27,6 @@ public struct UserQueryNotchLayout: Equatable, Sendable {
         expandedVisibleHeight: CGFloat,
         contentHorizontalInset: CGFloat,
         visibleHeight: CGFloat,
-        cornerRadius: CGFloat,
         collapsedSurfaceFrame: CGRect,
         expandedSurfaceFrame: CGRect,
         expandedContentFrame: CGRect,
@@ -43,7 +41,6 @@ public struct UserQueryNotchLayout: Equatable, Sendable {
         self.expandedVisibleHeight = expandedVisibleHeight
         self.contentHorizontalInset = contentHorizontalInset
         self.visibleHeight = visibleHeight
-        self.cornerRadius = cornerRadius
         self.collapsedSurfaceFrame = collapsedSurfaceFrame
         self.expandedSurfaceFrame = expandedSurfaceFrame
         self.expandedContentFrame = expandedContentFrame
@@ -128,7 +125,6 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
             expandedVisibleHeight: expandedVisibleHeight,
             contentHorizontalInset: 14,
             visibleHeight: visibleHeight,
-            cornerRadius: isExpanded ? Self.expandedCornerRadius : Self.collapsedCornerRadius,
             collapsedSurfaceFrame: collapsedSurfaceFrame,
             expandedSurfaceFrame: expandedSurfaceFrame,
             expandedContentFrame: expandedContentFrame,

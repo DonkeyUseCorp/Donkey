@@ -37,7 +37,6 @@ final class UserQueryOverlayController {
     private var statusHostShrinkWorkItem: DispatchWorkItem?
     private var spawnDesktopEmergeWorkItems: [String: DispatchWorkItem] = [:]
     private var hasPrewarmedInputPanel = false
-    private var hasPrewarmedStatusPanelExpansion = false
     private var lastStatusViewSnapshot: StatusPanelViewSnapshot?
 
     init(
@@ -82,7 +81,6 @@ final class UserQueryOverlayController {
         self.inputPanel = inputPanel
         self.statusPanel = statusPanel
         prewarmInputPanel()
-        prewarmStatusPanelExpansion()
         startActivationMonitoring()
         startAppDeactivationMonitoring()
         positionStatusPanel()
@@ -221,7 +219,6 @@ final class UserQueryOverlayController {
         statusPanel = nil
         statusHostingView = nil
         hasPrewarmedInputPanel = false
-        hasPrewarmedStatusPanelExpansion = false
         lastStatusViewSnapshot = nil
     }
 
@@ -561,14 +558,9 @@ final class UserQueryOverlayController {
         _ hostingView: UserQueryHostingView<UserQueryNotchStatusView>,
         metrics: NotchMetrics
     ) {
-        hostingView.layer?.backgroundColor = statusHostDebugBackgroundColor?.cgColor
         hostingView.layer?.cornerRadius = metrics.hostCornerRadius
         hostingView.layer?.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
         hostingView.layer?.masksToBounds = true
-    }
-
-    private var statusHostDebugBackgroundColor: NSColor? {
-        nil
     }
 
     private func statusViewSnapshot(metrics: NotchMetrics) -> StatusPanelViewSnapshot {
@@ -813,45 +805,12 @@ final class UserQueryOverlayController {
         scheduleStatusHostShrink()
     }
 
-    private func prewarmStatusPanelExpansion() {
-        guard !hasPrewarmedStatusPanelExpansion,
-              statusPanel != nil else { return }
-        hasPrewarmedStatusPanelExpansion = true
-
-        // AppKit and SwiftUI layout must stay on the main actor, but doing this
-        // while the status panel is still hidden keeps first-hover setup work off
-        // the visible animation path.
-        isStatusHostExpanded = true
-        positionStatusPanel()
-        updateStatusPanelView()
-        flushStatusHostLayout()
-
-        isStatusHostExpanded = false
-        positionStatusPanel()
-        updateStatusPanelView()
-        flushStatusHostLayout()
-    }
-
     private func prewarmInputPanel() {
         guard !hasPrewarmedInputPanel,
               let inputPanel else { return }
         hasPrewarmedInputPanel = true
 
         flushPanelLayout(inputPanel)
-    }
-
-    private func flushStatusHostLayout() {
-        guard let statusPanel else { return }
-
-        // The host uses `sizingOptions = []` (see makeStatusPanel) to keep its SwiftUI content
-        // from re-driving the window size. A side effect is that assigning `rootView` no longer
-        // invalidates the hosting view's AppKit layout, so `layoutSubtreeIfNeeded()` alone won't
-        // flush the pending SwiftUI render. The surface grow animation needs the collapsed render
-        // committed before `isStatusExpanded` flips, so it animates from the notch rather than
-        // snapping open. Mark the host dirty so the flush forces it through.
-        statusHostingView?.needsLayout = true
-        statusHostingView?.needsDisplay = true
-        flushPanelLayout(statusPanel)
     }
 
     private func flushPanelLayout(_ panel: NSPanel) {
