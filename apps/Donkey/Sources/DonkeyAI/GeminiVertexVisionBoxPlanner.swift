@@ -36,9 +36,11 @@ public enum GeminiVertexVisionBoxPlanner {
         window: WindowTargetBounds,
         urlSession: URLSession = .shared
     ) async throws -> VisionBoxAction {
-        let host = auth.location == "global" ? "aiplatform.googleapis.com" : "\(auth.location)-aiplatform.googleapis.com"
-        let endpoint = "https://\(host)/v1/projects/\(auth.project)/locations/\(auth.location)/publishers/google/models/\(model):generateContent"
-        guard let url = URL(string: endpoint) else {
+        guard let url = GeminiGenerateContent.vertexURL(
+            project: auth.project,
+            location: auth.location,
+            model: model
+        ) else {
             throw GeminiVertexVisionPlanner.PlannerError.requestFailed(status: -1, body: "bad url")
         }
 
@@ -83,7 +85,7 @@ public enum GeminiVertexVisionBoxPlanner {
         guard status == 200 else {
             throw GeminiVertexVisionPlanner.PlannerError.requestFailed(status: status, body: String(data: data, encoding: .utf8) ?? "")
         }
-        guard let text = outputText(data), !text.isEmpty else {
+        guard let text = GeminiGenerateContent.candidateText(data), !text.isEmpty else {
             throw GeminiVertexVisionPlanner.PlannerError.noOutputText(body: String(data: data, encoding: .utf8) ?? "")
         }
         let json = DebugUIInspectionResponseDecoder.jsonObjectSubstring(text)
@@ -93,15 +95,6 @@ public enum GeminiVertexVisionBoxPlanner {
             action.screenPoints = points.isEmpty ? nil : points
         }
         return action
-    }
-
-    private static func outputText(_ data: Data) -> String? {
-        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let candidates = root["candidates"] as? [[String: Any]],
-              let content = candidates.first?["content"] as? [String: Any],
-              let parts = content["parts"] as? [[String: Any]]
-        else { return nil }
-        return parts.compactMap { $0["text"] as? String }.joined()
     }
 
     private static func prompt(goal: String, app: String, width: Int, height: Int, history: [String], appGuidance: String?) -> String {

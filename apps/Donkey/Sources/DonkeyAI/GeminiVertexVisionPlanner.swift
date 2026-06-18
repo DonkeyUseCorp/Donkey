@@ -59,9 +59,11 @@ public enum GeminiVertexVisionPlanner {
         window: WindowTargetBounds,
         urlSession: URLSession = .shared
     ) async throws -> VisionActionPlanner.PlannedAction {
-        let host = auth.location == "global" ? "aiplatform.googleapis.com" : "\(auth.location)-aiplatform.googleapis.com"
-        let endpoint = "https://\(host)/v1/projects/\(auth.project)/locations/\(auth.location)/publishers/google/models/\(model):generateContent"
-        guard let url = URL(string: endpoint) else { throw PlannerError.requestFailed(status: -1, body: "bad url") }
+        guard let url = GeminiGenerateContent.vertexURL(
+            project: auth.project,
+            location: auth.location,
+            model: model
+        ) else { throw PlannerError.requestFailed(status: -1, body: "bad url") }
 
         let width = Int(compressed.pixelSize.width.rounded())
         let height = Int(compressed.pixelSize.height.rounded())
@@ -108,7 +110,7 @@ public enum GeminiVertexVisionPlanner {
         guard status == 200 else {
             throw PlannerError.requestFailed(status: status, body: String(data: data, encoding: .utf8) ?? "")
         }
-        guard let text = outputText(data), !text.isEmpty else {
+        guard let text = GeminiGenerateContent.candidateText(data), !text.isEmpty else {
             throw PlannerError.noOutputText(body: String(data: data, encoding: .utf8) ?? "")
         }
         let json = DebugUIInspectionResponseDecoder.jsonObjectSubstring(text)
@@ -117,12 +119,4 @@ public enum GeminiVertexVisionPlanner {
         return action
     }
 
-    private static func outputText(_ data: Data) -> String? {
-        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let candidates = root["candidates"] as? [[String: Any]],
-              let content = candidates.first?["content"] as? [String: Any],
-              let parts = content["parts"] as? [[String: Any]]
-        else { return nil }
-        return parts.compactMap { $0["text"] as? String }.joined()
-    }
 }
