@@ -1,17 +1,17 @@
 # Images
 
 id: images
-description: Expert still-image work — resize, convert, and rotate with sips, crop/composite/batch with magick, and read or strip metadata with exiftool.
-tags: image, photo, resize, convert, metadata, exif
-keywords: image, photo, picture, resize, scale, convert, crop, rotate, jpeg, png, heic, metadata, exif, strip
-tools: shell_exec
+description: Expert still-image work — resize/convert/rotate with sips, crop/composite with magick, metadata with exiftool, batch a folder, and generative edits (background removal, restyle, reference-match, text-to-image) with the image.* tools.
+tags: image, photo, resize, convert, metadata, exif, generate, edit
+keywords: image, photo, picture, resize, scale, convert, crop, rotate, jpeg, png, heic, metadata, exif, strip, batch, folder, background, remove, restyle, generate, reference, match, look
+tools: shell_exec, image.edit, image.generate, files.describe
 
-`sips` ships with macOS and `exiftool` is bundled and on the PATH — lead with
-those; they cover almost every request. `magick` (ImageMagick) is only available
-when the user has installed it (check the ENVIRONMENT tool list), so reach for it
-only for what `sips` can't do. Editing a file in place is reversible (consent
-gate); writing to a new `--out` path is safer, so prefer it when the user wants
-to keep the original.
+Two kinds of work: mechanical pixels (size, format, crop, metadata) use the local
+tools; semantic changes (remove a background, restyle, add or remove an object,
+match another photo's look, make an image from scratch) use the generative
+`image.*` tools. `sips` and `exiftool` are bundled; `magick` (ImageMagick) only when
+installed (check the ENVIRONMENT tool list). Editing in place is reversible (consent
+gate); a new `--out` path is safer — prefer it when the original should survive.
 
 ## sips — resize, convert, rotate (writes a new file with --out)
 - Resize to a max dimension, aspect preserved: `sips -Z 1024 in.jpg --out small.jpg`.
@@ -20,14 +20,29 @@ to keep the original.
 - Image to PDF: `sips -s format pdf in.png --out out.pdf`.
 - Read dimensions: `sips -g pixelWidth -g pixelHeight in.jpg`.
 
-## magick — crop, composite, batch (only if installed)
+## magick — crop, composite (only if installed)
 - Crop a region WxH+X+Y: `magick in.png -crop 200x200+0+0 out.png`.
-- Batch convert a folder: `magick mogrify -format jpg *.png`. NOTE `mogrify` edits or replaces files in place — confirm before running it on originals.
 - If `magick` is not in the ENVIRONMENT list, do what `sips` can and say plainly what needs ImageMagick; do not pretend it ran.
 
 ## exiftool — read and strip metadata
 - Read all metadata: `exiftool in.jpg`. One tag: `exiftool -GPSLatitude -GPSLongitude in.jpg`.
 - Strip everything (privacy): `exiftool -all= in.jpg` — keeps a `in.jpg_original` backup; delete it only if the user confirms.
 
+## Batch a folder (write copies, never in place)
+- `sips` processes many inputs when `--out` is a directory: `mkdir -p edited && sips -Z 2048 *.jpg --out edited` resizes every jpg into `edited/`; same for convert: `sips -s format jpeg *.png --out edited`.
+- A bare glob that matches nothing ABORTS under zsh — confirm matches first with `ls *.jpg` (or `ls | grep -iE '\.jpe?g$'`), then run. Keep parentheses out of commands (the classifier splits on them).
+- `exiftool` takes a folder: `exiftool -all= -o edited/ *.jpg`. `magick mogrify -path edited -resize 2048x2048 *.jpg` writes resized copies into `edited/` (plain `mogrify` without `-path` edits the originals — confirm first).
+- Report how many files changed and re-read one to verify.
+
+## Generative edits — image.edit / image.generate
+- Change an existing image: `image.edit` with `inputPath` and a plain-words `prompt` ("remove the background", "make the sky a sunset", "put a hat on the dog"). It writes a NEW file and returns its path; it never touches the source.
+- New image from text: `image.generate` with a `prompt`.
+- These cost credits per image. For a batch, say how many and confirm first, then call `image.edit` once per file (e.g. saving into `edited/`).
+- Verify the returned file exists and looks right (`files.describe` or open it), then report what was saved.
+
+## Match a reference photo's look
+- Generative (handles colour grade, mood, lighting, style): `image.edit` with the target as `inputPath`, the reference as `referencePaths`, and a `prompt` like "edit the first image to match the colour and lighting of the reference". Loop per file for a batch.
+- Tone/exposure only, no credits, needs magick: read both images' channel means (`magick in.jpg -format "%[fx:mean.r] %[fx:mean.g] %[fx:mean.b]" info:`) and nudge with `-modulate`/`-channel`; for anything past white balance and brightness use the generative path.
+
 ## Verify
-- Re-read the result: `sips -g pixelWidth -g pixelHeight out.jpg`, or `exiftool out.jpg` after stripping to confirm the tags are gone.
+- Re-read the result: `sips -g pixelWidth -g pixelHeight out.jpg`, `exiftool out.jpg` after stripping to confirm tags are gone, or `files.describe` for a generative output.
