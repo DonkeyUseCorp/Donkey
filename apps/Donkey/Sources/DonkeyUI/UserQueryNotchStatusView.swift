@@ -6,6 +6,12 @@ import UniformTypeIdentifiers
 public struct UserQueryNotchStatusView: View {
     @State private var renderedSpawnCue: UserQuerySpawnState?
     @State private var spawnCueIsExiting = false
+    /// Drives the grow/shrink animation. The controller flips the `isExpanded` property by swapping the
+    /// whole hosting `rootView` — and that swap can land inside the host-resize `CATransaction` (actions
+    /// disabled), which swallows a `.animation(value: isExpanded)` and snaps the surface open. Mirroring
+    /// the open state into `@State` and flipping it in `.onChange` moves the animation onto SwiftUI's own
+    /// fresh transaction, so the surface always interpolates from the committed collapsed notch.
+    @State private var surfaceIsOpen = false
 
     private let state: UserQueryState
     private let updateState: UserQueryUpdateState
@@ -95,50 +101,57 @@ public struct UserQueryNotchStatusView: View {
     }
 
     public var body: some View {
-        GeometryReader { proxy in
-            animatedNotchSurface
-                // Pin the top edge to the host's top center for every animation frame.
-                // Alignment-based layout occasionally reused a stale host geometry
-                // after quick hover enter/exit, making expansion appear to start
-                // from the bottom-right instead of from the physical notch.
-                .position(
-                    x: proxy.size.width / 2,
-                    y: animatingSurfaceHeight / 2
+        // The notch shape itself grows. There is one fixed content canvas — the black fill plus the
+        // collapsed and expanded content, laid out once and pinned to the host's top center — and a
+        // single clip shape that animates from the closed-notch size out to full size. The content
+        // never moves; the growing notch simply uncovers more of it, downward from the notch and
+        // outward from center. The host window opens/closes instantly to give the clip room.
+        contentCanvas
+            .frame(width: surfaceWidth, height: surfaceHeight, alignment: .top)
+            .clipShape(
+                GrowingNotchShape(
+                    width: animatingSurfaceWidth,
+                    height: animatingSurfaceHeight,
+                    cornerRadius: animatingSurfaceCornerRadius
                 )
-                // The host window opens/closes instantly; the visible black surface grows
-                // (or collapses) inside it. This animates the surface size, corner radius,
-                // shadow, and top-pinned position off the `isExpanded` change. Content
-                // opacity keeps its own faster fade below, which wins for that subtree.
-                .animation(surfaceAnimation, value: isExpanded)
-        }
-        .frame(width: surfaceWidth, height: surfaceHeight)
-        .clipped()
-        .accessibilityElement(children: .contain)
+            )
+            .shadow(
+                color: Color.black.opacity(surfaceIsOpen ? 0.5 : 0),
+                radius: surfaceIsOpen ? 24 : 0,
+                x: 0,
+                y: surfaceIsOpen ? 12 : 0
+            )
+            // The host follows a beat later on close (see closeAnimationDuration), once the clip has
+            // finished shrinking back to the notch.
+            .animation(surfaceAnimation, value: surfaceIsOpen)
+            .onAppear { surfaceIsOpen = isExpanded }
+            .onChange(of: isExpanded) { surfaceIsOpen = isExpanded }
+            .accessibilityElement(children: .contain)
     }
 
-    private var animatedNotchSurface: some View {
+    private var contentCanvas: some View {
         ZStack(alignment: .top) {
             Color.black
 
             collapsedContentLayer
-                // The collapsed chrome fades out as the surface grows open and fades back in as it
+                // The collapsed chrome fades out as the notch grows open and fades back in as it
                 // collapses, so it cross-dissolves with the expanded content rather than popping.
-                .opacity(isExpanded ? 0 : 1)
-                .animation(Self.collapsedChromeAnimation, value: isExpanded)
+                .opacity(surfaceIsOpen ? 0 : 1)
+                .animation(Self.collapsedChromeAnimation, value: surfaceIsOpen)
 
             expandedContent
-                .opacity(isExpanded ? 1 : 0)
+                .opacity(surfaceIsOpen ? 1 : 0)
                 .animation(
-                    isExpanded ? Self.expandedContentAnimation : Self.expandedContentDismissAnimation,
-                    value: isExpanded
+                    surfaceIsOpen ? Self.expandedContentAnimation : Self.expandedContentDismissAnimation,
+                    value: surfaceIsOpen
                 )
 
             if !hasTaskDisplayText {
                 expandedNotchArrow
-                    .opacity(isExpanded ? 1 : 0)
+                    .opacity(surfaceIsOpen ? 1 : 0)
                     .animation(
-                        isExpanded ? Self.expandedContentAnimation : Self.expandedContentDismissAnimation,
-                        value: isExpanded
+                        surfaceIsOpen ? Self.expandedContentAnimation : Self.expandedContentDismissAnimation,
+                        value: surfaceIsOpen
                     )
             }
 
@@ -146,17 +159,9 @@ public struct UserQueryNotchStatusView: View {
                 spawnCueArrow(renderedSpawnCue)
             }
         }
-        .frame(width: animatingSurfaceWidth, height: animatingSurfaceHeight, alignment: .top)
-        .clipShape(notchSurfaceShape(cornerRadius: animatingSurfaceCornerRadius))
-        .shadow(
-            color: Color.black.opacity(isExpanded ? 0.5 : 0),
-            radius: isExpanded ? 24 : 0,
-            x: 0,
-            y: isExpanded ? 12 : 0
-        )
-        // The host window opens instantly to make room; this black surface grows/collapses inside
-        // it, animated off `isExpanded` by the body's surfaceAnimation. The host follows a beat
-        // later on close (see closeAnimationDuration), once the surface has finished collapsing.
+        // The canvas is laid out once at the full expanded size and pinned to the top, so every layer
+        // holds its final position. The growing clip in `body` reveals more of it; nothing reflows.
+        .frame(width: expandedSurfaceWidth, height: expandedSurfaceHeight, alignment: .top)
         .contentShape(Rectangle())
         .onDrop(
             of: [UTType.fileURL],
@@ -216,18 +221,6 @@ public struct UserQueryNotchStatusView: View {
         }
     }
 
-    private func notchSurfaceShape(cornerRadius: CGFloat) -> UnevenRoundedRectangle {
-        UnevenRoundedRectangle(
-            cornerRadii: RectangleCornerRadii(
-                topLeading: 0,
-                bottomLeading: cornerRadius,
-                bottomTrailing: cornerRadius,
-                topTrailing: 0
-            ),
-            style: .continuous
-        )
-    }
-
     private var animatingSurfaceWidth: CGFloat {
         animatingSurfaceFrame.width
     }
@@ -240,11 +233,11 @@ public struct UserQueryNotchStatusView: View {
     /// always room), and this surface grows from the collapsed notch to the expanded frame inside it,
     /// animated off `isExpanded`. On collapse it shrinks back first, then the host follows.
     private var animatingSurfaceFrame: CGRect {
-        isExpanded ? layout.expandedSurfaceFrame : layout.collapsedSurfaceFrame
+        surfaceIsOpen ? layout.expandedSurfaceFrame : layout.collapsedSurfaceFrame
     }
 
     private var animatingSurfaceCornerRadius: CGFloat {
-        isExpanded ? layout.expandedCornerRadius : layout.collapsedCornerRadius
+        surfaceIsOpen ? layout.expandedCornerRadius : layout.collapsedCornerRadius
     }
 
     /// The collapsed surface size, used to lay out the collapsed chrome at a fixed size so it does not
@@ -255,6 +248,16 @@ public struct UserQueryNotchStatusView: View {
 
     private var collapsedSurfaceHeight: CGFloat {
         layout.collapsedSurfaceFrame.height
+    }
+
+    /// The fully expanded surface size. Every layer is laid out in this fixed canvas so the content
+    /// holds its final position while the growing clip window reveals it from the notch outward.
+    private var expandedSurfaceWidth: CGFloat {
+        layout.expandedSurfaceFrame.width
+    }
+
+    private var expandedSurfaceHeight: CGFloat {
+        layout.expandedSurfaceFrame.height
     }
 
     private var collapsedContent: some View {
@@ -975,10 +978,6 @@ public struct UserQueryNotchStatusView: View {
         primaryTask?.status == .running || state.leadingSignalLevel == .thinking
     }
 
-    private var isActiveTask: Bool {
-        isWorking || isCurrentTaskPaused || primaryTask?.status == .paused
-    }
-
     private var hasTaskDisplayText: Bool {
         !tasks.isEmpty || taskDisplayText != nil
     }
@@ -1026,15 +1025,11 @@ public struct UserQueryNotchStatusView: View {
         Color(red: 0.66, green: 0.34, blue: 0.79)
     ]
 
-    private var cornerRadius: CGFloat {
-        layout.cornerRadius
-    }
-
     /// The surface curve, chosen per direction: opening springs out (like the prototype's
     /// cubic-bezier(0.2,0.9,0.24,1)); closing eases shut a touch faster. The host window shrink on
     /// close (closeAnimationDuration) is timed to land just after the close curve settles.
     private var surfaceAnimation: Animation {
-        isExpanded ? Self.surfaceOpenAnimation : Self.surfaceCloseAnimation
+        surfaceIsOpen ? Self.surfaceOpenAnimation : Self.surfaceCloseAnimation
     }
 
     // Open grows the surface on the prototype's exact curve (cubic-bezier(0.2,0.9,0.24,1) over 550ms),
@@ -1061,6 +1056,48 @@ public struct UserQueryNotchStatusView: View {
     /// The chin advances to the next running task every 2.6s, on a clock shared by all tasks.
     private static let chinRotationInterval: TimeInterval = 2.6
     private static let chinRotationAnchor = Date(timeIntervalSinceReferenceDate: 0)
+}
+
+/// The notch silhouette as an animatable clip: an `UnevenRoundedRectangle` (square top, rounded
+/// bottom) of the given size, pinned to the top center of whatever rect it is asked to fill. Animating
+/// `width`/`height`/`cornerRadius` grows or shrinks the opening from the closed notch outward while the
+/// content it clips stays fixed underneath, so the notch appears to expand in place rather than the
+/// content moving.
+private struct GrowingNotchShape: Shape {
+    var width: CGFloat
+    var height: CGFloat
+    var cornerRadius: CGFloat
+
+    var animatableData: AnimatablePair<CGFloat, AnimatablePair<CGFloat, CGFloat>> {
+        get { AnimatablePair(width, AnimatablePair(height, cornerRadius)) }
+        set {
+            width = newValue.first
+            height = newValue.second.first
+            cornerRadius = newValue.second.second
+        }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let clampedWidth = min(max(0, width), rect.width)
+        let clampedHeight = min(max(0, height), rect.height)
+        let radius = min(cornerRadius, clampedWidth / 2, clampedHeight / 2)
+        let opening = CGRect(
+            x: (rect.width - clampedWidth) / 2,
+            y: 0,
+            width: clampedWidth,
+            height: clampedHeight
+        )
+        return UnevenRoundedRectangle(
+            cornerRadii: RectangleCornerRadii(
+                topLeading: 0,
+                bottomLeading: radius,
+                bottomTrailing: radius,
+                topTrailing: 0
+            ),
+            style: .continuous
+        )
+        .path(in: opening)
+    }
 }
 
 /// A round row control (stop / resume / close). Like the prototype's control buttons it brightens its
