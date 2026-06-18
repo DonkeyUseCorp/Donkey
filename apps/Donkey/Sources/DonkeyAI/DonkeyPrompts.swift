@@ -147,10 +147,22 @@ public enum DonkeyPrompts {
         let elementsBlock = harnessStepElementsBlock(task.worldModel.elements)
         let windowsBlock = harnessStepWindowsBlock(openWindows)
 
-        let factsBlock = task.worldModel.facts.isEmpty
+        // Follow-up instructions the user added after the task started are surfaced in their own block
+        // below (right under the goal), so they are excluded from the generic facts dump here.
+        let displayFacts = task.worldModel.facts
+            .filter { $0.key != HarnessTaskCoordinator.additionalInstructionsFactKey }
+        let factsBlock = displayFacts.isEmpty
             ? ""
-            : "\nKnown state:\n" + task.worldModel.facts.sorted { $0.key < $1.key }
+            : "\nKnown state:\n" + displayFacts.sorted { $0.key < $1.key }
                 .map { "  \($0.key) = \($0.value)" }.joined(separator: "\n") + "\n"
+
+        let followUpInstructions = task.worldModel.facts[HarnessTaskCoordinator.additionalInstructionsFactKey]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let followUpBlock = followUpInstructions.isEmpty
+            ? ""
+            : "\nADDITIONAL INSTRUCTIONS FROM THE USER (sent after the task started — fold them into your "
+                + "current work; do NOT restart from scratch or redo completed steps):\n"
+                + String(followUpInstructions.prefix(800)) + "\n"
 
         let environmentBlock = (environmentSummary?.isEmpty == false)
             ? "\nENVIRONMENT (command-line tools on this Mac — only reach for what's installed):\n  \(environmentSummary!)\n"
@@ -199,7 +211,7 @@ public enum DonkeyPrompts {
         entirely with system tools and have no on-screen UI target; reach for the GUI only when the task
         truly needs it.
         GOAL: \(goalText)
-        \(understandingBlock)
+        \(followUpBlock)\(understandingBlock)
         \(historyBlock)
         \(factsBlock)\(environmentBlock)\(guidanceBlock)\(skillCatalogBlock)\(windowsBlock)
         \(elementsBlock)

@@ -32,6 +32,26 @@ public struct HarnessPendingContinuation: Codable, Equatable, Sendable {
     }
 }
 
+/// A user instruction that arrived while the task's loop was already running. It is queued on the task
+/// and drained at the top of the next loop iteration, so a live run folds in the new instruction at its
+/// next step instead of being torn down and restarted. This is the deliberate opposite of `interrupt`,
+/// which clobbers the goal.
+public struct HarnessPendingUserMessage: Codable, Equatable, Sendable, Identifiable {
+    public var id: String
+    public var text: String
+    public var createdAt: Date
+
+    public init(
+        id: String = UUID().uuidString,
+        text: String,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.text = text
+        self.createdAt = createdAt
+    }
+}
+
 public struct HarnessTaskState: Codable, Equatable, Sendable {
     public var id: String
     public var threadID: String
@@ -107,8 +127,23 @@ public struct HarnessTaskEvent: Codable, Equatable, Sendable {
 }
 
 public actor HarnessTaskCoordinator {
+    /// Fact key the planner reads for instructions the user added after the task started. Persistent and
+    /// additive: each follow-up appends here so every later step keeps incorporating it, unlike a
+    /// transient "new message" flag that would read as brand-new on every prompt.
+    public static let additionalInstructionsFactKey = "additionalUserInstructions"
+
     private var tasksByID: [String: HarnessTaskState] = [:]
     private var eventsByTaskID: [String: [HarnessTaskEvent]] = [:]
+    /// Ephemeral, in-memory only: follow-up instructions queued against a running loop, drained at the
+    /// top of the next loop iteration. Deliberately not part of the persisted `HarnessTaskState` — a
+    /// queued message only matters to a live loop, and the drained text is folded into the persisted
+    /// world model anyway.
+    private var pendingUserMessagesByID: [String: [HarnessPendingUserMessage]] = [:]
+    /// Task IDs with a live runtime loop right now. The authoritative answer to "will an enqueued
+    /// follow-up actually be drained?" — set in `beginRun`, cleared in `endRunUnlessPending`/`markLoopEnded`.
+    /// Sampling this is what lets `enqueueUserMessage` tell a caller whether to inject or fall back to a
+    /// fresh resume, instead of guessing from a status that can already be stale.
+    private var runningLoopTaskIDs: Set<String> = []
     private let threadStore: (any HarnessThreadStoring)?
 
     public init(threadStore: (any HarnessThreadStoring)? = nil) {
@@ -136,6 +171,23 @@ public actor HarnessTaskCoordinator {
         await threadStore?.upsertTaskSnapshot(task)
         await appendEvent(taskID: id, status: task.status, summary: "Task created")
         return task
+    }
+
+    /// Merge metadata onto a task without recording a lifecycle event (used to pin the resolved drive
+    /// target so a later resume drives the original app rather than whatever is frontmost). Persists the
+    /// snapshot but stays quiet in the thread record, since it is bookkeeping, not a step.
+    public func recordMetadata(taskID: String, _ values: [String: String]) async {
+        let existing: HarnessTaskState?
+        if let cached = tasksByID[taskID] {
+            existing = cached
+        } else {
+            existing = await threadStore?.taskSnapshot(id: taskID)
+        }
+        guard var task = existing else { return }
+        task.metadata.merge(values) { _, new in new }
+        task.updatedAt = Date()
+        tasksByID[taskID] = task
+        await threadStore?.upsertTaskSnapshot(task)
     }
 
     public func task(id: String) async -> HarnessTaskState? {
@@ -242,11 +294,22 @@ public actor HarnessTaskCoordinator {
     public func complete(taskID: String, reason: String = "Task completed") async -> HarnessTaskState? {
         await mutate(taskID: taskID, status: .completed, summary: reason) { task in
             task.pendingContinuation = nil
+            // Follow-up instructions were run-scoped context for this completed run; drop them so a later
+            // reuse of the task never re-presents an already-handled one-shot as a fresh demand.
+            task.worldModel.facts[Self.additionalInstructionsFactKey] = nil
         }
     }
 
     public func failSafe(taskID: String, reason: String) async -> HarnessTaskState? {
         await mutate(taskID: taskID, status: .failedSafe, summary: reason) { task in
+            task.pendingContinuation = nil
+        }
+    }
+
+    /// The loop hit the runaway step ceiling without completing — distinct from a fail-safe stall. The
+    /// goal still stands, so the task is left retryable: resuming it (`startRunning`) re-enters the loop.
+    public func timeOut(taskID: String, reason: String = "Task hit the step ceiling") async -> HarnessTaskState? {
+        await mutate(taskID: taskID, status: .timedOut, summary: reason) { task in
             task.pendingContinuation = nil
         }
     }
@@ -269,6 +332,93 @@ public actor HarnessTaskCoordinator {
                 metadata: ["newGoal": newGoal]
             )
         }
+    }
+
+    /// Mark that a runtime loop has started for this task. Paired with `endRunUnlessPending` /
+    /// `markLoopEnded`. While a loop is marked running, an enqueued follow-up is guaranteed to be drained
+    /// by it (the loop drains every iteration and, on exit, atomically checks for late arrivals).
+    public func beginRun(taskID: String) {
+        runningLoopTaskIDs.insert(taskID)
+    }
+
+    /// Unconditionally clear the running-loop mark (used when a run ends on a terminal that should not be
+    /// reopened, e.g. a step-ceiling timeout).
+    public func markLoopEnded(taskID: String) {
+        runningLoopTaskIDs.remove(taskID)
+    }
+
+    /// Atomically decide, at the end of a loop, whether the run is truly finished. Returns true (caller
+    /// stops) only when no follow-up is queued; if a follow-up slipped in after the last drain, the mark
+    /// is kept and the caller loops once more to drain it. Because this is one actor call, it cannot race
+    /// `enqueueUserMessage`: either the message lands first (queue non-empty → keep running) or this clears
+    /// the mark first (so `enqueueUserMessage` then reports no live loop and the caller resumes instead).
+    public func endRunUnlessPending(taskID: String) -> Bool {
+        if pendingUserMessagesByID[taskID]?.isEmpty == false {
+            return false
+        }
+        runningLoopTaskIDs.remove(taskID)
+        return true
+    }
+
+    /// Queue a follow-up instruction onto a task. Returns whether a live loop is running that will drain
+    /// it — false means the caller should resume the task instead (a fresh run drains it at its top). The
+    /// deliberate opposite of `interrupt`, which clobbers the goal; this amends the work in place.
+    @discardableResult
+    public func enqueueUserMessage(taskID: String, text: String) async -> Bool {
+        guard let task = await task(id: taskID) else { return false }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return runningLoopTaskIDs.contains(taskID) }
+        pendingUserMessagesByID[taskID, default: []].append(HarnessPendingUserMessage(text: trimmed))
+        // Record the follow-up immediately so it survives in the thread even if the loop ends before drain.
+        await appendEvent(taskID: taskID, status: task.status, summary: "Queued follow-up: \(trimmed)")
+        return runningLoopTaskIDs.contains(taskID)
+    }
+
+    /// Pull and clear any queued follow-up instructions, appending them to the additive
+    /// `additionalUserInstructions` fact the planner reads. Returns the drained messages (empty if none).
+    @discardableResult
+    public func drainUserMessages(taskID: String) async -> [HarnessPendingUserMessage] {
+        guard let queued = pendingUserMessagesByID[taskID], !queued.isEmpty else { return [] }
+        pendingUserMessagesByID[taskID] = nil
+        let addition = queued.map(\.text).joined(separator: "\n")
+        _ = await mutate(taskID: taskID, status: nil, summary: "Folded in queued follow-up") { task in
+            let existing = task.worldModel.facts[Self.additionalInstructionsFactKey]
+            let combined = [existing, addition]
+                .compactMap { $0 }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+            task.worldModel.facts[Self.additionalInstructionsFactKey] = combined
+        }
+        return queued
+    }
+
+    /// Re-open a task whose loop reached a non-gate terminal (completed/failedSafe/timedOut/cancelled) so a
+    /// freshly-drained follow-up gets acted on. Unlike `startRunning`, it preserves the world model facts
+    /// (including the just-folded instruction). Gates and already-runnable tasks are left untouched.
+    public func reopenForFollowUp(taskID: String) async {
+        guard let task = await task(id: taskID) else { return }
+        switch task.status {
+        case .completed, .failedSafe, .timedOut, .cancelled:
+            _ = await mutate(taskID: taskID, status: .running, summary: "Reopened for queued follow-up") { task in
+                task.pendingContinuation = nil
+            }
+        default:
+            break
+        }
+    }
+
+    /// Mark a still-runnable task as timed out (used when the loop hits the step ceiling). No-op if the
+    /// task already reached a terminal/gate state.
+    public func timeOutIfRunnable(taskID: String, reason: String) async {
+        guard let task = await task(id: taskID), task.status.canExecuteTools else { return }
+        _ = await timeOut(taskID: taskID, reason: reason)
+    }
+
+    /// Mark a still-runnable task as failed-safe (used when the planner stops or a tool call can't run). No-op
+    /// if the task already reached a terminal/gate state.
+    public func failSafeIfRunnable(taskID: String, reason: String) async {
+        guard let task = await task(id: taskID), task.status.canExecuteTools else { return }
+        _ = await failSafe(taskID: taskID, reason: reason)
     }
 
     public func waitForUser(
@@ -412,6 +562,6 @@ public actor HarnessTaskCoordinator {
     }
 
     private static func isActiveTask(_ task: HarnessTaskState) -> Bool {
-        [.running, .paused, .waitingForUser, .waitingForPermission, .interrupted, .resuming].contains(task.status)
+        [.running, .paused, .waitingForUser, .waitingForPermission, .interrupted, .resuming, .timedOut].contains(task.status)
     }
 }

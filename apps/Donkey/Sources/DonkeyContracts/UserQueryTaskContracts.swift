@@ -11,6 +11,7 @@ public enum UserQueryTaskStatus: String, Codable, Equatable, Sendable {
     case interrupted
     case needsAttention
     case failed
+    case timedOut
 }
 
 public struct UserQueryNotchTask: Codable, Equatable, Identifiable, Sendable {

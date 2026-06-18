@@ -309,7 +309,7 @@ public struct UserQueryNotchStatusView: View {
 
                 if layout.chinHeight > 0, let speaker {
                     Text(speaker.detail.isEmpty ? speaker.title : speaker.detail)
-                        .font(.system(size: 9, weight: .regular))
+                        .font(.system(size: 13, weight: .regular))
                         .foregroundStyle(Color.white.opacity(0.72))
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -685,21 +685,40 @@ public struct UserQueryNotchStatusView: View {
             NotchControlButton(systemName: "stop.fill", label: "Stop", isEnabled: true) {
                 pauseRequested(task.id)
             }
-        case .paused, .interrupted:
-            HStack(spacing: 6) {
-                NotchControlButton(systemName: "play.fill", label: "Resume", isEnabled: true) {
-                    resumeRequested(task.id)
-                }
-                NotchControlButton(systemName: "xmark", label: "Close", isEnabled: true) {
-                    dismissRequested(task.id)
-                }
+        case .paused, .interrupted, .timedOut:
+            // Paused (user), interrupted (changed course), and timed out (hit the step ceiling) all carry a
+            // goal and real progress, so they are retryable: offer Resume + Close.
+            resumeAndCloseControls(for: task)
+        case .needsAttention:
+            // A run cut short by a relaunch is retryable; but an info-only needsAttention row (e.g. an
+            // asset drop) has no goal to resume, so it only gets Close — Resume there would dead-end.
+            if task.commandText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                closeControl(for: task)
+            } else {
+                resumeAndCloseControls(for: task)
             }
         default:
             // Completed, failed, chatting, and the waiting states (e.g. a clarifying question) are all
             // dismissable straight from the row instead of showing a non-actionable status glyph.
+            closeControl(for: task)
+        }
+    }
+
+    @ViewBuilder
+    private func resumeAndCloseControls(for task: UserQueryNotchTask) -> some View {
+        HStack(spacing: 6) {
+            NotchControlButton(systemName: "play.fill", label: "Resume", isEnabled: true) {
+                resumeRequested(task.id)
+            }
             NotchControlButton(systemName: "xmark", label: "Close", isEnabled: true) {
                 dismissRequested(task.id)
             }
+        }
+    }
+
+    private func closeControl(for task: UserQueryNotchTask) -> some View {
+        NotchControlButton(systemName: "xmark", label: "Close", isEnabled: true) {
+            dismissRequested(task.id)
         }
     }
 
@@ -927,10 +946,11 @@ public struct UserQueryNotchStatusView: View {
                 slotIcon("shield")
             case .running:
                 compactLiveTime(since: task.createdAt)
-            case .completed, .paused, .interrupted, .failed, .chatting, .needsAttention:
+            case .completed, .paused, .interrupted, .failed, .chatting, .needsAttention, .timedOut:
                 // The gutter only ever carries the waiting-on-user icons or the live clock — a completed
                 // task keeps surfacing as a colored pointer + chin line, and the rest (including a benign
-                // needsAttention) surface in the list without nagging the collapsed gutter.
+                // needsAttention or a retryable timed-out run) surface in the list without nagging the
+                // collapsed gutter.
                 EmptyView()
             }
         } else if updateState.isActionable {

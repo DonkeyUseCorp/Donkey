@@ -144,6 +144,9 @@ public extension UserQueryActivity {
         case .interrupted: return .interrupted
         case .needsAttention: return .needsAttention
         case .failed: return .failed
+        // A timed-out run is benign and retryable, so it surfaces the same non-nagging attention kind;
+        // the row's own detail ("Timed out — resume") carries the specifics.
+        case .timedOut: return .needsAttention
         }
     }
 

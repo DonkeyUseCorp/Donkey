@@ -101,7 +101,8 @@ public enum UserQuerySpawnLifecycle {
              .waitingForReview,
              .interrupted,
              .needsAttention,
-             .failed:
+             .failed,
+             .timedOut:
             true
         case .completed:
             false

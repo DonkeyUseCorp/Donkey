@@ -67,22 +67,51 @@ public struct GenericHarnessRuntime: Sendable {
         var noProgressStreak = 0
         var identicalNoProgressStreak = 0
         var lastCallSignature: String?
-        for _ in 0..<maxSteps {
+        var iterations = 0
+
+        // Mark this task as having a live loop. While marked, an enqueued follow-up is guaranteed delivery:
+        // it is drained at the top of each iteration, and the only stop that actually ends the run is one
+        // where `endRunUnlessPending` confirms the queue is empty in the same actor step. A follow-up that
+        // slips in at any stop reopens the run for one more pass instead of being silently dropped.
+        await coordinator.beginRun(taskID: taskID)
+
+        loop: while true {
+            // Fold any queued follow-up into the world model before planning. A fresh instruction resets
+            // the no-progress streak (legitimately new work) but NOT the identical-repeat guard, so a
+            // planner looping on one call is still caught; it also reopens a task whose previous step had
+            // already finished the run, so the new instruction is acted on rather than dropped.
+            if !(await coordinator.drainUserMessages(taskID: taskID)).isEmpty {
+                noProgressStreak = 0
+                await coordinator.reopenForFollowUp(taskID: taskID)
+            }
+
+            // Runaway backstop: a still-runnable task that exhausts the iteration budget timed out (the
+            // goal stands, so it stays retryable) — distinct from a stall (failSafe) or a clean stop.
+            if iterations >= maxSteps {
+                await coordinator.timeOutIfRunnable(taskID: taskID, reason: "maxStepsReached")
+                await coordinator.markLoopEnded(taskID: taskID)
+                break loop
+            }
+            iterations += 1
+
             guard let task = await coordinator.task(id: taskID), task.status.canExecuteTools else {
-                break
+                if await coordinator.endRunUnlessPending(taskID: taskID) { break loop } else { continue loop }
             }
             guard let call = await planner.planNextStep(for: task) else {
-                break
+                // The planner stopped without a lifecycle call: an abnormal stop, not a timeout.
+                await coordinator.failSafeIfRunnable(taskID: taskID, reason: "plannerStopped")
+                if await coordinator.endRunUnlessPending(taskID: taskID) { break loop } else { continue loop }
             }
             let signature = call.name + "\u{1}" + Self.canonicalInput(call.input)
 
             guard let step = await executeToolCall(taskID: taskID, call: call) else {
-                break
+                await coordinator.failSafeIfRunnable(taskID: taskID, reason: "executeFailed")
+                if await coordinator.endRunUnlessPending(taskID: taskID) { break loop } else { continue loop }
             }
             results.append(step)
             await onStep?(step)
             if step.stoppedForGate || !step.task.status.canExecuteTools {
-                break
+                if await coordinator.endRunUnlessPending(taskID: taskID) { break loop } else { continue loop }
             }
 
             // Stall detection — a step that changes the world or records a succeeded action is
@@ -121,15 +150,15 @@ public struct GenericHarnessRuntime: Sendable {
                 }
                 if noProgressStreak >= maxNoProgressSteps {
                     await failSafeStall(taskID: taskID, reason: "noProgress")
-                    break
+                    if await coordinator.endRunUnlessPending(taskID: taskID) { break loop } else { continue loop }
                 }
                 if identicalNoProgressStreak + 1 >= maxIdenticalRepeats {
                     await failSafeStall(taskID: taskID, reason: "stuckRepeatingCall")
-                    break
+                    if await coordinator.endRunUnlessPending(taskID: taskID) { break loop } else { continue loop }
                 }
                 if let reason = Self.repeatedFailureStallReason(after: step, threshold: maxRepeatedFailures) {
                     await failSafeStall(taskID: taskID, reason: reason)
-                    break
+                    if await coordinator.endRunUnlessPending(taskID: taskID) { break loop } else { continue loop }
                 }
             }
             lastCallSignature = signature
@@ -543,6 +572,6 @@ public struct GenericHarnessRuntime: Sendable {
         when status: HarnessTaskStatus
     ) -> Bool {
         guard call.name == "run.resume" else { return false }
-        return [.paused, .interrupted].contains(status)
+        return [.paused, .interrupted, .timedOut].contains(status)
     }
 }

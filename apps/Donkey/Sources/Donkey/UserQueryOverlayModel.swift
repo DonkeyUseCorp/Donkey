@@ -33,6 +33,10 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     private var updateChecker: any DonkeyUpdateChecking
     private let appCatalogRefreshLoop: LocalAppDynamicCatalogRefreshLoop
     private var activeTaskIDs: Set<String> = []
+    /// Resume requests made while a task's previous loop was still winding down (e.g. a quick Stop→Resume).
+    /// The resume is deferred here and fired by `handleCommandRunResult` once that loop ends, so two loops
+    /// never run on one task and the tap is never silently dropped.
+    private var pendingResumeTaskIDs: Set<String> = []
     /// Completed tasks the user has already seen surfaced in the collapsed notch. Expanding the notch
     /// acknowledges them so their colored pointers stop floating in the collapsed surface; the tasks
     /// themselves stay in the expanded list until closed.
@@ -68,7 +72,11 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         self.appCatalogRefreshLoop = LocalAppDynamicCatalogRefreshLoop(
             profileGenerator: HostedLocalAppCatalogProfileGenerator()
         )
-        let restoredTasks = Self.restoredTasks(from: taskStore.loadRecentTasks(limit: Self.notchTaskDisplayLimit))
+        let restoration = Self.restoredTasks(
+            from: taskStore.loadRecentTasks(limit: Self.notchTaskDisplayLimit),
+            now: Date()
+        )
+        let restoredTasks = restoration.tasks
         notchTasks = restoredTasks
         notchAccentIndex = restoredTasks.first.map { UserQueryAccentPalette.normalizedIndex($0.accentIndex) }
             ?? UserQueryAccentPalette.firstIndex
@@ -92,6 +100,35 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         appCatalogRefreshLoop.start()
         checkForUpdates()
         startLiveSessionIfEnabled()
+        autoResumeInterruptedTasks(restoration.autoResumeIDs)
+    }
+
+    /// Resume tasks that were actively running when the app last quit (see `restoredTasks`). Each runs as
+    /// an unattended BACKGROUND turn — the user may not be present — so it never raises an app or moves
+    /// the cursor; progress narrates into the task's own row. Fires once, at launch.
+    private func autoResumeInterruptedTasks(_ taskIDs: [String]) {
+        guard !taskIDs.isEmpty else { return }
+        for taskID in taskIDs {
+            guard let context = commandContext(taskID: taskID, isFollowUp: false, source: .followUp, spawnID: nil) else {
+                continue
+            }
+            activeTaskIDs.insert(taskID)
+            Task { [weak self, commandHandler] in
+                let result = await commandHandler.autoResumeCommand(taskID: taskID, context: context)
+                await MainActor.run {
+                    guard let self else { return }
+                    // No goal to resume, or the unattended run couldn't even start (no frontmost app,
+                    // backend off): keep the task retryable rather than failing it, so the user can resume
+                    // it later. Only a run that actually executed reports its real outcome.
+                    if result == nil || result?.metadata["harness.abortReason"] != nil {
+                        self.activeTaskIDs.remove(taskID)
+                        self.updateTask(id: taskID, detail: "Interrupted — resume", status: .timedOut)
+                        return
+                    }
+                    self.handleCommandRunResult(taskID: taskID, spawnID: nil, isFollowUp: false, result: result!)
+                }
+            }
+        }
     }
 
     /// Bring up the always-on Gemini Live session. It self-gates on configuration
@@ -479,6 +516,60 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         source: AppHarnessTurnSource = .typedPrompt,
         spawnID: String? = nil
     ) {
+        // A follow-up to a task whose loop is still running — or one blocked at a permission gate — is
+        // queued into that task: the running loop folds it in at its next step, and a gated task keeps its
+        // gate and drains the follow-up when the user approves. Either way it must NOT start a second run
+        // or clear the gate. Everything else (a brand-new command, or a follow-up to a stopped task) takes
+        // the fresh/resume path below, which runs concurrently with any other in-flight task.
+        let matchedStatus = matchedTaskID.flatMap { task(withID: $0)?.status }
+        if let matchedTaskID, matchedStatus == .running || matchedStatus == .waitingForPermission {
+            queueFollowUpIntoRunningTask(text: text, taskID: matchedTaskID, source: source, spawnID: spawnID)
+            return
+        }
+        runFreshOrResumedCommand(text: text, matchedTaskID: matchedTaskID, source: source, spawnID: spawnID)
+    }
+
+    /// Queue a follow-up onto a task whose loop is still running. The live loop picks it up at its next
+    /// step; if the loop happens to finish first, fall back to resuming the task with the instruction.
+    private func queueFollowUpIntoRunningTask(
+        text: String,
+        taskID: String,
+        source: AppHarnessTurnSource,
+        spawnID: String?
+    ) {
+        appendTaskEvent(taskID: taskID, role: .user, text: text)
+        updateSpawn(id: spawnID, taskID: taskID)
+        clearSubmissionInputs()
+        lastActiveTaskID = taskID
+        promptState.isActive = false
+        promptState.isVoiceInputActive = false
+        promptState.leadingSignalLevel = .thinking
+        promptState.promptText = task(withID: taskID)?.title ?? Self.collapsedDisplayText(for: text)
+        syncPrimaryTaskPausedFlag()
+        Task { [weak self, commandHandler] in
+            let injected = await commandHandler.injectFollowUp(taskID: taskID, text: text)
+            guard !injected else { return }
+            // Race: the loop finished between the live check and the enqueue. Resume the task with the
+            // instruction instead. The user event is already recorded, so it is not appended again.
+            await MainActor.run {
+                self?.runFreshOrResumedCommand(
+                    text: text,
+                    matchedTaskID: taskID,
+                    source: source,
+                    spawnID: spawnID,
+                    appendUserEvent: false
+                )
+            }
+        }
+    }
+
+    private func runFreshOrResumedCommand(
+        text: String,
+        matchedTaskID: String?,
+        source: AppHarnessTurnSource = .typedPrompt,
+        spawnID: String? = nil,
+        appendUserEvent: Bool = true
+    ) {
         let isFollowUp = matchedTaskID != nil
         let reservedAccentIndex = spawnID.flatMap { spawn(withID: $0)?.accentIndex }
         let task = taskForSubmittedCommand(
@@ -493,15 +584,11 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         )
         activeTaskIDs.insert(task.id)
         lastActiveTaskID = task.id
-        appendTaskEvent(taskID: task.id, role: .user, text: text)
-        messageText = ""
-        inputTextHeight = UserQueryLayout.composerInputTextMinimumHeight
-        isInputExpanded = false
-        notchCommandText = ""
-        notchCommandInputTextHeight = UserQueryLayout.composerInputTextMinimumHeight
-        isNotchCommandInputExpanded = true
+        if appendUserEvent {
+            appendTaskEvent(taskID: task.id, role: .user, text: text)
+        }
+        clearSubmissionInputs()
         promptState.isActive = false
-        promptState.isVoiceInputActive = false
         promptState.leadingSignalLevel = .thinking
         promptState.promptText = task.title
         syncPrimaryTaskPausedFlag()
@@ -551,6 +638,11 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             result: result,
             minimumFadeDelay: cursorOverlayRequest.map(Self.visualizationPlaybackDuration)
         )
+        // Honor a resume requested while this loop was still winding down (e.g. Stop→Resume): now that the
+        // loop has ended and the task left activeTaskIDs, the resume can start without racing a live loop.
+        if pendingResumeTaskIDs.remove(taskID) != nil {
+            resumeTask(id: taskID)
+        }
     }
 
     func pauseTask(id taskID: String) {
@@ -567,7 +659,16 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
 
     func resumeTask(id taskID: String) {
         guard let task = task(withID: taskID),
-              task.status == .paused || task.status == .interrupted else {
+              [.paused, .interrupted, .timedOut, .needsAttention].contains(task.status) else {
+            return
+        }
+        // Only run a task with real work behind it; an info-only row (e.g. an asset drop) has no goal, so
+        // resuming would dead-end. Such rows shouldn't offer Resume, but guard here too.
+        guard !task.commandText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        // If the task's previous loop is still winding down (e.g. just Stopped), defer the resume until it
+        // ends so two loops never run on one task; handleCommandRunResult fires the deferred resume.
+        guard !activeTaskIDs.contains(taskID) else {
+            pendingResumeTaskIDs.insert(taskID)
             return
         }
 
@@ -579,12 +680,22 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         promptState.leadingSignalLevel = .thinking
         promptState.promptText = task.title
         syncPrimaryTaskPausedFlag()
+        // Pausing or a relaunch tears the loop down, so there is no suspended loop to continue in memory:
+        // re-run the task's existing goal as a fresh loop. The persisted world model and history carry the
+        // context forward, so it continues the work rather than starting over.
+        let context = commandContext(taskID: taskID, isFollowUp: false, source: .followUp, spawnID: nil)
         Task { [weak self, commandHandler] in
-            let resumedInMemory = await commandHandler.resumeCommand(taskID: taskID)
-            guard !resumedInMemory else { return }
-
+            guard let result = await commandHandler.continueApprovedCommand(taskID: taskID, context: context) else {
+                // Nothing to resume (e.g. the harness snapshot is gone): restore a retryable row rather
+                // than leaving it stuck on the optimistic "running" with no loop behind it.
+                await MainActor.run {
+                    self?.activeTaskIDs.remove(taskID)
+                    self?.updateTask(id: taskID, detail: "Couldn’t resume — tap to retry", status: .timedOut)
+                }
+                return
+            }
             await MainActor.run {
-                self?.startCommandRun(text: "Continue", matchedTaskID: taskID)
+                self?.handleCommandRunResult(taskID: taskID, spawnID: nil, isFollowUp: false, result: result)
             }
         }
     }
@@ -902,18 +1013,16 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             .id
     }
 
+    /// Only an EXPLICIT spawn selection force-targets an existing task. A bare new prompt is never
+    /// auto-attached to the latest task just because it is the most recent — that route is what made a
+    /// new command hijack a running task. Implicit follow-up matching is left entirely to the typed
+    /// follow-up resolver, which decides against task content rather than recency.
     private func promptSubmissionFollowUpTarget() -> (spawnID: String, taskID: String)? {
-        if let selectedSpawnID,
-           let taskID = taskIDForInteractableSpawn(id: selectedSpawnID) {
-            return (selectedSpawnID, taskID)
-        }
-
-        guard let spawnID = latestInteractableSpawnID(),
-              let taskID = taskIDForInteractableSpawn(id: spawnID) else {
+        guard let selectedSpawnID,
+              let taskID = taskIDForInteractableSpawn(id: selectedSpawnID) else {
             return nil
         }
-
-        return (spawnID, taskID)
+        return (selectedSpawnID, taskID)
     }
 
     private func taskIDForInteractableSpawn(id spawnID: String) -> String? {
@@ -962,15 +1071,11 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             if let reservedAccentIndex {
                 task.accentIndex = UserQueryAccentPalette.normalizedIndex(reservedAccentIndex)
             }
-            if Self.shouldShowChangedCourseState(for: task) {
-                task.detail = "Changed course: \(Self.collapsedDisplayText(for: text))"
-                task.status = .interrupted
-                task.metadata["genericHarness.taskStatus"] = "interrupted"
-                task.metadata["genericHarness.newGoal"] = text
-            } else {
-                task.detail = Self.runningSeedDetail
-                task.status = .running
-            }
+            // A follow-up to a task whose loop is still running is queued into it upstream (it never
+            // reaches here). A matched task that reaches this point has a stopped loop, so a new turn
+            // resumes it: seed it back to running rather than restarting it under a replaced goal.
+            task.detail = Self.runningSeedDetail
+            task.status = .running
             task.updatedAt = Date()
             notchAccentIndex = UserQueryAccentPalette.normalizedIndex(task.accentIndex)
             prependTask(task)
@@ -1189,29 +1294,48 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         syncPrimaryTaskPausedFlag()
     }
 
-    private static func restoredTasks(from tasks: [UserQueryNotchTask]) -> [UserQueryNotchTask] {
-        tasks.map { task in
-            guard Self.inFlightStatusesAtLaunch.contains(task.status) else { return task }
+    /// How recently a running task must have last advanced to auto-resume itself on relaunch. Inside the
+    /// window the work was clearly in progress and should pick back up; outside it, resuming unattended
+    /// work the user likely moved on from (and spending credits while they're away) is the wrong default.
+    private static let autoResumeStalenessWindow: TimeInterval = 30 * 60
 
-            var restoredTask = task
-            restoredTask.status = .needsAttention
-            restoredTask.detail = "Interrupted"
-            restoredTask.updatedAt = Date()
-            return restoredTask
+    /// Maps persisted tasks into their post-relaunch state and collects the IDs to auto-resume. A relaunch
+    /// tears down every live loop, so an in-flight task can't simply keep running — but one that was
+    /// actively working moments ago resumes on its own, while staler or user-blocked work comes back as a
+    /// row the user can resume with a tap. The persisted `updatedAt` is preserved throughout so a row's
+    /// elapsed time stays the real run duration rather than the gap until the app was reopened.
+    static func restoredTasks(
+        from tasks: [UserQueryNotchTask],
+        now: Date
+    ) -> (tasks: [UserQueryNotchTask], autoResumeIDs: [String]) {
+        var autoResumeIDs: [String] = []
+        let restored = tasks.map { task -> UserQueryNotchTask in
+            switch task.status {
+            case .running:
+                // Actively running when the app quit. Resume on its own only if that was recent;
+                // otherwise it becomes a retryable row instead of running stale work unattended.
+                if now.timeIntervalSince(task.updatedAt) <= autoResumeStalenessWindow {
+                    autoResumeIDs.append(task.id)
+                    return task
+                }
+                var timedOut = task
+                timedOut.status = .timedOut
+                timedOut.detail = "Timed out — resume"
+                return timedOut
+            case .waitingForClarification, .waitingForReview, .waitingForPermission:
+                // Was blocked on the user; the loop that asked is gone. Surface a benign, resumable row
+                // (it needs the user to continue anyway) without raising the collapsed attention glyph.
+                var restoredTask = task
+                restoredTask.status = .needsAttention
+                restoredTask.detail = "Interrupted"
+                return restoredTask
+            default:
+                // paused, completed, failed, timedOut, interrupted, needsAttention, chatting: unchanged.
+                return task
+            }
         }
+        return (restored, autoResumeIDs)
     }
-
-    /// Statuses that imply a live harness loop. A relaunch tears that loop down, so none of these
-    /// can survive: the run is no longer in flight, nor is it actually blocked on the user for a
-    /// reply, a review, or a permission. Each is collapsed to the benign `needsAttention`, which
-    /// surfaces the task in the list without falsely raising the collapsed attention glyph (a
-    /// waiting reply/review) or permission shield for a session that has already ended.
-    private static let inFlightStatusesAtLaunch: Set<UserQueryTaskStatus> = [
-        .running,
-        .waitingForClarification,
-        .waitingForReview,
-        .waitingForPermission
-    ]
 
     private func refreshPromptStateAfterRunResult(
         taskID: String,
@@ -1276,6 +1400,8 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             return result.summary.isEmpty ? "Done" : collapsedDisplayText(for: result.summary)
         case .failed:
             return result.summary.isEmpty ? "Stopped" : collapsedDisplayText(for: result.summary)
+        case .timedOut:
+            return "Timed out — resume"
         }
     }
 
@@ -1322,22 +1448,6 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         guard !displayNames.isEmpty else { return "Uploaded assets" }
 
         return "Uploaded assets: \(displayNames)"
-    }
-
-    private static func shouldShowChangedCourseState(for task: UserQueryNotchTask) -> Bool {
-        switch task.status {
-        case .running, .interrupted:
-            return true
-        case .chatting,
-             .paused,
-             .completed,
-             .waitingForClarification,
-             .waitingForPermission,
-             .waitingForReview,
-             .needsAttention,
-             .failed:
-            return false
-        }
     }
 
     private static func persistedAsset(

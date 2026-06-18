@@ -28,6 +28,57 @@ private enum VisionGroundingLog {
     }
 }
 
+/// Serializes FOREGROUND harness runs so only one holds window focus at a time. Background runs route
+/// input by pid and never raise an app, so they parallelize freely and never touch this gate; two
+/// foreground runs, by contrast, would fight over the frontmost app, so they queue here and run their
+/// visible work one at a time (FIFO). A run still does all its planning/observation concurrently — it
+/// only waits for the token around the loop that actually drives the GUI.
+actor ForegroundFocusGate {
+    private var locked = false
+    private var waiters: [(id: Int, continuation: CheckedContinuation<Bool, Never>)] = []
+    private var nextWaiterID = 0
+
+    /// Returns true if the caller now holds the token (and must `release()`), false if it was cancelled
+    /// while waiting (and must NOT release — it never held the token).
+    func acquire() async -> Bool {
+        if !locked {
+            locked = true
+            return true
+        }
+        let id = nextWaiterID
+        nextWaiterID += 1
+        // Cancellation removes and resumes the waiter rather than leaving it parked forever; a cancelled
+        // waiter never held the token, so it returns false and `locked` (held by the active run) is
+        // untouched. Without this, release() would hand the token to a dead continuation and deadlock
+        // every later foreground run.
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                if Task.isCancelled {
+                    continuation.resume(returning: false)
+                } else {
+                    waiters.append((id, continuation))
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelWaiter(id) }
+        }
+    }
+
+    private func cancelWaiter(_ id: Int) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+        waiters.remove(at: index).continuation.resume(returning: false)
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            locked = false
+        } else {
+            // Hand the token directly to the next waiter; ownership transfers, so `locked` stays true.
+            waiters.removeFirst().continuation.resume(returning: true)
+        }
+    }
+}
+
 struct UserQueryCommandHandlingResult: Equatable, Sendable {
     var status: LocalAppTaskLiveRunStatus
     var threadStatus: UserQueryTaskStatus
@@ -78,12 +129,21 @@ protocol UserQueryCommandHandling: Sendable {
         context: UserQueryCommandContext?
     ) async -> UserQueryCommandHandlingResult
     func pauseCommand(taskID: String) async -> Bool
-    func resumeCommand(taskID: String) async -> Bool
     func approvePermissionGate(taskID: String, alwaysAllow: Bool) async -> Bool
     /// Re-run the harness loop for a task whose permission gate was just
     /// approved, so the granted command actually executes. Returns nil when the
     /// task is unknown.
     func continueApprovedCommand(
+        taskID: String,
+        context: UserQueryCommandContext?
+    ) async -> UserQueryCommandHandlingResult?
+    /// Queue a follow-up instruction onto a task whose loop is still running so it folds it in at its
+    /// next step. Returns true when the task is live (a loop will pick it up); false means the caller
+    /// should fall back to resuming the task with the instruction as a fresh turn.
+    func injectFollowUp(taskID: String, text: String) async -> Bool
+    /// Re-run a previously-interrupted task in the BACKGROUND (no focus steal), for unattended
+    /// auto-resume on relaunch. Returns nil when the task is unknown or has no goal to resume.
+    func autoResumeCommand(
         taskID: String,
         context: UserQueryCommandContext?
     ) async -> UserQueryCommandHandlingResult?
@@ -100,12 +160,26 @@ extension UserQueryCommandHandling {
     ) async -> UserQueryCommandHandlingResult? {
         nil
     }
+
+    func injectFollowUp(taskID: String, text: String) async -> Bool {
+        false
+    }
+
+    func autoResumeCommand(
+        taskID: String,
+        context: UserQueryCommandContext?
+    ) async -> UserQueryCommandHandlingResult? {
+        nil
+    }
 }
 
 struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
     var permissionPolicy: ToolCallPolicy
     var coordinatorRegistry: UserQueryRunCoordinatorRegistry
     var genericHarnessLifecycle: AppHarnessGenericLifecycle
+    /// Shared across every run (the actor is a reference, so struct copies captured into run Tasks share
+    /// one gate): only one foreground run drives the GUI at a time. See `ForegroundFocusGate`.
+    let foregroundFocusGate = ForegroundFocusGate()
 
     init(
         permissionPolicy: ToolCallPolicy = ToolCallPolicy(
@@ -199,19 +273,93 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         taskID: String,
         context: UserQueryCommandContext?
     ) async -> UserQueryCommandHandlingResult? {
+        // Interactive resume (gate approval, tap Resume): let the understanding boundary pick foreground
+        // vs. background as it would for any turn.
+        await resumeExistingTask(taskID: taskID, context: context, tracePrefix: "user-query-resume")
+    }
+
+    func injectFollowUp(taskID: String, text: String) async -> Bool {
+        guard let task = await genericHarnessLifecycle.taskState(taskID: taskID) else { return false }
+        switch task.status {
+        case .running, .resuming:
+            // A live loop drains the queue. The returned flag is authoritative — false means the loop
+            // ended in the meantime, so the caller resumes the task instead (which drains it on start).
+            return await genericHarnessLifecycle.coordinator.enqueueUserMessage(taskID: taskID, text: text)
+        case .waitingForPermission:
+            // Blocked on the user at a permission gate. Queue the follow-up WITHOUT resuming, so the gate
+            // is preserved; it drains when the user approves and the loop resumes. Report accepted so the
+            // caller does not start a competing run that would clear the pending gate.
+            _ = await genericHarnessLifecycle.coordinator.enqueueUserMessage(taskID: taskID, text: text)
+            return true
+        default:
+            // No live or gated loop (paused, timedOut, completed, failedSafe, interrupted, cancelled, or a
+            // clarification awaiting an answer): the caller resumes/answers, and that run drains the queue.
+            return false
+        }
+    }
+
+    func autoResumeCommand(
+        taskID: String,
+        context: UserQueryCommandContext?
+    ) async -> UserQueryCommandHandlingResult? {
+        // Unattended relaunch resume: force background so it never raises an app or moves the cursor.
+        await resumeExistingTask(
+            taskID: taskID,
+            context: context,
+            tracePrefix: "user-query-autoresume",
+            forcedExecutionPreference: .background
+        )
+    }
+
+    /// Task metadata keys for the drive target resolved on the first run, so a resume drives the same app.
+    static let driveTargetAppMetadataKey = "harness.driveTargetApp"
+    static let driveTargetBundleMetadataKey = "harness.driveTargetBundleID"
+
+    /// Shared resume path: re-run an existing task's persisted goal as a fresh loop (its stored world
+    /// model and history carry the work forward), pinned to the target the task resolved on its first run.
+    /// Returns nil when the task is unknown or has no goal.
+    private func resumeExistingTask(
+        taskID: String,
+        context: UserQueryCommandContext?,
+        tracePrefix: String,
+        forcedExecutionPreference: ExecutionPreference? = nil
+    ) async -> UserQueryCommandHandlingResult? {
         guard let task = await genericHarnessLifecycle.taskState(taskID: taskID),
               !task.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return nil
         }
-        let traceID = "user-query-resume-\(UUID().uuidString)"
+        var forcedDriveTarget: (appName: String, bundleIdentifier: String?)?
+        if let app = task.metadata[Self.driveTargetAppMetadataKey], !app.isEmpty {
+            let bundle = task.metadata[Self.driveTargetBundleMetadataKey]
+            forcedDriveTarget = (app, (bundle?.isEmpty == false) ? bundle : nil)
+        }
         return await runHarnessLoop(
             command: task.goal,
-            traceID: traceID,
+            traceID: "\(tracePrefix)-\(UUID().uuidString)",
             taskID: taskID,
             preparedTurnMetadata: [:],
+            forcedExecutionPreference: forcedExecutionPreference,
+            forcedDriveTarget: forcedDriveTarget,
             visualize: context?.agentVisualizationChanged,
             progress: Self.progressLabeler(context?.spawnProgressChanged)
         )
+    }
+
+    /// The single bridge from the harness's lifecycle status to the notch row's status. Exhaustive on
+    /// `HarnessTaskStatus` so a new harness case is a compile error here rather than silently collapsing
+    /// to `.failed`. `.running`/`.resuming` only appear if a run returned still-runnable (a bug); they map
+    /// to the retryable `.timedOut` so the row never looks live with no loop behind it.
+    static func userQueryStatus(forHarness status: HarnessTaskStatus?) -> UserQueryTaskStatus {
+        switch status {
+        case .completed: return .completed
+        case .paused: return .paused
+        case .timedOut: return .timedOut
+        case .interrupted: return .interrupted
+        case .waitingForUser: return .waitingForClarification
+        case .waitingForPermission: return .waitingForPermission
+        case .failedSafe, .cancelled: return .failed
+        case .running, .resuming, .none: return .timedOut
+        }
     }
 
     /// Adapt the spawn-progress callback into a plain narration sink the run
@@ -229,13 +377,6 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         await genericHarnessLifecycle.pauseTask(
             taskID: taskID,
             reason: "User query paused task"
-        ) != nil
-    }
-
-    func resumeCommand(taskID: String) async -> Bool {
-        await genericHarnessLifecycle.resumeTask(
-            taskID: taskID,
-            reason: "User query resumed task"
         ) != nil
     }
 
@@ -262,6 +403,8 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         traceID: String,
         taskID: String,
         preparedTurnMetadata: [String: String],
+        forcedExecutionPreference: ExecutionPreference? = nil,
+        forcedDriveTarget: (appName: String, bundleIdentifier: String?)? = nil,
         visualize: (@MainActor @Sendable (AgentVisualizationPlan) -> Void)? = nil,
         progress: (@MainActor @Sendable (String) -> Void)? = nil
     ) async -> UserQueryCommandHandlingResult {
@@ -276,7 +419,11 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 preparedTurnMetadata: preparedTurnMetadata
             )
         }
-        guard let target = MacWindowResolver().frontmostUserAppTarget() else {
+        // A resume pins the task's original target, so it can drive that app even when it (or nothing) is
+        // frontmost — which is the common case right after a relaunch. A fresh turn with no frontmost app
+        // and no pinned target still has nothing to drive, so it fails cleanly.
+        let frontmost = MacWindowResolver().frontmostUserAppTarget()
+        guard forcedDriveTarget != nil || frontmost != nil else {
             return await failHarnessRun(
                 command: command,
                 response: "I couldn't find a frontmost app window to navigate. Focus the app you want, then type your request.",
@@ -287,8 +434,8 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 preparedTurnMetadata: preparedTurnMetadata
             )
         }
-        let frontmostAppName = target.appName ?? "the frontmost app"
-        let frontmostBundleIdentifier = target.bundleIdentifier
+        let frontmostAppName = frontmost?.appName ?? forcedDriveTarget?.appName ?? "the frontmost app"
+        let frontmostBundleIdentifier = frontmost?.bundleIdentifier ?? forcedDriveTarget?.bundleIdentifier
 
         guard let configuration = try? DonkeyBackendInferenceConfiguration.fromEnvironment() else {
             return await failHarnessRun(
@@ -331,14 +478,25 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
 
         // Drive the understood target app whenever it names a running or installed app; else the
         // frontmost app. An installed-but-not-running target stays pinned by name — the see/act tools
-        // re-resolve its window each call, so it works as soon as the planner launches it.
-        let driveTarget = Self.resolveDriveTarget(
-            understanding: understanding,
-            frontmostAppName: frontmostAppName,
-            frontmostBundleIdentifier: frontmostBundleIdentifier
-        )
+        // re-resolve its window each call, so it works as soon as the planner launches it. A resume pins
+        // the task's original target so the work continues against the right app, not whatever is in front.
+        let driveTarget: (appName: String, bundleIdentifier: String?)
+        if let forcedDriveTarget {
+            driveTarget = (forcedDriveTarget.appName, forcedDriveTarget.bundleIdentifier)
+        } else {
+            driveTarget = Self.resolveDriveTarget(
+                understanding: understanding,
+                frontmostAppName: frontmostAppName,
+                frontmostBundleIdentifier: frontmostBundleIdentifier
+            )
+        }
         let appName = driveTarget.appName
         let bundleIdentifier = driveTarget.bundleIdentifier
+        // Pin the resolved target on the task so a later resume drives the same app (see forcedDriveTarget).
+        await genericHarnessLifecycle.coordinator.recordMetadata(taskID: taskID, [
+            Self.driveTargetAppMetadataKey: appName,
+            Self.driveTargetBundleMetadataKey: bundleIdentifier ?? ""
+        ])
 
         let appGuidance = BuiltInLocalAppSkillPacks.appOperatingGuidance(
             forApp: appName,
@@ -393,7 +551,9 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // boundary flips this to foreground only when the turn's point is for the user to watch. When
         // understanding is unavailable we still default to background (each lane degrades to foreground on
         // its own when an action can't be delivered that way).
-        let executionPreference = understanding?.executionPreference ?? .background
+        // An unattended auto-resume forces background so it never raises an app or moves the cursor while
+        // the user is away; an interactive turn lets the understanding boundary decide.
+        let executionPreference = forcedExecutionPreference ?? understanding?.executionPreference ?? .background
         let axProvider = AXComputerUseToolProvider(
             appName: appName,
             bundleIdentifier: bundleIdentifier,
@@ -496,7 +656,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // background actions already report no screen point, so they produce no cursor plan; this also
         // covers background coordinate/scroll/drag posts, which move no real pointer.) The overlay never
         // drives real input either way — realPointerMoved stays false.
-        let suppressBackgroundCursorPlayback = (understanding?.executionPreference ?? .background) == .background
+        let suppressBackgroundCursorPlayback = executionPreference == .background
 
         // Always set onStep so every turn is recorded; the overlay narration/cursor is layered on top
         // when a UI is attached.
@@ -560,7 +720,15 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         }
         // Step budget is progress-based, not a fixed count: the runtime keeps going while the task
         // advances and stops fast when it stalls or loops, so a long legitimate task isn't cut off.
+        // A foreground run waits its turn for window focus so concurrent foreground turns don't fight
+        // over the frontmost app; background runs route by pid and never take the gate.
+        let holdsForegroundFocus = executionPreference == .foreground
+            ? await foregroundFocusGate.acquire()
+            : false
         let runSteps = await runtime.run(taskID: taskID, planner: planner, onStep: onStep)
+        if holdsForegroundFocus {
+            await foregroundFocusGate.release()
+        }
         VisionWarmCacheActivity.shared.resume()
 
         let finalTask = await genericHarnessLifecycle.coordinator.task(id: taskID)
@@ -571,7 +739,9 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         let outcomeReason = completed ? "ok"
             : (awaitingUser ? "awaitingUser"
             : (awaitingPermission ? "awaitingPermission"
-            : (finalStatus == .failedSafe ? "failedSafe" : "maxStepsReached")))
+            : (finalStatus == .failedSafe ? "failedSafe"
+            : (finalStatus == .timedOut ? "timedOut"
+            : (finalStatus == .paused ? "paused" : "stopped")))))
         let turns = runSteps.count
         let anyTurnUsedCache = runSteps.contains { $0.toolResult?.metadata["usedCache"] == "true" }
         let totalParseMS = runSteps.reduce(0.0) { $0 + ($1.toolResult?.metadata["parseMS"].flatMap(Double.init) ?? 0) }
@@ -716,9 +886,18 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             traceID: traceID,
             metadata: ["structuredDecision": "true", "router": "harness", "harness.completed": String(completed)]
         )
+        // The runtime sets the task's terminal status authoritatively (run.complete, a stall fail-safe,
+        // the step-ceiling timeout, a user pause, or a gate), so the row status maps straight from it.
+        // Defensive only: if a run somehow returned still-runnable, mark it timed out (retryable) rather
+        // than leaving a row that looks live with no loop behind it.
+        await genericHarnessLifecycle.coordinator.timeOutIfRunnable(
+            taskID: taskID,
+            reason: "User query harness run returned without a terminal status"
+        )
+        let threadStatus = Self.userQueryStatus(forHarness: finalStatus)
         let result = UserQueryCommandHandlingResult(
             status: completed ? .completed : .failedSafe,
-            threadStatus: completed ? .completed : .failed,
+            threadStatus: threadStatus,
             decision: decision,
             summary: response,
             traceID: traceID,
@@ -726,19 +905,6 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 "appHarness.decision": AppHarnessDecisionKind.respond.rawValue
             ]) { _, new in new }
         )
-        // The planner ends the run via run.complete/run.failSafe, so the task status is usually already
-        // terminal; finalize defensively for the maxSteps-reached case.
-        if completed {
-            _ = await genericHarnessLifecycle.coordinator.complete(
-                taskID: taskID,
-                reason: "User query harness run completed"
-            )
-        } else {
-            _ = await genericHarnessLifecycle.coordinator.failSafe(
-                taskID: taskID,
-                reason: "User query harness run did not confirm completion"
-            )
-        }
         await coordinatorRegistry.finish(taskID: taskID)
         logHandlingResult(
             result,

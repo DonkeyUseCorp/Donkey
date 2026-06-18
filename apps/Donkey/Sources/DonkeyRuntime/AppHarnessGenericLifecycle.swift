@@ -234,12 +234,14 @@ public struct AppHarnessGenericLifecycle: Sendable {
                 response: response
             )
         } else if context.turn?.isFollowUp == true {
-            _ = await coordinator.interrupt(
-                taskID: taskID,
-                newGoal: goal,
-                turn: context.turn,
-                reason: "User query follow-up changed course"
-            )
+            // A follow-up to a task whose loop already stopped (a live loop picks the message up directly
+            // and never reaches here): queue the instruction so the resumed loop folds it in, and resume.
+            // The original goal is preserved — the follow-up amends the work rather than replacing it,
+            // the deliberate opposite of the old interrupt-and-restart behavior.
+            if let followUpText = context.turn?.text,
+               !followUpText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                _ = await coordinator.enqueueUserMessage(taskID: taskID, text: followUpText)
+            }
             _ = await coordinator.resume(
                 taskID: taskID,
                 reason: "User query follow-up resumed task"

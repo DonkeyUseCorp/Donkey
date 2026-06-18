@@ -276,7 +276,7 @@ public actor InMemoryHarnessThreadStore: HarnessThreadStoring {
     }
 
     private static func isActiveTask(_ task: HarnessTaskState) -> Bool {
-        [.running, .paused, .waitingForUser, .waitingForPermission, .interrupted, .resuming].contains(task.status)
+        [.running, .paused, .waitingForUser, .waitingForPermission, .interrupted, .resuming, .timedOut].contains(task.status)
     }
 
     private func updateActiveTaskIDs(for task: HarnessTaskState) {
@@ -451,7 +451,7 @@ public actor FileHarnessThreadStore: HarnessThreadStoring {
     }
 
     private static func isActiveTask(_ task: HarnessTaskState) -> Bool {
-        [.running, .paused, .waitingForUser, .waitingForPermission, .interrupted, .resuming].contains(task.status)
+        [.running, .paused, .waitingForUser, .waitingForPermission, .interrupted, .resuming, .timedOut].contains(task.status)
     }
 
     private func updateActiveTaskIDs(for task: HarnessTaskState) {
@@ -654,7 +654,7 @@ public struct HarnessThreadCompactor: Sendable {
     ) -> [HarnessTaskState] {
         let selected = tasks.filter { task in
             guard policy.preserveWaitingState else { return true }
-            return [.running, .paused, .waitingForUser, .waitingForPermission, .interrupted, .resuming].contains(task.status)
+            return [.running, .paused, .waitingForUser, .waitingForPermission, .interrupted, .resuming, .timedOut].contains(task.status)
         }
         records.append(
             AppHarnessContextCompactionRecord(
