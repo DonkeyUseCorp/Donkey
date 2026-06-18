@@ -41,13 +41,14 @@ public enum UserQueryLayout {
     // The notch follow-up box starts as a single line and grows with its text. Send button sits
     // in the bottom-right corner of the same box (no separate toolbar row), mirroring the prototype.
     public static let followUpComposerCornerRadius: CGFloat = 14
-    public static let followUpComposerSendButtonSize: CGFloat = 32
+    public static let followUpComposerSendButtonSize: CGFloat = 28
     public static let followUpComposerLeadingPadding: CGFloat = 20
     /// Right inset large enough to keep wrapped text clear of the corner send button.
-    public static let followUpComposerTrailingPadding: CGFloat = 48
-    public static let followUpComposerVerticalInset: CGFloat = 12
-    /// One-line resting height: tall enough to seat the corner send button (12 + 32 + 12).
-    public static let followUpComposerMinimumHeight: CGFloat = 56
+    public static let followUpComposerTrailingPadding: CGFloat = 44
+    public static let followUpComposerVerticalInset: CGFloat = 6
+    /// One-line resting height: a compact single-line bar that seats the corner send button (6 + 28 + 6),
+    /// matching the thin iMessage-style input.
+    public static let followUpComposerMinimumHeight: CGFloat = 40
 
     public static var followUpComposerTextWidth: CGFloat {
         composerInputSurfaceWidth - followUpComposerLeadingPadding - followUpComposerTrailingPadding
