@@ -49,7 +49,7 @@ The chin is the strip that drops below the real notch while a task is streaming.
 
 ## Streaming and the Queue
 
-Tasks form a queue, and the collapsed notch narrates that queue one update at a time.
+Tasks run in parallel — several can be working at once — and the collapsed notch narrates them one update at a time. A new request that continues a task already running is folded into that task instead of starting another; an unrelated request starts a new task that runs alongside.
 
 1. **New tasks join the front.** Submitting from either input prepends a running task so it is visible first.
 2. **Running tasks stream updates.** Every couple of seconds the chin advances to the next running task's latest update.
@@ -66,7 +66,7 @@ Two inputs add to the same queue: the centered composer summoned by double-tappi
 
 ## Task States
 
-A task is always in one of three states, and the available controls follow from the state. A running task finishes on its own after about three minutes.
+A task is always in one of three states, and the available controls follow from the state.
 
 | State | Pointer | Controls | Clock |
 | --- | --- | --- | --- |
@@ -75,6 +75,10 @@ A task is always in one of three states, and the available controls follow from 
 | Done | Silhouette | Close | Frozen |
 
 **Stop is a pause.** Stopping freezes the clock and keeps the task in the list; resume returns it to running. Close removes the task. A done task cannot resume — it can only be closed.
+
+**Stopped covers more than a pause.** A task also lands here when it runs long enough to hit its step ceiling (it reads as *timed out*) or when the app quits mid-run. All of these keep the task and its progress, so Resume picks the work back up — resuming re-runs the original goal with the work so far carried forward, not from scratch.
+
+**Relaunch.** Reopening the app does not strand in-progress work. A task that was actively running moments before the app closed resumes on its own in the background. One that was interrupted longer ago, timed out, or was waiting on you comes back as a stopped row you resume with a tap.
 
 ## Notifications
 

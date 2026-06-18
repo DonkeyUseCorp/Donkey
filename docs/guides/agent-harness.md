@@ -57,10 +57,15 @@ Every task carries its own durable state:
 - plan, tool history, and pending continuation
 - granted permissions
 - lifecycle status (running, paused, `waitingForUser`, `waitingForPermission`,
-  interrupted, resuming, completed, failed-safe, cancelled)
+  interrupted, resuming, completed, failed-safe, timed-out, cancelled)
 
 State is task-local. Pausing, clarifying, gating, interrupting, or cancelling
-one task never touches another.
+one task never touches another — and because each task runs its own loop, several
+tasks make progress side by side. A new request that continues a task already
+running is folded into that task's loop and picked up at its next step rather
+than restarting it; an unrelated request starts a new task that runs alongside.
+A task whose loop is torn down before it finishes (it hit the step ceiling, or
+the app quit mid-run) is left retryable, not failed.
 
 Storage keeps decisions inspectable:
 

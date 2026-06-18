@@ -12,6 +12,39 @@ proposes an action and protected code carries it out, and a step counts as done
 only once something checks that it worked. Anything that needs a brand-new rule
 of its own does not belong here.
 
+## Task Lifecycle After the First Turn
+
+A task is not over when its first run stops, and a running task is not sealed off
+from further input. Three mechanics keep the lifecycle honest.
+
+**Follow-up injection.** When the user sends a request while a task's loop is
+still running, the request is queued onto that task. The loop drains the queue at
+the top of each step and folds the text into the task's world model, so the next
+planning step incorporates it. The goal and the work so far are untouched — the
+agent keeps going with one more instruction, the way a queued message works in a
+chat. This is deliberately the opposite of changing course, which would replace
+the goal and re-plan; a follow-up only ever reaches a stopped task that way.
+Whether a request is a follow-up to a specific task is decided by the typed
+follow-up boundary, never by matching the text itself.
+
+**Concurrency.** Each task runs its own loop, and a loop releases control on every
+await it makes for the model or a tool, so several tasks advance together. Two
+unrelated requests become two tasks running at once rather than one stealing the
+other. Background turns — the default — drive their target by process id without
+raising an app or taking the cursor, so they never contend; only a foreground
+turn needs the visible screen, and foreground turns take a single focus token in
+turn so two of them never fight over the front window.
+
+**Resuming and timing out.** Pausing a task, or quitting the app, tears its loop
+down; there is no suspended loop to pick back up, so resuming re-runs the task's
+existing goal as a fresh loop. The stored world model and history carry the
+context forward, so it continues rather than starting over. A run that stops
+without finishing — it hit the step ceiling, or the app quit under it — is marked
+timed out rather than failed, because the goal still stands; the user can resume
+it. On relaunch, a task that was actively running moments earlier resumes on its
+own in the background; one interrupted longer ago, or one that was waiting on the
+user, comes back as a row the user resumes with a tap.
+
 ## Working With Files
 
 File work splits into two parts. Understanding a file — figuring out what is
