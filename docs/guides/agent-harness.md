@@ -159,7 +159,8 @@ Core tool families: conversation, clarification, permission requests, memory,
 skills, app lookup, observation, UI element actions, text/keyboard input,
 pointer input (scroll, drag, click variants), waiting, shell commands,
 AppleScript generation and execution, file understanding and file asks,
-verification, learning, and lifecycle control.
+text/web and generative image model calls, verification, learning, and
+lifecycle control.
 
 ## Shell First, GUI Second
 
