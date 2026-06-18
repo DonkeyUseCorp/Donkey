@@ -9,6 +9,7 @@ Bundled in `donkey-tools/` (built by `scripts/fetch-bundled-tools.sh`).
 | yt-dlp | Unlicense | |
 | qpdf | Apache-2.0 | |
 | exiftool | Perl Artistic / GPL-1.0+ | runs via system `/usr/bin/perl` |
+| pdf-fill | first-party | native PDFKit form-fill/overlay (`tools/pdf-fill/`); Apple system frameworks only, no third-party deps |
 
 Not bundled — used only if the user already has them installed:
 - **pandoc** (GPL-3.0): macOS `textutil` covers the common office conversions.

@@ -113,6 +113,21 @@ build_liteparse() {
   ok "lit"
 }
 
+# Build the `pdf-fill` CLI from the in-repo Swift source (tools/pdf-fill/main.swift).
+# It links only Apple system frameworks (PDFKit/Quartz), so the result is a single
+# self-contained binary — no dylib bundling. MANDATORY: it is the pdf skill's
+# headless form-fill/overlay path (litparse reads PDFs; this writes them).
+build_pdf_fill() {
+  command -v swiftc >/dev/null 2>&1 || { echo "FATAL: swiftc unavailable for pdf-fill build" >&2; exit 1; }
+  if ! swiftc -O "$ROOT_DIR/tools/pdf-fill/main.swift" -o "$VENDOR_DIR/pdf-fill" 2>/tmp/pdf-fill-build.log; then
+    echo "FATAL: pdf-fill build failed; tail of /tmp/pdf-fill-build.log:" >&2
+    tail -25 /tmp/pdf-fill-build.log >&2
+    exit 1
+  fi
+  chmod +x "$VENDOR_DIR/pdf-fill"
+  ok "pdf-fill"
+}
+
 log "Ensuring dylibbundler"
 command -v dylibbundler >/dev/null 2>&1 || brew install dylibbundler >/dev/null 2>&1
 
@@ -121,6 +136,9 @@ build_lgpl_ffmpeg
 
 # --- liteparse `lit`: mandatory, built from source (self-contained, includes OCR) ---
 build_liteparse
+
+# --- pdf-fill: mandatory, built from in-repo Swift source (native PDFKit, no deps) ---
+build_pdf_fill
 
 # --- qpdf (Homebrew) ---
 if ensure_brew_tool qpdf qpdf; then
