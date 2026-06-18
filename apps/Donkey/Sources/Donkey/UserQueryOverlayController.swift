@@ -779,10 +779,10 @@ final class UserQueryOverlayController {
         if isExpanded {
             guard statusHoverPhase != .expanded else { return }
 
-            // Mouse enter: open the window as fast as possible, with no animation, then animate the
-            // content in. The host jumps to its expanded size inside updateStatusPanelView and the
-            // black surface follows it instantly; only the expanded content animates, off the
-            // `isStatusExpanded` change. No two-phase spring, so nothing to race.
+            // Mouse enter: jump the host window to its expanded size instantly (no animation) so there
+            // is room, then let the visible black surface grow into it. The host resize happens inside
+            // updateStatusPanelView; the surface size, corner radius, and content all animate off the
+            // `isStatusExpanded` change in SwiftUI. The host is already full size, so nothing races.
             statusHoverPhase = .expanded
             isStatusHostExpanded = true
             isStatusExpanded = true
@@ -802,9 +802,9 @@ final class UserQueryOverlayController {
         }
 
         if isStatusExpanded {
-            // Mouse exit is the reverse: animate the content out first. The host stays expanded so
-            // the window keeps its size; it collapses instantly once the content has gone, when the
-            // host shrink fires below.
+            // Mouse exit is the reverse: collapse the surface (and fade the content out) first. The
+            // host stays expanded so it keeps containing the shrinking surface; it snaps to the notch
+            // size once the surface has finished collapsing, when the host shrink fires below.
             isStatusExpanded = false
             updateStatusPanelView()
         }
@@ -846,9 +846,9 @@ final class UserQueryOverlayController {
         // The host uses `sizingOptions = []` (see makeStatusPanel) to keep its SwiftUI content
         // from re-driving the window size. A side effect is that assigning `rootView` no longer
         // invalidates the hosting view's AppKit layout, so `layoutSubtreeIfNeeded()` alone won't
-        // flush the pending SwiftUI render. The two-phase open depends on the collapsed render
-        // committing *before* `isStatusExpanded` flips — otherwise the two passes coalesce and the
-        // notch snaps open instead of springing. Mark the host dirty so the flush forces it through.
+        // flush the pending SwiftUI render. The surface grow animation needs the collapsed render
+        // committed before `isStatusExpanded` flips, so it animates from the notch rather than
+        // snapping open. Mark the host dirty so the flush forces it through.
         statusHostingView?.needsLayout = true
         statusHostingView?.needsDisplay = true
         flushPanelLayout(statusPanel)

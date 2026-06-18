@@ -97,7 +97,7 @@ public struct UserQueryNotchStatusView: View {
     public var body: some View {
         GeometryReader { proxy in
             animatedNotchSurface
-                // Pin the top edge to the host's top center for every spring frame.
+                // Pin the top edge to the host's top center for every animation frame.
                 // Alignment-based layout occasionally reused a stale host geometry
                 // after quick hover enter/exit, making expansion appear to start
                 // from the bottom-right instead of from the physical notch.
@@ -105,6 +105,11 @@ public struct UserQueryNotchStatusView: View {
                     x: proxy.size.width / 2,
                     y: animatingSurfaceHeight / 2
                 )
+                // The host window opens/closes instantly; the visible black surface grows
+                // (or collapses) inside it. This animates the surface size, corner radius,
+                // shadow, and top-pinned position off the `isExpanded` change. Content
+                // opacity keeps its own faster fade below, which wins for that subtree.
+                .animation(surfaceAnimation, value: isExpanded)
         }
         .frame(width: surfaceWidth, height: surfaceHeight)
         .clipped()
@@ -116,9 +121,10 @@ public struct UserQueryNotchStatusView: View {
             Color.black
 
             collapsedContentLayer
-                // The collapsed chrome belongs to the closed window; it appears/disappears with the
-                // window itself (instant), not with the animated content.
-                .opacity(isHostExpanded ? 0 : 1)
+                // The collapsed chrome fades out as the surface grows open and fades back in as it
+                // collapses, so it cross-dissolves with the expanded content rather than popping.
+                .opacity(isExpanded ? 0 : 1)
+                .animation(Self.collapsedChromeAnimation, value: isExpanded)
 
             expandedContent
                 .opacity(isExpanded ? 1 : 0)
@@ -143,13 +149,14 @@ public struct UserQueryNotchStatusView: View {
         .frame(width: animatingSurfaceWidth, height: animatingSurfaceHeight, alignment: .top)
         .clipShape(notchSurfaceShape(cornerRadius: animatingSurfaceCornerRadius))
         .shadow(
-            color: Color.black.opacity(isHostExpanded ? 0.5 : 0),
-            radius: isHostExpanded ? 24 : 0,
+            color: Color.black.opacity(isExpanded ? 0.5 : 0),
+            radius: isExpanded ? 24 : 0,
             x: 0,
-            y: isHostExpanded ? 12 : 0
+            y: isExpanded ? 12 : 0
         )
-        // The window (black surface) snaps to its host size with no animation; only the content
-        // inside animates. This is the whole interaction: open the window instantly, animate content.
+        // The host window opens instantly to make room; this black surface grows/collapses inside
+        // it, animated off `isExpanded` by the body's surfaceAnimation. The host follows a beat
+        // later on close (see closeAnimationDuration), once the surface has finished collapsing.
         .contentShape(Rectangle())
         .onDrop(
             of: [UTType.fileURL],
@@ -173,14 +180,14 @@ public struct UserQueryNotchStatusView: View {
 
     private var regularCollapsedContent: some View {
         collapsedContent
-            .frame(width: animatingSurfaceWidth, height: animatingSurfaceHeight, alignment: .top)
+            .frame(width: collapsedSurfaceWidth, height: collapsedSurfaceHeight, alignment: .top)
     }
 
     private var restingCollapsedContent: some View {
         DonkeyCursorMark(color: accentColor, silhouette: true)
             .frame(width: 14, height: 14)
             .padding(.leading, 10)
-            .frame(width: animatingSurfaceWidth, height: animatingSurfaceHeight, alignment: .leading)
+            .frame(width: collapsedSurfaceWidth, height: collapsedSurfaceHeight, alignment: .leading)
     }
 
     /// The leading-lane pointer(s). A single surfaced task shows one colored pointer; several surfaced
@@ -229,15 +236,25 @@ public struct UserQueryNotchStatusView: View {
         animatingSurfaceFrame.height
     }
 
-    /// The visible black surface fills the host window, which is resized instantly on open/close.
-    /// It is no longer animated — the spring lived here and is gone; only the content animates.
-    /// Collapsed chrome only renders while the host is collapsed, so this stays the collapsed size then.
+    /// The visible black surface. The host window jumps to its expanded size instantly (so there is
+    /// always room), and this surface grows from the collapsed notch to the expanded frame inside it,
+    /// animated off `isExpanded`. On collapse it shrinks back first, then the host follows.
     private var animatingSurfaceFrame: CGRect {
-        CGRect(x: 0, y: 0, width: surfaceWidth, height: surfaceHeight)
+        isExpanded ? layout.expandedSurfaceFrame : layout.collapsedSurfaceFrame
     }
 
     private var animatingSurfaceCornerRadius: CGFloat {
-        isHostExpanded ? layout.expandedCornerRadius : layout.collapsedCornerRadius
+        isExpanded ? layout.expandedCornerRadius : layout.collapsedCornerRadius
+    }
+
+    /// The collapsed surface size, used to lay out the collapsed chrome at a fixed size so it does not
+    /// stretch with the growing surface while it cross-dissolves out.
+    private var collapsedSurfaceWidth: CGFloat {
+        layout.collapsedSurfaceFrame.width
+    }
+
+    private var collapsedSurfaceHeight: CGFloat {
+        layout.collapsedSurfaceFrame.height
     }
 
     private var collapsedContent: some View {
@@ -268,8 +285,8 @@ public struct UserQueryNotchStatusView: View {
         }
         .padding(.horizontal, max(10, layout.contentHorizontalInset))
         .frame(
-            width: animatingSurfaceWidth,
-            height: animatingSurfaceHeight,
+            width: collapsedSurfaceWidth,
+            height: collapsedSurfaceHeight,
             alignment: .center
         )
     }
@@ -293,13 +310,13 @@ public struct UserQueryNotchStatusView: View {
                         .foregroundStyle(Color.white.opacity(0.72))
                         .lineLimit(1)
                         .truncationMode(.tail)
-                        .frame(width: max(0, animatingSurfaceWidth - 24), alignment: .leading)
-                        .position(x: animatingSurfaceWidth / 2, y: layout.collapsedVisibleHeight + layout.chinHeight / 2)
+                        .frame(width: max(0, collapsedSurfaceWidth - 24), alignment: .leading)
+                        .position(x: collapsedSurfaceWidth / 2, y: layout.collapsedVisibleHeight + layout.chinHeight / 2)
                 }
             }
             .frame(
-                width: animatingSurfaceWidth,
-                height: animatingSurfaceHeight,
+                width: collapsedSurfaceWidth,
+                height: collapsedSurfaceHeight,
                 alignment: .center
             )
         }
@@ -499,7 +516,7 @@ public struct UserQueryNotchStatusView: View {
     }
 
     private var collapsedSideLaneWidth: CGFloat {
-        max(0, (animatingSurfaceWidth - layout.voidWidth) / 2)
+        max(0, (collapsedSurfaceWidth - layout.voidWidth) / 2)
     }
 
     private var collapsedLeadingLaneCenterX: CGFloat {
@@ -507,7 +524,7 @@ public struct UserQueryNotchStatusView: View {
     }
 
     private var collapsedTrailingLaneCenterX: CGFloat {
-        animatingSurfaceWidth - collapsedSideLaneWidth / 2
+        collapsedSurfaceWidth - collapsedSideLaneWidth / 2
     }
 
     private var currentTaskRow: some View {
@@ -1013,9 +1030,26 @@ public struct UserQueryNotchStatusView: View {
         layout.cornerRadius
     }
 
-    // The window opens/closes instantly; only the content animates. These drive the content fade in
-    // and out — the surface (window) itself is no longer animated.
-    private static let expandedContentAnimation = Animation.easeOut(duration: 0.3)
+    /// The surface curve, chosen per direction: opening springs out (like the prototype's
+    /// cubic-bezier(0.2,0.9,0.24,1)); closing eases shut a touch faster. The host window shrink on
+    /// close (closeAnimationDuration) is timed to land just after the close curve settles.
+    private var surfaceAnimation: Animation {
+        isExpanded ? Self.surfaceOpenAnimation : Self.surfaceCloseAnimation
+    }
+
+    // Open grows the surface on the prototype's exact curve (cubic-bezier(0.2,0.9,0.24,1) over 550ms),
+    // a decelerating ease with no overshoot. Close eases shut on the faster 220ms curve the prototype's
+    // outer clip uses, which is what perceptually drives the collapse; the host shrink
+    // (closeAnimationDuration) is timed to land just after it.
+    private static let surfaceOpenAnimation = Animation.timingCurve(0.2, 0.9, 0.24, 1, duration: 0.55)
+    private static let surfaceCloseAnimation = Animation.easeOut(duration: 0.22)
+    /// The collapsed chrome cross-dissolves as the surface grows/collapses (prototype: 150ms).
+    private static let collapsedChromeAnimation = Animation.easeOut(duration: 0.15)
+
+    // The content fades in 150ms after the surface starts growing (prototype: `opacity 300ms ease-out
+    // 150ms`) so the box opens first and the rows then appear, and out fast on close. These win over
+    // the surface curve for the content subtree because they are attached closer to the leaf.
+    private static let expandedContentAnimation = Animation.easeOut(duration: 0.3).delay(0.15)
     private static let expandedContentDismissAnimation = Animation.easeOut(duration: 0.1)
     private static let contentInset: CGFloat = 14
     private static let taskListCommandSpacing: CGFloat = 8

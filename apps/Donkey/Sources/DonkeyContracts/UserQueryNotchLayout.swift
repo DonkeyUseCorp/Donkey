@@ -71,10 +71,10 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
     public static let expandedTaskContentHeight: CGFloat = 280
     public static let inputHorizontalMargin: CGFloat = 14
     public static let compactCommandContentVerticalPadding: CGFloat = 30
-    /// How long the open window lingers after the content has animated out, before it closes
-    /// instantly. Just past the content-dismiss fade so the window holds its size until the content
-    /// is gone, then snaps shut.
-    public static let closeAnimationDuration: TimeInterval = 0.12
+    /// How long the open host window lingers after the surface starts collapsing, before it snaps to
+    /// the notch size. Timed just past the surface close animation (0.22s) so the host always stays
+    /// large enough to contain the still-shrinking surface, then closes once it has reached the notch.
+    public static let closeAnimationDuration: TimeInterval = 0.26
 
     public var voidWidth: CGFloat
     public var voidHeight: CGFloat
