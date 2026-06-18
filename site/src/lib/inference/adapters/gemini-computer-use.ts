@@ -316,6 +316,15 @@ function partFromValue(value: JsonValue): JsonObject {
     return imagePart(value);
   }
 
+  if (
+    value.type === "input_audio" ||
+    value.type === "audio" ||
+    value.type === "input_video" ||
+    value.type === "video"
+  ) {
+    return mediaPart(value);
+  }
+
   const text = stringValue(value.text);
   if (text) {
     return { text };
@@ -354,6 +363,56 @@ function imagePart(value: JsonObject): JsonObject {
   }
 
   return { text: JSON.stringify(value) };
+}
+
+// Audio/video content part. Mirrors imagePart: inline base64 becomes inlineData; a URI becomes
+// fileData. On Vertex, fileData.fileUri must be a gs:// Cloud Storage URI (or, for video, a YouTube
+// URL) — a plain https object URL is rejected by Vertex at request time. The gs:// form backs the
+// staged long-media path. Vertex reads audio and video the same way it reads images.
+function mediaPart(value: JsonObject): JsonObject {
+  const isVideo = value.type === "input_video" || value.type === "video";
+  const mimeType =
+    stringValue(value.mime_type) ||
+    stringValue(value.mimeType) ||
+    (isVideo ? "video/mp4" : "audio/mpeg");
+  const base64 =
+    stringValue(value.dataBase64) ||
+    stringValue(value.data_base64) ||
+    stringValue(value.audio_base64) ||
+    stringValue(value.video_base64);
+  if (base64) {
+    return {
+      inlineData: {
+        mimeType,
+        data: base64,
+      },
+    };
+  }
+
+  const fileURI =
+    stringValue(value.fileUri) ||
+    stringValue(value.file_uri) ||
+    stringValue(value.url);
+  if (fileURI?.startsWith("data:")) {
+    const inline = dataURLToInlineData(fileURI);
+    if (inline) {
+      return inline;
+    }
+  }
+
+  if (fileURI) {
+    return {
+      fileData: {
+        mimeType,
+        fileUri: fileURI,
+      },
+    };
+  }
+
+  // A media part with no recognized base64 or URI key: emit a short marker rather than
+  // JSON.stringify(value), which would inline a multi-megabyte base64 blob under an unexpected key
+  // as prompt text and blow the token budget.
+  return { text: "[unsupported media part: no inline data or file URI]" };
 }
 
 function functionResponsePart(value: JsonObject): JsonObject {

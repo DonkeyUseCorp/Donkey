@@ -82,6 +82,9 @@ final class GeminiLiveVoiceController {
             let backend = DonkeyBackendInferenceClient(configuration: backendConfiguration)
             let textGenerator = HostedTextGenerator(backend: backend)
             services.textGenerator = { await textGenerator.generate($0) }
+            services.mediaGenerator = { prompt, fileURL, mimeType in
+                await textGenerator.generate(prompt, attachmentPath: fileURL, mimeType: mimeType)
+            }
             // Web research goes through the backend on the service-account credential: search uses
             // Google Search grounding; fetch returns the page as clean markdown (boilerplate stripped).
             let hostedWebSearch = HostedWebSearch(backend: backend)

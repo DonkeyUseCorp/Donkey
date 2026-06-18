@@ -247,6 +247,119 @@ struct GenericHarnessTests {
     }
 
     @Test
+    func llmGenerateRoutesToTheMediaBoundaryWhenGivenAFilePath() async throws {
+        let audio = FileManager.default.temporaryDirectory
+            .appendingPathComponent("donkey-media-test-\(UUID().uuidString).mp3")
+        try Data([0x00, 0x01, 0x02]).write(to: audio)
+        defer { try? FileManager.default.removeItem(at: audio) }
+
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(
+                // Fails if the text path is taken by mistake.
+                textGenerator: { _ in "TEXT PATH" },
+                mediaGenerator: { prompt, file, mimeType in
+                    .text("SRT for \(file.lastPathComponent) mime=\(mimeType ?? "nil"): \(prompt)")
+                }
+            )
+        )
+        let result = await registry.execute(
+            HarnessToolCall(name: "llm.generate", input: [
+                "prompt": "transcribe to SRT",
+                "filePath": audio.path,
+                "mimeType": "audio/mpeg"
+            ]),
+            taskID: "t", worldModel: HarnessWorldModel(), grantedPermissions: []
+        )
+        #expect(result.status == .succeeded)
+        let text = result.metadata["text"]
+        // Routed to the media boundary, which saw the file and the forwarded mimeType.
+        #expect(text?.contains("SRT for \(audio.lastPathComponent)") == true)
+        #expect(text?.contains("mime=audio/mpeg") == true)
+        #expect(text?.contains("transcribe to SRT") == true)
+        #expect(text?.contains("TEXT PATH") == false)
+    }
+
+    @Test
+    func llmGenerateSurfacesATruncatedTranscriptAsAFailure() async throws {
+        let audio = FileManager.default.temporaryDirectory
+            .appendingPathComponent("donkey-media-test-\(UUID().uuidString).mp3")
+        try Data([0x00, 0x01]).write(to: audio)
+        defer { try? FileManager.default.removeItem(at: audio) }
+
+        // A transcript cut off at the token cap must not be written as a complete result.
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(mediaGenerator: { _, _, _ in .truncated })
+        )
+        let result = await registry.execute(
+            HarnessToolCall(name: "llm.generate", input: ["prompt": "transcribe", "filePath": audio.path]),
+            taskID: "t", worldModel: HarnessWorldModel(), grantedPermissions: []
+        )
+        #expect(result.status == .failed)
+        #expect(result.metadata["reason"] == "mediaOutputTruncated")
+    }
+
+    @Test
+    func llmGenerateMapsMediaOutcomesToDistinctReasons() async throws {
+        let audio = FileManager.default.temporaryDirectory
+            .appendingPathComponent("donkey-media-test-\(UUID().uuidString).mp3")
+        try Data([0x00]).write(to: audio)
+        defer { try? FileManager.default.removeItem(at: audio) }
+
+        // Each media failure mode reaches the planner as its own reason rather than an opaque nil.
+        let cases: [(HarnessMediaGenerationOutcome, String)] = [
+            (.unreadableFile, "mediaFileUnreadable"),
+            (.tooLarge(bytes: 20_000_000, limit: 14_000_000), "mediaFileTooLarge"),
+            (.unsupportedType("image/png"), "mediaUnsupportedType"),
+            (.empty, "emptyGeneration")
+        ]
+        for (outcome, expectedReason) in cases {
+            let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+                services: HarnessBuiltInToolServices(mediaGenerator: { _, _, _ in outcome })
+            )
+            let result = await registry.execute(
+                HarnessToolCall(name: "llm.generate", input: ["prompt": "transcribe", "filePath": audio.path]),
+                taskID: "t", worldModel: HarnessWorldModel(), grantedPermissions: []
+            )
+            #expect(result.status == .failed)
+            #expect(result.metadata["reason"] == expectedReason)
+        }
+    }
+
+    @Test
+    func llmGenerateFailsCleanlyWithoutAMediaBoundaryWhenGivenAFilePath() async throws {
+        let audio = FileManager.default.temporaryDirectory
+            .appendingPathComponent("donkey-media-test-\(UUID().uuidString).mp3")
+        try Data([0x00]).write(to: audio)
+        defer { try? FileManager.default.removeItem(at: audio) }
+
+        // Only the text boundary is wired — a media call must not silently fall back to it.
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(textGenerator: { _ in "text" })
+        )
+        let result = await registry.execute(
+            HarnessToolCall(name: "llm.generate", input: ["prompt": "transcribe", "filePath": audio.path]),
+            taskID: "t", worldModel: HarnessWorldModel(), grantedPermissions: []
+        )
+        #expect(result.status == .failed)
+        #expect(result.metadata["reason"] == "mediaGeneratorUnavailable")
+    }
+
+    @Test
+    func llmGenerateRejectsAMissingMediaFile() async {
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(mediaGenerator: { _, _, _ in .text("unused") })
+        )
+        let result = await registry.execute(
+            HarnessToolCall(name: "llm.generate", input: [
+                "prompt": "transcribe",
+                "filePath": "/no/such/donkey-media-\(UUID().uuidString).mp3"
+            ]),
+            taskID: "t", worldModel: HarnessWorldModel(), grantedPermissions: []
+        )
+        #expect(result.status == .invalidInput)
+    }
+
+    @Test
     func webSearchReturnsRankedResultsFromTheSearcher() async {
         let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
             services: HarnessBuiltInToolServices(
