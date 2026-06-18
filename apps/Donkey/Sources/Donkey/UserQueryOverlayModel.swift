@@ -1191,7 +1191,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
 
     private static func restoredTasks(from tasks: [UserQueryNotchTask]) -> [UserQueryNotchTask] {
         tasks.map { task in
-            guard task.status == .running else { return task }
+            guard Self.inFlightStatusesAtLaunch.contains(task.status) else { return task }
 
             var restoredTask = task
             restoredTask.status = .needsAttention
@@ -1200,6 +1200,18 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             return restoredTask
         }
     }
+
+    /// Statuses that imply a live harness loop. A relaunch tears that loop down, so none of these
+    /// can survive: the run is no longer in flight, nor is it actually blocked on the user for a
+    /// reply, a review, or a permission. Each is collapsed to the benign `needsAttention`, which
+    /// surfaces the task in the list without falsely raising the collapsed attention glyph (a
+    /// waiting reply/review) or permission shield for a session that has already ended.
+    private static let inFlightStatusesAtLaunch: Set<UserQueryTaskStatus> = [
+        .running,
+        .waitingForClarification,
+        .waitingForReview,
+        .waitingForPermission
+    ]
 
     private func refreshPromptStateAfterRunResult(
         taskID: String,
