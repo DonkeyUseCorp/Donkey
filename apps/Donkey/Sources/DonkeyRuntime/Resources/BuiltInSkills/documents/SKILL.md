@@ -31,7 +31,7 @@ Preview has no useful AppleScript dictionary. Open files with `open`, do file-le
 
 ## In-Preview actions (keyboard, after focusing Preview)
 - Rotate right/left: Cmd+R / Cmd+L. Select all text: Cmd+A. Copy selection: Cmd+C (then `pbpaste` to read it).
-- PDF form fields: press Tab to move to the first/next fillable field, then type with text.enter.
+- PDF form fields: press Tab to move to the first/next fillable field, then type with text.enter. This is the visual path; to fill a form headlessly (no Preview), use the `pdf` skill's `pdf-fill` instead.
 - Export/Save As has no shortcut: use ax.observe on the menu bar (File → Export as PDF…) and click the menu items.
 
 ## Verify
