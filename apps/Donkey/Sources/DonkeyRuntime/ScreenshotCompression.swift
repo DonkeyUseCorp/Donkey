@@ -36,9 +36,31 @@ public enum ScreenshotCompression {
             contentType: "image/png",
             pixelSize: HotLoopSize(width: Double(screenshot.imageWidth), height: Double(screenshot.imageHeight), space: .window)
         )
-        guard let source = CGImageSourceCreateWithData(screenshot.pngData as CFData, nil) else {
+        guard let source = CGImageSourceCreateWithData(screenshot.pngData as CFData, nil),
+              let encoded = downscaledJPEG(
+                  from: source,
+                  maxPixelDimension: maxPixelDimension,
+                  jpegQuality: jpegQuality
+              )
+        else {
             return fallback
         }
+        return CompressedScreenshot(
+            data: encoded.data,
+            contentType: "image/jpeg",
+            pixelSize: HotLoopSize(width: Double(encoded.width), height: Double(encoded.height), space: .window)
+        )
+    }
+
+    /// Downscale the first image in a `CGImageSource` to at most `maxPixelDimension` on its longest
+    /// edge (never upscaling) and JPEG-encode it. Shared by screenshot compression and the image
+    /// tools so every downscale-and-encode goes through one path. Returns nil if decoding/encoding
+    /// fails.
+    public static func downscaledJPEG(
+        from source: CGImageSource,
+        maxPixelDimension: Int,
+        jpegQuality: Double
+    ) -> (data: Data, width: Int, height: Int)? {
         let thumbnailOptions: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceShouldCacheImmediately: true,
@@ -49,18 +71,14 @@ public enum ScreenshotCompression {
               let encoded = NSMutableData() as CFMutableData?,
               let destination = CGImageDestinationCreateWithData(encoded, UTType.jpeg.identifier as CFString, 1, nil)
         else {
-            return fallback
+            return nil
         }
         CGImageDestinationAddImage(destination, image, [
             kCGImageDestinationLossyCompressionQuality: jpegQuality
         ] as CFDictionary)
         guard CGImageDestinationFinalize(destination) else {
-            return fallback
+            return nil
         }
-        return CompressedScreenshot(
-            data: encoded as Data,
-            contentType: "image/jpeg",
-            pixelSize: HotLoopSize(width: Double(image.width), height: Double(image.height), space: .window)
-        )
+        return (encoded as Data, image.width, image.height)
     }
 }

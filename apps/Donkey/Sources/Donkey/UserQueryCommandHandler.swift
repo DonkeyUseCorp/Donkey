@@ -525,6 +525,13 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         harnessServices.textGenerator = { prompt in
             await textGenerator.generate(prompt)
         }
+        // Generative image editing/generation behind image.edit / image.generate. Provider stays
+        // unset so the backend routes kind=image to its configured image model; this adapter only
+        // encodes inputs and writes the returned files.
+        let imageGenerator = HostedImageGenerator(backend: backend)
+        harnessServices.imageGenerator = { request in
+            await imageGenerator.generate(request)
+        }
         // Web research goes through the backend on the service-account credential — no key in the
         // app. Search uses Google Search grounding; fetch reads a page and returns clean markdown
         // (nav/ads/boilerplate stripped server-side) so the model gets the article, not raw HTML.

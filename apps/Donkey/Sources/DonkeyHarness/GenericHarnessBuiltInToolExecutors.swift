@@ -220,6 +220,40 @@ public actor HarnessGeneratedScriptStore {
     }
 }
 
+/// A request to a generative image model behind the `image.edit` / `image.generate` tools.
+/// `inputImagePaths` is empty for generation-from-scratch, the source image first (then any
+/// reference images) for an edit. Kept provider-neutral: the adapter that fulfills it names the model.
+public struct HarnessImageGenerationRequest: Sendable {
+    public var prompt: String
+    public var inputImagePaths: [String]
+    public var model: String?
+    public var outputDirectory: String?
+
+    public init(
+        prompt: String,
+        inputImagePaths: [String] = [],
+        model: String? = nil,
+        outputDirectory: String? = nil
+    ) {
+        self.prompt = prompt
+        self.inputImagePaths = inputImagePaths
+        self.model = model
+        self.outputDirectory = outputDirectory
+    }
+}
+
+public struct HarnessImageGenerationResult: Sendable {
+    public var savedPaths: [String]
+    /// Set when no image was produced — the provider/model's reason, surfaced to the planner so it
+    /// can adjust (e.g. reword the prompt) rather than being told a flat "no image, do not retry".
+    public var failureReason: String?
+
+    public init(savedPaths: [String], failureReason: String? = nil) {
+        self.savedPaths = savedPaths
+        self.failureReason = failureReason
+    }
+}
+
 public struct HarnessBuiltInToolServices: Sendable {
     public var memoryEntries: [HarnessMemoryEntry]
     public var skillRegistry: HarnessSkillRegistry?
@@ -257,6 +291,10 @@ public struct HarnessBuiltInToolServices: Sendable {
     /// back to the built-in Foundation understanding. The runtime supplies this; without it the tool
     /// still understands text files from their content.
     public var fileUnderstanding: (@Sendable (URL) async -> FileUnderstanding?)?
+    /// Generative image editing/generation behind `image.edit` and `image.generate`: a request in,
+    /// the saved output file paths out (or nil on failure). The runtime supplies an adapter that
+    /// routes through the hosted asset API to an image model; without it the tools report unavailable.
+    public var imageGenerator: (@Sendable (HarnessImageGenerationRequest) async -> HarnessImageGenerationResult?)?
 
     public init(
         memoryEntries: [HarnessMemoryEntry] = [],
@@ -274,7 +312,8 @@ public struct HarnessBuiltInToolServices: Sendable {
         textGenerator: (@Sendable (String) async -> String?)? = nil,
         webSearcher: (@Sendable (String) async -> String?)? = nil,
         webFetcher: (@Sendable (String) async -> String?)? = nil,
-        fileUnderstanding: (@Sendable (URL) async -> FileUnderstanding?)? = nil
+        fileUnderstanding: (@Sendable (URL) async -> FileUnderstanding?)? = nil,
+        imageGenerator: (@Sendable (HarnessImageGenerationRequest) async -> HarnessImageGenerationResult?)? = nil
     ) {
         self.memoryEntries = memoryEntries
         self.skillRegistry = skillRegistry
@@ -292,6 +331,7 @@ public struct HarnessBuiltInToolServices: Sendable {
         self.webSearcher = webSearcher
         self.webFetcher = webFetcher
         self.fileUnderstanding = fileUnderstanding
+        self.imageGenerator = imageGenerator
     }
 }
 
@@ -370,6 +410,10 @@ public enum BuiltInHarnessToolExecutors {
             return await webFetch(context, services: services)
         case "files.describe":
             return await filesDescribe(context, services: services)
+        case "image.edit":
+            return await imageGenerate(context, services: services, requiresInput: true)
+        case "image.generate":
+            return await imageGenerate(context, services: services, requiresInput: false)
         case "wait":
             return await timingWait(context)
         case "run.pause", "run.resume", "run.recover", "run.cancel", "run.complete", "run.failSafe":
@@ -1620,6 +1664,58 @@ public enum BuiltInHarnessToolExecutors {
             summary: text.count > 400 ? String(text.prefix(400)) + "…" : text,
             facts: ["lastAcceptedTool": context.call.name],
             metadata: ["text": text, "characterCount": String(text.count)]
+        )
+    }
+
+    private static func imageGenerate(
+        _ context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices,
+        requiresInput: Bool
+    ) async -> HarnessToolResult {
+        guard let generator = services.imageGenerator else {
+            return failed(context, "No image model is wired for \(context.call.name).", reason: "imageGeneratorUnavailable")
+        }
+        guard let prompt = trimmed(context.call.input["prompt"]) else {
+            return invalidInput(context, "\(context.call.name) requires a `prompt` describing the image.")
+        }
+        var inputPaths: [String] = []
+        if let inputPath = trimmed(context.call.input["inputPath"]) {
+            inputPaths.append(inputPath)
+        }
+        if let references = trimmed(context.call.input["referencePaths"]) {
+            inputPaths.append(contentsOf: references
+                .split(whereSeparator: { $0 == "," || $0 == "\n" || $0 == "\r" })
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty })
+        }
+        if requiresInput && inputPaths.isEmpty {
+            return invalidInput(context, "image.edit requires an `inputPath` to the image to edit.")
+        }
+        let request = HarnessImageGenerationRequest(
+            prompt: prompt,
+            inputImagePaths: inputPaths,
+            model: trimmed(context.call.input["model"]),
+            outputDirectory: trimmed(context.call.input["outDir"])
+        )
+        guard let result = await generator(request) else {
+            return failed(context, "The image model is unavailable right now.", reason: "imageGeneratorUnavailable")
+        }
+        guard !result.savedPaths.isEmpty else {
+            return failed(
+                context,
+                result.failureReason ?? "The image model returned no image.",
+                reason: "imageGenerationFailed"
+            )
+        }
+        let joined = result.savedPaths.joined(separator: ", ")
+        return success(
+            context,
+            summary: "Saved \(result.savedPaths.count) image(s) → \(joined)",
+            facts: ["lastAcceptedTool": context.call.name],
+            metadata: [
+                "paths": result.savedPaths.joined(separator: "\n"),
+                "count": String(result.savedPaths.count)
+            ]
         )
     }
 

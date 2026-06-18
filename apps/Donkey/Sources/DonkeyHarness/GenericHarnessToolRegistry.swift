@@ -533,6 +533,46 @@ public enum BuiltInHarnessToolCatalog {
                 metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
             ),
             descriptor(
+                "image.edit",
+                pluginID: "core.image",
+                summary: "Edit an existing image with a generative image model: describe the change in `prompt` and pass the source `inputPath`. Use it for semantic edits that sips/magick cannot do — remove or replace a background, add or remove an object, restyle, relight, or change a scene. To match a reference photo's look, pass the reference(s) as `referencePaths` and ask to match them. Writes a NEW image file and returns its path; it never overwrites the source. Costs image-generation credits per image, so for a batch confirm with the user first, then call once per file.",
+                input: [
+                    "prompt": "What to change, in plain words (e.g. \"remove the background\", \"make the sky a sunset\").",
+                    "inputPath": "Path to the source image to edit.",
+                    "referencePaths": "Optional comma/newline-separated reference image paths to condition on (e.g. a style/look reference).",
+                    "model": "Optional model id override; omit to use the default image model.",
+                    "outDir": "Optional output directory; a relative path like `edited` lands beside the source image. Omit to save next to the source."
+                ],
+                output: [
+                    "paths": "Newline-separated paths to the saved image file(s).",
+                    "count": "How many images were saved."
+                ],
+                optionalInputKeys: ["referencePaths", "model", "outDir"],
+                permissions: [],
+                safety: .reversible,
+                verification: ["the returned image file exists and reflects the requested edit"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            descriptor(
+                "image.generate",
+                pluginID: "core.image",
+                summary: "Generate a brand-new image from a text `prompt` with a generative image model — use when there is no source image to edit. Writes a new image file and returns its path. Costs image-generation credits per image.",
+                input: [
+                    "prompt": "Description of the image to create.",
+                    "model": "Optional model id override; omit to use the default image model.",
+                    "outDir": "Optional output directory for the result; omit to save to Downloads."
+                ],
+                output: [
+                    "paths": "Newline-separated paths to the saved image file(s).",
+                    "count": "How many images were saved."
+                ],
+                optionalInputKeys: ["model", "outDir"],
+                permissions: [],
+                safety: .reversible,
+                verification: ["the returned image file exists"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            descriptor(
                 "web.search",
                 pluginID: "core.web",
                 summary: "Search the web and return ranked results (title, URL, snippet). Use it for current facts the model can't be sure of — an artist's latest album, today's news, a product spec, an address. Follow up with web.fetch to read a result in full.",
