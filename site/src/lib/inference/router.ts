@@ -1,5 +1,6 @@
 import { createAudioAssetProvider } from "@/lib/inference/adapters/audio-studio";
 import { createGeminiComputerUseProvider } from "@/lib/inference/adapters/gemini-computer-use";
+import { createGeminiImageAssetProvider } from "@/lib/inference/adapters/gemini-image";
 import { createHostedResponsesProvider } from "@/lib/inference/adapters/hosted-responses";
 import {
   InferenceProviderError,
@@ -174,6 +175,10 @@ export class ProviderRegistry {
 
 export function createProviderRegistry() {
   return new ProviderRegistry([
+    // Asset selection is by capability + generateAsset, not list order: the image asset
+    // provider serves kind="image" (gemini-computer-use lists "image" as an input modality
+    // but has no generateAsset, so it is never chosen for asset generation).
+    createGeminiImageAssetProvider(),
     createAudioAssetProvider(),
     createGeminiComputerUseProvider(),
     createHostedResponsesProvider(),

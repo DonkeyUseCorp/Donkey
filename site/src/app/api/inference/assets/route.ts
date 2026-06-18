@@ -68,7 +68,7 @@ export const POST = withDonkeyAuth(async (request) => {
         metadata: {
           assetKind: parsed.data.kind,
         },
-        model: parsed.data.model,
+        model: parsed.data.model ?? "default",
         provider: failedUsageProvider,
         requestKind: "asset_generation",
         route: inferenceUsageRoutes.assets,
@@ -108,7 +108,7 @@ export const POST = withDonkeyAuth(async (request) => {
       metadata: {
         assetKind: parsed.data.kind,
       },
-      model: parsed.data.model,
+      model: parsed.data.model ?? "default",
       provider: failedUsageProvider,
       requestKind: "asset_generation",
       route: inferenceUsageRoutes.assets,

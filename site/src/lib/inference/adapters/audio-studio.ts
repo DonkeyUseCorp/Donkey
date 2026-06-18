@@ -118,7 +118,7 @@ function createMusic(
   const parameters = toJsonObject(request.parameters ?? {});
 
   return createAudioResponse(
-    request.model,
+    request.model ?? "",
     "music",
     "music-1.mp3",
     {
@@ -145,7 +145,7 @@ function createSound(
   );
 
   return createAudioResponse(
-    request.model,
+    request.model ?? "",
     "sound",
     "sound-1.mp3",
     {
@@ -182,7 +182,7 @@ function createSpeech(
   const parameters = toJsonObject(request.parameters ?? {});
 
   return createAudioResponse(
-    request.model,
+    request.model ?? "",
     "speech",
     "speech-1.mp3",
     {

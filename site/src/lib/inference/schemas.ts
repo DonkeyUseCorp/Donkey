@@ -81,7 +81,10 @@ export const assetGenerationRequestSchema = z.object({
   generationId: z.string().min(1).max(128).optional(),
   kind: assetGenerationKindSchema,
   provider: z.string().min(1).max(100).optional(),
-  model: z.string().min(1).max(256),
+  // Optional so a fully model-neutral caller (e.g. the image.* tools) can let the
+  // selected provider pick its default model. Providers that need an explicit model
+  // resolve their own default.
+  model: z.string().min(1).max(256).optional(),
   prompt: z.string().min(1).max(20_000),
   inputs: jsonObjectSchema.optional(),
   parameters: jsonObjectSchema.optional(),

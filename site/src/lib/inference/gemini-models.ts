@@ -11,6 +11,9 @@ export const geminiModels = {
   flash: "gemini-3.5-flash",
   flashLite: "gemini-3.1-flash-lite",
   flashComputerUse: "gemini-3-flash-preview",
+  // Generative image editing/generation ("nano banana"). Bump here when adopting a
+  // newer image model; the backend also honors a GEMINI_IMAGE_MODEL override.
+  flashImage: "gemini-2.5-flash-image",
 } as const;
 
 export type GeminiModel = (typeof geminiModels)[keyof typeof geminiModels];
@@ -28,4 +31,6 @@ export const geminiModelRoles = {
   screenshotParse: geminiModels.flash,
   // Vision grounding: a cheap structured pick over already-parsed elements.
   visionGrounding: geminiModels.flashLite,
+  // Generative image editing and generation.
+  imageGeneration: geminiModels.flashImage,
 } as const;

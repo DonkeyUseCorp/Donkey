@@ -254,6 +254,11 @@ function geminiCreditPricing(model: string): ProviderCreditPricing | undefined {
       inputAudio: "0.5",
     });
   }
+  // Generative image editing/generation ("nano banana") bills per output image:
+  // ~1290 output tokens at $30/1M ≈ $0.039 each.
+  if (modelMatches(model, "gemini-2.5-flash-image")) {
+    return { generationCostMicros: usdWithMargin("0.039") };
+  }
 
   return undefined;
 }

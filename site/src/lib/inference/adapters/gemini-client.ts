@@ -1,0 +1,133 @@
+import { GoogleGenAI } from "@google/genai";
+import type { GoogleGenAIOptions } from "@google/genai";
+import { JWT, type JWTInput } from "google-auth-library";
+
+import { isJsonObject, toJsonValue } from "@/lib/inference/json";
+import { InferenceProviderError, type JsonValue } from "@/lib/inference/providers";
+
+// Shared Gemini/Vertex wiring used by every Gemini-backed adapter (Responses and
+// asset generation). Credentials and client construction live here once so a new
+// adapter routes through the same service-account path instead of re-parsing the
+// environment.
+export type AdapterEnvironment = Record<string, string | undefined>;
+export type GeminiClient = Pick<GoogleGenAI, "models">;
+export type GeminiClientFactory = (options: GoogleGenAIOptions) => GeminiClient;
+
+const vertexLocation = "global";
+const vertexAIScope = "https://www.googleapis.com/auth/cloud-platform";
+
+export function defaultGeminiClientFactory(options: GoogleGenAIOptions): GeminiClient {
+  return new GoogleGenAI(options);
+}
+
+export function geminiClientConfig(environment: AdapterEnvironment): {
+  configured: boolean;
+  options: GoogleGenAIOptions;
+  service: "vertex-ai";
+} {
+  const apiVersion = environment.GEMINI_API_VERSION?.trim() || undefined;
+  const timeout = numberFromString(environment.GEMINI_TIMEOUT_MS);
+  const httpOptions: GoogleGenAIOptions["httpOptions"] | undefined =
+    timeout === undefined ? undefined : { timeout };
+  const googleCredentials = googleCredentialsFromEnvironment(environment);
+  const project = googleCredentials?.project_id;
+
+  const options: GoogleGenAIOptions = {
+    vertexai: true,
+    location: vertexLocation,
+  };
+  if (project) {
+    options.project = project;
+  }
+  if (apiVersion) {
+    options.apiVersion = apiVersion;
+  }
+  if (httpOptions) {
+    options.httpOptions = httpOptions;
+  }
+  if (googleCredentials) {
+    options.googleAuthOptions = {
+      authClient: googleAuthClient(googleCredentials),
+    };
+  }
+
+  return {
+    configured: Boolean(project),
+    options,
+    service: "vertex-ai",
+  };
+}
+
+function googleCredentialsFromEnvironment(
+  environment: AdapterEnvironment,
+): JWTInput | undefined {
+  const rawCredentials = environment.GOOGLE_APPLICATION_CREDENTIALS_JSON?.trim();
+  if (!rawCredentials) {
+    return undefined;
+  }
+
+  return serviceAccountCredentials(rawCredentials);
+}
+
+function googleAuthClient(credentials: JWTInput) {
+  return new JWT({
+    email: credentials.client_email,
+    key: credentials.private_key,
+    keyId: credentials.private_key_id,
+    scopes: [vertexAIScope],
+  });
+}
+
+function serviceAccountCredentials(rawCredentials: string): JWTInput {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawCredentials);
+  } catch {
+    throw new InferenceProviderError("Google service account JSON is invalid.", {
+      statusCode: 500,
+      code: "invalid_google_service_account_json",
+    });
+  }
+
+  const credentials = toJsonValue(parsed);
+  if (!isJsonObject(credentials)) {
+    throw new InferenceProviderError("Google service account JSON must be an object.", {
+      statusCode: 500,
+      code: "invalid_google_service_account_json",
+    });
+  }
+
+  const clientEmail = stringValue(credentials.client_email);
+  const privateKey = stringValue(credentials.private_key);
+  if (!clientEmail || !privateKey) {
+    throw new InferenceProviderError(
+      "Google service account JSON must include client_email and private_key.",
+      {
+        statusCode: 500,
+        code: "invalid_google_service_account_json",
+      },
+    );
+  }
+
+  return {
+    type: stringValue(credentials.type),
+    project_id: stringValue(credentials.project_id),
+    private_key_id: stringValue(credentials.private_key_id),
+    private_key: privateKey,
+    client_email: clientEmail,
+    client_id: stringValue(credentials.client_id),
+    universe_domain: stringValue(credentials.universe_domain),
+  };
+}
+
+export function stringValue(value: JsonValue | undefined): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function numberFromString(value: string | undefined): number | undefined {
+  if (!value?.trim()) {
+    return undefined;
+  }
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
