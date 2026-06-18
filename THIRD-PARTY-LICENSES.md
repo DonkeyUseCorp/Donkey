@@ -4,7 +4,7 @@ Bundled in `donkey-tools/` (built by `scripts/fetch-bundled-tools.sh`).
 
 | Tool | License | Notes |
 |---|---|---|
-| ffmpeg | LGPL-2.1 | built `--disable-gpl`, no x264/x265; H.264/HEVC encode via VideoToolbox |
+| ffmpeg | LGPL-2.1 | built `--disable-gpl`, no x264/x265; H.264/HEVC encode via VideoToolbox; subtitle burn-in links libass (ISC), freetype (FTL), fribidi (LGPL-2.1+) |
 | liteparse (`lit`) | Apache-2.0 | PDF extraction; bundles Tesseract (Apache-2.0) for OCR |
 | yt-dlp | Unlicense | |
 | qpdf | Apache-2.0 | |

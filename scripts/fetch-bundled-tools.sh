@@ -47,17 +47,58 @@ bundle() {
   local search=(--search-path "$BREW_LIB")
   local dir
   for dir in "${EXTRA_SEARCH[@]:-}"; do [ -n "$dir" ] && search+=(--search-path "$dir"); done
-  dylibbundler --overwrite-files --bundle-deps --fix-file "$VENDOR_DIR/$name" \
+  if dylibbundler --overwrite-files --bundle-deps --fix-file "$VENDOR_DIR/$name" \
     --dest-dir "$VENDOR_DIR" --install-path "@loader_path/" "${search[@]}" \
-    >/dev/null 2>&1
-  ok "$name"
+    >/dev/null 2>&1; then
+    ok "$name"
+  else
+    fail "$name" "dylibbundler failed; binary would have unresolved libraries"
+    return 1
+  fi
+}
+
+# Install prefix of the from-source libass, set by build_libass for build_lgpl_ffmpeg.
+ASS_PREFIX=""
+
+# Build libass from source so ffmpeg's `subtitles` filter (subtitle burn-in) works in the bundled
+# binary. We build it with the CoreText font provider (--disable-fontconfig): CoreText uses macOS's
+# own installed fonts, so there are NO fontconfig config files or font cache to relocate into the
+# bundle — the relocation trap that keeps fontconfig-based tools from shipping. harfbuzz is left off
+# (--disable-harfbuzz) to avoid pulling in the glib dependency tree; Latin/CJK subtitles render fine,
+# only complex-script (Arabic/Indic) shaping is given up. libass (ISC), freetype (FTL), and fribidi
+# (LGPL) are all LGPL-compatible, so enabling it keeps ffmpeg --disable-gpl.
+build_libass() {
+  local ver="0.17.3"
+  local work="/tmp/libass-build"
+  local brew_prefix; brew_prefix="$(brew --prefix)"
+  local dep
+  for dep in freetype fribidi; do
+    brew list "$dep" >/dev/null 2>&1 || brew install "$dep" >/dev/null 2>&1
+  done
+  rm -rf "$work"; mkdir -p "$work"
+  curl -fsSL -o "$work/libass.tar.xz" \
+    "https://github.com/libass/libass/releases/download/${ver}/libass-${ver}.tar.xz" \
+    || { echo "FATAL: libass source download failed" >&2; exit 1; }
+  tar -xJf "$work/libass.tar.xz" -C "$work" --strip-components=1
+  ( cd "$work" \
+    && PKG_CONFIG_PATH="$brew_prefix/lib/pkgconfig:$brew_prefix/share/pkgconfig" \
+       ./configure --prefix="$work/out" --disable-static --enable-shared \
+         --disable-fontconfig --disable-harfbuzz \
+    && make -j"$(sysctl -n hw.ncpu)" \
+    && make install ) >"$work/build.log" 2>&1
+  if [ ! -f "$work/out/lib/libass.dylib" ]; then
+    echo "FATAL: libass build failed; tail of $work/build.log:" >&2
+    tail -25 "$work/build.log" >&2
+    exit 1
+  fi
+  ASS_PREFIX="$work/out"
 }
 
 # Build a TRUE LGPL ffmpeg from source — no --enable-gpl, no x264/x265. H.264/HEVC
 # encode comes from Apple VideoToolbox; decode is built in; mp3 via LGPL libmp3lame,
-# opus via BSD libopus, AV1 decode via BSD dav1d. Built shared, then dylibbundled.
-# ffmpeg is MANDATORY: any failure here aborts the whole vendoring run, because a
-# bundle without ffmpeg is not shippable.
+# opus via BSD libopus, AV1 decode via BSD dav1d, subtitle burn-in via libass (built
+# above). Built shared, then dylibbundled. ffmpeg is MANDATORY: any failure here aborts
+# the whole vendoring run, because a bundle without ffmpeg is not shippable.
 build_lgpl_ffmpeg() {
   local ver="7.1.1"
   local work="/tmp/ffmpeg-lgpl-build"
@@ -68,17 +109,19 @@ build_lgpl_ffmpeg() {
   for dep in lame opus dav1d; do
     brew list "$dep" >/dev/null 2>&1 || brew install "$dep" >/dev/null 2>&1
   done
+  build_libass
   rm -rf "$work"; mkdir -p "$work"
   curl -fsSL -o "$work/ffmpeg.tar.xz" "https://ffmpeg.org/releases/ffmpeg-${ver}.tar.xz" \
     || { echo "FATAL: ffmpeg source download failed" >&2; exit 1; }
   tar -xJf "$work/ffmpeg.tar.xz" -C "$work" --strip-components=1
   ( cd "$work" \
-    && PKG_CONFIG_PATH="$brew_prefix/lib/pkgconfig:$brew_prefix/share/pkgconfig" \
+    && PKG_CONFIG_PATH="$ASS_PREFIX/lib/pkgconfig:$brew_prefix/lib/pkgconfig:$brew_prefix/share/pkgconfig" \
        ./configure --prefix="$work/out" \
          --disable-gpl --disable-nonfree --disable-doc --disable-static --enable-shared \
          --enable-videotoolbox --enable-audiotoolbox \
-         --enable-libmp3lame --enable-libopus --enable-libdav1d \
-         --extra-cflags="-I$brew_prefix/include" --extra-ldflags="-L$brew_prefix/lib" \
+         --enable-libmp3lame --enable-libopus --enable-libdav1d --enable-libass \
+         --extra-cflags="-I$brew_prefix/include -I$ASS_PREFIX/include" \
+         --extra-ldflags="-L$brew_prefix/lib -L$ASS_PREFIX/lib" \
     && make -j"$(sysctl -n hw.ncpu)" \
     && make install ) >"$work/build.log" 2>&1
   if [ ! -x "$work/out/bin/ffmpeg" ] || [ ! -x "$work/out/bin/ffprobe" ]; then
@@ -86,7 +129,9 @@ build_lgpl_ffmpeg() {
     tail -25 "$work/build.log" >&2
     exit 1
   fi
-  EXTRA_SEARCH=("$work/out/lib")
+  # Search both ffmpeg's own out/lib and libass's out/lib so dylibbundler vendors libass (and, via
+  # the Homebrew lib default search, its freetype/fribidi/libpng deps) flat with @loader_path.
+  EXTRA_SEARCH=("$work/out/lib" "$ASS_PREFIX/lib")
   bundle "$work/out/bin/ffmpeg" ffmpeg
   bundle "$work/out/bin/ffprobe" ffprobe
   EXTRA_SEARCH=()
