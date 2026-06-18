@@ -8,6 +8,7 @@ import {
 } from "@/lib/inference/elevenlabs-models";
 import { geminiModels, type GeminiModel } from "@/lib/inference/gemini-models";
 import { openaiModels, type OpenAIRunModel } from "@/lib/inference/openai-models";
+import { browserUsePerStepUsd } from "@/lib/browser/pricing";
 
 export type ProviderCreditPricing = {
   inputTokenCostMicrosPerMillion?: bigint;
@@ -44,6 +45,9 @@ export function providerCreditPricing(
   if (normalizedProvider === "elevenlabs") {
     return elevenLabsCreditPricing(normalizedModel);
   }
+  if (normalizedProvider === "browser-use") {
+    return browserUseCreditPricing();
+  }
 
   return undefined;
 }
@@ -67,6 +71,16 @@ const openaiRunModelPricing: Record<OpenAIRunModel, ProviderCreditPricing> = {
     longContext: { input: "5", cachedInput: "0.5", output: "22.5" },
   }),
 };
+
+function browserUseCreditPricing(): ProviderCreditPricing {
+  // Browser Use Cloud bills ~$0.01/task init + a per-step LLM fee, and the API
+  // exposes stepCount (not a USD cost), so we price per step. The per-step rate
+  // (which folds in the init fee) lives with the spend cap in browser/pricing.ts;
+  // usdWithMargin adds the 1.3x. Charged as generationCount = stepCount.
+  return {
+    generationCostMicros: usdWithMargin(browserUsePerStepUsd),
+  };
+}
 
 function openAICreditPricing(model: string): ProviderCreditPricing | undefined {
   const audioPricing = openAIAudioCreditPricing(model);

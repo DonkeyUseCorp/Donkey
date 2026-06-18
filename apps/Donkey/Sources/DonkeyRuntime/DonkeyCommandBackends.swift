@@ -105,18 +105,21 @@ public enum DonkeyCommandBackends {
         )
     }
 
-    /// Resolve the output file URL: an explicit `destination` (absolute, or a bare
-    /// name placed in ~/Downloads), else a generated `~/Downloads/<host>.<ext>`.
+    /// Resolve the output file URL inside ~/Downloads. A `destination` is treated as
+    /// a file *name* only — any directory components are stripped — so this no-consent
+    /// capture tool can never overwrite a file outside Downloads. Falls back to a
+    /// generated `<host>.<ext>` name.
     private static func snapshotDestination(_ destination: String?, url: URL, format: String) -> URL {
         let downloads = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Downloads", isDirectory: true)
         if let destination {
-            let candidate = (destination as NSString).isAbsolutePath
-                ? URL(fileURLWithPath: destination)
-                : downloads.appendingPathComponent(destination)
-            return candidate.pathExtension.isEmpty
-                ? candidate.appendingPathExtension(format)
-                : candidate
+            let name = (destination as NSString).lastPathComponent
+            if !name.isEmpty {
+                let candidate = downloads.appendingPathComponent(name)
+                return candidate.pathExtension.isEmpty
+                    ? candidate.appendingPathExtension(format)
+                    : candidate
+            }
         }
         let host = url.host?.replacingOccurrences(of: ".", with: "-") ?? "page"
         return downloads.appendingPathComponent("\(host).\(format)")

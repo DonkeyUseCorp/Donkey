@@ -264,7 +264,7 @@ struct SkillInstallTests {
         // The five capability skills (media, images, pdf, data, web-capture) ship built-in and are
         // discovered by walking the tree — no enumerated list to keep in sync.
         let ids = Set(BuiltInLocalAppSkillPacks.descriptors().map(\.id))
-        for id in ["media", "images", "pdf", "data", "web-capture"] {
+        for id in ["media", "images", "pdf", "data", "web-capture", "web-automation"] {
             #expect(ids.contains(id))
         }
     }

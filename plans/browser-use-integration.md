@@ -25,18 +25,19 @@ proxies). The Cloud API removes all of that for a per-task fee. We mirror how
   only.
 - SDKs: TypeScript `browser-use-sdk` (`import { BrowserUse } from
   "browser-use-sdk/v3"`) and Python. Our backend is TS, so use the TS SDK.
-- Run a task: natural-language task + options (starting URL, allowed domains, max
-  steps, model, **structured output schema** for typed JSON results). Tasks are
-  long-running (seconds to minutes).
-- Results: final output text, validated structured JSON, live preview + recording
-  URL, and files the agent downloaded (workspaces).
-- Async signals: **webhooks** (`agent.task.status_update`, signed with
-  `X-Browser-Use-Signature` = HMAC-SHA256 over `"{timestamp}.{sorted-json}"`,
-  plus `X-Browser-Use-Timestamp`; reject if older than 5 min) and live message
-  streaming. Sessions/profiles persist browser state (cookies/logins) across
-  follow-up tasks.
-- OpenAPI spec: `https://docs.browser-use.com/cloud/openapi/v3.json` — use it as
-  the source of truth for exact request/response fields during implementation.
+- SDK (verified, `browser-use-sdk@3.8.4`): `new BrowserUse({ apiKey })`, then
+  `client.sessions.create(body)` to start and `client.sessions.get(id)` to poll.
+  `body` (camelCase, mapped to snake_case): `task`, `startUrl`, `allowedDomains`,
+  `maxSteps`, `model`, `structuredOutput`/`schema`.
+- `SessionResponse` fields we use: `id`, `status`
+  (`created → idle → running → stopped | timed_out | error`), `output`
+  (free-form string OR structured object when an output schema was given),
+  `stepCount`, `isTaskSuccessful`, `recordingUrls`, `liveUrl`, `lastStepSummary`.
+- **No webhooks — polling.** The API has no task-completion webhook; the SDK
+  polls `sessions.get`. So our app polls our backend, and our backend polls
+  Browser Use. (Earlier draft assumed webhooks; corrected.)
+- **No per-task USD cost field.** The response exposes `stepCount`, and Browser
+  Use bills `$0.01 init + per-step`. So we price by steps (see billing).
 
 ## Architecture
 
@@ -70,100 +71,100 @@ can't do it. The `web-capture` skill drives this order:
 
 Agentic automation (navigate/click/fill/extract, multi-step) has no local
 equivalent, so it goes straight to Cloud (Phase 2).
-- **Backend (`site/`)**: routes behind `withDonkeyAuth`, queries in
-  `src/queries/`, any tables in a grouped `site/prisma/BrowserTasks.prisma`
-  (no hand-written SQL/migrations):
-  - `POST /api/browser/run` — validate, gate on credits, call Browser Use Cloud
-    to start a task, persist a row, return `{ taskId, status }`.
-  - `GET /api/browser/run/:id` — return `{ status, output, structured,
-    recordingUrl, files }`.
-  - `POST /api/browser/webhook` — verify the HMAC signature + timestamp, then
-    update the task row when Cloud reports completion (so the GET is fast and we
-    avoid hammering Cloud with polls).
-- **Async model**: start → return `taskId`; the app's `web.automate` tool polls
-  `GET /api/browser/run/:id` using the harness's existing waiting state until the
-  task reaches a terminal status or a bounded timeout. Webhooks keep the backend
-  row fresh; the app polls our backend, not Browser Use.
+- **Backend (`site/`)**: one route behind `withDonkeyAuth`:
+  - `POST /api/browser/run` — validate, preflight credits, then
+    `client.run(task, …)` which executes the task to completion **server-side**
+    (the SDK polls Browser Use on our server), charge credits by `stepCount`, and
+    return `{ status, isTaskSuccessful, text, structured, recordingUrl, liveUrl,
+    stepCount }`. `maxDuration = 300`; `maxCostUsd` bounds the task so it finishes
+    within that.
+- **Synchronous, not polled.** Charging happens here, after the run finishes, and
+  never depends on the client. The app makes one blocking call and waits — no GET
+  poll route, no cron sweep, no `BrowserRun` table (the credit usage event is the
+  audit record). The only residual edge is a task that exceeds `maxDuration`
+  (rare, bounded by `maxCostUsd`); accepted rather than reintroducing
+  client-driven settlement.
 
 ## Secrets, cost, and safety (decide before building)
 
 - **`BROWSER_USE_API_KEY`** lives only in backend env / secrets — never in the app
   bundle or repo (OSS).
-- **Billing (required)**: Browser Use Cloud cost is **variable per task**, not a
-  flat fee — V3 (the version we use) is token-based at ~1.2× the underlying LLM
-  rate plus a $0.01/task init; a run is ~5–30 steps. So we bill it exactly like
-  every other provider in Donkey: **pass the actual Cloud task cost through at the
-  standard 1.3× margin** (`provider-pricing.ts`), debited *after* completion via
-  `recordInferenceUsage`, not a hand-set price. Flow:
-  - **Preflight**: `requireInferenceCredits` + require balance ≥ a worst-case
-    ceiling derived from a per-task `maxSteps` cap (so a runaway task can't
-    surprise-bill); 402 when short.
-  - **Bound + disclose**: cap `maxSteps` per task; show the worst-case credit
-    estimate and the target domains in the consent gate before running.
-  - **Debit actual**: on the completion webhook, debit the real Cloud cost × 1.3
-    via `recordInferenceUsage` (route `/api/browser/run/`, provider
-    `browser-use`), reconciling the preflight hold. Add a `browser-use` entry to
-    the provider pricing so the 1.3× margin + ceil-rounding apply automatically.
-  - **Free rungs never charge**: local Chromium and `WKWebView` capture cost
-    nothing; only `web.automate` Cloud runs debit credits.
-  - Implementation check: confirm the task result/webhook returns the task's
-    cost (or step/token counts) — see `openapi/v3.json`. If cost is returned,
-    pass it through directly; if only steps/tokens, price from those.
+- **Billing (required)**: the API exposes no per-task USD cost, but it does
+  expose `stepCount`, and Browser Use bills `$0.01 init + per-step`. So we price
+  **by steps** at Donkey's standard 1.3× margin: a `browser-use` provider-pricing
+  entry with `generationCostMicros = usdWithMargin(<per-step USD>)`, charged via
+  `recordInferenceUsage` with `usage = { generationCount: stepCount }`. Flow:
+  - **Preflight**: `requireInferenceCredits` (402 when the balance is empty),
+    consistent with the other inference routes; the actual debit is after the run.
+  - **Bound**: `maxCostUsd` caps the Browser Use spend per run, which also keeps a
+    run within `maxDuration`. (No bespoke consent gate — `web.automate` is
+    `.sensitive` and the skill instructs confirming login/pay turns.)
+  - **Charge at completion, server-side**: when `client.run` returns (terminal),
+    debit `stepCount × per-step × 1.3` via `recordInferenceUsage` (route
+    `/api/browser/run/`, provider `browser-use`) in the same request. One request
+    = one charge, so no idempotency dance. Browser Use bills steps even on
+    failure, so charge regardless of `isTaskSuccessful`.
+  - **Free rungs never charge**: local Chromium and `web_snapshot` cost nothing;
+    only Cloud `web.automate` runs debit credits.
+  - Per-step rate tracks the default model's published per-step price; fold the
+    $0.01 init into the rate. Revisit if Browser Use later exposes exact cost.
 - **Data/privacy**: the task text, target sites, and any credentials pass through
   Browser Use's servers. Call this out to users for automation tasks; keep
   credential/login flows behind explicit consent and prefer Browser Use
   **profiles** / human-in-the-loop for auth rather than passing raw passwords.
-- **Domain scoping**: default `allowedDomains` to the task's target so a run can't
-  wander; surface the consent with the domains it will touch.
+- **Scoping**: v3 has no `allowedDomains` field — the target site is expressed in
+  the task prompt (and `startUrl` is folded in). `maxCostUsd` is the spend bound.
 
 ## Phasing
 
-- **Phase 1 — the capture ladder.** Build the free rungs first: the native
-  `web.snapshot` (`WKWebView` → PDF/PNG) tool, and confirm the local-Chromium path
-  in the `web-capture` skill. Then add `web.automate` (Cloud) as the paid fallback
-  for pages the free engines can't render, plus structured extraction for pages
-  `web.fetch` can't read. Wire the three backend routes, credit gating, and
-  consent. Update the `web-capture` skill to encode the ladder (Chromium →
-  `WKWebView` → Cloud) and keep `web.fetch` for static markdown.
+- **Phase 1 — the capture ladder (done).** The native `web_snapshot`
+  (`WKWebView` → PDF/PNG) free rung, the local-Chromium path in the `web-capture`
+  skill, and `web.automate` (Cloud) as the paid fallback + structured extraction
+  for pages `web.fetch` can't read, with synchronous credit charging. The
+  `web-capture` skill encodes the ladder (Chromium → `WKWebView` → Cloud) and
+  keeps `web.fetch` for static markdown.
 - **Phase 2 — agentic automation.** Cloud-only multi-step tasks
   (navigate/click/fill), follow-up tasks in a session, profiles for persistent
   auth, and human-in-the-loop for approvals/payments. Likely its own capability
   skill (`web-automation`) describing when to use it vs. the read/capture tools.
 
-## Files (anticipated)
+## Files (implemented)
 
-- `apps/Donkey/Sources/DonkeyAI/HostedBrowserAutomation.swift` (new; mirrors
-  `HostedWebFetch.swift`)
-- a `WKWebView`-backed `web.snapshot` capture tool in `DonkeyRuntime` (new)
-- registry tool wiring for `web.automate` and `web.snapshot` (alongside `web.*`)
-- `site/src/app/api/browser/run/route.ts`, `…/run/[id]/route.ts`,
-  `…/browser/webhook/route.ts` (new)
-- `site/src/queries/browser.ts`, `site/prisma/BrowserTasks.prisma` (new)
-- `apps/Donkey/Sources/DonkeyRuntime/Resources/BuiltInSkills/web-capture/SKILL.md`
-  (point rich capture at `web.automate`); a new `web-automation` skill in Phase 2
+- `apps/Donkey/Sources/DonkeyAI/HostedWebAutomate.swift` — single blocking call;
+  `DonkeyBackendInferenceClient.runBrowserTask`
+- `web_snapshot` (`WKWebView` → PDF/PNG) in `DonkeyCommandBackends.swift` +
+  descriptor in `DonkeyCommandLayer.swift`; `web.automate` descriptor + executor +
+  `webAutomator` service in the harness
+- `site/src/app/api/browser/run/route.ts` (synchronous POST)
+- `site/src/lib/browser/{client,models,pricing}.ts`;
+  `site/src/lib/credits/{provider-pricing,inference}.ts` (browser-use pricing +
+  route). No `BrowserRun` table — the credit usage event is the audit record.
+- `BuiltInSkills/web-capture/SKILL.md` (ladder) + `BuiltInSkills/web-automation/SKILL.md`
 
 ## Verification
 
-- Backend: a route test that starts a task against Browser Use Cloud (test key)
-  and returns a terminal result; webhook signature verification unit test
-  (reconstruct `"{timestamp}.{sorted-json}"`, timing-safe compare).
-- App E2E: "save this JS-heavy page as a PDF" (Phase 1) and "go to <site> and
-  extract <fields> as JSON" — confirm the consent gate appears with the target
-  domains, the artifact returns, and a credit is debited.
+- Built + checks green: `swift build`, `swift test --filter SkillInstallTests`,
+  site `tsc --noEmit`, `eslint`.
+- E2E (needs `BROWSER_USE_API_KEY` on a deploy): "save this JS-heavy page as a
+  PDF" (free `web_snapshot` rung), and "go to <site> and extract <fields> as
+  JSON" (`web.automate` — confirm the result returns and a credit is debited by
+  `stepCount`).
 
 ## Decisions
 
-- **Credits**: every Browser Use Cloud run is accounted for and debited from
-  Donkey credits; the free capture rungs are not. _(decided)_
+- **Credits**: every Cloud run is debited from Donkey credits, **server-side at
+  completion** (never client-driven); free capture rungs aren't charged. _(done)_
 - **Capture ladder**: local Chromium → `WKWebView` → Browser Use Cloud, paid only
-  as the last resort. _(decided)_
+  as the last resort. _(done)_
+- **Pricing**: charge `stepCount × per-step × 1.3` (per-step + cap centralized in
+  `browser/pricing.ts`); `maxCostUsd` bounds spend. _(done)_
+- **Delivery**: synchronous — the backend runs the task to completion and charges
+  in the one request; no polling, webhooks, or cron. _(done)_
+- **No consent gate** for `web.automate` (per product call). _(done)_
 
-- **Pricing model**: pass the actual Browser Use task cost through at Donkey's
-  standard 1.3× margin (debit-after-completion), bounded by a `maxSteps` cap — not
-  a flat hand-set fee. _(decided)_
+Open follow-ups:
 
-Still to settle before Phase 1:
-
-1. The `maxSteps` cap (cost ceiling) and the worst-case estimate shown at consent.
-2. **Sync-poll vs webhook-only** for result delivery (plan assumes both: webhook
-   updates the row, app polls our backend).
+1. Tune the per-step rate (`browser/pricing.ts`, `$0.02`) and the `maxCostUsd`
+   cap (`$0.5`) against real Browser Use bills once it's live.
+2. Phase 2: follow-up tasks in a session, profiles for persistent auth,
+   human-in-the-loop — its own `web-automation` depth beyond single tasks.

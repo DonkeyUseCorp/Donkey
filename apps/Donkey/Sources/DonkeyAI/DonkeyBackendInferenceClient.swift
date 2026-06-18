@@ -173,6 +173,32 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
         return try JSONDecoder().decode(RemoteWebFetchResult.self, from: data)
     }
 
+    /// Start a Browser Use Cloud agent task through the backend. Returns immediately with our task id;
+    /// poll `pollBrowserRun` for status and result. The backend owns the API key and credit charge.
+    /// Run an agentic browser task and wait for its result. The backend runs it to completion
+    /// (it polls Browser Use server-side) and charges credits there, so this is a single blocking
+    /// call — no client-side polling. Structured output, when requested, comes back as a JSON string.
+    public func runBrowserTask(
+        task: String,
+        startURL: String?,
+        structuredOutputSchemaJSON: String?
+    ) async throws -> RemoteBrowserRunStatus {
+        var request = makeRequest(path: "/api/browser/run/")
+        request.httpMethod = "POST"
+        // The backend runs the task to completion before responding; allow a long round trip.
+        request.timeoutInterval = 300
+        var body: [String: Any] = ["task": task]
+        if let startURL { body["startUrl"] = startURL }
+        if let schema = structuredOutputSchemaJSON,
+           let schemaData = schema.data(using: .utf8),
+           let schemaObject = try? JSONSerialization.jsonObject(with: schemaData) {
+            body["structuredOutputSchema"] = schemaObject
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let data = try await send(request)
+        return try JSONDecoder().decode(RemoteBrowserRunStatus.self, from: data)
+    }
+
     public func parseScreenshot(
         _ understandingRequest: LocalUIUnderstandingRequest,
         imageData: Data? = nil,
