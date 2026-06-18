@@ -868,9 +868,20 @@ async function resolveCreditRate(
     );
   }
 
-  return rateSnapshot(
-    globalRate,
-    providerDefaultRate,
+  if (globalRate) {
+    return rateSnapshot(globalRate, providerDefaultRate);
+  }
+
+  // Flat-priced routes (vision, refresh) don't need per-model pricing.
+  if (routeHasFlatPrice(route)) {
+    return providerDefaultRate;
+  }
+
+  // Every billable model must have a price — a code-level rate in provider-pricing.ts or a DB
+  // override. Fail loudly instead of silently charging a default so a missing price is caught.
+  throw new Error(
+    `No credit price configured for provider="${provider}" model="${model}" on route="${route}". ` +
+      "Add a price in provider-pricing.ts or an InferenceCreditRate row.",
   );
 }
 
@@ -908,28 +919,33 @@ function rateSnapshot(
 // InferenceCreditRate row still overrides it.
 export const visionCallDefaultMicros = creditStringToMicros("0.004");
 
+// Routes priced per call regardless of model (no per-model pricing required): refresh is free
+// and a vision parse is a flat per-call charge. Every other route bills against a model price.
+function routeHasFlatPrice(route: string): boolean {
+  return (
+    route === inferenceUsageRoutes.assetsRefresh ||
+    route === inferenceUsageRoutes.vision
+  );
+}
+
 function defaultCreditRate(
   route: string,
   provider: string,
   model: string,
 ): CreditRateSnapshot {
-  const defaultRequestMicros =
-    route === inferenceUsageRoutes.assetsRefresh
-      ? zeroCreditMicros
-      : route === inferenceUsageRoutes.vision
-        ? visionCallDefaultMicros
-        : creditStringToMicros("1");
+  const flatRequestMicros =
+    route === inferenceUsageRoutes.vision ? visionCallDefaultMicros : zeroCreditMicros;
   const providerPricing = providerCreditPricing(provider, model);
 
   return {
     id: null,
     version: null,
-    baseCostMicros: providerPricing ? zeroCreditMicros : defaultRequestMicros,
+    baseCostMicros: providerPricing ? zeroCreditMicros : flatRequestMicros,
     inputTokenCostMicros: zeroCreditMicros,
     outputTokenCostMicros: zeroCreditMicros,
     totalTokenCostMicros: zeroCreditMicros,
     characterCostMicros: zeroCreditMicros,
-    fallbackCostMicros: defaultRequestMicros,
+    fallbackCostMicros: flatRequestMicros,
     providerPricing,
   };
 }

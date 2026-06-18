@@ -2,6 +2,7 @@ import {
   creditStringToMicros,
   zeroCreditMicros,
 } from "@/lib/credits/amounts";
+import { geminiModels, type GeminiModel } from "@/lib/inference/gemini-models";
 
 export type ProviderCreditPricing = {
   inputTokenCostMicrosPerMillion?: bigint;
@@ -229,35 +230,37 @@ const openAITextCreditRates: {
   { model: "computer-use-preview", input: "3", output: "12" },
 ];
 
-function geminiCreditPricing(model: string): ProviderCreditPricing | undefined {
-  if (modelMatches(model, "gemini-3.5-flash")) {
-    return textTokenPricing({
-      model: "gemini-3.5-flash",
-      input: "1.5",
-      cachedInput: "0.15",
-      output: "9",
-    });
-  }
-  if (modelMatches(model, "gemini-3-flash-preview")) {
-    return textAudioTokenPricing({
-      input: "0.5",
-      cachedInput: "0.05",
-      output: "3",
-      inputAudio: "1",
-    });
-  }
-  if (modelMatches(model, "gemini-3.1-flash-lite")) {
-    return textAudioTokenPricing({
-      input: "0.25",
-      cachedInput: "0.025",
-      output: "1.5",
-      inputAudio: "0.5",
-    });
-  }
+// Every Gemini model we run must appear here: the Record is keyed by the GeminiModel union,
+// so adding a model to gemini-models.ts without a price fails the type-check (and the build).
+const geminiModelPricing: Record<GeminiModel, ProviderCreditPricing> = {
+  [geminiModels.flash]: textTokenPricing({
+    model: "gemini-3.5-flash",
+    input: "1.5",
+    cachedInput: "0.15",
+    output: "9",
+  }),
+  [geminiModels.flashComputerUse]: textAudioTokenPricing({
+    input: "0.5",
+    cachedInput: "0.05",
+    output: "3",
+    inputAudio: "1",
+  }),
+  [geminiModels.flashLite]: textAudioTokenPricing({
+    input: "0.25",
+    cachedInput: "0.025",
+    output: "1.5",
+    inputAudio: "0.5",
+  }),
   // Generative image editing/generation ("nano banana") bills per output image:
   // ~1290 output tokens at $30/1M ≈ $0.039 each.
-  if (modelMatches(model, "gemini-2.5-flash-image")) {
-    return { generationCostMicros: usdWithMargin("0.039") };
+  [geminiModels.flashImage]: { generationCostMicros: usdWithMargin("0.039") },
+};
+
+function geminiCreditPricing(model: string): ProviderCreditPricing | undefined {
+  for (const [id, pricing] of Object.entries(geminiModelPricing)) {
+    if (modelMatches(model, id)) {
+      return pricing;
+    }
   }
 
   return undefined;
