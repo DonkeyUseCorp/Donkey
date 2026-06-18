@@ -112,7 +112,19 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     private func startOverlaySurfaces() {
         guard overlayController == nil else { return }
 
-        let model = UserQueryOverlayModel()
+        // Voice button transcription: Apple's on-device speech is preferred; Gemini is
+        // the automatic fallback when the local path is unavailable or fails.
+        let voiceTranscriber = LocalVoiceTranscriptionAdapter(
+            runtime: FallbackVoiceTranscriptionRuntime(runtimes: [
+                AppleSpeechVoiceTranscriptionRuntime(),
+                GeminiVoiceTranscriptionRuntime()
+            ])
+        )
+        let model = UserQueryOverlayModel(voiceTranscriber: voiceTranscriber)
+
+        // Warm the on-device speech model in the background so the first voice command
+        // isn't blocked behind a model download.
+        AppleSpeechVoiceTranscriptionRuntime.prewarm()
         let controller = UserQueryOverlayController(model: model)
         overlayController = controller
         controller.show()

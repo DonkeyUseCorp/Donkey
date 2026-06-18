@@ -108,22 +108,27 @@ struct AIHarnessAdapterTests {
     }
 
     @Test
-    func voiceTranscriptionRouteHasNoDefaultLocalModel() throws {
+    func voiceTranscriptionRouteSelectsAppleOnDeviceLocalModel() throws {
         let router = AIModelRouter(registry: .defaultHybridPlanner)
 
-        #expect(throws: AIModelRouteError.noMatchingModel) {
-            _ = try router.route(
-                AIModelRouteRequest(
-                    jobType: .voiceTranscription,
-                    privacyMode: .privacySensitive,
-                    requiredCapabilities: [.audioInput]
-                )
+        let selected = try router.route(
+            AIModelRouteRequest(
+                jobType: .voiceTranscription,
+                privacyMode: .privacySensitive,
+                requiredCapabilities: [.audioInput]
             )
-        }
+        )
+
+        #expect(selected.id == "local-voice-transcription-apple-on-device")
+        #expect(selected.role == .voiceTranscription)
+        #expect(selected.provider == .localRuntime)
+        #expect(selected.capabilities.contains(.audioInput))
     }
 
     @Test
-    func voiceTranscriptionRouteHasNoWhisperFallbackWhenParakeetFailed() throws {
+    func voiceTranscriptionRouteHasNoRegistryFallbackWhenOnDeviceFailed() throws {
+        // The Gemini fallback lives in the injected runtime, not the registry, so once
+        // the on-device entry is excluded there is no other model to route to.
         let router = AIModelRouter(registry: .defaultHybridPlanner)
 
         #expect(throws: AIModelRouteError.noMatchingModel) {
@@ -131,7 +136,7 @@ struct AIHarnessAdapterTests {
                 AIModelRouteRequest(
                     jobType: .voiceTranscription,
                     privacyMode: .privacySensitive,
-                    failedModelEntryIDs: ["local-voice-transcription-parakeet-tdt-0.6b-v3"],
+                    failedModelEntryIDs: ["local-voice-transcription-apple-on-device"],
                     requiredCapabilities: [.audioInput]
                 )
             )

@@ -149,6 +149,26 @@ public struct AIModelRegistry: Codable, Equatable, Sendable {
                     "lastVerifiedAt": "2026-05-25",
                     "docsSource": "Donkey backend inference API"
                 ]
+            ),
+            AIModelRegistryEntry(
+                id: "local-voice-transcription-apple-on-device",
+                role: .voiceTranscription,
+                provider: .localRuntime,
+                modelID: "apple-on-device",
+                endpoint: URL(string: "local://apple/speech-on-device")!,
+                capabilities: [.audioInput],
+                timeoutMS: 15_000,
+                promptVersion: "voice-transcription-v1",
+                evalStatus: .candidate,
+                docsURL: URL(string: "donkey://docs/guides/agent-harness")!,
+                rollbackID: nil,
+                metadata: [
+                    // Apple's on-device speech is the routed entry; the injected runtime
+                    // falls back to Gemini when it is unavailable or fails.
+                    "localOnly": "true",
+                    "fallbackProvider": "gemini",
+                    "lastVerifiedAt": "2026-06-18"
+                ]
             )
         ]
     )

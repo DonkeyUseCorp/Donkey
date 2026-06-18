@@ -377,6 +377,12 @@ public struct LocalVoiceTranscriptionAdapter: Sendable {
             values["transcript.confidence"] = String(transcript.confidence)
             values["transcript.language"] = transcript.language ?? ""
             values["transcript.segmentCount"] = String(transcript.segments.count)
+            // Surface which backend actually answered (apple-speechanalyzer / apple-sfspeech / gemini)
+            // so the trace reflects reality: a fallback to a network backend is not local-only.
+            values.merge(transcript.metadata) { _, new in new }
+            if let backend = transcript.metadata["transcript.backend"] {
+                values["localOnly"] = backend.hasPrefix("apple") ? "true" : "false"
+            }
         }
         return values
     }

@@ -302,6 +302,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   </array>
   <key>NSMicrophoneUsageDescription</key>
   <string>Donkey uses the microphone for user-requested voice input.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Donkey transcribes your voice input on-device to turn it into a command.</string>
   <key>NSScreenCaptureUsageDescription</key>
   <string>Donkey captures bounded screenshots for user-requested app context.</string>
   <key>NSAppleEventsUsageDescription</key>
