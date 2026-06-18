@@ -254,6 +254,40 @@ public struct HarnessImageGenerationResult: Sendable {
     }
 }
 
+/// The typed request for the `web.automate` hosted tool: a natural-language task,
+/// an optional starting URL, and an optional JSON-schema string for structured
+/// output. Declared in DonkeyHarness so the executor can pass it across the
+/// closure boundary without importing the DonkeyAI implementation.
+public struct HarnessWebAutomateRequest: Sendable {
+    public var task: String
+    public var startURL: String?
+    public var structuredOutputSchemaJSON: String?
+
+    public init(task: String, startURL: String? = nil, structuredOutputSchemaJSON: String? = nil) {
+        self.task = task
+        self.startURL = startURL
+        self.structuredOutputSchemaJSON = structuredOutputSchemaJSON
+    }
+}
+
+/// Outcome of the multimodal arm of `llm.generate` — a model call over a local audio/video file.
+/// Distinguishes the cases a caller can act on (re-chunk a truncated transcript, fix an unreadable,
+/// oversized, or non-media file) instead of collapsing every failure to a bare nil.
+public enum HarnessMediaGenerationOutcome: Sendable {
+    /// Non-empty generated text (e.g. an SRT transcript).
+    case text(String)
+    /// The output hit the model's token ceiling and was cut off — split the media into shorter chunks.
+    case truncated
+    /// The file could not be read.
+    case unreadableFile
+    /// The file is larger than can be sent inline — chunk it. Carries the byte size and the cap.
+    case tooLarge(bytes: Int, limit: Int)
+    /// The file's resolved type is not audio or video.
+    case unsupportedType(String)
+    /// The model returned no usable text (empty reply, timeout, or a content block).
+    case empty
+}
+
 public struct HarnessBuiltInToolServices: Sendable {
     public var memoryEntries: [HarnessMemoryEntry]
     public var skillRegistry: HarnessSkillRegistry?
@@ -280,12 +314,23 @@ public struct HarnessBuiltInToolServices: Sendable {
     /// failure). Backs the `llm.generate` tool, the model boundary the planner can reach for to
     /// compose, transform, summarize, or massage text without leaving the harness.
     public var textGenerator: (@Sendable (String) async -> String?)?
+    /// A one-off model call over a local media file (audio/video): a prompt and a file URL in, a typed
+    /// outcome out. Backs `llm.generate` when a `filePath` is supplied — the multimodal arm that
+    /// transcribes, translates, captions, or answers questions about media. The prompt decides the
+    /// output (e.g. an SRT transcript). The outcome distinguishes the failure modes a caller can act on
+    /// (re-chunk a truncated transcript, fix an unreadable or oversized file) rather than collapsing
+    /// them to nil. nil means the media arm is unwired and such calls fail cleanly.
+    public var mediaGenerator: (@Sendable (_ prompt: String, _ file: URL, _ mimeType: String?) async -> HarnessMediaGenerationOutcome)?
     /// Web search: a query in, ranked results as text (title — url, then snippet, per result), or nil
     /// on failure. Backs the `web.search` tool so the agent can find current facts.
     public var webSearcher: (@Sendable (String) async -> String?)?
     /// Web fetch/navigation: a URL in, the page's readable text out, or nil on failure. Backs the
     /// `web.fetch` tool so the agent can read a page it found or was given.
     public var webFetcher: (@Sendable (String) async -> String?)?
+    /// Agentic web automation: a task (navigate/click/fill/extract) in, the run's result as a text
+    /// block out (final output, status, any recording link), or nil on failure. Backs the
+    /// `web.automate` tool, which runs through the hosted Browser Use Cloud backend and bills credits.
+    public var webAutomator: (@Sendable (HarnessWebAutomateRequest) async -> String?)?
     /// The file-understanding layer behind `files.describe`: a file URL in, a structured
     /// `FileUnderstanding` out (OCR for images, text for PDFs, dimensions/metadata), or nil to fall
     /// back to the built-in Foundation understanding. The runtime supplies this; without it the tool
@@ -310,8 +355,10 @@ public struct HarnessBuiltInToolServices: Sendable {
         automationConsentGranted: (@Sendable (_ bundleIdentifier: String?) async -> Bool)? = nil,
         commandExecutor: (@Sendable (HarnessToolExecutionContext) async -> HarnessToolResult?)? = nil,
         textGenerator: (@Sendable (String) async -> String?)? = nil,
+        mediaGenerator: (@Sendable (_ prompt: String, _ file: URL, _ mimeType: String?) async -> HarnessMediaGenerationOutcome)? = nil,
         webSearcher: (@Sendable (String) async -> String?)? = nil,
         webFetcher: (@Sendable (String) async -> String?)? = nil,
+        webAutomator: (@Sendable (HarnessWebAutomateRequest) async -> String?)? = nil,
         fileUnderstanding: (@Sendable (URL) async -> FileUnderstanding?)? = nil,
         imageGenerator: (@Sendable (HarnessImageGenerationRequest) async -> HarnessImageGenerationResult?)? = nil
     ) {
@@ -328,8 +375,10 @@ public struct HarnessBuiltInToolServices: Sendable {
         self.automationConsentGranted = automationConsentGranted
         self.commandExecutor = commandExecutor
         self.textGenerator = textGenerator
+        self.mediaGenerator = mediaGenerator
         self.webSearcher = webSearcher
         self.webFetcher = webFetcher
+        self.webAutomator = webAutomator
         self.fileUnderstanding = fileUnderstanding
         self.imageGenerator = imageGenerator
     }
@@ -408,6 +457,8 @@ public enum BuiltInHarnessToolExecutors {
             return await webSearch(context, services: services)
         case "web.fetch":
             return await webFetch(context, services: services)
+        case "web.automate":
+            return await webAutomate(context, services: services)
         case "files.describe":
             return await filesDescribe(context, services: services)
         case "image.edit":
@@ -1624,21 +1675,53 @@ public enum BuiltInHarnessToolExecutors {
         "app.lookup"
     ]
 
-    /// Generic LLM call: compose/transform text via the model boundary. Long output can be written
-    /// to a temp file (toFile=true) so the caller builds a note/document from the file instead of
-    /// passing a huge string through a length-limited shell command.
+    /// Generic LLM call: compose/transform text via the model boundary, or — when a `filePath` is
+    /// given — transcribe/translate/analyze a local audio or video file through the media boundary.
+    /// Long output can be written to a temp file (toFile=true) so the caller builds a note, subtitle
+    /// file, or document from the file instead of passing a huge string through a length-limited shell
+    /// command.
     private static func llmGenerate(
         _ context: HarnessToolExecutionContext,
         services: HarnessBuiltInToolServices
     ) async -> HarnessToolResult {
-        guard let generator = services.textGenerator else {
-            return failed(context, "No model boundary is wired for llm.generate.", reason: "textGeneratorUnavailable")
-        }
         guard let prompt = trimmed(context.call.input["prompt"]) else {
             return invalidInput(context, "llm.generate requires a `prompt`.")
         }
+
+        // Optional source text the prompt operates on — folded into the prompt for both the text and
+        // the media arm, so passing `input` alongside `filePath` (e.g. a glossary of names to spell) is
+        // not silently dropped.
         let source = context.call.input["input"].map { "\n\nINPUT:\n\($0)" } ?? ""
-        guard let text = await generator(prompt + source), !text.isEmpty else {
+        let generated: String?
+        if let filePath = trimmed(context.call.input["filePath"]) {
+            guard let mediaGenerator = services.mediaGenerator else {
+                return failed(context, "No media model boundary is wired for llm.generate with a filePath.", reason: "mediaGeneratorUnavailable")
+            }
+            let fileURL = URL(fileURLWithPath: filePath)
+            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                return invalidInput(context, "llm.generate `filePath` does not exist: \(filePath).")
+            }
+            switch await mediaGenerator(prompt + source, fileURL, trimmed(context.call.input["mimeType"])) {
+            case .text(let value):
+                generated = value
+            case .truncated:
+                return failed(context, "The transcript hit the model's output limit and was cut off — split the media into shorter chunks and transcribe each.", reason: "mediaOutputTruncated")
+            case .unreadableFile:
+                return failed(context, "Could not read the media file: \(filePath).", reason: "mediaFileUnreadable")
+            case .tooLarge(let bytes, let limit):
+                return failed(context, "The media file is \(bytes / 1_000_000)MB, over the \(limit / 1_000_000)MB inline limit — extract compact audio or split it into chunks.", reason: "mediaFileTooLarge")
+            case .unsupportedType(let mime):
+                return failed(context, "llm.generate `filePath` must be audio or video; got \(mime). Pass an explicit `mimeType` if the extension is unusual.", reason: "mediaUnsupportedType")
+            case .empty:
+                generated = nil
+            }
+        } else {
+            guard let generator = services.textGenerator else {
+                return failed(context, "No model boundary is wired for llm.generate.", reason: "textGeneratorUnavailable")
+            }
+            generated = await generator(prompt + source)
+        }
+        guard let text = generated, !text.isEmpty else {
             return failed(context, "The model returned no text.", reason: "emptyGeneration")
         }
 
@@ -1773,6 +1856,32 @@ public enum BuiltInHarnessToolExecutors {
             summary: text.count > 600 ? String(text.prefix(600)) + "…" : text,
             facts: ["lastAcceptedTool": context.call.name],
             metadata: ["text": text, "characterCount": String(text.count)]
+        )
+    }
+
+    private static func webAutomate(
+        _ context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices
+    ) async -> HarnessToolResult {
+        guard let automator = services.webAutomator else {
+            return failed(context, "Web automation is not configured.", reason: "webAutomateUnavailable")
+        }
+        guard let task = trimmed(context.call.input["task"]) else {
+            return invalidInput(context, "web.automate requires a `task` describing what to do.")
+        }
+        let request = HarnessWebAutomateRequest(
+            task: task,
+            startURL: trimmed(context.call.input["startUrl"]),
+            structuredOutputSchemaJSON: trimmed(context.call.input["schema"])
+        )
+        guard let result = await automator(request), !result.isEmpty else {
+            return failed(context, "The browser task did not complete.", reason: "webAutomateFailed")
+        }
+        return success(
+            context,
+            summary: result.count > 600 ? String(result.prefix(600)) + "…" : result,
+            facts: ["lastAcceptedTool": context.call.name],
+            metadata: ["text": result]
         )
     }
 

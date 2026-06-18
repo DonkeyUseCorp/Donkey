@@ -498,16 +498,19 @@ public enum BuiltInHarnessToolCatalog {
             descriptor(
                 "llm.generate",
                 pluginID: "core.model",
-                summary: "Run a one-off LLM call and return generated text. Use it to compose, transform, summarize, classify, rephrase, or massage text — e.g. produce a tracklist or a clean note body, or rewrite a raw status into a friendly one-line message. Set toFile=true for long output (a tracklist, lyrics, a long note body): the text is written to a temp file and the file path is returned, so it bypasses the shell command-length limit when you then build a note or document from it.",
+                summary: "Run a one-off LLM call and return generated text. Use it to compose, transform, summarize, classify, rephrase, or massage text — e.g. produce a tracklist or a clean note body, or rewrite a raw status into a friendly one-line message. Pass `filePath` to a local audio or video file to transcribe, translate, caption, or answer questions about it; the `prompt` decides the output (e.g. \"transcribe to SRT with timestamps\", \"transcribe and translate the text to Spanish, keep the timestamps\"). Set toFile=true for long output (a transcript, a tracklist, a long note body): the text is written to a temp file and the file path is returned, so it bypasses the shell command-length limit when you then build a subtitle file, note, or document from it.",
                 input: [
                     "prompt": "The instruction for the model (what to produce).",
                     "input": "Optional source text the prompt operates on.",
+                    "filePath": "Optional path to a local audio/video file to transcribe, translate, or analyze. Hand over compact audio (extract it first) and chunk long media.",
+                    "mimeType": "Optional MIME type for filePath (e.g. audio/mpeg, video/mp4); inferred from the file extension when omitted.",
                     "toFile": "\"true\" to write the result to a temp file and return its path instead of inline text."
                 ],
                 output: [
                     "text": "The generated text (a short preview when written to a file).",
                     "filePath": "Path to the file holding the full output, when toFile=true."
                 ],
+                optionalInputKeys: ["input", "filePath", "mimeType", "toFile"],
                 permissions: [],
                 safety: .sensitive,
                 verification: ["the returned text (or file) contains the requested content"],
@@ -598,6 +601,24 @@ public enum BuiltInHarnessToolCatalog {
                 permissions: [],
                 safety: .readOnly,
                 verification: ["the fetched text matches the requested page"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            descriptor(
+                "web.automate",
+                pluginID: "core.web",
+                summary: "Run an agentic browser task in the cloud: navigate, click, fill forms, log in, and extract data across pages, then return the result. Use this only when reading (web.fetch) and local capture (web_snapshot) cannot do it — e.g. a multi-step flow, a site behind a login, or heavy bot-protection. This drives a real browser and SPENDS the user's credits, so confirm with the user before running anything that logs in, submits, or pays. Put the starting site in `task` or `startUrl`; pass a `schema` to get structured JSON back.",
+                input: [
+                    "task": "Plain-language description of the whole browser task to accomplish.",
+                    "startUrl": "Optional URL to start at (otherwise name the site in `task`).",
+                    "schema": "Optional JSON Schema string; when set, the result is structured JSON conforming to it."
+                ],
+                output: [
+                    "text": "The agent's final result — its output text or extracted data, with the run status and any recording link."
+                ],
+                optionalInputKeys: ["startUrl", "schema"],
+                permissions: [],
+                safety: .sensitive,
+                verification: ["the task's reported result satisfies the goal"],
                 metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
             ),
             descriptor(

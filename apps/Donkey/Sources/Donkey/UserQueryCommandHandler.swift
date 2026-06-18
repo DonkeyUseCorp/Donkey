@@ -532,13 +532,20 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         harnessServices.imageGenerator = { request in
             await imageGenerator.generate(request)
         }
+        // Same boundary, multimodal arm: transcribe/translate/caption a local audio or video file
+        // (the media skill extracts audio and reaches for this to subtitle a clip).
+        harnessServices.mediaGenerator = { prompt, fileURL, mimeType in
+            await textGenerator.generate(prompt, attachmentPath: fileURL, mimeType: mimeType)
+        }
         // Web research goes through the backend on the service-account credential — no key in the
         // app. Search uses Google Search grounding; fetch reads a page and returns clean markdown
         // (nav/ads/boilerplate stripped server-side) so the model gets the article, not raw HTML.
         let hostedWebSearch = HostedWebSearch(backend: backend)
         let hostedWebFetch = HostedWebFetch(backend: backend)
+        let hostedWebAutomate = HostedWebAutomate(backend: backend)
         harnessServices.webSearcher = { query in await hostedWebSearch.search(query) }
         harnessServices.webFetcher = { url in await hostedWebFetch.fetch(url) }
+        harnessServices.webAutomator = { request in await hostedWebAutomate.run(request) }
         // File understanding behind files.describe: OCR + dimensions for images/screenshots, text for
         // PDFs, Foundation content for text files. Cached per file so the describe pass and any later
         // operation reuse one understanding.
