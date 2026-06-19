@@ -164,12 +164,53 @@ func commandPages(_ path: String) {
     emit(pages)
 }
 
+/// Coerce a JSON value to a number, accepting either a real JSON number or a
+/// numeric string (an LLM may emit `"x":"120"`). Returns nil for anything else.
+func numericValue(_ value: Any?) -> NSNumber? {
+    if let number = value as? NSNumber { return number }
+    if let string = value as? String {
+        let trimmed = string.trimmingCharacters(in: .whitespaces)
+        if let double = Double(trimmed) { return NSNumber(value: double) }
+    }
+    return nil
+}
+
 func boolFromString(_ string: String) -> Bool? {
     switch string.lowercased() {
     case "on", "true", "yes", "1", "checked", "x": return true
     case "off", "false", "no", "0", "unchecked", "": return false
     default: return nil
     }
+}
+
+/// Apply a value to a button field, which may be a single checkbox or a radio
+/// group of several widgets that share one field name. For a multi-widget group,
+/// turn ON the widget whose "on" state string matches the requested option and
+/// turn the rest OFF, so exactly the chosen option ends up selected. For a single
+/// checkbox, interpret the value as a boolean on/off.
+func applyButtonField(_ widgets: [PDFAnnotation], _ rawValue: Any) {
+    // Try to resolve the value to a specific option name (the widget's on-state).
+    let requested: String?
+    if let string = rawValue as? String { requested = string }
+    else if let number = rawValue as? NSNumber, !(rawValue is Bool) { requested = number.stringValue }
+    else { requested = nil }
+
+    // Radio group: more than one widget, each with a distinct on-state string.
+    if widgets.count > 1, let option = requested,
+       widgets.contains(where: { $0.buttonWidgetStateString == option }) {
+        for widget in widgets {
+            widget.buttonWidgetState = widget.buttonWidgetStateString == option ? .onState : .offState
+        }
+        return
+    }
+
+    // Single checkbox (or a boolean/unmatched value): toggle every widget on/off.
+    let on: Bool
+    if let flag = rawValue as? Bool { on = flag }
+    else if let string = rawValue as? String, let flag = boolFromString(string) { on = flag }
+    else if let number = rawValue as? NSNumber { on = number.boolValue }
+    else { on = true }
+    for widget in widgets { widget.buttonWidgetState = on ? .onState : .offState }
 }
 
 func commandSet(_ path: String, _ flags: [String: String]) {
@@ -179,30 +220,28 @@ func commandSet(_ path: String, _ flags: [String: String]) {
         fail("--data must be a JSON object of {fieldName: value}")
     }
 
-    // Index widgets by field name so we can apply each requested value.
-    var byName: [String: PDFAnnotation] = [:]
+    // Index ALL widgets per field name. A single field can have multiple widgets:
+    // radio groups (one widget per option), or a text field repeated across pages.
+    var byName: [String: [PDFAnnotation]] = [:]
     for (_, annotation) in widgetAnnotations(document) {
-        if let name = fieldName(annotation) { byName[name] = annotation }
+        if let name = fieldName(annotation) { byName[name, default: []].append(annotation) }
     }
 
     var applied: [String] = []
     var missing: [String] = []
     for (name, rawValue) in map {
-        guard let annotation = byName[name] else { missing.append(name); continue }
-        switch annotation.widgetFieldType {
-        case .button:
-            let on: Bool
-            if let flag = rawValue as? Bool { on = flag }
-            else if let string = rawValue as? String, let flag = boolFromString(string) { on = flag }
-            else if let number = rawValue as? NSNumber { on = number.boolValue }
-            else { on = true }
-            annotation.buttonWidgetState = on ? .onState : .offState
-        default:
+        guard let widgets = byName[name], !widgets.isEmpty else { missing.append(name); continue }
+        // A field is button-like if any of its widgets is a button (radio/checkbox).
+        let isButton = widgets.contains { $0.widgetFieldType == .button }
+        if isButton {
+            applyButtonField(widgets, rawValue)
+        } else {
             let string: String
             if let value = rawValue as? String { string = value }
             else if let flag = rawValue as? Bool { string = flag ? "Yes" : "No" }
             else { string = String(describing: rawValue) }
-            annotation.widgetStringValue = string
+            // Set on every widget sharing the name (text fields spanning pages).
+            for widget in widgets { widget.widgetStringValue = string }
         }
         applied.append(name)
     }
@@ -220,19 +259,24 @@ func commandOverlay(_ path: String, _ flags: [String: String]) {
     }
 
     var stamped = 0
-    for item in items {
-        guard let pageIndex = (item["page"] as? NSNumber)?.intValue,
-              let x = (item["x"] as? NSNumber)?.doubleValue,
-              let y = (item["y"] as? NSNumber)?.doubleValue,
+    var skipped: [[String: Any]] = []
+    for (offset, item) in items.enumerated() {
+        guard let pageIndex = numericValue(item["page"])?.intValue,
+              let x = numericValue(item["x"])?.doubleValue,
+              let y = numericValue(item["y"])?.doubleValue,
               let text = item["text"] as? String else {
-            fail("each overlay item needs page, x, y, text")
+            skipped.append(["index": offset, "reason": "needs page, x, y, text (numbers or numeric strings)"])
+            continue
         }
-        guard let page = document.page(at: pageIndex) else { fail("no such page: \(pageIndex)") }
-        let size = (item["size"] as? NSNumber)?.doubleValue ?? 12
+        guard let page = document.page(at: pageIndex) else {
+            skipped.append(["index": offset, "reason": "no such page: \(pageIndex)"])
+            continue
+        }
+        let size = numericValue(item["size"])?.doubleValue ?? 12
         // Width/height are generous so the text is never clipped; freeText draws
         // top-left within its bounds, so anchor the box's top at the given y.
-        let width = (item["width"] as? NSNumber)?.doubleValue ?? max(120, Double(text.count) * size * 0.6)
-        let height = (item["height"] as? NSNumber)?.doubleValue ?? (size * 1.4)
+        let width = numericValue(item["width"])?.doubleValue ?? max(120, Double(text.count) * size * 0.6)
+        let height = numericValue(item["height"])?.doubleValue ?? (size * 1.4)
         let bounds = CGRect(x: x, y: y - height, width: width, height: height)
         let annotation = PDFAnnotation(bounds: bounds, forType: .freeText, withProperties: nil)
         annotation.contents = text
@@ -246,9 +290,17 @@ func commandOverlay(_ path: String, _ flags: [String: String]) {
         stamped += 1
     }
 
+    // Only abort if nothing at all could be stamped; otherwise write the valid
+    // stamps and report which items were skipped and why.
+    guard stamped > 0 else {
+        fail("no overlay items could be stamped; \(skipped.count) skipped")
+    }
+
     let out = outputURL(flags)
     guard document.write(to: out) else { fail("could not write output: \(out.path)") }
-    emit(["out": out.path, "stamped": stamped])
+    var result: [String: Any] = ["out": out.path, "stamped": stamped]
+    if !skipped.isEmpty { result["skipped"] = skipped }
+    emit(result)
 }
 
 /// Burns annotations (form values, overlays) into page content so the result is
@@ -262,8 +314,11 @@ func commandFlatten(_ path: String, _ flags: [String: String]) {
     var firstBox = (document.page(at: 0)?.bounds(for: .mediaBox)) ?? CGRect(x: 0, y: 0, width: 612, height: 792)
     guard let context = CGContext(consumer: consumer, mediaBox: &firstBox, nil) else { fail("could not create PDF context") }
 
-    for index in 0..<document.pageCount {
-        guard let page = document.page(at: index) else { continue }
+    let total = document.pageCount
+    var processed = 0
+    var droppedPages: [Int] = []
+    for index in 0..<total {
+        guard let page = document.page(at: index) else { droppedPages.append(index); continue }
         var box = page.bounds(for: .mediaBox)
         let pageInfo = [kCGPDFContextMediaBox as String: NSData(bytes: &box, length: MemoryLayout<CGRect>.size)]
         context.beginPDFPage(pageInfo as CFDictionary)
@@ -274,6 +329,7 @@ func commandFlatten(_ path: String, _ flags: [String: String]) {
             annotation.draw(with: .mediaBox, in: context)
         }
         context.endPDFPage()
+        processed += 1
     }
     context.closePDF()
 
@@ -282,7 +338,20 @@ func commandFlatten(_ path: String, _ flags: [String: String]) {
     } catch {
         fail("could not write output: \(out.path)")
     }
-    emit(["out": out.path, "flattened": true])
+
+    var result: [String: Any] = [
+        "out": out.path,
+        "flattened": true,
+        "processedPages": processed,
+        "totalPages": total,
+    ]
+    // Surface any page loss explicitly so the caller does not mistake a
+    // page-dropped output for a clean success.
+    if !droppedPages.isEmpty {
+        result["droppedPages"] = droppedPages
+        result["warning"] = "dropped \(droppedPages.count) of \(total) pages: \(droppedPages.map(String.init).joined(separator: ", "))"
+    }
+    emit(result)
 }
 
 // MARK: - Entry point
