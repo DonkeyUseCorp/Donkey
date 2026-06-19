@@ -20,12 +20,22 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     @Published private(set) var notchTasks: [UserQueryNotchTask]
     @Published private(set) var spawnStates: [UserQuerySpawnState] = []
     @Published private(set) var selectedSpawnID: String?
+    /// Logged out: the notch renders a login call-to-action instead of the task surface. The app
+    /// delegate pushes this from the auth coordinator's session state (true while signed out after a
+    /// prior sign-in, i.e. an expired session) and clears it once sign-in completes.
+    @Published private(set) var needsLogin = false
     var agentVisualizationPresenter: ((PointerCoachCursorGuideRequest, String?) -> Void)?
+    /// Fired when the notch Login button is tapped, so the app delegate can start the real sign-in
+    /// (the Google browser flow). The model never opens browsers or windows itself.
+    var loginActionRequested: (() -> Void)?
+    /// Fired when a hosted request fails authentication mid-run (an expired session). The app delegate
+    /// wires this to sign out, which flips the notch into login mode while the running tasks stay put.
+    var sessionExpired: (() -> Void)?
     /// Fired when the Live session's optional audio streaming should start/stop,
     /// so the mic owner can keep the engine running continuously.
     var onLiveAudioStreamingChanged: ((Bool) -> Void)?
 
-    private let commandHandler: any UserQueryCommandHandling
+    private var commandHandler: any UserQueryCommandHandling
     private let taskStore: any UserQueryTaskStoring
     private let followUpResolver: any UserQueryFollowUpResolving
     private let voiceTranscriber: LocalVoiceTranscriptionAdapter
@@ -37,10 +47,26 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     /// The resume is deferred here and fired by `handleCommandRunResult` once that loop ends, so two loops
     /// never run on one task and the tap is never silently dropped.
     private var pendingResumeTaskIDs: Set<String> = []
-    /// Completed tasks the user has already seen surfaced in the collapsed notch. Expanding the notch
-    /// acknowledges them so their colored pointers stop floating in the collapsed surface; the tasks
-    /// themselves stay in the expanded list until closed.
-    private var acknowledgedCompletionIDs: Set<String> = []
+    /// The task an explicit Reply tap pinned the next submission to (a task waiting on the user — a
+    /// clarification or review). It routes the answer straight to that task instead of leaving the
+    /// follow-up resolver to guess, and the expanded panel dims every other row while it is set so the
+    /// user sees which thread their reply continues. Consumed by the next submission.
+    @Published private(set) var replyTargetTaskID: String?
+    /// Metadata flag marking a terminal task (completed or failed) as seen — set when the user expands
+    /// the notch. It lives on the task (and so is persisted through the task store) rather than in memory,
+    /// so an acknowledged failure stays dismissed across relaunches instead of re-surfacing every launch.
+    private static let seenMetadataKey = "notch.seen"
+
+    /// Clear the per-run metadata flags a task carries into a fresh running run: the "seen" dismissal (so
+    /// its next terminal state re-surfaces in the collapsed notch) and the streaming-answer flag (so a
+    /// streamed reply on the new run replaces the previous answer instead of appending to it). Applied at
+    /// every stopped→running transition — both the in-place resume (`updateTask`) and the matched-resume
+    /// seed (`taskForSubmittedCommand`), which bypasses `updateTask`.
+    private static func clearRunMetadata(_ metadata: inout [String: String]) {
+        metadata[seenMetadataKey] = nil
+        metadata[UserQueryNotchTask.streamingAnswerMetadataKey] = nil
+    }
+
     private var lastActiveTaskID: String?
     /// The task/spawn the in-flight Gemini Live turn reports into, so the user
     /// sees the same cursor-and-task feedback as a local pipeline run.
@@ -100,6 +126,11 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         appCatalogRefreshLoop.start()
         checkForUpdates()
         startLiveSessionIfEnabled()
+        // A mid-run 401 from the hosted backend means the session expired: surface login (the app
+        // delegate wires `sessionExpired` to the auth coordinator) while the running tasks stay put.
+        self.commandHandler.onAuthenticationRequired = { [weak self] in
+            self?.handleSessionExpired()
+        }
         autoResumeInterruptedTasks(restoration.autoResumeIDs)
     }
 
@@ -108,6 +139,9 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     /// the cursor; progress narrates into the task's own row. Fires once, at launch.
     private func autoResumeInterruptedTasks(_ taskIDs: [String]) {
         guard !taskIDs.isEmpty else { return }
+        // Don't drive the harness while signed out — every planner step would 401. The interrupted
+        // tasks stay retryable and resume on the next launch (or manual retry) once signed in.
+        guard BackendSessionGate.shared.isAuthenticated else { return }
         for taskID in taskIDs {
             guard let context = commandContext(taskID: taskID, isFollowUp: false, source: .followUp, spawnID: nil) else {
                 continue
@@ -135,7 +169,10 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     /// and only becomes `isConnected` if it can authenticate, so when it is not
     /// configured the existing command pipeline is used unchanged.
     private func startLiveSessionIfEnabled() {
-        guard liveController.isEnabled else { return }
+        // Self-gates on configuration AND on being signed in: the session mints a backend token to
+        // connect, which 401s while logged out. The app delegate calls `resumeLiveSession()` once the
+        // session is restored, so the always-on session comes back without a relaunch.
+        guard liveController.isEnabled, BackendSessionGate.shared.isAuthenticated else { return }
         liveController.onComplexRequest = { [weak self] goal in
             // The model explicitly delegated via agent_run: close out the Live
             // turn and run the goal through the full local pipeline (never back
@@ -174,6 +211,19 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         Task { [liveController] in await liveController.start() }
     }
 
+    /// Tear down the always-on Live session when the session signs out. The app delegate drives this
+    /// from the auth phase so a logged-out app stops reconnecting (each reconnect re-mints a token and
+    /// 401s). Paired with `resumeLiveSession()` on sign-in.
+    func suspendLiveSession() {
+        Task { [liveController] in await liveController.stop() }
+    }
+
+    /// Bring the Live session back after sign-in. `start()` self-guards on an existing session, so a
+    /// redundant call is a no-op.
+    func resumeLiveSession() {
+        startLiveSessionIfEnabled()
+    }
+
     /// Stream optional microphone audio into the Live session (no-op unless audio
     /// is enabled and the session is connected).
     func streamLiveAudioFrames(_ samples: [Float], sampleRate: Double) {
@@ -203,6 +253,25 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
 
     func showUpdateUI() {
         updateChecker.showUpdateUI()
+    }
+
+    /// Push the logged-out state into the notch. The app delegate drives this from the auth
+    /// coordinator's session phase.
+    func updateNeedsLogin(_ value: Bool) {
+        guard needsLogin != value else { return }
+        needsLogin = value
+    }
+
+    /// The notch Login button was tapped; hand off to the app delegate to start the sign-in flow.
+    func requestLogin() {
+        loginActionRequested?()
+    }
+
+    /// A hosted request returned 401 mid-run. Surface login once — ignored if already logged out, so a
+    /// burst of retrying calls doesn't re-fire — and let the app delegate sign out.
+    func handleSessionExpired() {
+        guard !needsLogin else { return }
+        sessionExpired?()
     }
 
     func handle(_ intent: UserQueryIntent) {
@@ -386,6 +455,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     private func runLocalCommand(_ text: String, source: AppHarnessTurnSource = .typedPrompt) {
         let candidates = followUpCandidates()
         let promptFollowUpTarget = promptSubmissionFollowUpTarget()
+        let replyTargetTaskID = consumePendingReplyTarget()
         let spawnID: String?
         if let promptFollowUpTarget {
             updateSpawn(
@@ -408,7 +478,10 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         let confidenceThreshold = Self.followUpMatchConfidenceThreshold
         Task { [weak self, followUpResolver] in
             let matchedTaskID: String?
-            if let taskID = promptFollowUpTarget?.taskID {
+            if let replyTargetTaskID {
+                // An explicit Reply pins the answer to that task — never re-routed by the resolver.
+                matchedTaskID = replyTargetTaskID
+            } else if let taskID = promptFollowUpTarget?.taskID {
                 matchedTaskID = taskID
             } else if candidates.isEmpty {
                 matchedTaskID = nil
@@ -645,6 +718,44 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         }
     }
 
+    /// The user tapped Reply on a task that is waiting on them (a clarification or a review). Pin the
+    /// next composer submission to that task so the answer continues it rather than starting a new task
+    /// or being matched elsewhere by the resolver; the controller focuses the input after this.
+    func beginReply(toTaskID taskID: String) {
+        // Any existing thread is repliable, whatever its state — running/permission-gated threads take
+        // the message as a queued follow-up downstream, the rest resume.
+        guard task(withID: taskID) != nil else {
+            return
+        }
+        // Tapping Reply on the row already targeted cancels reply mode and un-dims the other rows, so the
+        // user is never stuck in a dimmed state with no way back out short of sending a message.
+        if replyTargetTaskID == taskID {
+            replyTargetTaskID = nil
+            return
+        }
+        replyTargetTaskID = taskID
+        lastActiveTaskID = taskID
+    }
+
+    /// Leave reply mode without sending — the user tapped elsewhere in the notch chrome. No-op when no
+    /// reply is targeted, so a stray background tap in normal use does nothing.
+    func cancelReply() {
+        guard replyTargetTaskID != nil else { return }
+        replyTargetTaskID = nil
+    }
+
+    /// Take the pinned Reply target, if any, for the submission about to run. Cleared on read so it only
+    /// applies to the one answer (which also un-dims the rows), and dropped if the task is no longer
+    /// around (fall back to normal routing).
+    private func consumePendingReplyTarget() -> String? {
+        guard let taskID = replyTargetTaskID else { return nil }
+        replyTargetTaskID = nil
+        // Drop the pin only if the task vanished between the tap and the submit (e.g. it was closed);
+        // otherwise the message is pinned to it whatever its current state (`startCommandRun` routes a
+        // running/permission-gated target into a queued follow-up, a stopped/terminal one resumes).
+        return task(withID: taskID) != nil ? taskID : nil
+    }
+
     func pauseTask(id taskID: String) {
         guard task(withID: taskID)?.status == .running else { return }
 
@@ -701,20 +812,33 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     }
 
     /// The tasks the collapsed notch keeps surfaced as floating pointers: anything running, plus
-    /// completed tasks the user hasn't dismissed yet by expanding the notch.
+    /// terminal tasks (completed or failed) the user hasn't dismissed yet by expanding the notch. A
+    /// failure — like an auth error — holds the chin until acknowledged just as a completion does.
     var notchSurfacedTasks: [UserQueryNotchTask] {
         notchTasks.filter { task in
             task.status == .running ||
-                (task.status == .completed && !acknowledgedCompletionIDs.contains(task.id))
+                (Self.isSurfacedTerminalStatus(task.status) && !Self.isSeen(task))
         }
     }
 
-    /// Marks every currently-completed task as seen so it stops surfacing in the collapsed notch.
-    /// Called when the notch expands — the user is now looking at the full list.
-    func acknowledgeSurfacedCompletions() {
-        for task in notchTasks where task.status == .completed {
-            acknowledgedCompletionIDs.insert(task.id)
+    /// Marks every currently-terminal task (completed or failed) as seen so it stops surfacing in the
+    /// collapsed notch. Called when the notch expands — the user is now looking at the full list. The
+    /// flag is written to the task store, so the dismissal sticks across relaunches.
+    func acknowledgeSurfacedTasks() {
+        for index in notchTasks.indices where Self.isSurfacedTerminalStatus(notchTasks[index].status) && !Self.isSeen(notchTasks[index]) {
+            var task = notchTasks[index]
+            task.metadata[Self.seenMetadataKey] = "true"
+            notchTasks[index] = task
+            taskStore.upsertTask(task)
         }
+    }
+
+    private static func isSurfacedTerminalStatus(_ status: UserQueryTaskStatus) -> Bool {
+        status == .completed || status == .failed
+    }
+
+    private static func isSeen(_ task: UserQueryNotchTask) -> Bool {
+        task.metadata[seenMetadataKey] == "true"
     }
 
     /// Closes a task: removes it from the notch list and tears down its pointer.
@@ -726,6 +850,10 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
 
         notchTasks.removeAll { $0.id == taskID }
         activeTaskIDs.remove(taskID)
+        // Closing the targeted task ends reply mode so the remaining rows don't stay dimmed.
+        if replyTargetTaskID == taskID {
+            replyTargetTaskID = nil
+        }
         if lastActiveTaskID == taskID {
             lastActiveTaskID = notchTasks.first?.id
         }
@@ -1077,6 +1205,14 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             task.detail = Self.runningSeedDetail
             task.status = .running
             task.updatedAt = Date()
+            // Restamp the run-start: a resumed run's elapsed time should measure this run, not the idle
+            // gap since the task was first created (e.g. a task that failed, sat for hours, then resumed).
+            task.createdAt = Date()
+            // This branch seeds the task straight to running without going through `updateTask`, so it
+            // must apply the same fresh-run metadata reset (see `clearRunMetadata`): otherwise a replied-to
+            // thread keeps its stale "seen" (its next terminal state never re-surfaces) and "streaming
+            // answer" flag (the new streamed reply appends onto the old answer).
+            Self.clearRunMetadata(&task.metadata)
             notchAccentIndex = UserQueryAccentPalette.normalizedIndex(task.accentIndex)
             prependTask(task)
             return task
@@ -1169,6 +1305,13 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         return { [weak self] update in
             guard let self else { return }
 
+            // A streamed answer chunk accumulates onto the task's detail (the chin and the open row both
+            // read it), so the reply types itself out. It bypasses the label path below, which replaces.
+            if let answerDelta = update.answerDelta {
+                self.appendStreamedAnswer(taskID: taskID, delta: answerDelta, spawnID: spawnID)
+                return
+            }
+
             let label = update.label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !label.isEmpty, self.task(withID: taskID)?.status == .running {
                 self.updateTask(id: taskID, detail: label)
@@ -1181,6 +1324,22 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
                     phase: update.phase
                 )
             }
+        }
+    }
+
+    /// Append one streamed chunk of the assistant's final reply to the running task's detail. The first
+    /// chunk clears the per-step "Thinking" status and flips the streaming flag so the chin shows the
+    /// growing answer instead of the prompt; later chunks accumulate onto it. No-op once the task has
+    /// left the running state (a late chunk after completion must not reopen the row's status line).
+    private func appendStreamedAnswer(taskID: String, delta: String, spawnID: String?) {
+        guard let task = task(withID: taskID), task.status == .running else { return }
+        let isStreaming = task.metadata[UserQueryNotchTask.streamingAnswerMetadataKey] == "true"
+        let newDetail = isStreaming ? task.detail + delta : delta
+        var metadata = task.metadata
+        metadata[UserQueryNotchTask.streamingAnswerMetadataKey] = "true"
+        updateTask(id: taskID, detail: newDetail, metadata: metadata)
+        if let spawnID {
+            updateSpawn(id: spawnID, label: newDetail)
         }
     }
 
@@ -1276,6 +1435,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         guard let index = notchTasks.firstIndex(where: { $0.id == id }) else { return }
 
         var task = notchTasks[index]
+        let wasRunning = task.status == .running
         if let title {
             task.title = title
         }
@@ -1287,6 +1447,14 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         }
         if let metadata {
             task.metadata = metadata
+        }
+        // A stopped task re-entering running begins a fresh run: clear the per-run metadata flags and
+        // restamp the run-start so elapsed measures this run, not the idle gap before it. Gated on the
+        // prior status so the planner's per-step "still running" updates (and streamed-answer deltas,
+        // which re-pass the streaming flag) don't keep resetting it mid-run.
+        if status == .running, !wasRunning {
+            Self.clearRunMetadata(&task.metadata)
+            task.createdAt = Date()
         }
         task.updatedAt = Date()
         notchTasks[index] = task
@@ -1323,11 +1491,13 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
                 timedOut.detail = "Timed out — resume"
                 return timedOut
             case .waitingForClarification, .waitingForReview, .waitingForPermission:
-                // Was blocked on the user; the loop that asked is gone. Surface a benign, resumable row
-                // (it needs the user to continue anyway) without raising the collapsed attention glyph.
+                // Was blocked on the user; the loop that asked is gone. It comes back simply paused —
+                // a clean resumable/repliable row, not an "interrupted" one, since whether the app was
+                // restarted is irrelevant to the user. Paused also stays out of the collapsed attention
+                // glyph.
                 var restoredTask = task
-                restoredTask.status = .needsAttention
-                restoredTask.detail = "Interrupted"
+                restoredTask.status = .paused
+                restoredTask.detail = "Paused"
                 return restoredTask
             default:
                 // paused, completed, failed, timedOut, interrupted, needsAttention, chatting: unchanged.
@@ -1418,15 +1588,14 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     /// by step as `runProgressHandler` streams the planner's narration in.
     private static let runningSeedDetail = UserQueryActivity.Kind.working.label
 
+    /// The task's title is the user's prompt, whitespace-collapsed. It is NOT hard-truncated here: every
+    /// place that shows it (the collapsed bar, the prompt pill, each expanded row) renders it on a single
+    /// line and tail-truncates to its own available width, so the expanded row title spans the full row
+    /// rather than being clipped to a fixed character budget. Capped only by `collapsedDisplayText` so a
+    /// runaway prompt can't blob through the store.
     private static func taskLabel(for text: String) -> String {
         let collapsed = collapsedDisplayText(for: text)
-        guard !collapsed.isEmpty else { return "New task" }
-
-        let maxLength = 44
-        guard collapsed.count > maxLength else { return collapsed }
-
-        let endIndex = collapsed.index(collapsed.startIndex, offsetBy: maxLength)
-        return String(collapsed[..<endIndex]).trimmingCharacters(in: .whitespacesAndNewlines) + "..."
+        return collapsed.isEmpty ? "New task" : collapsed
     }
 
     /// A cursor label stays a short status line; cap it so a long tool result never blobs over the

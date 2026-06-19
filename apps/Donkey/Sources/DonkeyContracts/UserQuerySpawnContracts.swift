@@ -76,15 +76,22 @@ public struct UserQuerySpawnProgressUpdate: Equatable, Sendable {
     public var label: String?
     public var targetHint: UserQuerySpawnTargetHint?
     public var phase: UserQuerySpawnPhase?
+    /// One token-chunk of the assistant's final reply, streamed as it is generated. When set, the
+    /// model appends it to the running task's detail (the chin and the open row read that), so the
+    /// answer types itself out instead of popping in whole. A normal `label` update replaces the status
+    /// line; an `answerDelta` accumulates onto it.
+    public var answerDelta: String?
 
     public init(
         label: String? = nil,
         targetHint: UserQuerySpawnTargetHint? = nil,
-        phase: UserQuerySpawnPhase? = nil
+        phase: UserQuerySpawnPhase? = nil,
+        answerDelta: String? = nil
     ) {
         self.label = label
         self.targetHint = targetHint
         self.phase = phase
+        self.answerDelta = answerDelta
     }
 }
 

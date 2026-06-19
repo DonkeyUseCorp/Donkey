@@ -281,7 +281,7 @@ struct TaskFollowUpInjectionTests {
         func status(_ id: String) -> UserQueryTaskStatus? { result.tasks.first { $0.id == id }?.status }
         #expect(status("recent") == .running)
         #expect(status("stale") == .timedOut)        // too old to auto-run → retryable row
-        #expect(status("waiting") == .needsAttention) // was blocked on the user → manual resume
+        #expect(status("waiting") == .paused)         // was blocked on the user → comes back paused
         #expect(status("paused") == .paused)          // user-paused stays paused
         #expect(status("done") == .completed)         // terminal states untouched
         // The persisted updatedAt is preserved so elapsed-time stays the real run duration.

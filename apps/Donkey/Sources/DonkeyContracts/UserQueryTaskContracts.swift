@@ -14,6 +14,16 @@ public enum UserQueryTaskStatus: String, Codable, Equatable, Sendable {
     case timedOut
 }
 
+public extension UserQueryTaskStatus {
+    /// The agent is blocked asking the user to respond (a clarification or a review). These are the only
+    /// states that surface a dedicated Reply button, since only here is the agent actively asking. Every
+    /// state is repliable by tapping the row (a running/permission-gated thread takes the reply as a
+    /// queued follow-up, the rest resume), so there is no separate "repliable" predicate — only this.
+    var isAwaitingUserResponse: Bool {
+        self == .waitingForClarification || self == .waitingForReview
+    }
+}
+
 public struct UserQueryNotchTask: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var title: String
@@ -45,6 +55,30 @@ public struct UserQueryNotchTask: Codable, Equatable, Identifiable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.metadata = metadata
+    }
+}
+
+public extension UserQueryNotchTask {
+    /// Metadata flag set while the assistant's final reply is streaming in token-by-token, so the chin
+    /// switches from echoing the prompt to showing the growing answer even though the task is still
+    /// running. Cleared implicitly once the task reaches a terminal status (which shows `detail` anyway).
+    static let streamingAnswerMetadataKey = "notch.streamingAnswer"
+
+    /// The single line the collapsed chin shows for this task: the user's prompt while it runs, the
+    /// assistant's reply as it streams in (and once answered, its `detail`). The chin renderer and the
+    /// chin-band height measurement both read this, so the band is always sized to the exact line it
+    /// renders — a running task can't show a wrapped prompt inside a band measured for a shorter seed.
+    var chinDisplayText: String {
+        if status == .running {
+            // Once the reply starts streaming, show the growing answer instead of the prompt.
+            if metadata[Self.streamingAnswerMetadataKey] == "true",
+               !detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return detail
+            }
+            let prompt = commandText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !prompt.isEmpty { return prompt }
+        }
+        return detail.isEmpty ? title : detail
     }
 }
 

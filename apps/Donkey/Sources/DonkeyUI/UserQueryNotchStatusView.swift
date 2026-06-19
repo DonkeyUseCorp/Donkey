@@ -28,6 +28,9 @@ public struct UserQueryNotchStatusView: View {
     private let isCommandInputExpanded: Bool
     private let tasks: [UserQueryNotchTask]
     private let surfacedTasks: [UserQueryNotchTask]
+    /// While the user is replying to a specific task (tapped Reply), this is that task; the expanded
+    /// panel dims every other row so it's clear the next message continues this one thread.
+    private let replyTargetTaskID: String?
     private let accentIndex: Int
     private let spawnState: UserQuerySpawnState?
     private let commandSubmitted: @MainActor (String) -> Void
@@ -38,11 +41,20 @@ public struct UserQueryNotchStatusView: View {
     private let resumeRequested: @MainActor (String) -> Void
     private let dismissRequested: @MainActor (String) -> Void
     private let taskSelected: @MainActor (String) -> Void
+    /// A task waiting on the user (a clarification or review) offers Reply; tapping it pins the composer
+    /// to that task and focuses the input so the user's next message answers it.
+    private let replyRequested: @MainActor (String) -> Void
+    /// Tapping the notch chrome outside a row, control, or the composer while replying leaves reply mode.
+    private let replyModeExited: @MainActor () -> Void
     /// (taskID, alwaysAllow). `alwaysAllow` persists a standing rule for the
     /// command signature; it is only offered for non-highRisk shell consent.
     private let approvePermissionRequested: @MainActor (String, Bool) -> Void
     private let denyPermissionRequested: @MainActor (String) -> Void
     private let updateRequested: @MainActor () -> Void
+    /// Logged out: the notch renders a login call-to-action instead of the task surface, and the
+    /// Login button fires this to start the real sign-in (handled by the model/controller).
+    private let needsLogin: Bool
+    private let loginRequested: @MainActor () -> Void
 
     public init(
         state: UserQueryState,
@@ -58,6 +70,7 @@ public struct UserQueryNotchStatusView: View {
         isCommandInputExpanded: Bool,
         tasks: [UserQueryNotchTask] = [],
         surfacedTasks: [UserQueryNotchTask] = [],
+        replyTargetTaskID: String? = nil,
         accentIndex: Int,
         spawnState: UserQuerySpawnState? = nil,
         commandSubmitted: @escaping @MainActor (String) -> Void,
@@ -68,9 +81,13 @@ public struct UserQueryNotchStatusView: View {
         resumeRequested: @escaping @MainActor (String) -> Void,
         dismissRequested: @escaping @MainActor (String) -> Void,
         taskSelected: @escaping @MainActor (String) -> Void,
+        replyRequested: @escaping @MainActor (String) -> Void = { _ in },
+        replyModeExited: @escaping @MainActor () -> Void = {},
         approvePermissionRequested: @escaping @MainActor (String, Bool) -> Void,
         denyPermissionRequested: @escaping @MainActor (String) -> Void,
-        updateRequested: @escaping @MainActor () -> Void
+        updateRequested: @escaping @MainActor () -> Void,
+        needsLogin: Bool = false,
+        loginRequested: @escaping @MainActor () -> Void = {}
     ) {
         self.state = state
         self.updateState = updateState
@@ -85,6 +102,7 @@ public struct UserQueryNotchStatusView: View {
         self.isCommandInputExpanded = isCommandInputExpanded
         self.tasks = tasks
         self.surfacedTasks = surfacedTasks
+        self.replyTargetTaskID = replyTargetTaskID
         self.accentIndex = accentIndex
         self.spawnState = spawnState
         self.commandSubmitted = commandSubmitted
@@ -95,9 +113,13 @@ public struct UserQueryNotchStatusView: View {
         self.resumeRequested = resumeRequested
         self.dismissRequested = dismissRequested
         self.taskSelected = taskSelected
+        self.replyRequested = replyRequested
+        self.replyModeExited = replyModeExited
         self.approvePermissionRequested = approvePermissionRequested
         self.denyPermissionRequested = denyPermissionRequested
         self.updateRequested = updateRequested
+        self.needsLogin = needsLogin
+        self.loginRequested = loginRequested
     }
 
     public var body: some View {
@@ -133,6 +155,17 @@ public struct UserQueryNotchStatusView: View {
         ZStack(alignment: .top) {
             Color.black
 
+            // While replying, a tap on bare chrome (not a row, control, or the composer — those sit above
+            // this layer and take their own taps first) leaves reply mode. Only present while targeted, so
+            // it never interferes with normal taps.
+            if replyTargetTaskID != nil {
+                Rectangle()
+                    .fill(Color.white.opacity(0.001))
+                    .contentShape(Rectangle())
+                    .onTapGesture { replyModeExited() }
+                    .accessibilityHidden(true)
+            }
+
             collapsedContentLayer
                 // The collapsed chrome fades out as the notch grows open and fades back in as it
                 // collapses, so it cross-dissolves with the expanded content rather than popping.
@@ -146,7 +179,7 @@ public struct UserQueryNotchStatusView: View {
                     value: surfaceIsOpen
                 )
 
-            if !hasTaskDisplayText {
+            if !hasTaskDisplayText && !needsLogin {
                 expandedNotchArrow
                     .opacity(surfaceIsOpen ? 1 : 0)
                     .animation(
@@ -176,12 +209,75 @@ public struct UserQueryNotchStatusView: View {
 
     @ViewBuilder
     private var collapsedContentLayer: some View {
-        if isResting {
+        if needsLogin {
+            loginCollapsedContent
+        } else if isResting {
             restingCollapsedContent
         } else {
             regularCollapsedContent
         }
     }
+
+    /// Logged out, collapsed: the idle silhouette sits in the leading lane beside the void, and the
+    /// notch reads "Login to use Donkey". On a real notch the line sits in the band below the void;
+    /// a no-notch display renders the cursor and line inline in the top row. No button until expanded.
+    @ViewBuilder
+    private var loginCollapsedContent: some View {
+        let idleCursor = DonkeyCursorMark(color: accentColor, silhouette: true)
+            .frame(width: 14, height: 14)
+
+        if layout.canRenderTextInTopRow {
+            HStack(spacing: 7) {
+                idleCursor
+
+                Text(Self.loginHeadline)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(Color.white.opacity(0.82))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, max(10, layout.contentHorizontalInset))
+            .frame(width: collapsedSurfaceWidth, height: collapsedSurfaceHeight, alignment: .center)
+        } else {
+            let label = Text(Self.loginHeadline)
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.82))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+
+            ZStack(alignment: .top) {
+                idleCursor
+                    .position(x: collapsedLeadingLaneCenterX, y: layout.collapsedVisibleHeight / 2)
+
+                VStack(spacing: 0) {
+                    Spacer(minLength: 0).frame(height: layout.collapsedVisibleHeight)
+                    label.frame(height: UserQueryNotchMetrics.loginCollapsedBandHeight)
+                }
+            }
+            .frame(width: collapsedSurfaceWidth, height: collapsedSurfaceHeight, alignment: .top)
+        }
+    }
+
+    /// The white Login pill, styled like the prototype's expanded login bar (and the Restart button).
+    private func loginButton() -> some View {
+        Button(action: loginRequested) {
+            Text("Login")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Color.black.opacity(0.82))
+                .padding(.horizontal, 20)
+                .padding(.vertical, 8)
+                .background(Color.white)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Login")
+    }
+
+    private static let loginHeadline = "Login to use Donkey"
 
     private var regularCollapsedContent: some View {
         collapsedContent
@@ -200,6 +296,8 @@ public struct UserQueryNotchStatusView: View {
     /// so the lane never crowds. With nothing surfaced it falls back to the idle silhouette.
     @ViewBuilder
     private func pointerCluster(size: CGFloat) -> some View {
+        // A failed task is a real task, so it keeps its own accent-colored pointer here (alongside the
+        // right-rail warning glyph and held chin); the lane only ever shows one pointer per surfaced task.
         let cluster = Array(surfacedTasks.prefix(Self.maxClusterPointers))
         if cluster.isEmpty {
             DonkeyCursorMark(color: accentColor, silhouette: true)
@@ -308,13 +406,12 @@ public struct UserQueryNotchStatusView: View {
                     .position(x: collapsedTrailingLaneCenterX, y: layout.collapsedVisibleHeight / 2)
 
                 if layout.chinHeight > 0, let speaker {
-                    Text(speaker.detail.isEmpty ? speaker.title : speaker.detail)
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(Color.white.opacity(0.72))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    chinLine(for: speaker)
                         .frame(width: max(0, collapsedSurfaceWidth - 24), alignment: .leading)
-                        .position(x: collapsedSurfaceWidth / 2, y: layout.collapsedVisibleHeight + layout.chinHeight / 2)
+                        .position(
+                            x: collapsedSurfaceWidth / 2,
+                            y: layout.collapsedVisibleHeight + (layout.chinHeight - Self.chinBottomMargin) / 2
+                        )
                 }
             }
             .frame(
@@ -325,11 +422,32 @@ public struct UserQueryNotchStatusView: View {
         }
     }
 
-    /// The task currently surfaced in the chin. Running tasks (newest first) rotate round-robin; the
+    /// The chin line for a surfaced task. While the task runs it echoes what the user asked, so the
+    /// notch reads back the prompt rather than the planner's per-step narration. Once the agent answers,
+    /// the task's `detail` carries the reply (set to `result.summary` on completion), so the chin shows
+    /// the response. A failure is flagged by the red warning icon in the right rail (see
+    /// `collapsedRightSlot`), not inline here.
+    private func chinLine(for task: UserQueryNotchTask) -> some View {
+        Text(chinText(for: task))
+            .font(.system(size: Self.chinFontSize, weight: .regular))
+            .foregroundStyle(Color.white.opacity(0.72))
+            .lineLimit(2)
+            .truncationMode(.tail)
+    }
+
+    private func chinText(for task: UserQueryNotchTask) -> String {
+        task.chinDisplayText
+    }
+
+    /// The task currently surfaced in the chin. An unacknowledged failure outranks everything and holds
+    /// the chin until the user expands. Otherwise running tasks (newest first) rotate round-robin — the
     /// clock is anchored to the newest task's start, so a freshly added task shows first (the view
     /// re-renders on the task change) and then yields to the others. When nothing is running, the most
     /// recent undismissed completion keeps narrating its result instead of leaving the chin empty.
     private func rotatingChinTask(at date: Date) -> UserQueryNotchTask? {
+        if let errored = surfacedTasks.first(where: { $0.status == .failed }) {
+            return errored
+        }
         let running = surfacedTasks.filter { $0.status == .running }
         guard !running.isEmpty else {
             return surfacedTasks.first { $0.status == .completed }
@@ -342,7 +460,9 @@ public struct UserQueryNotchStatusView: View {
 
     private var expandedContent: some View {
         Group {
-            if hasTaskDisplayText {
+            if needsLogin {
+                loginExpandedContent
+            } else if hasTaskDisplayText {
                 expandedTaskContent
             } else {
                 expandedCommandOnlyContent
@@ -359,6 +479,22 @@ public struct UserQueryNotchStatusView: View {
         )
     }
 
+    /// Logged out, expanded: a wide, short bar — the headline on the left, the Login pill on the right
+    /// (no task list, no command input). Mirrors the prototype's expanded login bar.
+    private var loginExpandedContent: some View {
+        HStack(spacing: 12) {
+            Text(Self.loginHeadline)
+                .font(.system(size: 16, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.92))
+
+            Spacer(minLength: 8)
+
+            loginButton()
+        }
+        .padding(.horizontal, 18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+
     private var expandedTaskContent: some View {
         VStack(spacing: 0) {
             if updateState.headerButtonTitle != nil {
@@ -372,7 +508,11 @@ public struct UserQueryNotchStatusView: View {
                             currentTaskRow
                         } else {
                             ForEach(tasks) { task in
+                                // While replying to one task, the others dim back (handled inside the row
+                                // so an attention pointer can stay lit) — it's clear which thread the next
+                                // message continues.
                                 taskRow(task)
+                                    .animation(.easeOut(duration: 0.16), value: replyTargetTaskID)
                             }
                         }
                     }
@@ -598,14 +738,63 @@ public struct UserQueryNotchStatusView: View {
         return parts.joined(separator: " ")
     }
 
+    /// Trailing room a row's text leaves for the pinned top-right controls, by control set: a lone Close
+    /// (or Stop) button, or a Resume + Close pair. Permission rows carry their own banner controls.
+    private func controlsReserve(for task: UserQueryNotchTask) -> CGFloat {
+        if task.status == .waitingForPermission { return 0 }
+        return rowShowsControlPair(task) ? 74 : 44
+    }
+
+    /// Whether a row shows a two-button pair (Resume + Close, or Reply + Close) vs a single Close/Stop —
+    /// mirrors `stateControls`, so the title/subtext reserve the right trailing room for the controls.
+    private func rowShowsControlPair(_ task: UserQueryNotchTask) -> Bool {
+        switch task.status {
+        case .paused, .interrupted, .timedOut, .waitingForClarification, .waitingForReview:
+            return true
+        case .needsAttention:
+            return !task.commandText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        default:
+            return false
+        }
+    }
+
+    /// Trailing room the subtext leaves for the bottom-pinned elapsed time at its widest (e.g. "59m 59s").
+    private static let taskTimeColumnReserve: CGFloat = 52
+
+    /// Full opacity normally; while a reply is targeted, every row except the targeted one dims back so
+    /// the user sees which thread their next message answers.
+    private func rowReplyDimOpacity(for task: UserQueryNotchTask) -> Double {
+        guard let replyTargetTaskID else { return 1 }
+        return task.id == replyTargetTaskID ? 1 : 0.5
+    }
+
+    /// A task blocked on the user — the white attention state. Its pointer stays lit even when the row
+    /// dims for a reply, so every thread still waiting on the user reads at a glance.
+    private func isWaitingForReply(_ task: UserQueryNotchTask) -> Bool {
+        task.status.isAwaitingUserResponse
+    }
+
     private func taskRow(_ task: UserQueryNotchTask) -> some View {
         let isPermission = task.status == .waitingForPermission
+        // The reply dim is applied per-element rather than to the whole row so the pointer of a task that
+        // itself needs the user can stay lit while everything else recedes.
+        let contentDim = rowReplyDimOpacity(for: task)
+        let isReplyTarget = replyTargetTaskID == task.id
+        let pointerDim = isWaitingForReply(task) ? 1 : contentDim
         return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 12) {
-                // Colored pointer only while actively running; silhouette once stopped or finished.
-                DonkeyCursorMark(color: accentColor(for: task.accentIndex), silhouette: task.status != .running)
+                // Colored pointer while actively running; silhouette once stopped or finished — but the
+                // reply target always shows its live accent color, so even a finished thread reads as
+                // active again while the user is replying to it.
+                DonkeyCursorMark(
+                    color: accentColor(for: task.accentIndex),
+                    silhouette: !isReplyTarget && task.status != .running
+                )
                     .frame(width: 14, height: 14)
                     .padding(.top, 1)
+                    .opacity(pointerDim)
+                    // A task waiting on the user gently pulses its pointer to call attention.
+                    .modifier(AttentionPulse(active: isWaitingForReply(task)))
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(task.title)
@@ -613,6 +802,9 @@ public struct UserQueryNotchStatusView: View {
                         .foregroundStyle(Color.white.opacity(0.9))
                         .lineLimit(1)
                         .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        // First line runs all the way to just left of the pinned top-right controls.
+                        .padding(.trailing, controlsReserve(for: task))
 
                     if !isPermission {
                         Text(taskStatusDescription(task))
@@ -621,15 +813,18 @@ public struct UserQueryNotchStatusView: View {
                             .lineLimit(5)
                             .truncationMode(.tail)
                             .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            // Subtext runs to just left of the controls, or the bottom-pinned elapsed time.
+                            .padding(.trailing, max(controlsReserve(for: task), Self.taskTimeColumnReserve))
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                // Reserve room so long text never slides under the pinned controls / time (prototype: pr-[88px]).
-                .padding(.trailing, isPermission ? 0 : 88)
+                .opacity(contentDim)
             }
 
             if isPermission {
                 permissionBanner(for: task)
+                    .opacity(contentDim)
             }
         }
         .padding(.horizontal, 12)
@@ -640,11 +835,19 @@ public struct UserQueryNotchStatusView: View {
         // row renders at the same height and places the time identically; only genuinely long detail
         // grows past it (and never crowds the time).
         .frame(minHeight: 72)
-        .background(Color.white.opacity(0.07))
+        // The cell fill recedes with the rest of the content while a reply targets another row.
+        .background(Color.white.opacity(0.07 * contentDim))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .onTapGesture {
-            taskSelected(task.id)
+            // Every row is repliable. Tapping the active thread again leaves reply mode; tapping any
+            // other row pins it and focuses the composer, so the user can just start typing. (A running
+            // or permission-gated thread takes the message as a queued follow-up; the rest resume.)
+            if isReplyTarget {
+                replyModeExited()
+            } else {
+                replyRequested(task.id)
+            }
         }
         // Pinned to the full cell, matching the prototype insets: controls at top-8/right-12, elapsed
         // time at bottom-2.5/right-12, so the time stays near the cell bottom as the subtext grows.
@@ -653,6 +856,7 @@ public struct UserQueryNotchStatusView: View {
                 topRightControls(task)
                     .padding(.top, 8)
                     .padding(.trailing, 12)
+                    .opacity(contentDim)
             }
         }
         .overlay(alignment: .bottomTrailing) {
@@ -660,6 +864,7 @@ public struct UserQueryNotchStatusView: View {
                 taskElapsedLabel(task)
                     .padding(.bottom, 10)
                     .padding(.trailing, 12)
+                    .opacity(contentDim)
             }
         }
     }
@@ -685,6 +890,10 @@ public struct UserQueryNotchStatusView: View {
             NotchControlButton(systemName: "stop.fill", label: "Stop", isEnabled: true) {
                 pauseRequested(task.id)
             }
+        case .waitingForClarification, .waitingForReview:
+            // The agent is blocked waiting on the user (the white attention glyph). Offer Reply so the
+            // user can answer the question (or respond to the review) right from the row, plus Close.
+            replyAndCloseControls(for: task)
         case .paused, .interrupted, .timedOut:
             // Paused (user), interrupted (changed course), and timed out (hit the step ceiling) all carry a
             // goal and real progress, so they are retryable: offer Resume + Close.
@@ -698,8 +907,8 @@ public struct UserQueryNotchStatusView: View {
                 resumeAndCloseControls(for: task)
             }
         default:
-            // Completed, failed, chatting, and the waiting states (e.g. a clarifying question) are all
-            // dismissable straight from the row instead of showing a non-actionable status glyph.
+            // Completed, failed, and chatting only carry Close. A completed thread is still repliable,
+            // but by tapping the row (which activates it) rather than a button — see `taskRow`'s tap.
             closeControl(for: task)
         }
     }
@@ -709,6 +918,23 @@ public struct UserQueryNotchStatusView: View {
         HStack(spacing: 6) {
             NotchControlButton(systemName: "play.fill", label: "Resume", isEnabled: true) {
                 resumeRequested(task.id)
+            }
+            NotchControlButton(systemName: "xmark", label: "Close", isEnabled: true) {
+                dismissRequested(task.id)
+            }
+        }
+    }
+
+    /// A task waiting on the user gets Reply (answer the clarification / respond to the review) + Close.
+    /// Reply pins the composer to this task and focuses the input; the user's next message answers it.
+    @ViewBuilder
+    private func replyAndCloseControls(for task: UserQueryNotchTask) -> some View {
+        HStack(spacing: 6) {
+            NotchControlButton(label: "Reply", isEnabled: true) {
+                replyRequested(task.id)
+            } icon: {
+                MessageSquareReplyMark()
+                    .frame(width: 12, height: 12)
             }
             NotchControlButton(systemName: "xmark", label: "Close", isEnabled: true) {
                 dismissRequested(task.id)
@@ -809,6 +1035,16 @@ public struct UserQueryNotchStatusView: View {
         .accessibilityLabel("\(label) permission")
     }
 
+    /// While replying, the composer is outlined in the targeted task's accent color so the input visibly
+    /// belongs to that thread (matching the row's lit pointer).
+    private var replyTargetAccentColor: Color? {
+        guard let replyTargetTaskID,
+              let task = tasks.first(where: { $0.id == replyTargetTaskID }) else {
+            return nil
+        }
+        return accentColor(for: task.accentIndex)
+    }
+
     private var commandRow: some View {
         UserQueryComposer(
             state: commandInputState,
@@ -816,6 +1052,7 @@ public struct UserQueryNotchStatusView: View {
             inputTextHeight: commandInputTextHeight,
             isInputExpanded: isCommandInputExpanded,
             surfaceFill: Color.white.opacity(0.085),
+            borderColor: replyTargetAccentColor,
             forceExpandedSurface: true,
             toolbarStyle: .followUp,
             sizeProfile: .compact,
@@ -936,7 +1173,11 @@ public struct UserQueryNotchStatusView: View {
     /// lonely clock; every state's full elapsed total lives in the expanded row.
     @ViewBuilder
     private var collapsedRightSlot: some View {
-        if let task = primaryTask {
+        if surfacedErrorTask != nil {
+            // A surfaced failure (e.g. an auth error) raises the red warning glyph here while its message
+            // holds the chin, until the user expands to acknowledge it.
+            slotIcon("exclamationmark.bubble", color: Self.chinErrorColor)
+        } else if let task = primaryTask {
             switch task.status {
             case .waitingForClarification, .waitingForReview:
                 // Attention: the agent is blocked waiting for the user to answer or review something.
@@ -961,10 +1202,15 @@ public struct UserQueryNotchStatusView: View {
         }
     }
 
-    private func slotIcon(_ systemName: String) -> some View {
+    /// The surfaced failure currently holding the chin, if any — drives the right-rail warning glyph.
+    private var surfacedErrorTask: UserQueryNotchTask? {
+        surfacedTasks.first { $0.status == .failed }
+    }
+
+    private func slotIcon(_ systemName: String, color: Color = Color.white.opacity(0.85)) -> some View {
         Image(systemName: systemName)
             .font(.system(size: 11, weight: .regular))
-            .foregroundStyle(Color.white.opacity(0.85))
+            .foregroundStyle(color)
     }
 
     private func slotText(_ text: String, opacity: Double = 0.72) -> some View {
@@ -1073,6 +1319,15 @@ public struct UserQueryNotchStatusView: View {
     private static let maxClusterPointers = 3
     private static let clusterStepX: CGFloat = 8
     private static let clusterStepY: CGFloat = 3
+    /// Chin text metrics, matching the band geometry the controller sizes (10pt on a 12pt line with an
+    /// 8pt bottom margin). The text is seated above that bottom margin so it stays constant as the band
+    /// grows for a second line.
+    private static let chinFontSize: CGFloat = 12
+    private static let chinBottomMargin: CGFloat = 8
+    /// The failed-chin warning red. Mirrors the prototype's `ERROR_RED` (rgb(255, 69, 58)) exactly — it
+    /// is the one place this hue is needed in the app, so it stays a literal rather than a shared token,
+    /// kept in sync with tasks.ts by value.
+    private static let chinErrorColor = Color(red: 1.0, green: 69.0 / 255.0, blue: 58.0 / 255.0)
     /// The chin advances to the next running task every 2.6s, on a clock shared by all tasks.
     private static let chinRotationInterval: TimeInterval = 2.6
     private static let chinRotationAnchor = Date(timeIntervalSinceReferenceDate: 0)
@@ -1123,17 +1378,43 @@ private struct GrowingNotchShape: Shape {
 /// A round row control (stop / resume / close). Like the prototype's control buttons it brightens its
 /// fill on hover (white 12% → 20%), so the X and its siblings highlight under the cursor.
 private struct NotchControlButton: View {
-    let systemName: String
-    let label: String
-    var isEnabled: Bool = true
-    let action: @MainActor () -> Void
+    private let icon: AnyView
+    private let label: String
+    private let isEnabled: Bool
+    private let action: @MainActor () -> Void
 
     @State private var isHovering = false
 
-    var body: some View {
-        Button(action: action) {
+    /// SF Symbol control (stop / resume / close).
+    init(
+        systemName: String,
+        label: String,
+        isEnabled: Bool = true,
+        action: @escaping @MainActor () -> Void
+    ) {
+        self.init(label: label, isEnabled: isEnabled, action: action) {
             Image(systemName: systemName)
                 .font(.system(size: 10, weight: .regular))
+        }
+    }
+
+    /// Custom-icon control (e.g. the ported lucide Reply glyph). The icon inherits the button's
+    /// foreground tint, so a stroked shape reads the same enabled/hover color as an SF Symbol.
+    init<Icon: View>(
+        label: String,
+        isEnabled: Bool = true,
+        action: @escaping @MainActor () -> Void,
+        @ViewBuilder icon: () -> Icon
+    ) {
+        self.icon = AnyView(icon())
+        self.label = label
+        self.isEnabled = isEnabled
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            icon
                 .foregroundStyle(Color.white.opacity(isEnabled ? 0.88 : 0.3))
                 .frame(width: 24, height: 24)
                 .background(Color.white.opacity(backgroundOpacity))
@@ -1151,6 +1432,77 @@ private struct NotchControlButton: View {
     private var backgroundOpacity: Double {
         guard isEnabled else { return 0.055 }
         return isHovering ? 0.2 : 0.12
+    }
+}
+
+/// A gentle, slow pulse (scale + fade) used to call attention to a task that is waiting on the user,
+/// without the urgency of the running-pointer pulse. Inert until `active`, so non-waiting rows are still.
+private struct AttentionPulse: ViewModifier {
+    let active: Bool
+    @State private var pulsing = false
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(active && pulsing ? 1.1 : 1.0)
+            .opacity(active && pulsing ? 0.7 : 1.0)
+            .onAppear { startIfNeeded() }
+            .onChange(of: active) { startIfNeeded() }
+    }
+
+    private func startIfNeeded() {
+        // Reset when inactive so a thread that re-enters a waiting state (e.g. a second clarification)
+        // re-arms the pulse instead of being blocked by the stale `pulsing` flag.
+        guard active else {
+            pulsing = false
+            return
+        }
+        guard !pulsing else { return }
+        withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
+            pulsing = true
+        }
+    }
+}
+
+/// Lucide `message-square-reply`, ported from the icon set the prototype uses (24×24 viewBox, 2px round
+/// stroke) so the Reply control matches it. The bubble corners and the reply hook keep their 2px radius;
+/// the small tail roundings are simplified to straight joins at this size. Strokes in the current
+/// foreground style, so the enclosing button tints it like an SF Symbol.
+private struct MessageSquareReplyMark: View {
+    var body: some View {
+        GeometryReader { proxy in
+            let scale = min(proxy.size.width, proxy.size.height) / 24
+            Self.path(scale: scale)
+                .stroke(style: StrokeStyle(lineWidth: 2 * scale, lineCap: .round, lineJoin: .round))
+        }
+        .aspectRatio(1, contentMode: .fit)
+        .accessibilityHidden(true)
+    }
+
+    private static func path(scale: CGFloat) -> Path {
+        Path { p in
+            func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x * scale, y: y * scale) }
+            let r = 2 * scale
+
+            // Speech bubble: a rounded rectangle with a reply tail at the bottom-left.
+            p.move(to: pt(4, 3))
+            p.addArc(tangent1End: pt(22, 3), tangent2End: pt(22, 19), radius: r)
+            p.addArc(tangent1End: pt(22, 19), tangent2End: pt(2, 19), radius: r)
+            p.addLine(to: pt(6.828, 19))
+            p.addLine(to: pt(3.212, 21.788))
+            p.addLine(to: pt(2, 21.286))
+            p.addArc(tangent1End: pt(2, 3), tangent2End: pt(22, 3), radius: r)
+            p.closeSubpath()
+
+            // Reply arrow chevron.
+            p.move(to: pt(10, 8))
+            p.addLine(to: pt(7, 11))
+            p.addLine(to: pt(10, 14))
+
+            // Hook from the arrow back up into the bubble.
+            p.move(to: pt(17, 14))
+            p.addArc(tangent1End: pt(17, 11), tangent2End: pt(7, 11), radius: r)
+            p.addLine(to: pt(7, 11))
+        }
     }
 }
 

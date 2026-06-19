@@ -113,6 +113,9 @@ struct UserQueryComposer: View {
     let inputTextHeight: CGFloat
     let isInputExpanded: Bool
     let surfaceFill: Color
+    /// When set, the follow-up surface is outlined in this color — used to tint the composer with the
+    /// accent of the task a reply is pinned to, so the input visibly belongs to that thread.
+    let borderColor: Color?
     let forceExpandedSurface: Bool
     let toolbarStyle: UserQueryComposerToolbarStyle
     let sizeProfile: UserQueryComposerSizeProfile
@@ -128,6 +131,7 @@ struct UserQueryComposer: View {
         inputTextHeight: CGFloat,
         isInputExpanded: Bool,
         surfaceFill: Color = .black,
+        borderColor: Color? = nil,
         forceExpandedSurface: Bool = false,
         toolbarStyle: UserQueryComposerToolbarStyle = .waveformOnly,
         sizeProfile: UserQueryComposerSizeProfile = .standard,
@@ -142,6 +146,7 @@ struct UserQueryComposer: View {
         self.inputTextHeight = inputTextHeight
         self.isInputExpanded = isInputExpanded
         self.surfaceFill = surfaceFill
+        self.borderColor = borderColor
         self.forceExpandedSurface = forceExpandedSurface
         self.toolbarStyle = toolbarStyle
         self.sizeProfile = sizeProfile
@@ -201,6 +206,16 @@ struct UserQueryComposer: View {
             )
             .fill(surfaceFill)
         }
+        .overlay {
+            if let borderColor {
+                RoundedRectangle(
+                    cornerRadius: UserQueryLayout.followUpComposerCornerRadius,
+                    style: .continuous
+                )
+                .strokeBorder(borderColor, lineWidth: 1.5)
+            }
+        }
+        .animation(.easeOut(duration: 0.16), value: borderColor)
         .accessibilityElement(children: .contain)
     }
 

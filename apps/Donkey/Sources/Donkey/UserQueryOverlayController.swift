@@ -38,6 +38,9 @@ final class UserQueryOverlayController {
     private var spawnDesktopEmergeWorkItems: [String: DispatchWorkItem] = [:]
     private var hasPrewarmedInputPanel = false
     private var lastStatusViewSnapshot: StatusPanelViewSnapshot?
+    /// Memoizes the measured chin-band height by (chin text + width) so the per-frame `notchMetrics()`
+    /// doesn't redo Core Text layout when the surfaced chin text hasn't changed.
+    private var chinHeightCache: (key: String, height: CGFloat)?
 
     init(
         model: UserQueryOverlayModel,
@@ -472,9 +475,12 @@ final class UserQueryOverlayController {
         }
 
         activateVoiceInputIfNeeded()
-        positionStatusPanel()
+        // Build the notch metrics once per frame (the chin sizing does Core Text measurement) and feed
+        // both the panel position and the view update from it, instead of recomputing it for each.
+        let metrics = notchMetrics()
+        positionStatusPanel(metrics: metrics)
         updateStatusHoverExpansion()
-        updateStatusPanelView()
+        updateStatusPanelView(metrics: metrics)
         updateSpawnOverlay()
         resizeActivePanelIfNeeded(inputPanel)
         updateMouseEventPassthrough(for: inputPanel)
@@ -502,13 +508,13 @@ final class UserQueryOverlayController {
         )
     }
 
-    private func positionStatusPanel(disableAnimations: Bool = true) {
+    private func positionStatusPanel(metrics: NotchMetrics? = nil, disableAnimations: Bool = true) {
         guard let statusPanel,
               let screen = activeScreen() else {
             return
         }
 
-        let metrics = notchMetrics(for: screen)
+        let metrics = metrics ?? notchMetrics(for: screen)
         let frame = CGRect(
             x: screen.frame.midX - metrics.surfaceSize.width / 2,
             y: screen.frame.maxY - metrics.surfaceSize.height,
@@ -537,14 +543,14 @@ final class UserQueryOverlayController {
         }
     }
 
-    private func updateStatusPanelView() {
-        let metrics = notchMetrics()
+    private func updateStatusPanelView(metrics: NotchMetrics? = nil) {
+        let metrics = metrics ?? notchMetrics()
         let snapshot = statusViewSnapshot(metrics: metrics)
         let previousSnapshot = lastStatusViewSnapshot
         guard snapshot != previousSnapshot else { return }
 
         if snapshot.surfaceSize != previousSnapshot?.surfaceSize {
-            positionStatusPanel()
+            positionStatusPanel(metrics: metrics)
         }
 
         lastStatusViewSnapshot = snapshot
@@ -581,7 +587,9 @@ final class UserQueryOverlayController {
             accentIndex: model.notchAccentIndex,
             spawnState: spawnCue,
             spawnStates: model.spawnStates,
-            selectedSpawnID: model.selectedSpawnID
+            selectedSpawnID: model.selectedSpawnID,
+            replyTargetTaskID: model.replyTargetTaskID,
+            needsLogin: model.needsLogin
         )
     }
 
@@ -608,6 +616,7 @@ final class UserQueryOverlayController {
             isCommandInputExpanded: model.isNotchCommandInputExpanded,
             tasks: model.notchTasks,
             surfacedTasks: model.notchSurfacedTasks,
+            replyTargetTaskID: model.replyTargetTaskID,
             accentIndex: model.notchAccentIndex,
             spawnState: spawnCue,
             commandSubmitted: { [weak self] text in
@@ -634,6 +643,14 @@ final class UserQueryOverlayController {
             taskSelected: { [weak self] taskID in
                 self?.restoreSpawnPointer(forTaskID: taskID)
             },
+            replyRequested: { [weak self] taskID in
+                guard let self else { return }
+                self.model.beginReply(toTaskID: taskID)
+                self.focusStatusComposerTextInputIfAvailable()
+            },
+            replyModeExited: { [weak self] in
+                self?.model.cancelReply()
+            },
             approvePermissionRequested: { [weak self] taskID, alwaysAllow in
                 self?.model.approvePermissionGate(id: taskID, alwaysAllow: alwaysAllow)
             },
@@ -642,6 +659,10 @@ final class UserQueryOverlayController {
             },
             updateRequested: { [weak self] in
                 self?.openAvailableUpdate()
+            },
+            needsLogin: model.needsLogin,
+            loginRequested: { [weak self] in
+                self?.model.requestLogin()
             }
         )
     }
@@ -778,8 +799,9 @@ final class UserQueryOverlayController {
             statusHoverPhase = .expanded
             isStatusHostExpanded = true
             isStatusExpanded = true
-            // Opening the notch dismisses the completed pointers piled up in the collapsed surface.
-            model.acknowledgeSurfacedCompletions()
+            // Opening the notch dismisses the surfaced terminal tasks (completed pointers and any held
+            // error chin) piled up in the collapsed surface.
+            model.acknowledgeSurfacedTasks()
             updateStatusPanelView()
             focusStatusComposerTextInputIfAvailable()
             return
@@ -889,7 +911,8 @@ final class UserQueryOverlayController {
                 expandedContentHeight: statusExpandedContentHeight,
                 isExpanded: isStatusExpanded,
                 isHostExpanded: isStatusHostExpanded,
-                screenWidth: NotchMetrics.defaultScreenWidth
+                screenWidth: NotchMetrics.defaultScreenWidth,
+                needsLogin: model.needsLogin
             )
         }
 
@@ -908,6 +931,21 @@ final class UserQueryOverlayController {
         let voidHeight = hasNotch ? max(safeTop, NotchMetrics.fallbackVoidHeight) : 0
         let voidWidth = hasNotch ? max(measuredVoidWidth, inferredVoidWidth(for: screen, safeTop: safeTop)) : 0
 
+        // The chin band has to know its height before the surface frame is built, but that height
+        // depends on the collapsed width (how wide the chin text can wrap). Resolve the width from a
+        // zero-chin probe first, then size the band to the surfaced tasks' wrapped line count.
+        let widthProbe = NotchMetrics(
+            voidWidth: voidWidth,
+            voidHeight: voidHeight,
+            expandedContentHeight: statusExpandedContentHeight,
+            isExpanded: isStatusExpanded,
+            isHostExpanded: isStatusHostExpanded,
+            screenWidth: screen.frame.width,
+            chinHeight: 0,
+            needsLogin: model.needsLogin
+        )
+        let chinTextWidth = widthProbe.layout.collapsedSurfaceFrame.width - Self.statusChinHorizontalInset
+
         return NotchMetrics(
             voidWidth: voidWidth,
             voidHeight: voidHeight,
@@ -915,19 +953,64 @@ final class UserQueryOverlayController {
             isExpanded: isStatusExpanded,
             isHostExpanded: isStatusHostExpanded,
             screenWidth: screen.frame.width,
-            chinHeight: statusChinHeight
+            chinHeight: statusChinHeight(textWidth: chinTextWidth),
+            needsLogin: model.needsLogin
         )
     }
 
-    /// The collapsed chin hangs below the notch whenever a task is surfaced — running, or a completion
-    /// the user hasn't dismissed yet. The notch view rotates which one's line it shows. Real notch only.
-    private var statusChinHeight: CGFloat {
-        model.notchSurfacedTasks.isEmpty ? 0 : Self.statusChinBandHeight
+    /// The collapsed chin hangs below the notch whenever a task is surfaced — running, a completion, or
+    /// a failure the user hasn't dismissed yet. The notch view rotates which one's line it shows. The
+    /// band fits one line by default and grows by a line-height to seat a wrapped second line (capped
+    /// there), keeping the bottom margin constant. Real notch only.
+    private func statusChinHeight(textWidth: CGFloat) -> CGFloat {
+        let surfaced = model.notchSurfacedTasks
+        guard !surfaced.isEmpty else { return 0 }
+        // Cache by the surfaced chin text + width: `notchMetrics()` runs every frame, but the wrapped-line
+        // Core Text measurement only needs to rerun when the text or available width actually changes.
+        let key = "\(Int(textWidth))|" + surfaced.map(\.chinDisplayText).joined(separator: "\u{1}")
+        if let cache = chinHeightCache, cache.key == key { return cache.height }
+        let lines = surfaced.reduce(1) { partial, task in
+            return max(partial, Self.chinLineCount(for: task.chinDisplayText, width: textWidth))
+        }
+        let height = CGFloat(lines) * Self.statusChinLineHeight + Self.statusChinBottomMargin
+        chinHeightCache = (key, height)
+        return height
     }
 
-    private static let statusChinBandHeight: CGFloat = 20
+    /// Approximate how many lines (1 or 2) the chin text wraps to at `width`, by comparing its wrapped
+    /// height to a single line's height in the chin font. Used to grow the band for a second line.
+    private static func chinLineCount(for text: String, width: CGFloat) -> Int {
+        guard width > 0, !text.isEmpty, chinFontLineHeight > 0 else { return 1 }
+        let wrappedHeight = (text as NSString).boundingRect(
+            with: CGSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: NSFont.systemFont(ofSize: statusChinFontSize)]
+        ).height
+        let lines = Int((wrappedHeight / chinFontLineHeight).rounded())
+        return min(2, max(1, lines))
+    }
+
+    /// A single line's height in the chin font — constant, so measure it once instead of per call.
+    private static let chinFontLineHeight: CGFloat = ("Ag" as NSString).boundingRect(
+        with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+        options: [.usesLineFragmentOrigin, .usesFontLeading],
+        attributes: [.font: NSFont.systemFont(ofSize: statusChinFontSize)]
+    ).height
+
+    /// Chin band geometry, mirroring the prototype: a `statusChinFontSize` line on a `…LineHeight`
+    /// leading, with a constant `…BottomMargin` below the last line. One line totals 23pt (15 + 8);
+    /// a second line adds another 15pt. `…HorizontalInset` is the chin's total left+right text inset.
+    private static let statusChinFontSize: CGFloat = 12
+    private static let statusChinLineHeight: CGFloat = 15
+    private static let statusChinBottomMargin: CGFloat = 8
+    private static let statusChinHorizontalInset: CGFloat = 24
 
     private var statusExpandedContentHeight: CGFloat {
+        // Logged out: the expanded login is a short wide bar (label + Login button), not the full panel.
+        if model.needsLogin {
+            return NotchMetrics.loginExpandedContentHeight
+        }
+
         if hasStatusTaskDisplayText || !model.notchTasks.isEmpty || model.updateState.headerButtonTitle != nil {
             return NotchMetrics.expandedTaskContentHeight
         }
@@ -1377,6 +1460,8 @@ private struct StatusPanelViewSnapshot: Equatable {
     var spawnState: UserQuerySpawnState?
     var spawnStates: [UserQuerySpawnState]
     var selectedSpawnID: String?
+    var replyTargetTaskID: String?
+    var needsLogin: Bool
 }
 
 private enum StatusHoverPhase {

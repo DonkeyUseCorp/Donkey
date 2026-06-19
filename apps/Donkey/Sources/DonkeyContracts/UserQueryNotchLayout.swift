@@ -19,6 +19,8 @@ public struct UserQueryNotchLayout: Equatable, Sendable {
     /// Height of the chin band that hangs below the collapsed notch row while a task streams
     /// (0 when there is nothing to stream). The notch row itself stays `collapsedVisibleHeight`.
     public var chinHeight: CGFloat
+    /// Logged out: render the login call-to-action instead of the task surface.
+    public var needsLogin: Bool
 
     public init(
         voidWidth: CGFloat,
@@ -33,7 +35,8 @@ public struct UserQueryNotchLayout: Equatable, Sendable {
         collapsedCornerRadius: CGFloat,
         expandedCornerRadius: CGFloat,
         canRenderTextInTopRow: Bool,
-        chinHeight: CGFloat = 0
+        chinHeight: CGFloat = 0,
+        needsLogin: Bool = false
     ) {
         self.voidWidth = voidWidth
         self.voidHeight = voidHeight
@@ -48,6 +51,7 @@ public struct UserQueryNotchLayout: Equatable, Sendable {
         self.expandedCornerRadius = expandedCornerRadius
         self.canRenderTextInTopRow = canRenderTextInTopRow
         self.chinHeight = chinHeight
+        self.needsLogin = needsLogin
     }
 
     public var shouldRenderExpandedTopRowVoidMarker: Bool {
@@ -81,6 +85,17 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
     public var screenWidth: CGFloat
     /// Chin band below the collapsed notch row while a task streams (0 otherwise).
     public var chinHeight: CGFloat
+    /// Logged out: render the login call-to-action instead of the task surface. Collapsed shows just
+    /// the "Login to use Donkey" line; expanding reveals a wide, short bar with the Login button.
+    public var needsLogin: Bool
+
+    /// Height of the short collapsed login band that seats the "Login to use Donkey" line below the
+    /// void on a real notch. No-notch displays render the line inline in the top row.
+    public static let loginCollapsedBandHeight: CGFloat = 22
+
+    /// Expanded login content height: a short bar holding the label + Login button, not the full task
+    /// panel. The expanded surface adds the void top inset on top of this.
+    public static let loginExpandedContentHeight: CGFloat = 52
 
     public init(
         voidWidth: CGFloat,
@@ -89,7 +104,8 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
         isExpanded: Bool,
         isHostExpanded: Bool,
         screenWidth: CGFloat,
-        chinHeight: CGFloat = 0
+        chinHeight: CGFloat = 0,
+        needsLogin: Bool = false
     ) {
         self.voidWidth = voidWidth
         self.voidHeight = voidHeight
@@ -98,6 +114,7 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
         self.isHostExpanded = isHostExpanded
         self.screenWidth = screenWidth
         self.chinHeight = chinHeight
+        self.needsLogin = needsLogin
     }
 
     public var surfaceSize: CGSize {
@@ -131,7 +148,8 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
             collapsedCornerRadius: Self.collapsedCornerRadius,
             expandedCornerRadius: Self.expandedCornerRadius,
             canRenderTextInTopRow: canRenderTextInTopRow,
-            chinHeight: effectiveChinHeight
+            chinHeight: effectiveChinHeight,
+            needsLogin: needsLogin
         )
     }
 
@@ -176,8 +194,15 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
             x: 0,
             y: 0,
             width: collapsedSurfaceWidth,
-            height: collapsedVisibleHeight + effectiveChinHeight
+            height: collapsedVisibleHeight + collapsedExtraHeight
         )
+    }
+
+    /// The band below the collapsed notch row: the login call-to-action when logged out (real notch
+    /// only — no-notch displays render it inline), otherwise the streaming chin.
+    private var collapsedExtraHeight: CGFloat {
+        guard needsLogin else { return effectiveChinHeight }
+        return canRenderTextInTopRow ? 0 : Self.loginCollapsedBandHeight
     }
 
     private var expandedContentFrame: CGRect {
@@ -190,6 +215,7 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
     }
 
     private var collapsedSurfaceWidth: CGFloat {
+        // Logged out keeps the normal collapsed width — the bar just reads "Login to use Donkey".
         min(
             Self.expandedContentDesignFrame.width,
             max(
