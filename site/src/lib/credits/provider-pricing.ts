@@ -280,7 +280,18 @@ const geminiModelPricing: Record<GeminiModel, ProviderCreditPricing> = {
 };
 
 function geminiCreditPricing(model: string): ProviderCreditPricing | undefined {
-  for (const [id, pricing] of Object.entries(geminiModelPricing)) {
+  // Exact match wins, so a specific id is never shadowed by a broader prefix entry (e.g. an image
+  // model "…-flash-image" under the "…-flash" text prefix). For dated/snapshot ids that only match
+  // by prefix, try the longest (most specific) key first for the same reason.
+  const exact = geminiModelPricing[model as GeminiModel];
+  if (exact) {
+    return exact;
+  }
+
+  const byLongestPrefix = Object.entries(geminiModelPricing).sort(
+    ([a], [b]) => b.length - a.length,
+  );
+  for (const [id, pricing] of byLongestPrefix) {
     if (modelMatches(model, id)) {
       return pricing;
     }

@@ -82,6 +82,11 @@ type CreditPreflightInput = {
   route: string;
   provider?: string;
   model?: string;
+  // Opt-in: reject an unpriced (provider, model) at the preflight, before the provider runs. Only
+  // safe when the billed model equals this requested model (e.g. asset generation). Routes whose
+  // billed model differs from the request (a provider that pins its own model) must leave this off
+  // and rely on the post-generation price resolution instead.
+  enforceModelPrice?: boolean;
 };
 
 export type RecordedInferenceUsage = {
@@ -104,6 +109,23 @@ export class CreditLimitExceededError extends Error {
   ) {
     super("Credit limit exceeded");
     this.name = "CreditLimitExceededError";
+  }
+}
+
+// A billable (route, provider, model) has no configured price — neither a code-level rate in
+// provider-pricing.ts nor a DB override. We fail loudly instead of charging a guessed default,
+// and we fail at the preflight (before the provider runs and bills upstream) whenever the model
+// is known, so an unpriced model never produces an externally-billed-but-uncharged generation.
+export class CreditRateNotConfiguredError extends Error {
+  public constructor(
+    public readonly route: string,
+    public readonly provider: string,
+    public readonly model: string,
+  ) {
+    super(
+      `No credit price configured for provider="${provider}" model="${model}" on route="${route}".`,
+    );
+    this.name = "CreditRateNotConfiguredError";
   }
 }
 
@@ -259,8 +281,29 @@ export async function assertCanUseInference(input: CreditPreflightInput) {
   }
 
   await assertWithinConfiguredLimits(input);
+  await assertModelIsPriceable(input);
 
   return account;
+}
+
+// When the model that will be billed is already known at preflight, confirm it has a configured
+// price before the provider runs. This turns an unpriced model into a clean, pre-generation
+// failure instead of an upstream-billed generation that throws while recording usage. The billed
+// model isn't always known up front (some adapters resolve a default from an omitted model); those
+// cases still fail loudly post-generation via resolveCreditRate — never via a guessed fallback.
+async function assertModelIsPriceable(input: CreditPreflightInput) {
+  if (!input.enforceModelPrice) {
+    return;
+  }
+  const provider = input.provider?.trim();
+  const model = input.model?.trim();
+  if (!provider || !model) {
+    return;
+  }
+
+  // Throws CreditRateNotConfiguredError when no code or DB price exists (and the route isn't
+  // flat-priced); the returned rate is discarded — recordInferenceUsage resolves it again in-tx.
+  await resolveCreditRate(prisma, input.route, provider, model);
 }
 
 export async function requireInferenceCredits(input: CreditPreflightInput) {
@@ -572,6 +615,25 @@ export function creditErrorResponse(error: unknown) {
     );
   }
 
+  if (error instanceof CreditRateNotConfiguredError) {
+    // A configured-pricing gap is a server-side misconfiguration, surfaced cleanly (and logged)
+    // instead of crashing the request as an unhandled 500.
+    console.error("[inference-credits] no credit price configured", {
+      route: error.route,
+      provider: error.provider,
+      model: error.model,
+    });
+    return NextResponse.json(
+      {
+        error: "credit_price_not_configured",
+        message: "No price is configured for the requested model.",
+      },
+      {
+        status: 500,
+      },
+    );
+  }
+
   return null;
 }
 
@@ -797,13 +859,13 @@ function limitMatchesPreflight(
 }
 
 async function resolveCreditRate(
-  tx: Prisma.TransactionClient,
+  db: CreditsDatabase,
   route: string,
   provider: string,
   model: string,
 ): Promise<CreditRateSnapshot> {
   const now = new Date();
-  const rates = await tx.inferenceCreditRate.findMany({
+  const rates = await db.inferenceCreditRate.findMany({
     orderBy: [
       {
         version: "desc",
@@ -880,10 +942,7 @@ async function resolveCreditRate(
 
   // Every billable model must have a price — a code-level rate in provider-pricing.ts or a DB
   // override. Fail loudly instead of silently charging a default so a missing price is caught.
-  throw new Error(
-    `No credit price configured for provider="${provider}" model="${model}" on route="${route}". ` +
-      "Add a price in provider-pricing.ts or an InferenceCreditRate row.",
-  );
+  throw new CreditRateNotConfiguredError(route, provider, model);
 }
 
 function rateSnapshot(

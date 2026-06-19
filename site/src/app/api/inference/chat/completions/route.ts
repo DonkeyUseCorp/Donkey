@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import {
+  creditErrorResponse,
   creditUsageHeaders,
   inferenceUsageRoutes,
   recordFailedInferenceUsage,
@@ -155,6 +156,10 @@ export const POST = withDonkeyAuth(async (request) => {
       route: inferenceUsageRoutes.chatCompletions,
       userId: request.donkey.userId,
     });
+    const creditResponse = creditErrorResponse(error);
+    if (creditResponse) {
+      return creditResponse;
+    }
     if (error instanceof InferenceProviderError) {
       return inferenceProviderErrorResponse(error);
     }

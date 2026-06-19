@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import {
+  creditErrorResponse,
   creditUsageHeaders,
   inferenceUsageRoutes,
   recordFailedInferenceUsage,
@@ -35,17 +36,33 @@ export const POST = withDonkeyAuth(async (request) => {
     return validationErrorResponse(parsed.error);
   }
 
+  // Select the provider before the preflight so credit limits and pricing are scoped to the real
+  // provider (not a model-neutral request). This also lets the preflight reject an unpriced
+  // caller-supplied model before the provider runs and bills upstream.
+  let provider;
+  try {
+    provider = createProviderRegistry().assetProvider(parsed.data);
+  } catch (error) {
+    if (error instanceof InferenceProviderError) {
+      return inferenceProviderErrorResponse(error);
+    }
+    throw error;
+  }
+
   const credits = await requireInferenceCredits({
     model: parsed.data.model,
-    provider: parsed.data.provider,
+    provider: provider.id,
     route: inferenceUsageRoutes.assets,
     userId: request.donkey.userId,
+    // Asset generation bills the requested model, so reject an unpriced one before the provider
+    // runs and bills upstream — never produce a generation we can't charge for.
+    enforceModelPrice: true,
   });
   if (!credits.ok) {
     return credits.response;
   }
 
-  let failedUsageProvider = parsed.data.provider ?? "default";
+  const failedUsageProvider = provider.id;
 
   try {
     const generationId = generationIDForRequest(parsed.data);
@@ -53,9 +70,6 @@ export const POST = withDonkeyAuth(async (request) => {
       id: generationId,
       kind: parsed.data.kind,
     };
-    const registry = createProviderRegistry();
-    const provider = registry.assetProvider(parsed.data);
-    failedUsageProvider = provider.id;
     const result = await provider.generateAsset?.({
       generationId,
       request: parsed.data,
@@ -114,6 +128,10 @@ export const POST = withDonkeyAuth(async (request) => {
       route: inferenceUsageRoutes.assets,
       userId: request.donkey.userId,
     });
+    const creditResponse = creditErrorResponse(error);
+    if (creditResponse) {
+      return creditResponse;
+    }
     if (error instanceof InferenceProviderError) {
       return inferenceProviderErrorResponse(error);
     }

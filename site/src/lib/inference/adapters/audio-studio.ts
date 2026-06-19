@@ -29,6 +29,15 @@ type AudioResponsePromise = Promise<ReadableStream<Uint8Array>> & {
 
 const providerID = "elevenlabs";
 
+// The concrete model the provider bills for in each mode. result.model must always be a real,
+// priced model id (never "") so credit pricing can resolve it — an omitted request.model falls
+// back to these. All are priced in provider-pricing.ts (elevenLabsCreditPricing).
+const defaultAudioModels = {
+  music: elevenLabsModels.music,
+  sound: "eleven_text_to_sound_v2",
+  speech: "eleven_multilingual_v2",
+} as const;
+
 export function createAudioAssetProvider(
   environment: AdapterEnvironment = process.env,
   fetcher: typeof fetch = fetch,
@@ -117,9 +126,10 @@ function createMusic(
   request: AssetGenerationRequest,
 ) {
   const parameters = toJsonObject(request.parameters ?? {});
+  const model = request.model?.trim() || defaultAudioModels.music;
 
   return createAudioResponse(
-    request.model ?? "",
+    model,
     "music",
     "music-1.mp3",
     {
@@ -128,7 +138,7 @@ function createMusic(
     () =>
       client.music.compose({
         ...parameters,
-        modelId: request.model === elevenLabsModels.music ? elevenLabsModels.music : undefined,
+        modelId: model,
         prompt: request.prompt,
       } as ElevenLabs.BodyComposeMusicV1MusicPost),
   );
@@ -139,6 +149,7 @@ function createSound(
   request: AssetGenerationRequest,
 ) {
   const parameters = toJsonObject(request.parameters ?? {});
+  const model = request.model?.trim() || defaultAudioModels.sound;
   const durationSeconds = numberParam(
     parameters,
     "duration_seconds",
@@ -146,7 +157,7 @@ function createSound(
   );
 
   return createAudioResponse(
-    request.model ?? "",
+    model,
     "sound",
     "sound-1.mp3",
     {
@@ -157,7 +168,7 @@ function createSound(
     () =>
       client.textToSoundEffects.convert({
         ...parameters,
-        modelId: request.model,
+        modelId: model,
         text: request.prompt,
       } as ElevenLabs.CreateSoundEffectRequest),
   );
@@ -181,9 +192,10 @@ function createSpeech(
   }
 
   const parameters = toJsonObject(request.parameters ?? {});
+  const model = request.model?.trim() || defaultAudioModels.speech;
 
   return createAudioResponse(
-    request.model ?? "",
+    model,
     "speech",
     "speech-1.mp3",
     {
@@ -192,7 +204,7 @@ function createSpeech(
     () =>
       client.textToSpeech.convert(voiceID, {
         ...parameters,
-        modelId: request.model,
+        modelId: model,
         text: request.prompt,
       } as ElevenLabs.BodyTextToSpeechFull),
   );
