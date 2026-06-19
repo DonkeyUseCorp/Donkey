@@ -31,6 +31,9 @@ public struct UserQueryNotchStatusView: View {
     /// While the user is replying to a specific task (tapped Reply), this is that task; the expanded
     /// panel dims every other row so it's clear the next message continues this one thread.
     private let replyTargetTaskID: String?
+    /// The row the keyboard arrows currently highlight (distinct from the reply target). It renders a
+    /// brighter fill and a ring so the selection reads while the composer keeps text focus.
+    private let selectedTaskID: String?
     private let accentIndex: Int
     private let spawnState: UserQuerySpawnState?
     private let commandSubmitted: @MainActor (String) -> Void
@@ -71,6 +74,7 @@ public struct UserQueryNotchStatusView: View {
         tasks: [UserQueryNotchTask] = [],
         surfacedTasks: [UserQueryNotchTask] = [],
         replyTargetTaskID: String? = nil,
+        selectedTaskID: String? = nil,
         accentIndex: Int,
         spawnState: UserQuerySpawnState? = nil,
         commandSubmitted: @escaping @MainActor (String) -> Void,
@@ -103,6 +107,7 @@ public struct UserQueryNotchStatusView: View {
         self.tasks = tasks
         self.surfacedTasks = surfacedTasks
         self.replyTargetTaskID = replyTargetTaskID
+        self.selectedTaskID = selectedTaskID
         self.accentIndex = accentIndex
         self.spawnState = spawnState
         self.commandSubmitted = commandSubmitted
@@ -502,21 +507,31 @@ public struct UserQueryNotchStatusView: View {
             }
 
             VStack(spacing: Self.taskListCommandSpacing) {
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(spacing: 8) {
-                        if tasks.isEmpty {
-                            currentTaskRow
-                        } else {
-                            ForEach(tasks) { task in
-                                // While replying to one task, the others dim back (handled inside the row
-                                // so an attention pointer can stay lit) — it's clear which thread the next
-                                // message continues.
-                                taskRow(task)
-                                    .animation(.easeOut(duration: 0.16), value: replyTargetTaskID)
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(spacing: 8) {
+                            if tasks.isEmpty {
+                                currentTaskRow
+                            } else {
+                                ForEach(tasks) { task in
+                                    // While replying to one task, the others dim back (handled inside the
+                                    // row so an attention pointer can stay lit) — it's clear which thread
+                                    // the next message continues.
+                                    taskRow(task)
+                                        .id(task.id)
+                                        .animation(.easeOut(duration: 0.16), value: replyTargetTaskID)
+                                }
                             }
                         }
+                        .padding(.top, 10)
                     }
-                    .padding(.top, 10)
+                    // Keep the keyboard-highlighted row on screen as the arrows walk past the fold.
+                    .onChange(of: selectedTaskID) {
+                        guard let selectedTaskID else { return }
+                        withAnimation(.easeOut(duration: 0.16)) {
+                            proxy.scrollTo(selectedTaskID, anchor: .center)
+                        }
+                    }
                 }
 
                 commandRow
@@ -780,15 +795,16 @@ public struct UserQueryNotchStatusView: View {
         // itself needs the user can stay lit while everything else recedes.
         let contentDim = rowReplyDimOpacity(for: task)
         let isReplyTarget = replyTargetTaskID == task.id
-        let pointerDim = isWaitingForReply(task) ? 1 : contentDim
+        let isSelected = selectedTaskID == task.id
+        let pointerDim = (isWaitingForReply(task) || isSelected) ? 1 : contentDim
         return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 12) {
                 // Colored pointer while actively running; silhouette once stopped or finished — but the
-                // reply target always shows its live accent color, so even a finished thread reads as
-                // active again while the user is replying to it.
+                // reply target and the keyboard-highlighted row always show their live accent color, so
+                // even a finished thread reads as active again while it is the focus.
                 DonkeyCursorMark(
                     color: accentColor(for: task.accentIndex),
-                    silhouette: !isReplyTarget && task.status != .running
+                    silhouette: !isReplyTarget && !isSelected && task.status != .running
                 )
                     .frame(width: 14, height: 14)
                     .padding(.top, 1)
@@ -835,10 +851,18 @@ public struct UserQueryNotchStatusView: View {
         // row renders at the same height and places the time identically; only genuinely long detail
         // grows past it (and never crowds the time).
         .frame(minHeight: 72)
-        // The cell fill recedes with the rest of the content while a reply targets another row.
-        .background(Color.white.opacity(0.07 * contentDim))
+        // The cell fill recedes with the rest of the content while a reply targets another row; a
+        // keyboard-highlighted row instead brightens to full strength so the selection reads clearly.
+        .background(Color.white.opacity(isSelected ? 0.16 : 0.07 * contentDim))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.3), lineWidth: 1)
+            }
+        }
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .animation(.easeOut(duration: 0.12), value: isSelected)
         .onTapGesture {
             // Every row is repliable. Tapping the active thread again leaves reply mode; tapping any
             // other row pins it and focuses the composer, so the user can just start typing. (A running
@@ -1045,6 +1069,17 @@ public struct UserQueryNotchStatusView: View {
         return accentColor(for: task.accentIndex)
     }
 
+    /// The composer's outline color. The keyboard-highlighted row takes precedence — its accent rides on
+    /// the input so the selection reads as the next thread the user will reply to — and falls back to the
+    /// reply target's accent while one is pinned.
+    private var composerAccentColor: Color? {
+        if let selectedTaskID,
+           let task = tasks.first(where: { $0.id == selectedTaskID }) {
+            return accentColor(for: task.accentIndex)
+        }
+        return replyTargetAccentColor
+    }
+
     private var commandRow: some View {
         UserQueryComposer(
             state: commandInputState,
@@ -1052,7 +1087,7 @@ public struct UserQueryNotchStatusView: View {
             inputTextHeight: commandInputTextHeight,
             isInputExpanded: isCommandInputExpanded,
             surfaceFill: Color.white.opacity(0.085),
-            borderColor: replyTargetAccentColor,
+            borderColor: composerAccentColor,
             forceExpandedSurface: true,
             toolbarStyle: .followUp,
             sizeProfile: .compact,

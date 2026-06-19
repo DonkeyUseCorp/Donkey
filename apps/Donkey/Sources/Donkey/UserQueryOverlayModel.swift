@@ -20,7 +20,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     @Published var notchCommandText = "" {
         didSet {
             // Starting a draft hands the arrows back to the composer for text editing; the row
-            // highlight re-engages when the user clicks a row (see `setNotchSelection`).
+            // highlight re-engages when the user clicks or arrows onto a row (see `focusNotchRow`).
             if !notchCommandText.isEmpty { selectedTaskID = nil }
         }
     }
@@ -735,57 +735,44 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         }
     }
 
-    /// The user tapped Reply on a task that is waiting on them (a clarification or a review). Pin the
-    /// next composer submission to that task so the answer continues it rather than starting a new task
-    /// or being matched elsewhere by the resolver; the controller focuses the input after this.
-    func beginReply(toTaskID taskID: String) {
-        // Any existing thread is repliable, whatever its state — running/permission-gated threads take
-        // the message as a queued follow-up downstream, the rest resume.
-        guard task(withID: taskID) != nil else {
-            return
+    /// Move the expanded-notch focus with the arrows. With a row already focused, Up/Down step through the
+    /// rows and clamp at the ends — reaching the top or bottom holds that row rather than dropping back to
+    /// the composer — so the selection is never lost mid-navigation. With nothing focused the arrows enter
+    /// the list (Up at the bottom row nearest the composer, Down at the top); landing on a row does exactly
+    /// what clicking it does (highlight + pinned reply, other rows dim). Returns whether the key was
+    /// consumed; at the composer with a draft already typed, the arrows fall through to edit the text.
+    @discardableResult
+    func moveNotchSelection(_ direction: NotchArrowDirection) -> Bool {
+        guard !notchTasks.isEmpty else { return false }
+        let lastIndex = notchTasks.count - 1
+        guard let current = selectedTaskID.flatMap({ id in notchTasks.firstIndex { $0.id == id } }) else {
+            // No row focused yet: enter the list, but only when the composer isn't holding a draft.
+            if !notchCommandText.isEmpty { return false }
+            let entry = direction == .up ? lastIndex : 0
+            focusNotchRow(notchTasks[entry].id)
+            return true
         }
-        // Tapping Reply on the row already targeted cancels reply mode and un-dims the other rows, so the
-        // user is never stuck in a dimmed state with no way back out short of sending a message.
-        if replyTargetTaskID == taskID {
+        let next: Int
+        switch direction {
+        case .up: next = max(0, current - 1)
+        case .down: next = min(lastIndex, current + 1)
+        }
+        focusNotchRow(notchTasks[next].id)
+        return true
+    }
+
+    /// Make `taskID` the focused thread — the shared effect of clicking a row and of arrowing onto it: it
+    /// becomes the keyboard highlight and the reply target (its pointer lights, the composer takes its
+    /// accent, and the other rows dim). Passing nil (Escape, or leaving reply) clears both, the same as
+    /// clicking bare chrome.
+    func focusNotchRow(_ taskID: String?) {
+        selectedTaskID = taskID
+        guard let taskID, task(withID: taskID) != nil else {
             replyTargetTaskID = nil
             return
         }
         replyTargetTaskID = taskID
         lastActiveTaskID = taskID
-    }
-
-    /// Leave reply mode without sending — the user tapped elsewhere in the notch chrome. No-op when no
-    /// reply is targeted, so a stray background tap in normal use does nothing.
-    func cancelReply() {
-        guard replyTargetTaskID != nil else { return }
-        replyTargetTaskID = nil
-    }
-
-    /// Move the expanded-notch keyboard highlight. The rows and the composer form one vertical cycle
-    /// (rows top-to-bottom, composer at the bottom) that Up/Down step through and wrap around. Returns
-    /// whether the key was consumed: at the composer with a draft already typed, the arrows fall through
-    /// so they edit the text instead of moving the highlight.
-    @discardableResult
-    func moveNotchSelection(_ direction: NotchArrowDirection) -> Bool {
-        guard !notchTasks.isEmpty else { return false }
-        let composerSlot = notchTasks.count
-        let total = composerSlot + 1
-        let current = selectedTaskID
-            .flatMap { id in notchTasks.firstIndex { $0.id == id } } ?? composerSlot
-        // At the composer with text already in progress, the arrows belong to the draft, not the list.
-        if current == composerSlot, !notchCommandText.isEmpty { return false }
-        let next: Int
-        switch direction {
-        case .up: next = (current - 1 + total) % total
-        case .down: next = (current + 1) % total
-        }
-        selectedTaskID = next == composerSlot ? nil : notchTasks[next].id
-        return true
-    }
-
-    /// Engage the row highlight directly (a row click) so arrow navigation resumes from that row.
-    func setNotchSelection(_ taskID: String?) {
-        selectedTaskID = taskID
     }
 
     func clearNotchSelection() {

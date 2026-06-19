@@ -191,6 +191,13 @@ final class UserQueryOverlayController {
         panel.mouseDownHandler = { [weak self] in
             self?.focusStatusComposerTextInputIfAvailable()
         }
+        panel.escapeKeyHandler = { [weak self] in
+            // Esc leaves the focused row the same way clicking bare chrome does: highlight and reply clear.
+            self?.model.focusNotchRow(nil)
+        }
+        panel.arrowKeyHandler = { [weak self] direction in
+            self?.handleNotchArrowKey(direction) ?? false
+        }
         panel.level = DonkeyOverlayWindowLevel.userQuery
         panel.collectionBehavior = [
             .canJoinAllSpaces,
@@ -589,6 +596,7 @@ final class UserQueryOverlayController {
             spawnStates: model.spawnStates,
             selectedSpawnID: model.selectedSpawnID,
             replyTargetTaskID: model.replyTargetTaskID,
+            selectedTaskID: model.selectedTaskID,
             needsLogin: model.needsLogin
         )
     }
@@ -617,6 +625,7 @@ final class UserQueryOverlayController {
             tasks: model.notchTasks,
             surfacedTasks: model.notchSurfacedTasks,
             replyTargetTaskID: model.replyTargetTaskID,
+            selectedTaskID: model.selectedTaskID,
             accentIndex: model.notchAccentIndex,
             spawnState: spawnCue,
             commandSubmitted: { [weak self] text in
@@ -645,11 +654,12 @@ final class UserQueryOverlayController {
             },
             replyRequested: { [weak self] taskID in
                 guard let self else { return }
-                self.model.beginReply(toTaskID: taskID)
+                // A click focuses the row exactly as arrowing onto it does: highlight + pinned reply.
+                self.model.focusNotchRow(taskID)
                 self.focusStatusComposerTextInputIfAvailable()
             },
             replyModeExited: { [weak self] in
-                self?.model.cancelReply()
+                self?.model.focusNotchRow(nil)
             },
             approvePermissionRequested: { [weak self] taskID, alwaysAllow in
                 self?.model.approvePermissionGate(id: taskID, alwaysAllow: alwaysAllow)
@@ -665,6 +675,16 @@ final class UserQueryOverlayController {
                 self?.model.requestLogin()
             }
         )
+    }
+
+    /// Up/Down moves the expanded-notch focus, landing on each row exactly as a click would (highlight +
+    /// pinned reply, other rows dimmed). Consumed (returns true) only while the notch is open and the
+    /// model actually moved the focus; otherwise the arrows fall through to the composer to edit the draft.
+    private func handleNotchArrowKey(_ direction: NotchArrowDirection) -> Bool {
+        guard isStatusExpanded else { return false }
+        let moved = model.moveNotchSelection(direction)
+        if moved { updateStatusPanelView() }
+        return moved
     }
 
     private func notchSpawnCue(metrics: NotchMetrics) -> UserQuerySpawnState? {
@@ -820,6 +840,7 @@ final class UserQueryOverlayController {
             // host stays expanded so it keeps containing the shrinking surface; it snaps to the notch
             // size once the surface has finished collapsing, when the host shrink fires below.
             isStatusExpanded = false
+            model.clearNotchSelection()
             updateStatusPanelView()
         }
 
@@ -1374,6 +1395,9 @@ private final class UserQueryPanel: NSPanel {
     var dragRegionProvider: (() -> [CGRect])?
     var escapeKeyHandler: (() -> Void)?
     var mouseDownHandler: (() -> Void)?
+    /// Up/Down arrow handler for the expanded notch. Returns whether it consumed the key; when it does
+    /// not (the composer owns the arrows for text editing), the event falls through to the field.
+    var arrowKeyHandler: ((NotchArrowDirection) -> Bool)?
 
     override var canBecomeKey: Bool {
         true
@@ -1408,6 +1432,17 @@ private final class UserQueryPanel: NSPanel {
     }
 
     override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown {
+            switch Int(event.keyCode) {
+            case kVK_UpArrow:
+                if arrowKeyHandler?(.up) == true { return }
+            case kVK_DownArrow:
+                if arrowKeyHandler?(.down) == true { return }
+            default:
+                break
+            }
+        }
+
         if event.type == .keyDown,
            event.keyCode == UInt16(kVK_Escape) {
             escapeKeyHandler?()
@@ -1461,6 +1496,7 @@ private struct StatusPanelViewSnapshot: Equatable {
     var spawnStates: [UserQuerySpawnState]
     var selectedSpawnID: String?
     var replyTargetTaskID: String?
+    var selectedTaskID: String?
     var needsLogin: Bool
 }
 
