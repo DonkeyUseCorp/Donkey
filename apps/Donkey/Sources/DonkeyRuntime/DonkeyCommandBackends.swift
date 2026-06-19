@@ -144,21 +144,23 @@ public enum DonkeyCommandBackends {
         }
         let config = WKSnapshotConfiguration()
         config.rect = CGRect(origin: .zero, size: webView.bounds.size)
-        let image: NSImage = try await withCheckedThrowingContinuation { continuation in
+        // Convert to PNG inside the completion handler so the non-Sendable NSImage never
+        // crosses the continuation boundary.
+        return try await withCheckedThrowingContinuation { continuation in
             webView.takeSnapshot(with: config) { image, error in
-                if let image {
-                    continuation.resume(returning: image)
-                } else {
+                guard let image else {
                     continuation.resume(throwing: error ?? CocoaError(.fileWriteUnknown))
+                    return
                 }
+                guard let tiff = image.tiffRepresentation,
+                      let rep = NSBitmapImageRep(data: tiff),
+                      let png = rep.representation(using: .png, properties: [:]) else {
+                    continuation.resume(throwing: CocoaError(.fileWriteUnknown))
+                    return
+                }
+                continuation.resume(returning: png)
             }
         }
-        guard let tiff = image.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff),
-              let png = rep.representation(using: .png, properties: [:]) else {
-            throw CocoaError(.fileWriteUnknown)
-        }
-        return png
     }
 
     // MARK: - app_commands
