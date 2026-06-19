@@ -16,6 +16,9 @@ type Props = {
   setMissingPermissions: (missing: boolean) => void;
   activeTaskId: TaskId;
   setActiveTaskId: (id: TaskId) => void;
+  onTriggerAuthError: () => void;
+  loggedOut: boolean;
+  setLoggedOut: (loggedOut: boolean) => void;
 };
 
 type StateOption = {
@@ -48,6 +51,9 @@ export function DemoControls({
   setMissingPermissions,
   activeTaskId,
   setActiveTaskId,
+  onTriggerAuthError,
+  loggedOut,
+  setLoggedOut,
 }: Props) {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
 
@@ -105,6 +111,29 @@ export function DemoControls({
           );
         })}
       </div>
+
+      <div className="h-7 w-px bg-white/10" />
+
+      <button
+        type="button"
+        onClick={onTriggerAuthError}
+        className="h-8 rounded-lg px-2.5 text-[11px] font-medium transition"
+        style={{ background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.72)' }}
+      >
+        Auth error
+      </button>
+
+      <button
+        type="button"
+        onClick={() => setLoggedOut(!loggedOut)}
+        className="h-8 rounded-lg px-2.5 text-[11px] font-medium transition"
+        style={{
+          background: loggedOut ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.08)',
+          color: loggedOut ? 'rgba(0,0,0,0.82)' : 'rgba(255,255,255,0.72)',
+        }}
+      >
+        Logged out
+      </button>
 
       <div className="h-7 w-px bg-white/10" />
 

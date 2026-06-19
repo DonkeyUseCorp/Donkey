@@ -5,6 +5,7 @@ import { type FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useSta
 import { DemoControls } from '@/app/prototype/_components/DemoControls';
 import { MacDesktop } from '@/app/prototype/_components/MacDesktop';
 import {
+  AUTH_ERROR_MESSAGE,
   INITIAL_LIVE_TASKS,
   MAX_LIVE_TASKS,
   SAMPLE_SUBTEXTS,
@@ -28,13 +29,16 @@ export default function App() {
   // App-update notification is detected once on launch; the prototype seeds it on.
   const [updateAvailable, setUpdateAvailable] = useState(true);
   const [missingPermissions, setMissingPermissions] = useState(false);
+  // Logged out gates the notch into a login call-to-action; the prototype seeds it off.
+  const [loggedOut, setLoggedOut] = useState(false);
   const [liveTasks, setLiveTasks] = useState<LiveTask[]>(INITIAL_LIVE_TASKS);
   // The update currently streaming into the collapsed notch chin (rotates across running tasks).
   const [chinUpdate, setChinUpdate] = useState<NotchUpdate | null>(INITIAL_UPDATE);
-  // Completed tasks keep surfacing in the collapsed notch until the user expands; expanding marks
-  // them acknowledged so they stop surfacing as floating pointers (they stay in the expanded list).
-  const [acknowledgedDoneIds, setAcknowledgedDoneIds] = useState<Set<string>>(() => new Set());
-  const acknowledgedDoneRef = useRef(acknowledgedDoneIds);
+  // Terminal tasks — completions and errors — keep surfacing in the collapsed notch until the user
+  // expands; expanding marks them acknowledged so they stop surfacing as floating pointers / chin
+  // messages (they stay in the expanded list).
+  const [acknowledgedIds, setAcknowledgedIds] = useState<Set<string>>(() => new Set());
+  const acknowledgedRef = useRef(acknowledgedIds);
   const [activeTaskId, setActiveTaskId] = useState<TaskId>('compare');
   const [notchExpanded, setNotchExpanded] = useState(false);
   // Center composer is summoned with a double-tap of Cmd (like the app), hidden otherwise.
@@ -120,14 +124,20 @@ export default function App() {
 
   // Keep a ref of the acknowledged set so the rotation timer can read it without re-subscribing.
   useEffect(() => {
-    acknowledgedDoneRef.current = acknowledgedDoneIds;
-  }, [acknowledgedDoneIds]);
+    acknowledgedRef.current = acknowledgedIds;
+  }, [acknowledgedIds]);
 
-  // Rotate the collapsed chin through running tasks' streaming updates, one at a time. When nothing
-  // is running, keep surfacing the most recent completed task's result until the user dismisses it.
+  // Rotate the collapsed chin through running tasks' streaming updates, one at a time. An
+  // unacknowledged error outranks everything and holds the chin until the user expands; otherwise,
+  // when nothing is running, the most recent completion keeps surfacing until it's acknowledged.
   useEffect(() => {
     const interval = window.setInterval(() => {
       const tasks = liveTasksRef.current;
+      const errored = tasks.find((task) => task.status === 'error' && !acknowledgedRef.current.has(task.id));
+      if (errored) {
+        setChinUpdate({ color: errored.color, message: errored.detail, isError: true });
+        return;
+      }
       const running = tasks.filter((task) => task.status === 'running');
       if (running.length > 0) {
         updateCounterRef.current += 1;
@@ -136,7 +146,7 @@ export default function App() {
         setChinUpdate({ color: task.color, message });
         return;
       }
-      const done = tasks.find((task) => task.status === 'done' && !acknowledgedDoneRef.current.has(task.id));
+      const done = tasks.find((task) => task.status === 'done' && !acknowledgedRef.current.has(task.id));
       setChinUpdate(done ? { color: done.color, message: done.detail } : null);
     }, 2600);
 
@@ -154,12 +164,51 @@ export default function App() {
     setChinUpdate({ color, message: detail });
   }, []);
 
+  // Simulate an auth error. It attaches to a real task (the most recent running one, else any live
+  // task) so the error is tied to that task's own pointer — the chin holds its message with a red
+  // warning glyph in the right rail until the user expands to acknowledge it. Only when there's no
+  // task to attach to does it synthesize one, so the demo can still show the error chin.
+  const triggerAuthError = useCallback(() => {
+    const tasks = liveTasksRef.current;
+    const target = tasks.find((task) => task.status === 'running') ?? tasks.find((task) => task.status !== 'error');
+    if (target) {
+      setLiveTasks((current) =>
+        current.map((task) =>
+          task.id === target.id ? { ...task, status: 'error', detail: AUTH_ERROR_MESSAGE } : task,
+        ),
+      );
+      setChinUpdate({ color: target.color, message: AUTH_ERROR_MESSAGE, isError: true });
+      return;
+    }
+
+    liveTaskIdRef.current += 1;
+    const color = TASK_COLORS[(INITIAL_LIVE_TASKS.length + liveTaskIdRef.current) % TASK_COLORS.length];
+    const created: LiveTask = {
+      id: `live-${liveTaskIdRef.current}`,
+      title: 'Authentication required',
+      detail: AUTH_ERROR_MESSAGE,
+      color,
+      seconds: 0,
+      status: 'error',
+    };
+    setLiveTasks((current) => (current.length >= MAX_LIVE_TASKS ? current : [created, ...current]));
+    setChinUpdate({ color, message: AUTH_ERROR_MESSAGE, isError: true });
+  }, []);
+
   const stopLiveTask = useCallback((id: string) => {
     setLiveTasks((tasks) => tasks.map((task) => (task.id === id ? { ...task, status: 'stopped' } : task)));
   }, []);
 
   const resumeLiveTask = useCallback((id: string) => {
     setLiveTasks((tasks) => tasks.map((task) => (task.id === id ? { ...task, status: 'running' } : task)));
+  }, []);
+
+  // Replying to a thread continues it with the user's message: the task goes back to running and its
+  // line shows what the user just said, mirroring the app's "pin the next message to this task".
+  const replyToLiveTask = useCallback((id: string, text: string) => {
+    setLiveTasks((tasks) =>
+      tasks.map((task) => (task.id === id ? { ...task, status: 'running', detail: text } : task)),
+    );
   }, []);
 
   const closeLiveTask = useCallback((id: string) => {
@@ -180,16 +229,17 @@ export default function App() {
 
   const isNotchExpanded = notchExpanded || state === 'expanded-pinned';
 
-  // Expanding the notch dismisses the surfaced completions: the running tasks keep streaming, but the
-  // completed pointers that piled up in the collapsed notch are acknowledged and stop floating there.
+  // Expanding the notch acknowledges the surfaced terminal tasks: the running tasks keep streaming,
+  // but the completions and errors that piled up in the collapsed notch (pointers + the held error
+  // chin) are acknowledged and stop surfacing there.
   useEffect(() => {
     if (!isNotchExpanded) return;
 
-    setAcknowledgedDoneIds((prev) => {
+    setAcknowledgedIds((prev) => {
       let changed = false;
       const next = new Set(prev);
       for (const task of liveTasksRef.current) {
-        if (task.status === 'done' && !next.has(task.id)) {
+        if ((task.status === 'done' || task.status === 'error') && !next.has(task.id)) {
           next.add(task.id);
           changed = true;
         }
@@ -198,9 +248,12 @@ export default function App() {
     });
   }, [isNotchExpanded]);
 
-  // The collapsed notch surfaces running tasks and completed-but-undismissed tasks as a pointer cluster.
+  // The collapsed notch surfaces running tasks plus unacknowledged terminal tasks (completions and
+  // errors) as a pointer cluster.
   const surfacedTasks = liveTasks.filter(
-    (task) => task.status === 'running' || (task.status === 'done' && !acknowledgedDoneIds.has(task.id)),
+    (task) =>
+      task.status === 'running' ||
+      ((task.status === 'done' || task.status === 'error') && !acknowledgedIds.has(task.id)),
   );
 
   return (
@@ -226,7 +279,10 @@ export default function App() {
         onAddTask={addLiveTask}
         onStopTask={stopLiveTask}
         onResumeTask={resumeLiveTask}
+        onReplyToTask={replyToLiveTask}
         onCloseTask={closeLiveTask}
+        loggedOut={loggedOut}
+        onLogin={() => setLoggedOut(false)}
       />
       <DemoControls
         state={state}
@@ -237,8 +293,11 @@ export default function App() {
         setUpdateAvailable={setUpdateAvailable}
         missingPermissions={missingPermissions}
         setMissingPermissions={setMissingPermissions}
+        loggedOut={loggedOut}
+        setLoggedOut={setLoggedOut}
         activeTaskId={activeTaskId}
         setActiveTaskId={setActiveTaskId}
+        onTriggerAuthError={triggerAuthError}
       />
     </div>
   );

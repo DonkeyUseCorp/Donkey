@@ -19,13 +19,19 @@ export type TaskSample = {
   detail: string;
 };
 
-// 'running' ticks; 'stopped' is paused (resume or close); 'done' is finished (close only).
-export type LiveTaskStatus = 'running' | 'stopped' | 'done';
+// 'running' ticks; 'stopped' is paused (resume or close); 'done' is finished; 'waiting' means the
+// agent is blocked on the user (a clarification or review — the only state with a Reply button, since
+// only there is the agent asking); 'error' is a terminal failure (e.g. an auth error) that keeps
+// surfacing until acknowledged. 'waiting', 'done', and 'error' threads are repliable: the user taps the
+// row to pick them back up.
+export type LiveTaskStatus = 'running' | 'stopped' | 'done' | 'waiting' | 'error';
 
 // The streaming update currently surfaced in the collapsed notch chin (with its task's color).
+// `isError` marks a failure so the chin renders the warning icon in error red.
 export type NotchUpdate = {
   color: string;
   message: string;
+  isError?: boolean;
 };
 
 // A task shown in the expanded notch list.

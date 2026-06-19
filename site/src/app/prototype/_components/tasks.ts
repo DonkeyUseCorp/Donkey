@@ -42,6 +42,10 @@ export const UPDATE_MESSAGES = [
 // A running task finishes (→ done) once it reaches this elapsed time.
 export const TASK_DONE_AT_SECONDS = 180;
 
+// Error chin: macOS system red for the warning icon, plus the copy an auth failure surfaces.
+export const ERROR_RED = 'rgb(255,69,58)';
+export const AUTH_ERROR_MESSAGE = 'Authentication failed — sign in again to keep running your tasks.';
+
 export const INITIAL_LIVE_TASKS: LiveTask[] = [
   {
     id: 'seed-long',
@@ -53,6 +57,9 @@ export const INITIAL_LIVE_TASKS: LiveTask[] = [
     status: 'running',
   },
   { id: 'seed-1', title: TASKS.compare.label, detail: TASKS.compare.detail, color: TASKS.compare.color, seconds: 95, status: 'running' },
+  // Waiting on the user: the agent asked a question and is blocked — shows the Reply button and a
+  // gently pulsing pointer until the user answers.
+  { id: 'seed-wait', title: 'Reschedule the standup', detail: 'Which day works better — Tuesday or Thursday?', color: TASK_COLORS[6], seconds: 18, status: 'waiting' },
   { id: 'seed-2', title: TASKS.research.label, detail: TASKS.research.detail, color: TASKS.research.color, seconds: 527, status: 'stopped' },
   { id: 'seed-3', title: TASKS.reply.label, detail: TASKS.reply.detail, color: TASKS.reply.color, seconds: 180, status: 'done' },
   { id: 'seed-4', title: TASKS.schedule.label, detail: TASKS.schedule.detail, color: TASKS.schedule.color, seconds: 40, status: 'running' },

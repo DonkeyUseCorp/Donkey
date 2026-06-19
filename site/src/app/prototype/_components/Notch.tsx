@@ -1,8 +1,9 @@
 import { ArrowUp, CloudSync, MessageCircleWarning, Shield } from 'lucide-react';
-import { type FormEvent, useEffect, useRef, useState } from 'react';
+import { type FormEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { DonkeyCursor } from '@/app/prototype/_components/DonkeyCursor';
 import { ExpandedTaskRow } from '@/app/prototype/_components/ExpandedTaskRow';
+import { ERROR_RED } from '@/app/prototype/_components/tasks';
 import type { LiveTask, NotchState, NotchUpdate, NotchVariant } from '@/app/prototype/_components/types';
 
 type Props = {
@@ -20,7 +21,10 @@ type Props = {
   onAddTask: (title: string) => void;
   onStopTask: (id: string) => void;
   onResumeTask: (id: string) => void;
+  onReplyToTask: (id: string, text: string) => void;
   onCloseTask: (id: string) => void;
+  loggedOut: boolean;
+  onLogin: () => void;
 };
 
 const METRICS = {
@@ -28,8 +32,11 @@ const METRICS = {
   collapsedHeight: 32,
   // The MacBook notch void sits between two 34px content areas (left arrow, right time).
   contentAreaWidth: 34,
-  // Chin hangs below the real notch: single streaming line, 9px font, no top padding.
-  chinHeight: 20,
+  // Chin hangs below the real notch: a 12px streaming line (no top padding) that grows to a second
+  // line before truncating. `chinBaseHeight` is one line + the bottom margin; each extra line adds
+  // exactly `chinLineHeight`, so the bottom margin stays constant no matter the line count.
+  chinBaseHeight: 23,
+  chinLineHeight: 15,
   // Surfaced pointers (running + undismissed completions) stack as an overlapping cluster.
   pointerSize: 14,
   pointerStepX: 8,
@@ -45,6 +52,10 @@ const METRICS = {
   // Spec: the expanded notch window and its input box both use a 14px radius.
   expandedCornerRadius: 14,
   contentInset: 14,
+  // Logged out: collapsed just shows the "Login to use Donkey" line; expanding reveals a wide bar with
+  // the label on the left and the Login button on the right.
+  loginCollapsedChinHeight: 22,
+  loginExpandedHeight: 84,
 } as const;
 
 // The follow-up input starts as one line and grows with content up to a scroll cap.
@@ -96,7 +107,10 @@ export function Notch({
   onAddTask,
   onStopTask,
   onResumeTask,
+  onReplyToTask,
   onCloseTask,
+  loggedOut,
+  onLogin,
 }: Props) {
   const isRunning = isRunningState(state);
   const isActive = hasActiveTask(state);
@@ -108,6 +122,8 @@ export function Notch({
   // The left content area surfaces a cluster of pointers — running tasks plus completions the user
   // hasn't dismissed yet. One pointer renders alone; several overlap as a centered, cascading stack
   // (newest on top), capped so the notch never crowds. A completed pointer is colored but still.
+  // A failed task is a real task, so it keeps its own pointer here (alongside the right-rail warning
+  // glyph and held chin); each surfaced task shows a single pointer.
   const clusterTasks = surfacedTasks.slice(0, METRICS.maxClusterPointers);
   const clusterCount = clusterTasks.length;
   const clusterWidth = METRICS.pointerSize + METRICS.pointerStepX * Math.max(0, clusterCount - 1);
@@ -132,7 +148,19 @@ export function Notch({
   // The chin (real) / inline (simulated) shows the current streaming update; hidden when expanded or
   // once nothing is surfaced, so it never lingers a beat after the last pointer is dismissed.
   const message = !expanded && chinUpdate && surfacedTasks.length > 0 ? chinUpdate.message : '';
+  const isErrorChin = chinUpdate?.isError === true;
   const collapsedTime = formatCompactTime(runningSeconds);
+
+  // Measure how many lines the chin message wraps to (capped at two) so the band grows by exactly one
+  // line-height for a second line, keeping the bottom margin constant.
+  const chinTextRef = useRef<HTMLParagraphElement | null>(null);
+  const [chinLines, setChinLines] = useState(1);
+  useLayoutEffect(() => {
+    const el = chinTextRef.current;
+    if (!el) return;
+    setChinLines(Math.min(2, Math.max(1, Math.round(el.offsetHeight / METRICS.chinLineHeight))));
+  }, [message]);
+  const chinHeight = METRICS.chinBaseHeight + (chinLines - 1) * METRICS.chinLineHeight;
 
   // App-level notices share a single slot; permissions outranks update since it blocks functionality.
   const appNotice: 'permissions' | 'update' | null = missingPermissions
@@ -144,12 +172,16 @@ export function Notch({
   const isSimulatedExpandedMessage = variant === 'simulated' && message !== '';
 
   const collapsedHeight = expanded
-    ? METRICS.expandedHeight
-    : variant === 'real'
-      ? METRICS.collapsedHeight + (showChin ? METRICS.chinHeight : 0)
-      : isSimulatedExpandedMessage
-        ? METRICS.simulatedMessageHeight
-        : METRICS.collapsedHeight;
+    ? loggedOut
+      ? METRICS.loginExpandedHeight
+      : METRICS.expandedHeight
+    : loggedOut
+      ? METRICS.collapsedHeight + METRICS.loginCollapsedChinHeight
+      : variant === 'real'
+        ? METRICS.collapsedHeight + (showChin ? chinHeight : 0)
+        : isSimulatedExpandedMessage
+          ? METRICS.simulatedMessageHeight
+          : METRICS.collapsedHeight;
   const collapsedWidth = expanded ? METRICS.expandedWidth : METRICS.collapsedWidth;
 
   // Both variants keep a flush top edge (no top corner radius) and round only the bottom.
@@ -164,6 +196,29 @@ export function Notch({
 
   const followUpRef = useRef<HTMLTextAreaElement | null>(null);
   const [canSendFollowUp, setCanSendFollowUp] = useState(false);
+
+  // Reply mode: the thread the user is replying to. Tapping a repliable row (waiting / done / error)
+  // pins the next message to it and dims the others; the composer takes that thread's accent color.
+  const [replyTargetId, setReplyTargetId] = useState<string | null>(null);
+  const replyTarget = replyTargetId ? liveTasks.find((task) => task.id === replyTargetId) ?? null : null;
+
+  // Every thread is repliable by tapping its row, whatever its state. Tapping the active thread again
+  // leaves reply mode; tapping any other switches to it. (Only 'waiting' also shows a Reply button,
+  // since only there is the agent actively asking.)
+  const handleRowActivate = (task: LiveTask) => {
+    setReplyTargetId((current) => (current === task.id ? null : task.id));
+  };
+
+  // Focus the composer when a reply begins, so the user can type straight away (no second click).
+  useEffect(() => {
+    if (replyTargetId) followUpRef.current?.focus();
+  }, [replyTargetId]);
+
+  // Collapsing the notch also leaves reply mode, so it never reopens with stale dimming.
+  const collapse = () => {
+    setExpanded(false);
+    setReplyTargetId(null);
+  };
 
   const resizeFollowUp = () => {
     const input = followUpRef.current;
@@ -182,7 +237,13 @@ export function Notch({
     const taskText = String(formData.get('followUp') ?? '').trim();
     if (!taskText) return;
 
-    onAddTask(taskText);
+    if (replyTargetId) {
+      // Replying to a pinned thread continues it with the message rather than starting a new task.
+      onReplyToTask(replyTargetId, taskText);
+      setReplyTargetId(null);
+    } else {
+      onAddTask(taskText);
+    }
     form.reset();
     setCanSendFollowUp(false);
     if (followUpRef.current) followUpRef.current.style.height = `${FOLLOWUP_MIN_HEIGHT}px`;
@@ -203,9 +264,9 @@ export function Notch({
       onClick={() => setExpanded(true)}
       onFocus={() => setExpanded(true)}
       onPointerEnter={() => setExpanded(true)}
-      onPointerLeave={() => setExpanded(false)}
+      onPointerLeave={collapse}
       onMouseEnter={() => setExpanded(true)}
-      onMouseLeave={() => setExpanded(false)}
+      onMouseLeave={collapse}
     >
       <style>{`
         @keyframes notchArrowPulse {
@@ -226,6 +287,66 @@ export function Notch({
             'width 550ms cubic-bezier(0.2,0.9,0.24,1), height 550ms cubic-bezier(0.2,0.9,0.24,1), border-radius 550ms cubic-bezier(0.2,0.9,0.24,1), box-shadow 300ms ease-out',
         }}
       >
+        {/* Logged out: the notch becomes a login call-to-action instead of the task surface. The
+            collapsed chin reads "Login to use Donkey" with a Login button; expanding shows the
+            minimal login view. */}
+        {loggedOut && (
+          <>
+            {/* Collapsed: the idle silhouette sits in the left gutter beside the void, and the chin
+                below reads "Login to use Donkey" — no button until expanded. */}
+            <div
+              className="absolute inset-0"
+              style={{ opacity: expanded ? 0 : 1, transition: 'opacity 150ms ease-out' }}
+            >
+              <div
+                className="absolute left-0 top-0 grid place-items-center"
+                style={{ width: METRICS.contentAreaWidth, height: contentRowHeight }}
+              >
+                <DonkeyCursor color={activeColor} size={METRICS.pointerSize} silhouette />
+              </div>
+              <div
+                className="absolute left-0 overflow-hidden"
+                style={{
+                  top: METRICS.collapsedHeight,
+                  width: METRICS.collapsedWidth,
+                  height: METRICS.loginCollapsedChinHeight,
+                  padding: '0 12px',
+                }}
+              >
+                <p className="truncate text-[12px] leading-[15px] text-white/[0.82]">Login to use Donkey</p>
+              </div>
+            </div>
+
+            {/* Expanded: a wide bar — the label on the left, the Login button on the right. */}
+            <div
+              className="absolute left-0 flex items-center justify-between"
+              style={{
+                top: METRICS.collapsedHeight,
+                width: METRICS.expandedWidth,
+                height: METRICS.loginExpandedHeight - METRICS.collapsedHeight,
+                padding: `0 ${METRICS.contentInset + 4}px`,
+                opacity: expanded ? 1 : 0,
+                pointerEvents: expanded ? 'auto' : 'none',
+                transition: expanded ? 'opacity 300ms ease-out 150ms' : 'opacity 100ms ease-out',
+              }}
+            >
+              <span className="text-[16px] leading-none text-white/[0.92]">Login to use Donkey</span>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onLogin();
+                }}
+                className="flex items-center rounded-lg bg-white px-5 py-2 text-[14px] font-medium leading-none text-black/[0.82] transition hover:bg-white/[0.92]"
+              >
+                Login
+              </button>
+            </div>
+          </>
+        )}
+
+        {!loggedOut && (
+          <>
         <div
           className="absolute inset-0"
           style={{
@@ -274,7 +395,16 @@ export function Notch({
           </div>
 
           {/* Right content area — notifications surface here only when needed, otherwise run time. */}
-          {needsAttention ? (
+          {isErrorChin && message !== '' ? (
+            // Error (e.g. an auth failure): the warning glyph rides the right rail in error red while
+            // the message holds the chin, until the user expands to acknowledge it.
+            <div
+              className="absolute right-0 top-0 grid place-items-center"
+              style={{ width: METRICS.contentAreaWidth, height: contentRowHeight }}
+            >
+              <MessageCircleWarning size={15} strokeWidth={1.9} color={ERROR_RED} />
+            </div>
+          ) : needsAttention ? (
             // Chat-bubble alert: the LLM needs the user's attention (e.g. clarification).
             <div
               className="absolute right-0 top-0 grid place-items-center text-white/[0.85]"
@@ -304,22 +434,35 @@ export function Notch({
             </div>
           ) : null}
 
-          {/* Real notch: chin hangs below with the single streaming line (ellipsis if too long). */}
+          {/* Real notch: chin hangs below with the streaming line, growing to two lines before it
+              truncates with an ellipsis. An error holds the chin; its warning icon rides the right rail. */}
           {variant === 'real' && showChin && (
             <div
               className="absolute left-0 overflow-hidden"
               style={{
                 top: METRICS.collapsedHeight,
                 width: METRICS.collapsedWidth,
-                height: METRICS.chinHeight,
+                height: chinHeight,
                 padding: '0 12px',
               }}
             >
-              <p className="truncate text-[9px] leading-[12px] text-white/[0.72]">{message}</p>
+              <p
+                ref={chinTextRef}
+                className="text-[12px] leading-[15px] text-white/[0.72]"
+                style={{
+                  display: '-webkit-box',
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: 'vertical',
+                  overflow: 'hidden',
+                }}
+              >
+                {message}
+              </p>
             </div>
           )}
 
-          {/* Simulated notch: message sits inline between the arrow and the run time (two lines max). */}
+          {/* Simulated notch: message sits inline between the arrow and the run time (two lines max);
+              an error's warning icon rides the right rail, matching the real notch. */}
           {variant === 'simulated' && message !== '' && (
             <div
               className="absolute flex items-center"
@@ -331,7 +474,7 @@ export function Notch({
               }}
             >
               <p
-                className="text-[9px] leading-[12px] text-white/[0.72]"
+                className="text-[12px] leading-[15px] text-white/[0.72]"
                 style={{
                   display: '-webkit-box',
                   WebkitLineClamp: 2,
@@ -381,6 +524,10 @@ export function Notch({
             pointerEvents: expanded ? 'auto' : 'none',
             transition: expanded ? 'opacity 300ms ease-out 150ms' : 'opacity 100ms ease-out',
           }}
+          // Tapping bare chrome (not a row or the composer, which stop propagation) leaves reply mode.
+          onClick={() => {
+            if (replyTargetId) setReplyTargetId(null);
+          }}
         >
           {/* Scrollable task list fills the space above the always-visible input. */}
           <div className="min-h-0 flex-1 overflow-y-auto pt-2.5">
@@ -393,17 +540,29 @@ export function Notch({
                   color={task.color}
                   status={task.status}
                   timeText={formatRunningTime(task.seconds)}
+                  isReplyTarget={replyTargetId === task.id}
+                  dimmed={replyTargetId !== null && replyTargetId !== task.id}
                   onStop={() => onStopTask(task.id)}
                   onResume={() => onResumeTask(task.id)}
-                  onClose={() => onCloseTask(task.id)}
+                  onClose={() => {
+                    if (replyTargetId === task.id) setReplyTargetId(null);
+                    onCloseTask(task.id);
+                  }}
+                  onActivate={() => handleRowActivate(task)}
                 />
               ))}
             </div>
           </div>
 
-          {/* Input box is pinned to the bottom and always visible — one line that grows with its text. */}
+          {/* Input box is pinned to the bottom and always visible — one line that grows with its text.
+              While replying it's outlined in the targeted thread's accent color. */}
           <form
             className="relative flex min-h-[40px] w-[576px] shrink-0 items-center rounded-[14px] bg-white/[0.085] px-5 py-1.5"
+            style={{
+              boxShadow: replyTarget ? `inset 0 0 0 1.5px ${replyTarget.color}` : undefined,
+              transition: 'box-shadow 160ms ease-out',
+            }}
+            onClick={(event) => event.stopPropagation()}
             onSubmit={handleFollowUpSubmit}
           >
             <label className="sr-only" htmlFor="donkey-follow-up-input">
@@ -446,6 +605,8 @@ export function Notch({
             </button>
           </form>
         </div>
+          </>
+        )}
       </div>
     </section>
   );

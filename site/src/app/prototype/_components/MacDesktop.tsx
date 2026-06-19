@@ -25,7 +25,10 @@ type Props = {
   onAddTask: (title: string) => void;
   onStopTask: (id: string) => void;
   onResumeTask: (id: string) => void;
+  onReplyToTask: (id: string, text: string) => void;
   onCloseTask: (id: string) => void;
+  loggedOut: boolean;
+  onLogin: () => void;
 };
 
 const LAYOUT = {
@@ -62,7 +65,10 @@ export function MacDesktop({
   onAddTask,
   onStopTask,
   onResumeTask,
+  onReplyToTask,
   onCloseTask,
+  loggedOut,
+  onLogin,
 }: Props) {
   const hasPromptText = promptText.trim().length > 0;
 
@@ -117,7 +123,10 @@ export function MacDesktop({
         onAddTask={onAddTask}
         onStopTask={onStopTask}
         onResumeTask={onResumeTask}
+        onReplyToTask={onReplyToTask}
         onCloseTask={onCloseTask}
+        loggedOut={loggedOut}
+        onLogin={onLogin}
       />
 
       <section
