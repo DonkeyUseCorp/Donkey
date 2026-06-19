@@ -433,6 +433,33 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
         return downloads
     }
 
+    /// Decode and write a set of generation outputs FLAT into `directory` (no per-generation nesting),
+    /// returning the written file paths. Each output's backend-supplied filename is sanitized and made
+    /// unique within the batch (collision-suffixed); an output that can't be decoded/fetched is skipped
+    /// rather than aborting the rest. Shared with the image tool so both decode + name + write the same
+    /// way (the image tool just resolves its own destination and default filenames).
+    public func writeOutputsFlat(
+        _ outputs: [RemoteInferenceOutputRef],
+        to directory: URL,
+        defaultFilename: (Int, RemoteInferenceOutputRef) -> String
+    ) async -> [String] {
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        var saved: [String] = []
+        var usedFilenames = Set<String>()
+        for (index, output) in outputs.enumerated() {
+            guard let payload = try? await downloadPayload(for: output) else { continue }
+            let filename = uniqueFilename(
+                preferred: output.filename ?? defaultFilename(index, output),
+                used: &usedFilenames
+            )
+            let fileURL = directory.appendingPathComponent(filename, isDirectory: false)
+            if (try? payload.data.write(to: fileURL, options: [.atomic])) != nil {
+                saved.append(fileURL.path)
+            }
+        }
+        return saved
+    }
+
     public static func decodeServerSentEvents(_ data: Data) -> [RemoteInferenceServerSentEvent] {
         guard let text = String(data: data, encoding: .utf8) else { return [] }
         return text
@@ -673,6 +700,15 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
     }
 
     private func sanitizedFilename(_ value: String) -> String {
+        AssetFilenameSanitizer.sanitized(value)
+    }
+}
+
+/// Strips path separators and other filesystem-unsafe characters from a backend-supplied filename
+/// (replacing them with `-`) so it can never escape the output directory. Shared by the backend
+/// download path and the image tool so both sanitize the same way.
+enum AssetFilenameSanitizer {
+    static func sanitized(_ value: String) -> String {
         let disallowed = CharacterSet(charactersIn: "/\\?%*:|\"<>")
         let cleaned = value
             .components(separatedBy: disallowed)

@@ -1,9 +1,9 @@
 import CoreGraphics
 import DonkeyContracts
 import DonkeyHarness
-import DonkeyRuntime
 import Foundation
 import ImageIO
+import UniformTypeIdentifiers
 
 /// The model boundary behind the generic `image.edit` / `image.generate` harness tools. It encodes
 /// the source image(s), asks the hosted asset API for an image generation (provider AND model unset,
@@ -18,7 +18,9 @@ public struct HostedImageGenerator: Sendable {
     public init(
         backend: DonkeyBackendInferenceClient,
         timeoutSeconds: TimeInterval = 120,
-        maxPixelSize: Int = 2_048,
+        // A generous longest-edge ceiling for edit/reference source images: only larger images are
+        // downscaled (to bound request size); a normal-resolution source is sent at full detail.
+        maxPixelSize: Int = 4_096,
         maxPollAttempts: Int = 30
     ) {
         self.backend = backend
@@ -34,7 +36,7 @@ public struct HostedImageGenerator: Sendable {
         // paths are best-effort — an unreadable reference is skipped, not fatal to the whole edit.
         var images: [RemoteInferenceJSONValue] = []
         for (index, path) in request.inputImagePaths.enumerated() {
-            if let encoded = Self.encodedImage(atPath: path, maxPixelSize: maxPixelSize) {
+            if let encoded = Self.encodedSourceImage(atPath: path, maxPixelSize: maxPixelSize) {
                 images.append(.object([
                     "data": .string(encoded.base64),
                     "mimeType": .string(encoded.mimeType)
@@ -90,7 +92,9 @@ public struct HostedImageGenerator: Sendable {
                     failureReason: Self.failureReason(from: record)
                 )
             }
-            let saved = await Self.writeOutputs(record.outputs, to: outputDirectory)
+            let saved = await backend.writeOutputsFlat(record.outputs, to: outputDirectory) { index, _ in
+                "image-\(index).png"
+            }
             return HarnessImageGenerationResult(
                 savedPaths: saved,
                 failureReason: saved.isEmpty ? "The image model returned no image." : nil
@@ -128,43 +132,6 @@ public struct HostedImageGenerator: Sendable {
         return (sourceDir ?? downloads).appendingPathComponent(expanded, isDirectory: true)
     }
 
-    private static func writeOutputs(
-        _ outputs: [RemoteInferenceOutputRef],
-        to directory: URL
-    ) async -> [String] {
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        var saved: [String] = []
-        var used = Set<String>()
-        for (index, output) in outputs.enumerated() {
-            guard let data = await outputData(output) else { continue }
-            let preferred = output.filename ?? "image-\(index).png"
-            var name = preferred
-            var suffix = 1
-            while used.contains(name) {
-                let base = (preferred as NSString).deletingPathExtension
-                let ext = (preferred as NSString).pathExtension
-                name = ext.isEmpty ? "\(base)-\(suffix)" : "\(base)-\(suffix).\(ext)"
-                suffix += 1
-            }
-            used.insert(name)
-            let fileURL = directory.appendingPathComponent(name, isDirectory: false)
-            if (try? data.write(to: fileURL, options: [.atomic])) != nil {
-                saved.append(fileURL.path)
-            }
-        }
-        return saved
-    }
-
-    private static func outputData(_ output: RemoteInferenceOutputRef) async -> Data? {
-        if let base64 = output.dataBase64, let data = Data(base64Encoded: base64) {
-            return data
-        }
-        if let urlString = output.url, let url = URL(string: urlString) {
-            return try? Data(contentsOf: url)
-        }
-        return nil
-    }
-
     private static func failureReason(from record: RemoteInferenceGenerationRecord) -> String {
         if let detail = errorText(record.error) {
             return "Image generation \(record.status.rawValue): \(detail)"
@@ -186,23 +153,69 @@ public struct HostedImageGenerator: Sendable {
         }
     }
 
-    /// Loads an image from disk, downscales it to at most `maxPixelSize` on its longest edge, and
-    /// re-encodes it as JPEG so the request body stays small. Returns the base64 payload and MIME
-    /// type, or nil when the file can't be read as an image.
-    static func encodedImage(
+    /// Encodes an edit/reference SOURCE image while preserving detail: a transparent image is encoded
+    /// losslessly as PNG (alpha kept), an opaque one as high-quality JPEG. Only downscales when the
+    /// longest edge exceeds `maxPixelSize`, so a normal-resolution source is sent unshrunk. Returns the
+    /// base64 payload and MIME type, or nil when the file can't be read as an image.
+    static func encodedSourceImage(
         atPath path: String,
         maxPixelSize: Int
     ) -> (base64: String, mimeType: String)? {
         let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let encoded = ScreenshotCompression.downscaledJPEG(
-                  from: source,
-                  maxPixelDimension: maxPixelSize,
-                  jpegQuality: 0.9
-              )
+              let image = Self.image(from: source, maxPixelSize: maxPixelSize)
         else {
             return nil
         }
-        return (encoded.data.base64EncodedString(), "image/jpeg")
+        if Self.hasAlpha(image), let png = Self.encodedPNG(image) {
+            return (png.base64EncodedString(), "image/png")
+        }
+        guard let jpeg = Self.encodedJPEG(image, quality: 0.95) else { return nil }
+        return (jpeg.base64EncodedString(), "image/jpeg")
+    }
+
+    /// Decodes the first image, downscaling (never upscaling) only if its longest edge exceeds
+    /// `maxPixelSize`. Using the thumbnail path with a max-pixel hint keeps decode bounded.
+    private static func image(from source: CGImageSource, maxPixelSize: Int) -> CGImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            // Thumbnail creation never upscales, so a smaller source is returned at its native size.
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
+    private static func hasAlpha(_ image: CGImage) -> Bool {
+        switch image.alphaInfo {
+        case .first, .last, .premultipliedFirst, .premultipliedLast:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func encodedPNG(_ image: CGImage) -> Data? {
+        encodedImageData(image, type: UTType.png.identifier as CFString, properties: nil)
+    }
+
+    private static func encodedJPEG(_ image: CGImage, quality: Double) -> Data? {
+        encodedImageData(
+            image,
+            type: UTType.jpeg.identifier as CFString,
+            properties: [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary
+        )
+    }
+
+    private static func encodedImageData(_ image: CGImage, type: CFString, properties: CFDictionary?) -> Data? {
+        guard let data = NSMutableData() as CFMutableData?,
+              let destination = CGImageDestinationCreateWithData(data, type, 1, nil)
+        else {
+            return nil
+        }
+        CGImageDestinationAddImage(destination, image, properties)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return data as Data
     }
 }
