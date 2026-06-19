@@ -49,6 +49,45 @@ stop_running_donkey_apps() {
   fi
 }
 
+# Eject mounted Donkey disk images and drop every other app bundle claiming the donkey:
+# URL scheme from LaunchServices, leaving only this dev build. Each packaged DMG mount and
+# every rebuilt copy registers itself as a donkey:// handler, so without this the OAuth
+# callback (donkey://auth/callback) can get routed to a leftover release copy with a
+# different bundle id — a different UserDefaults, so the saved sign-in state never matches
+# and the running dev notch never receives the callback. The dev app re-registers itself in
+# create_debug_app_bundle, so it stays the sole handler.
+purge_other_donkey_installs() {
+  if command -v hdiutil >/dev/null 2>&1; then
+    local volume
+    for volume in /Volumes/Donkey*; do
+      [ -d "$volume" ] || continue
+      echo "Ejecting $volume ..."
+      hdiutil detach "$volume" -quiet >/dev/null 2>&1 ||
+        hdiutil detach "$volume" -force -quiet >/dev/null 2>&1 || true
+    done
+  fi
+
+  [ -x "$LSREGISTER" ] || return 0
+
+  local claimant
+  while IFS= read -r claimant; do
+    [ -z "$claimant" ] && continue
+    [ "$claimant" = "$DEV_APP_DIR" ] && continue
+    echo "Unregistering stale donkey:// handler: $claimant"
+    "$LSREGISTER" -u "$claimant" >/dev/null 2>&1 || true
+  done < <(
+    "$LSREGISTER" -dump 2>/dev/null | awk -v scheme="$AUTH_CALLBACK_SCHEME" '
+      /^[ \t]*path:/ {
+        line = $0
+        sub(/^[ \t]*path:[ \t]*/, "", line)
+        sub(/ \(0x[0-9a-f]+\)[ \t]*$/, "", line)
+        p = line
+      }
+      $0 ~ ("claimed schemes:.*" scheme ":") { print p }
+    ' | sort -u
+  )
+}
+
 cleanup_child_processes() {
   if [ "$LAUNCH_APP" != "0" ] && [ "${DONKEY_KEEP_APP_ON_EXIT:-0}" != "1" ]; then
     stop_running_donkey_apps
@@ -475,6 +514,11 @@ ensure_site_server
 if [ "${DONKEY_STOP_APPS_BEFORE_BUILD:-1}" = "1" ]; then
   echo "Stopping any running Donkey app..."
   stop_running_donkey_apps
+fi
+
+if [ "${DONKEY_PURGE_OTHER_INSTALLS:-1}" = "1" ]; then
+  echo "Ejecting Donkey volumes and clearing stale donkey:// handlers..."
+  purge_other_donkey_installs
 fi
 
 cd "$APP_DIR"
