@@ -1202,6 +1202,11 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             // A follow-up to a task whose loop is still running is queued into it upstream (it never
             // reaches here). A matched task that reaches this point has a stopped loop, so a new turn
             // resumes it: seed it back to running rather than restarting it under a replaced goal.
+            //
+            // The chin echoes `commandText` while a task runs, so the resumed turn must adopt the new
+            // follow-up text — otherwise the chin keeps reading back the original prompt for the whole
+            // run instead of what the user just asked.
+            task.commandText = text
             task.detail = Self.runningSeedDetail
             task.status = .running
             task.updatedAt = Date()
