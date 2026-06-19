@@ -231,6 +231,9 @@ final class UIUnderstandingCoordinator {
     private func refresh(force: Bool = false) {
         reloadConfigAndReschedule()
         guard currentConfig.enabled else { return }
+        // The AI parse pass hits the hosted backend; while signed out it would only 401, so the engine
+        // is idle until sign-in restores it (the app delegate also stops this coordinator on sign-out).
+        guard BackendSessionGate.shared.isAuthenticated else { return }
         guard !isAnalyzing else {
             UIUnderstandingLog.overlay.debug("debug inspection skipped refresh because analysis is already running")
             return

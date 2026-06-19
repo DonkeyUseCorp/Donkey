@@ -1,7 +1,9 @@
 import AppKit
 import Carbon.HIToolbox
+import Combine
 import Darwin
 import DonkeyAI
+import DonkeyContracts
 import DonkeyRuntime
 import Foundation
 
@@ -14,6 +16,9 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     private var overlayController: UserQueryOverlayController?
     private var uiUnderstandingCoordinator: UIUnderstandingCoordinator?
     private var frontmostVisionWarmCache: FrontmostVisionWarmCache?
+    /// Mirrors the auth coordinator's session phase into the overlay's `needsLogin`, so the notch
+    /// flips to/from the login call-to-action as the session is established or expires.
+    private var authStateCancellable: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if ManualCaptureDebugLaunchHandler.shouldHandle(arguments: CommandLine.arguments) {
@@ -29,13 +34,20 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
 
         let authCoordinator = DonkeyAuthCoordinator()
         self.authCoordinator = authCoordinator
+        // Seed the process-wide session gate before any surface is built, so the warm cache, Live
+        // session, and auto-resume all see the real auth state on their first tick instead of the
+        // optimistic default. The phase observer keeps it current from here on.
+        BackendSessionGate.shared.update(isAuthenticated: authCoordinator.isAuthenticated)
         authCoordinator.authenticationCompleted = { [weak self] _ in
             self?.startAuthenticatedAppSurfaces()
         }
         registerAuthCallbackHandler()
         installMainMenu()
 
-        if authCoordinator.isAuthenticated {
+        // First install (never signed in) opens the welcome/sign-in window. A returning user whose
+        // session has expired skips the window: the notch comes up in login mode (driven by the auth
+        // phase observer) and carries them back through sign-in inline.
+        if authCoordinator.isAuthenticated || authCoordinator.hasEverSignedIn {
             startAuthenticatedAppSurfaces()
         } else {
             showLoginWindow()
@@ -122,6 +134,30 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         )
         let model = UserQueryOverlayModel(voiceTranscriber: voiceTranscriber)
 
+        // The notch Login button starts the real Google sign-in; the auth phase drives whether the
+        // notch shows the login call-to-action, so an expired session surfaces here without a window.
+        model.loginActionRequested = { [weak self] in
+            self?.authCoordinator?.beginGoogleSignIn()
+        }
+        // A mid-run 401 expired the session: sign out (clears the dead cookie, flips phase to signedOut)
+        // so the $phase observer below sets needsLogin — surfacing the notch login WITHOUT tearing down
+        // the overlay or opening the window, so running tasks stay put and re-auth happens inline.
+        model.sessionExpired = { [weak self] in
+            self?.authCoordinator?.signOut()
+        }
+        if let authCoordinator {
+            model.updateNeedsLogin(!authCoordinator.isAuthenticated)
+            authStateCancellable = authCoordinator.$phase
+                .sink { [weak self, weak model] phase in
+                    model?.updateNeedsLogin(!phase.isSignedIn)
+                    self?.applySessionState(isSignedIn: phase.isSignedIn, model: model)
+                }
+        }
+
+        // A locally-stored session can already be expired server-side, which otherwise only surfaces on
+        // the first query's 401. Probe the backend on launch so the notch shows login right away.
+        validateStoredSession(model: model)
+
         // Warm the on-device speech model in the background so the first voice command
         // isn't blocked behind a model download.
         AppleSpeechVoiceTranscriptionRuntime.prewarm()
@@ -148,14 +184,54 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         )
         #endif
         self.uiUnderstandingCoordinator = uiUnderstandingCoordinator
-        uiUnderstandingCoordinator.start()
 
         // Keep ParsedVisionStore warm: watch the frontmost window and re-parse on big changes, so a
         // typed vision command reuses a fresh parse instead of paying for one inline. No-ops when the
         // vision backend isn't configured.
         let frontmostVisionWarmCache = FrontmostVisionWarmCache.fromEnvironment()
         self.frontmostVisionWarmCache = frontmostVisionWarmCache
-        frontmostVisionWarmCache?.start()
+
+        // Start the always-on backend loops only while signed in; the phase observer above suspends and
+        // resumes them as the session changes (an expired session must not keep them issuing 401s).
+        applySessionState(isSignedIn: authCoordinator?.isAuthenticated == true, model: model)
+    }
+
+    /// Drive the process-wide session gate and the always-on backend loops from the auth phase. Signed
+    /// out: close the gate (every backend call short-circuits to `.authenticationRequired` with no
+    /// network round trip) and fully suspend the warm cache, UI-understanding engine, and Live session,
+    /// so a logged-out app stops issuing guaranteed-401 requests. Signed in: reopen the gate and restart
+    /// them. Idempotent — `start()`/`stop()` on each loop are safe to call repeatedly.
+    private func applySessionState(isSignedIn: Bool, model: UserQueryOverlayModel?) {
+        BackendSessionGate.shared.update(isAuthenticated: isSignedIn)
+        if isSignedIn {
+            uiUnderstandingCoordinator?.start()
+            frontmostVisionWarmCache?.start()
+            model?.resumeLiveSession()
+        } else {
+            uiUnderstandingCoordinator?.stop()
+            frontmostVisionWarmCache?.stop()
+            model?.suspendLiveSession()
+        }
+    }
+
+    /// Confirms a locally-stored session is still valid server-side. Fires one cheap, auth-gated GET
+    /// (`/api/inference/models/`); a 401 routes through the model's session-expiry handling (sign out →
+    /// notch login) via the inference client's auth-expiry callback. Network or other errors are
+    /// ignored so a transient hiccup never signs the user out. Runs off the launch path.
+    private func validateStoredSession(model: UserQueryOverlayModel) {
+        guard authCoordinator?.isAuthenticated == true,
+              let configuration = try? DonkeyBackendInferenceConfiguration.fromEnvironment()
+        else { return }
+
+        let backend = DonkeyBackendInferenceClient(
+            configuration: configuration,
+            onAuthenticationRequired: { [weak model] in
+                Task { @MainActor in model?.handleSessionExpired() }
+            }
+        )
+        Task {
+            _ = try? await backend.listModels()
+        }
     }
 
     // MARK: - Sign out
@@ -187,6 +263,7 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     /// Tears down the live overlay/runtime surfaces so a later sign-in can rebuild them cleanly.
     /// `startAuthenticatedAppSurfaces()` guards on these being nil, so they must be reset here.
     private func teardownAuthenticatedSurfaces() {
+        authStateCancellable = nil
         frontmostVisionWarmCache?.stop()
         frontmostVisionWarmCache = nil
         uiUnderstandingCoordinator?.stop()

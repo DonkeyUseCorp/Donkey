@@ -134,6 +134,9 @@ public final class FrontmostVisionWarmCache {
 
     func tick() async {
         guard !VisionWarmCacheActivity.shared.isSuspended else { return }
+        // Nothing to keep warm while signed out — the parse would only 401. Skip the expensive capture
+        // entirely rather than spending it on a doomed backend call.
+        guard BackendSessionGate.shared.isAuthenticated else { return }
         guard permissionChecker.hasScreenRecordingAccess() else { return }
         guard let target = MacWindowResolver().frontmostUserAppTarget() else { return }
         let appKey = target.bundleIdentifier.flatMap { $0.isEmpty ? nil : $0 } ?? target.appName ?? ""
