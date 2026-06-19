@@ -21,6 +21,39 @@ public enum GeminiGenerateContent {
         return trimmedValue?.isEmpty == false ? trimmedValue : nil
     }
 
+    /// Serialize a `generateContent` request body: a single user turn whose `parts`
+    /// are supplied by the caller (text / inlineData), plus the caller's
+    /// `generationConfig` (temperature, response schema, thinking level, …).
+    public static func requestBody(
+        parts: [[String: Any]],
+        generationConfig: [String: Any]
+    ) throws -> Data {
+        let body: [String: Any] = [
+            "contents": [[
+                "role": "user",
+                "parts": parts
+            ]],
+            "generationConfig": generationConfig
+        ]
+        return try JSONSerialization.data(withJSONObject: body)
+    }
+
+    /// A part carrying a base64 inline blob (image/audio) with its MIME type.
+    public static func inlineDataPart(mimeType: String, base64: String) -> [String: Any] {
+        ["inlineData": ["mimeType": mimeType, "data": base64]]
+    }
+
+    /// Build the Vertex `generateContent` POST request: bearer auth + JSON content
+    /// type, body already serialized.
+    public static func vertexRequest(url: URL, bearerToken: String, body: Data) -> URLRequest {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        return request
+    }
+
     /// The text of the first candidate, concatenating its content parts. Returns
     /// nil when the response has no candidate text.
     public static func candidateText(_ data: Data) -> String? {
