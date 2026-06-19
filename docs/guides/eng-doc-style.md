@@ -64,6 +64,13 @@ file paths, which read as jargon and churn on every refactor.
   paragraph is bold, nothing is.
 - **Italics only for word-level contrast** (*what* vs *whether*), never for
   emphasis-shouting.
+- **State what a thing is; don't negate a foil nobody proposed.** Write "The
+  safety class decides whether the action stops for the user," not "The class,
+  *not the tool's name*, decides…" The appended opposite ("X, not Y," "it's not
+  Z, it's W") reads as defensive and machine-written. This is different from the
+  division-of-labor contrast in Principle 4, which assigns real work to two real
+  actors ("the model decides *what*; Swift decides *whether*"); the foil is bad
+  only when Y is a strawman the reader never would have assumed.
 - **Code font only for what a reader will actually type or run** — a real
   command or flag. Don't set internal tool names, types, states, or paths in
   backticks just because they exist in the code; describe what they do in plain

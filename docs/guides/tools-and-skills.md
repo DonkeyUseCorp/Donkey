@@ -195,8 +195,8 @@ curated one.
 
 ## Safety Classes and Consent
 
-Every tool declares a safety class. The class, not the tool's name, decides
-whether the action runs immediately or stops for the user.
+Every tool declares a safety class. The safety class decides whether the action
+runs immediately or stops for the user.
 
 | Class | Behavior |
 |---|---|
