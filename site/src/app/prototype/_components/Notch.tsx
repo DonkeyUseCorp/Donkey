@@ -1,5 +1,5 @@
 import { ArrowUp, CloudSync, MessageCircleWarning, Shield } from 'lucide-react';
-import { type FormEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { type FormEvent, type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { DonkeyCursor } from '@/app/prototype/_components/DonkeyCursor';
 import { ExpandedTaskRow } from '@/app/prototype/_components/ExpandedTaskRow';
@@ -195,18 +195,66 @@ export function Notch({
   const contentRowHeight = variant === 'real' ? METRICS.collapsedHeight : collapsedHeight;
 
   const followUpRef = useRef<HTMLTextAreaElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
   const [canSendFollowUp, setCanSendFollowUp] = useState(false);
 
   // Reply mode: the thread the user is replying to. Tapping a repliable row (waiting / done / error)
   // pins the next message to it and dims the others; the composer takes that thread's accent color.
   const [replyTargetId, setReplyTargetId] = useState<string | null>(null);
   const replyTarget = replyTargetId ? liveTasks.find((task) => task.id === replyTargetId) ?? null : null;
+  // The keyboard highlight: the row the arrows last landed on. It rides on top of the reply focus
+  // (brighter fill + ring) and is released as soon as the user starts typing a draft, the same as the
+  // app, so the arrows hand back to text editing while the reply stays pinned.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Focusing a row is the shared effect of clicking it and of arrowing onto it: it becomes both the
+  // keyboard highlight and the pinned reply target (lit pointer, accent composer, dimmed siblings).
+  const focusRow = (id: string | null) => {
+    setSelectedId(id);
+    setReplyTargetId(id);
+  };
 
   // Every thread is repliable by tapping its row, whatever its state. Tapping the active thread again
   // leaves reply mode; tapping any other switches to it. (Only 'waiting' also shows a Reply button,
   // since only there is the agent actively asking.)
   const handleRowActivate = (task: LiveTask) => {
-    setReplyTargetId((current) => (current === task.id ? null : task.id));
+    focusRow(replyTargetId === task.id ? null : task.id);
+  };
+
+  // Up/Down move the focus through the rows, landing on each exactly as a click would. The arrows clamp
+  // at the ends so the selection is held rather than dropped, and enter the list from the empty composer
+  // (Up at the bottom row nearest the input, Down at the top). Escape clears the focus. Once a draft is
+  // typed the arrows fall through to edit the text instead (handled by leaving them to the textarea).
+  const handleNotchKeyDown = (event: KeyboardEvent) => {
+    if (!expanded || loggedOut) return;
+
+    if (event.key === 'Escape') {
+      if (selectedId || replyTargetId) {
+        event.preventDefault();
+        focusRow(null);
+      }
+      return;
+    }
+
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+    if (liveTasks.length === 0) return;
+
+    const currentIndex = selectedId ? liveTasks.findIndex((task) => task.id === selectedId) : -1;
+    const draft = followUpRef.current?.value ?? '';
+    // No row highlighted and a draft in progress: leave the arrows to the textarea for text editing.
+    if (currentIndex === -1 && draft.length > 0) return;
+
+    event.preventDefault();
+    const last = liveTasks.length - 1;
+    let nextIndex: number;
+    if (currentIndex === -1) {
+      nextIndex = event.key === 'ArrowUp' ? last : 0;
+    } else if (event.key === 'ArrowUp') {
+      nextIndex = Math.max(0, currentIndex - 1);
+    } else {
+      nextIndex = Math.min(last, currentIndex + 1);
+    }
+    focusRow(liveTasks[nextIndex].id);
   };
 
   // Focus the composer when a reply begins, so the user can type straight away (no second click).
@@ -214,10 +262,16 @@ export function Notch({
     if (replyTargetId) followUpRef.current?.focus();
   }, [replyTargetId]);
 
-  // Collapsing the notch also leaves reply mode, so it never reopens with stale dimming.
+  // Keep the keyboard-highlighted row on screen as the arrows walk past the fold.
+  useEffect(() => {
+    if (!selectedId) return;
+    listRef.current?.querySelector(`[data-task-id="${selectedId}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [selectedId]);
+
+  // Collapsing the notch also leaves reply mode, so it never reopens with stale dimming or a highlight.
   const collapse = () => {
     setExpanded(false);
-    setReplyTargetId(null);
+    focusRow(null);
   };
 
   const resizeFollowUp = () => {
@@ -227,6 +281,8 @@ export function Notch({
     input.style.height = 'auto';
     input.style.height = `${Math.min(Math.max(input.scrollHeight, FOLLOWUP_MIN_HEIGHT), FOLLOWUP_MAX_HEIGHT)}px`;
     setCanSendFollowUp(input.value.trim().length > 0);
+    // Starting a draft hands the arrows back to the text; the reply stays pinned until sent.
+    if (input.value.length > 0) setSelectedId(null);
   };
 
   const handleFollowUpSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -240,9 +296,10 @@ export function Notch({
     if (replyTargetId) {
       // Replying to a pinned thread continues it with the message rather than starting a new task.
       onReplyToTask(replyTargetId, taskText);
-      setReplyTargetId(null);
+      focusRow(null);
     } else {
       onAddTask(taskText);
+      setSelectedId(null);
     }
     form.reset();
     setCanSendFollowUp(false);
@@ -261,6 +318,7 @@ export function Notch({
         transition: 'width 220ms ease-out, height 220ms ease-out, border-radius 220ms ease-out',
       }}
       tabIndex={0}
+      onKeyDown={handleNotchKeyDown}
       onClick={() => setExpanded(true)}
       onFocus={() => setExpanded(true)}
       onPointerEnter={() => setExpanded(true)}
@@ -526,26 +584,28 @@ export function Notch({
           }}
           // Tapping bare chrome (not a row or the composer, which stop propagation) leaves reply mode.
           onClick={() => {
-            if (replyTargetId) setReplyTargetId(null);
+            if (replyTargetId || selectedId) focusRow(null);
           }}
         >
           {/* Scrollable task list fills the space above the always-visible input. */}
-          <div className="min-h-0 flex-1 overflow-y-auto pt-2.5">
+          <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto pt-2.5">
             <div className="flex flex-col gap-2">
               {liveTasks.map((task) => (
                 <ExpandedTaskRow
                   key={task.id}
+                  taskId={task.id}
                   title={task.title}
                   detail={task.detail}
                   color={task.color}
                   status={task.status}
                   timeText={formatRunningTime(task.seconds)}
                   isReplyTarget={replyTargetId === task.id}
+                  isSelected={selectedId === task.id}
                   dimmed={replyTargetId !== null && replyTargetId !== task.id}
                   onStop={() => onStopTask(task.id)}
                   onResume={() => onResumeTask(task.id)}
                   onClose={() => {
-                    if (replyTargetId === task.id) setReplyTargetId(null);
+                    if (replyTargetId === task.id || selectedId === task.id) focusRow(null);
                     onCloseTask(task.id);
                   }}
                   onActivate={() => handleRowActivate(task)}

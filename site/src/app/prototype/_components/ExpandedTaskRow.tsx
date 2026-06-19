@@ -5,6 +5,8 @@ import { DonkeyCursor } from '@/app/prototype/_components/DonkeyCursor';
 import type { LiveTaskStatus } from '@/app/prototype/_components/types';
 
 type Props = {
+  // Used to scroll the row into view when the keyboard highlight lands on it.
+  taskId: string;
   title: string;
   detail: string;
   color: string;
@@ -12,6 +14,9 @@ type Props = {
   timeText: string;
   // Whether this row is the active reply target (full opacity, lit pointer, accent focus).
   isReplyTarget: boolean;
+  // Whether this row is the keyboard highlight — a brighter fill and a ring on top of the reply focus,
+  // shown until the user starts typing a draft.
+  isSelected: boolean;
   // Whether another row is the reply target, so this one recedes.
   dimmed: boolean;
   onStop: () => void;
@@ -25,12 +30,14 @@ const controlClass =
   'grid h-6 w-6 place-items-center rounded-full bg-white/[0.12] text-white/[0.88] transition hover:bg-white/[0.2]';
 
 export function ExpandedTaskRow({
+  taskId,
   title,
   detail,
   color,
   status,
   timeText,
   isReplyTarget,
+  isSelected,
   dimmed,
   onStop,
   onResume,
@@ -60,9 +67,19 @@ export function ExpandedTaskRow({
 
   return (
     <article
+      data-task-id={taskId}
       onClick={withStop(onActivate)}
       className="group relative flex cursor-pointer items-start gap-3 rounded-lg px-3 py-2.5 transition-colors hover:bg-white/[0.07]"
-      style={{ background: isReplyTarget ? 'rgba(255,255,255,0.07)' : undefined }}
+      style={{
+        // The keyboard highlight brightens the fill and adds a ring; a plain reply target keeps the
+        // softer fill. The inline fill wins over the hover class, so a highlighted row holds its color.
+        background: isSelected
+          ? 'rgba(255,255,255,0.16)'
+          : isReplyTarget
+            ? 'rgba(255,255,255,0.07)'
+            : undefined,
+        boxShadow: isSelected ? 'inset 0 0 0 1px rgba(255,255,255,0.3)' : undefined,
+      }}
     >
       <div
         style={{
