@@ -201,10 +201,12 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
             + "required input field filled. For a tool that needs no input, use an empty object: {}."
     }
 
-    /// Terminal fail-safe once the planning budget is spent. The reason and narration carry the exact
-    /// failure — a provider content block with its finish reason, an empty reply, an HTTP/auth error,
-    /// a timeout — so the thread and the user-facing summary name what actually broke instead of a
-    /// generic plan failure the user has to guess at.
+    /// Terminal fail-safe once the planning budget is spent. The `reason` carries the exact failure for
+    /// the thread — a provider content block with its finish reason, an empty reply, an HTTP/auth error,
+    /// a timeout. The user-facing narration stays plain and friendly: a signed-out session, a content
+    /// block, and an empty reply each get a specific, actionable line, and any other error gets a calm
+    /// "couldn't reach the model" message rather than a raw error dump. The technical detail the user
+    /// doesn't need is preserved in the thread's recorded planning errors, not the notch.
     private func failSafeCall(after error: Error?) -> HarnessToolCall {
         if let error, Self.isAuthenticationError(error) {
             lastNarration = "Your session is signed out, so I couldn't reach the model. Sign in again "
@@ -223,9 +225,12 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
                 + "planning attempts\(detail), so I stopped."
             return HarnessToolCall(name: "run.failSafe", input: ["reason": "plannerEmptyReply"])
         case nil:
-            if let error {
-                lastNarration = "Planning failed on all \(Self.maxPlanAttempts) attempts — last error: "
-                    + "\(String(describing: error).prefix(200))"
+            if error != nil {
+                // The user sees a plain, friendly account; the exact error (HTTP status, body, type) is
+                // already written to the thread via the planner's recorded planning errors, so support and
+                // a later self-correcting pass keep the technical detail without putting it in the notch.
+                lastNarration = "I couldn't reach the model to plan this, so I stopped. Please try again in "
+                    + "a moment — if it keeps happening, check your connection."
             }
             return HarnessToolCall(name: "run.failSafe", input: ["reason": "harnessPlanFailed"])
         }
@@ -233,10 +238,19 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
 
     /// Whether a planning failure is an expired/absent session (a backend 401, or the client's own
     /// pre-flight refusal while signed out). These are terminal for the step — retrying re-issues the
-    /// same doomed call — so the planner stops instead of spending its retry budget.
+    /// same doomed call — so the planner stops instead of spending its retry budget. A 401 reaches us
+    /// two ways: the typed `.authenticationRequired` from the normal request path, and a raw
+    /// `.httpStatus(401, …)` when the failure surfaces through a streaming error event, which never
+    /// runs through the status-to-auth mapping. Both mean the same signed-out state.
     private static func isAuthenticationError(_ error: Error) -> Bool {
-        if case DonkeyBackendInferenceClientError.authenticationRequired = error { return true }
-        return false
+        switch error {
+        case DonkeyBackendInferenceClientError.authenticationRequired:
+            return true
+        case DonkeyBackendInferenceClientError.httpStatus(401, _):
+            return true
+        default:
+            return false
+        }
     }
 
     /// Max planning samples per step before failing safe. The first is the normal call; the rest are

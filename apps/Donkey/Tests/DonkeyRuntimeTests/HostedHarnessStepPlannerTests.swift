@@ -185,9 +185,10 @@ struct HostedHarnessStepPlannerTests {
     }
 
     @Test
-    func backendHTTPFailureSurfacesTheExactErrorInTheNarration() async {
-        // A non-auth backend failure must not read as a generic plan failure: the narration carries the
-        // exact backend error (status code and body) so the user sees what broke without guessing.
+    func backendHTTPFailureShowsAFriendlyNarrationAndKeepsTheRawErrorForTheThread() async {
+        // A non-auth backend failure must read as a plain, friendly message to the user — never a raw
+        // error dump like `httpStatus(500, …)`. The exact backend error (status code and body) is kept
+        // in the recorded planning errors instead, which the thread persists for support and diagnostics.
         let serverError = (Data("server error".utf8), 500)
         let httpClient = SequencedHTTPClient(responses: [serverError, serverError, serverError])
         let planner = makePlanner(httpClient: httpClient, understanding: nil)
@@ -196,7 +197,12 @@ struct HostedHarnessStepPlannerTests {
 
         #expect(call?.name == "run.failSafe")
         #expect(call?.input["reason"] == "harnessPlanFailed")
-        #expect(planner.lastNarration?.contains("500") == true)
+        // User-facing: friendly, no raw status code or error type leaking into the notch.
+        #expect(planner.lastNarration?.contains("couldn't reach the model") == true)
+        #expect(planner.lastNarration?.contains("500") == false)
+        #expect(planner.lastNarration?.lowercased().contains("httpstatus") == false)
+        // Thread-facing: the exact backend status is still recorded for diagnostics.
+        #expect(planner.lastPlanningErrors.contains { $0.contains("500") })
     }
 
     @Test
