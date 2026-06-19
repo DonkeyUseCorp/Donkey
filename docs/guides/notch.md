@@ -64,6 +64,8 @@ The expanded panel is a scrollable list of task rows above an input that is pinn
 
 Two inputs add to the same queue: the centered composer summoned by double-tapping Command, and the input at the bottom of this panel. Both grow from one line as their text grows, keep the send button in the lower-right corner, and disable that button until there is text to send.
 
+**Keyboard navigation.** With the input empty, the up and down arrows move the focus through the rows, scrolling the focused row into view. Landing on a row does exactly what clicking it does — it becomes the highlighted, reply-pinned thread and the other rows dim. The arrows clamp at the ends: reaching the top or bottom row holds that selection rather than dropping back to the input, so the focus is never lost mid-navigation. Pressing Escape (or clicking bare chrome) leaves reply mode. As soon as the user types a draft the arrows go back to editing that text, and clicking a row re-engages navigation from there.
+
 ## Task States
 
 A task is always in one of three states, and the available controls follow from the state.
