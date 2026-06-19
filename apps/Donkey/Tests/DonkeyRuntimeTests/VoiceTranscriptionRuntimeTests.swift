@@ -113,6 +113,40 @@ struct VoiceTranscriptionRuntimeTests {
     }
 
     @Test
+    func geminiUsesRoutedEntryModelWhenItCarriesAUsableOne() async throws {
+        let http = FakeVoiceHTTPClient(
+            data: Data(#"{"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}"#.utf8),
+            statusCode: 200
+        )
+        // The env/constant says "gemini-default", but the routed entry carries a concrete model — the
+        // request and the metadata must reflect the entry's model, not the constant.
+        let runtime = GeminiVoiceTranscriptionRuntime(
+            apiKey: "test-key",
+            model: "gemini-default",
+            httpClient: http,
+            environment: [:]
+        )
+        let entry = AIModelRegistryEntry(
+            id: "routed-gemini-voice",
+            role: .voiceTranscription,
+            provider: .donkeyBackend,
+            modelID: "gemini-routed",
+            endpoint: URL(string: "donkey://backend")!,
+            capabilities: [.audioInput],
+            timeoutMS: 15_000,
+            promptVersion: "voice-transcription-v1",
+            evalStatus: .candidate,
+            docsURL: URL(string: "donkey://docs/guides/agent-harness")!
+        )
+
+        let transcript = try await runtime.transcribe(audio: Self.audio(), model: entry)
+
+        #expect(transcript.metadata["transcript.model"] == "gemini-routed")
+        let urlString = try #require(http.requests.first?.url?.absoluteString)
+        #expect(urlString.contains("models/gemini-routed:generateContent"))
+    }
+
+    @Test
     func geminiThrowsEmptyTranscriptWhenNoText() async {
         let http = FakeVoiceHTTPClient(
             data: Data(#"{"candidates":[{"content":{"parts":[{"text":"   "}]}}]}"#.utf8),

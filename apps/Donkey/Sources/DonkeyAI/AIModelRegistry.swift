@@ -164,9 +164,9 @@ public struct AIModelRegistry: Codable, Equatable, Sendable {
                 rollbackID: nil,
                 metadata: [
                     // Apple's on-device speech is the routed entry; the injected runtime
-                    // falls back to Gemini when it is unavailable or fails.
+                    // falls back to a network backend when it is unavailable or fails (the
+                    // fallback order is wired in the app, not driven by this metadata).
                     "localOnly": "true",
-                    "fallbackProvider": "gemini",
                     "lastVerifiedAt": "2026-06-18"
                 ]
             )

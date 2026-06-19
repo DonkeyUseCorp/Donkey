@@ -290,7 +290,11 @@ public struct LocalVoiceTranscriptionAdapter: Sendable {
                     startedAt: startedAt,
                     status: .completed,
                     validationStatus: "transcriptDecoded",
-                    metadata: metadata(for: request.audio, preparedAudio: preparedAudio, transcript: transcript)
+                    metadata: metadata(for: request.audio, preparedAudio: preparedAudio, transcript: transcript),
+                    // On a network fallback the answering backend differs from the routed Apple entry;
+                    // report the backend that actually answered, derived from the transcript metadata.
+                    backendModelID: transcript.metadata["transcript.model"],
+                    isNetworkFallback: transcript.metadata["transcript.backend"].map { !$0.hasPrefix("apple") }
                 )
             )
         } catch is CancellationError {
@@ -328,14 +332,21 @@ public struct LocalVoiceTranscriptionAdapter: Sendable {
         startedAt: RunTraceTimestamp,
         status: AIModelCallStatus,
         validationStatus: String,
-        metadata: [String: String]
+        metadata: [String: String],
+        backendModelID: String? = nil,
+        isNetworkFallback: Bool? = nil
     ) -> AIModelCallTrace {
         let completedAt = now()
+        // When a network backend actually answered (a fallback away from the routed Apple entry), the
+        // trace's provider/modelID must report that backend, not the local Apple entry. Both signals
+        // are derived from the transcript metadata, so this stays general (no hardcoded provider name).
+        let provider: AIModelProvider = (isNetworkFallback == true) ? .donkeyBackend : (model?.provider ?? .localRuntime)
+        let resolvedModelID = backendModelID?.nilIfEmpty ?? model?.modelID ?? "unrouted"
         return AIModelCallTrace(
             id: "voice-transcription-\(sourceTraceID)",
             role: .voiceTranscription,
-            provider: model?.provider ?? .localRuntime,
-            modelID: model?.modelID ?? "unrouted",
+            provider: provider,
+            modelID: resolvedModelID,
             promptVersion: model?.promptVersion ?? "voice-transcription-v1",
             schemaID: "voice-transcript-v1",
             latencyMS: startedAt.milliseconds(until: completedAt),
@@ -393,6 +404,10 @@ public struct LocalVoiceTranscriptionAdapter: Sendable {
             monotonicUptimeNanoseconds: UInt64(ProcessInfo.processInfo.systemUptime * 1_000_000_000)
         )
     }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
 private extension LocalVoiceAudioBuffer {

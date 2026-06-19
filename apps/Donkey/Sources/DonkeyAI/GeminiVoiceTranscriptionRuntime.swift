@@ -24,6 +24,9 @@ public struct GeminiVoiceTranscriptionRuntime: LocalVoiceTranscriptionRuntime {
     private let model: String
     private let httpClient: any AIHTTPClient
     private let environment: [String: String]
+    /// Caches the backend client and minted Vertex token across turns so the Vertex path
+    /// doesn't rebuild the client and re-mint a fresh OAuth token on every transcription.
+    private let vertexAuthCache = VertexAuthCache()
 
     public init(
         apiKey: String? = nil,
@@ -41,11 +44,15 @@ public struct GeminiVoiceTranscriptionRuntime: LocalVoiceTranscriptionRuntime {
         audio: LocalVoiceAudioBuffer,
         model entry: AIModelRegistryEntry
     ) async throws -> LocalVoiceTranscript {
+        // Use the routed entry's model when it carries a usable one for this runtime; otherwise fall
+        // back to `self.model` (the env override, else the constant). The metadata reports what was
+        // used. `self.model` already folds env override over the constant.
+        let requestModel = Self.resolvedModel(entry: entry, fallback: model)
         let request: URLRequest
         if let apiKey {
-            request = try developerAPIRequest(apiKey: apiKey, audio: audio)
+            request = try developerAPIRequest(apiKey: apiKey, model: requestModel, audio: audio)
         } else {
-            request = try await vertexRequest(audio: audio)
+            request = try await vertexRequest(model: requestModel, audio: audio)
         }
 
         let (data, response) = try await httpClient.send(request)
@@ -67,12 +74,26 @@ public struct GeminiVoiceTranscriptionRuntime: LocalVoiceTranscriptionRuntime {
             confidence: 1,
             metadata: [
                 "transcript.backend": "gemini",
-                "transcript.model": model
+                "transcript.model": requestModel
             ]
         )
     }
 
-    private func developerAPIRequest(apiKey: String, audio: LocalVoiceAudioBuffer) throws -> URLRequest {
+    /// Resolves the request model. Prefers the routed entry's model when it carries a concrete one for
+    /// this runtime (not the backend-selected sentinel and not the on-device placeholder the registry
+    /// uses for the Apple entry), otherwise the supplied fallback (env override, else the constant).
+    static func resolvedModel(entry: AIModelRegistryEntry, fallback: String) -> String {
+        let entryModel = GeminiGenerateContent.trimmed(entry.modelID)
+        guard let entryModel,
+              entryModel != AIModelRegistryEntry.backendSelectedModelID,
+              entry.provider != .localRuntime
+        else {
+            return fallback
+        }
+        return entryModel
+    }
+
+    private func developerAPIRequest(apiKey: String, model: String, audio: LocalVoiceAudioBuffer) throws -> URLRequest {
         var components = URLComponents(
             string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent"
         )
@@ -86,10 +107,10 @@ public struct GeminiVoiceTranscriptionRuntime: LocalVoiceTranscriptionRuntime {
         return request
     }
 
-    private func vertexRequest(audio: LocalVoiceAudioBuffer) async throws -> URLRequest {
-        let configuration = try DonkeyBackendInferenceConfiguration.fromEnvironment(environment)
-        let backend = DonkeyBackendInferenceClient(configuration: configuration, httpClient: httpClient)
-        let auth = try await GeminiVertexVisionPlanner.mintAuth(backend: backend)
+    private func vertexRequest(model: String, audio: LocalVoiceAudioBuffer) async throws -> URLRequest {
+        // Reuse the cached backend client and minted Vertex token; the token is only re-minted
+        // when it's missing or has expired, not on every transcription.
+        let auth = try await vertexAuthCache.auth(environment: environment, httpClient: httpClient)
 
         guard let url = GeminiGenerateContent.vertexURL(
             project: auth.project,
@@ -97,39 +118,41 @@ public struct GeminiVoiceTranscriptionRuntime: LocalVoiceTranscriptionRuntime {
             model: model
         ) else { throw GeminiVoiceTranscriptionError.invalidURL }
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(auth.token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try Self.requestBody(audio: audio)
-        return request
+        return GeminiGenerateContent.vertexRequest(
+            url: url,
+            bearerToken: auth.token,
+            body: try Self.requestBody(audio: audio)
+        )
     }
 
     private static func requestBody(audio: LocalVoiceAudioBuffer) throws -> Data {
-        let body: [String: Any] = [
-            "contents": [[
-                "role": "user",
-                "parts": [
-                    ["text": prompt],
-                    ["inlineData": [
-                        "mimeType": mimeType(for: audio.format),
-                        "data": audio.data.base64EncodedString()
-                    ]]
-                ]
-            ]],
-            "generationConfig": ["temperature": 0]
-        ]
-        return try JSONSerialization.data(withJSONObject: body)
+        try GeminiGenerateContent.requestBody(
+            parts: [
+                ["text": prompt],
+                GeminiGenerateContent.inlineDataPart(
+                    mimeType: mimeType(for: audio.format),
+                    base64: audio.data.base64EncodedString()
+                )
+            ],
+            generationConfig: ["temperature": 0]
+        )
     }
 
     private static func mimeType(for format: String) -> String {
         switch format.lowercased() {
+        // The normalizer emits WAV PCM16, so wav/pcm must stay audio/wav.
+        case "wav", "pcm", "pcm_f32le", "pcm_s16le": return "audio/wav"
         case "flac": return "audio/flac"
-        case "mp3": return "audio/mp3"
+        case "mp3", "mpeg": return "audio/mpeg"
+        case "m4a", "mp4": return "audio/mp4"
+        case "webm": return "audio/webm"
+        case "opus": return "audio/ogg"
         case "aac": return "audio/aac"
         case "ogg": return "audio/ogg"
         case "aiff": return "audio/aiff"
-        default: return "audio/wav"
+        // Don't silently claim WAV for an unknown format — a generic octet-stream surfaces the
+        // mismatch instead of mislabeling the bytes.
+        default: return "application/octet-stream"
         }
     }
 }
@@ -137,4 +160,65 @@ public struct GeminiVoiceTranscriptionRuntime: LocalVoiceTranscriptionRuntime {
 public enum GeminiVoiceTranscriptionError: Error, Equatable, Sendable {
     case invalidURL
     case requestFailed(status: Int, body: String)
+}
+
+/// Caches the backend client (built once from the environment) and the minted Vertex auth
+/// bundle (token + project + location) so the transcription runtime doesn't rebuild the client
+/// and mint a fresh OAuth token on every turn. The token is re-minted only when it's absent or
+/// within `expiryMargin` of its reported expiry.
+private actor VertexAuthCache {
+    private var client: DonkeyBackendInferenceClient?
+    private var cached: (auth: GeminiVertexVisionPlanner.VertexAuth, expiresAt: Date)?
+    /// Re-mint a little before the token actually expires so an in-flight request doesn't race it.
+    private static let expiryMargin: TimeInterval = 60
+    /// When the mint response reports no expiry, cap how long the token is reused so a token can
+    /// never be cached indefinitely (which would 401 after its real, unknown expiry).
+    private static let defaultTTL: TimeInterval = 30 * 60
+
+    func auth(
+        environment: [String: String],
+        httpClient: any AIHTTPClient
+    ) async throws -> GeminiVertexVisionPlanner.VertexAuth {
+        if let cached, !Self.isExpired(cached.expiresAt) {
+            return cached.auth
+        }
+
+        let backend = try client ?? makeClient(environment: environment, httpClient: httpClient)
+        client = backend
+        let minted = try await backend.mintLiveConnection()
+        guard let project = minted.project, let location = minted.location else {
+            throw GeminiVertexVisionPlanner.PlannerError.missingProjectOrLocation
+        }
+        let auth = GeminiVertexVisionPlanner.VertexAuth(
+            token: minted.token,
+            project: project,
+            location: location
+        )
+        // Fall back to a bounded default TTL when the mint reports no parseable expiry, so the token
+        // is never cached forever.
+        cached = (auth, Self.parseExpiry(minted.expiresAt) ?? Date().addingTimeInterval(Self.defaultTTL))
+        return auth
+    }
+
+    private func makeClient(
+        environment: [String: String],
+        httpClient: any AIHTTPClient
+    ) throws -> DonkeyBackendInferenceClient {
+        let configuration = try DonkeyBackendInferenceConfiguration.fromEnvironment(environment)
+        return DonkeyBackendInferenceClient(configuration: configuration, httpClient: httpClient)
+    }
+
+    private static func isExpired(_ expiresAt: Date) -> Bool {
+        return Date().addingTimeInterval(expiryMargin) >= expiresAt
+    }
+
+    private static func parseExpiry(_ value: String?) -> Date? {
+        guard let value, !value.isEmpty else { return nil }
+        if let date = ISO8601DateFormatter().date(from: value) {
+            return date
+        }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: value)
+    }
 }
