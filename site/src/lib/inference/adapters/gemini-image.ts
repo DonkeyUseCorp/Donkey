@@ -1,13 +1,17 @@
-import { ApiError, Modality } from "@google/genai";
+import { Modality } from "@google/genai";
 import type { GenerateContentParameters } from "@google/genai";
 
 import {
   defaultGeminiClientFactory,
+  geminiApiError,
+  geminiCandidateParts,
+  geminiCandidates,
   geminiClientConfig,
   stringValue,
   type AdapterEnvironment,
   type GeminiClientFactory,
 } from "@/lib/inference/adapters/gemini-client";
+import { providerCreditPricing } from "@/lib/credits/provider-pricing";
 import { geminiModelRoles } from "@/lib/inference/gemini-models";
 import { ensureConfigured } from "@/lib/inference/http";
 import { isJsonObject, toJsonObject, toJsonValue } from "@/lib/inference/json";
@@ -73,6 +77,15 @@ export function createGeminiImageAssetProvider(
     }
 
     const model = request.model?.trim() || defaultModel;
+    // Fail before spending: the GEMINI_IMAGE_MODEL override (or a caller model) may resolve to an
+    // id with no configured price. The preflight catches a caller-supplied model, but not a model
+    // resolved from the env default, so guard here too — never run a generation we can't price.
+    if (!providerCreditPricing(providerID, model)) {
+      throw new InferenceProviderError(
+        "No credit price is configured for the selected image model.",
+        { statusCode: 500, code: "image_model_not_priced", details: { model } },
+      );
+    }
     const parts: JsonObject[] = [];
     const prompt = request.prompt?.trim();
     if (prompt) {
@@ -99,7 +112,7 @@ export function createGeminiImageAssetProvider(
     try {
       rawResponse = await client.models.generateContent(params);
     } catch (error) {
-      throw geminiImageError(error);
+      throw geminiApiError("Gemini image generation failed.", error);
     }
 
     const outputs = imageOutputs(toJsonValue(rawResponse), generationId);
@@ -168,21 +181,10 @@ function inputImages(inputs: JsonObject | undefined): InlineImage[] {
 }
 
 function imageOutputs(raw: JsonValue, generationId: string): GenerationOutputRef[] {
-  const candidates =
-    isJsonObject(raw) && Array.isArray(raw.candidates) ? raw.candidates : [];
   const outputs: GenerationOutputRef[] = [];
   let index = 0;
-  for (const candidate of candidates) {
-    if (!isJsonObject(candidate)) {
-      continue;
-    }
-    const content = candidate.content;
-    const parts =
-      isJsonObject(content) && Array.isArray(content.parts) ? content.parts : [];
-    for (const part of parts) {
-      if (!isJsonObject(part)) {
-        continue;
-      }
+  for (const candidate of geminiCandidates(raw)) {
+    for (const part of geminiCandidateParts(candidate)) {
       const inline = part.inlineData ?? part.inline_data;
       if (!isJsonObject(inline)) {
         continue;
@@ -221,21 +223,4 @@ function extensionForMime(mimeType: string): string {
     default:
       return "png";
   }
-}
-
-function geminiImageError(error: unknown) {
-  if (error instanceof ApiError) {
-    // ApiError.status can be 0 for transport failures; keep it a valid HTTP status so the
-    // route can serialize the response instead of throwing on an out-of-range status.
-    const status = error.status >= 400 && error.status <= 599 ? error.status : 502;
-    return new InferenceProviderError("Gemini image generation failed.", {
-      statusCode: status,
-      code: "provider_error",
-      details: { status: error.status, message: error.message },
-    });
-  }
-
-  return new InferenceProviderError("Gemini image generation failed.", {
-    details: { message: error instanceof Error ? error.message : "Unknown error" },
-  });
 }

@@ -1,9 +1,13 @@
-import { GoogleGenAI } from "@google/genai";
+import { ApiError, GoogleGenAI } from "@google/genai";
 import type { GoogleGenAIOptions } from "@google/genai";
 import { JWT, type JWTInput } from "google-auth-library";
 
 import { isJsonObject, toJsonValue } from "@/lib/inference/json";
-import { InferenceProviderError, type JsonValue } from "@/lib/inference/providers";
+import {
+  InferenceProviderError,
+  type JsonObject,
+  type JsonValue,
+} from "@/lib/inference/providers";
 
 // Shared Gemini/Vertex wiring used by every Gemini-backed adapter (Responses and
 // asset generation). Credentials and client construction live here once so a new
@@ -122,6 +126,44 @@ function serviceAccountCredentials(rawCredentials: string): JWTInput {
 
 export function stringValue(value: JsonValue | undefined): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+// Maps a thrown Gemini SDK error to an InferenceProviderError. ApiError.status can be 0 for transport
+// failures, so it's clamped to a valid HTTP status the route can serialize. Shared by every Gemini
+// adapter; pass the caller's user-facing message.
+export function geminiApiError(message: string, error: unknown): InferenceProviderError {
+  if (error instanceof ApiError) {
+    const status = error.status >= 400 && error.status <= 599 ? error.status : 502;
+    return new InferenceProviderError(message, {
+      statusCode: status,
+      code: "provider_error",
+      details: { status: error.status, message: error.message },
+    });
+  }
+
+  return new InferenceProviderError(message, {
+    details: { message: error instanceof Error ? error.message : "Unknown error" },
+  });
+}
+
+// The candidate objects of a generateContent response, and the content parts of one candidate. Both
+// Gemini adapters (text/Responses and image) walk this same candidates → content.parts structure, so
+// the traversal lives here once.
+export function geminiCandidates(raw: JsonValue): JsonObject[] {
+  return isJsonObject(raw) && Array.isArray(raw.candidates)
+    ? raw.candidates.filter(isJsonObject)
+    : [];
+}
+
+export function geminiCandidateParts(candidate: JsonObject | undefined): JsonObject[] {
+  if (
+    !candidate ||
+    !isJsonObject(candidate.content) ||
+    !Array.isArray(candidate.content.parts)
+  ) {
+    return [];
+  }
+  return candidate.content.parts.filter(isJsonObject);
 }
 
 function numberFromString(value: string | undefined): number | undefined {

@@ -12,7 +12,11 @@ import type {
 } from "@google/genai";
 
 import {
+  geminiApiError,
+  geminiCandidateParts,
+  geminiCandidates,
   geminiClientConfig,
+  stringValue,
   type AdapterEnvironment,
   type GeminiClientFactory,
 } from "@/lib/inference/adapters/gemini-client";
@@ -196,6 +200,9 @@ export function createGeminiComputerUseProvider(
     canCreateResponse: (request) => {
       return !hasExplicitUnsupportedTools(request.body.tools);
     },
+    // This adapter renders input_audio/input_video parts (see mediaPart); declare it so the router
+    // routes media requests here by capability rather than only because OpenAI declines them.
+    handlesResponseMedia: () => true,
     listModels,
     completeText,
     createResponse,
@@ -711,17 +718,7 @@ function normalizedGeminiResponse(
   raw: JsonValue,
   registeredTools: string[],
 ): JsonObject {
-  const candidates = isJsonObject(raw) && Array.isArray(raw.candidates)
-    ? raw.candidates
-    : [];
-  const firstCandidate = candidates.find(isJsonObject);
-  const parts =
-    firstCandidate &&
-    isJsonObject(firstCandidate.content) &&
-    Array.isArray(firstCandidate.content.parts)
-      ? firstCandidate.content.parts
-      : [];
-  const partObjects = parts.filter(isJsonObject);
+  const partObjects = geminiCandidateParts(geminiCandidates(raw)[0]);
   // Thought summaries (parts flagged `thought: true` when includeThoughts is on) must NOT land in
   // output_text — that field carries the structured JSON the caller parses. Keep them separate so the
   // reasoning can be persisted to the thread without corrupting the tool-call payload.
@@ -837,22 +834,7 @@ function requestedChatModel(request: ChatCompletionRequest, fallback: string) {
 }
 
 function geminiProviderError(error: unknown) {
-  if (error instanceof ApiError) {
-    return new InferenceProviderError("Gemini request failed.", {
-      statusCode: error.status,
-      code: "provider_error",
-      details: {
-        status: error.status,
-        message: error.message,
-      },
-    });
-  }
-
-  return new InferenceProviderError("Gemini request failed.", {
-    details: {
-      message: error instanceof Error ? error.message : "Unknown error",
-    },
-  });
+  return geminiApiError("Gemini request failed.", error);
 }
 
 function chatCompletionBody(
@@ -918,10 +900,6 @@ function staticModel(model: string, computerUse: boolean): InferenceModel {
         : { structuredOutputs: true }),
     },
   };
-}
-
-function stringValue(value: JsonValue | undefined): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function numberValue(value: JsonValue | undefined): number | undefined {

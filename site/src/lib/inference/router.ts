@@ -8,9 +8,31 @@ import {
   type InferenceModality,
   type InferenceModel,
   type InferenceProvider,
+  type JsonValue,
   type ResponseCreateRequest,
   type StoredGenerationForProvider,
 } from "@/lib/inference/providers";
+
+// Input part types that carry audio/video media. Only a provider that declares handlesResponseMedia
+// can render these, so the router uses this to route media requests by capability.
+const mediaPartTypes = new Set(["input_audio", "input_video", "audio", "video"]);
+
+function responseRequestHasMedia(request: ResponseCreateRequest): boolean {
+  const search = (value: JsonValue | undefined): boolean => {
+    if (Array.isArray(value)) {
+      return value.some(search);
+    }
+    if (value && typeof value === "object") {
+      const type = (value as Record<string, JsonValue>).type;
+      if (typeof type === "string" && mediaPartTypes.has(type)) {
+        return true;
+      }
+      return Object.values(value as Record<string, JsonValue>).some(search);
+    }
+    return false;
+  };
+  return search(request.body.input as JsonValue | undefined);
+}
 
 export class ProviderRegistry {
   private providers: InferenceProvider[];
@@ -80,15 +102,25 @@ export class ProviderRegistry {
       return provider;
     }
 
+    const mediaRequest = request ? responseRequestHasMedia(request) : false;
     const provider = this.providers.find((candidate) => {
       return (
         candidate.configured &&
         Boolean(candidate.createResponse) &&
-        (request ? candidate.canCreateResponse?.(request) !== false : true)
+        (request ? candidate.canCreateResponse?.(request) !== false : true) &&
+        // A request with audio/video parts must go to a provider that positively handles media,
+        // so it is never routed to one (current or future) that would silently drop the media.
+        (mediaRequest && request ? candidate.handlesResponseMedia?.(request) === true : true)
       );
     });
 
     if (!provider) {
+      if (mediaRequest) {
+        throw new InferenceProviderError(
+          "No configured Responses provider can handle audio/video input.",
+          { statusCode: 415, code: "no_media_responses_provider" },
+        );
+      }
       throw new InferenceProviderError("No configured Responses provider is available.", {
         statusCode: 503,
         code: "no_responses_provider",

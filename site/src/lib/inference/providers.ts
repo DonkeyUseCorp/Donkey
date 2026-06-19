@@ -113,6 +113,10 @@ export type InferenceProvider = {
     request: ResponseCreateRequest,
   ) => Promise<ResponseCreateResult>;
   canCreateResponse?: (request: ResponseCreateRequest) => boolean;
+  // Positively declares that this provider handles audio/video input parts in a Responses request.
+  // The router requires it for media requests so media is routed by capability, not by elimination
+  // (a provider that omits this is never handed a media request that it would silently drop).
+  handlesResponseMedia?: (request: ResponseCreateRequest) => boolean;
   generateAsset?: (
     request: AssetGenerationProviderRequest,
   ) => Promise<AssetGenerationProviderResult>;
