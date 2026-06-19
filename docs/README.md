@@ -30,6 +30,7 @@ Supported product and engineering guides live in `docs/guides/`. This list is th
 
 **Extending the agent**
 
+- [Tools and Skills](guides/tools-and-skills.md) — the agent's capability surface: which tools exist, the order it reaches for them, how skills surface, and how safety classes gate execution.
 - [Authoring Skills](guides/authoring-skills.md) — writing reusable skill packs that teach the agent app-specific workflows.
 
 **Site and backend**
