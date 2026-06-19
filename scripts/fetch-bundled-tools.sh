@@ -142,12 +142,13 @@ build_lgpl_ffmpeg() {
 # bundling). MANDATORY: the pdf skill's extraction/OCR depends on it, and it
 # replaces a separate tesseract.
 build_liteparse() {
+  local ver="2.1.1"
   command -v cargo >/dev/null 2>&1 || brew install rust >/dev/null 2>&1
   command -v cmake >/dev/null 2>&1 || brew install cmake >/dev/null 2>&1
   command -v cargo >/dev/null 2>&1 || { echo "FATAL: cargo unavailable for liteparse build" >&2; exit 1; }
   local root="/tmp/liteparse-build"
   rm -rf "$root"
-  PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig" cargo install liteparse --root "$root" >"$root.log" 2>&1
+  PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig" cargo install liteparse --version "$ver" --root "$root" >"$root.log" 2>&1
   if [ ! -x "$root/bin/lit" ]; then
     echo "FATAL: liteparse (lit) build failed; tail of $root.log:" >&2
     tail -25 "$root.log" >&2
