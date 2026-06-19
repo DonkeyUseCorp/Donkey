@@ -10,6 +10,7 @@ import {
 import {
   creditUsageHeaders,
   inferenceUsageRoutes,
+  recordFailedInferenceUsage,
   recordInferenceUsage,
   requireInferenceCredits,
 } from "@/lib/credits/inference";
@@ -54,14 +55,40 @@ export const POST = withDonkeyAuth(async (request) => {
     ? `Start at ${parsed.data.startUrl}. ${parsed.data.task}`
     : parsed.data.task;
 
-  const session = await getBrowserUse().run(task, {
-    model: browserUseDefaultModel,
-    maxCostUsd: browserUseDefaultMaxCostUsd,
-    timeout: (maxDuration - 20) * 1000,
-    ...(parsed.data.structuredOutputSchema
-      ? { outputSchema: parsed.data.structuredOutputSchema }
-      : {}),
-  });
+  let session;
+  try {
+    session = await getBrowserUse().run(task, {
+      model: browserUseDefaultModel,
+      maxCostUsd: browserUseDefaultMaxCostUsd,
+      timeout: (maxDuration - 20) * 1000,
+      ...(parsed.data.structuredOutputSchema
+        ? { outputSchema: parsed.data.structuredOutputSchema }
+        : {}),
+    });
+  } catch (error) {
+    // The run may have consumed Browser Use steps before throwing (SDK timeout/transport error).
+    // Record a failed usage event for audit (a failed status is never charged) and return a clean
+    // error instead of an unhandled 500 that leaves no trace of the run.
+    await recordFailedInferenceUsage({
+      userId: request.donkey.userId,
+      clientId: client.clientId,
+      route: inferenceUsageRoutes.browserRun,
+      requestKind: "browser_automation",
+      provider: browserUseProvider,
+      model: browserUseDefaultModel,
+      errorCode: "browser_run_failed",
+      metadata: {
+        message: error instanceof Error ? error.message : "Unknown error",
+      },
+    });
+    return NextResponse.json(
+      {
+        error: "browser_run_failed",
+        message: "The browser automation run did not complete.",
+      },
+      { status: 502 },
+    );
+  }
 
   const stepCount = session.stepCount ?? 0;
   // Browser Use bills steps even on failure, so charge regardless of success.
@@ -78,11 +105,17 @@ export const POST = withDonkeyAuth(async (request) => {
   });
 
   const output: unknown = session.output ?? null;
-  const structured =
-    output !== null && typeof output === "object"
-      ? JSON.stringify(output)
-      : null;
   const text = typeof output === "string" ? output : null;
+  let structured: string | null = null;
+  if (output !== null && typeof output === "object") {
+    try {
+      structured = JSON.stringify(output);
+    } catch {
+      // Unserializable output (e.g. a BigInt or circular reference) must not throw here — credits
+      // were already charged above, so drop the structured payload rather than 500 after billing.
+      structured = null;
+    }
+  }
 
   return NextResponse.json(
     {

@@ -17,9 +17,3 @@ export function getBrowserUse(): BrowserUse {
 export const browserUseProvider = "browser-use";
 /// The default agent model for web.automate tasks.
 export const browserUseDefaultModel = browserUseModels.agent;
-
-/// Browser Use session lifecycle terminal states (created → idle → running →
-/// these). A run is done — and billable — once it reaches one of these.
-export function isTerminalBrowserStatus(status: string): boolean {
-  return status === "stopped" || status === "timed_out" || status === "error";
-}
