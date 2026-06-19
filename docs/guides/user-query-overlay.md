@@ -19,6 +19,15 @@ exchanges the code for a Better Auth cookie, the notch is not shown and
 double-Command activation is not registered. `DonkeyAuthCoordinator` and
 `DonkeyLoginWindowController` own the sign-in gate.
 
+The welcome window gates a first install only — a Mac that has never signed
+in. Once a Mac has signed in at least once, an expired session is handled in
+the notch instead of the window: the overlay comes up with the notch logged
+out, and its Login button restarts the same Google flow. The auth phase
+drives this, so the notch flips back to the task surface the moment sign-in
+completes. A session that expires mid-run — a hosted request returning 401 —
+trips the same path live: the notch flips to login while the running tasks
+stay put, then resumes showing them after sign-in.
+
 ## Activation and the Prompt
 
 - Double-tap Command and release: centered prompt with keyboard focus, no

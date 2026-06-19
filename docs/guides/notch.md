@@ -74,7 +74,11 @@ A task is always in one of three states, and the available controls follow from 
 | Stopped | Silhouette | Resume, Close | Frozen |
 | Done | Silhouette | Close | Frozen |
 
-**Stop is a pause.** Stopping freezes the clock and keeps the task in the list; resume returns it to running. Close removes the task. A done task cannot resume — it can only be closed.
+**Stop is a pause.** Stopping freezes the clock and keeps the task in the list; resume returns it to running. Close removes the task. A done task can't resume the old run, but it can be picked back up — tapping the row continues the thread with a new message.
+
+**Replying to a thread.** A thread is repliable whenever the user can pick it back up: one the agent is waiting on (a clarification or review — the white attention glyph), a finished one they want to continue, or a failed one they want to retry. **Tapping the row activates it** — that's the primary gesture, and it works for every repliable kind, including the ones the agent is asking about. A dedicated **Reply** button also appears, but only on the waiting kinds, since only there is the agent actively asking; it does the same thing as tapping the row. A waiting row's pointer gently pulses in the list — just enough to draw the eye to the thread that needs an answer. Activating a thread focuses the composer so the user can type straight away (no second click on the input) and pins the next message to that thread instead of running it through the follow-up classifier.
+
+While a reply is targeted the panel makes the chosen thread the clear focus: every other row recedes to 50% opacity, and the composer is outlined in the targeted task's accent color so the input visibly belongs to that thread. The targeted row's pointer lights up in its original color even if the thread had finished or failed (its silhouette goes active again), and any other row still waiting on the user keeps its pointer lit while it dims, so no attention-needing thread disappears. Reply mode is a convenience, not a mode you're trapped in: tapping the active row again, tapping a non-repliable row, tapping bare notch chrome, or closing the task all leave it — and tapping a different repliable row just moves the focus there. Once dismissed, the next message goes back through the classifier, which may still land on the same thread or a different one.
 
 **Stopped covers more than a pause.** A task also lands here when it runs long enough to hit its step ceiling (it reads as *timed out*) or when the app quits mid-run. All of these keep the task and its progress, so Resume picks the work back up — resuming re-runs the original goal with the work so far carried forward, not from scratch.
 
@@ -82,13 +86,32 @@ A task is always in one of three states, and the available controls follow from 
 
 ## Notifications
 
-Three notification kinds surface on the notch, each tied to a condition. In the collapsed right gutter they share one slot by priority: attention first, then the running clock, then permissions, then update. When expanded they move to the right-gutter action, where permissions outranks update.
+The collapsed right gutter shows exactly one thing, chosen by the rules below — never more. Most task states put nothing there at all; the gutter only lights up when the user actually needs to act, a task fails, or a task is running (the clock). A finished or merely-interrupted task is silent here — it keeps surfacing as its colored pointer and chin line, not as a gutter glyph.
 
-| Kind | Icon | Means | Expanded action |
+Three glyphs exist, plus the running clock. Two of them share the same chat-bubble-with-warning-mark shape, separated by color — **white when the agent is waiting on the user, red when a task has failed.** Read them as: white asks you to do something, red tells you something broke.
+
+| Glyph | Color | Means | Raised by |
 | --- | --- | --- | --- |
-| Attention | Chat bubble with a warning mark | The model needs the user — a clarification | — |
-| Update | Cloud with sync arrows | An app update is available, checked at launch | Update Available → Restart |
-| Permissions | Shield | A required permission is missing | Missing Permissions → Review |
+| Chat bubble + warning | White | Attention — the agent is blocked waiting on the user | A task waiting for clarification or for review |
+| Chat bubble + warning | Red | Error — a task failed and hasn't been acknowledged | A failed task still surfaced (cleared once the user expands the notch) |
+| Shield | White | A required permission is missing | A task waiting for permission |
+| Cloud + sync arrows | White | An app update is available, checked at launch | The updater, when nothing task-level is showing |
+| Clock | — | A task is actively running | The running task's elapsed time |
+
+**Collapsed gutter priority.** An unacknowledged failure (red) wins over everything, so a break is never hidden behind a clock. Otherwise the gutter follows the front task's state — attention, a permission shield, or the clock while it runs — and falls back to the update cloud only when no task needs the slot. A task that is done, paused, interrupted, timed out, or in a benign needs-attention state (an interrupted run restored across launches, an upload) raises nothing: it isn't waiting on the user, so it stays out of the gutter and surfaces only in the expanded list.
+
+**Expanded.** Attention and error are read from the rows themselves once the notch is open, so they leave the gutter. A task that raised the white attention glyph carries a **Reply** control in its row — tapping it focuses the composer and pins the next message to that task, so the user's answer continues it rather than starting a new task. Only the app-level actions remain in the right-gutter action button, where permissions outranks update: Missing Permissions → Review, then Update Available → Restart.
+
+## Logged Out
+
+When the session signs out after a prior sign-in, the notch becomes a login
+call-to-action rather than the task surface. Collapsed, it simply reads
+"Login to use Donkey"; expanding reveals a wide, short bar with that label and
+a Login button on the right. The button starts the normal Google sign-in, and
+the surface returns to the task list once signed in. The stored session is
+checked on launch, so an already-expired session shows login immediately
+instead of waiting for the first request to fail. A brand-new install still
+signs in through the welcome window, not the notch.
 
 ## Where It Lives
 
