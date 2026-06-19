@@ -268,11 +268,13 @@ struct TaskFollowUpInjectionTests {
         let recentRunning = task("recent", .running, ageMinutes: 10)
         let staleRunning = task("stale", .running, ageMinutes: 120)
         let waiting = task("waiting", .waitingForClarification, ageMinutes: 5)
+        let review = task("review", .waitingForReview, ageMinutes: 5)
+        let permission = task("permission", .waitingForPermission, ageMinutes: 5)
         let paused = task("paused", .paused, ageMinutes: 5)
         let completed = task("done", .completed, ageMinutes: 5)
 
         let result = UserQueryOverlayModel.restoredTasks(
-            from: [recentRunning, staleRunning, waiting, paused, completed],
+            from: [recentRunning, staleRunning, waiting, review, permission, paused, completed],
             now: now
         )
 
@@ -280,10 +282,14 @@ struct TaskFollowUpInjectionTests {
         #expect(result.autoResumeIDs == ["recent"])
         func status(_ id: String) -> UserQueryTaskStatus? { result.tasks.first { $0.id == id }?.status }
         #expect(status("recent") == .running)
-        #expect(status("stale") == .timedOut)        // too old to auto-run → retryable row
-        #expect(status("waiting") == .paused)         // was blocked on the user → comes back paused
-        #expect(status("paused") == .paused)          // user-paused stays paused
-        #expect(status("done") == .completed)         // terminal states untouched
+        #expect(status("stale") == .timedOut)              // too old to auto-run → retryable row
+        #expect(status("waiting") == .waitingForClarification) // still asking the user → comes back as a Reply row
+        #expect(status("review") == .waitingForReview)     // still asking the user → comes back as a Reply row
+        #expect(status("permission") == .waitingForPermission) // gate stands → keeps its Approve/Deny banner
+        #expect(status("paused") == .paused)               // user-paused (Stop) stays paused
+        #expect(status("done") == .completed)              // terminal states untouched
+        // The waiting rows keep their persisted detail (the question) rather than a bare "Paused".
+        #expect(result.tasks.first { $0.id == "waiting" }?.detail == "d")
         // The persisted updatedAt is preserved so elapsed-time stays the real run duration.
         #expect(result.tasks.first { $0.id == "stale" }?.updatedAt == staleRunning.updatedAt)
     }

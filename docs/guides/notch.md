@@ -82,7 +82,7 @@ While a reply is targeted the panel makes the chosen thread the clear focus: eve
 
 **Stopped covers more than a pause.** A task also lands here when it runs long enough to hit its step ceiling (it reads as *timed out*) or when the app quits mid-run. All of these keep the task and its progress, so Resume picks the work back up — resuming re-runs the original goal with the work so far carried forward, not from scratch.
 
-**Relaunch.** Reopening the app does not strand in-progress work. A task that was actively running moments before the app closed resumes on its own in the background. One that was interrupted longer ago, timed out, or was waiting on you comes back as a stopped row you resume with a tap.
+**Relaunch.** Reopening the app does not strand in-progress work. A task that was actively running moments before the app closed resumes on its own in the background. One that was interrupted longer ago or timed out comes back as a stopped row you resume with a tap. One that was still waiting on you comes back in that same state: a clarification or review keeps its Reply button and its question, and a permission gate keeps its Approve / Deny — answering or approving continues the task with its context intact. Pausing is a deliberate action you take on a running task, so a relaunch never recasts a waiting task as paused.
 
 ## Notifications
 

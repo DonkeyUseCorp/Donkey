@@ -4,6 +4,12 @@ import DonkeyRuntime
 import Foundation
 import SwiftUI
 
+/// Direction the keyboard arrows move the expanded-notch row highlight.
+enum NotchArrowDirection {
+    case up
+    case down
+}
+
 @MainActor
 final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     @Published private(set) var promptState: UserQueryState
@@ -11,7 +17,13 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     @Published var placement: UserQueryPlacement = .bottomRight
     @Published var inputTextHeight = UserQueryLayout.composerInputTextMinimumHeight
     @Published var isInputExpanded = false
-    @Published var notchCommandText = ""
+    @Published var notchCommandText = "" {
+        didSet {
+            // Starting a draft hands the arrows back to the composer for text editing; the row
+            // highlight re-engages when the user clicks a row (see `setNotchSelection`).
+            if !notchCommandText.isEmpty { selectedTaskID = nil }
+        }
+    }
     @Published private(set) var notchCommandInputTextHeight = UserQueryLayout.composerInputTextMinimumHeight
     @Published private(set) var isNotchCommandInputExpanded = true
     @Published private(set) var notchAccentIndex = 0
@@ -52,6 +64,11 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     /// follow-up resolver to guess, and the expanded panel dims every other row while it is set so the
     /// user sees which thread their reply continues. Consumed by the next submission.
     @Published private(set) var replyTargetTaskID: String?
+    /// The task row the keyboard arrows currently highlight in the expanded notch, or nil when the
+    /// composer holds the focus. Distinct from `replyTargetTaskID`: arrowing only moves this highlight;
+    /// pressing Return on it begins a reply (like clicking the row). Typing into the composer clears it
+    /// so the arrows return to editing the draft; clicking a row re-engages it.
+    @Published private(set) var selectedTaskID: String?
     /// Metadata flag marking a terminal task (completed or failed) as seen — set when the user expands
     /// the notch. It lives on the task (and so is persisted through the task store) rather than in memory,
     /// so an acknowledged failure stays dismissed across relaunches instead of re-surfacing every launch.
@@ -744,6 +761,37 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         replyTargetTaskID = nil
     }
 
+    /// Move the expanded-notch keyboard highlight. The rows and the composer form one vertical cycle
+    /// (rows top-to-bottom, composer at the bottom) that Up/Down step through and wrap around. Returns
+    /// whether the key was consumed: at the composer with a draft already typed, the arrows fall through
+    /// so they edit the text instead of moving the highlight.
+    @discardableResult
+    func moveNotchSelection(_ direction: NotchArrowDirection) -> Bool {
+        guard !notchTasks.isEmpty else { return false }
+        let composerSlot = notchTasks.count
+        let total = composerSlot + 1
+        let current = selectedTaskID
+            .flatMap { id in notchTasks.firstIndex { $0.id == id } } ?? composerSlot
+        // At the composer with text already in progress, the arrows belong to the draft, not the list.
+        if current == composerSlot, !notchCommandText.isEmpty { return false }
+        let next: Int
+        switch direction {
+        case .up: next = (current - 1 + total) % total
+        case .down: next = (current + 1) % total
+        }
+        selectedTaskID = next == composerSlot ? nil : notchTasks[next].id
+        return true
+    }
+
+    /// Engage the row highlight directly (a row click) so arrow navigation resumes from that row.
+    func setNotchSelection(_ taskID: String?) {
+        selectedTaskID = taskID
+    }
+
+    func clearNotchSelection() {
+        selectedTaskID = nil
+    }
+
     /// Take the pinned Reply target, if any, for the submission about to run. Cleared on read so it only
     /// applies to the one answer (which also un-dims the rows), and dropped if the task is no longer
     /// around (fall back to normal routing).
@@ -853,6 +901,9 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         // Closing the targeted task ends reply mode so the remaining rows don't stay dimmed.
         if replyTargetTaskID == taskID {
             replyTargetTaskID = nil
+        }
+        if selectedTaskID == taskID {
+            selectedTaskID = nil
         }
         if lastActiveTaskID == taskID {
             lastActiveTaskID = notchTasks.first?.id
@@ -1496,14 +1547,14 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
                 timedOut.detail = "Timed out — resume"
                 return timedOut
             case .waitingForClarification, .waitingForReview, .waitingForPermission:
-                // Was blocked on the user; the loop that asked is gone. It comes back simply paused —
-                // a clean resumable/repliable row, not an "interrupted" one, since whether the app was
-                // restarted is irrelevant to the user. Paused also stays out of the collapsed attention
-                // glyph.
-                var restoredTask = task
-                restoredTask.status = .paused
-                restoredTask.detail = "Paused"
-                return restoredTask
+                // The loop that was blocked on the user is gone, but the gate still stands — the question or
+                // the pending approval is persisted in the task's continuation (and shown in its `detail`).
+                // Keep it in that same waiting state rather than collapsing it to paused: pausing is a
+                // deliberate user action (Stop on a running task), never something a relaunch does on the
+                // user's behalf. A waiting-on-user row keeps its Reply button (and the attention glyph); a
+                // permission row keeps its Approve / Deny banner, and approving re-runs the persisted call
+                // with consent granted. Answering or approving continues the task with the context intact.
+                return task
             default:
                 // paused, completed, failed, timedOut, interrupted, needsAttention, chatting: unchanged.
                 return task
