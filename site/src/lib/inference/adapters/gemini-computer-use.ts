@@ -8,6 +8,7 @@ import type {
   Content,
   GenerateContentConfig,
   GenerateContentParameters,
+  GenerateContentResponse,
   Tool,
 } from "@google/genai";
 
@@ -38,6 +39,7 @@ import {
   type ResponseCreateRequest,
   type ResponseCreateResult,
   type TextCompletionResult,
+  type TextStreamResult,
 } from "@/lib/inference/providers";
 
 const providerID = "gemini-computer-use";
@@ -192,6 +194,66 @@ export function createGeminiComputerUseProvider(
     };
   }
 
+  // Stream a chat completion as Server-Sent Events. Each model chunk is re-emitted as an
+  // OpenAI-style `data: {choices:[{delta:{content}}]}` line so the desktop client parses one stable
+  // shape regardless of provider, ending with the `[DONE]` sentinel. Used by the notch to stream the
+  // assistant's final reply token-by-token into the chin and the open task row.
+  async function streamCompletion(
+    request: ChatCompletionRequest,
+  ): Promise<TextStreamResult> {
+    ensureConfigured(configured);
+
+    const model = requestedChatModel(request, defaultVertexResponsesModel);
+    const body = toJsonObject(request);
+    const requestParameters: GenerateContentParameters = {
+      model,
+      contents: contentsFromInput(toJsonValue(request.messages)),
+      config: generationConfigFromBody(body),
+    };
+    const client = clientFactory(clientConfig.options);
+
+    let iterator: AsyncGenerator<GenerateContentResponse>;
+    try {
+      iterator = await client.models.generateContentStream(requestParameters);
+    } catch (error) {
+      throw geminiProviderError(error);
+    }
+
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        try {
+          for await (const chunk of iterator) {
+            const piece = streamChunkText(chunk);
+            if (!piece) {
+              continue;
+            }
+            const event = { choices: [{ index: 0, delta: { content: piece } }] };
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+          }
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        } catch (error) {
+          // A mid-stream provider failure is surfaced as a terminal SSE error event so the client
+          // stops cleanly with whatever it has, rather than hanging on a truncated stream.
+          const message = error instanceof Error ? error.message : "stream failed";
+          controller.enqueue(
+            encoder.encode(`event: error\ndata: ${JSON.stringify({ message })}\n\n`),
+          );
+        } finally {
+          controller.close();
+        }
+      },
+    });
+
+    return {
+      provider: geminiProviderID,
+      model,
+      response: new Response(stream, {
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    };
+  }
+
   return {
     id: providerID,
     configured,
@@ -205,8 +267,16 @@ export function createGeminiComputerUseProvider(
     handlesResponseMedia: () => true,
     listModels,
     completeText,
+    streamCompletion,
     createResponse,
   };
+}
+
+// The incremental text of one streamed model chunk: the SDK's concatenated `.text` getter, falling
+// back to an empty string for a chunk that carries only metadata (usage, finish reason).
+function streamChunkText(chunk: GenerateContentResponse): string {
+  const text = (chunk as { text?: unknown }).text;
+  return typeof text === "string" ? text : "";
 }
 
 function geminiGenerateContentParameters(
