@@ -270,6 +270,20 @@ public struct HarnessWebAutomateRequest: Sendable {
     }
 }
 
+/// The result of a `web.automate` run: the formatted text block for the agent to read plus whether
+/// the run actually succeeded. The executor reports `.failed` (keeping `text` as the failure message)
+/// whenever `succeeded` is false, so an errored, timed-out, or unsuccessful run is never reported as
+/// a success.
+public struct HarnessWebAutomateOutcome: Sendable {
+    public var text: String
+    public var succeeded: Bool
+
+    public init(text: String, succeeded: Bool) {
+        self.text = text
+        self.succeeded = succeeded
+    }
+}
+
 /// Outcome of the multimodal arm of `llm.generate` — a model call over a local audio/video file.
 /// Distinguishes the cases a caller can act on (re-chunk a truncated transcript, fix an unreadable,
 /// oversized, or non-media file) instead of collapsing every failure to a bare nil.
@@ -284,7 +298,10 @@ public enum HarnessMediaGenerationOutcome: Sendable {
     case tooLarge(bytes: Int, limit: Int)
     /// The file's resolved type is not audio or video.
     case unsupportedType(String)
-    /// The model returned no usable text (empty reply, timeout, or a content block).
+    /// The media model call timed out or threw before producing output — retryable (re-chunk / retry),
+    /// distinct from `.empty`. Carries a short reason for the trace.
+    case timedOut(reason: String)
+    /// The model genuinely returned an empty/whitespace string (not a timeout or thrown error).
     case empty
 }
 
@@ -330,7 +347,7 @@ public struct HarnessBuiltInToolServices: Sendable {
     /// Agentic web automation: a task (navigate/click/fill/extract) in, the run's result as a text
     /// block out (final output, status, any recording link), or nil on failure. Backs the
     /// `web.automate` tool, which runs through the hosted Browser Use Cloud backend and bills credits.
-    public var webAutomator: (@Sendable (HarnessWebAutomateRequest) async -> String?)?
+    public var webAutomator: (@Sendable (HarnessWebAutomateRequest) async -> HarnessWebAutomateOutcome)?
     /// The file-understanding layer behind `files.describe`: a file URL in, a structured
     /// `FileUnderstanding` out (OCR for images, text for PDFs, dimensions/metadata), or nil to fall
     /// back to the built-in Foundation understanding. The runtime supplies this; without it the tool
@@ -358,7 +375,7 @@ public struct HarnessBuiltInToolServices: Sendable {
         mediaGenerator: (@Sendable (_ prompt: String, _ file: URL, _ mimeType: String?) async -> HarnessMediaGenerationOutcome)? = nil,
         webSearcher: (@Sendable (String) async -> String?)? = nil,
         webFetcher: (@Sendable (String) async -> String?)? = nil,
-        webAutomator: (@Sendable (HarnessWebAutomateRequest) async -> String?)? = nil,
+        webAutomator: (@Sendable (HarnessWebAutomateRequest) async -> HarnessWebAutomateOutcome)? = nil,
         fileUnderstanding: (@Sendable (URL) async -> FileUnderstanding?)? = nil,
         imageGenerator: (@Sendable (HarnessImageGenerationRequest) async -> HarnessImageGenerationResult?)? = nil
     ) {
@@ -1712,6 +1729,10 @@ public enum BuiltInHarnessToolExecutors {
                 return failed(context, "The media file is \(bytes / 1_000_000)MB, over the \(limit / 1_000_000)MB inline limit — extract compact audio or split it into chunks.", reason: "mediaFileTooLarge")
             case .unsupportedType(let mime):
                 return failed(context, "llm.generate `filePath` must be audio or video; got \(mime). Pass an explicit `mimeType` if the extension is unusual.", reason: "mediaUnsupportedType")
+            case .timedOut(let reason):
+                // A timeout or thrown error is retryable — surface it as such rather than as "no text"
+                // so the planner re-chunks or retries instead of giving up.
+                return failed(context, "The media model call did not finish (\(reason)) — split the media into shorter chunks and retry.", reason: "mediaTimedOut")
             case .empty:
                 generated = nil
             }
@@ -1874,8 +1895,18 @@ public enum BuiltInHarnessToolExecutors {
             startURL: trimmed(context.call.input["startUrl"]),
             structuredOutputSchemaJSON: trimmed(context.call.input["schema"])
         )
-        guard let result = await automator(request), !result.isEmpty else {
-            return failed(context, "The browser task did not complete.", reason: "webAutomateFailed")
+        let outcome = await automator(request)
+        let result = outcome.text
+        // Report failure (keeping the diagnostic text) whenever the run did not genuinely succeed —
+        // an errored, timed-out, or unsuccessful run must never be surfaced to the agent as a success.
+        guard outcome.succeeded, !result.isEmpty else {
+            let message = result.isEmpty ? "The browser task did not complete." : result
+            return failed(
+                context,
+                message.count > 600 ? String(message.prefix(600)) + "…" : message,
+                reason: "webAutomateFailed",
+                metadata: ["text": message]
+            )
         }
         return success(
             context,
@@ -1990,17 +2021,18 @@ public enum BuiltInHarnessToolExecutors {
     private static func failed(
         _ context: HarnessToolExecutionContext,
         _ summary: String,
-        reason: String
+        reason: String,
+        metadata: [String: String] = [:]
     ) -> HarnessToolResult {
         HarnessToolResult(
             callID: context.call.id,
             toolName: context.call.name,
             status: .failed,
             summary: summary,
-            metadata: [
+            metadata: metadata.merging([
                 "executor": "builtInGeneric",
                 "reason": reason
-            ]
+            ]) { _, reserved in reserved }
         )
     }
 

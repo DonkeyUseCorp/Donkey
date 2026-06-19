@@ -82,9 +82,16 @@ public struct HostedTextGenerator: Sendable {
             return .unsupportedType(resolvedMIME)
         }
         // Reject an oversized file up front (with a chunk-it signal) rather than reading the whole
-        // thing just to overrun the request-body limit at the network.
-        if let size = Self.fileByteSize(attachmentPath), size > Self.maxInlineMediaBytes {
-            return .tooLarge(bytes: size, limit: Self.maxInlineMediaBytes)
+        // thing just to overrun the request-body limit at the network. The body base64-encodes the
+        // bytes (~+33%), so compare the PROJECTED base64 size — `size * 4 / 3`, rounded up — against
+        // the wire limit, not the raw byte count. Report the raw size and the raw-equivalent limit
+        // (the largest raw file that fits under the base64 cap) so the numbers stay sensible.
+        if let size = Self.fileByteSize(attachmentPath) {
+            let base64Size = (size + 2) / 3 * 4
+            if base64Size > Self.maxInlineMediaBytes {
+                let rawEquivalentLimit = Self.maxInlineMediaBytes / 4 * 3
+                return .tooLarge(bytes: size, limit: rawEquivalentLimit)
+            }
         }
         // Read + base64-encode off the cooperative executor (the media arm is wired onto the always-on
         // Live session path), and memory-map so the raw bytes aren't held resident alongside the
@@ -126,10 +133,15 @@ public struct HostedTextGenerator: Sendable {
             ]
         )
         let backend = self.backend
-        guard let response = try? await AIDeadline.enforce(seconds: mediaTimeoutSeconds, {
-            try await backend.createResponse(request)
-        }) else {
-            return .empty
+        let response: RemoteInferenceJSONValue
+        do {
+            // A timeout or a thrown error is a retryable failure, NOT an empty model output. Catch it
+            // so the caller can re-chunk / retry rather than treat it as "model returned no text".
+            response = try await AIDeadline.enforce(seconds: mediaTimeoutSeconds, {
+                try await backend.createResponse(request)
+            })
+        } catch {
+            return .timedOut(reason: String(describing: error))
         }
         // A transcript cut off at the token ceiling comes back non-empty but incomplete; surface it as
         // truncated so the caller re-chunks instead of writing a silently-partial subtitle file.
@@ -143,6 +155,8 @@ public struct HostedTextGenerator: Sendable {
         return .text(text)
     }
 
+    /// The wire/body limit: the maximum size of the base64-encoded inline media in the request body.
+    /// A raw file passes only when its base64 projection (`bytes * 4 / 3`) stays under this.
     private static let maxInlineMediaBytes = 14 * 1024 * 1024
 
     private static func inferredMIMEType(for url: URL) -> String? {

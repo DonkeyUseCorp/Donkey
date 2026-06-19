@@ -310,6 +310,9 @@ struct GenericHarnessTests {
             (.unreadableFile, "mediaFileUnreadable"),
             (.tooLarge(bytes: 20_000_000, limit: 14_000_000), "mediaFileTooLarge"),
             (.unsupportedType("image/png"), "mediaUnsupportedType"),
+            // A timeout / thrown error is retryable and must reach the planner as its own reason, not
+            // as "no text".
+            (.timedOut(reason: "deadline"), "mediaTimedOut"),
             (.empty, "emptyGeneration")
         ]
         for (outcome, expectedReason) in cases {

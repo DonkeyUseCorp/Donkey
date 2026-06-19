@@ -10,7 +10,6 @@ public struct RemoteBrowserRunStatus: Codable, Sendable {
     public var text: String?
     public var structured: String?
     public var recordingUrl: String?
-    public var liveUrl: String?
     public var stepCount: Int
     public var lastStepSummary: String?
 }
@@ -25,22 +24,31 @@ public struct HostedWebAutomate: Sendable {
         self.backend = backend
     }
 
-    public func run(_ request: HarnessWebAutomateRequest) async -> String? {
+    /// Runs a browser task and returns the formatted text plus whether the run actually succeeded, so
+    /// the executor reports `.failed` (keeping the text as the failure message) on anything but a
+    /// genuine success. `succeeded == false` covers a nil result (the backend errored/timed out) as
+    /// well as a run the backend reports did not complete the task.
+    public func run(_ request: HarnessWebAutomateRequest) async -> HarnessWebAutomateOutcome {
         guard let result = try? await backend.runBrowserTask(
             task: request.task,
             startURL: request.startURL,
             structuredOutputSchemaJSON: request.structuredOutputSchemaJSON
         ) else {
-            return nil
+            return HarnessWebAutomateOutcome(
+                text: "The browser task did not complete (the run could not be reached).",
+                succeeded: false
+            )
         }
-        return format(result)
+        return HarnessWebAutomateOutcome(text: format(result), succeeded: result.isTaskSuccessful == true)
     }
 
     private func format(_ status: RemoteBrowserRunStatus) -> String {
         var lines: [String] = []
-        let state = status.isTaskSuccessful == false
-            ? "did not fully succeed (\(status.status))"
-            : "completed (\(status.status))"
+        // The run is only a success when the backend explicitly reports `isTaskSuccessful == true`; a
+        // nil (backend sent null on error/timeout/stop) or false is surfaced as "did not fully succeed".
+        let state = status.isTaskSuccessful == true
+            ? "completed (\(status.status))"
+            : "did not fully succeed (\(status.status))"
         lines.append("Browser task \(state) after \(status.stepCount) steps.")
         if let structured = status.structured {
             lines.append("")
