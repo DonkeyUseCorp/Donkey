@@ -7,6 +7,10 @@ public enum DonkeyBackendInferenceClientError: Error, Equatable, Sendable {
     case invalidResponse
     case invalidURL(String)
     case httpStatus(Int, String)
+    /// The backend rejected the request as unauthenticated (HTTP 401). Distinct from `httpStatus` so
+    /// the app can surface re-login instead of a generic failure, keyed on a typed case (never the
+    /// response body text).
+    case authenticationRequired
     case missingDownloadPayload(String)
     case invalidBase64(String)
 }
@@ -91,15 +95,37 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
     public var configuration: DonkeyBackendInferenceConfiguration
     public var httpClient: any AIHTTPClient
     public var fileManager: FileManager
+    /// Fired the moment the backend returns 401 on any request path, before any caller can swallow the
+    /// thrown error. The app uses it to flip into re-login while keeping the running task in place.
+    public var onAuthenticationRequired: (@Sendable () -> Void)?
+    /// Process-wide authority on whether the session is usable; defaults to the shared instance the auth
+    /// coordinator drives. Injectable so tests exercise the signed-out short-circuit without mutating
+    /// global state (the test suite runs in parallel).
+    public var sessionGate: BackendSessionGate
 
     public init(
         configuration: DonkeyBackendInferenceConfiguration,
         httpClient: any AIHTTPClient = URLSessionAIHTTPClient(),
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        onAuthenticationRequired: (@Sendable () -> Void)? = nil,
+        sessionGate: BackendSessionGate = .shared
     ) {
         self.configuration = configuration
         self.httpClient = httpClient
         self.fileManager = fileManager
+        self.onAuthenticationRequired = onAuthenticationRequired
+        self.sessionGate = sessionGate
+    }
+
+    /// Maps a non-2xx status into the right typed error. A 401 fires `onAuthenticationRequired` and
+    /// returns the distinct `.authenticationRequired` case so every request path surfaces an expired
+    /// session the same way; other statuses keep the body message for the planner to read.
+    private func httpError(statusCode: Int, message: @autoclosure () -> String) -> DonkeyBackendInferenceClientError {
+        if statusCode == 401 {
+            onAuthenticationRequired?()
+            return .authenticationRequired
+        }
+        return .httpStatus(statusCode, message())
     }
 
     public func listModels(
@@ -228,15 +254,16 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
         )
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
 
+        try ensureSessionUsable()
         let (lines, response) = try await httpClient.streamLines(request)
         var responseBodyLines: [String] = []
         guard (200..<300).contains(response.statusCode) else {
             for try await line in lines {
                 responseBodyLines.append(line)
             }
-            throw DonkeyBackendInferenceClientError.httpStatus(
-                response.statusCode,
-                responseBodyLines.joined(separator: "\n")
+            throw httpError(
+                statusCode: response.statusCode,
+                message: responseBodyLines.joined(separator: "\n")
             )
         }
 
@@ -371,6 +398,56 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
         body.stream = true
         request.httpBody = try JSONEncoder().encode(body)
         return request
+    }
+
+    /// Stream a chat completion, delivering each text delta to `onDelta` as it arrives and returning
+    /// the full accumulated text. The route emits OpenAI-style SSE chunks — `data:` lines whose
+    /// `choices[0].delta.content` is the next piece — ending with a `[DONE]` sentinel; a terminal
+    /// `event: error` ends the stream with whatever text arrived so far. Mirrors `parseScreenshotStream`'s
+    /// SSE handling (auth pre-flight, status check, line parsing). Used to stream the notch's final reply.
+    public func streamChat(
+        _ completionRequest: RemoteInferenceChatCompletionRequest,
+        onDelta: @escaping @MainActor @Sendable (String) -> Void
+    ) async throws -> String {
+        var request = try makeStreamingChatRequest(completionRequest)
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+
+        try ensureSessionUsable()
+        let (lines, response) = try await httpClient.streamLines(request)
+        guard (200..<300).contains(response.statusCode) else {
+            var bodyLines: [String] = []
+            for try await line in lines {
+                bodyLines.append(line)
+            }
+            throw httpError(
+                statusCode: response.statusCode,
+                message: bodyLines.joined(separator: "\n")
+            )
+        }
+
+        var accumulated = ""
+        for try await line in lines {
+            guard line.hasPrefix("data:") else { continue }
+            let payload = String(line.dropFirst("data:".count)).trimmingCharacters(in: .whitespaces)
+            guard !payload.isEmpty else { continue }
+            if payload == "[DONE]" { break }
+            guard let piece = Self.chatStreamDeltaText(payload), !piece.isEmpty else { continue }
+            accumulated += piece
+            await onDelta(piece)
+        }
+        return accumulated
+    }
+
+    /// Extracts `choices[0].delta.content` from one OpenAI-style streamed chat chunk. Returns nil for a
+    /// chunk that carries no text delta (role-only opener, finish marker) so the caller skips it.
+    static func chatStreamDeltaText(_ jsonLine: String) -> String? {
+        guard let data = jsonLine.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choices = object["choices"] as? [[String: Any]],
+              let delta = choices.first?["delta"] as? [String: Any] else {
+            return nil
+        }
+        return delta["content"] as? String
     }
 
     public func createAssetGeneration(
@@ -571,11 +648,23 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
     }
 
 
+    /// Refuse a request the moment the session is known to be signed out, before any network round
+    /// trip. This is the single chokepoint that stops every always-on loop (Live token mint, vision
+    /// warm cache, planner steps, catalog refresh) from spraying guaranteed-401 calls at the backend
+    /// while logged out — they get the same typed `.authenticationRequired` they'd get from a real 401,
+    /// just instantly and for free. The dev-auth bypass is always treated as authenticated.
+    private func ensureSessionUsable() throws {
+        guard !configuration.devAuthBypass,
+              !sessionGate.isAuthenticated else { return }
+        throw DonkeyBackendInferenceClientError.authenticationRequired
+    }
+
     private func send(_ request: URLRequest) async throws -> Data {
+        try ensureSessionUsable()
         let (data, response) = try await httpClient.send(request)
         guard (200..<300).contains(response.statusCode) else {
             let message = String(data: data, encoding: .utf8) ?? HTTPURLResponse.localizedString(forStatusCode: response.statusCode)
-            throw DonkeyBackendInferenceClientError.httpStatus(response.statusCode, message)
+            throw httpError(statusCode: response.statusCode, message: message)
         }
         return data
     }
@@ -600,7 +689,7 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
         request.httpShouldHandleCookies = true
         let (data, response) = try await httpClient.send(request)
         guard (200..<300).contains(response.statusCode) else {
-            throw DonkeyBackendInferenceClientError.httpStatus(response.statusCode, String(data: data, encoding: .utf8) ?? "")
+            throw httpError(statusCode: response.statusCode, message: String(data: data, encoding: .utf8) ?? "")
         }
         return (data, response.value(forHTTPHeaderField: "Content-Type") ?? output.contentType ?? "application/octet-stream")
     }

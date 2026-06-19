@@ -36,6 +36,36 @@ struct DonkeyBackendInferenceClientTests {
     }
 
     @Test
+    func streamChatParsesSSEDeltasAndReturnsAccumulatedText() async throws {
+        // OpenAI-style SSE: a role-only opener (no content) is skipped, content chunks accumulate, and
+        // the [DONE] sentinel ends the stream. The default streamLines splits the buffered body by line.
+        let sse = """
+        data: {"choices":[{"delta":{"role":"assistant"}}]}
+
+        data: {"choices":[{"delta":{"content":"Now "}}]}
+
+        data: {"choices":[{"delta":{"content":"playing."}}]}
+
+        data: [DONE]
+
+        """
+        let client = DonkeyBackendInferenceClient(
+            configuration: configuration(),
+            httpClient: FixtureHTTPClient(data: Data(sse.utf8), statusCode: 200)
+        )
+        let collector = StreamDeltaCollector()
+        let full = try await client.streamChat(
+            RemoteInferenceChatCompletionRequest(
+                messages: [RemoteInferenceChatMessage(role: "user", content: .string("hi"))]
+            ),
+            onDelta: { delta in collector.append(delta) }
+        )
+
+        #expect(full == "Now playing.")
+        #expect(collector.values() == ["Now ", "playing."])
+    }
+
+    @Test
     func createResponseUsesBackendProxyAndStoreFalse() async throws {
         let httpClient = FixtureHTTPClient(
             data: Data(#"{"output_text":"{\"taskType\":\"none\"}"}"#.utf8),
@@ -863,6 +893,53 @@ struct DonkeyBackendInferenceClientTests {
         #expect(downloads[0].contentType == "image/png")
     }
 
+    @Test
+    func signedOutSessionShortCircuitsRequestsWithoutHittingTheNetwork() async {
+        // While signed out the client must refuse every request locally — no network round trip — so the
+        // always-on loops stop spraying guaranteed-401 calls. It returns the same typed error a real 401
+        // would, instantly. A local gate instance keeps this independent of the parallel test run.
+        let gate = BackendSessionGate()
+        gate.update(isAuthenticated: false)
+
+        let httpClient = FixtureHTTPClient(data: Data("{}".utf8), statusCode: 200)
+        let client = DonkeyBackendInferenceClient(
+            configuration: configuration(),
+            httpClient: httpClient,
+            sessionGate: gate
+        )
+
+        await #expect(throws: DonkeyBackendInferenceClientError.authenticationRequired) {
+            _ = try await client.createResponse(
+                RemoteInferenceResponseCreateRequest(model: "router/large", input: .string("hi"))
+            )
+        }
+        // Never reached the transport.
+        #expect(httpClient.requests.isEmpty)
+    }
+
+    @Test
+    func devAuthBypassIgnoresTheSignedOutGate() async throws {
+        // The dev-auth bypass is always treated as authenticated, so the gate never blocks it.
+        let gate = BackendSessionGate()
+        gate.update(isAuthenticated: false)
+
+        let httpClient = FixtureHTTPClient(data: Data("{}".utf8), statusCode: 200)
+        let client = DonkeyBackendInferenceClient(
+            configuration: DonkeyBackendInferenceConfiguration(
+                baseURL: URL(string: "https://donkey.example")!,
+                clientID: "client-1",
+                devAuthBypass: true
+            ),
+            httpClient: httpClient,
+            sessionGate: gate
+        )
+
+        _ = try await client.createResponse(
+            RemoteInferenceResponseCreateRequest(model: "router/large", input: .string("hi"))
+        )
+        #expect(httpClient.requests.count == 1)
+    }
+
     private func configuration() -> DonkeyBackendInferenceConfiguration {
         DonkeyBackendInferenceConfiguration(
             baseURL: URL(string: "https://donkey.example")!,
@@ -914,6 +991,24 @@ struct DonkeyBackendInferenceClientTests {
             error: nil,
             metadata: [:]
         )
+    }
+}
+
+private final class StreamDeltaCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var deltas: [String] = []
+
+    func append(_ delta: String) {
+        lock.lock()
+        deltas.append(delta)
+        lock.unlock()
+    }
+
+    func values() -> [String] {
+        lock.lock()
+        let snapshot = deltas
+        lock.unlock()
+        return snapshot
     }
 }
 

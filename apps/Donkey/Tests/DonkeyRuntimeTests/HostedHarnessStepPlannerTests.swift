@@ -167,9 +167,10 @@ struct HostedHarnessStepPlannerTests {
     }
 
     @Test
-    func backendHTTPFailureSurfacesTheExactErrorInTheNarration() async {
-        // An auth failure must not read as a generic plan failure: the narration carries the exact
-        // backend error (status code and body) so the user sees what broke without guessing.
+    func unauthorizedFailsSafeOnceWithASignInPrompt() async {
+        // A 401 is an expired session — retrying just 401s again. The planner must stop on the first
+        // attempt (not burn the whole retry budget) and surface a clear "sign in again" message rather
+        // than a generic plan failure the user has to guess at.
         let unauthorized = (Data("unauthorized".utf8), 401)
         let httpClient = SequencedHTTPClient(responses: [unauthorized, unauthorized, unauthorized])
         let planner = makePlanner(httpClient: httpClient, understanding: nil)
@@ -177,8 +178,25 @@ struct HostedHarnessStepPlannerTests {
         let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
 
         #expect(call?.name == "run.failSafe")
+        #expect(call?.input["reason"] == "sessionSignedOut")
+        #expect(planner.lastNarration?.lowercased().contains("sign in") == true)
+        // Terminal on the first attempt — no wasted retries against a session that can't recover.
+        #expect(httpClient.requests.count == 1)
+    }
+
+    @Test
+    func backendHTTPFailureSurfacesTheExactErrorInTheNarration() async {
+        // A non-auth backend failure must not read as a generic plan failure: the narration carries the
+        // exact backend error (status code and body) so the user sees what broke without guessing.
+        let serverError = (Data("server error".utf8), 500)
+        let httpClient = SequencedHTTPClient(responses: [serverError, serverError, serverError])
+        let planner = makePlanner(httpClient: httpClient, understanding: nil)
+
+        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
+
+        #expect(call?.name == "run.failSafe")
         #expect(call?.input["reason"] == "harnessPlanFailed")
-        #expect(planner.lastNarration?.contains("401") == true)
+        #expect(planner.lastNarration?.contains("500") == true)
     }
 
     @Test

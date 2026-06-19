@@ -131,6 +131,9 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
                 lastPlanningErrors.append(
                     "planning attempt \(attempt + 1)/\(Self.maxPlanAttempts) failed: \(String(describing: error).prefix(300))"
                 )
+                // An expired session never recovers by retrying — every attempt 401s instantly. Stop now
+                // and fail safe with a clear signed-out message rather than burning the whole retry budget.
+                if Self.isAuthenticationError(error) { break }
                 guard attempt < lastAttempt else { break }
                 retryNote = Self.retryNote(after: error)
                 continue
@@ -203,6 +206,11 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     /// a timeout — so the thread and the user-facing summary name what actually broke instead of a
     /// generic plan failure the user has to guess at.
     private func failSafeCall(after error: Error?) -> HarnessToolCall {
+        if let error, Self.isAuthenticationError(error) {
+            lastNarration = "Your session is signed out, so I couldn't reach the model. Sign in again "
+                + "and re-run this."
+            return HarnessToolCall(name: "run.failSafe", input: ["reason": "sessionSignedOut"])
+        }
         switch error as? PlanningError {
         case let .blockedByContentFilter(finishReason, _):
             lastNarration = "The model provider's content filter blocked every planning reply "
@@ -221,6 +229,14 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
             }
             return HarnessToolCall(name: "run.failSafe", input: ["reason": "harnessPlanFailed"])
         }
+    }
+
+    /// Whether a planning failure is an expired/absent session (a backend 401, or the client's own
+    /// pre-flight refusal while signed out). These are terminal for the step — retrying re-issues the
+    /// same doomed call — so the planner stops instead of spending its retry budget.
+    private static func isAuthenticationError(_ error: Error) -> Bool {
+        if case DonkeyBackendInferenceClientError.authenticationRequired = error { return true }
+        return false
     }
 
     /// Max planning samples per step before failing safe. The first is the normal call; the rest are

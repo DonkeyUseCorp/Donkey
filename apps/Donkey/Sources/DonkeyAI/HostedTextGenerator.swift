@@ -55,6 +55,35 @@ public struct HostedTextGenerator: Sendable {
         return (text?.isEmpty == false) ? text : nil
     }
 
+    /// Streams the model's reply to `prompt`, delivering each text delta to `onDelta` as it arrives
+    /// and returning the full text. Used to stream the assistant's final answer into the notch chin and
+    /// the open task row token-by-token. Returns nil on any failure (empty stream, transport, timeout),
+    /// so the caller falls back to the already-drafted answer rather than showing nothing.
+    public func generateStreaming(
+        _ prompt: String,
+        onDelta: @escaping @MainActor @Sendable (String) -> Void
+    ) async -> String? {
+        let request = RemoteInferenceChatCompletionRequest(
+            messages: [
+                RemoteInferenceChatMessage(role: "user", content: .string(prompt))
+            ],
+            stream: true,
+            metadata: ["source": "hosted-text-generator", "prompt_version": "answer-stream-v1"],
+            parameters: [
+                "temperature": .number(0.4),
+                "max_output_tokens": .number(Double(maxOutputTokens))
+            ]
+        )
+        let backend = self.backend
+        guard let text = try? await AIDeadline.enforce(seconds: timeoutSeconds, {
+            try await backend.streamChat(request, onDelta: onDelta)
+        }) else {
+            return nil
+        }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     /// Runs `prompt` against a local media file (audio or video) — the multimodal arm of
     /// `llm.generate`. The file is read and sent inline (base64) alongside the prompt, so the prompt
     /// decides the output (transcribe to SRT, translate, summarize, answer a question). `mimeType` is

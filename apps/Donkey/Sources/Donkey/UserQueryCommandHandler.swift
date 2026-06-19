@@ -147,6 +147,9 @@ protocol UserQueryCommandHandling: Sendable {
         taskID: String,
         context: UserQueryCommandContext?
     ) async -> UserQueryCommandHandlingResult?
+    /// Set by the overlay so a mid-run hosted 401 (an expired session) surfaces re-login. The inference
+    /// client fires it off the main actor, so the hook hops back to the main actor itself.
+    var onAuthenticationRequired: (@MainActor @Sendable () -> Void)? { get set }
 }
 
 extension UserQueryCommandHandling {
@@ -180,6 +183,9 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
     /// Shared across every run (the actor is a reference, so struct copies captured into run Tasks share
     /// one gate): only one foreground run drives the GUI at a time. See `ForegroundFocusGate`.
     let foregroundFocusGate = ForegroundFocusGate()
+    /// Set by the overlay model; fired when any hosted request in a turn returns 401 so the app can
+    /// surface re-login. Optional, so existing construction sites are unaffected.
+    var onAuthenticationRequired: (@MainActor @Sendable () -> Void)?
 
     init(
         permissionPolicy: ToolCallPolicy = ToolCallPolicy(
@@ -192,6 +198,13 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         self.permissionPolicy = permissionPolicy
         self.coordinatorRegistry = coordinatorRegistry
         self.genericHarnessLifecycle = genericHarnessLifecycle
+    }
+
+    /// Bridges the struct's main-actor auth-expiry hook to the inference client's off-actor callback,
+    /// hopping back to the main actor. Nil when no hook is set, so the client stays silent.
+    private func backendAuthExpiryHook() -> (@Sendable () -> Void)? {
+        guard let onAuthenticationRequired else { return nil }
+        return { Task { @MainActor in onAuthenticationRequired() } }
     }
 
     func handleSubmittedCommand(
@@ -265,7 +278,8 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             taskID: taskID,
             preparedTurnMetadata: Self.genericHarnessMetadata(preparedTurn: genericPreparedTurn),
             visualize: context?.agentVisualizationChanged,
-            progress: Self.progressLabeler(context?.spawnProgressChanged)
+            progress: Self.progressLabeler(context?.spawnProgressChanged),
+            answerStream: Self.answerDeltaSink(context?.spawnProgressChanged)
         )
     }
 
@@ -341,7 +355,8 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             forcedExecutionPreference: forcedExecutionPreference,
             forcedDriveTarget: forcedDriveTarget,
             visualize: context?.agentVisualizationChanged,
-            progress: Self.progressLabeler(context?.spawnProgressChanged)
+            progress: Self.progressLabeler(context?.spawnProgressChanged),
+            answerStream: Self.answerDeltaSink(context?.spawnProgressChanged)
         )
     }
 
@@ -370,6 +385,18 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         guard let spawnProgressChanged else { return nil }
         return { label in
             spawnProgressChanged(UserQuerySpawnProgressUpdate(label: label))
+        }
+    }
+
+    /// Adapt the spawn-progress callback into a delta sink for the streamed final answer: each chunk is
+    /// forwarded as an `answerDelta` so the model accumulates it onto the task's detail (the chin and the
+    /// open row stream it), rather than replacing the status line the way a `label` update does.
+    private static func answerDeltaSink(
+        _ spawnProgressChanged: (@MainActor @Sendable (UserQuerySpawnProgressUpdate) -> Void)?
+    ) -> (@MainActor @Sendable (String) -> Void)? {
+        guard let spawnProgressChanged else { return nil }
+        return { delta in
+            spawnProgressChanged(UserQuerySpawnProgressUpdate(answerDelta: delta))
         }
     }
 
@@ -406,7 +433,8 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         forcedExecutionPreference: ExecutionPreference? = nil,
         forcedDriveTarget: (appName: String, bundleIdentifier: String?)? = nil,
         visualize: (@MainActor @Sendable (AgentVisualizationPlan) -> Void)? = nil,
-        progress: (@MainActor @Sendable (String) -> Void)? = nil
+        progress: (@MainActor @Sendable (String) -> Void)? = nil,
+        answerStream: (@MainActor @Sendable (String) -> Void)? = nil
     ) async -> UserQueryCommandHandlingResult {
         guard permissionPolicy.allowedCapabilities.contains(.input) else {
             return await failHarnessRun(
@@ -448,7 +476,13 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 preparedTurnMetadata: preparedTurnMetadata
             )
         }
-        let backend = DonkeyBackendInferenceClient(configuration: configuration)
+        // One client serves the whole turn — understanding, planner, and hosted adapters all share it —
+        // so wiring the auth-expiry hook here catches a 401 on any of those paths, even the ones that
+        // swallow the thrown error.
+        let backend = DonkeyBackendInferenceClient(
+            configuration: configuration,
+            onAuthenticationRequired: backendAuthExpiryHook()
+        )
 
         // The thread is the COMPLETE, human-readable record of the turn (like ChatGPT/Claude), written
         // live as markdown. It is opened here — before the very first model call — so the trace manager
@@ -467,7 +501,6 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // extract parameters, and decide whether to clarify. Degrades to driving the raw command when
         // it returns nil — or when the call outlives its deadline — so a backend hiccup never
         // dead-ends or silently stalls the run.
-        progress?("Working out what you need")
         let understandingBoundary = HostedHarnessRequestUnderstanding(backend: backend, trace: trace)
         let understanding = await AIDeadline.race(seconds: Self.understandingTimeoutSeconds) {
             await understandingBoundary.understand(command: command, frontmostAppName: frontmostAppName)
@@ -891,9 +924,22 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         let conversationMessage = finalTask?.toolHistory.last { $0.call.name == "conversation.respond" }
             .flatMap { $0.call.input["response"] ?? $0.call.input["message"] }
             .flatMap { $0.isEmpty ? nil : $0 }
-        let response = conversationMessage
+        var response = conversationMessage
             ?? planner.lastNarration
             ?? (completed ? "Done." : "I tried operating \(appName) but couldn't confirm the goal was finished.")
+
+        // Stream the assistant's final reply token-by-token into the notch (the chin and the open task
+        // row) when the turn produced a real text answer. It is re-composed from the harness's drafted
+        // answer so it stays grounded; the streamed text becomes the authoritative reply, and a failed
+        // or empty stream falls back to the draft already computed above. Only conversational answers
+        // stream — an action that merely finished ("Done.") has no message worth typing out.
+        if completed, let conversationMessage, let answerStream {
+            let prompt = Self.finalAnswerPrompt(goal: command, draftAnswer: conversationMessage)
+            if let streamed = await textGenerator.generateStreaming(prompt, onDelta: answerStream),
+               !streamed.isEmpty {
+                response = streamed
+            }
+        }
         let decision = AppHarnessDecision(
             kind: .respond,
             message: response,
@@ -1044,6 +1090,20 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         UserQueryLog.commands.notice(
             "command finished traceID=\(result.traceID, privacy: .public) stage=\(stage, privacy: .public) status=\(result.status.rawValue, privacy: .public) threadStatus=\(result.threadStatus.rawValue, privacy: .public) summary=\(result.summary, privacy: .public) taskLabel=\(taskLabel, privacy: .public) hint=\(hint, privacy: .public)"
         )
+    }
+
+    /// Prompt for the streamed final reply: relay the harness's drafted answer to the user, grounded
+    /// strictly in that draft so the streamed message can't drift from what the run actually found.
+    private static func finalAnswerPrompt(goal: String, draftAnswer: String) -> String {
+        """
+        Relay Donkey's reply to the user for this finished request. Base it strictly on the draft \
+        below — do not add facts, steps, or speculation. Reply directly to the user in a concise, \
+        friendly voice; if the draft already reads well, lightly polish it. Output only the reply \
+        text, with no preamble.
+
+        User request: \(goal)
+        Draft reply: \(draftAnswer)
+        """
     }
 
     /// Deadline for the one-shot understanding call; past it the run degrades to
