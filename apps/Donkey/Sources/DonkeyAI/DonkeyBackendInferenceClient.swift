@@ -11,8 +11,38 @@ public enum DonkeyBackendInferenceClientError: Error, Equatable, Sendable {
     /// the app can surface re-login instead of a generic failure, keyed on a typed case (never the
     /// response body text).
     case authenticationRequired
+    /// The backend rejected the request for lack of credits (HTTP 402). Distinct from `httpStatus` so
+    /// the app surfaces a "buy credits" message instead of a generic failure. `balance` is the typed
+    /// balance from the JSON error body when present (decoded field, never matched from raw text).
+    case insufficientCredits(balance: String?)
     case missingDownloadPayload(String)
     case invalidBase64(String)
+}
+
+/// Shared, app-agnostic copy for the "out of credits" state. Centralized so every consumer (the step
+/// planner's fail-safe, the image generator, any future caller) surfaces one consistent message and
+/// the same billing destination rather than leaking a raw `httpStatus(402, …)` dump to the user.
+public enum DonkeyCreditExhaustion {
+    /// Where users top up. Shown in the message and used by any UI that opens the billing page.
+    public static let billingURLString = "https://donkeyuse.com/app/settings"
+
+    /// Whether a failure is the credit-exhausted state. A 402 reaches us two ways: the typed
+    /// `.insufficientCredits` from the normal request path, and a raw `.httpStatus(402, …)` when the
+    /// failure surfaces through a streaming error event that skips status-to-error mapping.
+    public static func isExhausted(_ error: Error) -> Bool {
+        switch error {
+        case DonkeyBackendInferenceClientError.insufficientCredits:
+            return true
+        case DonkeyBackendInferenceClientError.httpStatus(402, _):
+            return true
+        default:
+            return false
+        }
+    }
+
+    public static func userMessage() -> String {
+        "You're out of credits."
+    }
 }
 
 public struct DonkeyBackendInferenceConfiguration: Equatable, Sendable {
@@ -125,7 +155,31 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
             onAuthenticationRequired?()
             return .authenticationRequired
         }
-        return .httpStatus(statusCode, message())
+        let body = message()
+        // Every 402 from this backend is a credits problem (insufficient balance or a configured
+        // spend limit). Map it to the typed case so callers surface "buy credits" instead of a raw
+        // status dump; the balance is read from the decoded JSON field, never matched from raw text.
+        if statusCode == 402 {
+            return .insufficientCredits(balance: Self.creditBalance(fromBody: body))
+        }
+        return .httpStatus(statusCode, body)
+    }
+
+    /// Pulls the `balance` from a 402 JSON error body, e.g. {"error":"insufficient_credits","balance":"0"}.
+    /// Returns nil for any non-JSON or balance-less body. Decodes the field; does not pattern-match text.
+    private static func creditBalance(fromBody body: String) -> String? {
+        guard let data = body.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return nil
+        }
+        if let balance = object["balance"] as? String {
+            return balance
+        }
+        if let balance = object["balance"] as? NSNumber {
+            return balance.stringValue
+        }
+        return nil
     }
 
     public func listModels(

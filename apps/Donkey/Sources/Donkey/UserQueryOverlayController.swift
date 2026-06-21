@@ -673,6 +673,9 @@ final class UserQueryOverlayController {
             needsLogin: model.needsLogin,
             loginRequested: { [weak self] in
                 self?.model.requestLogin()
+            },
+            reloadCreditsRequested: { [weak self] taskID in
+                self?.model.reloadCredits(id: taskID)
             }
         )
     }

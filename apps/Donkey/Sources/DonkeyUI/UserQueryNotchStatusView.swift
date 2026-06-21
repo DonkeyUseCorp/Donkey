@@ -58,6 +58,9 @@ public struct UserQueryNotchStatusView: View {
     /// Login button fires this to start the real sign-in (handled by the model/controller).
     private let needsLogin: Bool
     private let loginRequested: @MainActor () -> Void
+    /// A task that failed for lack of credits shows a "Reload credits" CTA in its banner; tapping it
+    /// fires this so the app can open the billing page (reuses the permission-banner button styling).
+    private let reloadCreditsRequested: @MainActor (String) -> Void
 
     public init(
         state: UserQueryState,
@@ -91,7 +94,8 @@ public struct UserQueryNotchStatusView: View {
         denyPermissionRequested: @escaping @MainActor (String) -> Void,
         updateRequested: @escaping @MainActor () -> Void,
         needsLogin: Bool = false,
-        loginRequested: @escaping @MainActor () -> Void = {}
+        loginRequested: @escaping @MainActor () -> Void = {},
+        reloadCreditsRequested: @escaping @MainActor (String) -> Void = { _ in }
     ) {
         self.state = state
         self.updateState = updateState
@@ -125,6 +129,7 @@ public struct UserQueryNotchStatusView: View {
         self.updateRequested = updateRequested
         self.needsLogin = needsLogin
         self.loginRequested = loginRequested
+        self.reloadCreditsRequested = reloadCreditsRequested
     }
 
     public var body: some View {
@@ -841,6 +846,9 @@ public struct UserQueryNotchStatusView: View {
             if isPermission {
                 permissionBanner(for: task)
                     .opacity(contentDim)
+            } else if showsReloadCreditsBanner(task) {
+                reloadCreditsBanner(for: task)
+                    .opacity(contentDim)
             }
         }
         .padding(.horizontal, 12)
@@ -1015,6 +1023,39 @@ public struct UserQueryNotchStatusView: View {
             }
             permissionButton(label: "Deny", prominent: false) {
                 denyPermissionRequested(task.id)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.05))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    /// Whether this task failed for lack of credits and should show the reload CTA. Read from the typed
+    /// metadata flag the harness sets — never inferred from the narration text.
+    private func showsReloadCreditsBanner(_ task: UserQueryNotchTask) -> Bool {
+        task.metadata[UserQueryTaskMetadataKey.creditReloadRequired] == "true"
+    }
+
+    /// A reload CTA on a credit-exhausted task. Reuses the permission banner's button styling; tapping
+    /// it opens the billing page so the user can top up, then re-run the task (Close is still on the row).
+    private func reloadCreditsBanner(for task: UserQueryNotchTask) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "creditcard")
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.7))
+
+            Text("Add credits to continue")
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.7))
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer(minLength: 8)
+
+            permissionButton(label: "Reload", prominent: true) {
+                reloadCreditsRequested(task.id)
             }
         }
         .padding(.horizontal, 10)

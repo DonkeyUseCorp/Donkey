@@ -918,6 +918,24 @@ struct DonkeyBackendInferenceClientTests {
     }
 
     @Test
+    func http402MapsToInsufficientCreditsWithParsedBalance() async {
+        // A 402 means the balance is spent (or a spend limit was hit). The client maps it to the typed
+        // `.insufficientCredits` case with the balance decoded from the JSON body, so callers surface a
+        // "buy credits" message instead of a raw `httpStatus(402, …)` dump.
+        let body = Data(#"{"error":"insufficient_credits","message":"out of credits","balance":"0"}"#.utf8)
+        let client = DonkeyBackendInferenceClient(
+            configuration: configuration(),
+            httpClient: FixtureHTTPClient(data: body, statusCode: 402)
+        )
+
+        await #expect(throws: DonkeyBackendInferenceClientError.insufficientCredits(balance: "0")) {
+            _ = try await client.createResponse(
+                RemoteInferenceResponseCreateRequest(model: "router/large", input: .string("hi"))
+            )
+        }
+    }
+
+    @Test
     func devAuthBypassIgnoresTheSignedOutGate() async throws {
         // The dev-auth bypass is always treated as authenticated, so the gate never blocks it.
         let gate = BackendSessionGate()

@@ -955,15 +955,21 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             reason: "User query harness run returned without a terminal status"
         )
         let threadStatus = Self.userQueryStatus(forHarness: finalStatus)
+        // A run that failed safe for lack of credits carries a typed flag the notch reads to show the
+        // reload CTA banner (instead of inferring the credit state from the narration text).
+        var responseMetadata = [
+            "appHarness.decision": AppHarnessDecisionKind.respond.rawValue
+        ]
+        if planner.lastFailureRequiresCreditReload {
+            responseMetadata[UserQueryTaskMetadataKey.creditReloadRequired] = "true"
+        }
         let result = UserQueryCommandHandlingResult(
             status: completed ? .completed : .failedSafe,
             threadStatus: threadStatus,
             decision: decision,
             summary: response,
             traceID: traceID,
-            metadata: baseMetadata.merging([
-                "appHarness.decision": AppHarnessDecisionKind.respond.rawValue
-            ]) { _, new in new }
+            metadata: baseMetadata.merging(responseMetadata) { _, new in new }
         )
         await coordinatorRegistry.finish(taskID: taskID)
         logHandlingResult(

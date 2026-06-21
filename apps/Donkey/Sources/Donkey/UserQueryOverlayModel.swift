@@ -1,3 +1,4 @@
+import AppKit
 import DonkeyAI
 import DonkeyContracts
 import DonkeyRuntime
@@ -282,6 +283,15 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     /// The notch Login button was tapped; hand off to the app delegate to start the sign-in flow.
     func requestLogin() {
         loginActionRequested?()
+    }
+
+    /// The notch "Reload credits" CTA was tapped on a credit-exhausted task. Open the billing page in
+    /// the browser (donkeyuse.com in prod, localhost in dev — the configured web base URL) so the user
+    /// can top up; the task stays on the row so it can be re-run once credits land.
+    func reloadCredits(id taskID: String) {
+        let billingURL = DonkeyAuthConfiguration.current().webBaseURL
+            .appendingPathComponent("app/settings")
+        NSWorkspace.shared.open(billingURL)
     }
 
     /// A hosted request returned 401 mid-run. Surface login once — ignored if already logged out, so a

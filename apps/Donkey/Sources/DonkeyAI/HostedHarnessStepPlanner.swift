@@ -56,6 +56,10 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     /// reason a step fell back to run.failSafe). Cleared at the start of each planNextStep; the route
     /// writes them into the thread transcript so a failed step is diagnosable from the thread alone.
     public private(set) var lastPlanningErrors: [String] = []
+    /// True when the most recent step failed safe because the backend reported the balance is spent
+    /// (HTTP 402). The user-query layer reads this typed flag to flag the task for a reload CTA in the
+    /// notch, instead of inferring the credit state from the narration text.
+    public private(set) var lastFailureRequiresCreditReload = false
 
     /// Names of the registered read-only tools (observe/verify/respond/lifecycle), derived from each
     /// descriptor's safety class. A tool counts as an "action" for first-action timing exactly when it
@@ -121,6 +125,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         var retryNote: String?
         var lastFailure: Error?
         lastPlanningErrors = []
+        lastFailureRequiresCreditReload = false
         let lastAttempt = Self.maxPlanAttempts - 1
         for attempt in 0...lastAttempt {
             let decision: Decision
@@ -131,9 +136,10 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
                 lastPlanningErrors.append(
                     "planning attempt \(attempt + 1)/\(Self.maxPlanAttempts) failed: \(String(describing: error).prefix(300))"
                 )
-                // An expired session never recovers by retrying — every attempt 401s instantly. Stop now
-                // and fail safe with a clear signed-out message rather than burning the whole retry budget.
-                if Self.isAuthenticationError(error) { break }
+                // An expired session or an exhausted balance never recovers by retrying — every attempt
+                // hits the same 401/402 instantly. Stop now and fail safe with a clear, actionable
+                // message rather than burning the whole retry budget.
+                if Self.isAuthenticationError(error) || DonkeyCreditExhaustion.isExhausted(error) { break }
                 guard attempt < lastAttempt else { break }
                 retryNote = Self.retryNote(after: error)
                 continue
@@ -212,6 +218,11 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
             lastNarration = "Your session is signed out, so I couldn't reach the model. Sign in again "
                 + "and re-run this."
             return HarnessToolCall(name: "run.failSafe", input: ["reason": "sessionSignedOut"])
+        }
+        if let error, DonkeyCreditExhaustion.isExhausted(error) {
+            lastNarration = DonkeyCreditExhaustion.userMessage()
+            lastFailureRequiresCreditReload = true
+            return HarnessToolCall(name: "run.failSafe", input: ["reason": "insufficientCredits"])
         }
         switch error as? PlanningError {
         case let .blockedByContentFilter(finishReason, _):

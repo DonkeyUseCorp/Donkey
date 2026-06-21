@@ -71,7 +71,9 @@ public struct HostedImageGenerator: Sendable {
         let maxPollAttempts = self.maxPollAttempts
         // One deadline over the whole call (create + poll + write); the request was synchronous in
         // practice, but polling/writing stay bounded so the harness step can't hang.
-        let outcome = try? await AIDeadline.enforce(seconds: timeoutSeconds) {
+        let outcome: HarnessImageGenerationResult
+        do {
+            outcome = try await AIDeadline.enforce(seconds: timeoutSeconds) {
             () -> HarnessImageGenerationResult in
             var record = try await backend.createAssetGeneration(assetRequest)
             var attempts = 0
@@ -99,12 +101,20 @@ public struct HostedImageGenerator: Sendable {
                 savedPaths: saved,
                 failureReason: saved.isEmpty ? "The image model returned no image." : nil
             )
+            }
+        } catch let error where DonkeyCreditExhaustion.isExhausted(error) {
+            return HarnessImageGenerationResult(
+                savedPaths: [],
+                failureReason: DonkeyCreditExhaustion.userMessage()
+            )
+        } catch {
+            return HarnessImageGenerationResult(
+                savedPaths: [],
+                failureReason: "Image generation timed out or could not reach the model."
+            )
         }
 
-        return outcome ?? HarnessImageGenerationResult(
-            savedPaths: [],
-            failureReason: "Image generation timed out or could not reach the model."
-        )
+        return outcome
     }
 
     /// Resolves where outputs are written. An absolute `outDir` is used as-is; a relative one resolves

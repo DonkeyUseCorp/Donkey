@@ -185,6 +185,28 @@ struct HostedHarnessStepPlannerTests {
     }
 
     @Test
+    func insufficientCreditsFailsSafeOnceWithABuyCreditsPrompt() async {
+        // A 402 is an exhausted balance — retrying just 402s again. The planner must stop on the first
+        // attempt and surface a clear "buy credits" message with the billing destination, never a raw
+        // `httpStatus(402, …)` dump.
+        let outOfCredits = (Data(#"{"error":"insufficient_credits","balance":"0"}"#.utf8), 402)
+        let httpClient = SequencedHTTPClient(responses: [outOfCredits, outOfCredits, outOfCredits])
+        let planner = makePlanner(httpClient: httpClient, understanding: nil)
+
+        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
+
+        #expect(call?.name == "run.failSafe")
+        #expect(call?.input["reason"] == "insufficientCredits")
+        #expect(planner.lastNarration?.lowercased().contains("credits") == true)
+        // Typed flag the notch reads to show the reload CTA (never inferred from the narration text).
+        #expect(planner.lastFailureRequiresCreditReload == true)
+        // User-facing: no raw status code or error type leaking into the notch.
+        #expect(planner.lastNarration?.lowercased().contains("httpstatus") == false)
+        // Terminal on the first attempt — no wasted retries against a balance that can't recover mid-run.
+        #expect(httpClient.requests.count == 1)
+    }
+
+    @Test
     func backendHTTPFailureShowsAFriendlyNarrationAndKeepsTheRawErrorForTheThread() async {
         // A non-auth backend failure must read as a plain, friendly message to the user — never a raw
         // error dump like `httpStatus(500, …)`. The exact backend error (status code and body) is kept
