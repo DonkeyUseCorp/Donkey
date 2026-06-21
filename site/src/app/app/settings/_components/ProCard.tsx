@@ -16,17 +16,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-
-function formatDollars(value: string | null): string {
-  if (value === null) {
-    return "—";
-  }
-  const parsed = Number.parseFloat(value);
-  if (!Number.isFinite(parsed)) {
-    return "—";
-  }
-  return parsed.toLocaleString("en-US", { currency: "USD", style: "currency" });
-}
+import { formatUsd } from "@/lib/credits/format-usd";
 
 export function ProCard() {
   const pro = useProSubscription();
@@ -68,8 +58,8 @@ export function ProCard() {
         {isActive && data ? (
           <div className="space-y-1">
             <div className="text-foreground">
-              {formatDollars(data.allowanceRemaining)} of{" "}
-              {formatDollars(data.monthlyAllowance)} included left this month
+              {formatUsd(data.allowanceRemaining)} of{" "}
+              {formatUsd(data.monthlyAllowance)} included left this month
             </div>
             <div>
               Renews:{" "}

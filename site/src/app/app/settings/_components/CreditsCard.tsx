@@ -13,6 +13,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { formatUsd } from "@/lib/credits/format-usd";
+import {
+  creditTopUpMinDollars,
+  creditTopUpPresetsDollars,
+} from "@/lib/credits/top-up";
 import { ApiError } from "@/queries/apiClient";
 import {
   useCreditAutoReload,
@@ -20,19 +25,6 @@ import {
   useStartCreditCheckout,
   useUpdateCreditAutoReload,
 } from "@/queries/credits";
-
-const presets = [5, 25, 50, 100];
-
-function formatDollars(value: string): string {
-  const parsed = Number.parseFloat(value);
-  if (!Number.isFinite(parsed)) {
-    return "$0.00";
-  }
-  return parsed.toLocaleString("en-US", {
-    currency: "USD",
-    style: "currency",
-  });
-}
 
 export function CreditsCard() {
   const balance = useCreditBalance();
@@ -46,7 +38,8 @@ export function CreditsCard() {
   };
 
   const customValue = Number.parseInt(customAmount, 10);
-  const customValid = Number.isFinite(customValue) && customValue >= 5;
+  const customValid =
+    Number.isFinite(customValue) && customValue >= creditTopUpMinDollars;
 
   return (
     <Card>
@@ -62,7 +55,7 @@ export function CreditsCard() {
             <Skeleton className="h-9 w-32" />
           ) : (
             <div className="text-3xl font-semibold tabular-nums">
-              {formatDollars(balance.data?.balance ?? "0")}
+              {formatUsd(balance.data?.balance ?? "0")}
             </div>
           )}
           <p className="mt-1 text-sm text-muted-foreground">Available balance</p>
@@ -71,7 +64,7 @@ export function CreditsCard() {
         <div className="space-y-3">
           <Label>Buy credits</Label>
           <div className="flex flex-wrap gap-2">
-            {presets.map((amount) => (
+            {creditTopUpPresetsDollars.map((amount) => (
               <Button
                 disabled={checkout.isPending}
                 key={amount}
@@ -112,7 +105,9 @@ export function CreditsCard() {
           ) : null}
         </div>
 
-        <AutoReloadSection onNeedsCard={() => startCheckout(presets[1])} />
+        <AutoReloadSection
+          onNeedsCard={() => startCheckout(creditTopUpPresetsDollars[1])}
+        />
       </CardContent>
     </Card>
   );
