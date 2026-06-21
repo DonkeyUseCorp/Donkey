@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -421,13 +421,29 @@ export async function recordInferenceUsage(input: InferenceUsageInput) {
   );
 
   // After a real charge commits, top up the balance via auto-reload if it fell
-  // below the user's threshold. Best-effort and non-blocking: a dynamic import
-  // breaks the module cycle (billing -> credits -> billing), and failures never
-  // affect the inference response. The grant lands later via the Stripe webhook.
+  // below the user's threshold. Scheduled with next/server `after` so it runs
+  // off the response path AND the serverless runtime keeps the function alive
+  // until it finishes (an un-awaited promise can be dropped after the response).
+  // The dynamic import breaks the module cycle (billing -> credits -> billing);
+  // the post-charge balance is passed in so the trigger needn't re-read it.
   if (input.billingMode !== "included" && recorded.creditCostMicros > zeroCreditMicros) {
-    void import("@/lib/billing/credit-auto-reload")
-      .then((module) => module.maybeTriggerCreditAutoReload(input.userId))
-      .catch(() => {});
+    const balanceMicros = recorded.remainingBalanceMicros;
+    try {
+      after(async () => {
+        try {
+          const { maybeTriggerCreditAutoReload } = await import(
+            "@/lib/billing/credit-auto-reload"
+          );
+          await maybeTriggerCreditAutoReload(input.userId, balanceMicros);
+        } catch (error) {
+          console.error("[credit-auto-reload] trigger failed", error);
+        }
+      });
+    } catch (error) {
+      // `after` throws outside a request scope (e.g. a script/test). Don't let
+      // that break usage recording — auto-reload is best-effort.
+      console.error("[credit-auto-reload] could not schedule trigger", error);
+    }
   }
 
   return recorded;

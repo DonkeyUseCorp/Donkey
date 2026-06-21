@@ -5,6 +5,7 @@ import {
   handleAutoReloadPaymentFailed,
   handleAutoReloadPaymentSucceeded,
   handleCreditTopUpCheckout,
+  handleCreditTopUpPaymentSucceeded,
 } from "@/lib/billing/credit-purchases";
 import {
   subscriptionIsPro,
@@ -74,7 +75,9 @@ export async function POST(request: Request) {
       break;
     }
     case "payment_intent.succeeded": {
+      // Each handler no-ops unless the PaymentIntent's kind matches, so both run.
       await handleAutoReloadPaymentSucceeded(event.data.object);
+      await handleCreditTopUpPaymentSucceeded(event.data.object);
       break;
     }
     case "payment_intent.payment_failed": {

@@ -58,18 +58,34 @@ export function quotaFromPrice(price: Stripe.Price | null | undefined): number {
   return defaultVisionMonthlyQuota;
 }
 
-// Reuse one Stripe customer per user. The id is stored on the user's
-// VisionApiSubscription row once known.
+// Reuse one Stripe customer per user, stored on User.stripeCustomerId so every
+// billing product (Pro, Vision, top-ups) shares it and a customer is never
+// duplicated — and a Pro-only or credit-only user gets no phantom Vision row.
 export async function ensureStripeCustomer(input: {
   userId: string;
   email: string;
   name?: string | null;
 }): Promise<string> {
-  const existing = await prisma.visionApiSubscription.findUnique({
+  const user = await prisma.user.findUnique({
+    select: { stripeCustomerId: true },
+    where: { id: input.userId },
+  });
+  if (user?.stripeCustomerId) {
+    return user.stripeCustomerId;
+  }
+
+  // Legacy rows stored the customer id on the Vision subscription; reuse it (and
+  // backfill the user) so an existing Vision customer is never re-created.
+  const legacyVision = await prisma.visionApiSubscription.findUnique({
+    select: { stripeCustomerId: true },
     where: { userId: input.userId },
   });
-  if (existing?.stripeCustomerId) {
-    return existing.stripeCustomerId;
+  if (legacyVision?.stripeCustomerId) {
+    await prisma.user.update({
+      data: { stripeCustomerId: legacyVision.stripeCustomerId },
+      where: { id: input.userId },
+    });
+    return legacyVision.stripeCustomerId;
   }
 
   const stripe = getStripe();
@@ -78,18 +94,34 @@ export async function ensureStripeCustomer(input: {
     metadata: { userId: input.userId },
     name: input.name ?? undefined,
   });
-
-  await prisma.visionApiSubscription.upsert({
-    create: {
-      planKey: visionPlanKey,
-      stripeCustomerId: customer.id,
-      userId: input.userId,
-    },
-    update: { stripeCustomerId: customer.id },
-    where: { userId: input.userId },
+  await prisma.user.update({
+    data: { stripeCustomerId: customer.id },
+    where: { id: input.userId },
   });
-
   return customer.id;
+}
+
+// Resolve which user a Stripe subscription belongs to: the userId stamped into
+// subscription metadata at checkout, falling back to the per-user Stripe customer
+// id. Shared by the Vision and Pro sync paths so they can't resolve differently.
+export async function resolveSubscriptionUserId(
+  subscription: Stripe.Subscription,
+): Promise<string | null> {
+  const metadataUserId = subscription.metadata?.userId;
+  if (metadataUserId) {
+    return metadataUserId;
+  }
+  const customerId = stripeId(subscription.customer);
+  if (customerId) {
+    const user = await prisma.user.findUnique({
+      select: { id: true },
+      where: { stripeCustomerId: customerId },
+    });
+    if (user) {
+      return user.id;
+    }
+  }
+  return null;
 }
 
 // Source of truth for a subscription's lifecycle. Called from webhook handlers
@@ -97,7 +129,7 @@ export async function ensureStripeCustomer(input: {
 export async function syncVisionSubscription(
   subscription: Stripe.Subscription,
 ): Promise<void> {
-  const userId = await resolveUserIdForSubscription(subscription);
+  const userId = await resolveSubscriptionUserId(subscription);
   const customerId = stripeId(subscription.customer);
   if (!userId || !customerId) {
     console.error("[billing] could not resolve user/customer for subscription", {
@@ -149,27 +181,6 @@ export async function syncVisionSubscription(
   });
 }
 
-async function resolveUserIdForSubscription(
-  subscription: Stripe.Subscription,
-): Promise<string | null> {
-  const metadataUserId = subscription.metadata?.userId;
-  if (metadataUserId) {
-    return metadataUserId;
-  }
-
-  const customerId = stripeId(subscription.customer);
-  if (customerId) {
-    const row = await prisma.visionApiSubscription.findFirst({
-      where: { stripeCustomerId: customerId },
-    });
-    if (row) {
-      return row.userId;
-    }
-  }
-
-  return null;
-}
-
 // Normalize a Stripe field that may be an id string or an expanded object (or
 // absent) to its id. Shared by the webhook handlers.
 export function stripeId(
@@ -182,7 +193,9 @@ export function stripeId(
   return typeof value === "string" ? value : value.id;
 }
 
-function unixToDate(seconds: number | null | undefined): Date | null {
+// Epoch seconds (Stripe's unit) to Date, or null when absent. Shared by the
+// Vision and Pro subscription sync paths.
+export function unixToDate(seconds: number | null | undefined): Date | null {
   if (!seconds) {
     return null;
   }

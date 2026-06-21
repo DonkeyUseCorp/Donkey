@@ -140,6 +140,9 @@ model CreditAutoReload {
   stripeCustomerId      String?
   stripePaymentMethodId String?
   status                String    @default("idle")
+  // The off-session PaymentIntent that currently owns the "charging" lock, so a
+  // success/failure webhook only releases the charge it actually belongs to.
+  chargingPaymentIntentId String?
   lastChargeAt          DateTime?
   lastError             String?
   createdAt             DateTime  @default(now())

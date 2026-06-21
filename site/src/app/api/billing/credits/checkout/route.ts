@@ -2,13 +2,13 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { auth } from "@/lib/auth";
+import { ensureStripeCustomer, getStripe } from "@/lib/billing/stripe";
 import {
   creditTopUpKind,
   creditTopUpMaxDollars,
   creditTopUpMinDollars,
   dollarsToStripeCents,
-} from "@/lib/billing/credit-purchases";
-import { ensureStripeCustomer, getStripe } from "@/lib/billing/stripe";
+} from "@/lib/credits/top-up";
 import { unauthorizedResponse, withDonkeyAuth } from "@/lib/donkey-api-auth";
 
 export const dynamic = "force-dynamic";

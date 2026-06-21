@@ -18,10 +18,9 @@ export const GET = withDonkeyAuth(async (request) => {
   const [subscription, grants] = await Promise.all([
     getActiveProSubscription(userId),
     prisma.userCreditGrant.findMany({
-      select: { remainingAmountMicros: true },
+      select: { originalAmountMicros: true, remainingAmountMicros: true },
       where: {
         OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
-        remainingAmountMicros: { gt: zeroCreditMicros },
         source: "pro_subscription",
         status: "active",
         unit: creditGrantUnit,
@@ -34,6 +33,17 @@ export const GET = withDonkeyAuth(async (request) => {
     (sum, grant) => sum + grant.remainingAmountMicros,
     zeroCreditMicros,
   );
+  // Denominator = what was actually granted this period, so "X of Y left" stays
+  // consistent even if the price changed mid-period (the grant is frozen per
+  // period). Fall back to the configured allowance before the first grant lands.
+  const allowanceGrantedMicros = grants.reduce(
+    (sum, grant) => sum + grant.originalAmountMicros,
+    zeroCreditMicros,
+  );
+  const monthlyAllowanceMicros =
+    allowanceGrantedMicros > zeroCreditMicros
+      ? allowanceGrantedMicros
+      : (subscription?.monthlyAllowanceMicros ?? zeroCreditMicros);
 
   return NextResponse.json({
     allowanceRemaining: creditMicrosToString(allowanceRemainingMicros),
@@ -41,7 +51,7 @@ export const GET = withDonkeyAuth(async (request) => {
     currentPeriodEnd: subscription?.currentPeriodEnd?.toISOString() ?? null,
     isActive: Boolean(subscription),
     monthlyAllowance: subscription
-      ? creditMicrosToString(subscription.monthlyAllowanceMicros)
+      ? creditMicrosToString(monthlyAllowanceMicros)
       : null,
     status: subscription?.status ?? null,
   });

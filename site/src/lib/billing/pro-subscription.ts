@@ -1,12 +1,13 @@
 import type Stripe from "stripe";
 
-import { stripeId } from "@/lib/billing/stripe";
-import { zeroCreditMicros } from "@/lib/credits/amounts";
+import {
+  resolveSubscriptionUserId,
+  stripeId,
+  unixToDate,
+} from "@/lib/billing/stripe";
+import { creditMicrosPerCent, zeroCreditMicros } from "@/lib/credits/amounts";
 import { grantCredits } from "@/lib/credits/inference";
 import { prisma } from "@/lib/prisma";
-
-// Credit micros per Stripe cent. $1 = 100 cents = 1,000,000 micros, so 1 cent = 10,000 micros.
-const creditMicrosPerCent = BigInt(10_000);
 
 // Donkey Pro: the Mac app subscription, separate from the Vision API product.
 export const proPlanKey = "pro";
@@ -45,11 +46,22 @@ export async function getActiveProSubscription(userId: string) {
   return subscription;
 }
 
-// True when a Stripe subscription belongs to the Pro product (vs Vision). Used
-// to route shared subscription webhook events to the right sync.
+// The subscription's Pro line item, if any. Matches across ALL items (not just
+// the first), so a multi-item subscription is still recognized as Pro and its
+// price/period are read from the right item rather than items.data[0].
+function proItem(
+  subscription: Stripe.Subscription,
+): Stripe.SubscriptionItem | undefined {
+  const id = proPriceId();
+  return id
+    ? subscription.items.data.find((item) => item.price?.id === id)
+    : undefined;
+}
+
+// True when the subscription includes the Pro price. Used to route shared
+// subscription webhook events to the right product sync.
 export function subscriptionIsPro(subscription: Stripe.Subscription): boolean {
-  const priceId = subscription.items.data[0]?.price?.id;
-  return Boolean(priceId && proPriceId() && priceId === proPriceId());
+  return proItem(subscription) !== undefined;
 }
 
 // Source of truth for a Pro subscription's lifecycle. Maps the Stripe object
@@ -60,7 +72,7 @@ export function subscriptionIsPro(subscription: Stripe.Subscription): boolean {
 export async function syncProSubscription(
   subscription: Stripe.Subscription,
 ): Promise<void> {
-  const userId = await resolveUserIdForSubscription(subscription);
+  const userId = await resolveSubscriptionUserId(subscription);
   const customerId = stripeId(subscription.customer);
   if (!userId) {
     console.error("[billing] could not resolve user for Pro subscription", {
@@ -70,7 +82,7 @@ export async function syncProSubscription(
     return;
   }
 
-  const item = subscription.items.data[0];
+  const item = proItem(subscription) ?? subscription.items.data[0];
   const price = item?.price;
   const periodStart = unixToDate(item?.current_period_start ?? null);
   const periodEnd = unixToDate(item?.current_period_end ?? null);
@@ -107,7 +119,7 @@ export async function syncProSubscription(
     isActiveProStatus(subscription.status) &&
     periodStart &&
     periodEnd &&
-    allowanceMicros > BigInt(0)
+    allowanceMicros > zeroCreditMicros
   ) {
     await grantCredits({
       amountMicros: allowanceMicros,
@@ -121,32 +133,4 @@ export async function syncProSubscription(
       userId,
     });
   }
-}
-
-async function resolveUserIdForSubscription(
-  subscription: Stripe.Subscription,
-): Promise<string | null> {
-  const metadataUserId = subscription.metadata?.userId;
-  if (metadataUserId) {
-    return metadataUserId;
-  }
-
-  const customerId = stripeId(subscription.customer);
-  if (customerId) {
-    const row = await prisma.proSubscription.findFirst({
-      where: { stripeCustomerId: customerId },
-    });
-    if (row) {
-      return row.userId;
-    }
-  }
-
-  return null;
-}
-
-function unixToDate(seconds: number | null | undefined): Date | null {
-  if (!seconds) {
-    return null;
-  }
-  return new Date(seconds * 1000);
 }

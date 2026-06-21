@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
+import { creditMicrosPerCredit } from "@/lib/credits/amounts";
 import {
   creditTopUpMaxDollars,
   creditTopUpMinDollars,
-} from "@/lib/billing/credit-purchases";
-import { creditMicrosPerCredit } from "@/lib/credits/amounts";
+} from "@/lib/credits/top-up";
 import { withDonkeyAuth } from "@/lib/donkey-api-auth";
 import { prisma } from "@/lib/prisma";
 
@@ -93,7 +93,7 @@ export const PUT = withDonkeyAuth(async (request) => {
   const thresholdMicros =
     BigInt(parsed.data.thresholdDollars) * creditMicrosPerCredit;
 
-  const config = await prisma.creditAutoReload.upsert({
+  await prisma.creditAutoReload.upsert({
     create: {
       amountMicros,
       enabled: parsed.data.enabled,
@@ -104,11 +104,22 @@ export const PUT = withDonkeyAuth(async (request) => {
       amountMicros,
       enabled: parsed.data.enabled,
       thresholdMicros,
-      // Re-enabling after a failure clears the stale error and lock.
-      ...(parsed.data.enabled ? { lastError: null, status: "idle" } : {}),
     },
     where: { userId: request.donkey.userId },
   });
 
+  // Re-enabling clears a prior failure so the saved card is retried promptly.
+  // Scoped to status "failed" so it never resets an in-flight "charging" lock —
+  // clobbering that would let the next inference fire a second off-session charge.
+  if (parsed.data.enabled) {
+    await prisma.creditAutoReload.updateMany({
+      data: { chargingPaymentIntentId: null, lastError: null, status: "idle" },
+      where: { status: "failed", userId: request.donkey.userId },
+    });
+  }
+
+  const config = await prisma.creditAutoReload.findUnique({
+    where: { userId: request.donkey.userId },
+  });
   return NextResponse.json(serialize(config));
 });

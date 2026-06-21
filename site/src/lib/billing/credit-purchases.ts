@@ -2,23 +2,9 @@ import type Stripe from "stripe";
 
 import { stripeId } from "@/lib/billing/stripe";
 import { creditStringToMicros } from "@/lib/credits/amounts";
+import { creditAutoReloadKind, creditTopUpKind } from "@/lib/credits/top-up";
 import { grantCredits } from "@/lib/credits/inference";
 import { prisma } from "@/lib/prisma";
-
-// Self-serve credit top-ups. Presets drive the quick-buy buttons; the custom
-// field accepts any whole-dollar amount in [min, max]. Amounts are whole dollars
-// so they map cleanly to Stripe unit_amount cents and the grant ledger.
-export const creditTopUpPresetsDollars = [5, 25, 50, 100] as const;
-export const creditTopUpMinDollars = 5;
-export const creditTopUpMaxDollars = 2_000;
-
-// Stripe metadata "kind" tags that route a completed payment to a credit grant.
-export const creditTopUpKind = "credit_topup";
-export const creditAutoReloadKind = "credit_topup_autoreload";
-
-export function dollarsToStripeCents(amountDollars: number): number {
-  return Math.round(amountDollars * 100);
-}
 
 function parseAmountDollars(value: string | undefined): number | null {
   if (!value) {
@@ -102,8 +88,34 @@ export async function handleCreditTopUpCheckout(
   }
 }
 
-// An off-session auto-reload charge succeeded. Grant the credits and clear the
-// charging lock so a future low balance can trigger again.
+// A one-time top-up PaymentIntent succeeded. A fallback to the
+// checkout.session.completed grant: the two share a (source, sourceId) so
+// grantCredits dedupes, but this guarantees the credits land even if the
+// Checkout event is dropped or the endpoint isn't subscribed to it.
+export async function handleCreditTopUpPaymentSucceeded(
+  paymentIntent: Stripe.PaymentIntent,
+): Promise<void> {
+  if (paymentIntent.metadata?.kind !== creditTopUpKind) {
+    return;
+  }
+  const userId = paymentIntent.metadata?.userId;
+  const amountDollars = parseAmountDollars(paymentIntent.metadata?.amountDollars);
+  if (!userId || !amountDollars) {
+    return;
+  }
+
+  await grantPurchasedCredits({
+    amountDollars,
+    description: `$${amountDollars} credit top-up`,
+    source: "stripe_topup",
+    sourceId: paymentIntent.id,
+    userId,
+  });
+}
+
+// An off-session auto-reload charge succeeded. Grant the credits and release the
+// lock — but only if this PaymentIntent still owns it, so a stale webhook can't
+// clear a newer charge's lock.
 export async function handleAutoReloadPaymentSucceeded(
   paymentIntent: Stripe.PaymentIntent,
 ): Promise<void> {
@@ -125,13 +137,18 @@ export async function handleAutoReloadPaymentSucceeded(
   });
 
   await prisma.creditAutoReload.updateMany({
-    data: { lastChargeAt: new Date(), lastError: null, status: "idle" },
-    where: { userId },
+    data: {
+      chargingPaymentIntentId: null,
+      lastChargeAt: new Date(),
+      lastError: null,
+      status: "idle",
+    },
+    where: { chargingPaymentIntentId: paymentIntent.id, userId },
   });
 }
 
 // An off-session auto-reload charge failed (e.g. card declined). Record it and
-// release the lock; the UI surfaces lastError so the user can fix the card.
+// release the lock it owns; the UI surfaces lastError so the user can fix the card.
 export async function handleAutoReloadPaymentFailed(
   paymentIntent: Stripe.PaymentIntent,
 ): Promise<void> {
@@ -145,11 +162,12 @@ export async function handleAutoReloadPaymentFailed(
 
   await prisma.creditAutoReload.updateMany({
     data: {
+      chargingPaymentIntentId: null,
       lastError:
         paymentIntent.last_payment_error?.message ?? "The auto-reload charge failed.",
       status: "failed",
     },
-    where: { userId },
+    where: { chargingPaymentIntentId: paymentIntent.id, userId },
   });
 }
 
