@@ -24,6 +24,30 @@ model VisionApiSubscription {
   updatedAt            DateTime  @updatedAt
 }
 
+// Donkey Pro: the Mac app subscription. Kept entirely separate from the Vision
+// API product above. While active it includes a monthly inference allowance
+// equal to the plan price, granted into the user's credit balance as an
+// expiring grant (source "pro_subscription") so it is drawn down before
+// never-expiring purchased credits and does not roll over.
+// monthlyAllowanceMicros mirrors the included amount (the price), for display.
+model ProSubscription {
+  id                     String    @id @default(cuid())
+  userId                 String    @unique
+  user                   User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  stripeCustomerId       String?
+  stripeSubscriptionId   String?   @unique
+  status                 String    @default("incomplete")
+  planKey                String    @default("pro")
+  monthlyAllowanceMicros BigInt    @default(0)
+  currentPeriodStart     DateTime?
+  currentPeriodEnd       DateTime?
+  cancelAtPeriodEnd      Boolean   @default(false)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  @@map("pro_subscription")
+}
+
 // Mirrors the Better Auth @better-auth/api-key plugin schema (generated via the
 // Better Auth CLI). The plugin owns reads/writes through auth.api.* and links a
 // key to its owner via referenceId (= User.id). We keep verification

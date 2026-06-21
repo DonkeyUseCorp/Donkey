@@ -6,6 +6,24 @@ import { apiFetch } from "@/queries/apiClient";
 
 export const subscriptionQueryKey = ["billing", "subscription"] as const;
 export const usageQueryKey = ["billing", "usage"] as const;
+export const proSubscriptionQueryKey = ["billing", "pro"] as const;
+
+export type ProSubscription = {
+  isActive: boolean;
+  status: string | null;
+  cancelAtPeriodEnd: boolean;
+  currentPeriodEnd: string | null;
+  // Included monthly allowance (USD) and how much is left this period.
+  monthlyAllowance: string | null;
+  allowanceRemaining: string;
+};
+
+export function useProSubscription() {
+  return useQuery({
+    queryFn: () => apiFetch<ProSubscription>("/api/billing/pro"),
+    queryKey: proSubscriptionQueryKey,
+  });
+}
 
 // Plans that the checkout route understands. Only "vision" is self-serve today;
 // "pro" (the Mac app plan) is accepted by the landing card but the route returns

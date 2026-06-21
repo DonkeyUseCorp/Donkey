@@ -12,12 +12,20 @@ import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
-const creditGrantRequestSchema = z.object({
-  amountDollars: z.coerce.number().int().positive().max(100),
-  description: z.string().trim().min(1).max(500).optional(),
-  sourceId: z.string().trim().min(1).max(160).optional(),
-  userId: z.string().trim().min(1),
-}).strict();
+// The target is identified by userId (e.g. "+$100 to me") or by email (the
+// grant-to-user form). At least one is required.
+const creditGrantRequestSchema = z
+  .object({
+    amountDollars: z.coerce.number().int().positive().max(100),
+    description: z.string().trim().min(1).max(500).optional(),
+    email: z.string().trim().email().optional(),
+    sourceId: z.string().trim().min(1).max(160).optional(),
+    userId: z.string().trim().min(1).optional(),
+  })
+  .strict()
+  .refine((data) => Boolean(data.userId || data.email), {
+    message: "Provide a userId or an email.",
+  });
 
 export const POST = withDonkeyAuth(async (request) => {
   if (!(await isDonkeySuperUser(request.donkey.userId))) {
@@ -49,9 +57,9 @@ export const POST = withDonkeyAuth(async (request) => {
       email: true,
       id: true,
     },
-    where: {
-      id: parsed.data.userId,
-    },
+    where: parsed.data.userId
+      ? { id: parsed.data.userId }
+      : { email: parsed.data.email },
   });
 
   if (!targetUser) {

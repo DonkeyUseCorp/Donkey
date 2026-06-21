@@ -14,8 +14,10 @@ model User {
   creditLedgerEntries UserCreditLedgerEntry[]
   inferenceUsageEvents InferenceUsageEvent[]
   creditLimits UserCreditLimit[]
+  creditAutoReload CreditAutoReload?
   apiKeys       Apikey[]
   visionApiSubscription VisionApiSubscription?
+  proSubscription ProSubscription?
 
   @@map("user")
 }

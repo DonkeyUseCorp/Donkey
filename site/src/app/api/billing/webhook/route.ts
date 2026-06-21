@@ -2,6 +2,15 @@ import { NextResponse } from "next/server";
 import type Stripe from "stripe";
 
 import {
+  handleAutoReloadPaymentFailed,
+  handleAutoReloadPaymentSucceeded,
+  handleCreditTopUpCheckout,
+} from "@/lib/billing/credit-purchases";
+import {
+  subscriptionIsPro,
+  syncProSubscription,
+} from "@/lib/billing/pro-subscription";
+import {
   getStripe,
   stripeId,
   syncVisionSubscription,
@@ -9,6 +18,16 @@ import {
 import { notFoundResponse } from "@/lib/donkey-api-auth";
 
 export const dynamic = "force-dynamic";
+
+// Two subscription products share these webhook events; route each Stripe
+// subscription to the right sync by its price (Pro vs Vision, the default).
+async function syncSubscription(subscription: Stripe.Subscription) {
+  if (subscriptionIsPro(subscription)) {
+    await syncProSubscription(subscription);
+    return;
+  }
+  await syncVisionSubscription(subscription);
+}
 
 // Public, signature-verified Stripe webhook. This is an intentional exception to
 // the "wrap every route with withDonkeyAuth" rule (see docs/guides/backend-apis):
@@ -43,17 +62,29 @@ export async function POST(request: Request) {
 
   switch (event.type) {
     case "checkout.session.completed": {
-      const subscriptionId = stripeId(event.data.object.subscription);
+      const checkoutSession = event.data.object;
+      const subscriptionId = stripeId(checkoutSession.subscription);
       if (subscriptionId) {
         const subscription = await stripe.subscriptions.retrieve(subscriptionId);
-        await syncVisionSubscription(subscription);
+        await syncSubscription(subscription);
+      } else {
+        // A one-time credit top-up (mode=payment) has no subscription.
+        await handleCreditTopUpCheckout(stripe, checkoutSession);
       }
+      break;
+    }
+    case "payment_intent.succeeded": {
+      await handleAutoReloadPaymentSucceeded(event.data.object);
+      break;
+    }
+    case "payment_intent.payment_failed": {
+      await handleAutoReloadPaymentFailed(event.data.object);
       break;
     }
     case "customer.subscription.created":
     case "customer.subscription.updated":
     case "customer.subscription.deleted": {
-      await syncVisionSubscription(event.data.object);
+      await syncSubscription(event.data.object);
       break;
     }
     case "invoice.paid":
@@ -64,7 +95,7 @@ export async function POST(request: Request) {
       const subscriptionId = stripeId(invoice.subscription);
       if (subscriptionId) {
         const subscription = await stripe.subscriptions.retrieve(subscriptionId);
-        await syncVisionSubscription(subscription);
+        await syncSubscription(subscription);
       }
       break;
     }

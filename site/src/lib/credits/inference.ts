@@ -326,7 +326,7 @@ export async function requireInferenceCredits(input: CreditPreflightInput) {
 }
 
 export async function recordInferenceUsage(input: InferenceUsageInput) {
-  return prisma.$transaction(
+  const recorded = await prisma.$transaction(
     async (tx): Promise<RecordedInferenceUsage> => {
       const included = input.billingMode === "included";
       // "included" calls never read or charge the balance, so skip the
@@ -419,6 +419,18 @@ export async function recordInferenceUsage(input: InferenceUsageInput) {
       isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
     },
   );
+
+  // After a real charge commits, top up the balance via auto-reload if it fell
+  // below the user's threshold. Best-effort and non-blocking: a dynamic import
+  // breaks the module cycle (billing -> credits -> billing), and failures never
+  // affect the inference response. The grant lands later via the Stripe webhook.
+  if (input.billingMode !== "included" && recorded.creditCostMicros > zeroCreditMicros) {
+    void import("@/lib/billing/credit-auto-reload")
+      .then((module) => module.maybeTriggerCreditAutoReload(input.userId))
+      .catch(() => {});
+  }
+
+  return recorded;
 }
 
 export async function recordFailedInferenceUsage(input: {
@@ -722,17 +734,6 @@ async function debitGrants(
 ) {
   let remainingCostMicros = creditCostMicros;
   const grants = await tx.userCreditGrant.findMany({
-    orderBy: [
-      {
-        expiresAt: {
-          sort: "asc",
-          nulls: "last",
-        },
-      },
-      {
-        createdAt: "asc",
-      },
-    ],
     where: {
       accountId,
       remainingAmountMicros: {
@@ -745,7 +746,14 @@ async function debitGrants(
     },
   });
 
-  for (const grant of grants) {
+  // Consumption priority: spend the subscription / periodic allotment (any grant with an expiry or a
+  // billing period) BEFORE prepaid purchased credits, which never expire. Within the expiring set the
+  // soonest-to-expire is spent first so nothing is wasted; permanent purchased credits are spent last,
+  // oldest first. This ordering is exactly why top-ups are granted with no expiry (see grantCredits
+  // callers): a non-expiring grant sorts to the back of the queue.
+  const ordered = [...grants].sort(compareGrantConsumptionOrder);
+
+  for (const grant of ordered) {
     if (remainingCostMicros <= zeroCreditMicros) {
       return;
     }
@@ -766,6 +774,41 @@ async function debitGrants(
     remainingCostMicros -= debitMicros;
   }
 
+}
+
+type GrantConsumptionFields = {
+  expiresAt: Date | null;
+  periodEnd: Date | null;
+  createdAt: Date;
+};
+
+// When a grant runs out (its expiry or billing-period end), as epoch millis, or null if it never
+// expires. A subscription/periodic grant has one of these; a purchased top-up has neither.
+function grantConsumptionDeadline(grant: GrantConsumptionFields): number | null {
+  const deadline = grant.expiresAt ?? grant.periodEnd;
+  return deadline ? deadline.getTime() : null;
+}
+
+// Orders grants for debit: expiring (subscription/periodic) credits ahead of non-expiring (purchased)
+// ones, soonest deadline first, then oldest grant first. Keeps use-it-or-lose-it credit from being
+// wasted while never-expiring purchased credit waits at the back.
+function compareGrantConsumptionOrder(
+  left: GrantConsumptionFields,
+  right: GrantConsumptionFields,
+): number {
+  const leftDeadline = grantConsumptionDeadline(left);
+  const rightDeadline = grantConsumptionDeadline(right);
+
+  if (leftDeadline === null && rightDeadline !== null) {
+    return 1;
+  }
+  if (leftDeadline !== null && rightDeadline === null) {
+    return -1;
+  }
+  if (leftDeadline !== null && rightDeadline !== null && leftDeadline !== rightDeadline) {
+    return leftDeadline - rightDeadline;
+  }
+  return left.createdAt.getTime() - right.createdAt.getTime();
 }
 
 async function assertWithinConfiguredLimits(input: CreditPreflightInput) {

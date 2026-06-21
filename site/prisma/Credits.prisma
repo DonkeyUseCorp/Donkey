@@ -126,6 +126,28 @@ model InferenceCreditRate {
   @@map("inference_credit_rate")
 }
 
+// Per-user auto-reload config. When enabled, the credit balance dropping below
+// thresholdMicros triggers an off-session Stripe charge of amountMicros against
+// the saved payment method; the resulting credits are granted from the webhook.
+// status guards against concurrent charges ("idle" | "charging" | "failed").
+model CreditAutoReload {
+  id                    String    @id @default(cuid())
+  userId                String    @unique
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  enabled               Boolean   @default(false)
+  thresholdMicros       BigInt    @default(0)
+  amountMicros          BigInt    @default(0)
+  stripeCustomerId      String?
+  stripePaymentMethodId String?
+  status                String    @default("idle")
+  lastChargeAt          DateTime?
+  lastError             String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@map("credit_auto_reload")
+}
+
 model UserCreditLimit {
   id                         String   @id @default(cuid())
   userId                     String
