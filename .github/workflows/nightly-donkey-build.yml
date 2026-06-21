@@ -15,7 +15,9 @@ concurrency:
 jobs:
   nightly:
     name: Build nightly
-    runs-on: macos-latest
+    # macOS 26 image ships the Xcode 26 SDK, which defines the SpeechAnalyzer /
+    # SpeechTranscriber APIs the app compiles against (gated to macOS 26 at runtime).
+    runs-on: macos-26
 
     steps:
       - name: Check out repository
