@@ -42,7 +42,7 @@ export const pricingPlans = [
     color: "cream",
     detail: "For individuals and teams",
     features: [
-      "Unlimited usage on Mac (text and voice input)",
+      "Automate your Mac with text and voice input",
       "Prioritized support and feature requests",
       "Early access to new features",
     ],
