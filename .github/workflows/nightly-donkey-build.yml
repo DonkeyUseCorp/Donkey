@@ -17,7 +17,6 @@ jobs:
     name: Build nightly
     # The macos-26 image carries the Xcode 26 SDK that defines the SpeechAnalyzer /
     # SpeechTranscriber APIs the app compiles against (gated to macOS 26 at runtime).
-    # A later step selects that Xcode explicitly; the image default is not guaranteed.
     runs-on: macos-26
 
     steps:
@@ -105,30 +104,6 @@ jobs:
       - name: Vendor bundled tools
         if: steps.changes.outputs.should_build == 'true' && steps.tools-cache.outputs.cache-hit != 'true'
         run: ./scripts/fetch-bundled-tools.sh
-
-      # The macos-26 image ships several Xcodes and xcode-select does not reliably
-      # default to the macOS 26 one, whose Speech SDK defines SpeechAnalyzer /
-      # SpeechTranscriber. Pin DEVELOPER_DIR to the newest Xcode 26 so the build
-      # compiles against the macOS 26 SDK.
-      - name: Select Xcode with the macOS 26 SDK
-        if: steps.changes.outputs.should_build == 'true'
-        run: |
-          dir="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)"
-          if [[ -z "$dir" ]]; then
-            echo "No Xcode 26 found on this runner. Installed Xcodes:" >&2
-            ls -d /Applications/Xcode*.app >&2 || true
-            exit 1
-          fi
-          developer_dir="$dir/Contents/Developer"
-          sudo xcode-select -s "$developer_dir"
-          echo "DEVELOPER_DIR=$developer_dir" >> "$GITHUB_ENV"
-          xcodebuild -version
-          sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
-          echo "macOS SDK: $sdk_version"
-          if [[ "${sdk_version%%.*}" -lt 26 ]]; then
-            echo "Selected SDK $sdk_version predates macOS 26; SpeechAnalyzer is unavailable." >&2
-            exit 1
-          fi
 
       - name: Package Donkey
         if: steps.changes.outputs.should_build == 'true'
