@@ -18,6 +18,12 @@ final class UserQueryOverlayController {
     private var statusHostingView: UserQueryHostingView<UserQueryNotchStatusView>?
     private var inputPanel: NSPanel?
     private var timer: Timer?
+    private let missionControlMonitor = MissionControlMonitor()
+    private var isMissionControlActive = false
+    /// 0 = the notch rests at the top of the screen, 1 = it has slid fully up and off-screen.
+    /// The 60 Hz tick eases this toward its target so the slide reads as a smooth animation
+    /// even though the panel is repositioned by direct per-frame `setFrame` calls.
+    private var missionControlHideProgress: CGFloat = 0
     private var globalActivationMonitor: Any?
     private var localActivationMonitor: Any?
     private var appDeactivationObserver: Any?
@@ -86,6 +92,7 @@ final class UserQueryOverlayController {
         prewarmInputPanel()
         startActivationMonitoring()
         startAppDeactivationMonitoring()
+        startMissionControlMonitoring()
         positionStatusPanel()
         centerInputPanel()
         inputPanel.orderOut(nil)
@@ -220,6 +227,7 @@ final class UserQueryOverlayController {
         statusHoverPhase = .collapsed
         stopActivationMonitoring()
         stopAppDeactivationMonitoring()
+        stopMissionControlMonitoring()
         microphoneWaveformMeter.stop()
         agentVisualizationCursorController.close()
         spawnOverlayController.close()
@@ -287,6 +295,21 @@ final class UserQueryOverlayController {
             NotificationCenter.default.removeObserver(appDeactivationObserver)
             self.appDeactivationObserver = nil
         }
+    }
+
+    private func startMissionControlMonitoring() {
+        missionControlMonitor.onChange = { [weak self] isActive in
+            Task { @MainActor in
+                self?.isMissionControlActive = isActive
+            }
+        }
+        missionControlMonitor.start()
+    }
+
+    private func stopMissionControlMonitoring() {
+        missionControlMonitor.onChange = nil
+        missionControlMonitor.stop()
+        isMissionControlActive = false
     }
 
     private func handleActivationEvent(_ event: NSEvent) {
@@ -482,6 +505,7 @@ final class UserQueryOverlayController {
         }
 
         activateVoiceInputIfNeeded()
+        advanceMissionControlHideProgress()
         // Build the notch metrics once per frame (the chin sizing does Core Text measurement) and feed
         // both the panel position and the view update from it, instead of recomputing it for each.
         let metrics = notchMetrics()
@@ -515,6 +539,23 @@ final class UserQueryOverlayController {
         )
     }
 
+    /// Extra travel beyond the surface height so the notch fully clears the screen edge
+    /// (the expanded chin can hang below the collapsed surface).
+    private static let missionControlHideClearance: CGFloat = 24
+
+    /// Eases `missionControlHideProgress` toward its target each frame. A per-frame
+    /// fraction gives an ease-out slide (~0.2s) that the 60 Hz tick renders by
+    /// repositioning the panel; snap to the endpoint to stop sub-pixel drift.
+    private func advanceMissionControlHideProgress() {
+        let target: CGFloat = isMissionControlActive ? 1 : 0
+        let delta = target - missionControlHideProgress
+        if abs(delta) < 0.001 {
+            missionControlHideProgress = target
+            return
+        }
+        missionControlHideProgress += delta * 0.22
+    }
+
     private func positionStatusPanel(metrics: NotchMetrics? = nil, disableAnimations: Bool = true) {
         guard let statusPanel,
               let screen = activeScreen() else {
@@ -522,9 +563,13 @@ final class UserQueryOverlayController {
         }
 
         let metrics = metrics ?? notchMetrics(for: screen)
+        // While Mission Control is up, slide the notch past the top edge so it doesn't float
+        // over the Spaces/window thumbnails. The eased progress (driven by the tick) makes the
+        // extra Y offset animate the donkey up and off-screen, then back down when it closes.
+        let hideOffset = (metrics.surfaceSize.height + Self.missionControlHideClearance) * missionControlHideProgress
         let frame = CGRect(
             x: screen.frame.midX - metrics.surfaceSize.width / 2,
-            y: screen.frame.maxY - metrics.surfaceSize.height,
+            y: screen.frame.maxY - metrics.surfaceSize.height + hideOffset,
             width: metrics.surfaceSize.width,
             height: metrics.surfaceSize.height
         )
