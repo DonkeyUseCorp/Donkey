@@ -100,6 +100,9 @@ build_libass() {
 # above). Built shared, then dylibbundled. ffmpeg is MANDATORY: any failure here aborts
 # the whole vendoring run, because a bundle without ffmpeg is not shippable.
 build_lgpl_ffmpeg() {
+  if [ -x "$VENDOR_DIR/ffmpeg" ] && [ -x "$VENDOR_DIR/ffprobe" ]; then
+    ok "ffmpeg (cached)"; ok "ffprobe (cached)"; return 0
+  fi
   local ver="7.1.1"
   local work="/tmp/ffmpeg-lgpl-build"
   local brew_prefix; brew_prefix="$(brew --prefix)"
@@ -142,6 +145,7 @@ build_lgpl_ffmpeg() {
 # bundling). MANDATORY: the pdf skill's extraction/OCR depends on it, and it
 # replaces a separate tesseract.
 build_liteparse() {
+  if [ -x "$VENDOR_DIR/lit" ]; then ok "lit (cached)"; return 0; fi
   local ver="2.1.1"
   command -v cargo >/dev/null 2>&1 || brew install rust >/dev/null 2>&1
   command -v cmake >/dev/null 2>&1 || brew install cmake >/dev/null 2>&1
@@ -164,6 +168,7 @@ build_liteparse() {
 # self-contained binary — no dylib bundling. MANDATORY: it is the pdf skill's
 # headless form-fill/overlay path (litparse reads PDFs; this writes them).
 build_pdf_fill() {
+  if [ -x "$VENDOR_DIR/pdf-fill" ]; then ok "pdf-fill (cached)"; return 0; fi
   command -v swiftc >/dev/null 2>&1 || { echo "FATAL: swiftc unavailable for pdf-fill build" >&2; exit 1; }
   if ! swiftc -O "$ROOT_DIR/tools/pdf-fill/main.swift" -o "$VENDOR_DIR/pdf-fill" 2>/tmp/pdf-fill-build.log; then
     echo "FATAL: pdf-fill build failed; tail of /tmp/pdf-fill-build.log:" >&2
@@ -187,7 +192,9 @@ build_liteparse
 build_pdf_fill
 
 # --- qpdf (Homebrew) ---
-if ensure_brew_tool qpdf qpdf; then
+if [ -x "$VENDOR_DIR/qpdf" ]; then
+  ok "qpdf (cached)"
+elif ensure_brew_tool qpdf qpdf; then
   bundle "$(brew --prefix qpdf)/bin/qpdf" qpdf
 fi
 
@@ -206,18 +213,23 @@ fi
 # optional tool used only when the user has it installed. ---
 
 # --- yt-dlp: official self-contained macOS build (bundles its own Python) ---
-log "Downloading yt-dlp"
-if curl -fsSL -o "$VENDOR_DIR/yt-dlp" \
-  "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"; then
-  chmod +x "$VENDOR_DIR/yt-dlp"
-  ok "yt-dlp"
+if [ -x "$VENDOR_DIR/yt-dlp" ]; then
+  ok "yt-dlp (cached)"
 else
-  fail "yt-dlp" "download failed"
+  log "Downloading yt-dlp"
+  if curl -fsSL -o "$VENDOR_DIR/yt-dlp" \
+    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"; then
+    chmod +x "$VENDOR_DIR/yt-dlp"
+    ok "yt-dlp"
+  else
+    fail "yt-dlp" "download failed"
+  fi
 fi
 
 # --- exiftool: standalone Perl distribution, runs via system /usr/bin/perl ---
-log "Downloading exiftool"
-if curl -fsSL -o /tmp/exiftool.tar.gz \
+if [ -x "$VENDOR_DIR/exiftool" ]; then
+  ok "exiftool (cached)"
+elif log "Downloading exiftool"; curl -fsSL -o /tmp/exiftool.tar.gz \
   "https://github.com/exiftool/exiftool/archive/refs/heads/master.tar.gz"; then
   rm -rf /tmp/exiftool-src "$VENDOR_DIR/exiftool" "$VENDOR_DIR/lib/Image"
   mkdir -p /tmp/exiftool-src

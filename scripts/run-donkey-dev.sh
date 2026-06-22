@@ -460,6 +460,14 @@ create_debug_app_bundle() {
     exit 1
   fi
 
+  # Stage the bundled CLI tools at Contents/Resources/donkey-tools so bundledToolsDirectory
+  # resolves in dev exactly as in release. Symlinked to the repo's vendor dir rather than
+  # copied: the bundle is rebuilt every run, and a ~250MB copy (+ re-sign) each time is
+  # needless when ad-hoc dev signing has no hardened-runtime constraint on the target.
+  if [ -d "$ROOT_DIR/vendor/donkey-tools" ]; then
+    ln -sfn "$ROOT_DIR/vendor/donkey-tools" "$RESOURCES_DIR/donkey-tools"
+  fi
+
   sparkle_framework="$(find "$APP_DIR/.build" -path "*/debug/Sparkle.framework" -type d | head -n 1 || true)"
   if [ -n "$sparkle_framework" ]; then
     cp -R "$sparkle_framework" "$FRAMEWORKS_DIR/"
@@ -530,6 +538,12 @@ if [ ! -x "$DONKEY_BIN" ]; then
   echo "Built Donkey executable was not found at $DONKEY_BIN." >&2
   exit 1
 fi
+
+# Make sure the bundled CLI tools (yt-dlp, ffmpeg, ...) are vendored before staging them
+# into the app, so a dev build behaves like release: capability skills run them by bare
+# name instead of hunting for Homebrew. Cached after the first run.
+echo "Ensuring bundled tools..."
+"$ROOT_DIR/scripts/ensure-bundled-tools.sh"
 
 echo "Creating debug app bundle..."
 create_debug_app_bundle

@@ -190,17 +190,22 @@ cd "$BUILD_DIR"
 echo "Compiling Donkey for Mac ..."
 swift build -c release --product Donkey
 
-# Stage the bundled command-line tools (yt-dlp, ffmpeg, pandoc, qpdf, exiftool,
-# tesseract, magick) into the app so the capability skills work with nothing
-# installed. The arm64 binaries are NOT committed to the repo; point
-# DONKEY_TOOLS_DIR at a directory containing them (default: vendor/donkey-tools).
-# When that directory is absent this is a no-op, so a normal build still succeeds
-# and the skills fall back to whatever the user has installed.
+# The bundled command-line tools (yt-dlp, ffmpeg, qpdf, exiftool, ...) are NOT baked into
+# the app: the shipped app stays small and downloads a prebuilt, self-contained arm64 tools
+# bundle on first run (see BundledToolsInstaller + bundled-tools.json). The release pipeline
+# that *produces and publishes* that artifact is scripts/publish-bundled-tools.sh.
+#
+# As an offline/airgapped escape hatch, point DONKEY_TOOLS_DIR at a prebuilt directory to
+# bake it into the app anyway; otherwise this stages nothing and the app self-installs.
 stage_bundled_tools() {
-  local source_dir="${DONKEY_TOOLS_DIR:-$ROOT_DIR/vendor/donkey-tools}"
-  if [ ! -d "$source_dir" ]; then
-    echo "No bundled tools at $source_dir; skipping (capability skills will use installed tools)."
+  local source_dir="${DONKEY_TOOLS_DIR:-}"
+  if [ -z "$source_dir" ]; then
+    echo "Not baking tools into the app; it downloads them on first run."
     return 0
+  fi
+  if [ ! -d "$source_dir" ]; then
+    echo "DONKEY_TOOLS_DIR=$source_dir does not exist." >&2
+    exit 1
   fi
   local dest_dir="$RESOURCES_DIR/donkey-tools"
   rm -rf "$dest_dir"
@@ -215,7 +220,7 @@ stage_bundled_tools() {
       codesign --force --sign - "$tool" >/dev/null 2>&1 || true
     done
   fi
-  echo "Staged bundled tools from $source_dir into $dest_dir."
+  echo "Baked bundled tools from $source_dir into $dest_dir (offline override)."
 }
 
 rm -rf "$APP_DIR"

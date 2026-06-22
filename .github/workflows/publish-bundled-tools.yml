@@ -1,0 +1,74 @@
+name: Publish Bundled Tools
+
+# Builds the prebuilt CLI tools bundle (ffmpeg, yt-dlp, lit, pdf-fill, qpdf, exiftool) from source and
+# publishes it as a GitHub release asset, then commits the refreshed bundled-tools.json so the shipped app
+# and the dev script download the new bundle on first run. This is the ONE place the heavy source build
+# runs — end users and dev machines only ever download the result.
+#
+# Runs on demand, and automatically whenever the tools recipe changes (a new ffmpeg, a pdf-fill tweak).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version for the tools bundle (default: today's UTC date)"
+        required: false
+  push:
+    branches: [main]
+    paths:
+      - scripts/fetch-bundled-tools.sh
+      - tools/pdf-fill/main.swift
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-bundled-tools
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Build and publish tools
+    # macos-26 is arm64 with the Xcode SDK the in-repo pdf-fill source builds against.
+    runs-on: macos-26
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Determine version
+        id: ver
+        run: |
+          v="${{ github.event.inputs.version }}"
+          if [ -z "$v" ]; then v="$(date -u +'%Y.%m.%d')"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      # Same cache key as the nightly build, so the two share a single ffmpeg/Rust build. The key busts
+      # when the recipe or the in-repo pdf-fill source changes, which is also what triggers this workflow.
+      - name: Restore bundled tools cache
+        id: tools-cache
+        uses: actions/cache@v4
+        with:
+          path: vendor/donkey-tools
+          key: donkey-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-bundled-tools.sh', 'tools/pdf-fill/main.swift') }}
+
+      - name: Build and publish the tools bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/publish-bundled-tools.sh "${{ steps.ver.outputs.version }}"
+
+      - name: Commit the refreshed manifest
+        run: |
+          manifest="apps/Donkey/Sources/DonkeyRuntime/Resources/bundled-tools.json"
+          if git diff --quiet -- "$manifest"; then
+            echo "Manifest unchanged; nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$manifest"
+          git commit -m "chore(tools): publish bundled tools ${{ steps.ver.outputs.version }} [skip ci]"
+          git push origin "HEAD:${{ github.event.repository.default_branch }}"
