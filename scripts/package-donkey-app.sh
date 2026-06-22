@@ -274,6 +274,17 @@ export CLANG_MODULE_CACHE_PATH="$CACHE_DIR/clang"
 export SWIFTPM_CACHE_PATH="$CACHE_DIR/swiftpm"
 export HOME="$CACHE_DIR/home"
 
+# Overriding HOME (above) repoints the per-user keychain search list to $HOME/Library/Preferences, which
+# hides the search list the release workflow configured under the runner's real HOME — so codesign would
+# report "no identity found" even with --keychain and an unlocked keychain. Re-register the signing
+# keychain under this HOME so codesign can resolve the Developer ID identity. Keychain unlock state is
+# global to securityd, so no password is needed here; only the search list is HOME-scoped.
+if [ -n "${DONKEY_SIGN_KEYCHAIN:-}" ]; then
+  mkdir -p "$HOME/Library/Preferences"
+  security list-keychains -d user -s "$DONKEY_SIGN_KEYCHAIN" $(security list-keychains -d user | sed -e 's/"//g')
+  security default-keychain -d user -s "$DONKEY_SIGN_KEYCHAIN"
+fi
+
 cd "$BUILD_DIR"
 echo "Compiling Donkey for Mac ..."
 swift build -c release --product Donkey
