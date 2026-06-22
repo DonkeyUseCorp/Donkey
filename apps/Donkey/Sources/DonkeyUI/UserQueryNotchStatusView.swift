@@ -521,21 +521,25 @@ public struct UserQueryNotchStatusView: View {
                                 ForEach(tasks) { task in
                                     // While replying to one task, the others dim back (handled inside the
                                     // row so an attention pointer can stay lit) — it's clear which thread
-                                    // the next message continues.
+                                    // the next message continues. The dim is instant, not eased: an eased
+                                    // reply-dim made an arrowed-to row brighten ~0.16s after it scrolled
+                                    // in, reading as "scroll, then select."
                                     taskRow(task)
                                         .id(task.id)
-                                        .animation(.easeOut(duration: 0.16), value: replyTargetTaskID)
                                 }
                             }
                         }
                         .padding(.top, 10)
                     }
                     // Keep the keyboard-highlighted row on screen as the arrows walk past the fold.
+                    // `anchor: nil` scrolls the minimum to reveal the row (a no-op while it's already
+                    // visible) and stays unanimated, so a fast arrow burst can't restart a scroll
+                    // animation every frame and stall ("stuck", confirmed by profiling). The scroll
+                    // shares the selection's transaction (no defer), so an off-screen row scrolls in
+                    // already highlighted instead of lighting up a frame after it arrives.
                     .onChange(of: selectedTaskID) {
                         guard let selectedTaskID else { return }
-                        withAnimation(.easeOut(duration: 0.16)) {
-                            proxy.scrollTo(selectedTaskID, anchor: .center)
-                        }
+                        proxy.scrollTo(selectedTaskID)
                     }
                 }
 
@@ -870,7 +874,9 @@ public struct UserQueryNotchStatusView: View {
             }
         }
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .animation(.easeOut(duration: 0.12), value: isSelected)
+        // The highlight snaps rather than fading: the row scrolls into view instantly, so an
+        // eased highlight would land ~0.12s later and read as "scroll first, then select."
+        // Snapping lands the selection with the scroll, so the row reads as selected first.
         .onTapGesture {
             // Every row is repliable. Tapping the active thread again leaves reply mode; tapping any
             // other row pins it and focuses the composer, so the user can just start typing. (A running
