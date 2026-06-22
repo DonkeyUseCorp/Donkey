@@ -145,22 +145,37 @@ jobs:
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | sed -e 's/"//g')
           rm -f "$RUNNER_TEMP/cert.p12"
 
-          # Show what actually landed in the keychain. The identity name is a registered secret so GitHub
-          # masks it as ***, but the "N valid identities found" count is not: 0 means the .p12 had no usable
-          # codesigning identity (typically a cert exported without its private key); 1+ means the cert+key
-          # imported fine and any later "no identity found" is a name mismatch with DONKEY_APP_SIGN_IDENTITY.
+          # Show what landed in the keychain. The identity name is a registered secret (masked ***), but the
+          # "N valid identities found" count is not: 0 means the .p12 had no usable codesigning identity
+          # (typically a cert exported without its private key); 1+ means the cert+key imported fine.
           echo "Codesigning identities in the signing keychain:"
           security find-identity -v -p codesigning "$keychain"
-          # Fail here with an actionable message rather than letting codesign abort later with a terse error.
-          if ! security find-identity -v -p codesigning "$keychain" | grep -qF "$SIGN_IDENTITY"; then
-            echo "::error::Requested signing identity not present in the keychain. Confirm DONKEY_APP_SIGN_IDENTITY matches the cert's name exactly (no trailing whitespace) and that DONKEY_DEVELOPER_ID_CERT_P12 includes the private key."
+
+          # Sign by the cert's SHA-1 hash, not by the DONKEY_APP_SIGN_IDENTITY name string. A name carried in
+          # a secret can pick up a trailing newline/whitespace that codesign rejects ("no identity found")
+          # even though the cert is present — and a substring name match can be ambiguous. The hash is exact
+          # and whitespace-free. Parse it from the "  1) <HASH> "name"" line.
+          hash="$(security find-identity -v -p codesigning "$keychain" | sed -n 's/^[[:space:]]*1)[[:space:]]*\([0-9A-Fa-f]\{40\}\).*/\1/p')"
+          if [ -z "$hash" ]; then
+            echo "::error::No usable codesigning identity in the keychain. Confirm DONKEY_DEVELOPER_ID_CERT_P12 includes the private key (export the cert AND its key) and that DONKEY_DEVELOPER_ID_CERT_PASSWORD is correct."
             exit 1
           fi
-          echo "Requested signing identity is present and usable."
+
+          # Prove real signing works here — with the same keychain + hash the Package step will use — so any
+          # failure surfaces now with context instead of as a terse error 3 minutes into the build.
+          smoke="$RUNNER_TEMP/codesign-smoketest"
+          cp /bin/echo "$smoke"
+          if ! codesign --force --options runtime --timestamp=none --keychain "$keychain" --sign "$hash" "$smoke"; then
+            echo "::error::codesign smoke test failed against the signing keychain. The identity is present but not usable for signing (check the key partition list / keychain unlock)."
+            exit 1
+          fi
+          rm -f "$smoke"
+          echo "Codesign smoke test passed; signing with identity hash $hash."
+
           if [ -n "$NOTARY_KEY_P8" ]; then
             echo "$NOTARY_KEY_P8" | base64 --decode > "$RUNNER_TEMP/notary.p8"
           fi
-          echo "identity=$SIGN_IDENTITY" >> "$GITHUB_OUTPUT"
+          echo "identity=$hash" >> "$GITHUB_OUTPUT"
           # Hand the keychain path to the Package step so codesign can target it explicitly (--keychain)
           # rather than depending on the search-list state set above carrying across steps.
           echo "keychain=$keychain" >> "$GITHUB_OUTPUT"
