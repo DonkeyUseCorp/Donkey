@@ -33,9 +33,39 @@ for t in "${MANDATORY_TOOLS[@]}"; do
   [ -x "$VENDOR_DIR/$t" ] || { echo "FATAL: $t missing from $VENDOR_DIR after build" >&2; exit 1; }
 done
 
-# NOTE: for public distribution the binaries should be Developer ID-signed and the tarball notarized here,
-# or Gatekeeper will block first launch of the downloaded tools. Left as a deliberate follow-up; the
-# checksum in the manifest already guarantees integrity of the download.
+# Developer ID signing happened inside the build (fetch-bundled-tools.sh runs sign-bundled-tools.sh with
+# whatever DONKEY_TOOLS_SIGN_IDENTITY is set). Notarize those signed binaries so Apple validates them and
+# Gatekeeper trusts them. Bare CLI binaries can't be stapled (only .app/.dmg/.pkg can), so Gatekeeper does
+# an online check; for the app-downloaded, un-quarantined tools the Developer ID signature is what counts,
+# and notarization is the proof that signature is good. Skipped (with a warning) when only ad-hoc signed.
+notarize_bundle() {
+  if [ "${DONKEY_TOOLS_SIGN_IDENTITY:--}" = "-" ]; then
+    echo "Warning: tools are only ad-hoc signed (no DONKEY_TOOLS_SIGN_IDENTITY); NOT for public distribution." >&2
+    return 0
+  fi
+  local zip="$RUNNER_TEMP_DIR/donkey-tools-notarize.zip"
+  rm -f "$zip"
+  /usr/bin/ditto -c -k --keepParent "$VENDOR_DIR" "$zip"
+  if [ -f "${DONKEY_NOTARY_KEY_P8:-/nonexistent}" ] && [ -n "${DONKEY_NOTARY_KEY_ID:-}" ] && [ -n "${DONKEY_NOTARY_ISSUER_ID:-}" ]; then
+    echo "==> Notarizing with App Store Connect API key"
+    xcrun notarytool submit "$zip" \
+      --key "$DONKEY_NOTARY_KEY_P8" --key-id "$DONKEY_NOTARY_KEY_ID" --issuer "$DONKEY_NOTARY_ISSUER_ID" --wait
+  elif [ -n "${DONKEY_NOTARY_PROFILE:-}" ]; then
+    echo "==> Notarizing with keychain profile $DONKEY_NOTARY_PROFILE"
+    xcrun notarytool submit "$zip" --keychain-profile "$DONKEY_NOTARY_PROFILE" --wait
+  elif [ -n "${DONKEY_NOTARY_APPLE_ID:-}" ] && [ -n "${DONKEY_NOTARY_TEAM_ID:-}" ] && [ -n "${DONKEY_NOTARY_PASSWORD:-}" ]; then
+    echo "==> Notarizing with Apple ID $DONKEY_NOTARY_APPLE_ID"
+    xcrun notarytool submit "$zip" \
+      --apple-id "$DONKEY_NOTARY_APPLE_ID" --team-id "$DONKEY_NOTARY_TEAM_ID" --password "$DONKEY_NOTARY_PASSWORD" --wait
+  else
+    echo "FATAL: DONKEY_TOOLS_SIGN_IDENTITY is set but no notary credentials were provided." >&2
+    exit 1
+  fi
+  rm -f "$zip"
+}
+
+RUNNER_TEMP_DIR="${RUNNER_TEMP:-/tmp}"
+notarize_bundle
 
 echo "==> Packaging $ASSET (bundle contents at archive root)"
 rm -f "$OUT"

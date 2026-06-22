@@ -243,6 +243,12 @@ else
   fail "exiftool" "download failed"
 fi
 
+# dylibbundler invalidated each binary's signature when it rewrote install names, and an
+# unsigned Mach-O is killed on exec on Apple Silicon — so (re)sign before the tools are used.
+# Ad-hoc by default; publish-bundled-tools.sh sets a Developer ID identity for releases.
+log "Signing"
+"$SCRIPT_DIR/sign-bundled-tools.sh" "$VENDOR_DIR"
+
 log "Summary"
 printf '%s\n' "${STATUS[@]}"
 echo

@@ -43,6 +43,32 @@ updates the numeric GitHub Release with the DMG and checksum, updates
 changes, marks the release as GitHub's latest, moves the alias tags, and
 prunes releases beyond the latest 10.
 
+## Bundled Tools
+
+The capability skills (media, pdf) run CLI tools — `ffmpeg`, `yt-dlp`, and a few
+others — that the app downloads on first launch instead of baking into the app
+download. The `Publish Bundled Tools` workflow builds them from source on an
+arm64 runner, signs and notarizes them, uploads the bundle as a GitHub release
+asset, and commits the refreshed `bundled-tools.json` (the manifest the app reads
+to know what to fetch). It runs on demand and whenever the tools recipe changes.
+
+Every tool is re-signed during the build: relocating their bundled libraries
+invalidates the original signature, and macOS will not run an unsigned binary on
+Apple Silicon. Without the secrets below the tools are only ad-hoc signed — fine
+for local development, not for distribution. Set these repository secrets to
+produce a signed, notarized bundle:
+
+- `DONKEY_DEVELOPER_ID_CERT_P12` / `DONKEY_DEVELOPER_ID_CERT_PASSWORD` — the
+  Developer ID Application certificate (base64-encoded `.p12`) and its password.
+- `DONKEY_TOOLS_SIGN_IDENTITY` — the identity to sign with, e.g.
+  `Developer ID Application: Your Name (TEAMID)`.
+- `DONKEY_NOTARY_KEY_P8` (base64 App Store Connect API key `.p8`),
+  `DONKEY_NOTARY_KEY_ID`, `DONKEY_NOTARY_ISSUER_ID` — the notarization credentials.
+
+Standalone CLI binaries cannot be stapled (only app/dmg/pkg bundles can), so
+notarization here is the online proof that the Developer ID signature is good;
+the signature itself is what lets the downloaded tools run.
+
 ## One-Time Sparkle Setup
 
 Generate one Sparkle EdDSA signing keypair on a trusted Mac:
