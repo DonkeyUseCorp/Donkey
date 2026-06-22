@@ -523,7 +523,7 @@ struct MusicPlaybackToolsTests {
         let tools = provider.makeTools()
         let harnessTool = tools.first { $0.descriptor.name == tool }!
         let context = HarnessToolExecutionContext(
-            taskID: "task-1",
+            agentID: "task-1",
             call: HarnessToolCall(name: tool, input: input),
             descriptor: harnessTool.descriptor,
             worldModel: HarnessWorldModel(),

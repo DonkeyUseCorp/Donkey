@@ -60,8 +60,8 @@ final class UserQueryOverlayController {
                 preferredSpawnID: preferredSpawnID
             )
         }
-        spawnOverlayController.followUpSubmitted = { [weak self] spawnID, taskID, text in
-            self?.model.submitSpawnFollowUp(spawnID: spawnID, taskID: taskID, text: text)
+        spawnOverlayController.followUpSubmitted = { [weak self] spawnID, conversationID, text in
+            self?.model.submitSpawnFollowUp(spawnID: spawnID, conversationID: conversationID, text: text)
         }
         spawnOverlayController.selected = { [weak self] spawnID in
             self?.model.selectSpawn(id: spawnID)
@@ -685,32 +685,32 @@ final class UserQueryOverlayController {
             assetsDropped: { [weak self] drafts in
                 self?.model.handleDroppedAssets(drafts)
             },
-            pauseRequested: { [weak self] taskID in
-                self?.model.pauseTask(id: taskID)
+            pauseRequested: { [weak self] conversationID in
+                self?.model.pauseAgent(id: conversationID)
             },
-            resumeRequested: { [weak self] taskID in
-                self?.model.resumeTask(id: taskID)
+            resumeRequested: { [weak self] conversationID in
+                self?.model.resumeAgent(id: conversationID)
             },
-            dismissRequested: { [weak self] taskID in
-                self?.model.dismissTask(id: taskID)
+            dismissRequested: { [weak self] conversationID in
+                self?.model.dismissTask(id: conversationID)
             },
-            taskSelected: { [weak self] taskID in
-                self?.restoreSpawnPointer(forTaskID: taskID)
+            taskSelected: { [weak self] conversationID in
+                self?.restoreSpawnPointer(forTaskID: conversationID)
             },
-            replyRequested: { [weak self] taskID in
+            replyRequested: { [weak self] conversationID in
                 guard let self else { return }
                 // A click focuses the row exactly as arrowing onto it does: highlight + pinned reply.
-                self.model.focusNotchRow(taskID)
+                self.model.focusNotchRow(conversationID)
                 self.focusStatusComposerTextInputIfAvailable()
             },
             replyModeExited: { [weak self] in
                 self?.model.focusNotchRow(nil)
             },
-            approvePermissionRequested: { [weak self] taskID, alwaysAllow in
-                self?.model.approvePermissionGate(id: taskID, alwaysAllow: alwaysAllow)
+            approvePermissionRequested: { [weak self] conversationID, alwaysAllow in
+                self?.model.approvePermissionGate(id: conversationID, alwaysAllow: alwaysAllow)
             },
-            denyPermissionRequested: { [weak self] taskID in
-                self?.model.denyPermissionGate(id: taskID)
+            denyPermissionRequested: { [weak self] conversationID in
+                self?.model.denyPermissionGate(id: conversationID)
             },
             updateRequested: { [weak self] in
                 self?.openAvailableUpdate()
@@ -719,8 +719,8 @@ final class UserQueryOverlayController {
             loginRequested: { [weak self] in
                 self?.model.requestLogin()
             },
-            reloadCreditsRequested: { [weak self] taskID in
-                self?.model.reloadCredits(id: taskID)
+            reloadCreditsRequested: { [weak self] conversationID in
+                self?.model.reloadCredits(id: conversationID)
             }
         )
     }
@@ -749,8 +749,8 @@ final class UserQueryOverlayController {
 
     /// Brings back a pointer the user dismissed when its task is clicked in
     /// the notch; the surface re-emerges and travels to its target again.
-    private func restoreSpawnPointer(forTaskID taskID: String) {
-        guard let spawnID = model.spawnStates.first(where: { $0.taskID == taskID })?.id else {
+    private func restoreSpawnPointer(forTaskID conversationID: String) {
+        guard let spawnID = model.spawnStates.first(where: { $0.conversationID == conversationID })?.id else {
             return
         }
 
@@ -1537,8 +1537,8 @@ private struct StatusPanelViewSnapshot: Equatable {
     var notchCommandText: String
     var notchCommandInputTextHeight: CGFloat
     var isNotchCommandInputExpanded: Bool
-    var notchTasks: [UserQueryNotchTask]
-    var notchSurfacedTasks: [UserQueryNotchTask]
+    var notchTasks: [UserQueryConversation]
+    var notchSurfacedTasks: [UserQueryConversation]
     var accentIndex: Int
     var spawnState: UserQuerySpawnState?
     var spawnStates: [UserQuerySpawnState]

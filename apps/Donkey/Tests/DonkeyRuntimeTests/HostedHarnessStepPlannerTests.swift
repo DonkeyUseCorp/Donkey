@@ -464,8 +464,8 @@ struct HostedHarnessStepPlannerTests {
         )
     }
 
-    private func task(goal: String, toolHistory: [HarnessToolCallRecord]) -> HarnessTaskState {
-        HarnessTaskState(threadID: "thread-1", goal: goal, toolHistory: toolHistory)
+    private func task(goal: String, toolHistory: [HarnessToolCallRecord]) -> HarnessAgentState {
+        HarnessAgentState(conversationID: "thread-1", goal: goal, toolHistory: toolHistory)
     }
 
     private func cannedDecision(tool: String) -> Data {

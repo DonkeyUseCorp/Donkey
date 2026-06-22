@@ -10,7 +10,7 @@ struct AppSkillCommandTests {
     private func lookup(_ app: String) async -> HarnessToolResult? {
         let descriptor = DonkeyCommandLayer.descriptors.first { $0.name == "app_skill" }!
         let context = HarnessToolExecutionContext(
-            taskID: "test",
+            agentID: "test",
             call: HarnessToolCall(name: "app_skill", input: ["app": app]),
             descriptor: descriptor,
             worldModel: HarnessWorldModel(),
@@ -91,7 +91,7 @@ struct AppSkillCommandTests {
         let descriptor = DonkeyCommandLayer.descriptors.first { $0.name == "skill_run" }!
         func run(_ input: [String: String]) async -> HarnessToolResult? {
             await DonkeyCommandBackends.makeExecutor()(HarnessToolExecutionContext(
-                taskID: "test",
+                agentID: "test",
                 call: HarnessToolCall(name: "skill_run", input: input),
                 descriptor: descriptor,
                 worldModel: HarnessWorldModel(),

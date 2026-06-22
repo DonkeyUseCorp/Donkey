@@ -16,7 +16,7 @@ public actor ShellPermissionPolicyStore {
     private let storeURL: URL
     private var alwaysAllowed: Set<String>
     private var loaded = false
-    /// One-shot grants keyed `"taskID\u{1}signature"`, consumed on first use.
+    /// One-shot grants keyed `"agentID\u{1}signature"`, consumed on first use.
     private var onceGrants: Set<String> = []
 
     public init(storeURL: URL? = nil) {
@@ -62,22 +62,22 @@ public actor ShellPermissionPolicyStore {
 
     // MARK: - Allow-once (transient)
 
-    public func grantOnce(taskID: String, signature: String) {
+    public func grantOnce(agentID: String, signature: String) {
         guard !signature.isEmpty else { return }
-        onceGrants.insert(Self.onceKey(taskID: taskID, signature: signature))
+        onceGrants.insert(Self.onceKey(agentID: agentID, signature: signature))
     }
 
     /// Returns true and removes the grant if a one-shot allowance exists for this
     /// task + signature; false otherwise.
-    public func consumeOnce(taskID: String, signature: String) -> Bool {
-        let key = Self.onceKey(taskID: taskID, signature: signature)
+    public func consumeOnce(agentID: String, signature: String) -> Bool {
+        let key = Self.onceKey(agentID: agentID, signature: signature)
         guard onceGrants.contains(key) else { return false }
         onceGrants.remove(key)
         return true
     }
 
-    private static func onceKey(taskID: String, signature: String) -> String {
-        "\(taskID)\u{1}\(signature)"
+    private static func onceKey(agentID: String, signature: String) -> String {
+        "\(agentID)\u{1}\(signature)"
     }
 
     // MARK: - Persistence

@@ -41,7 +41,7 @@ struct MusicPlaylistLiveE2ETests {
     struct ScriptedPlaylistPlanner: HarnessNextStepPlanning {
         let playlistName: String
 
-        func planNextStep(for task: HarnessTaskState) async -> HarnessToolCall? {
+        func planNextStep(for task: HarnessAgentState, rollingContext: String?) async -> HarnessToolCall? {
             let history = task.toolHistory
             let searches = history.filter { $0.call.name == MusicPlaybackToolProvider.ToolName.search }
             if searches.isEmpty {
@@ -106,25 +106,25 @@ struct MusicPlaylistLiveE2ETests {
         // verification read unambiguous, and makes the playlist easy to find for manual cleanup.
         let playlistName = "Best of 2000 (Donkey E2E \(stamp))"
 
-        let coordinator = HarnessTaskCoordinator()
+        let coordinator = HarnessAgentCoordinator()
         let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
         let provider = MusicPlaybackToolProvider(service: MusicKitPlaybackService())
         for tool in provider.makeTools() {
             await registry.register(tool)
         }
         let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
-        let task = await coordinator.createTask(
+        let task = await coordinator.createAgent(
             id: "live-music-e2e-\(stamp)",
-            threadID: "t",
+            conversationID: "t",
             goal: Self.command,
             grantedPermissions: [.lifecycle]
         )
 
         // The same transcript wiring the real route uses, written under a temp root so the run
-        // leaves a readable thread.md to inspect.
+        // leaves a readable conversation.md to inspect.
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("donkey-live-music-e2e-\(stamp)", isDirectory: true)
-        let transcript = ThreadTranscript(id: task.id, root: root)
+        let transcript = ConversationTranscript(id: task.id, root: root)
         transcript.begin(id: task.id, app: "Music")
         transcript.userMessage(Self.command)
         transcript.planning(
@@ -134,7 +134,7 @@ struct MusicPlaylistLiveE2ETests {
             successCriteria: "A library playlist named \"\(playlistName)\" exists and lists the 10 songs"
         )
 
-        let steps = await runtime.run(taskID: task.id, planner: ScriptedPlaylistPlanner(playlistName: playlistName)) { step in
+        let steps = await runtime.run(agentID: task.id, planner: ScriptedPlaylistPlanner(playlistName: playlistName)) { step in
             guard let result = step.toolResult else { return }
             transcript.step(
                 number: step.task.toolHistory.count,
@@ -147,9 +147,9 @@ struct MusicPlaylistLiveE2ETests {
             )
         }
 
-        let finalTask = await coordinator.task(id: task.id)
-        let threadText = (try? String(contentsOfFile: transcript.threadPath, encoding: .utf8)) ?? ""
-        print("Live E2E thread (\(transcript.threadPath)):\n\(threadText)")
+        let finalTask = await coordinator.agent(id: task.id)
+        let threadText = (try? String(contentsOfFile: transcript.conversationPath, encoding: .utf8)) ?? ""
+        print("Live E2E conversation (\(transcript.conversationPath)):\n\(threadText)")
 
         // The run completed end to end: one batched search + create + add + entries + run.complete.
         #expect(

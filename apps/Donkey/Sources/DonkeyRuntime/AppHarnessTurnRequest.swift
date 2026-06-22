@@ -3,16 +3,16 @@ import Foundation
 
 public struct AppHarnessTurnRequest: Equatable, Sendable {
     public var turn: AppHarnessTurn
-    public var recentEvents: [UserQueryTaskEvent]
-    public var assets: [UserQueryTaskAsset]
+    public var recentEvents: [UserQueryConversationEvent]
+    public var assets: [UserQueryConversationAsset]
     public var targetState: [String: String]
     public var memory: [String]
     public var policy: [String: String]
 
     public init(
         turn: AppHarnessTurn,
-        recentEvents: [UserQueryTaskEvent] = [],
-        assets: [UserQueryTaskAsset] = [],
+        recentEvents: [UserQueryConversationEvent] = [],
+        assets: [UserQueryConversationAsset] = [],
         targetState: [String: String] = [:],
         memory: [String] = [],
         policy: [String: String] = [:]

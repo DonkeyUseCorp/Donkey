@@ -1,6 +1,6 @@
 import Foundation
 
-public enum UserQueryTaskStatus: String, Codable, Equatable, Sendable {
+public enum UserQueryConversationStatus: String, Codable, Equatable, Sendable {
     case chatting
     case running
     case paused
@@ -14,7 +14,7 @@ public enum UserQueryTaskStatus: String, Codable, Equatable, Sendable {
     case timedOut
 }
 
-public extension UserQueryTaskStatus {
+public extension UserQueryConversationStatus {
     /// The agent is blocked asking the user to respond (a clarification or a review). These are the only
     /// states that surface a dedicated Reply button, since only here is the agent actively asking. Every
     /// state is repliable by tapping the row (a running/permission-gated thread takes the reply as a
@@ -24,12 +24,12 @@ public extension UserQueryTaskStatus {
     }
 }
 
-public struct UserQueryNotchTask: Codable, Equatable, Identifiable, Sendable {
+public struct UserQueryConversation: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var title: String
     public var detail: String
     public var commandText: String
-    public var status: UserQueryTaskStatus
+    public var status: UserQueryConversationStatus
     public var accentIndex: Int
     public var createdAt: Date
     public var updatedAt: Date
@@ -40,7 +40,7 @@ public struct UserQueryNotchTask: Codable, Equatable, Identifiable, Sendable {
         title: String,
         detail: String,
         commandText: String = "",
-        status: UserQueryTaskStatus,
+        status: UserQueryConversationStatus,
         accentIndex: Int,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
@@ -58,7 +58,7 @@ public struct UserQueryNotchTask: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-public extension UserQueryNotchTask {
+public extension UserQueryConversation {
     /// Metadata flag set while the assistant's final reply is streaming in token-by-token, so the chin
     /// switches from echoing the prompt to showing the growing answer even though the task is still
     /// running. Cleared implicitly once the task reaches a terminal status (which shows `detail` anyway).
@@ -82,31 +82,31 @@ public extension UserQueryNotchTask {
     }
 }
 
-public enum UserQueryTaskEventRole: String, Codable, Equatable, Sendable {
+public enum UserQueryConversationEventRole: String, Codable, Equatable, Sendable {
     case user
     case assistant
     case system
     case tool
 }
 
-public struct UserQueryTaskEvent: Codable, Equatable, Identifiable, Sendable {
+public struct UserQueryConversationEvent: Codable, Equatable, Identifiable, Sendable {
     public var id: String
-    public var taskID: String
-    public var role: UserQueryTaskEventRole
+    public var conversationID: String
+    public var role: UserQueryConversationEventRole
     public var text: String
     public var sequence: Int
     public var createdAt: Date
 
     public init(
         id: String,
-        taskID: String,
-        role: UserQueryTaskEventRole,
+        conversationID: String,
+        role: UserQueryConversationEventRole,
         text: String,
         sequence: Int,
         createdAt: Date = Date()
     ) {
         self.id = id
-        self.taskID = taskID
+        self.conversationID = conversationID
         self.role = role
         self.text = text
         self.sequence = sequence
@@ -114,16 +114,16 @@ public struct UserQueryTaskEvent: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-public enum UserQueryTaskAssetSource: String, Codable, Equatable, Sendable {
+public enum UserQueryConversationAssetSource: String, Codable, Equatable, Sendable {
     case userUploaded
     case agentReturned
 }
 
-public struct UserQueryTaskAsset: Codable, Equatable, Identifiable, Sendable {
+public struct UserQueryConversationAsset: Codable, Equatable, Identifiable, Sendable {
     public var id: String
-    public var taskID: String
+    public var conversationID: String
     public var eventID: String?
-    public var source: UserQueryTaskAssetSource
+    public var source: UserQueryConversationAssetSource
     public var displayName: String
     public var contentType: String
     public var urlString: String
@@ -132,9 +132,9 @@ public struct UserQueryTaskAsset: Codable, Equatable, Identifiable, Sendable {
 
     public init(
         id: String,
-        taskID: String,
+        conversationID: String,
         eventID: String? = nil,
-        source: UserQueryTaskAssetSource,
+        source: UserQueryConversationAssetSource,
         displayName: String,
         contentType: String,
         urlString: String,
@@ -142,7 +142,7 @@ public struct UserQueryTaskAsset: Codable, Equatable, Identifiable, Sendable {
         createdAt: Date = Date()
     ) {
         self.id = id
-        self.taskID = taskID
+        self.conversationID = conversationID
         self.eventID = eventID
         self.source = source
         self.displayName = displayName
@@ -153,15 +153,15 @@ public struct UserQueryTaskAsset: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-public struct UserQueryTaskAssetDraft: Codable, Equatable, Sendable {
-    public var source: UserQueryTaskAssetSource
+public struct UserQueryConversationAssetDraft: Codable, Equatable, Sendable {
+    public var source: UserQueryConversationAssetSource
     public var displayName: String
     public var contentType: String
     public var urlString: String
     public var byteCount: Int64?
 
     public init(
-        source: UserQueryTaskAssetSource = .userUploaded,
+        source: UserQueryConversationAssetSource = .userUploaded,
         displayName: String,
         contentType: String,
         urlString: String,

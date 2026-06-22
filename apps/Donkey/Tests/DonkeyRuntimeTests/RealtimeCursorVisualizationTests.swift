@@ -9,7 +9,7 @@ import Testing
 struct RealtimeCursorVisualizationTests {
     private func step(metadata: [String: String], status: HarnessToolResultStatus = .succeeded) -> HarnessStepExecutionResult {
         HarnessStepExecutionResult(
-            task: HarnessTaskState(threadID: "thread-1", goal: "do it"),
+            task: HarnessAgentState(conversationID: "thread-1", goal: "do it"),
             toolResult: HarnessToolResult(
                 callID: "call-1",
                 toolName: "vision.click",

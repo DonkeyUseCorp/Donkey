@@ -15,7 +15,7 @@ public enum HarnessStage: String, Codable, CaseIterable, Equatable, Sendable {
     case lifecycle
 }
 
-public enum HarnessTaskStatus: String, Codable, CaseIterable, Equatable, Sendable {
+public enum HarnessAgentStatus: String, Codable, CaseIterable, Equatable, Sendable {
     case running
     case paused
     case waitingForUser
@@ -111,7 +111,7 @@ public struct HarnessIntentAnalysis: Codable, Equatable, Sendable {
 
 public struct HarnessContextSnapshot: Codable, Equatable, Sendable {
     public var turn: AppHarnessTurn?
-    public var threadID: String?
+    public var conversationID: String?
     public var memory: [String]
     public var availableToolNames: [String]
     public var availableSkillIDs: [String]
@@ -120,7 +120,7 @@ public struct HarnessContextSnapshot: Codable, Equatable, Sendable {
 
     public init(
         turn: AppHarnessTurn? = nil,
-        threadID: String? = nil,
+        conversationID: String? = nil,
         memory: [String] = [],
         availableToolNames: [String] = [],
         availableSkillIDs: [String] = [],
@@ -128,7 +128,7 @@ public struct HarnessContextSnapshot: Codable, Equatable, Sendable {
         metadata: [String: String] = [:]
     ) {
         self.turn = turn
-        self.threadID = threadID
+        self.conversationID = conversationID
         self.memory = memory
         self.availableToolNames = availableToolNames
         self.availableSkillIDs = availableSkillIDs

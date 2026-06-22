@@ -132,7 +132,7 @@ public extension UserQueryActivity.Kind {
 
 public extension UserQueryActivity {
     /// Maps a task's lifecycle status to an activity kind.
-    static func kind(forStatus status: UserQueryTaskStatus) -> Kind {
+    static func kind(forStatus status: UserQueryConversationStatus) -> Kind {
         switch status {
         case .chatting: return .message
         case .running: return .working
@@ -178,7 +178,7 @@ public extension UserQueryActivity {
     /// The activity a task is currently surfacing. While running it prefers the live tool hint
     /// (`activity.tool` metadata) so the line reads like the agent's current step; otherwise the
     /// status drives the kind. The task's `detail` carries any specifics.
-    static func current(for task: UserQueryNotchTask) -> UserQueryActivity {
+    static func current(for task: UserQueryConversation) -> UserQueryActivity {
         let summary = task.detail.trimmingCharacters(in: .whitespacesAndNewlines)
         let kind: Kind
         if task.status == .running, let tool = task.metadata["activity.tool"], !tool.isEmpty {

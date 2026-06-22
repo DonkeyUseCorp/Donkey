@@ -422,7 +422,7 @@ public final class UserQuerySpawnOverlayViewModel: ObservableObject {
 
     public func beginInlineInput() {
         guard let state,
-              state.taskID != nil,
+              state.conversationID != nil,
               !isLabelEditing else {
             select()
             return
@@ -460,7 +460,7 @@ public final class UserQuerySpawnOverlayViewModel: ObservableObject {
 
         let trimmedText = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty,
-              let taskID = state.taskID else {
+              let conversationID = state.conversationID else {
             cancelInlineInput()
             return
         }
@@ -470,7 +470,7 @@ public final class UserQuerySpawnOverlayViewModel: ObservableObject {
         isLabelEditing = false
         labelLayoutChanged?()
         labelEditingChanged?(false)
-        followUpSubmitted?(state.id, taskID, trimmedText)
+        followUpSubmitted?(state.id, conversationID, trimmedText)
     }
 
     public func updateDraftTextHeight(_ height: CGFloat) {

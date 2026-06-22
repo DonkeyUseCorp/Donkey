@@ -58,20 +58,20 @@ public struct HarnessToolDescriptor: Codable, Equatable, Sendable {
 }
 
 public struct HarnessToolExecutionContext: Sendable {
-    public var taskID: String
+    public var agentID: String
     public var call: HarnessToolCall
     public var descriptor: HarnessToolDescriptor
     public var worldModel: HarnessWorldModel
     public var grantedPermissions: Set<HarnessPermission>
 
     public init(
-        taskID: String,
+        agentID: String,
         call: HarnessToolCall,
         descriptor: HarnessToolDescriptor,
         worldModel: HarnessWorldModel,
         grantedPermissions: Set<HarnessPermission>
     ) {
-        self.taskID = taskID
+        self.agentID = agentID
         self.call = call
         self.descriptor = descriptor
         self.worldModel = worldModel
@@ -117,7 +117,7 @@ public actor HarnessToolRegistry {
 
     public func execute(
         _ call: HarnessToolCall,
-        taskID: String,
+        agentID: String,
         worldModel: HarnessWorldModel,
         grantedPermissions: Set<HarnessPermission>
     ) async -> HarnessToolResult {
@@ -150,7 +150,7 @@ public actor HarnessToolRegistry {
 
         return await tool.execute(
             HarnessToolExecutionContext(
-                taskID: taskID,
+                agentID: agentID,
                 call: call,
                 descriptor: tool.descriptor,
                 worldModel: worldModel,

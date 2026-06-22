@@ -6,8 +6,8 @@ import Testing
 
 @Suite
 struct HarnessStepPromptTests {
-    private func task(goal: String) -> HarnessTaskState {
-        HarnessTaskState(id: "t", threadID: "th", goal: goal, status: .running, worldModel: HarnessWorldModel())
+    private func task(goal: String) -> HarnessAgentState {
+        HarnessAgentState(id: "t", conversationID: "th", goal: goal, status: .running, worldModel: HarnessWorldModel())
     }
 
     /// The installed-skill catalog must reach the planner prompt verbatim, with routing instructions —

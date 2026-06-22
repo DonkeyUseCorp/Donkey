@@ -3,26 +3,26 @@ import DonkeyRuntime
 import Foundation
 
 public struct UserQueryFollowUpCandidate: Codable, Equatable, Sendable {
-    public var taskID: String
+    public var conversationID: String
     public var title: String
     public var detail: String
     public var commandText: String
-    public var status: UserQueryTaskStatus
+    public var status: UserQueryConversationStatus
     public var updatedAt: Date
     public var recentEvents: [String]
     public var assetNames: [String]
 
     public init(
-        taskID: String,
+        conversationID: String,
         title: String,
         detail: String,
         commandText: String,
-        status: UserQueryTaskStatus,
+        status: UserQueryConversationStatus,
         updatedAt: Date,
         recentEvents: [String] = [],
         assetNames: [String] = []
     ) {
-        self.taskID = taskID
+        self.conversationID = conversationID
         self.title = title
         self.detail = detail
         self.commandText = commandText
@@ -57,13 +57,13 @@ public struct UserQueryFollowUpResolverRequest: Equatable, Sendable {
 }
 
 public struct UserQueryFollowUpResolverResult: Equatable, Sendable {
-    public var taskID: String?
+    public var conversationID: String?
     public var confidence: Double
     public var reason: String
     public var trace: AIModelCallTrace
 
-    public init(taskID: String?, confidence: Double, reason: String, trace: AIModelCallTrace) {
-        self.taskID = taskID
+    public init(conversationID: String?, confidence: Double, reason: String, trace: AIModelCallTrace) {
+        self.conversationID = conversationID
         self.confidence = confidence
         self.reason = reason
         self.trace = trace
@@ -154,17 +154,17 @@ public struct HostedTaskFollowUpResolver: UserQueryFollowUpResolving {
             }
 
             let decision = try JSONDecoder().decode(LocalLLMTaskFollowUpDecision.self, from: decisionData)
-            let validCandidateIDs = Set(request.candidates.map(\.taskID))
-            let taskID = decision.isFollowUp && validCandidateIDs.contains(decision.taskID) ? decision.taskID : nil
+            let validCandidateIDs = Set(request.candidates.map(\.conversationID))
+            let conversationID = decision.isFollowUp && validCandidateIDs.contains(decision.conversationID) ? decision.conversationID : nil
             return UserQueryFollowUpResolverResult(
-                taskID: taskID,
+                conversationID: conversationID,
                 confidence: min(max(decision.confidence, 0), 1),
                 reason: decision.reason,
                 trace: trace(
                     entry: entry,
                     request: request,
                     status: .completed,
-                    validationStatus: taskID == nil ? "newTask" : "matchedTask",
+                    validationStatus: conversationID == nil ? "newTask" : "matchedTask",
                     latencyMS: latencyMS,
                     metadata: [
                         "provider": "donkeyBackend",
@@ -230,7 +230,7 @@ public struct HostedTaskFollowUpResolver: UserQueryFollowUpResolving {
         )
     }
 
-    private static let instructions = "Decide whether the current turn continues one of the candidate Donkey task threads. Set isFollowUp false and taskID empty when the turn should start a new task."
+    private static let instructions = "Decide whether the current turn continues one of the candidate Donkey task threads. Set isFollowUp false and conversationID empty when the turn should start a new task."
 
     private static func schema(for candidates: [UserQueryFollowUpCandidate]) -> RemoteInferenceJSONValue {
         .object([
@@ -238,15 +238,15 @@ public struct HostedTaskFollowUpResolver: UserQueryFollowUpResolving {
             "additionalProperties": .bool(false),
             "required": .array([
                 .string("isFollowUp"),
-                .string("taskID"),
+                .string("conversationID"),
                 .string("confidence"),
                 .string("reason")
             ]),
             "properties": .object([
                 "isFollowUp": .object(["type": .string("boolean")]),
-                "taskID": .object([
+                "conversationID": .object([
                     "type": .string("string"),
-                    "enum": .array((candidates.map(\.taskID) + [""]).map(RemoteInferenceJSONValue.string))
+                    "enum": .array((candidates.map(\.conversationID) + [""]).map(RemoteInferenceJSONValue.string))
                 ]),
                 "confidence": .object([
                     "type": .string("number"),
@@ -318,7 +318,7 @@ public struct HostedTaskFollowUpResolver: UserQueryFollowUpResolving {
         metadata: [String: String] = [:]
     ) -> UserQueryFollowUpResolverResult {
         UserQueryFollowUpResolverResult(
-            taskID: nil,
+            conversationID: nil,
             confidence: 0,
             reason: metadata["error"] ?? metadata["reason"] ?? "",
             trace: trace(
@@ -359,7 +359,7 @@ public struct HostedTaskFollowUpResolver: UserQueryFollowUpResolving {
 
 private struct LocalLLMTaskFollowUpDecision: Codable, Equatable, Sendable {
     var isFollowUp: Bool
-    var taskID: String
+    var conversationID: String
     var confidence: Double
     var reason: String
 }

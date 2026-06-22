@@ -143,14 +143,14 @@ struct HarnessTurnTraceTests {
         )
     }
 
-    private func makeTranscript() -> ThreadTranscript {
+    private func makeTranscript() -> ConversationTranscript {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("harness-turn-trace-tests-\(UUID().uuidString)", isDirectory: true)
-        return ThreadTranscript(id: UUID().uuidString, root: root)
+        return ConversationTranscript(id: UUID().uuidString, root: root)
     }
 
-    private func threadText(_ transcript: ThreadTranscript) throws -> String {
-        try String(contentsOfFile: transcript.threadPath, encoding: .utf8)
+    private func threadText(_ transcript: ConversationTranscript) throws -> String {
+        try String(contentsOfFile: transcript.conversationPath, encoding: .utf8)
     }
 }
 

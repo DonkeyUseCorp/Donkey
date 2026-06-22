@@ -33,19 +33,19 @@ struct ShellPermissionPolicyStoreTests {
     @Test
     func allowOnceIsConsumedExactlyOnce() async {
         let store = ShellPermissionPolicyStore(storeURL: temporaryStoreURL())
-        await store.grantOnce(taskID: "t1", signature: "open")
-        #expect(await store.consumeOnce(taskID: "t1", signature: "open") == true)
+        await store.grantOnce(agentID: "t1", signature: "open")
+        #expect(await store.consumeOnce(agentID: "t1", signature: "open") == true)
         // Second use is gone.
-        #expect(await store.consumeOnce(taskID: "t1", signature: "open") == false)
+        #expect(await store.consumeOnce(agentID: "t1", signature: "open") == false)
     }
 
     @Test
     func allowOnceIsScopedToTaskAndSignature() async {
         let store = ShellPermissionPolicyStore(storeURL: temporaryStoreURL())
-        await store.grantOnce(taskID: "t1", signature: "open")
-        #expect(await store.consumeOnce(taskID: "t2", signature: "open") == false)
-        #expect(await store.consumeOnce(taskID: "t1", signature: "killall") == false)
-        #expect(await store.consumeOnce(taskID: "t1", signature: "open") == true)
+        await store.grantOnce(agentID: "t1", signature: "open")
+        #expect(await store.consumeOnce(agentID: "t2", signature: "open") == false)
+        #expect(await store.consumeOnce(agentID: "t1", signature: "killall") == false)
+        #expect(await store.consumeOnce(agentID: "t1", signature: "open") == true)
     }
 
     @Test

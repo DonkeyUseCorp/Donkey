@@ -82,7 +82,7 @@ public struct AgentPathStep: Codable, Equatable, Sendable, Identifiable {
 
 public struct AgentPathTrace: Codable, Equatable, Sendable, Identifiable {
     public var id: String
-    public var taskID: String
+    public var agentID: String
     public var title: String
     public var sourceTraceID: String
     public var steps: [AgentPathStep]
@@ -90,14 +90,14 @@ public struct AgentPathTrace: Codable, Equatable, Sendable, Identifiable {
 
     public init(
         id: String = UUID().uuidString,
-        taskID: String,
+        agentID: String,
         title: String,
         sourceTraceID: String,
         steps: [AgentPathStep],
         metadata: [String: String] = [:]
     ) {
         self.id = id
-        self.taskID = taskID
+        self.agentID = agentID
         self.title = title
         self.sourceTraceID = sourceTraceID
         self.steps = steps
@@ -150,7 +150,7 @@ public struct AgentPathTrace: Codable, Equatable, Sendable, Identifiable {
             metadata: metadata.merging([
                 "source": "agent-path-trace",
                 "agentPath.traceID": id,
-                "agentPath.taskID": taskID,
+                "agentPath.agentID": agentID,
                 "agentPath.stepCount": String(steps.count),
                 "agentPath.groundedStepCount": String(visualSteps.count),
                 "realPointerMoved": "false",

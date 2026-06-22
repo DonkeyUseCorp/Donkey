@@ -596,7 +596,7 @@ public enum DonkeyCommandBackends {
             allowed = await store.isAlwaysAllowed(signature)
         }
         if !allowed {
-            allowed = await store.consumeOnce(taskID: context.taskID, signature: signature)
+            allowed = await store.consumeOnce(agentID: context.agentID, signature: signature)
         }
         if allowed { return nil }
 

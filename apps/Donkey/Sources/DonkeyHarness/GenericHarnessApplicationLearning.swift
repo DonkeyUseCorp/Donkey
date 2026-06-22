@@ -138,7 +138,7 @@ public struct HarnessApplicationProfile: Codable, Equatable, Sendable {
 
 public struct HarnessApplicationLearningDraft: Codable, Equatable, Sendable {
     public var id: String
-    public var taskID: String
+    public var agentID: String
     public var skillID: String
     public var appName: String
     public var bundleIdentifier: String?
@@ -152,7 +152,7 @@ public struct HarnessApplicationLearningDraft: Codable, Equatable, Sendable {
 
     public init(
         id: String,
-        taskID: String,
+        agentID: String,
         skillID: String,
         appName: String,
         bundleIdentifier: String? = nil,
@@ -165,7 +165,7 @@ public struct HarnessApplicationLearningDraft: Codable, Equatable, Sendable {
         metadata: [String: String] = [:]
     ) {
         self.id = id
-        self.taskID = taskID
+        self.agentID = agentID
         self.skillID = skillID
         self.appName = appName
         self.bundleIdentifier = bundleIdentifier
@@ -208,7 +208,7 @@ public actor HarnessApplicationLearningStore {
     @discardableResult
     public func begin(
         draftID: String,
-        taskID: String,
+        agentID: String,
         skillID: String,
         appName: String,
         bundleIdentifier: String?,
@@ -218,7 +218,7 @@ public actor HarnessApplicationLearningStore {
     ) -> HarnessApplicationLearningDraft {
         let draft = HarnessApplicationLearningDraft(
             id: draftID,
-            taskID: taskID,
+            agentID: agentID,
             skillID: skillID,
             appName: appName,
             bundleIdentifier: bundleIdentifier,

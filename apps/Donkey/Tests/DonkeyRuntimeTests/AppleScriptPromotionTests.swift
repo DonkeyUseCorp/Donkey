@@ -57,7 +57,7 @@ struct AppleScriptPromotionTests {
                     "goal": "create the Groceries note"
                 ]
             ),
-            taskID: "task-promotion",
+            agentID: "task-promotion",
             worldModel: HarnessWorldModel(),
             grantedPermissions: [.appLookup]
         )
@@ -67,7 +67,7 @@ struct AppleScriptPromotionTests {
                 name: "automation.applescript.validate",
                 input: ["scriptArtifactID": artifactID, "targetApp": "Notes"]
             ),
-            taskID: "task-promotion",
+            agentID: "task-promotion",
             worldModel: HarnessWorldModel(),
             grantedPermissions: [.appLookup]
         )
@@ -77,7 +77,7 @@ struct AppleScriptPromotionTests {
                 name: "automation.applescript.execute",
                 input: ["scriptArtifactID": artifactID, "targetApp": "Notes"]
             ),
-            taskID: "task-promotion",
+            agentID: "task-promotion",
             worldModel: HarnessWorldModel(),
             grantedPermissions: [.appControl, .input]
         )
@@ -213,7 +213,7 @@ struct AppleScriptPromotionTests {
                 name: "skill.script.execute",
                 input: ["scriptID": "builtin-script"]
             ),
-            taskID: "task-builtin",
+            agentID: "task-builtin",
             worldModel: HarnessWorldModel(),
             grantedPermissions: [.appControl, .input]
         )

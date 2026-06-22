@@ -10,7 +10,7 @@ struct AppCommandsCommandTests {
     private func run(_ input: [String: String]) async -> HarnessToolResult? {
         let descriptor = DonkeyCommandLayer.descriptors.first { $0.name == "app_commands" }!
         let context = HarnessToolExecutionContext(
-            taskID: "test",
+            agentID: "test",
             call: HarnessToolCall(name: "app_commands", input: input),
             descriptor: descriptor,
             worldModel: HarnessWorldModel(),

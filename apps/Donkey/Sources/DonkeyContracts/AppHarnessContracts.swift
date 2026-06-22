@@ -80,7 +80,7 @@ public struct AppHarnessTurn: Codable, Equatable, Sendable {
     public var id: String
     public var text: String
     public var source: AppHarnessTurnSource
-    public var taskID: String?
+    public var conversationID: String?
     public var isFollowUp: Bool
     public var createdAt: Date
 
@@ -88,14 +88,14 @@ public struct AppHarnessTurn: Codable, Equatable, Sendable {
         id: String = UUID().uuidString,
         text: String,
         source: AppHarnessTurnSource,
-        taskID: String? = nil,
+        conversationID: String? = nil,
         isFollowUp: Bool = false,
         createdAt: Date = Date()
     ) {
         self.id = id
         self.text = text
         self.source = source
-        self.taskID = taskID
+        self.conversationID = conversationID
         self.isFollowUp = isFollowUp
         self.createdAt = createdAt
     }

@@ -203,7 +203,7 @@ final class GeminiLiveVoiceController {
 
     /// The task id consent grants and tool executions are keyed on for this
     /// session-wide Live "task".
-    static let liveTaskID = "gemini-live"
+    static let liveAgentID = "gemini-live"
 
     /// Permissions the Live session's Command Layer tools run with.
     static let liveGrantedPermissions: Set<HarnessPermission> = [.appControl, .input, .appLookup, .skillLookup]
@@ -249,7 +249,7 @@ final class GeminiLiveVoiceController {
             let toolCall = HarnessToolCall(id: call.id, name: toolName, input: call.arguments)
             let result = await registry.execute(
                 toolCall,
-                taskID: Self.liveTaskID,
+                agentID: Self.liveAgentID,
                 worldModel: HarnessWorldModel(),
                 grantedPermissions: Self.liveGrantedPermissions
             )
@@ -339,11 +339,11 @@ final class GeminiLiveVoiceController {
         if alwaysAllow, classification.tier != .highRisk {
             await ShellPermissionPolicyStore.shared.allowAlways(classification.signature, tier: classification.tier)
         } else {
-            await ShellPermissionPolicyStore.shared.grantOnce(taskID: Self.liveTaskID, signature: classification.signature)
+            await ShellPermissionPolicyStore.shared.grantOnce(agentID: Self.liveAgentID, signature: classification.signature)
         }
         let result = await registry.execute(
             pending.call,
-            taskID: Self.liveTaskID,
+            agentID: Self.liveAgentID,
             worldModel: HarnessWorldModel(),
             grantedPermissions: Self.liveGrantedPermissions
         )

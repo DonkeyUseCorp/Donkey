@@ -48,7 +48,7 @@ struct DictionaryGroundedAppleScriptTests {
                     "goal": "create a note"
                 ]
             ),
-            taskID: "task-grounded",
+            agentID: "task-grounded",
             worldModel: HarnessWorldModel(),
             grantedPermissions: [.appLookup]
         )
@@ -88,7 +88,7 @@ struct DictionaryGroundedAppleScriptTests {
                     "goal": "activate"
                 ]
             ),
-            taskID: "task-ungrounded",
+            agentID: "task-ungrounded",
             worldModel: HarnessWorldModel(),
             grantedPermissions: [.appLookup]
         )

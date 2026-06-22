@@ -234,7 +234,7 @@ public enum SignalLevel: String, Equatable, Sendable {
 
 /// Well-known keys on a task's `metadata`. Shared so the harness side that writes them and the notch
 /// UI that reads them never drift on a raw string literal.
-public enum UserQueryTaskMetadataKey {
+public enum UserQueryConversationMetadataKey {
     /// Set to "true" on a task that failed because the account is out of credits. The notch shows a
     /// "Reload credits" CTA banner for such a task.
     public static let creditReloadRequired = "credits.reloadRequired"

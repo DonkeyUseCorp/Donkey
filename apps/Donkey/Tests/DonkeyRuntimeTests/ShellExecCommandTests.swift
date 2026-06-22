@@ -10,7 +10,7 @@ struct ShellExecCommandTests {
     private func shellExec(_ command: String) async -> HarnessToolResult? {
         let descriptor = DonkeyCommandLayer.descriptors.first { $0.name == "shell_exec" }!
         let context = HarnessToolExecutionContext(
-            taskID: "test",
+            agentID: "test",
             call: HarnessToolCall(name: "shell_exec", input: ["command": command]),
             descriptor: descriptor,
             worldModel: HarnessWorldModel(),

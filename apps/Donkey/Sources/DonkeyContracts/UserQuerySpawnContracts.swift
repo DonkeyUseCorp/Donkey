@@ -32,7 +32,7 @@ public struct UserQuerySpawnTargetHint: Codable, Equatable, Sendable {
 
 public struct UserQuerySpawnState: Codable, Equatable, Identifiable, Sendable {
     public var id: String
-    public var taskID: String?
+    public var conversationID: String?
     public var commandText: String
     public var label: String
     public var accentIndex: Int
@@ -47,7 +47,7 @@ public struct UserQuerySpawnState: Codable, Equatable, Identifiable, Sendable {
 
     public init(
         id: String = UUID().uuidString,
-        taskID: String? = nil,
+        conversationID: String? = nil,
         commandText: String,
         label: String,
         accentIndex: Int,
@@ -59,7 +59,7 @@ public struct UserQuerySpawnState: Codable, Equatable, Identifiable, Sendable {
         finishedAt: Date? = nil
     ) {
         self.id = id
-        self.taskID = taskID
+        self.conversationID = conversationID
         self.commandText = commandText
         self.label = label
         self.accentIndex = accentIndex
@@ -97,7 +97,7 @@ public struct UserQuerySpawnProgressUpdate: Equatable, Sendable {
 
 public enum UserQuerySpawnLifecycle {
     public static func keepsVisibleResult(
-        for threadStatus: UserQueryTaskStatus
+        for threadStatus: UserQueryConversationStatus
     ) -> Bool {
         switch threadStatus {
         case .chatting,

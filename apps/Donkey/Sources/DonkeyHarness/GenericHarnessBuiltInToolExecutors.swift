@@ -1144,8 +1144,8 @@ public enum BuiltInHarnessToolExecutors {
 
         let trace = AgentPathTrace(
             id: trimmed(context.call.input["traceID"] ?? context.call.input["agentPathTraceID"])
-                ?? "agent-path-\(context.taskID)-\(context.call.id)",
-            taskID: context.taskID,
+                ?? "agent-path-\(context.agentID)-\(context.call.id)",
+            agentID: context.agentID,
             title: trimmed(context.call.input["title"]) ?? context.worldModel.facts["genericHarness.intent.goal"] ?? "Agent path",
             sourceTraceID: trimmed(context.call.input["sourceTraceID"] ?? context.call.metadata["traceID"]) ?? context.call.id,
             steps: steps,
@@ -1245,7 +1245,7 @@ public enum BuiltInHarnessToolExecutors {
             input["generation.backend"] = outcome.metadata["generator"] ?? "dynamicAppleScriptGenerator"
         }
         let generatedContext = HarnessToolExecutionContext(
-            taskID: context.taskID,
+            agentID: context.agentID,
             call: HarnessToolCall(
                 id: context.call.id,
                 name: context.call.name,
@@ -1424,14 +1424,14 @@ public enum BuiltInHarnessToolExecutors {
             return invalidInput(context, "application.learning.start requires a target app.")
         }
         let skillID = trimmed(context.call.input["skillID"]) ?? "learned-\(stableIDSeed(from: appName))"
-        let draftID = trimmed(context.call.input["draftID"]) ?? "\(context.taskID)-\(skillID)"
+        let draftID = trimmed(context.call.input["draftID"]) ?? "\(context.agentID)-\(skillID)"
         let learningGoal = trimmed(context.call.input["goal"]) ?? "Learn \(appName)."
         let policy = trimmed(context.call.input["explorationPolicy"])
             ?? "Safe exploration only: observe, inspect Accessibility elements, open reversible menus/tabs/fields, and ask before destructive, send, purchase, or save-overwrite actions."
 
         let draft = await services.applicationLearningStore.begin(
             draftID: draftID,
-            taskID: context.taskID,
+            agentID: context.agentID,
             skillID: skillID,
             appName: appName,
             bundleIdentifier: trimmed(context.call.input["bundleIdentifier"]),

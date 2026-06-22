@@ -106,8 +106,8 @@ public enum LocalAppUserQueryHarnessServices {
             ?? context.call.input["entityValue"]
             ?? ""
         let command = ActionEngineCommand(
-            id: "\(context.taskID)-\(artifact.id)",
-            traceID: context.call.metadata["traceID"] ?? context.taskID,
+            id: "\(context.agentID)-\(artifact.id)",
+            traceID: context.call.metadata["traceID"] ?? context.agentID,
             targetID: context.call.input["targetID"] ?? artifact.ownerSkillID ?? artifact.id,
             kind: .controller,
             issuedAt: now(),

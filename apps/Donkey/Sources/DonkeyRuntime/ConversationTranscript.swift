@@ -9,9 +9,9 @@ import Foundation
 /// Durable metadata stays in Core Data; the *contents* live here in markdown, one folder per thread
 /// under `~/Library/Application Support/Donkey/Threads/<id>/`:
 ///
-/// - `thread.md` — the full conversation, appended live (`tail -f` to watch it unfold).
+/// - `conversation.md` — the full conversation, appended live (`tail -f` to watch it unfold).
 /// - `summary.md` — a compacted, structured summary of the thread.
-public final class ThreadTranscript: @unchecked Sendable {
+public final class ConversationTranscript: @unchecked Sendable {
     /// Who a flat entry is from.
     public enum Role: String, Sendable {
         case user
@@ -28,7 +28,7 @@ public final class ThreadTranscript: @unchecked Sendable {
     }
 
     public let directory: URL
-    private let threadURL: URL
+    private let conversationURL: URL
     private let summaryURL: URL
     private let lock = NSLock()
     private let started = Date()
@@ -36,24 +36,24 @@ public final class ThreadTranscript: @unchecked Sendable {
     public static func defaultRoot() -> URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Donkey", isDirectory: true)
-            .appendingPathComponent("Threads", isDirectory: true)
+            .appendingPathComponent("Conversations", isDirectory: true)
     }
 
     public init(id: String, root: URL? = nil) {
         let base = (root ?? Self.defaultRoot()).appendingPathComponent(Self.slug(id), isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         self.directory = base
-        self.threadURL = base.appendingPathComponent("thread.md")
+        self.conversationURL = base.appendingPathComponent("conversation.md")
         self.summaryURL = base.appendingPathComponent("summary.md")
     }
 
-    public var threadPath: String { threadURL.path }
+    public var conversationPath: String { conversationURL.path }
 
     /// Start the thread file with its header (only written once; later turns append).
     public func begin(id: String, app: String) {
-        guard !FileManager.default.fileExists(atPath: threadURL.path) else { return }
+        guard !FileManager.default.fileExists(atPath: conversationURL.path) else { return }
         let header = """
-        # Thread \(id)
+        # Conversation \(id)
 
         - **App:** \(app.isEmpty ? "(system tools / none)" : app)
         - **Started:** \(Self.stamp(started))
@@ -223,12 +223,12 @@ public final class ThreadTranscript: @unchecked Sendable {
 
     private func write(_ text: String, append: Bool) {
         lock.lock(); defer { lock.unlock() }
-        if append, let handle = try? FileHandle(forWritingTo: threadURL) {
+        if append, let handle = try? FileHandle(forWritingTo: conversationURL) {
             handle.seekToEndOfFile()
             handle.write(Data(text.utf8))
             try? handle.close()
         } else {
-            try? text.write(to: threadURL, atomically: true, encoding: .utf8)
+            try? text.write(to: conversationURL, atomically: true, encoding: .utf8)
         }
     }
 

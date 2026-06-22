@@ -215,7 +215,7 @@ struct AIHarnessAdapterTests {
     @Test
     func hostedFollowUpResolverLetsBackendSelectResponsesModel() async throws {
         let httpClient = FakeAIHTTPClient(
-            data: Data(#"{"output_text":"{\"isFollowUp\":true,\"taskID\":\"task-1\",\"confidence\":0.82,\"reason\":\"same task\"}"}"#.utf8),
+            data: Data(#"{"output_text":"{\"isFollowUp\":true,\"agentID\":\"task-1\",\"confidence\":0.82,\"reason\":\"same task\"}"}"#.utf8),
             statusCode: 200
         )
         let resolver = HostedTaskFollowUpResolver(
@@ -231,7 +231,7 @@ struct AIHarnessAdapterTests {
                 text: "add that to it",
                 candidates: [
                     UserQueryFollowUpCandidate(
-                        taskID: "task-1",
+                        conversationID: "task-1",
                         title: "Draft note",
                         detail: "Writing a note",
                         commandText: "write a note",
@@ -243,7 +243,7 @@ struct AIHarnessAdapterTests {
             )
         )
 
-        #expect(result.taskID == "task-1")
+        #expect(result.conversationID == "task-1")
         #expect(result.trace.provider == .donkeyBackend)
         #expect(result.trace.modelID == AIModelRegistryEntry.backendSelectedModelID)
 

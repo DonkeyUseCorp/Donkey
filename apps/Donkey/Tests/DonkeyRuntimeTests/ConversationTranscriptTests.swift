@@ -3,7 +3,7 @@ import Testing
 @testable import DonkeyRuntime
 
 @Suite
-struct ThreadTranscriptTests {
+struct ConversationTranscriptTests {
     @Test
     func stepRendersDecisionThenOutputAsOneBlock() throws {
         let transcript = makeTranscript()
@@ -107,7 +107,7 @@ struct ThreadTranscriptTests {
         transcript.response("Done — playlist created.")
 
         let text = try threadText(transcript)
-        #expect(text.contains("# Thread T1"))
+        #expect(text.contains("# Conversation T1"))
         #expect(text.contains("👤 user · message"))
         #expect(text.contains("create a playlist"))
         #expect(text.contains("⚙️ system · event"))
@@ -179,13 +179,13 @@ struct ThreadTranscriptTests {
         #expect(text.contains("\"tool\":\"ax.observe\""))
     }
 
-    private func makeTranscript() -> ThreadTranscript {
+    private func makeTranscript() -> ConversationTranscript {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("thread-transcript-tests-\(UUID().uuidString)", isDirectory: true)
-        return ThreadTranscript(id: UUID().uuidString, root: root)
+        return ConversationTranscript(id: UUID().uuidString, root: root)
     }
 
-    private func threadText(_ transcript: ThreadTranscript) throws -> String {
-        try String(contentsOfFile: transcript.threadPath, encoding: .utf8)
+    private func threadText(_ transcript: ConversationTranscript) throws -> String {
+        try String(contentsOfFile: transcript.conversationPath, encoding: .utf8)
     }
 }

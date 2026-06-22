@@ -256,7 +256,7 @@ struct UserQuerySpawnGeometryTests {
         let viewModel = UserQuerySpawnOverlayViewModel()
         let state = UserQuerySpawnState(
             id: "spawn-1",
-            taskID: "task-1",
+            conversationID: "task-1",
             commandText: "plan",
             label: Array(repeating: "checking", count: 18).joined(separator: " "),
             accentIndex: 1,
@@ -309,7 +309,7 @@ struct UserQuerySpawnGeometryTests {
         let viewModel = UserQuerySpawnOverlayViewModel()
         let state = UserQuerySpawnState(
             id: "spawn-1",
-            taskID: "task-1",
+            conversationID: "task-1",
             commandText: "hi there",
             label: "hi there",
             accentIndex: 1,
@@ -318,9 +318,9 @@ struct UserQuerySpawnGeometryTests {
         var submittedSpawnID: String?
         var submittedTaskID: String?
         var submittedText: String?
-        viewModel.followUpSubmitted = { spawnID, taskID, text in
+        viewModel.followUpSubmitted = { spawnID, agentID, text in
             submittedSpawnID = spawnID
-            submittedTaskID = taskID
+            submittedTaskID = agentID
             submittedText = text
         }
 
@@ -349,7 +349,7 @@ struct UserQuerySpawnGeometryTests {
         let viewModel = UserQuerySpawnOverlayViewModel()
         let state = UserQuerySpawnState(
             id: "spawn-1",
-            taskID: "task-1",
+            conversationID: "task-1",
             commandText: "hi there",
             label: "hi there",
             accentIndex: 1,

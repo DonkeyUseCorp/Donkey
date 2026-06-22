@@ -5,11 +5,11 @@ import Testing
 @Suite
 struct UserQueryActivityTests {
     private func task(
-        status: UserQueryTaskStatus,
+        status: UserQueryConversationStatus,
         detail: String = "",
         metadata: [String: String] = [:]
-    ) -> UserQueryNotchTask {
-        UserQueryNotchTask(
+    ) -> UserQueryConversation {
+        UserQueryConversation(
             id: "t",
             title: "Title",
             detail: detail,

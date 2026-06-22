@@ -38,7 +38,7 @@ struct AppleScriptCompileGateTests {
                     "goal": "do the thing"
                 ]
             ),
-            taskID: "task-compile-gate",
+            agentID: "task-compile-gate",
             worldModel: HarnessWorldModel(),
             grantedPermissions: [.appLookup]
         )
@@ -55,7 +55,7 @@ struct AppleScriptCompileGateTests {
                 name: "automation.applescript.validate",
                 input: ["scriptArtifactID": artifactID, "targetApp": targetApp]
             ),
-            taskID: "task-compile-gate",
+            agentID: "task-compile-gate",
             worldModel: HarnessWorldModel(),
             grantedPermissions: [.appLookup]
         )
@@ -245,7 +245,7 @@ struct AppleScriptCompileGateTests {
                     "scriptSource": #"tell application "Music" to play track "{query}""#
                 ]
             ),
-            taskID: "task-template",
+            agentID: "task-template",
             worldModel: HarnessWorldModel(),
             grantedPermissions: [.skillLookup]
         )
@@ -255,7 +255,7 @@ struct AppleScriptCompileGateTests {
                 name: "skill.script.validate",
                 input: ["scriptID": "play-template", "targetApp": "Music"]
             ),
-            taskID: "task-template",
+            agentID: "task-template",
             worldModel: HarnessWorldModel(),
             grantedPermissions: [.skillLookup]
         )

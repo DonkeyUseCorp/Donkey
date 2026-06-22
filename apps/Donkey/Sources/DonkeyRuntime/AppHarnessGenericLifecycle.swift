@@ -12,82 +12,82 @@ public enum HarnessGateApproval: String, Sendable {
 }
 
 public struct AppHarnessGenericLifecyclePreparedTurn: Equatable, Sendable {
-    public var thread: HarnessThread
-    public var task: HarnessTaskState
-    public var compactedContext: HarnessCompactedThreadContext
+    public var conversation: HarnessConversation
+    public var agent: HarnessAgentState
+    public var compactedContext: HarnessCompactedConversationContext
 
     public init(
-        thread: HarnessThread,
-        task: HarnessTaskState,
-        compactedContext: HarnessCompactedThreadContext
+        conversation: HarnessConversation,
+        agent: HarnessAgentState,
+        compactedContext: HarnessCompactedConversationContext
     ) {
-        self.thread = thread
-        self.task = task
+        self.conversation = conversation
+        self.agent = agent
         self.compactedContext = compactedContext
     }
 }
 
 public struct AppHarnessGenericLifecycle: Sendable {
-    public var threadStore: any HarnessThreadStoring
-    public var coordinator: HarnessTaskCoordinator
-    public var compactor: HarnessThreadCompactor
+    public var conversationStore: any HarnessConversationStoring
+    public var coordinator: HarnessAgentCoordinator
+    public var compactor: HarnessConversationCompactor
 
     public init(
-        threadStore: (any HarnessThreadStoring)? = nil,
-        coordinator: HarnessTaskCoordinator? = nil,
-        compactor: HarnessThreadCompactor = HarnessThreadCompactor()
+        conversationStore: (any HarnessConversationStoring)? = nil,
+        coordinator: HarnessAgentCoordinator? = nil,
+        compactor: HarnessConversationCompactor = HarnessConversationCompactor()
     ) {
-        let resolvedThreadStore = threadStore ?? FileHarnessThreadStore()
-        self.threadStore = resolvedThreadStore
-        self.coordinator = coordinator ?? HarnessTaskCoordinator(threadStore: resolvedThreadStore)
+        let resolvedConversationStore = conversationStore ?? FileHarnessConversationStore()
+        self.conversationStore = resolvedConversationStore
+        self.coordinator = coordinator ?? HarnessAgentCoordinator(conversationStore: resolvedConversationStore)
         self.compactor = compactor
     }
 
     public func prepareUserQueryTurn(
         request: AppHarnessTurnRequest,
-        pointerTask: UserQueryNotchTask?,
+        pointerTask: UserQueryConversation?,
         traceID: String,
         availableToolNames: [String],
         grantedPermissions: Set<HarnessPermission> = []
     ) async -> AppHarnessGenericLifecyclePreparedTurn {
-        let threadID = request.turn.taskID ?? pointerTask?.id ?? traceID
-        let taskID = pointerTask?.id ?? request.turn.taskID ?? threadID
+        let conversationID = request.turn.conversationID ?? pointerTask?.id ?? traceID
+        let agentID = pointerTask?.id ?? request.turn.conversationID ?? conversationID
         let title = pointerTask?.title ?? request.turn.text
         let now = Date()
-        let existingThread = await threadStore.thread(id: threadID)
-        let activeTaskIDs = Array(Set((existingThread?.activeTaskIDs ?? []) + [taskID])).sorted()
-        let thread = HarnessThread(
-            id: threadID,
-            title: existingThread?.title ?? title,
+        let existingConversation = await conversationStore.conversation(id: conversationID)
+        let activeAgentIDs = Array(Set((existingConversation?.activeAgentIDs ?? []) + [agentID])).sorted()
+        let conversation = HarnessConversation(
+            id: conversationID,
+            title: existingConversation?.title ?? title,
             status: .running,
-            activeTaskIDs: activeTaskIDs,
-            createdAt: existingThread?.createdAt ?? now,
+            activeAgentIDs: activeAgentIDs,
+            createdAt: existingConversation?.createdAt ?? now,
             updatedAt: now,
-            metadata: (existingThread?.metadata ?? [:]).merging([
+            metadata: (existingConversation?.metadata ?? [:]).merging([
                 "source": "userQuery",
                 "traceID": traceID
             ]) { current, _ in current }
         )
-        await threadStore.upsertThread(thread)
+        await conversationStore.upsertConversation(conversation)
         await mirrorUserQueryEvents(
             request.recentEvents,
-            threadID: threadID,
-            taskID: taskID
+            conversationID: conversationID,
+            agentID: agentID
         )
         await mirrorUserQueryAssets(
             request.assets,
-            threadID: threadID,
-            taskID: taskID
+            conversationID: conversationID,
+            agentID: agentID
         )
         await appendCurrentTurnIfNeeded(
             request.turn,
-            threadID: threadID,
-            taskID: taskID
+            conversationID: conversationID,
+            agentID: agentID
         )
 
         let context = HarnessContextSnapshot(
             turn: request.turn,
-            threadID: threadID,
+            conversationID: conversationID,
             memory: request.memory,
             availableToolNames: availableToolNames,
             policy: request.policy,
@@ -96,28 +96,28 @@ public struct AppHarnessGenericLifecycle: Sendable {
                 "source": "userQuery"
             ]
         )
-        let task = await loadOrCreateTask(
-            taskID: taskID,
-            threadID: threadID,
+        let agent = await loadOrCreateAgent(
+            agentID: agentID,
+            conversationID: conversationID,
             goal: request.turn.text,
             context: context,
             grantedPermissions: grantedPermissions
         )
-        let events = await threadStore.events(threadID: threadID)
-        let assets = await threadStore.assets(threadID: threadID)
-        let activeTasks = await coordinator.activeTasks()
-            .filter { $0.threadID == threadID }
+        let events = await conversationStore.events(conversationID: conversationID)
+        let assets = await conversationStore.assets(conversationID: conversationID)
+        let activeAgents = await coordinator.activeAgents()
+            .filter { $0.conversationID == conversationID }
         let compactedContext = compactor.compact(
-            thread: thread,
+            conversation: conversation,
             currentTurn: request.turn,
             events: events,
             assets: assets,
-            activeTasks: activeTasks
+            activeAgents: activeAgents
         )
-        await threadStore.appendCompactionSnapshot(
+        await conversationStore.appendCompactionSnapshot(
             HarnessCompactionSnapshot(
-                threadID: threadID,
-                taskIDs: compactedContext.activeTasks.map(\.id),
+                conversationID: conversationID,
+                agentIDs: compactedContext.activeAgents.map(\.id),
                 eventIDs: compactedContext.events.map(\.id),
                 assetIDs: compactedContext.assets.map(\.id),
                 promptCharacterCount: compactedContext.promptText.count,
@@ -130,35 +130,35 @@ public struct AppHarnessGenericLifecycle: Sendable {
         )
 
         return AppHarnessGenericLifecyclePreparedTurn(
-            thread: thread,
-            task: task,
+            conversation: conversation,
+            agent: agent,
             compactedContext: compactedContext
         )
     }
 
-    public func taskState(taskID: String) async -> HarnessTaskState? {
-        await coordinator.task(id: taskID)
+    public func agentState(agentID: String) async -> HarnessAgentState? {
+        await coordinator.agent(id: agentID)
     }
 
     @discardableResult
-    public func pauseTask(taskID: String, reason: String) async -> HarnessTaskState? {
-        await coordinator.pause(taskID: taskID, reason: reason)
+    public func pauseAgent(agentID: String, reason: String) async -> HarnessAgentState? {
+        await coordinator.pause(agentID: agentID, reason: reason)
     }
 
     @discardableResult
-    public func resumeTask(taskID: String, reason: String) async -> HarnessTaskState? {
-        await coordinator.resume(taskID: taskID, reason: reason)
+    public func resumeAgent(agentID: String, reason: String) async -> HarnessAgentState? {
+        await coordinator.resume(agentID: agentID, reason: reason)
     }
 
     @discardableResult
     public func approvePermissionGate(
-        taskID: String,
+        agentID: String,
         decision: HarnessGateApproval = .allow,
         reason: String
-    ) async -> HarnessTaskState? {
-        guard let task = await coordinator.task(id: taskID),
-              task.status == .waitingForPermission,
-              let continuation = task.pendingContinuation else {
+    ) async -> HarnessAgentState? {
+        guard let agent = await coordinator.agent(id: agentID),
+              agent.status == .waitingForPermission,
+              let continuation = agent.pendingContinuation else {
             return nil
         }
 
@@ -171,9 +171,9 @@ public struct AppHarnessGenericLifecycle: Sendable {
             if decision == .allowAlways, tier != .highRisk {
                 await ShellPermissionPolicyStore.shared.allowAlways(signature, tier: tier)
             } else {
-                await ShellPermissionPolicyStore.shared.grantOnce(taskID: taskID, signature: signature)
+                await ShellPermissionPolicyStore.shared.grantOnce(agentID: agentID, signature: signature)
             }
-            return await coordinator.resume(taskID: taskID, reason: reason)
+            return await coordinator.resume(agentID: agentID, reason: reason)
         }
 
         // System (TCC) permission gate: the user approved in the notch, so NOW trigger the macOS
@@ -182,12 +182,12 @@ public struct AppHarnessGenericLifecycle: Sendable {
             guard let permission = Self.systemPermission(from: continuation.metadata) else { return nil }
             let granted = await SystemPermissionCoordinator.request(permission)
             guard granted else { return nil }
-            return await coordinator.resume(taskID: taskID, reason: reason)
+            return await coordinator.resume(agentID: agentID, reason: reason)
         }
 
         guard !continuation.missingPermissions.isEmpty else { return nil }
         return await coordinator.grantPermissions(
-            taskID: taskID,
+            agentID: agentID,
             permissions: Set(continuation.missingPermissions),
             reason: reason
         )
@@ -209,17 +209,17 @@ public struct AppHarnessGenericLifecycle: Sendable {
         }
     }
 
-    private func loadOrCreateTask(
-        taskID: String,
-        threadID: String,
+    private func loadOrCreateAgent(
+        agentID: String,
+        conversationID: String,
         goal: String,
         context: HarnessContextSnapshot,
         grantedPermissions: Set<HarnessPermission>
-    ) async -> HarnessTaskState {
-        guard let existing = await coordinator.task(id: taskID) else {
-            return await coordinator.createTask(
-                id: taskID,
-                threadID: threadID,
+    ) async -> HarnessAgentState {
+        guard let existing = await coordinator.agent(id: agentID) else {
+            return await coordinator.createAgent(
+                id: agentID,
+                conversationID: conversationID,
                 goal: goal,
                 context: context,
                 grantedPermissions: grantedPermissions
@@ -230,48 +230,48 @@ public struct AppHarnessGenericLifecycle: Sendable {
            let response = context.turn?.text,
            !response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             _ = await coordinator.provideUserResponse(
-                taskID: taskID,
+                agentID: agentID,
                 response: response
             )
         } else if context.turn?.isFollowUp == true {
-            // A follow-up to a task whose loop already stopped (a live loop picks the message up directly
+            // A follow-up to a agent whose loop already stopped (a live loop picks the message up directly
             // and never reaches here): queue the instruction so the resumed loop folds it in, and resume.
             // The original goal is preserved — the follow-up amends the work rather than replacing it,
             // the deliberate opposite of the old interrupt-and-restart behavior.
             if let followUpText = context.turn?.text,
                !followUpText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                _ = await coordinator.enqueueUserMessage(taskID: taskID, text: followUpText)
+                _ = await coordinator.enqueueUserMessage(agentID: agentID, text: followUpText)
             }
             _ = await coordinator.resume(
-                taskID: taskID,
-                reason: "User query follow-up resumed task"
+                agentID: agentID,
+                reason: "User query follow-up resumed agent"
             )
         } else if !existing.status.canExecuteTools {
             _ = await coordinator.resume(
-                taskID: taskID,
-                reason: "User query resumed task"
+                agentID: agentID,
+                reason: "User query resumed agent"
             )
         }
 
         return await coordinator.updateContext(
-            taskID: taskID,
+            agentID: agentID,
             context: context
         ) ?? existing
     }
 
     private func mirrorUserQueryEvents(
-        _ pointerEvents: [UserQueryTaskEvent],
-        threadID: String,
-        taskID: String
+        _ pointerEvents: [UserQueryConversationEvent],
+        conversationID: String,
+        agentID: String
     ) async {
-        let existingIDs = Set(await threadStore.events(threadID: threadID).map(\.id))
+        let existingIDs = Set(await conversationStore.events(conversationID: conversationID).map(\.id))
         for event in pointerEvents where !existingIDs.contains(event.id) {
-            await threadStore.appendEvent(
-                HarnessThreadEvent(
+            await conversationStore.appendEvent(
+                HarnessConversationEvent(
                     id: event.id,
-                    threadID: threadID,
-                    taskID: taskID,
-                    role: HarnessThreadEventRole(userQueryRole: event.role),
+                    conversationID: conversationID,
+                    agentID: agentID,
+                    role: HarnessConversationEventRole(userQueryRole: event.role),
                     text: event.text,
                     sequence: event.sequence,
                     createdAt: event.createdAt,
@@ -282,17 +282,17 @@ public struct AppHarnessGenericLifecycle: Sendable {
     }
 
     private func mirrorUserQueryAssets(
-        _ pointerAssets: [UserQueryTaskAsset],
-        threadID: String,
-        taskID: String
+        _ pointerAssets: [UserQueryConversationAsset],
+        conversationID: String,
+        agentID: String
     ) async {
-        let existingIDs = Set(await threadStore.assets(threadID: threadID).map(\.id))
+        let existingIDs = Set(await conversationStore.assets(conversationID: conversationID).map(\.id))
         for asset in pointerAssets where !existingIDs.contains(asset.id) {
-            await threadStore.appendAsset(
-                HarnessThreadAsset(
+            await conversationStore.appendAsset(
+                HarnessConversationAsset(
                     id: asset.id,
-                    threadID: threadID,
-                    taskID: taskID,
+                    conversationID: conversationID,
+                    agentID: agentID,
                     eventID: asset.eventID,
                     displayName: asset.displayName,
                     contentType: asset.contentType,
@@ -310,21 +310,21 @@ public struct AppHarnessGenericLifecycle: Sendable {
 
     private func appendCurrentTurnIfNeeded(
         _ turn: AppHarnessTurn,
-        threadID: String,
-        taskID: String
+        conversationID: String,
+        agentID: String
     ) async {
-        let events = await threadStore.events(threadID: threadID)
+        let events = await conversationStore.events(conversationID: conversationID)
         let hasCurrentTurn = events.contains { event in
             event.metadata["turnID"] == turn.id
                 || (event.role == .user && event.text == turn.text)
         }
         guard !hasCurrentTurn else { return }
 
-        await threadStore.appendEvent(
-            HarnessThreadEvent(
+        await conversationStore.appendEvent(
+            HarnessConversationEvent(
                 id: "turn-\(turn.id)",
-                threadID: threadID,
-                taskID: taskID,
+                conversationID: conversationID,
+                agentID: agentID,
                 role: .user,
                 text: turn.text,
                 sequence: (events.map(\.sequence).max() ?? -1) + 1,
@@ -339,8 +339,8 @@ public struct AppHarnessGenericLifecycle: Sendable {
 
 }
 
-private extension HarnessThreadEventRole {
-    init(userQueryRole: UserQueryTaskEventRole) {
+private extension HarnessConversationEventRole {
+    init(userQueryRole: UserQueryConversationEventRole) {
         switch userQueryRole {
         case .user:
             self = .user

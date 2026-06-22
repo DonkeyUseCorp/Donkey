@@ -9,7 +9,7 @@ public enum TraceModelCallKind: String, Codable, Equatable, Sendable {
     /// A per-step planning call (the first sample or a feedback-driven retry).
     case plannerStep
     /// The background call that rewrites the compacted thread summary.
-    case threadSummary
+    case conversationSummary
 }
 
 /// What came back from a model call. Distinguishes the failure shapes the planner already separates
@@ -79,7 +79,7 @@ public struct TraceModelCall: Sendable {
 /// The recording surface the model boundaries depend on. The AI boundaries (`HostedHarnessStepPlanner`,
 /// `HostedHarnessRequestUnderstanding`) hold only this protocol, so they record without importing the
 /// runtime that writes files and stay testable with a recording double — the same split the harness
-/// uses for `HarnessThreadStoring`. The concrete `HarnessTurnTrace` lives in DonkeyRuntime and adds the
+/// uses for `HarnessConversationStoring`. The concrete `HarnessTurnTrace` lives in DonkeyRuntime and adds the
 /// per-step and per-turn methods the handler calls directly.
 ///
 /// A nil recorder means tracing is off; every call site treats it as optional so the hot path is

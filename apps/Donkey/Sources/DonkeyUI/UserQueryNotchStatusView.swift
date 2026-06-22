@@ -26,8 +26,8 @@ public struct UserQueryNotchStatusView: View {
     @Binding private var commandText: String
     private let commandInputTextHeight: CGFloat
     private let isCommandInputExpanded: Bool
-    private let tasks: [UserQueryNotchTask]
-    private let surfacedTasks: [UserQueryNotchTask]
+    private let tasks: [UserQueryConversation]
+    private let surfacedTasks: [UserQueryConversation]
     /// While the user is replying to a specific task (tapped Reply), this is that task; the expanded
     /// panel dims every other row so it's clear the next message continues this one thread.
     private let replyTargetTaskID: String?
@@ -39,7 +39,7 @@ public struct UserQueryNotchStatusView: View {
     private let commandSubmitted: @MainActor (String) -> Void
     private let commandInputTextHeightChanged: @MainActor (CGFloat) -> Void
     private let commandInputExpansionChanged: @MainActor (Bool) -> Void
-    private let assetsDropped: @MainActor ([UserQueryTaskAssetDraft]) -> Void
+    private let assetsDropped: @MainActor ([UserQueryConversationAssetDraft]) -> Void
     private let pauseRequested: @MainActor (String) -> Void
     private let resumeRequested: @MainActor (String) -> Void
     private let dismissRequested: @MainActor (String) -> Void
@@ -49,7 +49,7 @@ public struct UserQueryNotchStatusView: View {
     private let replyRequested: @MainActor (String) -> Void
     /// Tapping the notch chrome outside a row, control, or the composer while replying leaves reply mode.
     private let replyModeExited: @MainActor () -> Void
-    /// (taskID, alwaysAllow). `alwaysAllow` persists a standing rule for the
+    /// (conversationID, alwaysAllow). `alwaysAllow` persists a standing rule for the
     /// command signature; it is only offered for non-highRisk shell consent.
     private let approvePermissionRequested: @MainActor (String, Bool) -> Void
     private let denyPermissionRequested: @MainActor (String) -> Void
@@ -74,8 +74,8 @@ public struct UserQueryNotchStatusView: View {
         commandText: Binding<String>,
         commandInputTextHeight: CGFloat,
         isCommandInputExpanded: Bool,
-        tasks: [UserQueryNotchTask] = [],
-        surfacedTasks: [UserQueryNotchTask] = [],
+        tasks: [UserQueryConversation] = [],
+        surfacedTasks: [UserQueryConversation] = [],
         replyTargetTaskID: String? = nil,
         selectedTaskID: String? = nil,
         accentIndex: Int,
@@ -83,7 +83,7 @@ public struct UserQueryNotchStatusView: View {
         commandSubmitted: @escaping @MainActor (String) -> Void,
         commandInputTextHeightChanged: @escaping @MainActor (CGFloat) -> Void,
         commandInputExpansionChanged: @escaping @MainActor (Bool) -> Void,
-        assetsDropped: @escaping @MainActor ([UserQueryTaskAssetDraft]) -> Void,
+        assetsDropped: @escaping @MainActor ([UserQueryConversationAssetDraft]) -> Void,
         pauseRequested: @escaping @MainActor (String) -> Void,
         resumeRequested: @escaping @MainActor (String) -> Void,
         dismissRequested: @escaping @MainActor (String) -> Void,
@@ -437,7 +437,7 @@ public struct UserQueryNotchStatusView: View {
     /// the task's `detail` carries the reply (set to `result.summary` on completion), so the chin shows
     /// the response. A failure is flagged by the red warning icon in the right rail (see
     /// `collapsedRightSlot`), not inline here.
-    private func chinLine(for task: UserQueryNotchTask) -> some View {
+    private func chinLine(for task: UserQueryConversation) -> some View {
         Text(chinText(for: task))
             .font(.system(size: Self.chinFontSize, weight: .regular))
             .foregroundStyle(Color.white.opacity(0.72))
@@ -445,7 +445,7 @@ public struct UserQueryNotchStatusView: View {
             .truncationMode(.tail)
     }
 
-    private func chinText(for task: UserQueryNotchTask) -> String {
+    private func chinText(for task: UserQueryConversation) -> String {
         task.chinDisplayText
     }
 
@@ -454,7 +454,7 @@ public struct UserQueryNotchStatusView: View {
     /// clock is anchored to the newest task's start, so a freshly added task shows first (the view
     /// re-renders on the task change) and then yields to the others. When nothing is running, the most
     /// recent undismissed completion keeps narrating its result instead of leaving the chin empty.
-    private func rotatingChinTask(at date: Date) -> UserQueryNotchTask? {
+    private func rotatingChinTask(at date: Date) -> UserQueryConversation? {
         if let errored = surfacedTasks.first(where: { $0.status == .failed }) {
             return errored
         }
@@ -730,8 +730,8 @@ public struct UserQueryNotchStatusView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .onTapGesture {
-            if let taskID = primaryTask?.id {
-                taskSelected(taskID)
+            if let conversationID = primaryTask?.id {
+                taskSelected(conversationID)
             }
         }
     }
@@ -764,14 +764,14 @@ public struct UserQueryNotchStatusView: View {
 
     /// Trailing room a row's text leaves for the pinned top-right controls, by control set: a lone Close
     /// (or Stop) button, or a Resume + Close pair. Permission rows carry their own banner controls.
-    private func controlsReserve(for task: UserQueryNotchTask) -> CGFloat {
+    private func controlsReserve(for task: UserQueryConversation) -> CGFloat {
         if task.status == .waitingForPermission { return 0 }
         return rowShowsControlPair(task) ? 74 : 44
     }
 
     /// Whether a row shows a two-button pair (Resume + Close, or Reply + Close) vs a single Close/Stop —
     /// mirrors `stateControls`, so the title/subtext reserve the right trailing room for the controls.
-    private func rowShowsControlPair(_ task: UserQueryNotchTask) -> Bool {
+    private func rowShowsControlPair(_ task: UserQueryConversation) -> Bool {
         switch task.status {
         case .paused, .interrupted, .timedOut, .waitingForClarification, .waitingForReview:
             return true
@@ -787,7 +787,7 @@ public struct UserQueryNotchStatusView: View {
 
     /// Full opacity normally; while a reply is targeted, every row except the targeted one dims back so
     /// the user sees which thread their next message answers.
-    private func rowReplyDimOpacity(for task: UserQueryNotchTask) -> Double {
+    private func rowReplyDimOpacity(for task: UserQueryConversation) -> Double {
         guard let replyTargetTaskID else { return 1 }
         return task.id == replyTargetTaskID ? 1 : 0.5
     }
@@ -796,11 +796,11 @@ public struct UserQueryNotchStatusView: View {
     /// row dims for a reply, so every thread still waiting on the user reads at a glance. Broader than
     /// `isAwaitingUserResponse` (which gates the Reply button): a permission request also waits on the
     /// user and pulses for attention, but is answered with Approve / Deny rather than Reply.
-    private func isWaitingOnUser(_ task: UserQueryNotchTask) -> Bool {
+    private func isWaitingOnUser(_ task: UserQueryConversation) -> Bool {
         task.status.isAwaitingUserResponse || task.status == .waitingForPermission
     }
 
-    private func taskRow(_ task: UserQueryNotchTask) -> some View {
+    private func taskRow(_ task: UserQueryConversation) -> some View {
         let isPermission = task.status == .waitingForPermission
         // The reply dim is applied per-element rather than to the whole row so the pointer of a task that
         // itself needs the user can stay lit while everything else recedes.
@@ -912,7 +912,7 @@ public struct UserQueryNotchStatusView: View {
     /// Controls pinned to the row's top-right. Like the prototype, every task carries a real control:
     /// running → stop; paused → resume + close; everything else → close, so any task can be deleted.
     @ViewBuilder
-    private func topRightControls(_ task: UserQueryNotchTask) -> some View {
+    private func topRightControls(_ task: UserQueryConversation) -> some View {
         switch task.status {
         case .waitingForPermission:
             // The permission banner carries its own Approve / Deny; the row needs no extra control.
@@ -923,7 +923,7 @@ public struct UserQueryNotchStatusView: View {
     }
 
     @ViewBuilder
-    private func stateControls(for task: UserQueryNotchTask) -> some View {
+    private func stateControls(for task: UserQueryConversation) -> some View {
         switch task.status {
         case .running:
             // Stop = pause (same affordance the prototype uses for a running task).
@@ -954,7 +954,7 @@ public struct UserQueryNotchStatusView: View {
     }
 
     @ViewBuilder
-    private func resumeAndCloseControls(for task: UserQueryNotchTask) -> some View {
+    private func resumeAndCloseControls(for task: UserQueryConversation) -> some View {
         HStack(spacing: 6) {
             NotchControlButton(systemName: "play.fill", label: "Resume", isEnabled: true) {
                 resumeRequested(task.id)
@@ -968,7 +968,7 @@ public struct UserQueryNotchStatusView: View {
     /// A task waiting on the user gets Reply (answer the clarification / respond to the review) + Close.
     /// Reply pins the composer to this task and focuses the input; the user's next message answers it.
     @ViewBuilder
-    private func replyAndCloseControls(for task: UserQueryNotchTask) -> some View {
+    private func replyAndCloseControls(for task: UserQueryConversation) -> some View {
         HStack(spacing: 6) {
             NotchTextButton(label: "Reply", isEnabled: true) {
                 replyRequested(task.id)
@@ -979,7 +979,7 @@ public struct UserQueryNotchStatusView: View {
         }
     }
 
-    private func closeControl(for task: UserQueryNotchTask) -> some View {
+    private func closeControl(for task: UserQueryConversation) -> some View {
         NotchControlButton(systemName: "xmark", label: "Close", isEnabled: true) {
             dismissRequested(task.id)
         }
@@ -988,7 +988,7 @@ public struct UserQueryNotchStatusView: View {
     /// Live ticking time while running; a frozen total once the task has stopped or finished. Both use
     /// the prototype's row time style (10px, 55% white) so every row's time matches regardless of status.
     @ViewBuilder
-    private func taskElapsedLabel(_ task: UserQueryNotchTask) -> some View {
+    private func taskElapsedLabel(_ task: UserQueryConversation) -> some View {
         if task.status == .running {
             TimelineView(.periodic(from: task.createdAt, by: 1)) { context in
                 taskElapsedText(Self.elapsedDescription(from: task.createdAt, to: context.date))
@@ -1009,7 +1009,7 @@ public struct UserQueryNotchStatusView: View {
     /// A permission request banner below the task text: the request reads on the left, Approve / Deny
     /// on the right. The system permission is only requested once the user taps Approve; Deny stops
     /// the task — the harness never reaches the system without the user's go-ahead.
-    private func permissionBanner(for task: UserQueryNotchTask) -> some View {
+    private func permissionBanner(for task: UserQueryConversation) -> some View {
         HStack(spacing: 8) {
             Text(permissionRequestText(task))
                 .font(.system(size: 12, weight: .regular))
@@ -1034,13 +1034,13 @@ public struct UserQueryNotchStatusView: View {
 
     /// Whether this task failed for lack of credits and should show the reload CTA. Read from the typed
     /// metadata flag the harness sets — never inferred from the narration text.
-    private func showsReloadCreditsBanner(_ task: UserQueryNotchTask) -> Bool {
-        task.metadata[UserQueryTaskMetadataKey.creditReloadRequired] == "true"
+    private func showsReloadCreditsBanner(_ task: UserQueryConversation) -> Bool {
+        task.metadata[UserQueryConversationMetadataKey.creditReloadRequired] == "true"
     }
 
     /// A reload CTA on a credit-exhausted task. Reuses the permission banner's button styling; tapping
     /// it opens the billing page so the user can top up, then re-run the task (Close is still on the row).
-    private func reloadCreditsBanner(for task: UserQueryNotchTask) -> some View {
+    private func reloadCreditsBanner(for task: UserQueryConversation) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "creditcard")
                 .font(.system(size: 12, weight: .regular))
@@ -1068,7 +1068,7 @@ public struct UserQueryNotchStatusView: View {
     /// What the user is actually approving — named by the concrete action, never the word "tools".
     /// Prefers the shell command being requested, falls back to the gate's own reason, and never
     /// surfaces the runtime's internal "stopped" placeholder.
-    private func permissionRequestText(_ task: UserQueryNotchTask) -> String {
+    private func permissionRequestText(_ task: UserQueryConversation) -> String {
         if let command = task.metadata["genericHarness.shellConsent.command"]?
             .trimmingCharacters(in: .whitespacesAndNewlines), !command.isEmpty {
             return "Allow Donkey to run \(command)"
@@ -1272,7 +1272,7 @@ public struct UserQueryNotchStatusView: View {
     }
 
     /// The surfaced failure currently holding the chin, if any — drives the right-rail warning glyph.
-    private var surfacedErrorTask: UserQueryNotchTask? {
+    private var surfacedErrorTask: UserQueryConversation? {
         surfacedTasks.first { $0.status == .failed }
     }
 
@@ -1334,14 +1334,14 @@ public struct UserQueryNotchStatusView: View {
         accentColor(for: primaryTask?.accentIndex ?? accentIndex)
     }
 
-    private var primaryTask: UserQueryNotchTask? {
+    private var primaryTask: UserQueryConversation? {
         tasks.first
     }
 
 
     /// The task's status line, resolved through the centralized activity vocabulary so the notch and
     /// the future conversation view speak the same language.
-    private func taskStatusDescription(_ task: UserQueryNotchTask) -> String {
+    private func taskStatusDescription(_ task: UserQueryConversation) -> String {
         UserQueryActivity.current(for: task).displayText
     }
 
@@ -1674,15 +1674,15 @@ private struct DonkeyCursorMark: View {
 
 private final class DroppedAssetCollector: @unchecked Sendable {
     private let lock = NSLock()
-    private var drafts: [UserQueryTaskAssetDraft] = []
+    private var drafts: [UserQueryConversationAssetDraft] = []
 
-    func append(_ draft: UserQueryTaskAssetDraft) {
+    func append(_ draft: UserQueryConversationAssetDraft) {
         lock.lock()
         drafts.append(draft)
         lock.unlock()
     }
 
-    func values() -> [UserQueryTaskAssetDraft] {
+    func values() -> [UserQueryConversationAssetDraft] {
         lock.lock()
         let snapshot = drafts
         lock.unlock()
@@ -1711,7 +1711,7 @@ private enum DroppedAssetUtilities {
         return nil
     }
 
-    static func assetDraft(for url: URL) -> UserQueryTaskAssetDraft? {
+    static func assetDraft(for url: URL) -> UserQueryConversationAssetDraft? {
         guard url.isFileURL else { return nil }
 
         let contentType = (try? url.resourceValues(forKeys: [.contentTypeKey]).contentType?.preferredMIMEType)
@@ -1719,7 +1719,7 @@ private enum DroppedAssetUtilities {
             ?? "application/octet-stream"
         let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
         let byteCount = (attributes?[.size] as? NSNumber)?.int64Value
-        return UserQueryTaskAssetDraft(
+        return UserQueryConversationAssetDraft(
             displayName: url.lastPathComponent,
             contentType: contentType,
             urlString: url.absoluteString,

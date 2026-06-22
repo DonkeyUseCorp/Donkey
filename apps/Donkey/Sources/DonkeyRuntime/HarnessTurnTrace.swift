@@ -5,7 +5,7 @@ import Foundation
 /// run's whole decision path — what was sent to the model, what came back, which sensing modality each
 /// step used, and where the time went — is traceable in the thread file.
 ///
-/// It owns no file of its own; it renders through the turn's `ThreadTranscript` (kept as the sole
+/// It owns no file of its own; it renders through the turn's `ConversationTranscript` (kept as the sole
 /// writer of `thread.md`) and adds the timing the transcript can't see on its own. The model boundaries
 /// hold this as `any HarnessTurnTracing` and only `recordModelCall`; the command handler holds the
 /// concrete type and additionally drives `recordStep` / `recordTurnTiming`.
@@ -15,11 +15,11 @@ import Foundation
 /// One-shot calls (understanding, the background summary) are recorded for visibility but never counted
 /// toward a step, so they can't inflate the next step's timing.
 ///
-/// Concurrency mirrors `ThreadTranscript`: a `final class` with an `NSLock` guarding the small timing
+/// Concurrency mirrors `ConversationTranscript`: a `final class` with an `NSLock` guarding the small timing
 /// accumulator, so it's callable synchronously from the planner's hot path and from the `@MainActor`
 /// step callback without actor hops.
 public final class HarnessTurnTrace: HarnessTurnTracing, @unchecked Sendable {
-    private let transcript: ThreadTranscript
+    private let transcript: ConversationTranscript
     private let now: @Sendable () -> RunTraceTimestamp
     private let lock = NSLock()
 
@@ -32,7 +32,7 @@ public final class HarnessTurnTrace: HarnessTurnTracing, @unchecked Sendable {
     /// `now` is the clock used to stamp when a step lands (for tool-time); it defaults to the real
     /// wall+monotonic clock and is injectable so tests can drive deterministic durations.
     public init(
-        transcript: ThreadTranscript,
+        transcript: ConversationTranscript,
         now: @escaping @Sendable () -> RunTraceTimestamp = RunTraceTimestamp.now
     ) {
         self.transcript = transcript
@@ -126,7 +126,7 @@ public final class HarnessTurnTrace: HarnessTurnTracing, @unchecked Sendable {
         switch kind {
         case .understanding: return "understanding"
         case .plannerStep: return "planner step"
-        case .threadSummary: return "thread summary"
+        case .conversationSummary: return "thread summary"
         }
     }
 
