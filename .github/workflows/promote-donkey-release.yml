@@ -122,7 +122,7 @@ jobs:
         env:
           CERT_P12: ${{ secrets.DONKEY_DEVELOPER_ID_CERT_P12 }}
           CERT_PASSWORD: ${{ secrets.DONKEY_DEVELOPER_ID_CERT_PASSWORD }}
-          SIGN_IDENTITY: ${{ secrets.DONKEY_TOOLS_SIGN_IDENTITY }}
+          SIGN_IDENTITY: ${{ secrets.DONKEY_APP_SIGN_IDENTITY }}
           NOTARY_KEY_P8: ${{ secrets.DONKEY_NOTARY_KEY_P8 }}
         run: |
           if [ -z "$CERT_P12" ] || [ -z "$SIGN_IDENTITY" ]; then
@@ -140,6 +140,19 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kpw" "$keychain" >/dev/null
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | sed -e 's/"//g')
           rm -f "$RUNNER_TEMP/cert.p12"
+
+          # Show what actually landed in the keychain. The identity name is a registered secret so GitHub
+          # masks it as ***, but the "N valid identities found" count is not: 0 means the .p12 had no usable
+          # codesigning identity (typically a cert exported without its private key); 1+ means the cert+key
+          # imported fine and any later "no identity found" is a name mismatch with DONKEY_APP_SIGN_IDENTITY.
+          echo "Codesigning identities in the signing keychain:"
+          security find-identity -v -p codesigning "$keychain"
+          # Fail here with an actionable message rather than letting codesign abort later with a terse error.
+          if ! security find-identity -v -p codesigning "$keychain" | grep -qF "$SIGN_IDENTITY"; then
+            echo "::error::Requested signing identity not present in the keychain. Confirm DONKEY_APP_SIGN_IDENTITY matches the cert's name exactly (no trailing whitespace) and that DONKEY_DEVELOPER_ID_CERT_P12 includes the private key."
+            exit 1
+          fi
+          echo "Requested signing identity is present and usable."
           if [ -n "$NOTARY_KEY_P8" ]; then
             echo "$NOTARY_KEY_P8" | base64 --decode > "$RUNNER_TEMP/notary.p8"
           fi
