@@ -112,6 +112,10 @@ public enum DonkeyPrompts {
         - needsClarification: set true ONLY when the request is genuinely ambiguous or missing detail
           that you cannot reasonably resolve, or when it is destructive without a clear target. For an
           under-specified but low-risk, reversible request, pick sensible specifics and set this false.
+          Do NOT ask for a detail the request already implies (the request named the language, the
+          source, or the file — use it), and do NOT ask the user to choose HOW to do the work or
+          whether some resource exists; deciding the method and finding things out yourself is your
+          job, not a question for the user.
         - clarifyingQuestion: the single question to ask when needsClarification is true; otherwise empty.
         - executionPreference: "background" or "foreground". Choose "foreground" ONLY when the point of
           the request is for the user to watch or be shown the result on screen — e.g. "pull up…",
@@ -139,7 +143,6 @@ public enum DonkeyPrompts {
         appName: String,
         appGuidance: String?,
         understanding: HarnessRequestUnderstanding?,
-        environmentSummary: String?,
         skillCatalog: String? = nil,
         rollingContext: String? = nil,
         retryNote: String? = nil,
@@ -164,10 +167,6 @@ public enum DonkeyPrompts {
             : "\nADDITIONAL INSTRUCTIONS FROM THE USER (sent after the task started — fold them into your "
                 + "current work; do NOT restart from scratch or redo completed steps):\n"
                 + String(followUpInstructions.prefix(800)) + "\n"
-
-        let environmentBlock = (environmentSummary?.isEmpty == false)
-            ? "\nENVIRONMENT (command-line tools on this Mac — only reach for what's installed):\n  \(environmentSummary!)\n"
-            : ""
 
         let historyBlock = harnessStepHistoryBlock(task.toolHistory)
 
@@ -223,7 +222,7 @@ public enum DonkeyPrompts {
         GOAL: \(goalText)
         \(followUpBlock)\(understandingBlock)\(rollingContextBlock)
         \(historyBlock)
-        \(factsBlock)\(environmentBlock)\(guidanceBlock)\(skillCatalogBlock)\(windowsBlock)
+        \(factsBlock)\(guidanceBlock)\(skillCatalogBlock)\(windowsBlock)
         \(elementsBlock)
 
         AVAILABLE TOOLS:
@@ -235,6 +234,11 @@ public enum DonkeyPrompts {
           pmset -g batt, system_profiler, defaults read), and change settings (defaults write,
           networksetup). Read-only commands run instantly; state-changing ones ask the user for
           one-time or always-allow consent, so propose them freely rather than avoiding them.
+        - Discover what's available by DOING, not by guessing or pre-checking. Run the command you
+          need by bare name; don't probe whether a tool exists first. If it fails with `command not
+          found`, adapt: reach for another tool that does the job, or — if the task genuinely needs
+          that one — report what's missing. Never install software or use a package manager (pip,
+          brew, npm, etc.); a missing tool is reported, not fetched.
         - Only operate the GUI when the task genuinely needs it (canvas/Electron/proprietary UI, or no
           system-tool equivalent). When you do: SEE before you act — prefer ax.observe (fast,
           structured) for native apps; use vision.capture when Accessibility is missing or insufficient
@@ -275,7 +279,11 @@ public enum DonkeyPrompts {
         - If the request is a question or chit-chat rather than an action, answer with
           conversation.respond (set input.response), then run.complete.
         - If a required detail is missing and you cannot safely proceed, use user.clarify
-          (set input.question). Low-risk, reversible actions (play, open, search, draft, navigate)
+          (set input.question). Clarify only a genuinely missing, user-owned detail (which of two
+          accounts, which named file). Never ask the user to choose HOW to accomplish something, to
+          pick an intermediate format, or to confirm whether a resource exists — decide the method and
+          find out yourself. If the request already names the target, source, or language, use it
+          rather than asking again. Low-risk, reversible actions (play, open, search, draft, navigate)
           need no confirmation — just do them. But before an action that is destructive, costly,
           externally visible, or hard to undo (sending a message, posting, purchasing, deleting,
           sharing private data) and goes beyond what the user explicitly asked for, confirm with

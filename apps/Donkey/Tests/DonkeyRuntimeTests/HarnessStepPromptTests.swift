@@ -22,7 +22,6 @@ struct HarnessStepPromptTests {
             appName: "iTerm2",
             appGuidance: nil,
             understanding: nil,
-            environmentSummary: nil,
             skillCatalog: catalog
         )
         #expect(prompt.contains("authoritative playbooks for these apps/domains"))
@@ -39,7 +38,6 @@ struct HarnessStepPromptTests {
             appName: "iTerm2",
             appGuidance: nil,
             understanding: nil,
-            environmentSummary: nil,
             skillCatalog: nil
         )
         #expect(!prompt.contains("authoritative playbooks for these apps/domains"))
@@ -65,7 +63,6 @@ struct HarnessStepPromptTests {
             appName: "Notes",
             appGuidance: nil,
             understanding: nil,
-            environmentSummary: nil,
             openWindows: [window(app: "Safari", title: "GitHub", frontmost: true)]
         )
         #expect(prompt.contains("OPEN WINDOWS"))
@@ -83,7 +80,6 @@ struct HarnessStepPromptTests {
             appName: "iTerm2",
             appGuidance: nil,
             understanding: nil,
-            environmentSummary: nil,
             openWindows: []
         )
         #expect(!prompt.contains("OPEN WINDOWS"))

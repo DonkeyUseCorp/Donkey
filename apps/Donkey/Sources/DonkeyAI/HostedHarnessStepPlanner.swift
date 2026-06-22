@@ -21,9 +21,6 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     /// clarify gate. nil when the upfront understanding call was skipped or failed, in which case the
     /// planner falls back to the raw task goal.
     private let understanding: HarnessRequestUnderstanding?
-    /// One-line summary of which command-line tools are installed on this Mac (and versions), so the
-    /// planner only reaches for tools that exist. Empty when the probe was skipped or found nothing.
-    private let environmentSummary: String?
     /// Compact catalog of every installed app skill (id, description, covered apps, validated scripts),
     /// so the planner can route to an authoritative playbook even when no GUI app is the drive target —
     /// e.g. playing music or saving a note by script. nil when no skills are installed.
@@ -79,7 +76,6 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         appName: String,
         appGuidance: String?,
         understanding: HarnessRequestUnderstanding? = nil,
-        environmentSummary: String? = nil,
         skillCatalog: String? = nil,
         trace: (any HarnessTurnTracing)? = nil,
         openWindows: @escaping @Sendable () -> [MacWindowTargetCandidate] = { [] },
@@ -91,7 +87,6 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         self.appName = appName
         self.appGuidance = appGuidance
         self.understanding = understanding
-        self.environmentSummary = environmentSummary
         self.skillCatalog = skillCatalog
         self.trace = trace
         self.openWindows = openWindows
@@ -383,7 +378,6 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
             appName: appName,
             appGuidance: appGuidance,
             understanding: understanding,
-            environmentSummary: environmentSummary,
             skillCatalog: skillCatalog,
             rollingContext: rollingContext,
             retryNote: retryNote,

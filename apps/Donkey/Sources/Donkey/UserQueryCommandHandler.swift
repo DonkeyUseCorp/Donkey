@@ -663,7 +663,6 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             registry: registry
         )
         let plannerDescriptors = await registry.descriptors()
-        let environmentSummary = await SystemToolCapabilityProbe.shared.summary()
         // Every step, surface the other windows on screen (all apps/displays) to the planner so a
         // request that lives in a window the user isn't looking at can be found and switched to. Donkey's
         // own windows are filtered out by bundle id so the agent never targets its own overlay.
@@ -674,7 +673,6 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             appName: appName,
             appGuidance: appGuidance,
             understanding: understanding,
-            environmentSummary: environmentSummary,
             skillCatalog: Self.installedSkillCatalog(),
             trace: trace,
             openWindows: {
