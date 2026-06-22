@@ -674,20 +674,25 @@ public enum DonkeyCommandBackends {
         )
     }
 
-    /// The bundled command-line tools directory inside the packaged app
-    /// (`…/Contents/Resources/donkey-tools`). Skills invoke `ffmpeg`/`yt-dlp` and the
-    /// other bundled tools by bare name and rely on this being on the shell PATH.
-    /// `nil` in dev/test builds (SwiftPM) where no packaged tools directory exists,
-    /// so the environment is left to inherit unchanged there.
-    static let bundledToolsDirectory: URL? = {
-        guard let dir = Bundle.main.resourceURL?
-            .appendingPathComponent("donkey-tools", isDirectory: true),
-            FileManager.default.fileExists(atPath: dir.path)
-        else {
-            return nil
+    /// The directory holding the bundled command-line tools (`ffmpeg`/`yt-dlp`/...), which skills invoke
+    /// by bare name and rely on being on the shell PATH. Resolved fresh each call (not cached) so tools
+    /// that `BundledToolsInstaller` downloads after launch are picked up without a relaunch.
+    ///
+    /// Preference order: the first-run download in Application Support, then a copy baked into the app
+    /// bundle (the offline override, or a dev symlink). `nil` when neither exists, so the child process
+    /// inherits the environment unchanged and skills fall back to whatever the user has installed.
+    static var bundledToolsDirectory: URL? {
+        let installed = BundledTools.installDirectory
+        if BundledTools.isInstalled(at: installed) {
+            return installed
         }
-        return dir
-    }()
+        if let baked = Bundle.main.resourceURL?
+            .appendingPathComponent("donkey-tools", isDirectory: true),
+            FileManager.default.fileExists(atPath: baked.path) {
+            return baked
+        }
+        return nil
+    }
 
     /// The environment for a `shell_exec` child: the app's environment with the bundled
     /// tools directory appended to PATH. Appended, not prepended, so a tool the user has

@@ -40,6 +40,7 @@ let package = Package(
             ],
             resources: [
                 .process("Resources/local-app-finder-profiles.json"),
+                .process("Resources/bundled-tools.json"),
                 .copy("Resources/BuiltInSkills")
             ],
             swiftSettings: [

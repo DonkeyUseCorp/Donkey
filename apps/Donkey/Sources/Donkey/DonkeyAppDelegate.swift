@@ -32,6 +32,13 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // Kick off the first-run download of the bundled CLI tools (ffmpeg/yt-dlp/...) in the background,
+        // so a later media task runs them by bare name instead of hunting for Homebrew. Non-blocking and a
+        // no-op once the current version is installed or when nothing is published yet.
+        Task.detached(priority: .utility) {
+            await BundledToolsInstaller.shared.installIfNeeded()
+        }
+
         let authCoordinator = DonkeyAuthCoordinator()
         self.authCoordinator = authCoordinator
         // Seed the process-wide session gate before any surface is built, so the warm cache, Live

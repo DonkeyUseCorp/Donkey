@@ -10,6 +10,12 @@ tools: shell_exec, llm.generate
 name. Downloading and writing files is reversible — propose the command and let
 the consent gate handle approval; do not fall back to a browser.
 
+Never probe for or install Homebrew (or any package manager), and never check
+whether these tools exist first — just run them by bare name. The app installs
+them itself on first launch; if one is briefly missing the command fails with
+`command not found`, in which case say the media tools are still installing and
+stop. Do not try to install anything.
+
 ## Download from a URL (yt-dlp)
 - Always single-quote the URL — `?` and `&` are shell metacharacters: `yt-dlp -P ~/Downloads 'URL'`.
 - Default the destination to `~/Downloads`; honor a different folder only if the user names one. yt-dlp already picks the best quality.
