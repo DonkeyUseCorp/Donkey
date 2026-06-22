@@ -792,10 +792,12 @@ public struct UserQueryNotchStatusView: View {
         return task.id == replyTargetTaskID ? 1 : 0.5
     }
 
-    /// A task blocked on the user — the white attention state. Its pointer stays lit even when the row
-    /// dims for a reply, so every thread still waiting on the user reads at a glance.
-    private func isWaitingForReply(_ task: UserQueryNotchTask) -> Bool {
-        task.status.isAwaitingUserResponse
+    /// A task blocked on the user — the attention state. Its pointer stays lit and pulses even when the
+    /// row dims for a reply, so every thread still waiting on the user reads at a glance. Broader than
+    /// `isAwaitingUserResponse` (which gates the Reply button): a permission request also waits on the
+    /// user and pulses for attention, but is answered with Approve / Deny rather than Reply.
+    private func isWaitingOnUser(_ task: UserQueryNotchTask) -> Bool {
+        task.status.isAwaitingUserResponse || task.status == .waitingForPermission
     }
 
     private func taskRow(_ task: UserQueryNotchTask) -> some View {
@@ -805,7 +807,7 @@ public struct UserQueryNotchStatusView: View {
         let contentDim = rowReplyDimOpacity(for: task)
         let isReplyTarget = replyTargetTaskID == task.id
         let isSelected = selectedTaskID == task.id
-        let pointerDim = (isWaitingForReply(task) || isSelected) ? 1 : contentDim
+        let pointerDim = (isWaitingOnUser(task) || isSelected) ? 1 : contentDim
         return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 12) {
                 // Colored pointer while actively running; silhouette once stopped or finished — but the
@@ -819,7 +821,7 @@ public struct UserQueryNotchStatusView: View {
                     .padding(.top, 1)
                     .opacity(pointerDim)
                     // A task waiting on the user gently pulses its pointer to call attention.
-                    .modifier(AttentionPulse(active: isWaitingForReply(task)))
+                    .modifier(AttentionPulse(active: isWaitingOnUser(task)))
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(task.title)
@@ -968,11 +970,8 @@ public struct UserQueryNotchStatusView: View {
     @ViewBuilder
     private func replyAndCloseControls(for task: UserQueryNotchTask) -> some View {
         HStack(spacing: 6) {
-            NotchControlButton(label: "Reply", isEnabled: true) {
+            NotchTextButton(label: "Reply", isEnabled: true) {
                 replyRequested(task.id)
-            } icon: {
-                MessageSquareReplyMark()
-                    .frame(width: 12, height: 12)
             }
             NotchControlButton(systemName: "xmark", label: "Close", isEnabled: true) {
                 dismissRequested(task.id)
@@ -1012,10 +1011,6 @@ public struct UserQueryNotchStatusView: View {
     /// the task — the harness never reaches the system without the user's go-ahead.
     private func permissionBanner(for task: UserQueryNotchTask) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: "lock.shield")
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(Color.white.opacity(0.7))
-
             Text(permissionRequestText(task))
                 .font(.system(size: 12, weight: .regular))
                 .foregroundStyle(Color.white.opacity(0.7))
@@ -1031,11 +1026,10 @@ public struct UserQueryNotchStatusView: View {
                 denyPermissionRequested(task.id)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        // Aligns the prompt under the task title (pointer width 14 + the row's 12 spacing) so it reads
+        // as part of the row rather than a nested card.
+        .padding(.leading, 26)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.05))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     /// Whether this task failed for lack of credits and should show the reload CTA. Read from the typed
@@ -1196,14 +1190,7 @@ public struct UserQueryNotchStatusView: View {
     }
 
     private func activityBars(color: Color, height: CGFloat = 18) -> some View {
-        HStack(spacing: 3) {
-            ForEach([0.44, 0.82, 0.58], id: \.self) { scale in
-                Capsule(style: .continuous)
-                    .fill(color)
-                    .frame(width: 3, height: height * scale)
-            }
-        }
-        .frame(width: 18, height: height)
+        ActivityBars(color: color, height: height)
     }
 
     private var taskTitle: String {
@@ -1265,8 +1252,8 @@ public struct UserQueryNotchStatusView: View {
                 // Attention: the agent is blocked waiting for the user to answer or review something.
                 slotIcon("exclamationmark.bubble")
             case .waitingForPermission:
-                // Missing permission to continue.
-                slotIcon("shield")
+                // Waiting on the user, same as a clarification or review — show the attention "!" glyph.
+                slotIcon("exclamationmark.bubble")
             case .running:
                 compactLiveTime(since: task.createdAt)
             case .completed, .paused, .interrupted, .failed, .chatting, .needsAttention, .timedOut:
@@ -1517,6 +1504,73 @@ private struct NotchControlButton: View {
     }
 }
 
+/// A rectangular text control (e.g. Reply). Shares NotchControlButton's enabled/hover tinting, but
+/// renders a labeled pill instead of a 24×24 icon circle so the action reads as a word, not a glyph.
+private struct NotchTextButton: View {
+    let label: String
+    let isEnabled: Bool
+    let action: @MainActor () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.white.opacity(isEnabled ? 0.88 : 0.3))
+                .padding(.horizontal, 10)
+                .frame(height: 24)
+                .background(Color.white.opacity(backgroundOpacity))
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .accessibilityLabel(label)
+        .onHover { hovering in
+            isHovering = hovering && isEnabled
+        }
+        .animation(.easeOut(duration: 0.12), value: isHovering)
+    }
+
+    private var backgroundOpacity: Double {
+        guard isEnabled else { return 0.055 }
+        return isHovering ? 0.2 : 0.12
+    }
+}
+
+/// The working indicator: three capsules that rise and fall out of phase like an audio level meter, so a
+/// running task reads as actively in motion rather than a static glyph. Driven off a frame-stepped
+/// timeline (only ever on screen while a task is working), each bar offset on the sine so they ripple
+/// instead of pumping in unison.
+private struct ActivityBars: View {
+    let color: Color
+    var height: CGFloat = 18
+
+    // Per-bar phase offsets (radians) so the three bars crest at different moments.
+    private static let phases: [Double] = [0, 1.1, 2.2]
+    private static let speed = 5.5
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 3) {
+                ForEach(Array(Self.phases.enumerated()), id: \.offset) { _, phase in
+                    Capsule(style: .continuous)
+                        .fill(color)
+                        .frame(width: 3, height: barHeight(at: t, phase: phase))
+                }
+            }
+            .frame(width: 18, height: height, alignment: .center)
+        }
+    }
+
+    /// Oscillates each bar between ~0.3 and 1.0 of the full height.
+    private func barHeight(at t: Double, phase: Double) -> CGFloat {
+        let unit = (sin(t * Self.speed + phase) + 1) / 2  // 0...1
+        return height * (0.3 + 0.7 * unit)
+    }
+}
+
 /// A gentle, slow pulse (scale + fade) used to call attention to a task that is waiting on the user,
 /// without the urgency of the running-pointer pulse. Inert until `active`, so non-waiting rows are still.
 private struct AttentionPulse: ViewModifier {
@@ -1541,49 +1595,6 @@ private struct AttentionPulse: ViewModifier {
         guard !pulsing else { return }
         withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
             pulsing = true
-        }
-    }
-}
-
-/// Lucide `message-square-reply`, ported from the icon set the prototype uses (24×24 viewBox, 2px round
-/// stroke) so the Reply control matches it. The bubble corners and the reply hook keep their 2px radius;
-/// the small tail roundings are simplified to straight joins at this size. Strokes in the current
-/// foreground style, so the enclosing button tints it like an SF Symbol.
-private struct MessageSquareReplyMark: View {
-    var body: some View {
-        GeometryReader { proxy in
-            let scale = min(proxy.size.width, proxy.size.height) / 24
-            Self.path(scale: scale)
-                .stroke(style: StrokeStyle(lineWidth: 2 * scale, lineCap: .round, lineJoin: .round))
-        }
-        .aspectRatio(1, contentMode: .fit)
-        .accessibilityHidden(true)
-    }
-
-    private static func path(scale: CGFloat) -> Path {
-        Path { p in
-            func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x * scale, y: y * scale) }
-            let r = 2 * scale
-
-            // Speech bubble: a rounded rectangle with a reply tail at the bottom-left.
-            p.move(to: pt(4, 3))
-            p.addArc(tangent1End: pt(22, 3), tangent2End: pt(22, 19), radius: r)
-            p.addArc(tangent1End: pt(22, 19), tangent2End: pt(2, 19), radius: r)
-            p.addLine(to: pt(6.828, 19))
-            p.addLine(to: pt(3.212, 21.788))
-            p.addLine(to: pt(2, 21.286))
-            p.addArc(tangent1End: pt(2, 3), tangent2End: pt(22, 3), radius: r)
-            p.closeSubpath()
-
-            // Reply arrow chevron.
-            p.move(to: pt(10, 8))
-            p.addLine(to: pt(7, 11))
-            p.addLine(to: pt(10, 14))
-
-            // Hook from the arrow back up into the bubble.
-            p.move(to: pt(17, 14))
-            p.addArc(tangent1End: pt(17, 11), tangent2End: pt(7, 11), radius: r)
-            p.addLine(to: pt(7, 11))
         }
     }
 }
