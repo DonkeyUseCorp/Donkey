@@ -48,11 +48,28 @@ export type VisionUsage = {
   extraRemaining: number;
   periodStart: string | null;
   periodEnd: string | null;
+  // Recent inference calls across products (app + Vision API), newest first.
   recent: {
     createdAt: string;
-    model: string;
+    // "app" = Pro/credit-billed app inference; "vision" = Vision API call.
+    product: "app" | "vision";
     requestKind: string;
+    model: string;
     status: string;
+    // USD cost charged to credits; "included" calls (Vision quota/grants) are 0.
+    costCredits: string;
+    billingStatus: string;
+    errorCode: string | null;
+    // Token breakdown that explains the cost.
+    usage: {
+      inputTokens: number;
+      cachedInputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      // Images produced by asset_generation calls (priced per image).
+      generationCount: number;
+      durationMillis: number;
+    };
   }[];
 };
 

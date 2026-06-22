@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 const navItems = [
   { href: "/app/settings", label: "Overview" },
+  { href: "/app/settings/usage", label: "Usage" },
   { href: "/app/settings/api-keys", label: "API keys" },
 ];
 

@@ -1,33 +1,37 @@
 "use client";
 
-import { useUsage } from "@/queries/billing";
-import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { useProSubscription, useUsage } from "@/queries/billing";
+import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
-  TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatUsd } from "@/lib/credits/format-usd";
+
+// One labeled usage line (product on the left, status/amount on the right).
+function UsageRow({ label, value }: { label: string; value: string }) {
+  return (
+    <TableRow>
+      <TableCell className="font-medium text-foreground">{label}</TableCell>
+      <TableCell className="text-right text-muted-foreground">
+        {value}
+      </TableCell>
+    </TableRow>
+  );
+}
 
 export function UsageCard() {
   const usage = useUsage();
+  const pro = useProSubscription();
 
+  // Only gate on the Vision usage query; the Pro row degrades on its own so a
+  // slow or failing Pro request never blocks the Vision summary from rendering.
   if (usage.isLoading) {
     return (
       <Card>
-        <CardHeader>
-          <Skeleton className="h-6 w-32" />
-        </CardHeader>
         <CardContent>
           <Skeleton className="h-24 w-full" />
         </CardContent>
@@ -43,22 +47,53 @@ export function UsageCard() {
       ? Math.min(100, Math.round((data.used / limit) * 100))
       : 0;
 
+  // Donkey Pro is the app-inference subscription; its included allowance is spent
+  // separately from the Vision API quota below. Used = allowance − remaining.
+  const proData = pro.data;
+  const proActive = proData?.isActive ?? false;
+  const proAllowance =
+    proData?.monthlyAllowance != null
+      ? Number.parseFloat(proData.monthlyAllowance)
+      : null;
+  const proRemaining = Number.parseFloat(proData?.allowanceRemaining ?? "0");
+  const proUsed =
+    proAllowance != null ? Math.max(0, proAllowance - proRemaining) : null;
+
+  // Don't assert "No Pro plan" while the Pro query is still loading or errored —
+  // that would mislabel an actual Pro user. Only claim it once we have data.
+  const proStatus = pro.isLoading
+    ? "Loading…"
+    : proActive && proUsed != null && proData?.monthlyAllowance != null
+      ? `${formatUsd(String(proUsed))} of ${formatUsd(proData.monthlyAllowance)} used this month`
+      : pro.isError
+        ? "Unavailable"
+        : "No Pro plan — using credits";
+
+  const visionStatus =
+    data && limit > 0
+      ? `${data.used.toLocaleString()} of ${limit.toLocaleString()} calls used · ${data.remaining.toLocaleString()} remaining`
+      : extra > 0
+        ? "No subscription — using your extra calls"
+        : "No active plan — subscribe to start making calls";
+
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>Usage this period</CardTitle>
-        <CardDescription>
-          {data && limit > 0
-            ? `${data.used.toLocaleString()} of ${limit.toLocaleString()} calls used · ${data.remaining.toLocaleString()} remaining`
-            : extra > 0
-              ? "No subscription — using your extra calls."
-              : "No active plan — subscribe to start making calls."}
-        </CardDescription>
-      </CardHeader>
       <CardContent className="space-y-4">
+        <Table>
+          <TableBody>
+            <UsageRow label="Donkey Pro (app)" value={proStatus} />
+            <UsageRow label="Vision API" value={visionStatus} />
+            {extra > 0 ? (
+              <UsageRow
+                label="Extra Vision API calls"
+                value={`${extra.toLocaleString()} available`}
+              />
+            ) : null}
+          </TableBody>
+        </Table>
         {data && limit > 0 ? (
           <div
-            aria-label="Quota used"
+            aria-label="Vision API quota used"
             className="h-2 w-full overflow-hidden rounded-full bg-muted"
           >
             <div
@@ -67,57 +102,6 @@ export function UsageCard() {
             />
           </div>
         ) : null}
-
-        {extra > 0 ? (
-          <div className="flex items-baseline justify-between rounded-md border bg-muted/40 px-3 py-2">
-            <span className="text-sm font-medium text-foreground">
-              Extra calls
-            </span>
-            <span className="text-sm text-muted-foreground">
-              {extra.toLocaleString()} available
-            </span>
-          </div>
-        ) : null}
-
-        <div>
-          <h3 className="mb-2 text-sm font-medium">Recent calls</h3>
-          {data && data.recent.length > 0 ? (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>When</TableHead>
-                  <TableHead>Kind</TableHead>
-                  <TableHead>Model</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data.recent.map((event, index) => (
-                  <TableRow key={`${event.createdAt}-${index}`}>
-                    <TableCell>
-                      {new Date(event.createdAt).toLocaleString()}
-                    </TableCell>
-                    <TableCell>{event.requestKind}</TableCell>
-                    <TableCell>{event.model}</TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={
-                          event.status === "succeeded"
-                            ? "secondary"
-                            : "destructive"
-                        }
-                      >
-                        {event.status}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          ) : (
-            <p className="text-sm text-muted-foreground">No calls yet.</p>
-          )}
-        </div>
       </CardContent>
     </Card>
   );
