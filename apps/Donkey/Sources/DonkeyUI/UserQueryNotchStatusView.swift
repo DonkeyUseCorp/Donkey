@@ -381,8 +381,11 @@ public struct UserQueryNotchStatusView: View {
     private var fullWidthCollapsedContent: some View {
         HStack(spacing: 7) {
             pointerCluster(size: 14)
+                // While a task waits on the user, its pointer stays lit and pulses for attention — the
+                // same cue the expanded row gives — so the blocked thread reads at a glance.
+                .modifier(AttentionPulse(active: isPrimaryWaitingOnUser))
 
-            Text(taskTitle)
+            Text(collapsedHeadline)
                 .font(.system(size: 12, weight: .regular))
                 .foregroundStyle(Color.white.opacity(0.92))
                 .lineLimit(1)
@@ -392,6 +395,10 @@ public struct UserQueryNotchStatusView: View {
 
             if isWorking {
                 activityBars(color: accentColor, height: 12)
+            } else {
+                // With no work bars to show, the gutter carries the waiting-on-user "!" glyph (or the
+                // update cloud) so a notched host raises the same attention indicator as a void-aware one.
+                collapsedRightSlot
             }
         }
         .padding(.horizontal, max(10, layout.contentHorizontalInset))
@@ -409,6 +416,7 @@ public struct UserQueryNotchStatusView: View {
             let speaker = rotatingChinTask(at: context.date)
             ZStack {
                 pointerCluster(size: 14)
+                    .modifier(AttentionPulse(active: isPrimaryWaitingOnUser))
                     .position(x: collapsedLeadingLaneCenterX, y: layout.collapsedVisibleHeight / 2)
 
                 collapsedRightSlot
@@ -457,6 +465,11 @@ public struct UserQueryNotchStatusView: View {
     private func rotatingChinTask(at date: Date) -> UserQueryConversation? {
         if let errored = surfacedTasks.first(where: { $0.status == .failed }) {
             return errored
+        }
+        // A task blocked on the user is attention-worthy: hold the chin on it so its `chinDisplayText`
+        // (which is the agent's question once stopped, not the prompt) reads back what the agent is asking.
+        if let waiting = surfacedTasks.first(where: { isWaitingOnUser($0) }) {
+            return waiting
         }
         let running = surfacedTasks.filter { $0.status == .running }
         guard !running.isEmpty else {
@@ -1212,6 +1225,23 @@ public struct UserQueryNotchStatusView: View {
         }
     }
 
+    /// The collapsed headline. Normally the prompt (`taskTitle`); but while the primary task waits on the
+    /// user, the notch reads back the agent's question (carried in `detail`) instead, so the pill shows
+    /// what the agent is asking rather than echoing what the user originally typed.
+    private var collapsedHeadline: String {
+        if let primaryTask, isWaitingOnUser(primaryTask) {
+            let question = primaryTask.detail.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !question.isEmpty { return question }
+        }
+        return taskTitle
+    }
+
+    /// Whether the surfaced task is blocked on the user — drives the collapsed pointer's attention pulse.
+    private var isPrimaryWaitingOnUser: Bool {
+        guard let primaryTask else { return false }
+        return isWaitingOnUser(primaryTask)
+    }
+
     private var statusDescription: String {
         if let primaryTask {
             return taskStatusDescription(primaryTask)
@@ -1245,15 +1275,15 @@ public struct UserQueryNotchStatusView: View {
         if surfacedErrorTask != nil {
             // A surfaced failure (e.g. an auth error) raises the red warning glyph here while its message
             // holds the chin, until the user expands to acknowledge it.
-            slotIcon("exclamationmark.bubble", color: Self.chinErrorColor)
+            attentionGlyph(color: Self.chinErrorColor)
         } else if let task = primaryTask {
             switch task.status {
             case .waitingForClarification, .waitingForReview:
                 // Attention: the agent is blocked waiting for the user to answer or review something.
-                slotIcon("exclamationmark.bubble")
+                attentionGlyph()
             case .waitingForPermission:
-                // Waiting on the user, same as a clarification or review — show the attention "!" glyph.
-                slotIcon("exclamationmark.bubble")
+                // Waiting on the user, same as a clarification or review — show the attention glyph.
+                attentionGlyph()
             case .running:
                 compactLiveTime(since: task.createdAt)
             case .completed, .paused, .interrupted, .failed, .chatting, .needsAttention, .timedOut:
@@ -1281,6 +1311,18 @@ public struct UserQueryNotchStatusView: View {
             .font(.system(size: 11, weight: .regular))
             .foregroundStyle(color)
     }
+
+    /// The waiting-on-user attention glyph: the prototype's `MessageCircleWarning`. SF Symbols has no
+    /// faithful circular message-with-exclamation mark, so it is ported as a path (see
+    /// `DonkeyAttentionGlyph`) and rendered at the slot-icon's optical size.
+    private func attentionGlyph(color: Color = Color.white.opacity(0.85)) -> some View {
+        DonkeyAttentionGlyph(color: color)
+            .frame(width: Self.attentionGlyphSize, height: Self.attentionGlyphSize)
+    }
+
+    /// Sized to read alongside the 11pt slot text/clock; the Lucide art carries internal padding, so the
+    /// frame runs a touch larger than the SF-symbol icons to land at the same optical weight.
+    private static let attentionGlyphSize: CGFloat = 13
 
     private func slotText(_ text: String, opacity: Double = 0.72) -> some View {
         Text(text)
@@ -1668,6 +1710,57 @@ private struct DonkeyCursorMark: View {
                 control2: point(90.1598, 2.8077)
             )
             path.closeSubpath()
+        }
+    }
+}
+
+/// The waiting-on-user attention mark. Geometry is ported verbatim from the prototype's Notch icon —
+/// Lucide `MessageCircleWarning` (24×24 viewBox, stroked at width 1.9, round caps/joins) — so the app
+/// and landing-page prototype show the same glyph. The bubble's elliptical arcs are expressed as cubic
+/// Béziers; the exclamation is a vertical stroke plus a zero-length round-capped segment for the dot.
+private struct DonkeyAttentionGlyph: View {
+    var color: Color
+
+    var body: some View {
+        GeometryReader { proxy in
+            let scale = min(proxy.size.width, proxy.size.height) / 24
+            Self.glyphPath(scale: scale)
+                .stroke(
+                    color,
+                    style: StrokeStyle(lineWidth: 1.9 * scale, lineCap: .round, lineJoin: .round)
+                )
+        }
+        .aspectRatio(1, contentMode: .fit)
+        .accessibilityHidden(true)
+    }
+
+    private static func glyphPath(scale: CGFloat) -> Path {
+        Path { path in
+            func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+                CGPoint(x: x * scale, y: y * scale)
+            }
+
+            // Speech-bubble outline (Lucide's circle + tail).
+            path.move(to: point(2.992, 16.342))
+            path.addCurve(to: point(3.086, 17.509), control1: point(3.139, 16.713), control2: point(3.172, 17.119))
+            path.addLine(to: point(2.021, 20.799))
+            path.addCurve(to: point(2.314, 21.727), control1: point(1.951, 21.138), control2: point(2.062, 21.489))
+            path.addCurve(to: point(3.257, 21.967), control1: point(2.565, 21.965), control2: point(2.922, 22.056))
+            path.addLine(to: point(6.670, 20.969))
+            path.addCurve(to: point(7.769, 21.061), control1: point(7.038, 20.896), control2: point(7.419, 20.928))
+            path.addCurve(to: point(20.208, 17.713), control1: point(12.178, 23.120), control2: point(17.428, 21.707))
+            path.addCurve(to: point(19.028, 4.886), control1: point(22.987, 13.720), control2: point(22.489, 8.306))
+            path.addCurve(to: point(6.187, 3.863), control1: point(15.567, 1.467), control2: point(10.147, 1.035))
+            path.addCurve(to: point(2.992, 16.342), control1: point(2.228, 6.692), control2: point(0.880, 11.959))
+            path.closeSubpath()
+
+            // Exclamation stroke.
+            path.move(to: point(12, 8))
+            path.addLine(to: point(12, 12))
+
+            // Exclamation dot: a zero-length segment that the round line cap renders as a dot.
+            path.move(to: point(12, 16))
+            path.addLine(to: point(12.01, 16))
         }
     }
 }

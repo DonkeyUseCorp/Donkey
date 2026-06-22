@@ -856,14 +856,23 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         }
     }
 
-    /// The tasks the collapsed notch keeps surfaced as floating pointers: anything running, plus
-    /// terminal tasks (completed or failed) the user hasn't dismissed yet by expanding the notch. A
-    /// failure — like an auth error — holds the chin until acknowledged just as a completion does.
+    /// The tasks the collapsed notch keeps surfaced as floating pointers: anything running, anything
+    /// blocked on the user (a clarification, a review, or a permission), plus terminal tasks (completed
+    /// or failed) the user hasn't dismissed yet by expanding the notch. A failure — like an auth error —
+    /// holds the chin until acknowledged just as a completion does; a waiting task keeps its pointer lit
+    /// and pulsing (and its question in the chin) until the user answers.
     var notchSurfacedTasks: [UserQueryConversation] {
         notchTasks.filter { task in
             task.status == .running ||
+                Self.isWaitingOnUserStatus(task.status) ||
                 (Self.isSurfacedTerminalStatus(task.status) && !Self.isSeen(task))
         }
+    }
+
+    /// Whether a status is blocked waiting on the user — a clarification or review to answer, or a
+    /// permission to approve. Mirrors the notch view's `isWaitingOnUser`.
+    private static func isWaitingOnUserStatus(_ status: UserQueryConversationStatus) -> Bool {
+        status.isAwaitingUserResponse || status == .waitingForPermission
     }
 
     /// Marks every currently-terminal task (completed or failed) as seen so it stops surfacing in the
