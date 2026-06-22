@@ -89,22 +89,9 @@ jobs:
             brew install imagemagick
           fi
 
-      # The bundled CLI tools (ffmpeg, lit, pdf-fill, qpdf, …) are gitignored and
-      # built/fetched by fetch-bundled-tools.sh. Cache the result so we don't rebuild
-      # ffmpeg/Rust from source every night; the key busts when the recipe or the
-      # in-repo pdf-fill source changes.
-      - name: Restore bundled tools cache
-        if: steps.changes.outputs.should_build == 'true'
-        id: tools-cache
-        uses: actions/cache@v4
-        with:
-          path: vendor/donkey-tools
-          key: donkey-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-bundled-tools.sh', 'tools/pdf-fill/main.swift') }}
-
-      - name: Vendor bundled tools
-        if: steps.changes.outputs.should_build == 'true' && steps.tools-cache.outputs.cache-hit != 'true'
-        run: ./scripts/fetch-bundled-tools.sh
-
+      # The bundled CLI tools (ffmpeg, lit, pdf-fill, …) are NOT baked into the app: it downloads
+      # them on first run from the artifact published by the Publish Bundled Tools workflow, so the
+      # nightly package builds without vendoring them here.
       - name: Package Donkey
         if: steps.changes.outputs.should_build == 'true'
         env:
