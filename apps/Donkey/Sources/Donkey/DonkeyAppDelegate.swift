@@ -170,8 +170,9 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
 
         // The UI-understanding engine (AX + AI parse + per-window cache + background warming) runs in
-        // every build. Only the visual overlay is debug-only: debug builds inject the AppKit overlay
-        // renderer, while production parses headlessly through a no-op renderer.
+        // every build and feeds the agent. Only the visual overlay is gated: debug builds inject the
+        // AppKit overlay renderer (shown when the dev-overlay config turns it on), while production
+        // parses headlessly through a no-op renderer.
         #if DONKEY_DEBUG_OVERLAY
         let uiUnderstandingCoordinator = UIUnderstandingCoordinator(
             overlayController: DebugUIInspectionOverlayController(),
@@ -179,8 +180,7 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         )
         #else
         let uiUnderstandingCoordinator = UIUnderstandingCoordinator(
-            rendersOverlay: false,
-            defaultConfiguration: DebugUIOverlayConfiguration(enabled: true)
+            rendersOverlay: false
         )
         #endif
         self.uiUnderstandingCoordinator = uiUnderstandingCoordinator

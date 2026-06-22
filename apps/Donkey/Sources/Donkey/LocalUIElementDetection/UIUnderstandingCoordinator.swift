@@ -25,9 +25,13 @@ private enum RemoteAIEngine {
 /// a debug concern, injected through `DebugUIInspectionOverlayRendering`.
 @MainActor
 final class UIUnderstandingCoordinator {
-    private let overlayController: any DebugUIInspectionOverlayRendering
+    // The real overlay renderer: AppKit in debug builds, a no-op in production. Drawing is routed
+    // through the gated `overlayController` accessor below so the engine keeps parsing and caching
+    // for the agent even while the overlay is off.
+    private let realOverlayController: any DebugUIInspectionOverlayRendering
+    private let noopOverlayController: any DebugUIInspectionOverlayRendering =
+        NoopDebugUIInspectionOverlayRenderer()
     private let rendersOverlay: Bool
-    private let defaultConfiguration: DebugUIOverlayConfiguration
     private let captureService = DebugUIScreenCaptureService()
     private let accessibilityInspectionService = DebugUIAccessibilityInspectionService()
     private let windowResolver = MacWindowResolver()
@@ -60,26 +64,32 @@ final class UIUnderstandingCoordinator {
     private var notificationObservers: [NSObjectProtocol] = []
     private var movementEventMonitors: [Any] = []
     private var currentConfig: DebugUIOverlayConfiguration = .disabled
+    // The understanding engine always parses and publishes — the agent reads the shared store
+    // regardless of any overlay. Only the visible overlay is gated: it draws when this instance
+    // renders one (debug builds) and the dev-overlay config turns it on.
+    private var overlayActive: Bool { rendersOverlay && currentConfig.enabled }
+    // Routes every render/close to the real renderer only while the overlay is active; otherwise a
+    // no-op renderer, so engine bookkeeping (caching for the agent) runs without drawing anything.
+    private var overlayController: any DebugUIInspectionOverlayRendering {
+        overlayActive ? realOverlayController : noopOverlayController
+    }
     private var isAnalyzing = false
     private var isRefreshingActiveAccessibility = false
 
     /// - Parameters:
-    ///   - overlayController: where parsed frames are painted. Production injects a no-op renderer
-    ///     so the engine still parses and caches without drawing anything.
-    ///   - rendersOverlay: whether this instance drives a visible overlay. Render-only smoothing work
-    ///     (the high-frequency active-window accessibility pass) is skipped when false.
-    ///   - defaultConfiguration: the configuration used when no dev-overlay config file enables the
-    ///     engine. Production passes an enabled configuration so AX + AI parsing runs everywhere.
+    ///   - overlayController: where parsed frames are painted while the overlay is active. Production
+    ///     injects a no-op renderer; the engine parses and caches regardless of what is drawn.
+    ///   - rendersOverlay: whether this instance can drive a visible overlay. Render-only smoothing
+    ///     work (the high-frequency active-window accessibility pass) is skipped when false, and the
+    ///     overlay never draws. The engine still runs in every build.
     init(
         configURL: URL? = nil,
         overlayController: any DebugUIInspectionOverlayRendering = NoopDebugUIInspectionOverlayRenderer(),
-        rendersOverlay: Bool = false,
-        defaultConfiguration: DebugUIOverlayConfiguration = .disabled
+        rendersOverlay: Bool = false
     ) {
         self.configURL = configURL
-        self.overlayController = overlayController
+        self.realOverlayController = overlayController
         self.rendersOverlay = rendersOverlay
-        self.defaultConfiguration = defaultConfiguration
     }
 
     func start() {
@@ -106,7 +116,7 @@ final class UIUnderstandingCoordinator {
         }
         notificationObservers.removeAll()
         movementEventMonitors.removeAll()
-        overlayController.close()
+        realOverlayController.close()
         trackers.removeAll()
         lastFingerprints.removeAll()
         lastRenderedFrames.removeAll()
@@ -168,17 +178,15 @@ final class UIUnderstandingCoordinator {
     }
 
     private func reloadConfigAndReschedule(force: Bool = false) {
-        // The dev-overlay config file only flips the visible overlay on or off. When it does not
-        // enable the engine, fall back to `defaultConfiguration` — production passes an enabled
-        // configuration there so AX + AI parsing runs even though nothing is rendered.
-        let loaded = DebugUIOverlayConfiguration.load(fileURL: configURL)
-        let newConfig = loaded.enabled ? loaded : defaultConfiguration
+        // The dev-overlay config file only flips the visible overlay on or off; the engine parses
+        // and caches in every build regardless. `enabled` is therefore purely the overlay switch.
+        let newConfig = DebugUIOverlayConfiguration.load(fileURL: configURL)
         let enablementChanged = newConfig.enabled != currentConfig.enabled
         currentConfig = newConfig
 
         if force || enablementChanged {
             UIUnderstandingLog.overlay.info(
-                "debug inspection config enabled=\(String(newConfig.enabled), privacy: .public)"
+                "debug inspection overlay enabled=\(String(newConfig.enabled), privacy: .public)"
             )
         }
 
@@ -196,7 +204,7 @@ final class UIUnderstandingCoordinator {
         // The 0.12s active-accessibility pass exists purely to keep the visible overlay smooth, so
         // it only runs when this instance actually renders. Headless (production) parsing relies on
         // the main cadence below.
-        if newConfig.enabled && rendersOverlay {
+        if overlayActive {
             if activeAccessibilityTimer == nil || force {
                 activeAccessibilityTimer?.invalidate()
                 let newTimer = Timer(timeInterval: 0.12, repeats: true) { [weak self] _ in
@@ -223,16 +231,16 @@ final class UIUnderstandingCoordinator {
             lastActiveWindowIDs.removeAll()
             windowElementCache.removeAll()
             if !newConfig.enabled {
-                overlayController.close()
+                realOverlayController.close()
             }
         }
     }
 
     private func refresh(force: Bool = false) {
         reloadConfigAndReschedule()
-        guard currentConfig.enabled else { return }
-        // The AI parse pass hits the hosted backend; while signed out it would only 401, so the engine
-        // is idle until sign-in restores it (the app delegate also stops this coordinator on sign-out).
+        // The engine runs in every build, gated only by sign-in: the AI parse pass hits the hosted
+        // backend, which would just 401 while signed out, so it idles until sign-in restores it (the
+        // app delegate also stops this coordinator on sign-out). The overlay is gated separately.
         guard BackendSessionGate.shared.isAuthenticated else { return }
         guard !isAnalyzing else {
             UIUnderstandingLog.overlay.debug("debug inspection skipped refresh because analysis is already running")
@@ -249,7 +257,7 @@ final class UIUnderstandingCoordinator {
                     "debug inspection failed error=\(String(describing: error), privacy: .public)"
                 )
                 if lastRenderedFrames.isEmpty {
-                    overlayController.close()
+                    realOverlayController.close()
                     lastFingerprints.removeAll()
                     trackers.removeAll()
                 }
@@ -348,7 +356,7 @@ final class UIUnderstandingCoordinator {
     }
 
     private func refreshActiveAccessibilityFrame() {
-        guard currentConfig.enabled,
+        guard overlayActive,
               !isRefreshingActiveAccessibility,
               let screens = try? screenSurfaces(scope: currentConfig.screenScope)
         else {
@@ -505,7 +513,7 @@ final class UIUnderstandingCoordinator {
     }
 
     private func reprojectRenderedFramesFromCurrentWindowBounds() {
-        guard currentConfig.enabled,
+        guard overlayActive,
               !lastRenderedFrames.isEmpty,
               let screens = try? screenSurfaces(scope: currentConfig.screenScope)
         else {
@@ -876,12 +884,12 @@ final class UIUnderstandingCoordinator {
         }
     }
 
-    /// Kick a single-flight background pass that pre-extracts and caches overlays for windows the
-    /// user is not currently looking at, so switching to any of them is instant. Only meaningful
-    /// when just the active window renders; otherwise every window is already analyzed live.
+    /// Kick a single-flight background pass that pre-extracts and caches understanding for windows
+    /// the user is not currently looking at, so switching to any of them (or the agent acting on one)
+    /// is instant. Runs whenever the engine does; only meaningful while the active window is handled
+    /// live, otherwise every window is already analyzed.
     private func scheduleBackgroundWarm() {
-        guard currentConfig.enabled,
-              currentConfig.activeWindowOnly,
+        guard currentConfig.activeWindowOnly,
               remoteAIEngine == .vision,
               !isWarmingBackground
         else {
