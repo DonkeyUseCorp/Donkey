@@ -61,7 +61,12 @@ to know what to fetch). It runs on demand and whenever the tools recipe changes.
 Every tool is re-signed during the build: relocating their bundled libraries
 invalidates the original signature, and macOS will not run an unsigned binary on
 Apple Silicon. Without the secrets below the tools are only ad-hoc signed — fine
-for local development, not for distribution.
+for local development, not for distribution. `yt-dlp` additionally gets the
+library-validation exception (`com.apple.security.cs.disable-library-validation`):
+it self-extracts and loads its own Python framework at launch, which the hardened
+runtime would otherwise reject for not sharing our Team ID. The other tools don't
+get it — they load only the sibling libraries we re-sign, so they stay fully
+hardened.
 
 Standalone CLI binaries cannot be stapled (only app/dmg/pkg bundles can), so
 notarization here is the online proof that the Developer ID signature is good;
