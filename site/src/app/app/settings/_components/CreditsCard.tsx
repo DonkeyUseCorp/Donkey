@@ -70,7 +70,6 @@ export function CreditsCard() {
           <div className="flex flex-wrap gap-2">
             {creditTopUpPresetsDollars.map((amount) => (
               <Button
-                className={customAmount === String(amount) ? undefined : "bg-card"}
                 disabled={checkout.isPending}
                 key={amount}
                 onClick={() => setCustomAmount(String(amount))}

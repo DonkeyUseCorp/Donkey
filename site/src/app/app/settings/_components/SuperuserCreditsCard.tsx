@@ -117,7 +117,6 @@ export function SuperuserCreditsCard() {
             {presetDollars.map((preset) => (
               <Button
                 key={preset}
-                className={amount === String(preset) ? undefined : "bg-card"}
                 onClick={() => setAmount(String(preset))}
                 type="button"
                 variant={amount === String(preset) ? "default" : "outline"}

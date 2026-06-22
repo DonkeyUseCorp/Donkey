@@ -312,7 +312,6 @@ export function UsageHistoryCard() {
                 (pageNumber) => (
                   <PaginationItem key={pageNumber}>
                     <PaginationLink
-                      className={pageNumber === currentPage ? "bg-card" : undefined}
                       isActive={pageNumber === currentPage}
                       onClick={() => goToPage(pageNumber)}
                     >
