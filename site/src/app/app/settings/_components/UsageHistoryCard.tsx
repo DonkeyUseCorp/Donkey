@@ -80,6 +80,10 @@ function CallDetail({ call }: { call: RecentCall }) {
   const imageBilled = usage.generationCount > 0;
   const tokenBilled =
     usage.inputTokens > 0 || usage.outputTokens > 0 || usage.totalTokens > 0;
+  // Vision parses report no token/image usage — they're a flat per-call charge,
+  // so there's no breakdown to show, just the pricing model.
+  const flatRate =
+    !imageBilled && !tokenBilled && call.requestKind === "vision_parse";
 
   const stats: { label: string; value: string }[] = [];
   if (imageBilled) {
@@ -111,7 +115,9 @@ function CallDetail({ call }: { call: RecentCall }) {
     ? "Image generation is priced per image, not by tokens."
     : tokenBilled
       ? "Cost is driven by tokens: a large input means a long question or lots of context, a large output means a long answer."
-      : "No billable usage was recorded for this call.";
+      : flatRate
+        ? "Flat rate — vision parses are billed per call."
+        : "No billable usage was recorded for this call.";
 
   return (
     <div className="space-y-3 px-2 py-1 text-sm">
