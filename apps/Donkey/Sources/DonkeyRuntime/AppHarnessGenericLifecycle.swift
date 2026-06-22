@@ -2,9 +2,13 @@ import DonkeyContracts
 import DonkeyHarness
 import Foundation
 
-public enum AppHarnessGenericLifecycleToolNames {
-    public static let agentPathVisualize = "agent.path.visualize"
-    public static let localAppTools: [String] = (LocalAppActionPlanTool.allCases.map(\.rawValue) + [agentPathVisualize]).sorted()
+/// How the user answered a permission/consent gate. `allow` covers a one-time
+/// approval (category permission grant, or shell allow-once); `allowAlways`
+/// persists a standing shell-command rule and is offered only for non-highRisk
+/// commands.
+public enum HarnessGateApproval: String, Sendable {
+    case allow
+    case allowAlways
 }
 
 public struct AppHarnessGenericLifecyclePreparedTurn: Equatable, Sendable {
@@ -132,98 +136,6 @@ public struct AppHarnessGenericLifecycle: Sendable {
         )
     }
 
-    @discardableResult
-    public func planLocalTaskRun(
-        taskID: String,
-        resolution: LocalAppTaskCatalogResolution,
-        fallbackGoal: String,
-        traceID: String,
-        availableToolNames: [String] = AppHarnessGenericLifecycleToolNames.localAppTools
-    ) async -> HarnessTaskState? {
-        let intent = Self.intentAnalysis(
-            for: resolution,
-            fallbackGoal: fallbackGoal
-        )
-        _ = await coordinator.updateIntent(taskID: taskID, intent: intent)
-        let plannedStepMetadata = resolution.intent?.metadata ?? [:]
-        let modelPlanSteps = Self.modelPlanningSteps(
-            from: plannedStepMetadata,
-            traceID: traceID,
-            availableToolNames: availableToolNames,
-            normalizedEntities: resolution.intent?.normalizedEntities ?? [:],
-            entities: resolution.intent?.entities ?? [:]
-        )
-        let plan = HarnessPlan(
-            goal: intent.goal,
-            steps: modelPlanSteps,
-            successCriteria: Self.stringArrayMetadata(
-                plannedStepMetadata["genericHarness.verificationCriteriaJSON"],
-                fallback: ["Resolved local app result is completed or handed to a user gate."]
-            ),
-            fallbackPolicy: Self.stringArrayMetadata(
-                plannedStepMetadata["genericHarness.fallbacksJSON"],
-                fallback: ["If execution needs review or missing detail, stop at the user gate."]
-            ),
-            clarificationPolicy: Self.clarificationPolicy(from: plannedStepMetadata),
-            confidence: intent.confidence,
-            metadata: [
-                "planner": "genericHarnessLocalAppPlan",
-                "traceID": traceID,
-                "resolution.status": resolution.status.rawValue,
-                "modelPlan.stepCount": String(modelPlanSteps.count),
-                "modelPlan.schemaVersion": plannedStepMetadata["genericHarness.schemaVersion"] ?? ""
-            ]
-        )
-        _ = await coordinator.updatePlan(taskID: taskID, plan: plan)
-        return await coordinator.startRunning(
-            taskID: taskID,
-            reason: "User query task planned through generic harness"
-        )
-    }
-
-    @discardableResult
-    public func planRecovery(
-        taskID: String,
-        reason: String,
-        traceID: String
-    ) async -> HarnessTaskState? {
-        guard let task = await coordinator.task(id: taskID) else { return nil }
-
-        let plan = HarnessPlan(
-            goal: task.goal,
-            steps: [
-                HarnessPlanStep(
-                    id: "recover-local-app-task",
-                    summary: "Recover from an unsuccessful user-query local app task.",
-                    toolCall: HarnessToolCall(
-                        id: "local-app-recover-\(traceID)",
-                        name: "run.recover",
-                        input: ["reason": reason],
-                        metadata: [
-                            "adapter": "userQuery",
-                            "traceID": traceID
-                        ]
-                    ),
-                    expectedObservation: "Recovery records a safe fallback or updated task evidence."
-                )
-            ],
-            successCriteria: ["Recovery stops safely or prepares a future continuation."],
-            fallbackPolicy: ["If recovery cannot proceed, leave the task failed safe."],
-            clarificationPolicy: ["Ask only if a specific missing user detail would let the task continue."],
-            confidence: task.intent?.confidence ?? 0,
-            metadata: [
-                "planner": "genericHarnessUserQueryRecovery",
-                "traceID": traceID,
-                "recovery.reason": reason
-            ]
-        )
-        _ = await coordinator.updatePlan(taskID: taskID, plan: plan)
-        return await coordinator.startRunning(
-            taskID: taskID,
-            reason: "User query recovery planned through generic harness"
-        )
-    }
-
     public func taskState(taskID: String) async -> HarnessTaskState? {
         await coordinator.task(id: taskID)
     }
@@ -239,19 +151,62 @@ public struct AppHarnessGenericLifecycle: Sendable {
     }
 
     @discardableResult
-    public func approvePermissionGate(taskID: String, reason: String) async -> HarnessTaskState? {
+    public func approvePermissionGate(
+        taskID: String,
+        decision: HarnessGateApproval = .allow,
+        reason: String
+    ) async -> HarnessTaskState? {
         guard let task = await coordinator.task(id: taskID),
               task.status == .waitingForPermission,
-              let continuation = task.pendingContinuation,
-              !continuation.missingPermissions.isEmpty else {
+              let continuation = task.pendingContinuation else {
             return nil
         }
 
+        // Shell-command consent: persist an always-allow rule or grant a single
+        // use, then resume so the loop re-issues the command and the executor
+        // finds it allowed.
+        if continuation.metadata["gate"] == "shellConsent" {
+            let signature = continuation.metadata["shell.signature"] ?? ""
+            let tier = ShellRiskTier(rawValue: continuation.metadata["shell.tier"] ?? "") ?? .reversibleWrite
+            if decision == .allowAlways, tier != .highRisk {
+                await ShellPermissionPolicyStore.shared.allowAlways(signature, tier: tier)
+            } else {
+                await ShellPermissionPolicyStore.shared.grantOnce(taskID: taskID, signature: signature)
+            }
+            return await coordinator.resume(taskID: taskID, reason: reason)
+        }
+
+        // System (TCC) permission gate: the user approved in the notch, so NOW trigger the macOS
+        // permission request. Only on a successful grant do we resume the loop to re-run the tool.
+        if continuation.metadata["gate"] == "systemPermission" {
+            guard let permission = Self.systemPermission(from: continuation.metadata) else { return nil }
+            let granted = await SystemPermissionCoordinator.request(permission)
+            guard granted else { return nil }
+            return await coordinator.resume(taskID: taskID, reason: reason)
+        }
+
+        guard !continuation.missingPermissions.isEmpty else { return nil }
         return await coordinator.grantPermissions(
             taskID: taskID,
             permissions: Set(continuation.missingPermissions),
             reason: reason
         )
+    }
+
+    private static func systemPermission(from metadata: [String: String]) -> SystemPermission? {
+        switch metadata["system.permission"] {
+        case "automation":
+            let target = metadata["system.target"]
+            return .automation(targetBundleID: (target?.isEmpty == false) ? target : nil)
+        case "screenRecording":
+            return .screenRecording
+        case "accessibility":
+            return .accessibility
+        case "microphone":
+            return .microphone
+        default:
+            return nil
+        }
     }
 
     private func loadOrCreateTask(
@@ -279,12 +234,14 @@ public struct AppHarnessGenericLifecycle: Sendable {
                 response: response
             )
         } else if context.turn?.isFollowUp == true {
-            _ = await coordinator.interrupt(
-                taskID: taskID,
-                newGoal: goal,
-                turn: context.turn,
-                reason: "User query follow-up changed course"
-            )
+            // A follow-up to a task whose loop already stopped (a live loop picks the message up directly
+            // and never reaches here): queue the instruction so the resumed loop folds it in, and resume.
+            // The original goal is preserved — the follow-up amends the work rather than replacing it,
+            // the deliberate opposite of the old interrupt-and-restart behavior.
+            if let followUpText = context.turn?.text,
+               !followUpText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                _ = await coordinator.enqueueUserMessage(taskID: taskID, text: followUpText)
+            }
             _ = await coordinator.resume(
                 taskID: taskID,
                 reason: "User query follow-up resumed task"
@@ -380,168 +337,6 @@ public struct AppHarnessGenericLifecycle: Sendable {
         )
     }
 
-    private static func intentAnalysis(
-        for resolution: LocalAppTaskCatalogResolution,
-        fallbackGoal: String
-    ) -> HarnessIntentAnalysis {
-        let taskType = resolution.intent?.taskType ?? resolution.definition?.taskType
-        let targetApp = resolution.intent?.targetApp.appName
-            ?? resolution.definition?.targetApp.appName
-            ?? resolution.availability?.target.appName
-        let goalParts = [
-            taskType,
-            targetApp.map { "in \($0)" }
-        ].compactMap { $0 }
-        let goal = goalParts.isEmpty ? fallbackGoal : goalParts.joined(separator: " ")
-        let metadata = resolution.intent?.metadata ?? [:]
-        let modelGoal = metadata["genericHarness.intent.goal"]
-            .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
-        let missingInformation: [String]
-        if resolution.status == .needsConfirmation {
-            missingInformation = Self.stringArrayMetadata(
-                metadata["genericHarness.missingInformationJSON"],
-                fallback: [resolution.metadata["reason"] ?? "more detail"]
-            )
-        } else {
-            missingInformation = Self.stringArrayMetadata(
-                metadata["genericHarness.missingInformationJSON"],
-                fallback: []
-            )
-        }
-        return HarnessIntentAnalysis(
-            goal: modelGoal ?? goal,
-            entities: resolution.intent?.normalizedEntities ?? resolution.intent?.entities ?? [:],
-            ambiguityClass: HarnessAmbiguityClass(
-                rawValue: metadata["genericHarness.ambiguity.class"] ?? ""
-            ) ?? (resolution.status == .needsConfirmation ? .recoverable : .safe),
-            riskLevel: HarnessRiskLevel(
-                rawValue: metadata["genericHarness.risk.level"] ?? ""
-            ) ?? .medium,
-            missingInformation: missingInformation,
-            shouldAskBeforeActing: metadata["genericHarness.shouldAskBeforeActing"] == "true"
-                || resolution.status == .needsConfirmation,
-            confidence: resolution.intent?.confidence ?? 0,
-            metadata: [
-                "resolution.status": resolution.status.rawValue,
-                "taskType": taskType ?? "",
-                "targetApp": targetApp ?? "",
-                "intentID": resolution.intent?.intentID ?? ""
-            ].merging(resolution.metadata) { current, _ in current }
-        )
-    }
-
-    private static func modelPlanningSteps(
-        from metadata: [String: String],
-        traceID: String,
-        availableToolNames: [String],
-        normalizedEntities: [String: String],
-        entities: [String: String]
-    ) -> [HarnessPlanStep] {
-        guard let text = metadata["genericHarness.planStepsJSON"],
-              let data = text.data(using: .utf8),
-              let values = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
-        else {
-            return []
-        }
-        let allowedToolNames = Set(availableToolNames)
-
-        return values.enumerated().map { index, value in
-            let id = nonEmpty(stringValue(value["id"])) ?? "model-plan-step-\(index + 1)"
-            let toolName = nonEmpty(stringValue(value["toolName"]))
-            let toolCall = toolName.flatMap { toolName -> HarnessToolCall? in
-                guard allowedToolNames.contains(toolName) else { return nil }
-                let input = toolInput(
-                    from: value,
-                    normalizedEntities: normalizedEntities,
-                    entities: entities
-                )
-                return HarnessToolCall(
-                    id: "local-app-step-\(traceID)-\(index + 1)",
-                    name: toolName,
-                    input: input.merging([
-                        "inputEntity": stringValue(value["inputEntity"]) ?? "",
-                        "controlID": stringValue(value["controlID"]) ?? "",
-                        "focusKey": stringValue(value["focusKey"]) ?? "",
-                        "expectedObservation": stringValue(value["expectedObservation"]) ?? "",
-                        "modelStepID": id,
-                        "modelStepIndex": String(index)
-                    ]) { current, _ in current },
-                    metadata: [
-                        "adapter": "userQuery",
-                        "traceID": traceID,
-                        "source": "hostedGenericHarnessPlanning"
-                    ]
-                )
-            }
-            return HarnessPlanStep(
-                id: "model-\(id)",
-                summary: nonEmpty(stringValue(value["summary"])) ?? "Model-planned harness step",
-                toolCall: toolCall,
-                expectedObservation: nonEmpty(stringValue(value["expectedObservation"])),
-                metadata: [
-                    "source": "hostedGenericHarnessPlanning",
-                    "toolName": toolName ?? "",
-                    "inputEntity": stringValue(value["inputEntity"]) ?? "",
-                    "controlID": stringValue(value["controlID"]) ?? "",
-                    "focusKey": stringValue(value["focusKey"]) ?? ""
-                ]
-            )
-        }
-    }
-
-    private static func toolInput(
-        from value: [String: Any],
-        normalizedEntities: [String: String],
-        entities: [String: String]
-    ) -> [String: String] {
-        var input = value["toolInputs"] as? [String: String] ?? [:]
-        let inputEntity = nonEmpty(input["inputEntity"] ?? stringValue(value["inputEntity"]))
-        if let inputEntity {
-            input["inputEntity"] = inputEntity
-        }
-        if input["input"]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
-           let inputEntity,
-           let entityValue = normalizedEntities[inputEntity] ?? entities[inputEntity] {
-            input["input"] = entityValue
-        }
-        return input
-    }
-
-    private static func clarificationPolicy(from metadata: [String: String]) -> [String] {
-        var policy = stringArrayMetadata(
-            metadata["genericHarness.clarification.questionsJSON"],
-            fallback: []
-        )
-        if let text = nonEmpty(metadata["genericHarness.clarification.policy"]) {
-            policy.append(text)
-        }
-        return policy.isEmpty
-            ? ["Ask a specific follow-up question when the resolved task is incomplete."]
-            : policy
-    }
-
-    private static func stringArrayMetadata(
-        _ text: String?,
-        fallback: [String]
-    ) -> [String] {
-        guard let text,
-              let data = text.data(using: .utf8),
-              let values = try? JSONSerialization.jsonObject(with: data) as? [String]
-        else {
-            return fallback
-        }
-        let cleaned = values.compactMap(nonEmpty)
-        return cleaned.isEmpty ? fallback : cleaned
-    }
-
-    private static func nonEmpty(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private static func stringValue(_ value: Any?) -> String? {
-        value as? String
-    }
 }
 
 private extension HarnessThreadEventRole {

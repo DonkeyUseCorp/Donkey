@@ -1,5 +1,3 @@
-#if DONKEY_DEBUG_OVERLAY
-
 @preconcurrency import AppKit
 import CoreGraphics
 import CryptoKit
@@ -9,33 +7,20 @@ import ImageIO
 import UniformTypeIdentifiers
 
 public struct DebugUIOverlayConfiguration: Equatable, Sendable {
+    /// The only knob the dev-overlay JSON file controls: flip the debug overlay on or off.
+    /// Everything else below is a fixed, sensible default — the old tuning fields were never used.
     public var enabled: Bool
-    public var mode: String
-    public var cadenceSeconds: TimeInterval
-    public var screenScope: DebugUIInspectionScreenScope
-    public var minConfidence: Double
-    public var activeWindowOnly: Bool
-    public var targetBundleIdentifiers: [String]
-    public var targetAppNames: [String]
 
-    public init(
-        enabled: Bool = false,
-        mode: String = "donkeyVision",
-        cadenceSeconds: TimeInterval = 1.0,
-        screenScope: DebugUIInspectionScreenScope = .main,
-        minConfidence: Double = 0.25,
-        activeWindowOnly: Bool = false,
-        targetBundleIdentifiers: [String] = [],
-        targetAppNames: [String] = []
-    ) {
+    public var mode: String { "donkeyVision" }
+    public var cadenceSeconds: TimeInterval { 1.0 }
+    public var screenScope: DebugUIInspectionScreenScope { .main }
+    public var minConfidence: Double { 0.25 }
+    public var activeWindowOnly: Bool { true }
+    public var targetBundleIdentifiers: [String] { [] }
+    public var targetAppNames: [String] { [] }
+
+    public init(enabled: Bool = false) {
         self.enabled = enabled
-        self.mode = mode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "donkeyVision" : mode
-        self.cadenceSeconds = min(max(cadenceSeconds, 0.25), 10.0)
-        self.screenScope = screenScope
-        self.minConfidence = min(max(minConfidence, 0), 1)
-        self.activeWindowOnly = activeWindowOnly
-        self.targetBundleIdentifiers = Self.normalizedList(targetBundleIdentifiers)
-        self.targetAppNames = Self.normalizedList(targetAppNames)
     }
 
     public static let disabled = DebugUIOverlayConfiguration(enabled: false)
@@ -66,39 +51,17 @@ public struct DebugUIOverlayConfiguration: Equatable, Sendable {
             urls = candidateConfigURLs(fileManager: fileManager)
         }
 
-        guard let raw = urls.lazy.compactMap({ url -> RawDebugUIOverlayConfiguration? in
+        let enabled = urls.lazy.compactMap { url -> Bool? in
             guard fileManager.fileExists(atPath: url.path),
-                  let data = try? Data(contentsOf: url)
+                  let data = try? Data(contentsOf: url),
+                  let raw = try? JSONDecoder().decode(RawDebugUIOverlayConfiguration.self, from: data)
             else {
                 return nil
             }
-            return try? JSONDecoder().decode(RawDebugUIOverlayConfiguration.self, from: data)
-        }).first else {
-            return .disabled
-        }
+            return raw.enabled ?? false
+        }.first ?? false
 
-        let mode = raw.mode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return DebugUIOverlayConfiguration(
-            enabled: raw.enabled ?? false,
-            mode: mode.isEmpty ? "donkeyVision" : mode,
-            cadenceSeconds: raw.cadenceSeconds ?? 1.0,
-            screenScope: raw.screenScope.flatMap(DebugUIInspectionScreenScope.init(rawValue:)) ?? .main,
-            minConfidence: raw.minConfidence ?? 0.25,
-            activeWindowOnly: raw.activeWindowOnly ?? false,
-            targetBundleIdentifiers: raw.targetBundleIdentifiers ?? [],
-            targetAppNames: raw.targetAppNames ?? []
-        )
-    }
-
-    private static func normalizedList(_ values: [String]) -> [String] {
-        var seen = Set<String>()
-        return values.compactMap { value in
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return nil }
-            let key = trimmed.lowercased()
-            guard seen.insert(key).inserted else { return nil }
-            return trimmed
-        }
+        return DebugUIOverlayConfiguration(enabled: enabled)
     }
 
     public static func candidateConfigURLs(
@@ -155,13 +118,6 @@ public struct DebugUIOverlayConfiguration: Equatable, Sendable {
 
 private struct RawDebugUIOverlayConfiguration: Codable {
     var enabled: Bool?
-    var mode: String?
-    var cadenceSeconds: TimeInterval?
-    var screenScope: String?
-    var minConfidence: Double?
-    var activeWindowOnly: Bool?
-    var targetBundleIdentifiers: [String]?
-    var targetAppNames: [String]?
 }
 
 public struct DebugUIElementTracker: Equatable, Sendable {
@@ -173,13 +129,17 @@ public struct DebugUIElementTracker: Equatable, Sendable {
     private var pendingContent: [String: PendingTrackedElement]
     private var appearanceThreshold: Int
     private var disappearanceTolerance: Int
+    private var stableDisappearanceTolerance: Int
+    private var stableIDPrefixes: [String]
     private var movementConfirmationSamples: Int
 
     public init(
         previousElements: [DebugUIElement] = [],
         appearanceThreshold: Int = 2,
         disappearanceTolerance: Int = 2,
-        movementConfirmationSamples: Int = 2
+        movementConfirmationSamples: Int = 2,
+        stableDisappearanceTolerance: Int? = nil,
+        stableIDPrefixes: [String] = []
     ) {
         self.previousElements = previousElements
         self.lastObservedElements = previousElements
@@ -189,7 +149,23 @@ public struct DebugUIElementTracker: Equatable, Sendable {
         self.pendingContent = [:]
         self.appearanceThreshold = max(1, appearanceThreshold)
         self.disappearanceTolerance = max(0, disappearanceTolerance)
+        // Stable-ID elements (e.g. accessibility boxes) keep a fixed identity across scans, so a
+        // brief detection gap should not yank them — that is what reads as flicker. Volatile
+        // elements (e.g. vision parses that reassign IDs every pass) must stay at the base
+        // tolerance, otherwise stale boxes linger and stack. Never below the base tolerance.
+        self.stableDisappearanceTolerance = max(
+            max(0, disappearanceTolerance),
+            stableDisappearanceTolerance ?? disappearanceTolerance
+        )
+        self.stableIDPrefixes = stableIDPrefixes
         self.movementConfirmationSamples = max(1, movementConfirmationSamples)
+    }
+
+    private func disappearanceTolerance(for element: DebugUIElement) -> Int {
+        for prefix in stableIDPrefixes where element.id.hasPrefix(prefix) {
+            return stableDisappearanceTolerance
+        }
+        return disappearanceTolerance
     }
 
     public mutating func update(
@@ -256,7 +232,7 @@ public struct DebugUIElementTracker: Equatable, Sendable {
 
         for previous in previousElements where !trackedIDs.contains(previous.id) {
             let missingCount = (missingCounts[previous.id] ?? 0) + 1
-            if missingCount <= disappearanceTolerance {
+            if missingCount <= disappearanceTolerance(for: previous) {
                 missingCounts[previous.id] = missingCount
                 rendered.append(previous)
             } else {
@@ -644,10 +620,9 @@ public struct DebugUIScreenCaptureService: Sendable {
     }
 
     private static func screenCaptureAccessGranted() -> Bool {
-        if CGPreflightScreenCaptureAccess() {
-            return true
-        }
-        return CGRequestScreenCaptureAccess()
+        // Preflight only — never prompt here. The system dialog is requested through the in-notch
+        // pre-gate (on user approval); runtime capture just checks and falls back if not granted.
+        CGPreflightScreenCaptureAccess()
     }
 
     private func capture(screen: NSScreen) throws -> DebugUIScreenCaptureSnapshot {
@@ -846,5 +821,3 @@ protocol DebugUIScreenCapturing: Sendable {
 }
 
 extension DebugUIScreenCaptureService: DebugUIScreenCapturing {}
-
-#endif

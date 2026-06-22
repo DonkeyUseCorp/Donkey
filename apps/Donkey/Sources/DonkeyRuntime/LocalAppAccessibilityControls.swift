@@ -256,178 +256,6 @@ public struct LocalAppAccessibilityControlDiscovery: Sendable {
     }
 }
 
-public struct LocalAppAccessibilityActionPlanner: Sendable {
-    public init() {}
-
-    public func commands(
-        for intent: TaskIntent,
-        definition: LocalAppTaskDefinition,
-        index: LocalAppAccessibilityControlIndex,
-        issuedAt: RunTraceTimestamp
-    ) -> [ActionEngineCommand] {
-        let adapter = LocalAppTaskAdapter(definition: definition)
-        return definition.workflowSteps.compactMap { step in
-            switch step.role {
-            case .focusControl:
-                guard let controlID = step.metadata["controlID"],
-                      let control = index.firstControl(
-                        matching: controlID,
-                        acceptedKinds: [.searchField, .textField, .button]
-                      )
-                else {
-                    return nil
-                }
-                return command(
-                    id: "\(intent.intentID)-ax-\(step.id)",
-                    traceID: intent.metadata["traceID"] ?? intent.intentID,
-                    targetID: adapter.targetID,
-                    issuedAt: issuedAt,
-                    kind: .tap,
-                    control: control,
-                    definition: definition,
-                    step: step,
-                    metadata: [
-                        "accessibility.action": "AXPress",
-                        "accessibility.nodeID": control.id,
-                        "inputStrategy": "accessibility"
-                    ]
-                )
-            case .enterText:
-                let entityName = step.metadata["entityName"] ?? definition.verificationEntityName
-                guard let entityName,
-                      let text = intent.normalizedEntities[entityName],
-                      let control = index.firstControl(
-                        matching: step.metadata["controlID"] ?? "search",
-                        acceptedKinds: [.searchField, .textField]
-                      )
-                else {
-                    return nil
-                }
-                return command(
-                    id: "\(intent.intentID)-ax-\(step.id)",
-                    traceID: intent.metadata["traceID"] ?? intent.intentID,
-                    targetID: adapter.targetID,
-                    issuedAt: issuedAt,
-                    kind: .key,
-                    control: control,
-                    definition: definition,
-                    step: step,
-                    metadata: [
-                        "accessibility.action": "AXSetValue",
-                        "accessibility.nodeID": control.id,
-                        "accessibility.value": text,
-                        "inputStrategy": "accessibility",
-                        "text": text
-                    ]
-                )
-            case .submit:
-                guard let controlID = step.metadata["controlID"],
-                      let control = index.firstControl(
-                        matching: controlID,
-                        acceptedKinds: [.button, .link, .menuItem, .listItem, .checkbox]
-                      )
-                else {
-                    return nil
-                }
-                return command(
-                    id: "\(intent.intentID)-ax-\(step.id)",
-                    traceID: intent.metadata["traceID"] ?? intent.intentID,
-                    targetID: adapter.targetID,
-                    issuedAt: issuedAt,
-                    kind: .tap,
-                    control: control,
-                    definition: definition,
-                    step: step,
-                    metadata: [
-                        "accessibility.action": "AXPress",
-                        "accessibility.nodeID": control.id,
-                        "controlID": controlID,
-                        "inputStrategy": "accessibility",
-                        "inputIntent": "submit"
-                    ]
-                )
-            case .parseIntent, .launchOrFocusApp, .observeApp, .verifyResult, .custom:
-                return nil
-            }
-        }
-    }
-
-    public func fillCommands(
-        approval: DocumentFormFillApproval,
-        definition: LocalAppTaskDefinition,
-        issuedAt: RunTraceTimestamp
-    ) -> [ActionEngineCommand] {
-        let adapter = LocalAppTaskAdapter(definition: definition)
-        return approval.approvedProposals.enumerated().map { index, proposal in
-            ActionEngineCommand(
-                id: "\(approval.id)-fill-\(index)",
-                traceID: approval.traceID,
-                targetID: adapter.targetID,
-                kind: .key,
-                issuedAt: Self.timestamp(issuedAt, advancedByMilliseconds: Double(index) * 60),
-                key: proposal.proposedValue,
-                metadata: [
-                    "taskType": definition.taskType,
-                    "workflowStepRole": "enterText",
-                    "inputStrategy": "accessibility",
-                    "accessibility.action": "AXSetValue",
-                    "accessibility.nodeID": proposal.fieldID,
-                    "accessibility.value": proposal.proposedValue,
-                    "documentFormFill.approvalID": approval.id,
-                    "documentFormFill.sourceKey": proposal.sourceKey,
-                    "documentFormFill.fieldLabel": proposal.fieldLabel
-                ]
-            )
-        }
-    }
-
-    private func command(
-        id: String,
-        traceID: String,
-        targetID: String,
-        issuedAt: RunTraceTimestamp,
-        kind: ActionEngineCommandKind,
-        control: LocalAppDiscoveredControl,
-        definition: LocalAppTaskDefinition,
-        step: LocalAppTaskWorkflowStepDefinition,
-        metadata: [String: String]
-    ) -> ActionEngineCommand {
-        ActionEngineCommand(
-            id: id,
-            traceID: traceID,
-            targetID: targetID,
-            kind: kind,
-            issuedAt: issuedAt,
-            targetBounds: control.frame.map {
-                HotLoopRect(
-                    x: $0.x,
-                    y: $0.y,
-                    width: $0.width,
-                    height: $0.height,
-                    space: .screen
-                )
-            },
-            metadata: step.metadata.merging(metadata) { current, _ in current }
-                .merging([
-                    "taskType": definition.taskType,
-                    "bundleIdentifier": definition.targetApp.bundleIdentifier ?? "",
-                    "workflowStepID": step.id,
-                    "workflowStepRole": step.role.rawValue
-                ]) { current, _ in current }
-        )
-    }
-
-    private static func timestamp(
-        _ timestamp: RunTraceTimestamp,
-        advancedByMilliseconds milliseconds: Double
-    ) -> RunTraceTimestamp {
-        RunTraceTimestamp(
-            wallClock: timestamp.wallClock.addingTimeInterval(milliseconds / 1_000),
-            monotonicUptimeNanoseconds: timestamp.monotonicUptimeNanoseconds + UInt64(milliseconds * 1_000_000)
-        )
-    }
-}
-
 public struct MacAccessibilityActionEngineInputBackend: ActionEngineInputBackend {
     public var actionTimeoutNanoseconds: UInt64
 
@@ -458,23 +286,44 @@ public struct MacAccessibilityActionEngineInputBackend: ActionEngineInputBackend
         else {
             return result(command, executed: false, reason: "missingAccessibilityTarget")
         }
-        guard let bundleIdentifier = command.metadata["bundleIdentifier"],
-              let application = frontmostApplication(),
-              application.bundleIdentifier == bundleIdentifier
-        else {
-            return result(command, executed: false, reason: "targetAppNotFrontmost")
+        // Resolve the process to act on. In the default (foreground) mode the target must be frontmost
+        // and its pid comes from the frontmost app, preserving the original guard exactly. In background
+        // mode the guard upstream has already confirmed the pinned target is a safe, on-active-Space
+        // surface, so we trust the supplied pid and drop the frontmost requirement — AXUIElementPerformAction
+        // is a focus-neutral cross-process RPC that needs neither frontmost status nor a cursor move.
+        let processID: pid_t
+        if command.metadata["accessibility.executionMode"] == "background",
+           let pidString = command.metadata["accessibility.processID"],
+           let backgroundProcessID = pid_t(pidString) {
+            processID = backgroundProcessID
+        } else {
+            guard let bundleIdentifier = command.metadata["bundleIdentifier"],
+                  let application = frontmostApplication(),
+                  application.bundleIdentifier == bundleIdentifier
+            else {
+                return result(command, executed: false, reason: "targetAppNotFrontmost")
+            }
+            processID = application.processIdentifier
         }
 
-        let appElement = AXUIElementCreateApplication(application.processIdentifier)
-        guard let element = resolveElement(nodeID: nodeID, application: appElement) else {
-            return result(command, executed: false, reason: "accessibilityNodeNotFound")
+        // Prefer the live handle captured at observe time: it stays bound to the same logical control
+        // even if the tree reordered, so we act on what we observed rather than whatever now sits at the
+        // old node index. Fall back to the positional re-walk, and surface a distinct "stale" reason when
+        // neither resolves so the planner re-observes instead of retrying a vanished node.
+        let element: AXUIElement
+        if let cached = cachedElement(processID: processID, nodeID: nodeID),
+           isAlive(cached) {
+            element = cached
+        } else if let walked = resolveElement(
+            nodeID: nodeID,
+            application: AXUIElementCreateApplication(processID)
+        ) {
+            element = walked
+        } else {
+            return result(command, executed: false, reason: "accessibilityNodeStale")
         }
 
-        switch action {
-        case "AXPress":
-            let error = AXUIElementPerformAction(element, kAXPressAction as CFString)
-            return result(command, executed: error == .success, reason: String(describing: error))
-        case "AXSetValue":
+        if action == "AXSetValue" {
             guard let value = command.metadata["accessibility.value"] ?? command.key else {
                 return result(command, executed: false, reason: "missingAccessibilityValue")
             }
@@ -484,8 +333,71 @@ public struct MacAccessibilityActionEngineInputBackend: ActionEngineInputBackend
                 value as CFTypeRef
             )
             return result(command, executed: error == .success, reason: String(describing: error))
-        default:
+        }
+
+        guard let performAction = Self.performAction(for: action) else {
             return result(command, executed: false, reason: "unsupportedAccessibilityAction")
+        }
+        // Re-check at dispatch that the live element still advertises this action and is enabled; the
+        // observe-time action list can go stale. On a miss the caller falls back to a coordinate click.
+        guard advertises(element, action: action), isEnabled(element) else {
+            return result(command, executed: false, reason: "accessibilityActionNotAdvertised")
+        }
+        let error = AXUIElementPerformAction(element, performAction)
+        return result(command, executed: error == .success, reason: String(describing: error))
+    }
+
+    /// The live handle observed for `nodeID`, read on the main actor (the cache is MainActor-confined and
+    /// `AXUIElement` is not Sendable). Mirrors `frontmostApplication()`'s main-thread hop.
+    private func cachedElement(processID: pid_t, nodeID: String) -> AXUIElement? {
+        let lookup = {
+            MainActor.assumeIsolated {
+                MacAccessibilityElementHandleCache.shared.handle(processID: processID, nodeID: nodeID)
+            }
+        }
+        return Thread.isMainThread ? lookup() : DispatchQueue.main.sync(execute: lookup)
+    }
+
+    /// Whether the AX handle still points at a live control — a cheap attribute read fails once the
+    /// element is destroyed, which is exactly when a cached handle must be discarded.
+    private func isAlive(_ element: AXUIElement) -> Bool {
+        var value: CFTypeRef?
+        return AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &value) == .success
+    }
+
+    private func advertises(_ element: AXUIElement, action: String) -> Bool {
+        var names: CFArray?
+        guard AXUIElementCopyActionNames(element, &names) == .success,
+              let actions = names as? [String]
+        else {
+            return false
+        }
+        return actions.contains(action)
+    }
+
+    /// Treats a missing `AXEnabled` attribute as enabled: many container/menu elements never expose it,
+    /// and only an explicit `false` should block the action.
+    private func isEnabled(_ element: AXUIElement) -> Bool {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXEnabledAttribute as CFString, &value) == .success else {
+            return true
+        }
+        return (value as? Bool) ?? true
+    }
+
+    /// Maps a supported perform-style action name to its AX constant. `AXSetValue` is handled separately
+    /// because it sets an attribute rather than performing an action.
+    private static func performAction(for action: String) -> CFString? {
+        switch action {
+        case "AXPress": return kAXPressAction as CFString
+        case "AXShowMenu": return kAXShowMenuAction as CFString
+        // No SDK constant ships for the open action, but apps (e.g. Finder) advertise the "AXOpen"
+        // string; AX matches on the name, so the literal is exactly what a constant would resolve to.
+        case "AXOpen": return "AXOpen" as CFString
+        case "AXPick": return kAXPickAction as CFString
+        case "AXConfirm": return kAXConfirmAction as CFString
+        case "AXCancel": return kAXCancelAction as CFString
+        default: return nil
         }
     }
 

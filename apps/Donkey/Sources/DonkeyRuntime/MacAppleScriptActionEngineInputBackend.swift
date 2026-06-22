@@ -1,4 +1,5 @@
 import DonkeyContracts
+import DonkeyHarness
 import Foundation
 
 public struct AppleScriptExecutionResult: Equatable, Sendable {
@@ -46,6 +47,106 @@ public struct NSAppleScriptRunner: AppleScriptRunning {
                 succeeded: true,
                 output: descriptor.stringValue ?? ""
             )
+        }
+    }
+}
+
+/// Deterministic AppleScript compile gate: compiles source against the target app's real
+/// dictionary WITHOUT executing it, returning the actual compiler error on failure. AppleScript
+/// resolves terminology at compile time from the bundle on disk, so this catches wrong commands,
+/// wrong parameter names, and syntax errors before anything runs — and never launches the app.
+public struct NSAppleScriptCompileGate: Sendable {
+    public static let compileTimeoutSeconds: TimeInterval = 5
+
+    private let bundleResolver: @Sendable (_ bundleIdentifier: String?, _ appName: String?) -> URL?
+
+    public init(
+        bundleResolver: @escaping @Sendable (_ bundleIdentifier: String?, _ appName: String?) -> URL? = { bundleIdentifier, appName in
+            MacAppScriptabilityProbe().bundleURL(bundleIdentifier: bundleIdentifier, appName: appName)
+        }
+    ) {
+        self.bundleResolver = bundleResolver
+    }
+
+    public func compile(
+        source: String,
+        targetApp: String?,
+        bundleIdentifier: String?
+    ) async -> HarnessScriptCompileOutcome {
+        // Resolve the target bundle BEFORE constructing NSAppleScript: compiling a `tell
+        // application` block for an app Launch Services can't resolve raises a blocking
+        // "Where is application …?" chooser panel. An unresolvable target is a deterministic
+        // rejection, not a dialog.
+        if targetApp != nil || bundleIdentifier != nil {
+            guard bundleResolver(bundleIdentifier, targetApp) != nil else {
+                return HarnessScriptCompileOutcome(
+                    compiled: false,
+                    errorMessage: "Target app is not installed or resolvable: \(targetApp ?? bundleIdentifier ?? "").",
+                    metadata: ["reason": "targetAppUnresolvable"]
+                )
+            }
+        }
+        // The MainActor compile is uncancellable, so the timeout races it rather than cancelling:
+        // on timeout the bounded answer wins and the orphaned compile finishes in the background.
+        return await withCheckedContinuation { continuation in
+            let once = ResumeOnce()
+            Task { @MainActor in
+                let outcome = Self.compileSync(source)
+                if once.claim() { continuation.resume(returning: outcome) }
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(Self.compileTimeoutSeconds * 1_000_000_000))
+                guard once.claim() else { return }
+                continuation.resume(
+                    returning: HarnessScriptCompileOutcome(
+                        compiled: false,
+                        errorMessage: "AppleScript compile timed out after \(Int(Self.compileTimeoutSeconds))s.",
+                        metadata: ["reason": "compileTimeout"]
+                    )
+                )
+            }
+        }
+    }
+
+    @MainActor
+    private static func compileSync(_ source: String) -> HarnessScriptCompileOutcome {
+        guard let script = NSAppleScript(source: source) else {
+            return HarnessScriptCompileOutcome(
+                compiled: false,
+                errorMessage: "AppleScript source could not be parsed.",
+                metadata: ["reason": "sourceUnparseable"]
+            )
+        }
+        var error: NSDictionary?
+        guard script.compileAndReturnError(&error) else {
+            let message = (error?[NSAppleScript.errorMessage] as? String)
+                ?? (error?[NSAppleScript.errorBriefMessage] as? String)
+                ?? "AppleScript failed to compile."
+            var rangeDescription = ""
+            if let rangeValue = error?[NSAppleScript.errorRange] as? NSValue {
+                let range = rangeValue.rangeValue
+                rangeDescription = "characters \(range.location)–\(range.location + range.length)"
+            }
+            return HarnessScriptCompileOutcome(
+                compiled: false,
+                errorMessage: message,
+                errorRangeDescription: rangeDescription,
+                metadata: ["reason": "compileFailed"]
+            )
+        }
+        return HarnessScriptCompileOutcome(compiled: true)
+    }
+
+    private final class ResumeOnce: @unchecked Sendable {
+        private let lock = NSLock()
+        private var resumed = false
+
+        func claim() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !resumed else { return false }
+            resumed = true
+            return true
         }
     }
 }

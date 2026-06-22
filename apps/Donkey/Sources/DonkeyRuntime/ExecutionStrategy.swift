@@ -113,7 +113,10 @@ public struct MacAppScriptabilityProbe: Sendable {
         AppScriptabilityClassifier.classify(facts(bundleIdentifier: bundleIdentifier, appName: appName))
     }
 
-    private func bundleURL(bundleIdentifier: String?, appName: String?) -> URL? {
+    /// Resolves the installed bundle for an app the planner may know only by display name.
+    /// Shared by the scriptability probe, the scripting-dictionary service, and the
+    /// AppleScript compile gate so they all agree on which bundle "the app" means.
+    public func bundleURL(bundleIdentifier: String?, appName: String?) -> URL? {
         // Resolve by bundle identifier first (reliable).
         if let bundleIdentifier, !bundleIdentifier.isEmpty,
            let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) {

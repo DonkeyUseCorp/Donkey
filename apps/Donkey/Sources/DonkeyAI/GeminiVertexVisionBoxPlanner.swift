@@ -36,72 +36,41 @@ public enum GeminiVertexVisionBoxPlanner {
         window: WindowTargetBounds,
         urlSession: URLSession = .shared
     ) async throws -> VisionBoxAction {
-        let host = auth.location == "global" ? "aiplatform.googleapis.com" : "\(auth.location)-aiplatform.googleapis.com"
-        let endpoint = "https://\(host)/v1/projects/\(auth.project)/locations/\(auth.location)/publishers/google/models/\(model):generateContent"
-        guard let url = URL(string: endpoint) else {
-            throw GeminiVertexVisionPlanner.PlannerError.requestFailed(status: -1, body: "bad url")
-        }
-
         let width = Int(compressed.pixelSize.width.rounded())
         let height = Int(compressed.pixelSize.height.rounded())
-        let body: [String: Any] = [
-            "contents": [[
-                "role": "user",
-                "parts": [
-                    ["text": prompt(goal: goal, app: appName, width: width, height: height, history: history, appGuidance: appGuidance)],
-                    ["inlineData": ["mimeType": compressed.contentType, "data": compressed.data.base64EncodedString()]]
-                ]
-            ]],
-            "generationConfig": [
-                "temperature": 0,
-                "responseMimeType": "application/json",
-                // gemini-3.5-flash is a thinking model; left on, thinking tokens can
-                // consume the whole budget and starve the JSON output. The raw Vertex
-                // API takes the nested thinkingConfig.thinkingBudget form.
-                "thinkingConfig": ["thinkingBudget": 0],
-                "responseSchema": [
-                    "type": "object",
-                    "properties": [
-                        "action": ["type": "string", "enum": ["click", "type", "key", "done"]],
-                        "box": ["type": "array", "items": ["type": "number"]],
-                        "text": ["type": "string"],
-                        "reason": ["type": "string"]
-                    ],
-                    "required": ["action", "reason"]
-                ]
+        let generationConfig: [String: Any] = [
+            "temperature": 0,
+            "responseMimeType": "application/json",
+            // gemini-3.5-flash takes thinking_level (the integer thinkingBudget is ignored on 3.x).
+            // No maxOutputTokens is set, so the large default leaves ample room for medium thinking
+            // plus the small box JSON. Vertex takes the proto enum name (uppercase).
+            "thinkingConfig": ["thinkingLevel": "MEDIUM"],
+            "responseSchema": [
+                "type": "object",
+                "properties": [
+                    "action": ["type": "string", "enum": ["click", "type", "key", "done"]],
+                    "box": ["type": "array", "items": ["type": "number"]],
+                    "text": ["type": "string"],
+                    "reason": ["type": "string"]
+                ],
+                "required": ["action", "reason"]
             ]
         ]
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(auth.token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, response) = try await urlSession.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-        guard status == 200 else {
-            throw GeminiVertexVisionPlanner.PlannerError.requestFailed(status: status, body: String(data: data, encoding: .utf8) ?? "")
-        }
-        guard let text = outputText(data), !text.isEmpty else {
-            throw GeminiVertexVisionPlanner.PlannerError.noOutputText(body: String(data: data, encoding: .utf8) ?? "")
-        }
-        let json = DebugUIInspectionResponseDecoder.jsonObjectSubstring(text)
-        var action = try JSONDecoder().decode(VisionBoxAction.self, from: Data(json.utf8))
+        var action = try await GeminiVertexVisionPlanner.generateAction(
+            auth: auth,
+            model: model,
+            prompt: prompt(goal: goal, app: appName, width: width, height: height, history: history, appGuidance: appGuidance),
+            compressed: compressed,
+            generationConfig: generationConfig,
+            urlSession: urlSession,
+            decode: VisionBoxAction.self
+        )
         if action.action == "click", let box = action.box {
             let points = VisionBoxGeometry.screenPoints(box, window: window)
             action.screenPoints = points.isEmpty ? nil : points
         }
         return action
-    }
-
-    private static func outputText(_ data: Data) -> String? {
-        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let candidates = root["candidates"] as? [[String: Any]],
-              let content = candidates.first?["content"] as? [String: Any],
-              let parts = content["parts"] as? [[String: Any]]
-        else { return nil }
-        return parts.compactMap { $0["text"] as? String }.joined()
     }
 
     private static func prompt(goal: String, app: String, width: Int, height: Int, history: [String], appGuidance: String?) -> String {

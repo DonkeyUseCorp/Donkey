@@ -21,12 +21,11 @@ even when there are no active tasks.
 
 ## Current Sequence
 
-- Better Donkey Vision testing UI. Vision (RunPod OmniParser V2) now renders on
-  the developer debug overlay (`DONKEY_DEBUG_OVERLAY`, fused with AX, gated behind
-  `remoteAIEngine` in `DebugUIInspectionCoordinator`). That overlay is a debugging
-  surface, not a real product/testing UI. We need a better way to view and
-  evaluate raw vision output (boxes, labels, per-window parse latency, hit/skip on
-  the local image-hash cache) while iterating. Scope/shape TBD.
+- **Browser automation via Browser Use Cloud** — see
+  `plans/browser-use-integration.md`. Backend proxy + app-facing `web.automate`
+  hosted tool for agentic web tasks and rich page capture. Start with Phase 1
+  (capture + extract) after the open decisions (credit cost, sync vs webhook) are
+  settled.
 
 ## Invariants
 

@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 
 export type Stat = {
+  eyebrow: string;
   label: string;
   value: string;
 };

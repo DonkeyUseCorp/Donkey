@@ -1,31 +1,24 @@
 "use client";
 
-import { ArrowRight } from "lucide-react";
 import { useCallback, useState } from "react";
 
-import {
-  BillingApiError,
-  createBillingPortalSession,
-} from "@/app/api-clients/billingApi";
 import { PillButton } from "@/app/_components/landing/LandingPrimitives";
 import { authClient } from "@/lib/auth-client";
+import { ApiError } from "@/queries/apiClient";
+import { useOpenBillingPortal } from "@/queries/billing";
 
 export function BillingPortalButton() {
-  const [isPending, setIsPending] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const portal = useOpenBillingPortal();
 
   const handleOpenPortal = useCallback(async () => {
-    setIsPending(true);
     setStatusMessage(null);
 
     try {
-      const session = await createBillingPortalSession();
+      const session = await portal.mutateAsync();
       window.location.assign(session.url);
     } catch (error) {
-      if (
-        error instanceof BillingApiError &&
-        error.code === "unauthorized"
-      ) {
+      if (error instanceof ApiError && error.status === 401) {
         await authClient.signIn.social({
           callbackURL: "/pricing",
           provider: "google",
@@ -33,20 +26,18 @@ export function BillingPortalButton() {
         return;
       }
 
-      if (error instanceof BillingApiError && error.code === "not-found") {
-        setStatusMessage("Billing portal is not available yet.");
-      } else {
-        setStatusMessage("Billing portal is not available yet.");
-      }
-    } finally {
-      setIsPending(false);
+      setStatusMessage("Billing portal is not available yet.");
     }
-  }, []);
+  }, [portal]);
 
   return (
     <div>
-      <PillButton disabled={isPending} onClick={handleOpenPortal} variant="secondary">
-        {isPending ? "Opening..." : "Manage billing"} <ArrowRight size={14} />
+      <PillButton
+        disabled={portal.isPending}
+        onClick={handleOpenPortal}
+        variant="secondary"
+      >
+        {portal.isPending ? "Opening..." : "Manage billing"}
       </PillButton>
       {statusMessage ? (
         <div

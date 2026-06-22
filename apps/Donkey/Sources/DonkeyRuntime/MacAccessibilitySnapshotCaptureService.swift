@@ -371,6 +371,19 @@ final class ApplicationServicesMacAccessibilitySnapshotCapturer: MacAccessibilit
         limits: MacAccessibilitySnapshotLimits,
         onNode: (MacAccessibilitySnapshotNode) -> Void
     ) throws -> MacAccessibilitySnapshotTree {
+        try captureTree(target: target, limits: limits, onNode: onNode, onLiveElement: { _, _ in })
+    }
+
+    /// Like `captureTree(target:limits:onNode:)`, but also hands each visited node's live `AXUIElement`
+    /// (paired with its nodeID) to `onLiveElement` so a caller can retain handles for later, identity-
+    /// stable action resolution. Not part of the capture protocol — only the concrete capturer and the
+    /// observe path use it, so the overlay/inspection callers and their test fakes are untouched.
+    func captureTree(
+        target: MacWindowTargetCandidate,
+        limits: MacAccessibilitySnapshotLimits,
+        onNode: (MacAccessibilitySnapshotNode) -> Void,
+        onLiveElement: (String, AXUIElement) -> Void
+    ) throws -> MacAccessibilitySnapshotTree {
         let application = AXUIElementCreateApplication(target.processID)
         let deadlineUptime = ProcessInfo.processInfo.systemUptime
             + Double(maximumTraversalNanoseconds) / 1_000_000_000
@@ -388,7 +401,8 @@ final class ApplicationServicesMacAccessibilitySnapshotCapturer: MacAccessibilit
             deadlineUptime: deadlineUptime,
             remainingNodeCount: &remainingNodeCount,
             isTreeTruncated: &isTreeTruncated,
-            onNode: onNode
+            onNode: onNode,
+            onLiveElement: onLiveElement
         ) ?? RawMacAccessibilitySnapshotNode(
             role: "AXUnknown",
             title: target.title,
@@ -407,6 +421,22 @@ final class ApplicationServicesMacAccessibilitySnapshotCapturer: MacAccessibilit
         for target: MacWindowTargetCandidate,
         in application: AXUIElement
     ) -> AXUIElement? {
+        let windows = elementArrayAttribute(
+            kAXWindowsAttribute as CFString,
+            from: application,
+            limit: 100
+        )
+
+        // A modal popup — a separate dialog window or a modal panel — blocks its parent window, so
+        // while one is open it is the surface the planner needs to see and act on (its buttons and
+        // input fields). This is app-agnostic: confirmation prompts, save/print dialogs, and login
+        // sheets are routine RPA surfaces, and a plain window-by-target lookup would miss them
+        // because they don't match the resolved main window. (Sheets attach as children of their
+        // parent window and already appear under it; this catches the separate-window case.)
+        if let modal = windows.first(where: { isModalPopup($0) }) {
+            return modal
+        }
+
         if let focusedWindow = elementAttribute(
             kAXFocusedWindowAttribute as CFString,
             from: application
@@ -414,16 +444,21 @@ final class ApplicationServicesMacAccessibilitySnapshotCapturer: MacAccessibilit
             return focusedWindow
         }
 
-        let windows = elementArrayAttribute(
-            kAXWindowsAttribute as CFString,
-            from: application,
-            limit: 100
-        )
         if let match = windows.first(where: { matches($0, target: target) }) {
             return match
         }
 
         return windows.first
+    }
+
+    /// A window that traps interaction until dismissed: a dialog/system-dialog subrole, or any
+    /// window flagged `AXModal`. Used so the observation surfaces popups over the main window.
+    private func isModalPopup(_ element: AXUIElement) -> Bool {
+        let subrole = stringAttribute(kAXSubroleAttribute as CFString, from: element)
+        if subrole == (kAXDialogSubrole as String) || subrole == (kAXSystemDialogSubrole as String) {
+            return true
+        }
+        return boolAttribute(kAXModalAttribute as CFString, from: element) == true
     }
 
     private func readRawNode(
@@ -434,7 +469,8 @@ final class ApplicationServicesMacAccessibilitySnapshotCapturer: MacAccessibilit
         deadlineUptime: TimeInterval,
         remainingNodeCount: inout Int,
         isTreeTruncated: inout Bool,
-        onNode: (MacAccessibilitySnapshotNode) -> Void
+        onNode: (MacAccessibilitySnapshotNode) -> Void,
+        onLiveElement: (String, AXUIElement) -> Void
     ) -> RawMacAccessibilitySnapshotNode? {
         guard !hasTimedOut(deadlineUptime) else {
             isTreeTruncated = true
@@ -471,6 +507,7 @@ final class ApplicationServicesMacAccessibilitySnapshotCapturer: MacAccessibilit
                 }
             )
         )
+        onLiveElement(path, element)
 
         let children = childNodes(
             for: element,
@@ -480,7 +517,8 @@ final class ApplicationServicesMacAccessibilitySnapshotCapturer: MacAccessibilit
             deadlineUptime: deadlineUptime,
             remainingNodeCount: &remainingNodeCount,
             isTreeTruncated: &isTreeTruncated,
-            onNode: onNode
+            onNode: onNode,
+            onLiveElement: onLiveElement
         )
 
         return RawMacAccessibilitySnapshotNode(
@@ -504,7 +542,8 @@ final class ApplicationServicesMacAccessibilitySnapshotCapturer: MacAccessibilit
         deadlineUptime: TimeInterval,
         remainingNodeCount: inout Int,
         isTreeTruncated: inout Bool,
-        onNode: (MacAccessibilitySnapshotNode) -> Void
+        onNode: (MacAccessibilitySnapshotNode) -> Void,
+        onLiveElement: (String, AXUIElement) -> Void
     ) -> [RawMacAccessibilitySnapshotNode] {
         guard !hasTimedOut(deadlineUptime) else {
             isTreeTruncated = true
@@ -542,7 +581,8 @@ final class ApplicationServicesMacAccessibilitySnapshotCapturer: MacAccessibilit
                     deadlineUptime: deadlineUptime,
                     remainingNodeCount: &remainingNodeCount,
                     isTreeTruncated: &isTreeTruncated,
-                    onNode: onNode
+                    onNode: onNode,
+                    onLiveElement: onLiveElement
                 )
             }
     }

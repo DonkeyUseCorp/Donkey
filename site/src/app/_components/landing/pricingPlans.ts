@@ -1,4 +1,4 @@
-import type { BillingPlanKey } from "@/app/api-clients/billingApi";
+import type { BillingPlanKey } from "@/queries/billing";
 import type { CardColor } from "@/app/_components/landing/theme";
 
 export type PricingPlanAction =
@@ -40,13 +40,11 @@ export const pricingPlans = [
     },
     body: "For people who want Donkey as a daily Mac assistant for planning, app work, and follow-through.",
     color: "cream",
-    detail: "More done with AI on your Mac",
+    detail: "For individuals and teams",
     features: [
-      "Advanced reasoning for Mac tasks",
-      "Local app actions and workflow runs",
-      "Help across everyday Mac apps",
-      "Review steps before important actions",
-      "Simple billing and account access",
+      "Automate your Mac with text and voice input",
+      "Prioritized support and feature requests",
+      "Early access to new features",
     ],
     name: "Pro",
     price: "$20/month",
@@ -73,12 +71,11 @@ export const pricingPreviewPlans = [
   {
     ...pricingPlans[0],
     action: {
-      href: "/pricing",
+      href: "/sign-up",
       kind: "link",
-      label: "See Pro",
+      label: "Get Started",
     },
     body: "Start with the self-serve plan when you want Donkey helping with real Mac work.",
-    detail: "More done with AI on your Mac",
   },
   pricingPlans[1],
 ] satisfies PricingPlan[];

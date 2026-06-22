@@ -1,17 +1,48 @@
 import DonkeyContracts
 import DonkeyHarness
 import Foundation
+import os
 
 public enum LocalAppUserQueryHarnessServices {
+    private static let logger = Logger(subsystem: "com.donkey.app", category: "skill-script")
+
     public static func builtInSkillBackedServices() -> HarnessBuiltInToolServices {
         HarnessBuiltInToolServices(
             skillRegistry: HarnessSkillRegistry(skills: BuiltInLocalAppSkillPacks.descriptors()),
             generatedScripts: HarnessGeneratedScriptStore(artifacts: builtInValidatedScriptArtifacts()),
+            // Learned + promoted skill packs land under the default LearnedApplications root, where
+            // BuiltInLocalAppSkillPacks re-discovers them (30s TTL) for app_skill / skill_run.
+            applicationSkillPackWriter: HarnessApplicationSkillPackWriter(
+                rootDirectory: HarnessApplicationSkillPackWriter.defaultRootDirectory()
+            ),
+            scriptingDictionaryProvider: { targetApp, bundleIdentifier in
+                let lookup = await AppScriptingDictionaryService.shared.lookup(
+                    appName: targetApp,
+                    bundleIdentifier: bundleIdentifier ?? targetApp
+                )
+                guard lookup.dictionary != nil else { return nil }
+                return HarnessScriptingDictionarySnapshot(
+                    digest: lookup.digest,
+                    commandNames: lookup.commandNames
+                )
+            },
+            appleScriptCompiler: { source, targetApp, bundleIdentifier in
+                await NSAppleScriptCompileGate().compile(
+                    source: source,
+                    targetApp: targetApp,
+                    bundleIdentifier: bundleIdentifier
+                )
+            },
             appleScriptExecutor: { artifact, context in
                 await executeSkillScript(artifact: artifact, context: context)
             },
             skillScriptExecutor: { artifact, context in
                 await executeSkillScript(artifact: artifact, context: context)
+            },
+            // Preflight Automation consent (no prompt) so mid-task AppleScript routes through the
+            // in-notch permission gate instead of firing a bare system dialog.
+            automationConsentGranted: { bundleIdentifier in
+                SystemPermissionCoordinator.isGranted(.automation(targetBundleID: bundleIdentifier))
             },
             // The Command Layer (incl. shell_exec) is intentionally available to
             // the local planner as well as the Gemini Live session; both go
@@ -95,12 +126,25 @@ public enum LocalAppUserQueryHarnessServices {
         let output = result.metadata["appleScript.output"] ?? ""
         let outputMetadata = structuredOutputMetadata(output)
         let clarificationRequired = outputMetadata["clarification.required"] == "true"
-        let succeeded = result.executed && !clarificationRequired
+        // Honor a status the script reports about its own outcome: a script can run cleanly (executed)
+        // yet report `status=not_found`/`status=failed` because the real-world effect didn't happen
+        // (e.g. playback never started). Treating that as success is a false positive — the agent
+        // would claim it did something it didn't.
+        let scriptStatus = outputMetadata["status"]
+        let statusReportsFailure = scriptStatus == "not_found" || scriptStatus == "failed"
+        let succeeded = result.executed && !clarificationRequired && !statusReportsFailure
+        let summary = skillScriptSummary(
+            succeeded: succeeded,
+            executed: result.executed,
+            output: output,
+            error: result.metadata["appleScript.error"] ?? ""
+        )
+        logger.log(
+            "skill script result skillID=\(artifact.ownerSkillID ?? "", privacy: .public) scriptID=\(artifact.id, privacy: .public) executed=\(result.executed) succeeded=\(succeeded) status=\(scriptStatus ?? "", privacy: .public) error=\(result.metadata["appleScript.error"] ?? "", privacy: .public)"
+        )
         return HarnessScriptExecutionOutcome(
             succeeded: succeeded,
-            summary: succeeded
-                ? "Skill script executed successfully."
-                : "Skill script did not complete successfully.",
+            summary: summary,
             output: output,
             metadata: result.metadata.merging(outputMetadata) { current, _ in current }.merging([
                 "skillID": artifact.ownerSkillID ?? "",
@@ -108,6 +152,28 @@ public enum LocalAppUserQueryHarnessServices {
                 "script.relativePath": artifact.metadata["relativePath"] ?? ""
             ]) { current, _ in current }
         )
+    }
+
+    /// The summary is the tool-result body the planner actually reads each step (history lines and
+    /// the thread both carry it; the structured output only lands in world-model facts). A skill
+    /// script's whole feedback loop — `status=not_found` → escalate to vision instead of retrying —
+    /// depends on its self-report traveling in this string, so never collapse a failure to a generic
+    /// one-liner.
+    public static func skillScriptSummary(
+        succeeded: Bool,
+        executed: Bool,
+        output: String,
+        error: String
+    ) -> String {
+        if !executed && output.isEmpty {
+            let detail = error.isEmpty ? "no output" : String(error.prefix(300))
+            return "Skill script errored before reporting a status: \(detail)"
+        }
+        let headline = succeeded
+            ? "Skill script succeeded."
+            : "Skill script ran but reported the goal was not achieved — read its status below and adjust your approach; do not repeat the same call."
+        guard !output.isEmpty else { return headline }
+        return headline + "\nScript report:\n" + String(output.prefix(500))
     }
 
     private static func structuredOutputMetadata(_ output: String) -> [String: String] {

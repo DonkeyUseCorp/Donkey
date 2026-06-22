@@ -1,12 +1,8 @@
 "use client";
 
-import { ArrowRight, Check } from "lucide-react";
+import { Check } from "lucide-react";
 import { useCallback, useState } from "react";
 
-import {
-  BillingApiError,
-  createCheckoutSession,
-} from "@/app/api-clients/billingApi";
 import {
   PillButton,
   TapedCard,
@@ -14,6 +10,8 @@ import {
 import type { PricingPlan } from "@/app/_components/landing/pricingPlans";
 import { useMediaQuery } from "@/app/_components/landing/useMediaQuery";
 import { authClient } from "@/lib/auth-client";
+import { ApiError } from "@/queries/apiClient";
+import { useStartCheckout } from "@/queries/billing";
 
 type Props = {
   plan: PricingPlan;
@@ -21,8 +19,8 @@ type Props = {
 
 export function PricingPlanCard({ plan }: Props) {
   const isDesktop = useMediaQuery("(min-width: 768px)");
-  const [isPending, setIsPending] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const checkout = useStartCheckout();
   const action = plan.action;
 
   const handleCheckout = useCallback(async () => {
@@ -30,17 +28,13 @@ export function PricingPlanCard({ plan }: Props) {
       return;
     }
 
-    setIsPending(true);
     setStatusMessage(null);
 
     try {
-      const session = await createCheckoutSession(action.planKey);
+      const session = await checkout.mutateAsync(action.planKey);
       window.location.assign(session.url);
     } catch (error) {
-      if (
-        error instanceof BillingApiError &&
-        error.code === "unauthorized"
-      ) {
+      if (error instanceof ApiError && error.status === 401) {
         await authClient.signIn.social({
           callbackURL: `/pricing?checkout=${action.planKey}`,
           provider: "google",
@@ -48,38 +42,41 @@ export function PricingPlanCard({ plan }: Props) {
         return;
       }
 
-      if (error instanceof BillingApiError && error.code === "not-found") {
-        setStatusMessage("Checkout is not available yet.");
-      } else {
-        setStatusMessage("Checkout is not available yet. Please try again soon.");
-      }
-    } finally {
-      setIsPending(false);
+      setStatusMessage("Checkout is not available yet. Please try again soon.");
     }
-  }, [action]);
+  }, [action, checkout]);
 
   const button =
     action.kind === "checkout" ? (
       <PillButton
-        disabled={isPending}
+        disabled={checkout.isPending}
         onClick={handleCheckout}
         variant="dark"
       >
-        {isPending ? "Opening..." : action.label} <ArrowRight size={14} />
+        {checkout.isPending ? "Opening..." : action.label}
       </PillButton>
     ) : (
       <PillButton href={action.href} variant="dark">
-        {action.label} <ArrowRight size={14} />
+        {action.label}
       </PillButton>
     );
 
   return (
     <TapedCard
       color={plan.color}
+      fill
       tapeColor={plan.tapeColor}
       tapePosition={plan.tapePosition}
     >
-      <div style={{ padding: isDesktop ? 36 : 28 }}>
+      <div
+        style={{
+          boxSizing: "border-box",
+          display: "flex",
+          flexDirection: "column",
+          height: "100%",
+          padding: isDesktop ? 36 : 28,
+        }}
+      >
         <div style={{ fontWeight: 600, fontSize: 22, marginBottom: 18 }}>
           {plan.name}
         </div>
@@ -151,21 +148,23 @@ export function PricingPlanCard({ plan }: Props) {
             </div>
           ))}
         </div>
-        {button}
-        {statusMessage ? (
-          <div
-            role="status"
-            style={{
-              color: "#4a403d",
-              fontSize: 13,
-              fontWeight: 600,
-              lineHeight: 1.4,
-              marginTop: 14,
-            }}
-          >
-            {statusMessage}
-          </div>
-        ) : null}
+        <div style={{ marginTop: "auto" }}>
+          {button}
+          {statusMessage ? (
+            <div
+              role="status"
+              style={{
+                color: "#4a403d",
+                fontSize: 13,
+                fontWeight: 600,
+                lineHeight: 1.4,
+                marginTop: 14,
+              }}
+            >
+              {statusMessage}
+            </div>
+          ) : null}
+        </div>
       </div>
     </TapedCard>
   );

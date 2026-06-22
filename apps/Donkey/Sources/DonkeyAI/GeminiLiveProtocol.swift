@@ -113,6 +113,9 @@ public enum GeminiLiveProtocol {
             if let modelTurn = serverContent["modelTurn"] as? [String: Any],
                let parts = modelTurn["parts"] as? [[String: Any]] {
                 for part in parts {
+                    if let text = part["text"] as? String, !text.isEmpty {
+                        events.append(.textOut(text))
+                    }
                     if let inlineData = part["inlineData"] as? [String: Any],
                        let base64 = inlineData["data"] as? String,
                        let audio = Data(base64Encoded: base64) {
@@ -128,6 +131,7 @@ public enum GeminiLiveProtocol {
                    let text = outputTranscription["text"] as? String, !text.isEmpty {
                     events.append(.finalTranscript(text))
                 }
+                events.append(.turnComplete)
             }
         }
 

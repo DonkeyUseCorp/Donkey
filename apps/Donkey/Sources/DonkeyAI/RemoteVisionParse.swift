@@ -1,6 +1,6 @@
 import Foundation
 
-// Wire models for the hosted vision endpoint (POST /api/inference/vision), which
+// Wire models for the hosted vision endpoint (POST /api/vision), which
 // fronts the RunPod OmniParser V2 worker. Coordinates in the response are pixels
 // relative to the uploaded image, origin top-left. See the contract in
 // site/src/lib/inference/vision/schema.ts.

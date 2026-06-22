@@ -7,6 +7,7 @@ protocol UserQueryTaskStoring {
     func loadRecentTasks(limit: Int) -> [UserQueryNotchTask]
     func searchTasks(matching query: String, limit: Int) -> [UserQueryNotchTask]
     func upsertTask(_ task: UserQueryNotchTask)
+    func deleteTask(id: String)
     func loadEvents(taskID: String) -> [UserQueryTaskEvent]
     func appendEvent(_ event: UserQueryTaskEvent)
     func loadAssets(taskID: String) -> [UserQueryTaskAsset]
@@ -93,6 +94,20 @@ final class CoreDataUserQueryTaskStore: UserQueryTaskStoring {
         managedTask.setValue(task.createdAt, forKey: Self.createdAtKey)
         managedTask.setValue(task.updatedAt, forKey: Self.updatedAtKey)
         managedTask.setValue(Self.metadataJSONString(task.metadata), forKey: Self.metadataJSONKey)
+
+        try? context.save()
+    }
+
+    /// Permanently removes a task and everything attached to it — its row plus all
+    /// stored events and assets — so a dismissed task does not reappear on relaunch.
+    func deleteTask(id: String) {
+        guard let context else { return }
+
+        if let managedTask = Self.existingTask(id: id, in: context) {
+            context.delete(managedTask)
+        }
+        Self.deleteRows(entityName: Self.eventEntityName, taskIDKey: Self.eventTaskIDKey, taskID: id, in: context)
+        Self.deleteRows(entityName: Self.assetEntityName, taskIDKey: Self.assetTaskIDKey, taskID: id, in: context)
 
         try? context.save()
     }
@@ -272,6 +287,20 @@ final class CoreDataUserQueryTaskStore: UserQueryTaskStoring {
 
     private static func assetEntityDescription(in context: NSManagedObjectContext) -> NSEntityDescription {
         NSEntityDescription.entity(forEntityName: assetEntityName, in: context)!
+    }
+
+    private static func deleteRows(
+        entityName: String,
+        taskIDKey: String,
+        taskID: String,
+        in context: NSManagedObjectContext
+    ) {
+        let request = NSFetchRequest<NSManagedObject>(entityName: entityName)
+        request.predicate = NSPredicate(format: "%K == %@", taskIDKey, taskID)
+        guard let rows = try? context.fetch(request) else { return }
+        for row in rows {
+            context.delete(row)
+        }
     }
 
     private static func existingTask(id: String, in context: NSManagedObjectContext) -> NSManagedObject? {

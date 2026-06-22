@@ -154,13 +154,32 @@ if [ "$INCLUDE_DEBUG" -eq 1 ]; then
   LOG_COMMAND+=(--debug)
 fi
 
-filter_log_tool_noise() {
-  while IFS= read -r line || [ -n "$line" ]; do
-    if [[ "$line" == "Filtering the log data using "* ]]; then
-      continue
-    fi
-    printf '%s\n' "$line"
-  done
+# Trim the unified-log boilerplate down to "HH:MM:SS.mmm  message": drop the date,
+# the message-type letter, the "Process[pid:tid]" column, and the "[subsystem:category]"
+# tag, which are identical on every Donkey line and just add noise. When writing to a
+# terminal, also wrap path=... values in OSC 8 file:// hyperlinks (percent-encoded, so
+# spaces like "Application Support" don't break link detection) so Cmd+click opens
+# them via the terminal's semantic-history handler.
+reformat_log_stream() {
+  local linkify=0
+  if [ -t 1 ]; then
+    linkify=1
+  fi
+  LINKIFY_PATHS="$linkify" perl -ne '
+    BEGIN { $| = 1 }
+    next if /^Filtering the log data using /;
+    next if /^Timestamp\s+Ty/;
+    s/^\d{4}-\d{2}-\d{2} //;
+    s/^(\d{2}:\d{2}:\d{2}\.\d+) +[A-Za-z]+ +[^\[]*\[\d+:[0-9a-fx]+\] +(\[[^\]]*\] )?/$1  /;
+    if ($ENV{LINKIFY_PATHS}) {
+      s{path=(/.+?)(?=\s+\w+=|$)}{
+        my $path = $1;
+        (my $url = $path) =~ s|([^A-Za-z0-9\-._~/])|sprintf("%%%02X", ord($1))|ge;
+        "path=\033]8;;file://$url\007$path\033]8;;\007"
+      }ge;
+    }
+    print;
+  '
 }
 
-exec "${LOG_COMMAND[@]}" > >(filter_log_tool_noise) 2> >(filter_log_tool_noise >&2)
+exec "${LOG_COMMAND[@]}" > >(reformat_log_stream) 2> >(reformat_log_stream >&2)

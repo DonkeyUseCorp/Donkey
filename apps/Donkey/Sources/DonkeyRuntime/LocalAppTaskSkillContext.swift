@@ -18,8 +18,76 @@ public enum BuiltInLocalAppSkillPacks {
         ).discover()
     }()
 
+    /// Learned application skill packs (saved by `application.learning.saveSkillPack`) can appear
+    /// mid-session, so unlike the bundled packs they are re-discovered with a short TTL. This is
+    /// what makes learning compound: a pack saved in one session is matched and preloaded like a
+    /// built-in in every later session.
+    private final class TTLDescriptorCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cached: (descriptors: [HarnessSkillDescriptor], at: Date)?
+
+        func descriptors(ttl: TimeInterval, discover: () -> [HarnessSkillDescriptor]) -> [HarnessSkillDescriptor] {
+            lock.lock()
+            defer { lock.unlock() }
+            if let cached, Date().timeIntervalSince(cached.at) < ttl {
+                return cached.descriptors
+            }
+            let fresh = discover()
+            cached = (fresh, Date())
+            return fresh
+        }
+
+        func invalidate() {
+            lock.lock()
+            defer { lock.unlock() }
+            cached = nil
+        }
+    }
+
+    private static let learnedPackCache = TTLDescriptorCache()
+    private static let installedPackCache = TTLDescriptorCache()
+
+    public static func learnedDescriptors() -> [HarnessSkillDescriptor] {
+        learnedPackCache.descriptors(ttl: 30) {
+            HarnessSkillFileSystemSource(
+                roots: [HarnessApplicationSkillPackWriter.defaultRootDirectory()],
+                sourceKind: .userDirectory
+            ).discover()
+        }
+    }
+
+    /// Skills the user installed from the catalog. Each lives at `Installed/<id>/current`; like
+    /// learned packs they can appear mid-session, so they are re-discovered with a short TTL.
+    public static func installedDescriptors() -> [HarnessSkillDescriptor] {
+        installedPackCache.descriptors(ttl: 30) {
+            let roots = HarnessSkillInstaller().currentBundleRoots()
+            guard !roots.isEmpty else { return [] }
+            return HarnessSkillFileSystemSource(roots: roots, sourceKind: .installed).discover()
+        }
+    }
+
+    /// Drop the installed-skill cache so a just-installed/uninstalled skill is visible immediately
+    /// rather than after the TTL. Called by `HarnessSkillInstallManager` after a change.
+    public static func invalidateInstalledCache() {
+        installedPackCache.invalidate()
+    }
+
+    /// Built-in first, then installed, then learned, so a curated built-in always wins on an id
+    /// collision and an installed catalog skill wins over a learned one. Dedup by id also guards the
+    /// `HarnessSkillRegistry` (which keys uniquely on id) against a duplicate-id crash.
     public static func descriptors() -> [HarnessSkillDescriptor] {
-        cachedDescriptors
+        dedupedByID(cachedDescriptors + installedDescriptors() + learnedDescriptors())
+    }
+
+    private static func dedupedByID(
+        _ descriptors: [HarnessSkillDescriptor]
+    ) -> [HarnessSkillDescriptor] {
+        var seen = Set<String>()
+        var result: [HarnessSkillDescriptor] = []
+        for descriptor in descriptors where seen.insert(descriptor.id).inserted {
+            result.append(descriptor)
+        }
+        return result
     }
 
     public static func instructionSnippet(
@@ -57,6 +125,21 @@ public enum BuiltInLocalAppSkillPacks {
         bundleIdentifier: String? = nil,
         maxCharacters: Int = 4_000
     ) -> String? {
+        guard let match = appSkillDescriptor(forApp: appName, bundleIdentifier: bundleIdentifier) else {
+            return nil
+        }
+        let body = bounded(strippedSkillMetadata(from: match.description), maxCharacters: maxCharacters)
+        return body.isEmpty ? nil : body
+    }
+
+    /// The app-specific skill descriptor (one whose `apps:` frontmatter names this app by display
+    /// name or bundle identifier), or nil when no app-specific skill is installed. Exposes the
+    /// skill's id and validated scripts so callers can advertise runnable workflows alongside the
+    /// operating playbook.
+    public static func appSkillDescriptor(
+        forApp appName: String,
+        bundleIdentifier: String? = nil
+    ) -> HarnessSkillDescriptor? {
         let wanted = Set(
             ([appName, bundleIdentifier].compactMap { $0 })
                 .map { $0.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -64,16 +147,13 @@ public enum BuiltInLocalAppSkillPacks {
         )
         guard !wanted.isEmpty else { return nil }
 
-        let match = descriptors().first { descriptor in
+        return descriptors().first { descriptor in
             let apps = (descriptor.metadata["apps"] ?? "")
                 .split(separator: ",")
                 .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
             return apps.contains { app in wanted.contains { AppNameMatching.matches($0, app) } }
         }
-        guard let match else { return nil }
-        let body = bounded(strippedSkillMetadata(from: match.description), maxCharacters: maxCharacters)
-        return body.isEmpty ? nil : body
     }
 
     public static func scriptSource(
@@ -116,115 +196,5 @@ public enum BuiltInLocalAppSkillPacks {
     private static func bounded(_ value: String, maxCharacters: Int) -> String {
         guard value.count > maxCharacters else { return value }
         return String(value.prefix(maxCharacters)).trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-}
-
-public struct LocalAppTaskSkillContext: Equatable, Sendable {
-    public var snippets: [String]
-
-    public init(snippets: [String]) {
-        self.snippets = snippets
-    }
-
-    /// Builds skill guidance that scales to many skills via progressive disclosure (no embeddings):
-    ///   1. A compact discovery catalog — one line per skill (id + summary + tags) for the top-K
-    ///      lexically-relevant skills — so the planner can SEE what is available and pick one.
-    ///   2. The FULL instruction body of the single best-matched skill, so its concrete execution
-    ///      steps (e.g. skill.load → skill.script.execute) are never truncated.
-    /// Context stays bounded regardless of the total number of skills: K one-liners + 1 full body.
-    /// The planner can `skill.load` any other catalog entry to get that skill's full body on demand.
-    public static func defaultContext(
-        command: String = "",
-        taskDefinitions: [LocalAppTaskDefinition],
-        appFinderCatalog: [LocalAppFinderCatalogEntry],
-        maxSkills: Int = 24,
-        detailCharacters: Int = 4_000
-    ) -> LocalAppTaskSkillContext {
-        let ranked = rankedBuiltInSkillDescriptors(
-            command: command,
-            taskDefinitions: taskDefinitions,
-            appFinderCatalog: appFinderCatalog
-        )
-        guard !ranked.isEmpty else {
-            return LocalAppTaskSkillContext(snippets: [])
-        }
-
-        let catalogEntries = ranked.prefix(max(1, maxSkills)).map(\.descriptor)
-        let catalog = (["Available skills (pick the most relevant for the request; load it with skill.load to get its full steps):"]
-            + catalogEntries.map(discoveryLine(for:)))
-            .joined(separator: "\n")
-
-        var snippets = [catalog]
-        if let top = ranked.first, top.score > 0 {
-            snippets.append(BuiltInLocalAppSkillPacks.instructionSnippet(for: top.descriptor, maxCharacters: detailCharacters))
-        }
-        return LocalAppTaskSkillContext(snippets: snippets)
-    }
-
-    /// One compact catalog line for discovery: `- <id>: <summary> (tags: a, b)`.
-    private static func discoveryLine(for descriptor: HarnessSkillDescriptor) -> String {
-        let tags = descriptor.tags.isEmpty ? "" : " (tags: \(descriptor.tags.joined(separator: ", ")))"
-        return "- \(descriptor.id): \(descriptor.summary)\(tags)"
-    }
-
-    private static func rankedBuiltInSkillDescriptors(
-        command: String,
-        taskDefinitions: [LocalAppTaskDefinition],
-        appFinderCatalog: [LocalAppFinderCatalogEntry]
-    ) -> [(descriptor: HarnessSkillDescriptor, score: Int)] {
-        // App-specific operating skills (those declaring `apps:`) are vision-driving playbooks
-        // consumed via `appOperatingGuidance(forApp:)` by the vision action path — they are not
-        // intent-planning skills, so keep them out of the planner's skill catalog/ranking.
-        let descriptors = BuiltInLocalAppSkillPacks.descriptors()
-            .filter { ($0.metadata["apps"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        guard !descriptors.isEmpty else { return [] }
-
-        var taskValues: [String] = []
-        for definition in taskDefinitions {
-            taskValues.append(definition.taskType)
-            taskValues.append(definition.targetApp.appName)
-            taskValues.append(definition.metadata["displayTitle"] ?? "")
-            taskValues.append(definition.metadata["domain"] ?? "")
-            taskValues.append(definition.metadata["catalogEntry"] ?? "")
-        }
-        let taskTokens = tokens(in: taskValues.joined(separator: " "))
-
-        var catalogValues: [String] = []
-        for entry in appFinderCatalog {
-            catalogValues.append(entry.appName)
-            catalogValues.append(entry.description)
-            for capability in entry.capabilities {
-                catalogValues.append(capability.id)
-                catalogValues.append(capability.summary)
-                catalogValues.append(capability.controlProfiles.joined(separator: " "))
-            }
-        }
-        let catalogTokens = tokens(in: catalogValues.joined(separator: " "))
-        // The user's actual request is the strongest signal for which skills the task needs, so
-        // weight command matches heavily. Without this, selection only reflects installed apps and
-        // static task definitions, which can miss (or arbitrarily pick) the skill the task requires.
-        let commandTokens = tokens(in: command)
-        let availableTokens = taskTokens.union(catalogTokens).union(commandTokens)
-        return descriptors.map { descriptor in
-            // Score over id, name, summary, tags, and the file-based `keywords:` trigger words.
-            let descriptorTokens = tokens(
-                in: ([descriptor.id, descriptor.name, descriptor.summary, descriptor.metadata["keywords"] ?? ""]
-                    + descriptor.tags)
-                    .joined(separator: " ")
-            )
-            let score = descriptorTokens.intersection(availableTokens).count
-                + 3 * descriptorTokens.intersection(commandTokens).count
-            return (descriptor: descriptor, score: score)
-        }
-        .sorted {
-            if $0.score == $1.score {
-                return $0.descriptor.name < $1.descriptor.name
-            }
-            return $0.score > $1.score
-        }
-    }
-
-    private static func tokens(in value: String) -> Set<String> {
-        ControlTextRelevance.tokens(in: value)
     }
 }

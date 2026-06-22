@@ -20,31 +20,6 @@ public struct HarnessMemoryEntry: Codable, Equatable, Sendable {
     }
 }
 
-public struct HarnessAppLookupEntry: Codable, Equatable, Sendable {
-    public var id: String
-    public var name: String
-    public var bundleIdentifier: String?
-    public var path: String?
-    public var isInstalled: Bool
-    public var metadata: [String: String]
-
-    public init(
-        id: String,
-        name: String,
-        bundleIdentifier: String? = nil,
-        path: String? = nil,
-        isInstalled: Bool = true,
-        metadata: [String: String] = [:]
-    ) {
-        self.id = id
-        self.name = name
-        self.bundleIdentifier = bundleIdentifier
-        self.path = path
-        self.isInstalled = isInstalled
-        self.metadata = metadata
-    }
-}
-
 public enum HarnessGeneratedScriptLanguage: String, Codable, Equatable, Sendable {
     case appleScript
     case shell
@@ -109,6 +84,9 @@ public struct HarnessScriptGenerationRequest: Equatable, Sendable {
     public var entities: [String: String]
     public var allowedActions: String
     public var verification: String
+    /// The target app's real scripting-dictionary terminology (bounded digest). When present, the
+    /// generator must write against these declared commands instead of guessing terminology.
+    public var scriptingDictionaryDigest: String
     public var worldFacts: [String: String]
     public var sourceTraceID: String?
     public var metadata: [String: String]
@@ -121,6 +99,7 @@ public struct HarnessScriptGenerationRequest: Equatable, Sendable {
         entities: [String: String] = [:],
         allowedActions: String = "",
         verification: String = "",
+        scriptingDictionaryDigest: String = "",
         worldFacts: [String: String] = [:],
         sourceTraceID: String? = nil,
         metadata: [String: String] = [:]
@@ -132,9 +111,23 @@ public struct HarnessScriptGenerationRequest: Equatable, Sendable {
         self.entities = entities
         self.allowedActions = allowedActions
         self.verification = verification
+        self.scriptingDictionaryDigest = scriptingDictionaryDigest
         self.worldFacts = worldFacts
         self.sourceTraceID = sourceTraceID
         self.metadata = metadata
+    }
+}
+
+/// What the runtime knows about the target app's scripting dictionary, handed to the harness so
+/// AppleScript generation is grounded in declared terminology and validation can cross-check the
+/// commands a generated script claims to use.
+public struct HarnessScriptingDictionarySnapshot: Equatable, Sendable {
+    public var digest: String
+    public var commandNames: [String]
+
+    public init(digest: String, commandNames: [String] = []) {
+        self.digest = digest
+        self.commandNames = commandNames
     }
 }
 
@@ -153,6 +146,29 @@ public struct HarnessScriptGenerationOutcome: Equatable, Sendable {
         self.succeeded = succeeded
         self.source = source
         self.summary = summary
+        self.metadata = metadata
+    }
+}
+
+/// Result of deterministically compiling an AppleScript artifact against the target app's real
+/// dictionary, without executing it. AppleScript resolves terminology at compile time, so this is
+/// a 100%-accurate syntax+terminology gate; failures carry the actual compiler message so the
+/// planner can regenerate with the precise error in context.
+public struct HarnessScriptCompileOutcome: Equatable, Sendable {
+    public var compiled: Bool
+    public var errorMessage: String
+    public var errorRangeDescription: String
+    public var metadata: [String: String]
+
+    public init(
+        compiled: Bool,
+        errorMessage: String = "",
+        errorRangeDescription: String = "",
+        metadata: [String: String] = [:]
+    ) {
+        self.compiled = compiled
+        self.errorMessage = errorMessage
+        self.errorRangeDescription = errorRangeDescription
         self.metadata = metadata
     }
 }
@@ -204,42 +220,184 @@ public actor HarnessGeneratedScriptStore {
     }
 }
 
+/// A request to a generative image model behind the `image.edit` / `image.generate` tools.
+/// `inputImagePaths` is empty for generation-from-scratch, the source image first (then any
+/// reference images) for an edit. Kept provider-neutral: the adapter that fulfills it names the model.
+public struct HarnessImageGenerationRequest: Sendable {
+    public var prompt: String
+    public var inputImagePaths: [String]
+    public var model: String?
+    public var outputDirectory: String?
+
+    public init(
+        prompt: String,
+        inputImagePaths: [String] = [],
+        model: String? = nil,
+        outputDirectory: String? = nil
+    ) {
+        self.prompt = prompt
+        self.inputImagePaths = inputImagePaths
+        self.model = model
+        self.outputDirectory = outputDirectory
+    }
+}
+
+public struct HarnessImageGenerationResult: Sendable {
+    public var savedPaths: [String]
+    /// Set when no image was produced — the provider/model's reason, surfaced to the planner so it
+    /// can adjust (e.g. reword the prompt) rather than being told a flat "no image, do not retry".
+    public var failureReason: String?
+
+    public init(savedPaths: [String], failureReason: String? = nil) {
+        self.savedPaths = savedPaths
+        self.failureReason = failureReason
+    }
+}
+
+/// The typed request for the `web.automate` hosted tool: a natural-language task,
+/// an optional starting URL, and an optional JSON-schema string for structured
+/// output. Declared in DonkeyHarness so the executor can pass it across the
+/// closure boundary without importing the DonkeyAI implementation.
+public struct HarnessWebAutomateRequest: Sendable {
+    public var task: String
+    public var startURL: String?
+    public var structuredOutputSchemaJSON: String?
+
+    public init(task: String, startURL: String? = nil, structuredOutputSchemaJSON: String? = nil) {
+        self.task = task
+        self.startURL = startURL
+        self.structuredOutputSchemaJSON = structuredOutputSchemaJSON
+    }
+}
+
+/// The result of a `web.automate` run: the formatted text block for the agent to read plus whether
+/// the run actually succeeded. The executor reports `.failed` (keeping `text` as the failure message)
+/// whenever `succeeded` is false, so an errored, timed-out, or unsuccessful run is never reported as
+/// a success.
+public struct HarnessWebAutomateOutcome: Sendable {
+    public var text: String
+    public var succeeded: Bool
+
+    public init(text: String, succeeded: Bool) {
+        self.text = text
+        self.succeeded = succeeded
+    }
+}
+
+/// Outcome of the multimodal arm of `llm.generate` — a model call over a local audio/video file.
+/// Distinguishes the cases a caller can act on (re-chunk a truncated transcript, fix an unreadable,
+/// oversized, or non-media file) instead of collapsing every failure to a bare nil.
+public enum HarnessMediaGenerationOutcome: Sendable {
+    /// Non-empty generated text (e.g. an SRT transcript).
+    case text(String)
+    /// The output hit the model's token ceiling and was cut off — split the media into shorter chunks.
+    case truncated
+    /// The file could not be read.
+    case unreadableFile
+    /// The file is larger than can be sent inline — chunk it. Carries the byte size and the cap.
+    case tooLarge(bytes: Int, limit: Int)
+    /// The file's resolved type is not audio or video.
+    case unsupportedType(String)
+    /// The media model call timed out or threw before producing output — retryable (re-chunk / retry),
+    /// distinct from `.empty`. Carries a short reason for the trace.
+    case timedOut(reason: String)
+    /// The model genuinely returned an empty/whitespace string (not a timeout or thrown error).
+    case empty
+}
+
 public struct HarnessBuiltInToolServices: Sendable {
     public var memoryEntries: [HarnessMemoryEntry]
-    public var appEntries: [HarnessAppLookupEntry]
     public var skillRegistry: HarnessSkillRegistry?
     public var generatedScripts: HarnessGeneratedScriptStore
     public var applicationLearningStore: HarnessApplicationLearningStore
     public var applicationSkillPackWriter: HarnessApplicationSkillPackWriter?
     public var appleScriptGenerator: (@Sendable (HarnessScriptGenerationRequest) async -> HarnessScriptGenerationOutcome)?
+    /// The target app's parsed scripting dictionary (digest + command names), or nil when no
+    /// dictionary can be read. Grounds `automation.applescript.generate` in real terminology.
+    public var scriptingDictionaryProvider: (@Sendable (_ targetApp: String, _ bundleIdentifier: String?) async -> HarnessScriptingDictionarySnapshot?)?
+    /// Compiles AppleScript source against the target app's dictionary without executing it.
+    /// When absent, validation runs the static checks only.
+    public var appleScriptCompiler: (@Sendable (_ source: String, _ targetApp: String?, _ bundleIdentifier: String?) async -> HarnessScriptCompileOutcome)?
     public var appleScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)?
     public var skillScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)?
+    /// Preflights macOS Automation (Apple Events) consent for a target app bundle id, WITHOUT
+    /// prompting. When this returns false, AppleScript execution raises the in-notch permission gate
+    /// instead of letting the system dialog fire mid-task. nil means "skip the pre-gate".
+    public var automationConsentGranted: (@Sendable (_ bundleIdentifier: String?) async -> Bool)?
     /// Native Donkey Command Layer backend. Returns a result for a recognized
     /// command, or `nil` to let dispatch fall through to `unknownTool`.
     public var commandExecutor: (@Sendable (HarnessToolExecutionContext) async -> HarnessToolResult?)?
+    /// A one-off model completion: given a fully-formed prompt, return generated text (or nil on
+    /// failure). Backs the `llm.generate` tool, the model boundary the planner can reach for to
+    /// compose, transform, summarize, or massage text without leaving the harness.
+    public var textGenerator: (@Sendable (String) async -> String?)?
+    /// A one-off model call over a local media file (audio/video): a prompt and a file URL in, a typed
+    /// outcome out. Backs `llm.generate` when a `filePath` is supplied — the multimodal arm that
+    /// transcribes, translates, captions, or answers questions about media. The prompt decides the
+    /// output (e.g. an SRT transcript). The outcome distinguishes the failure modes a caller can act on
+    /// (re-chunk a truncated transcript, fix an unreadable or oversized file) rather than collapsing
+    /// them to nil. nil means the media arm is unwired and such calls fail cleanly.
+    public var mediaGenerator: (@Sendable (_ prompt: String, _ file: URL, _ mimeType: String?) async -> HarnessMediaGenerationOutcome)?
+    /// Web search: a query in, ranked results as text (title — url, then snippet, per result), or nil
+    /// on failure. Backs the `web.search` tool so the agent can find current facts.
+    public var webSearcher: (@Sendable (String) async -> String?)?
+    /// Web fetch/navigation: a URL in, the page's readable text out, or nil on failure. Backs the
+    /// `web.fetch` tool so the agent can read a page it found or was given.
+    public var webFetcher: (@Sendable (String) async -> String?)?
+    /// Agentic web automation: a task (navigate/click/fill/extract) in, the run's result as a text
+    /// block out (final output, status, any recording link), or nil on failure. Backs the
+    /// `web.automate` tool, which runs through the hosted Browser Use Cloud backend and bills credits.
+    public var webAutomator: (@Sendable (HarnessWebAutomateRequest) async -> HarnessWebAutomateOutcome)?
+    /// The file-understanding layer behind `files.describe`: a file URL in, a structured
+    /// `FileUnderstanding` out (OCR for images, text for PDFs, dimensions/metadata), or nil to fall
+    /// back to the built-in Foundation understanding. The runtime supplies this; without it the tool
+    /// still understands text files from their content.
+    public var fileUnderstanding: (@Sendable (URL) async -> FileUnderstanding?)?
+    /// Generative image editing/generation behind `image.edit` and `image.generate`: a request in,
+    /// the saved output file paths out (or nil on failure). The runtime supplies an adapter that
+    /// routes through the hosted asset API to an image model; without it the tools report unavailable.
+    public var imageGenerator: (@Sendable (HarnessImageGenerationRequest) async -> HarnessImageGenerationResult?)?
 
     public init(
         memoryEntries: [HarnessMemoryEntry] = [],
-        appEntries: [HarnessAppLookupEntry] = [],
         skillRegistry: HarnessSkillRegistry? = nil,
         generatedScripts: HarnessGeneratedScriptStore = HarnessGeneratedScriptStore(),
         applicationLearningStore: HarnessApplicationLearningStore = HarnessApplicationLearningStore(),
         applicationSkillPackWriter: HarnessApplicationSkillPackWriter? = nil,
         appleScriptGenerator: (@Sendable (HarnessScriptGenerationRequest) async -> HarnessScriptGenerationOutcome)? = nil,
+        scriptingDictionaryProvider: (@Sendable (_ targetApp: String, _ bundleIdentifier: String?) async -> HarnessScriptingDictionarySnapshot?)? = nil,
+        appleScriptCompiler: (@Sendable (_ source: String, _ targetApp: String?, _ bundleIdentifier: String?) async -> HarnessScriptCompileOutcome)? = nil,
         appleScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)? = nil,
         skillScriptExecutor: (@Sendable (HarnessGeneratedScriptArtifact, HarnessToolExecutionContext) async -> HarnessScriptExecutionOutcome)? = nil,
-        commandExecutor: (@Sendable (HarnessToolExecutionContext) async -> HarnessToolResult?)? = nil
+        automationConsentGranted: (@Sendable (_ bundleIdentifier: String?) async -> Bool)? = nil,
+        commandExecutor: (@Sendable (HarnessToolExecutionContext) async -> HarnessToolResult?)? = nil,
+        textGenerator: (@Sendable (String) async -> String?)? = nil,
+        mediaGenerator: (@Sendable (_ prompt: String, _ file: URL, _ mimeType: String?) async -> HarnessMediaGenerationOutcome)? = nil,
+        webSearcher: (@Sendable (String) async -> String?)? = nil,
+        webFetcher: (@Sendable (String) async -> String?)? = nil,
+        webAutomator: (@Sendable (HarnessWebAutomateRequest) async -> HarnessWebAutomateOutcome)? = nil,
+        fileUnderstanding: (@Sendable (URL) async -> FileUnderstanding?)? = nil,
+        imageGenerator: (@Sendable (HarnessImageGenerationRequest) async -> HarnessImageGenerationResult?)? = nil
     ) {
         self.memoryEntries = memoryEntries
-        self.appEntries = appEntries
         self.skillRegistry = skillRegistry
         self.generatedScripts = generatedScripts
         self.applicationLearningStore = applicationLearningStore
         self.applicationSkillPackWriter = applicationSkillPackWriter
         self.appleScriptGenerator = appleScriptGenerator
+        self.scriptingDictionaryProvider = scriptingDictionaryProvider
+        self.appleScriptCompiler = appleScriptCompiler
         self.appleScriptExecutor = appleScriptExecutor
         self.skillScriptExecutor = skillScriptExecutor
+        self.automationConsentGranted = automationConsentGranted
         self.commandExecutor = commandExecutor
+        self.textGenerator = textGenerator
+        self.mediaGenerator = mediaGenerator
+        self.webSearcher = webSearcher
+        self.webFetcher = webFetcher
+        self.webAutomator = webAutomator
+        self.fileUnderstanding = fileUnderstanding
+        self.imageGenerator = imageGenerator
     }
 }
 
@@ -280,10 +438,6 @@ public enum BuiltInHarnessToolExecutors {
             return await scriptValidate(context, services: services)
         case "skill.script.execute":
             return await scriptExecute(context, services: services, executor: services.skillScriptExecutor)
-        case "app.search":
-            return appSearch(context, services: services)
-        case "app.openOrFocus":
-            return appOpenOrFocus(context, services: services)
         case "screen.observe":
             return screenObserve(context)
         case "elements.get":
@@ -314,6 +468,22 @@ public enum BuiltInHarnessToolExecutors {
             return await applicationLearningSaveSkillPack(context, services: services)
         case "state.verify":
             return stateVerify(context)
+        case "llm.generate":
+            return await llmGenerate(context, services: services)
+        case "web.search":
+            return await webSearch(context, services: services)
+        case "web.fetch":
+            return await webFetch(context, services: services)
+        case "web.automate":
+            return await webAutomate(context, services: services)
+        case "files.describe":
+            return await filesDescribe(context, services: services)
+        case "image.edit":
+            return await imageGenerate(context, services: services, requiresInput: true)
+        case "image.generate":
+            return await imageGenerate(context, services: services, requiresInput: false)
+        case "wait":
+            return await timingWait(context)
         case "run.pause", "run.resume", "run.recover", "run.cancel", "run.complete", "run.failSafe":
             return lifecycle(context)
         default:
@@ -538,10 +708,14 @@ public enum BuiltInHarnessToolExecutors {
             _ = await services.generatedScripts.reject(id: scriptID, reason: "emptyScriptSource")
             return failed(context, "Script artifact has no source to validate.", reason: "emptyScriptSource")
         }
-        if artifact.language == .appleScript,
-           let rejectionReason = appleScriptValidationRejectionReason(artifact: artifact, context: context) {
-            _ = await services.generatedScripts.reject(id: scriptID, reason: rejectionReason)
-            return failed(context, "AppleScript artifact failed validation.", reason: rejectionReason)
+        if artifact.language == .appleScript {
+            if let rejectionReason = appleScriptValidationRejectionReason(artifact: artifact, context: context) {
+                _ = await services.generatedScripts.reject(id: scriptID, reason: rejectionReason)
+                return failed(context, "AppleScript artifact failed validation.", reason: rejectionReason)
+            }
+            if let gateRejection = await appleScriptGateRejection(artifact: artifact, context: context, services: services) {
+                return gateRejection
+            }
         }
 
         let validated = await services.generatedScripts.validate(
@@ -585,6 +759,28 @@ public enum BuiltInHarnessToolExecutors {
             return failed(context, "No guarded script execution backend is configured.", reason: "missingScriptExecutionBackend")
         }
 
+        // Pre-gate: never let Automation (Apple Events) consent fire as a bare system dialog mid-task.
+        // If the target app's automation isn't already granted, raise the in-notch permission gate;
+        // the system prompt only happens after the user approves it (then the loop re-runs this tool).
+        let targetBundleID = trimmed(artifact.metadata["bundleIdentifier"])
+        if let automationConsentGranted = services.automationConsentGranted,
+           await automationConsentGranted(targetBundleID) == false {
+            let appName = trimmed(artifact.metadata["targetApp"]) ?? "this app"
+            return HarnessToolResult(
+                callID: context.call.id,
+                toolName: context.call.name,
+                status: .waitingForPermission,
+                summary: "Needs your approval to control \(appName).",
+                metadata: [
+                    "executor": "guardedScriptBackend",
+                    "gate": "systemPermission",
+                    "system.permission": "automation",
+                    "system.target": targetBundleID ?? "",
+                    "scriptArtifactID": scriptID
+                ]
+            )
+        }
+
         let outcome = await executor(artifact, context)
         if outcome.metadata["clarification.required"] == "true" {
             let question = trimmed(outcome.metadata["clarification.question"])
@@ -610,6 +806,15 @@ public enum BuiltInHarnessToolExecutors {
             )
         }
         let status: HarnessToolResultStatus = outcome.succeeded ? .succeeded : .failed
+        var resultMetadata = outcome.metadata.merging([
+            "scriptArtifactID": scriptID,
+            "executor": "guardedScriptBackend"
+        ]) { current, _ in current }
+        if outcome.succeeded {
+            resultMetadata.merge(
+                await promoteVerifiedGeneratedScript(artifact: artifact, services: services)
+            ) { current, _ in current }
+        }
         return HarnessToolResult(
             callID: context.call.id,
             toolName: context.call.name,
@@ -623,83 +828,137 @@ public enum BuiltInHarnessToolExecutors {
                     "lastAcceptedTool": context.call.name
                 ]
             ),
-            metadata: outcome.metadata.merging([
-                "scriptArtifactID": scriptID,
-                "executor": "guardedScriptBackend"
-            ]) { current, _ in current }
+            metadata: resultMetadata
         )
     }
 
-    // MARK: - App Search & Focus
+    // MARK: - Promotion of verified generated scripts
 
-    private static func appSearch(
-        _ context: HarnessToolExecutionContext,
+    /// A dynamically generated AppleScript that compiled, executed, and reported success is proven
+    /// terminology for this app on this machine. Promote it into a learned skill pack so the next
+    /// run of the same task goes `app_skill` → `skill_run` with zero model-generated script: fully
+    /// deterministic on the second run. Returns promotion metadata for the tool result (empty when
+    /// promotion doesn't apply or no skill-pack writer is configured).
+    private static func promoteVerifiedGeneratedScript(
+        artifact: HarnessGeneratedScriptArtifact,
         services: HarnessBuiltInToolServices
-    ) -> HarnessToolResult {
-        guard let query = trimmed(context.call.input["query"] ?? context.call.input["target"]) else {
-            return invalidInput(context, "app.search requires a non-empty query.")
+    ) async -> [String: String] {
+        guard artifact.createdByToolName == "automation.applescript.generate",
+              artifact.validationStatus == .validated,
+              let writer = services.applicationSkillPackWriter,
+              let appName = trimmed(artifact.metadata["targetApp"])
+        else {
+            return [:]
         }
-        let queryTokens = tokens(in: query)
-        let appMatches = services.appEntries
-            .filter { entry in
-                Self.matches(
-                    tokens: queryTokens,
-                    values: [entry.id, entry.name, entry.bundleIdentifier ?? "", entry.path ?? ""] + Array(entry.metadata.values)
-                )
-            }
-            .prefix(10)
-        let facts = Dictionary<String, String>(
-            uniqueKeysWithValues: appMatches.map { entry in
-                ("app.search.match.\(entry.id)", entry.name)
-            }
-        )
-        return success(
-            context,
-            summary: "Found \(appMatches.count) app/item match(es).",
-            facts: facts.merging([
-                "app.search.query": query,
-                "app.search.ids": appMatches.map(\.id).joined(separator: ","),
-                "lastAcceptedTool": context.call.name
-            ]) { current, _ in current },
+        let bundleIdentifier = trimmed(artifact.metadata["bundleIdentifier"])
+        let purpose = artifact.metadata["purpose"] ?? artifact.metadata["goal"] ?? artifact.id
+        let usedCommands = (artifact.metadata["generation.usedCommands"] ?? "")
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+
+        // Dedup key: same app + same dictionary-command signature lands in the same pack, so a
+        // repeat success updates the promoted script instead of accumulating duplicates.
+        let dedupSeed = usedCommands.isEmpty
+            ? "\(appName) \(purpose)"
+            : "\(appName) \(usedCommands.joined(separator: " "))"
+        let skillID = "promoted-\(stableIDSeed(from: dedupSeed))"
+
+        let bindings = (artifact.metadata["generation.parameterBindings"] ?? "")
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let (promotedSource, parameterized) = parameterizedPromotionSource(artifact.source, bindings: bindings)
+
+        let promoted = HarnessGeneratedScriptArtifact(
+            id: "\(skillID)-run",
+            language: .appleScript,
+            source: promotedSource,
+            validationStatus: .validated,
+            createdByToolName: artifact.createdByToolName,
+            ownerSkillID: skillID,
             metadata: [
-                "resultCount": String(appMatches.count),
-                "targetIDs": appMatches.map(\.id).joined(separator: ",")
+                "purpose": purpose,
+                "targetApp": appName,
+                "bundleIdentifier": bundleIdentifier ?? "",
+                "generation.usedCommands": usedCommands.joined(separator: "\n"),
+                "promotion.sourceArtifactID": artifact.id,
+                "promotion.parameterized": parameterized ? "true" : "false",
+                "validation.policy": "promotedVerifiedScript",
+                "validation.provenance": artifact.metadata["generation.backend"] ?? "dynamicAppleScriptGenerator"
             ]
         )
+        let profile = HarnessApplicationProfile(
+            skillID: skillID,
+            appName: appName,
+            bundleIdentifier: bundleIdentifier,
+            learningGoal: purpose,
+            observations: [],
+            workflowRecipes: [
+                HarnessApplicationWorkflowRecipe(
+                    id: "\(skillID)-workflow",
+                    name: purpose,
+                    summary: "Run the promoted verified script via skill_run (skillID=\(skillID), scriptID=\(promoted.id))\(parameterized ? ", passing the task's value as `input`" : "").",
+                    steps: [
+                        HarnessApplicationWorkflowStep(
+                            id: "run-promoted-script",
+                            summary: "Execute the verified AppleScript for: \(purpose)",
+                            toolName: "skill_run",
+                            inputHints: parameterized
+                                ? ["skillID": skillID, "scriptID": promoted.id, "input": "the task's user-specific value"]
+                                : ["skillID": skillID, "scriptID": promoted.id],
+                            safetyClass: .guardedInput,
+                            verification: "the script reports a successful structured status"
+                        )
+                    ],
+                    verificationCriteria: ["script output reports success"],
+                    metadata: ["source": "appleScriptPromotion"]
+                )
+            ],
+            generatedScriptIDs: [promoted.id],
+            metadata: [
+                "source": "appleScriptPromotion",
+                "promotion.sourceArtifactID": artifact.id
+            ]
+        )
+        guard let saved = try? writer.save(profile: profile, scripts: [promoted]) else { return [:] }
+        return [
+            "promotion.skillID": saved.skill.id,
+            "promotion.scriptID": saved.skill.scripts.first?.id ?? promoted.id,
+            "promotion.parameterized": parameterized ? "true" : "false"
+        ]
     }
 
-    private static func appOpenOrFocus(
-        _ context: HarnessToolExecutionContext,
-        services: HarnessBuiltInToolServices
-    ) -> HarnessToolResult {
-        guard let targetID = trimmed(context.call.input["targetID"]) else {
-            return invalidInput(context, "app.openOrFocus requires a targetID.")
+    /// Turns one task-specific value back into a reusable template: when a generator-reported
+    /// parameter binding's value appears as a quoted string literal in the source, replace it with
+    /// the `{query}` token the skill executor substitutes from `input` at run time. Matching is
+    /// quote-bounded so command words are never rewritten; with no recoverable binding the script
+    /// is promoted as-is (a fixed, still-deterministic workflow).
+    private static func parameterizedPromotionSource(
+        _ source: String,
+        bindings: [String]
+    ) -> (source: String, parameterized: Bool) {
+        for binding in bindings {
+            let parts = binding.split(separator: "=", maxSplits: 1)
+            guard parts.count == 2 else { continue }
+            let value = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard value.count >= 2 else { continue }
+            let quoted = "\"\(appleScriptStringEscaped(value))\""
+            if source.contains(quoted) {
+                return (source.replacingOccurrences(of: quoted, with: "\"{query}\""), true)
+            }
         }
-        guard let target = services.appEntries.first(where: { appMatchesTarget($0, targetID: targetID) }) else {
-            return failed(context, "App/item target was not found: \(targetID)", reason: "targetNotFound")
-        }
-        guard target.isInstalled else {
-            return failed(context, "App/item target is not installed: \(target.name)", reason: "targetUnavailable")
-        }
-        return HarnessToolResult(
-            callID: context.call.id,
-            toolName: context.call.name,
-            status: .succeeded,
-            summary: "Focused \(target.name).",
-            observations: HarnessObservationDelta(
-                focusedApp: target.name,
-                facts: [
-                    "focusedApp.id": target.id,
-                    "focusedApp.bundleIdentifier": target.bundleIdentifier ?? "",
-                    "lastAcceptedTool": context.call.name
-                ]
-            ),
-            metadata: target.metadata.merging([
-                "targetID": target.id,
-                "bundleIdentifier": target.bundleIdentifier ?? "",
-                "path": target.path ?? ""
-            ]) { current, _ in current }
-        )
+        return (source, false)
+    }
+
+    /// Mirrors the runtime template renderer's escaping so a promoted `{query}` slot re-renders to
+    /// exactly the literal the verified script contained.
+    private static func appleScriptStringEscaped(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
     }
 
     // MARK: - Screen & Elements
@@ -942,6 +1201,16 @@ public enum BuiltInHarnessToolExecutors {
             guard let generator = services.appleScriptGenerator else {
                 return failed(context, "No dynamic AppleScript generation backend is configured.", reason: "missingAppleScriptGenerationBackend")
             }
+            // Ground generation in the app's real scripting dictionary when one can be read, and
+            // record the grounding on the artifact so validation can cross-check used commands.
+            let dictionary = await services.scriptingDictionaryProvider?(
+                targetApp,
+                trimmed(context.call.input["bundleIdentifier"])
+            )
+            input["generation.dictionaryGrounded"] = dictionary == nil ? "false" : "true"
+            if let dictionary, !dictionary.commandNames.isEmpty {
+                input["dictionary.commandNames"] = dictionary.commandNames.joined(separator: "\n")
+            }
             let outcome = await generator(
                 HarnessScriptGenerationRequest(
                     language: .appleScript,
@@ -951,6 +1220,7 @@ public enum BuiltInHarnessToolExecutors {
                     entities: scriptGenerationEntities(from: context),
                     allowedActions: context.call.input["allowedActions"] ?? "",
                     verification: context.call.input["verification"] ?? "",
+                    scriptingDictionaryDigest: dictionary?.digest ?? "",
                     worldFacts: context.worldModel.facts,
                     sourceTraceID: context.call.metadata["traceID"],
                     metadata: context.call.input
@@ -989,6 +1259,88 @@ public enum BuiltInHarnessToolExecutors {
         return await scriptGenerate(generatedContext, services: services, ownerSkillID: nil)
     }
 
+    /// Template tokens the runtime's script renderer substitutes. Matching is against this known
+    /// set only — never generic `{…}`, which AppleScript uses for list/record literals.
+    private static let appleScriptTemplateTokens = [
+        "{query}", "{rawQuery}", "{queryLiteral}",
+        "{entityValue}", "{rawEntityValue}",
+        "{targetApp}", "{rawTargetApp}",
+        "{bundleIdentifier}", "{rawBundleIdentifier}",
+        "{input}"
+    ]
+
+    /// Deterministic gates for dynamically generated AppleScript, beyond the static text checks:
+    /// unresolved template tokens (a parameter was never bound), commands the target app's
+    /// dictionary doesn't declare, and a real compile against the app's terminology. Skill-pack
+    /// template artifacts are exempt — they legitimately carry tokens until execution renders them.
+    private static func appleScriptGateRejection(
+        artifact: HarnessGeneratedScriptArtifact,
+        context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices
+    ) async -> HarnessToolResult? {
+        guard artifact.createdByToolName == "automation.applescript.generate" else { return nil }
+
+        if let token = appleScriptTemplateTokens.first(where: artifact.source.contains) {
+            let reason = "unresolvedTemplatePlaceholder:\(token)"
+            _ = await services.generatedScripts.reject(id: artifact.id, reason: reason)
+            return failed(
+                context,
+                "Generated AppleScript still contains the unresolved template token \(token); every parameter must be bound to a concrete value before validation.",
+                reason: reason
+            )
+        }
+
+        if let unknownCommand = commandNotInDictionary(artifact: artifact) {
+            let reason = "commandNotInDictionary:\(unknownCommand)"
+            _ = await services.generatedScripts.reject(id: artifact.id, reason: reason)
+            return failed(
+                context,
+                "Generated AppleScript uses the command \"\(unknownCommand)\", which the target app's scripting dictionary does not declare. Regenerate using only commands from the dictionary digest.",
+                reason: reason
+            )
+        }
+
+        guard let compiler = services.appleScriptCompiler else { return nil }
+        let targetApp = trimmed(context.call.input["targetApp"] ?? artifact.metadata["targetApp"])
+        let bundleIdentifier = trimmed(context.call.input["bundleIdentifier"] ?? artifact.metadata["bundleIdentifier"])
+        let compile = await compiler(artifact.source, targetApp, bundleIdentifier)
+        guard !compile.compiled else { return nil }
+        _ = await services.generatedScripts.reject(id: artifact.id, reason: "appleScriptCompileFailed")
+        return HarnessToolResult(
+            callID: context.call.id,
+            toolName: context.call.name,
+            status: .failed,
+            summary: compile.errorMessage.isEmpty
+                ? "AppleScript failed to compile against the target app's dictionary."
+                : "AppleScript failed to compile: \(compile.errorMessage)",
+            metadata: compile.metadata.merging([
+                "reason": "appleScriptCompileFailed",
+                "compile.errorMessage": compile.errorMessage,
+                "compile.errorRange": compile.errorRangeDescription
+            ]) { current, _ in current }
+        )
+    }
+
+    /// Cross-checks the commands the generator CLAIMED to use against the dictionary command list
+    /// stamped on the artifact at generation time. Structured-output-on-structured-data matching:
+    /// a cheap hallucination catch before the (heavier) compile gate.
+    private static func commandNotInDictionary(artifact: HarnessGeneratedScriptArtifact) -> String? {
+        guard let usedRaw = artifact.metadata["generation.usedCommands"],
+              let declaredRaw = artifact.metadata["dictionary.commandNames"]
+        else {
+            return nil
+        }
+        let declared = Set(
+            declaredRaw.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+        )
+        guard !declared.isEmpty else { return nil }
+        return usedRaw
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .first { !declared.contains($0.lowercased()) }
+    }
+
     private static func appleScriptValidationRejectionReason(
         artifact: HarnessGeneratedScriptArtifact,
         context: HarnessToolExecutionContext
@@ -1013,7 +1365,8 @@ public enum BuiltInHarnessToolExecutors {
             "empty trash",
             "shutdown",
             "restart",
-            "quit "
+            "quit ",
+            "eppc://"
         ]
         if let denied = deniedFragments.first(where: lowercased.contains) {
             return "disallowedAppleScriptFragment:\(denied)"
@@ -1339,6 +1692,242 @@ public enum BuiltInHarnessToolExecutors {
         "app.lookup"
     ]
 
+    /// Generic LLM call: compose/transform text via the model boundary, or — when a `filePath` is
+    /// given — transcribe/translate/analyze a local audio or video file through the media boundary.
+    /// Long output can be written to a temp file (toFile=true) so the caller builds a note, subtitle
+    /// file, or document from the file instead of passing a huge string through a length-limited shell
+    /// command.
+    private static func llmGenerate(
+        _ context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices
+    ) async -> HarnessToolResult {
+        guard let prompt = trimmed(context.call.input["prompt"]) else {
+            return invalidInput(context, "llm.generate requires a `prompt`.")
+        }
+
+        // Optional source text the prompt operates on — folded into the prompt for both the text and
+        // the media arm, so passing `input` alongside `filePath` (e.g. a glossary of names to spell) is
+        // not silently dropped.
+        let source = context.call.input["input"].map { "\n\nINPUT:\n\($0)" } ?? ""
+        let generated: String?
+        if let filePath = trimmed(context.call.input["filePath"]) {
+            guard let mediaGenerator = services.mediaGenerator else {
+                return failed(context, "No media model boundary is wired for llm.generate with a filePath.", reason: "mediaGeneratorUnavailable")
+            }
+            let fileURL = URL(fileURLWithPath: filePath)
+            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                return invalidInput(context, "llm.generate `filePath` does not exist: \(filePath).")
+            }
+            switch await mediaGenerator(prompt + source, fileURL, trimmed(context.call.input["mimeType"])) {
+            case .text(let value):
+                generated = value
+            case .truncated:
+                return failed(context, "The transcript hit the model's output limit and was cut off — split the media into shorter chunks and transcribe each.", reason: "mediaOutputTruncated")
+            case .unreadableFile:
+                return failed(context, "Could not read the media file: \(filePath).", reason: "mediaFileUnreadable")
+            case .tooLarge(let bytes, let limit):
+                return failed(context, "The media file is \(bytes / 1_000_000)MB, over the \(limit / 1_000_000)MB inline limit — extract compact audio or split it into chunks.", reason: "mediaFileTooLarge")
+            case .unsupportedType(let mime):
+                return failed(context, "llm.generate `filePath` must be audio or video; got \(mime). Pass an explicit `mimeType` if the extension is unusual.", reason: "mediaUnsupportedType")
+            case .timedOut(let reason):
+                // A timeout or thrown error is retryable — surface it as such rather than as "no text"
+                // so the planner re-chunks or retries instead of giving up.
+                return failed(context, "The media model call did not finish (\(reason)) — split the media into shorter chunks and retry.", reason: "mediaTimedOut")
+            case .empty:
+                generated = nil
+            }
+        } else {
+            guard let generator = services.textGenerator else {
+                return failed(context, "No model boundary is wired for llm.generate.", reason: "textGeneratorUnavailable")
+            }
+            generated = await generator(prompt + source)
+        }
+        guard let text = generated, !text.isEmpty else {
+            return failed(context, "The model returned no text.", reason: "emptyGeneration")
+        }
+
+        let toFile = (context.call.input["toFile"] ?? "").lowercased() == "true"
+        if toFile {
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("donkey-llm-\(context.call.id).txt")
+            do {
+                try text.write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                return failed(context, "Could not write generated text to a file: \(error)", reason: "fileWriteFailed")
+            }
+            let preview = String(text.prefix(200))
+            return success(
+                context,
+                summary: "Generated \(text.count) characters → \(url.path)",
+                facts: ["lastAcceptedTool": context.call.name],
+                metadata: ["filePath": url.path, "text": preview, "characterCount": String(text.count)]
+            )
+        }
+        return success(
+            context,
+            summary: text.count > 400 ? String(text.prefix(400)) + "…" : text,
+            facts: ["lastAcceptedTool": context.call.name],
+            metadata: ["text": text, "characterCount": String(text.count)]
+        )
+    }
+
+    private static func imageGenerate(
+        _ context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices,
+        requiresInput: Bool
+    ) async -> HarnessToolResult {
+        guard let generator = services.imageGenerator else {
+            return failed(context, "No image model is wired for \(context.call.name).", reason: "imageGeneratorUnavailable")
+        }
+        guard let prompt = trimmed(context.call.input["prompt"]) else {
+            return invalidInput(context, "\(context.call.name) requires a `prompt` describing the image.")
+        }
+        var inputPaths: [String] = []
+        if let inputPath = trimmed(context.call.input["inputPath"]) {
+            inputPaths.append(inputPath)
+        }
+        if let references = trimmed(context.call.input["referencePaths"]) {
+            inputPaths.append(contentsOf: references
+                .split(whereSeparator: { $0 == "," || $0 == "\n" || $0 == "\r" })
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty })
+        }
+        if requiresInput && inputPaths.isEmpty {
+            return invalidInput(context, "image.edit requires an `inputPath` to the image to edit.")
+        }
+        let request = HarnessImageGenerationRequest(
+            prompt: prompt,
+            inputImagePaths: inputPaths,
+            model: trimmed(context.call.input["model"]),
+            outputDirectory: trimmed(context.call.input["outDir"])
+        )
+        guard let result = await generator(request) else {
+            return failed(context, "The image model is unavailable right now.", reason: "imageGeneratorUnavailable")
+        }
+        guard !result.savedPaths.isEmpty else {
+            return failed(
+                context,
+                result.failureReason ?? "The image model returned no image.",
+                reason: "imageGenerationFailed"
+            )
+        }
+        let joined = result.savedPaths.joined(separator: ", ")
+        return success(
+            context,
+            summary: "Saved \(result.savedPaths.count) image(s) → \(joined)",
+            facts: ["lastAcceptedTool": context.call.name],
+            metadata: [
+                "paths": result.savedPaths.joined(separator: "\n"),
+                "count": String(result.savedPaths.count)
+            ]
+        )
+    }
+
+    private static func webSearch(
+        _ context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices
+    ) async -> HarnessToolResult {
+        guard let searcher = services.webSearcher else {
+            return failed(context, "Web search is not configured.", reason: "webSearchUnavailable")
+        }
+        guard let query = trimmed(context.call.input["query"]) else {
+            return invalidInput(context, "web.search requires a `query`.")
+        }
+        guard let results = await searcher(query), !results.isEmpty else {
+            return failed(context, "No results for \"\(query)\".", reason: "noWebResults")
+        }
+        return success(
+            context,
+            summary: results.count > 600 ? String(results.prefix(600)) + "…" : results,
+            facts: ["lastAcceptedTool": context.call.name],
+            metadata: ["results": results, "query": query]
+        )
+    }
+
+    private static func webFetch(
+        _ context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices
+    ) async -> HarnessToolResult {
+        guard let fetcher = services.webFetcher else {
+            return failed(context, "Web fetch is not configured.", reason: "webFetchUnavailable")
+        }
+        guard let url = trimmed(context.call.input["url"]) else {
+            return invalidInput(context, "web.fetch requires a `url`.")
+        }
+        guard let text = await fetcher(url), !text.isEmpty else {
+            return failed(context, "Could not read \(url).", reason: "webFetchFailed")
+        }
+        if (context.call.input["toFile"] ?? "").lowercased() == "true" {
+            let fileURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("donkey-web-\(context.call.id).txt")
+            do {
+                try text.write(to: fileURL, atomically: true, encoding: .utf8)
+            } catch {
+                return failed(context, "Could not write page text to a file: \(error)", reason: "fileWriteFailed")
+            }
+            return success(
+                context,
+                summary: "Fetched \(text.count) characters → \(fileURL.path)",
+                facts: ["lastAcceptedTool": context.call.name],
+                metadata: ["filePath": fileURL.path, "text": String(text.prefix(200)), "characterCount": String(text.count)]
+            )
+        }
+        return success(
+            context,
+            summary: text.count > 600 ? String(text.prefix(600)) + "…" : text,
+            facts: ["lastAcceptedTool": context.call.name],
+            metadata: ["text": text, "characterCount": String(text.count)]
+        )
+    }
+
+    private static func webAutomate(
+        _ context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices
+    ) async -> HarnessToolResult {
+        guard let automator = services.webAutomator else {
+            return failed(context, "Web automation is not configured.", reason: "webAutomateUnavailable")
+        }
+        guard let task = trimmed(context.call.input["task"]) else {
+            return invalidInput(context, "web.automate requires a `task` describing what to do.")
+        }
+        let request = HarnessWebAutomateRequest(
+            task: task,
+            startURL: trimmed(context.call.input["startUrl"]),
+            structuredOutputSchemaJSON: trimmed(context.call.input["schema"])
+        )
+        let outcome = await automator(request)
+        let result = outcome.text
+        // Report failure (keeping the diagnostic text) whenever the run did not genuinely succeed —
+        // an errored, timed-out, or unsuccessful run must never be surfaced to the agent as a success.
+        guard outcome.succeeded, !result.isEmpty else {
+            let message = result.isEmpty ? "The browser task did not complete." : result
+            return failed(
+                context,
+                message.count > 600 ? String(message.prefix(600)) + "…" : message,
+                reason: "webAutomateFailed",
+                metadata: ["text": message]
+            )
+        }
+        return success(
+            context,
+            summary: result.count > 600 ? String(result.prefix(600)) + "…" : result,
+            facts: ["lastAcceptedTool": context.call.name],
+            metadata: ["text": result]
+        )
+    }
+
+    private static func timingWait(_ context: HarnessToolExecutionContext) async -> HarnessToolResult {
+        let requested = context.call.input["seconds"].flatMap(Double.init) ?? 1
+        let seconds = min(max(requested, 0.1), 10)
+        try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+        return success(
+            context,
+            summary: "Waited \(String(format: "%.1f", seconds))s for the app to settle.",
+            facts: ["lastAcceptedTool": context.call.name],
+            metadata: ["seconds": String(format: "%.1f", seconds)]
+        )
+    }
+
     private static func stateVerify(_ context: HarnessToolExecutionContext) -> HarnessToolResult {
         guard let criteria = trimmed(context.call.input["criteria"]) else {
             // Planners sometimes append a verify step without echoing explicit criteria. Verify against
@@ -1432,17 +2021,18 @@ public enum BuiltInHarnessToolExecutors {
     private static func failed(
         _ context: HarnessToolExecutionContext,
         _ summary: String,
-        reason: String
+        reason: String,
+        metadata: [String: String] = [:]
     ) -> HarnessToolResult {
         HarnessToolResult(
             callID: context.call.id,
             toolName: context.call.name,
             status: .failed,
             summary: summary,
-            metadata: [
+            metadata: metadata.merging([
                 "executor": "builtInGeneric",
                 "reason": reason
-            ]
+            ]) { _, reserved in reserved }
         )
     }
 
@@ -1473,11 +2063,6 @@ public enum BuiltInHarnessToolExecutors {
         return context.worldModel.elements.filter { element in
             matches(tokens: scopeTokens, values: [element.id, element.label, element.role] + Array(element.metadata.values))
         }
-    }
-
-    private static func appMatchesTarget(_ entry: HarnessAppLookupEntry, targetID: String) -> Bool {
-        [entry.id, entry.name, entry.bundleIdentifier ?? "", entry.path ?? ""]
-            .contains { normalized($0) == normalized(targetID) }
     }
 
     private static func actionAllowed(_ action: String, elementActions: [String]) -> Bool {

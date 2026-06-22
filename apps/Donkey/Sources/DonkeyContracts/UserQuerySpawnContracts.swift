@@ -39,7 +39,11 @@ public struct UserQuerySpawnState: Codable, Equatable, Identifiable, Sendable {
     public var phase: UserQuerySpawnPhase
     public var notchCueAngleDegrees: Double
     public var targetHint: UserQuerySpawnTargetHint?
+    public var createdAt: Date
     public var updatedAt: Date
+    /// When the spawn's work last came to rest (run finished or is waiting on
+    /// the user). Nil while a run is in flight; cleared when work resumes.
+    public var finishedAt: Date?
 
     public init(
         id: String = UUID().uuidString,
@@ -50,7 +54,9 @@ public struct UserQuerySpawnState: Codable, Equatable, Identifiable, Sendable {
         phase: UserQuerySpawnPhase = .notchCue,
         notchCueAngleDegrees: Double = UserQuerySpawnGeometry.defaultExitAngleDegrees,
         targetHint: UserQuerySpawnTargetHint? = nil,
-        updatedAt: Date = Date()
+        createdAt: Date = Date(),
+        updatedAt: Date = Date(),
+        finishedAt: Date? = nil
     ) {
         self.id = id
         self.taskID = taskID
@@ -60,7 +66,9 @@ public struct UserQuerySpawnState: Codable, Equatable, Identifiable, Sendable {
         self.phase = phase
         self.notchCueAngleDegrees = notchCueAngleDegrees
         self.targetHint = targetHint
+        self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.finishedAt = finishedAt
     }
 }
 
@@ -68,15 +76,22 @@ public struct UserQuerySpawnProgressUpdate: Equatable, Sendable {
     public var label: String?
     public var targetHint: UserQuerySpawnTargetHint?
     public var phase: UserQuerySpawnPhase?
+    /// One token-chunk of the assistant's final reply, streamed as it is generated. When set, the
+    /// model appends it to the running task's detail (the chin and the open row read that), so the
+    /// answer types itself out instead of popping in whole. A normal `label` update replaces the status
+    /// line; an `answerDelta` accumulates onto it.
+    public var answerDelta: String?
 
     public init(
         label: String? = nil,
         targetHint: UserQuerySpawnTargetHint? = nil,
-        phase: UserQuerySpawnPhase? = nil
+        phase: UserQuerySpawnPhase? = nil,
+        answerDelta: String? = nil
     ) {
         self.label = label
         self.targetHint = targetHint
         self.phase = phase
+        self.answerDelta = answerDelta
     }
 }
 
@@ -93,7 +108,8 @@ public enum UserQuerySpawnLifecycle {
              .waitingForReview,
              .interrupted,
              .needsAttention,
-             .failed:
+             .failed,
+             .timedOut:
             true
         case .completed:
             false

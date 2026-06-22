@@ -113,6 +113,9 @@ struct UserQueryComposer: View {
     let inputTextHeight: CGFloat
     let isInputExpanded: Bool
     let surfaceFill: Color
+    /// When set, the follow-up surface is outlined in this color — used to tint the composer with the
+    /// accent of the task a reply is pinned to, so the input visibly belongs to that thread.
+    let borderColor: Color?
     let forceExpandedSurface: Bool
     let toolbarStyle: UserQueryComposerToolbarStyle
     let sizeProfile: UserQueryComposerSizeProfile
@@ -128,6 +131,7 @@ struct UserQueryComposer: View {
         inputTextHeight: CGFloat,
         isInputExpanded: Bool,
         surfaceFill: Color = .black,
+        borderColor: Color? = nil,
         forceExpandedSurface: Bool = false,
         toolbarStyle: UserQueryComposerToolbarStyle = .waveformOnly,
         sizeProfile: UserQueryComposerSizeProfile = .standard,
@@ -142,6 +146,7 @@ struct UserQueryComposer: View {
         self.inputTextHeight = inputTextHeight
         self.isInputExpanded = isInputExpanded
         self.surfaceFill = surfaceFill
+        self.borderColor = borderColor
         self.forceExpandedSurface = forceExpandedSurface
         self.toolbarStyle = toolbarStyle
         self.sizeProfile = sizeProfile
@@ -164,11 +169,67 @@ struct UserQueryComposer: View {
 
     @ViewBuilder
     private var promptSurface: some View {
-        if usesExpandedSurface {
-            expandedPromptSurface
-        } else {
-            promptCapsule
+        switch toolbarStyle {
+        case .followUp:
+            followUpSurface
+        case .waveformOnly:
+            if usesExpandedSurface {
+                expandedPromptSurface
+            } else {
+                promptCapsule
+            }
         }
+    }
+
+    // A single rounded box that opens as one line and grows with its text up to a scroll cap, with the
+    // send button pinned to the bottom-right corner — the notch follow-up input from the prototype.
+    private var followUpSurface: some View {
+        ZStack(alignment: .bottomTrailing) {
+            textInput
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(.top, followUpTextTopPadding)
+                .padding(.leading, UserQueryLayout.followUpComposerLeadingPadding)
+                .padding(.trailing, UserQueryLayout.followUpComposerTrailingPadding)
+
+            sendButton(size: UserQueryLayout.followUpComposerSendButtonSize)
+                .padding(UserQueryLayout.followUpComposerVerticalInset)
+        }
+        .frame(
+            width: UserQueryLayout.composerInputSurfaceWidth,
+            height: composerHeight,
+            alignment: .topLeading
+        )
+        .background {
+            RoundedRectangle(
+                cornerRadius: UserQueryLayout.followUpComposerCornerRadius,
+                style: .continuous
+            )
+            .fill(surfaceFill)
+        }
+        .overlay {
+            if let borderColor {
+                RoundedRectangle(
+                    cornerRadius: UserQueryLayout.followUpComposerCornerRadius,
+                    style: .continuous
+                )
+                .strokeBorder(borderColor, lineWidth: 1.5)
+            }
+        }
+        .animation(.easeOut(duration: 0.16), value: borderColor)
+        .accessibilityElement(children: .contain)
+    }
+
+    // Center the line vertically while resting; it settles toward the top inset as the text grows,
+    // matching the prototype's `items-center` box.
+    private var followUpTextTopPadding: CGFloat {
+        max(
+            UserQueryLayout.followUpComposerVerticalInset,
+            (composerHeight - followUpTextAreaHeight) / 2
+        )
+    }
+
+    private var followUpTextAreaHeight: CGFloat {
+        UserQueryLayout.followUpComposerTextAreaHeight(inputTextHeight: inputTextHeight)
     }
 
     private var promptCapsule: some View {
@@ -349,7 +410,16 @@ struct UserQueryComposer: View {
             submit: submit
         )
         .frame(maxWidth: .infinity)
-        .frame(height: inputTextHeight)
+        .frame(height: textInputFrameHeight)
+    }
+
+    private var textInputFrameHeight: CGFloat {
+        switch toolbarStyle {
+        case .followUp:
+            return followUpTextAreaHeight
+        case .waveformOnly:
+            return inputTextHeight
+        }
     }
 
     private var expandedSurfaceHeight: CGFloat {
@@ -430,6 +500,10 @@ struct UserQueryComposer: View {
     }
 
     var composerHeight: CGFloat {
+        if toolbarStyle == .followUp {
+            return UserQueryLayout.followUpComposerHeight(inputTextHeight: inputTextHeight)
+        }
+
         if usesExpandedSurface {
             return max(
                 sizeProfile.expandedMinimumHeight,

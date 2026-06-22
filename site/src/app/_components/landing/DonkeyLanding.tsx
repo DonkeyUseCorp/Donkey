@@ -25,7 +25,7 @@ export default function DonkeyLanding() {
         WebkitFontSmoothing: "antialiased",
       }}
     >
-      <TopNav />
+      <TopNav showDownload />
       <Hero />
       <TrustedBy />
       <Solutions />

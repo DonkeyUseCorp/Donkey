@@ -26,6 +26,35 @@ enum RemoteInferenceResponseHelpers {
         return nil
     }
 
+    /// The provider-reported finish reason for the first candidate that has one, read from the raw
+    /// provider payload the backend echoes back (`provider_output.candidates[].finishReason`). This is
+    /// how an empty reply names its exact cause — RECITATION, SAFETY, MAX_TOKENS — instead of
+    /// surfacing as a generic missing-output failure. nil when the payload carries no finish reason.
+    static func providerFinishReason(from value: RemoteInferenceJSONValue) -> String? {
+        guard let candidates = value.objectValue?["provider_output"]?.objectValue?["candidates"]?.arrayValue else {
+            return nil
+        }
+        for candidate in candidates {
+            if let reason = candidate.objectValue?["finishReason"]?.stringValue,
+               !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return reason
+            }
+        }
+        return nil
+    }
+
+    /// The model's thought summary, when thinking was enabled. The backend separates this from
+    /// `output_text` (which carries the structured tool-call JSON), so reasoning can be persisted to
+    /// the thread without corrupting the decision parse. nil/empty when thinking was off.
+    static func reasoningText(from value: RemoteInferenceJSONValue) -> String? {
+        guard let text = value.objectValue?["reasoning_text"]?.stringValue,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return nil
+        }
+        return text
+    }
+
     static func jsonValue(_ value: Any) -> RemoteInferenceJSONValue {
         switch value {
         case let string as String:

@@ -1,103 +1,85 @@
 import { ArrowUp, Mic } from 'lucide-react';
-import type { FormEvent, PointerEvent, RefObject } from 'react';
+import type { FormEvent, RefObject } from 'react';
 
 import { Notch } from '@/app/prototype/_components/Notch';
-import { SpawnedCursor } from '@/app/prototype/_components/SpawnedCursor';
-import type { DesktopSize, NotchState, Spawn, TaskId } from '@/app/prototype/_components/types';
+import type { LiveTask, NotchState, NotchUpdate, NotchVariant } from '@/app/prototype/_components/types';
 
 type Props = {
   state: NotchState;
-  activeTaskId: TaskId;
+  notchVariant: NotchVariant;
+  updateAvailable: boolean;
+  onRestart: () => void;
+  missingPermissions: boolean;
+  onReviewPermissions: () => void;
+  outOfCredits: boolean;
+  onReloadCredits: () => void;
   notchExpanded: boolean;
   setNotchExpanded: (expanded: boolean) => void;
+  composerVisible: boolean;
   promptText: string;
   setPromptText: (text: string) => void;
   promptInputRef: RefObject<HTMLTextAreaElement | null>;
   promptTextHeight: number;
-  promptExpanded: boolean;
   onPromptSubmit: (event: FormEvent<HTMLFormElement>) => void;
-  desktopRef: RefObject<HTMLElement | null>;
-  desktopSize: DesktopSize;
-  spawns: Spawn[];
-  selectedSpawnId: string | null;
-  editingSpawnId: string | null;
-  setSelectedSpawnId: (id: string | null) => void;
-  setEditingSpawnId: (id: string | null) => void;
-  onSpawnFollowUp: (spawnId: string, text: string) => void;
-  onRequestSpawn: (taskText: string) => void;
+  liveTasks: LiveTask[];
+  surfacedTasks: LiveTask[];
+  chinUpdate: NotchUpdate | null;
+  onAddTask: (title: string) => void;
+  onStopTask: (id: string) => void;
+  onResumeTask: (id: string) => void;
+  onReplyToTask: (id: string, text: string) => void;
+  onCloseTask: (id: string) => void;
+  loggedOut: boolean;
+  onLogin: () => void;
 };
 
 const LAYOUT = {
   contentWidth: 592,
-  contentExtraHeight: 8,
   stageHorizontalPadding: 8,
   stageVerticalPadding: 10,
   composerWidth: 576,
-  composerCornerRadius: 22,
-  composerInputMinimumHeight: 66,
-  composerInputLeadingContentPadding: 20,
-  composerInputTrailingContentPadding: 14.6,
-  composerWaveformWidth: 54,
-  composerWaveformHeight: 28,
-  composerMicrophoneIconSize: 28,
+  // Single growing layout: one line by default, grows with content; controls pinned bottom-right.
+  composerMinHeight: 56,
+  composerCornerRadius: 28,
+  composerTextMaxHeight: 134.4,
+  composerMicrophoneSize: 28,
   composerSendButtonSize: 36.8,
-  composerTrailingControlsSpacing: 16,
-  composerTrailingControlsWidth: 80.8,
-  composerWrappingTextWidth: 449,
-  composerExpandedTextWidth: 528,
-  composerExpandedTextTopPadding: 18,
-  composerExpandedTextHorizontalPadding: 24,
-  composerExpandedToolbarHeight: 54,
-  composerExpandedMinimumHeight: 156,
 } as const;
 
 export function MacDesktop({
   state,
-  activeTaskId,
+  notchVariant,
+  updateAvailable,
+  onRestart,
+  missingPermissions,
+  onReviewPermissions,
+  outOfCredits,
+  onReloadCredits,
   notchExpanded,
   setNotchExpanded,
+  composerVisible,
   promptText,
   setPromptText,
   promptInputRef,
   promptTextHeight,
-  promptExpanded,
   onPromptSubmit,
-  desktopRef,
-  desktopSize,
-  spawns,
-  selectedSpawnId,
-  editingSpawnId,
-  setSelectedSpawnId,
-  setEditingSpawnId,
-  onSpawnFollowUp,
-  onRequestSpawn,
+  liveTasks,
+  surfacedTasks,
+  chinUpdate,
+  onAddTask,
+  onStopTask,
+  onResumeTask,
+  onReplyToTask,
+  onCloseTask,
+  loggedOut,
+  onLogin,
 }: Props) {
-  const composerHeight = promptExpanded
-    ? Math.max(
-        LAYOUT.composerExpandedMinimumHeight,
-        promptTextHeight + LAYOUT.composerExpandedTextTopPadding + LAYOUT.composerExpandedToolbarHeight,
-      )
-    : LAYOUT.composerInputMinimumHeight;
-  const hostHeight = LAYOUT.stageVerticalPadding * 2 + composerHeight + LAYOUT.contentExtraHeight;
-  const activeSpawnCue = [...spawns].reverse().find((spawn) => spawn.phase === 'notch-cue') ?? null;
   const hasPromptText = promptText.trim().length > 0;
-
-  const handleDesktopPointerDown = (event: PointerEvent<HTMLElement>) => {
-    if (!editingSpawnId) return;
-
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-    if (target.closest('[data-spawn-interactive="true"]')) return;
-
-    setEditingSpawnId(null);
-  };
 
   return (
     <main
-      ref={desktopRef}
       className="relative min-h-screen overflow-hidden bg-[#121419] text-white"
       style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif' }}
-      onPointerDown={handleDesktopPointerDown}
     >
       <div
         className="absolute inset-0"
@@ -115,7 +97,7 @@ export function MacDesktop({
       />
 
       <div
-        className="absolute left-0 right-0 top-0 z-10 flex h-7 items-center gap-4 px-4 text-[13px] text-white/[0.72]"
+        className="absolute left-0 right-0 top-0 z-10 flex h-8 items-center gap-4 px-4 text-[13px] text-white/[0.72]"
         style={{
           background: 'rgba(11,12,15,0.55)',
           backdropFilter: 'blur(14px)',
@@ -132,52 +114,49 @@ export function MacDesktop({
 
       <Notch
         state={state}
-        activeTaskId={activeTaskId}
+        variant={notchVariant}
+        updateAvailable={updateAvailable}
+        onRestart={onRestart}
+        missingPermissions={missingPermissions}
+        onReviewPermissions={onReviewPermissions}
+        outOfCredits={outOfCredits}
+        onReloadCredits={onReloadCredits}
         expanded={notchExpanded}
         setExpanded={setNotchExpanded}
-        spawnCue={activeSpawnCue}
-        onRequestSpawn={onRequestSpawn}
+        liveTasks={liveTasks}
+        surfacedTasks={surfacedTasks}
+        chinUpdate={chinUpdate}
+        onAddTask={onAddTask}
+        onStopTask={onStopTask}
+        onResumeTask={onResumeTask}
+        onReplyToTask={onReplyToTask}
+        onCloseTask={onCloseTask}
+        loggedOut={loggedOut}
+        onLogin={onLogin}
       />
-
-      {spawns.map((spawn, index) => (
-        <SpawnedCursor
-          key={spawn.id}
-          spawn={spawn}
-          spawnOrigin={{ x: desktopSize.w / 2 + ((index % 5) - 2) * 18, y: -24 }}
-          desktopSize={desktopSize}
-          selected={selectedSpawnId === spawn.id}
-          editing={editingSpawnId === spawn.id}
-          onSelect={() => setSelectedSpawnId(spawn.id)}
-          onBeginEditing={() => {
-            setSelectedSpawnId(spawn.id);
-            setEditingSpawnId(spawn.id);
-          }}
-          onCancelEditing={() => setEditingSpawnId(null)}
-          onSubmitFollowUp={(text) => onSpawnFollowUp(spawn.id, text)}
-        />
-      ))}
 
       <section
         aria-label="Donkey prompt"
         className="absolute left-1/2 top-1/2 z-20"
         style={{
           width: LAYOUT.contentWidth,
-          height: hostHeight,
           padding: `${LAYOUT.stageVerticalPadding}px ${LAYOUT.stageHorizontalPadding}px`,
-          transform: 'translate(-50%, -50%)',
+          transform: `translate(-50%, -50%) scale(${composerVisible ? 1 : 0.98})`,
+          opacity: composerVisible ? 1 : 0,
+          pointerEvents: composerVisible ? 'auto' : 'none',
+          transition: 'opacity 160ms ease-out, transform 160ms ease-out',
         }}
       >
+        {/* Single layout: one line that grows with its text; controls pinned bottom-right. */}
         <form
           onSubmit={onPromptSubmit}
-          className="relative bg-black"
+          className="relative flex items-center bg-black"
           style={{
             width: LAYOUT.composerWidth,
-            height: composerHeight,
-            borderRadius: promptExpanded ? LAYOUT.composerCornerRadius : 999,
-            boxShadow: `0 5px 12px rgba(0,0,0,0.2), inset 0 0 0 1px ${
-              promptExpanded ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.34)'
-            }`,
-            transition: 'height 160ms ease-out, border-radius 160ms ease-out',
+            minHeight: LAYOUT.composerMinHeight,
+            borderRadius: LAYOUT.composerCornerRadius,
+            padding: '10px 20px',
+            boxShadow: '0 5px 12px rgba(0,0,0,0.2), inset 0 0 0 1px rgba(255,255,255,0.34)',
           }}
         >
           <label className="sr-only" htmlFor="donkey-prompt-input">
@@ -190,16 +169,11 @@ export function MacDesktop({
             value={promptText}
             onChange={(event) => setPromptText(event.target.value)}
             placeholder="What can donkey do for you?"
-            className="absolute resize-none overflow-hidden border-0 bg-transparent p-0 text-[16px] font-light leading-[19.2px] text-white outline-none placeholder:text-white/[0.58]"
+            className="flex-1 resize-none border-0 bg-transparent p-0 pr-[84px] text-[16px] font-light leading-[19.2px] text-white outline-none placeholder:text-white/[0.58]"
             style={{
-              left: promptExpanded
-                ? LAYOUT.composerExpandedTextHorizontalPadding
-                : LAYOUT.composerInputLeadingContentPadding,
-              top: promptExpanded
-                ? LAYOUT.composerExpandedTextTopPadding
-                : (LAYOUT.composerInputMinimumHeight - promptTextHeight) / 2,
-              width: promptExpanded ? LAYOUT.composerExpandedTextWidth : LAYOUT.composerWrappingTextWidth,
               height: promptTextHeight,
+              maxHeight: LAYOUT.composerTextMaxHeight,
+              overflowY: 'auto',
               caretColor: 'white',
               fontVariantLigatures: 'none',
             }}
@@ -210,26 +184,13 @@ export function MacDesktop({
               }
             }}
           />
-          <div
-            className="absolute flex items-center justify-end"
-            style={{
-              right: promptExpanded
-                ? LAYOUT.composerExpandedTextHorizontalPadding
-                : LAYOUT.composerInputTrailingContentPadding,
-              top: promptExpanded
-                ? composerHeight - LAYOUT.composerExpandedToolbarHeight + (LAYOUT.composerExpandedToolbarHeight - LAYOUT.composerSendButtonSize) / 2
-                : (LAYOUT.composerInputMinimumHeight - LAYOUT.composerSendButtonSize) / 2,
-              width: LAYOUT.composerTrailingControlsWidth,
-              height: LAYOUT.composerSendButtonSize,
-              gap: LAYOUT.composerTrailingControlsSpacing,
-            }}
-          >
+          <div className="absolute bottom-2.5 right-3.5 flex items-center gap-2">
             <button
               type="button"
               className="grid place-items-center rounded-full transition"
               style={{
-                width: LAYOUT.composerMicrophoneIconSize,
-                height: LAYOUT.composerMicrophoneIconSize,
+                width: LAYOUT.composerMicrophoneSize,
+                height: LAYOUT.composerMicrophoneSize,
                 color: hasPromptText ? 'rgba(255,255,255,0.42)' : 'rgba(255,255,255,0.78)',
               }}
               aria-label="Voice input"

@@ -25,21 +25,13 @@ public enum HarnessTaskStatus: String, Codable, CaseIterable, Equatable, Sendabl
     case completed
     case failedSafe
     case cancelled
+    /// The run hit the runaway step ceiling (or a wall-clock limit) without completing. Terminal for
+    /// the loop, but the goal still stands, so it surfaces as a retryable row rather than a failure.
+    case timedOut
 
     public var canExecuteTools: Bool {
         self == .running || self == .resuming
     }
-}
-
-public enum HarnessTurnRelationship: String, Codable, Equatable, Sendable {
-    case startsNewTask
-    case modifiesCurrentTask
-    case cancelsTask
-    case pausesTask
-    case resumesTask
-    case answersClarification
-    case grantsPermission
-    case conversation
 }
 
 public enum HarnessAmbiguityClass: String, Codable, Equatable, Sendable {

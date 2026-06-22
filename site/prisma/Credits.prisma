@@ -22,6 +22,11 @@ model UserCreditGrant {
   user                  User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
   source                String
   sourceId              String?
+  // What the amounts below are denominated in. "credit" = USD micros that feed
+  // UserCreditAccount.balanceMicros. "vision_call" = a raw integer count of
+  // Vision API calls that lives off-balance (never touches balanceMicros and is
+  // consumed by the Vision API quota path, not by dollar inference).
+  unit                  String    @default("credit")
   originalAmountMicros  BigInt
   remainingAmountMicros BigInt
   expiresAt             DateTime?
@@ -34,10 +39,9 @@ model UserCreditGrant {
   updatedAt             DateTime                @updatedAt
   ledgerEntries         UserCreditLedgerEntry[]
 
-  @@unique([userId, source, sourceId])
+  @@unique([userId, unit, source, sourceId])
   @@index([accountId])
-  @@index([userId, expiresAt])
-  @@index([userId, status])
+  @@index([userId, unit, status])
   @@map("user_credit_grant")
 }
 
@@ -120,6 +124,31 @@ model InferenceCreditRate {
   @@index([active, route, provider, model])
   @@index([validFrom, validUntil])
   @@map("inference_credit_rate")
+}
+
+// Per-user auto-reload config. When enabled, the credit balance dropping below
+// thresholdMicros triggers an off-session Stripe charge of amountMicros against
+// the saved payment method; the resulting credits are granted from the webhook.
+// status guards against concurrent charges ("idle" | "charging" | "failed").
+model CreditAutoReload {
+  id                    String    @id @default(cuid())
+  userId                String    @unique
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  enabled               Boolean   @default(false)
+  thresholdMicros       BigInt    @default(0)
+  amountMicros          BigInt    @default(0)
+  stripeCustomerId      String?
+  stripePaymentMethodId String?
+  status                String    @default("idle")
+  // The off-session PaymentIntent that currently owns the "charging" lock, so a
+  // success/failure webhook only releases the charge it actually belongs to.
+  chargingPaymentIntentId String?
+  lastChargeAt          DateTime?
+  lastError             String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@map("credit_auto_reload")
 }
 
 model UserCreditLimit {

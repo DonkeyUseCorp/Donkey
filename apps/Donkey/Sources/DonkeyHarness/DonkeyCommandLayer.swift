@@ -18,7 +18,10 @@ public enum DonkeyCommandLayer {
     public enum Command: String, CaseIterable, Sendable {
         case shellExec = "shell_exec"
         case appsList = "apps_list"
-        case musicPlay = "music_play"
+        case appSkill = "app_skill"
+        case appCommands = "app_commands"
+        case skillRun = "skill_run"
+        case webSnapshot = "web_snapshot"
     }
 
     public static var descriptors: [HarnessToolDescriptor] {
@@ -28,15 +31,20 @@ public enum DonkeyCommandLayer {
             HarnessToolDescriptor(
                 name: Command.shellExec.rawValue,
                 pluginID: pluginID,
-                summary: "Run a safe, single-line shell command on the user's Mac and return its output. General-purpose: open/activate or quit apps (e.g. `open -a Spotify`), drive apps and the system — including via `osascript -e '…'` — and read state (e.g. `date`, `pmset -g batt`). Avoid destructive, privileged (`sudo`), raw-disk, network-download, or pipe-to-shell commands.",
-                inputSchema: ["command": "A safe, single-line shell command, e.g. `open -a Notes`, `osascript -e 'tell application \"Spotify\" to play'`, or `date`."],
+                summary: "Run a single-line shell command on the user's Mac and return its output. This is your primary, expert tool: prefer it for finding files (`mdfind`, `ls -t`, `find`), launching or quitting apps (`open -a \"App Name\"`, `osascript -e 'quit app \"App Name\"'`), reading state (`date`, `pmset -g batt`, `system_profiler`), and changing settings (`defaults write`, `networksetup -set…`). Read-only commands run immediately; anything that changes state asks the user for one-time or always-allow consent first, so you may freely propose it. Destructive or privileged commands (`sudo`, `rm`, `dd`, piping into a shell) ask every time.",
+                inputSchema: [
+                    "command": "A safe, single-line shell command, e.g. `open -a \"App Name\"`, `osascript -e '…'`, or `date`.",
+                    "timeoutSeconds": "Time budget for known-slow commands (default 12, max 120)."
+                ],
+                optionalInputKeys: ["timeoutSeconds"],
                 outputSchema: [
-                    "stdout": "Captured standard output (trimmed).",
+                    "stdout": "Captured standard output (trimmed; long output is truncated with an explicit marker).",
                     "exitCode": "Process exit code."
                 ],
                 requiredPermissions: [.appControl, .input],
                 safetyClass: .guardedInput,
-                verificationHints: ["the command exits with code 0"]
+                verificationHints: ["the command exits with code 0"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
             ),
             HarnessToolDescriptor(
                 name: Command.appsList.rawValue,
@@ -62,18 +70,65 @@ public enum DonkeyCommandLayer {
                 safetyClass: .readOnly
             ),
             HarnessToolDescriptor(
-                name: Command.musicPlay.rawValue,
+                name: Command.appSkill.rawValue,
                 pluginID: pluginID,
-                summary: "Search for and play media in a music app (Spotify or Apple Music) without screenshots.",
-                inputSchema: [
-                    "query": "Track, artist, album, or playlist to search and play.",
-                    "app": "Music app: Spotify or Music. Defaults to the user's available music app."
+                summary: "Look up the installed operating playbook (skill) for a specific app before driving it. The playbook says how that app is operated — whether it is scriptable, must be driven by vision, and its known workflows and pitfalls. Call this whenever a task targets a specific app you have no loaded guidance for; if no skill is installed the result says so and you fall back to your general tools.",
+                inputSchema: ["app": "The app's display name or bundle identifier."],
+                outputSchema: [
+                    "found": "\"true\" when an operating playbook is installed for the app.",
+                    "guidance": "The app's operating playbook, when found."
                 ],
-                optionalInputKeys: ["app"],
-                outputSchema: ["status": "Playback status reported by the music app."],
+                requiredPermissions: [.skillLookup],
+                safetyClass: .readOnly
+            ),
+            HarnessToolDescriptor(
+                name: Command.appCommands.rawValue,
+                pluginID: pluginID,
+                summary: "Read an app's real AppleScript vocabulary — the commands, parameters, classes, and enumerations its scripting dictionary actually declares — before generating any AppleScript for it. Call this for any scriptable app you have no loaded skill for; scripts written from this digest use terminology the app is guaranteed to understand. When the digest marks a suite as condensed or truncated, call again with `suite` set to that suite's name for full detail. If `scriptable` comes back false, do not generate AppleScript; drive the app with accessibility/vision tools instead.",
+                inputSchema: [
+                    "app": "The app's display name or bundle identifier.",
+                    "suite": "Optional: a suite name from a previous result, to get that suite at full detail."
+                ],
+                optionalInputKeys: ["suite"],
+                outputSchema: [
+                    "scriptable": "\"true\", \"false\", or \"unknown\" — whether the app can be driven via AppleScript.",
+                    "digest": "The bounded scripting-dictionary digest (commands with parameter names/types/optionality, classes, enumerations).",
+                    "suites": "Comma-separated suite names available for the `suite` drill-down."
+                ],
+                requiredPermissions: [.appLookup],
+                safetyClass: .readOnly
+            ),
+            HarnessToolDescriptor(
+                name: Command.skillRun.rawValue,
+                pluginID: pluginID,
+                summary: "Execute a validated script that an installed skill ships, without screenshots. Skills advertise their scripts through app_skill (skill id + script ids); running one performs that skill's bounded multi-step workflow natively in well under a second. Use it whenever a looked-up skill offers a script that covers the task, instead of reinventing the steps yourself.",
+                inputSchema: [
+                    "skillID": "The skill that ships the script, as advertised by app_skill.",
+                    "scriptID": "The validated script to execute, as advertised by app_skill.",
+                    "input": "The script's input value (e.g. a search query), when it takes one."
+                ],
+                optionalInputKeys: ["input"],
+                outputSchema: ["status": "Structured status the script reports."],
                 requiredPermissions: [.appControl, .input],
                 safetyClass: .guardedInput,
-                verificationHints: ["the music app reports that playback started"]
+                verificationHints: ["the script reports a successful structured status"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            HarnessToolDescriptor(
+                name: Command.webSnapshot.rawValue,
+                pluginID: pluginID,
+                summary: "Render a web page in a built-in headless browser and save it as a PDF or a full-page PNG — no external browser needed. Use this to capture a page to a file (\"save this page as a PDF\", \"screenshot this page\") when the user does not need to watch it happen. It only reads the page and writes the output file. For static text, prefer `web.fetch` (markdown); for pages behind a login or heavy bot-protection that fail to render here, fall back to the hosted browser tool.",
+                inputSchema: [
+                    "url": "The http(s) page URL to capture.",
+                    "format": "\"pdf\" (default) or \"png\" (full-page screenshot).",
+                    "destination": "Optional output file path; defaults to ~/Downloads."
+                ],
+                optionalInputKeys: ["format", "destination"],
+                outputSchema: ["filePath": "Path to the saved PDF or PNG."],
+                requiredPermissions: [],
+                safetyClass: .readOnly,
+                verificationHints: ["the saved file exists and is non-empty"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
             )
         ]
     }

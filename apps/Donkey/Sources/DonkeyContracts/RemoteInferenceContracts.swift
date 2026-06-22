@@ -224,7 +224,9 @@ public struct RemoteInferenceAssetGenerationRequest: Codable, Equatable, Sendabl
     public var generationId: String?
     public var kind: RemoteInferenceAssetKind
     public var provider: String?
-    public var model: String
+    /// Optional: omit to let the selected provider pick its default model (the image tools do this,
+    /// staying model-neutral). Synthesized encoding drops the key when nil.
+    public var model: String?
     public var prompt: String
     public var inputs: RemoteInferenceJSONObject
     public var parameters: RemoteInferenceJSONObject
@@ -234,7 +236,7 @@ public struct RemoteInferenceAssetGenerationRequest: Codable, Equatable, Sendabl
         generationId: String? = nil,
         kind: RemoteInferenceAssetKind,
         provider: String? = nil,
-        model: String,
+        model: String? = nil,
         prompt: String,
         inputs: RemoteInferenceJSONObject = [:],
         parameters: RemoteInferenceJSONObject = [:],

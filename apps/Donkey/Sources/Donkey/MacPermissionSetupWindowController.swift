@@ -6,10 +6,11 @@ import DonkeyRuntime
 import SwiftUI
 
 @MainActor
-final class MacPermissionSetupWindowController: NSWindowController {
+final class MacPermissionSetupWindowController: NSWindowController, NSWindowDelegate {
     var completed: (() -> Void)?
 
     private let model: MacPermissionSetupModel
+    private var didComplete = false
 
     init(model: MacPermissionSetupModel = MacPermissionSetupModel()) {
         self.model = model
@@ -21,15 +22,24 @@ final class MacPermissionSetupWindowController: NSWindowController {
         window.setContentSize(NSSize(width: 640, height: 600))
         window.isReleasedWhenClosed = false
         super.init(window: window)
+        window.delegate = self
 
+        // Continue/Skip just closes the window. Closing — whether from those buttons or the X — is the
+        // single place that fires `completed`, so the overlay (notch) starts up regardless of how the
+        // user dismisses this window.
         model.completed = { [weak self] in
             self?.close()
-            self?.completed?()
         }
     }
 
     required init?(coder: NSCoder) {
         nil
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard !didComplete else { return }
+        didComplete = true
+        completed?()
     }
 
     var permissionsAreReady: Bool {
@@ -57,6 +67,9 @@ final class MacPermissionSetupModel: ObservableObject {
     private let requester: any MacPermissionRequesting
     private let defaults: UserDefaults
     private let requestedDefaultsKey = "MacPermissionSetup.RequestedKinds"
+    /// True once the screen-recording system prompt has been triggered in this app session. The
+    /// first Enable tap should let that prompt stand; only a later tap falls back to System Settings.
+    private var didTriggerScreenRecordingPrompt = false
 
     init(
         requester: any MacPermissionRequesting = SystemMacPermissionRequester(),
@@ -92,12 +105,29 @@ final class MacPermissionSetupModel: ObservableObject {
     func request(_ kind: MacPermissionKind) async {
         guard requestingKind == nil else { return }
 
+        // Screen recording is special: macOS shows its prompt only on the first
+        // CGRequestScreenCaptureAccess() from a not-determined state, and the call returns
+        // synchronously still "not granted" while that prompt is on screen. Re-calling it on a
+        // later tap just stacks a second identical prompt, and opening System Settings right after
+        // the first call would pop the settings window on top of the prompt before the user can
+        // answer it. So request exactly once; on any later tap (still not granted) skip the request
+        // and route straight to System Settings. That fallback also covers the stale-record case
+        // where the first request silently no-ops and no prompt ever appears.
+        if kind == .screenRecording, didTriggerScreenRecordingPrompt, statuses[kind] != .granted {
+            requester.openSystemSettings(for: kind)
+            return
+        }
+
         requestingKind = kind
         rememberRequested(kind)
         let status = await requester.request(kind)
         statuses[kind] = status
         refresh()
         requestingKind = nil
+
+        if kind == .screenRecording, statuses[kind] != .granted {
+            didTriggerScreenRecordingPrompt = true
+        }
     }
 
     func openSystemSettings(for kind: MacPermissionKind) {

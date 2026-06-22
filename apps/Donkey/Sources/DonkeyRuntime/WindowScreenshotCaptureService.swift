@@ -374,6 +374,133 @@ public final class ScreenCaptureKitWindowScreenshotCapturer: WindowScreenshotCap
     }
 }
 
+/// A screenshot of an entire display, used when the thing to interact with lives OUTSIDE the target
+/// window — a modal confirmation sheet, a system dialog, or a right-click menu. `displayBounds` is the
+/// display's frame in global, top-left-origin screen points, so a detected element's normalized box can
+/// be mapped to a screen point exactly like a window capture (just against the display rect instead of
+/// the window rect).
+public struct CapturedDisplayScreenshot: Sendable {
+    public var pngData: Data
+    public var imageWidth: Int
+    public var imageHeight: Int
+    public var displayBounds: CGRect
+
+    public init(pngData: Data, imageWidth: Int, imageHeight: Int, displayBounds: CGRect) {
+        self.pngData = pngData
+        self.imageWidth = imageWidth
+        self.imageHeight = imageHeight
+        self.displayBounds = displayBounds
+    }
+}
+
+public extension ScreenCaptureKitWindowScreenshotCapturer {
+    /// Capture an entire display through ScreenCaptureKit (same backend as the window path, so it
+    /// honors the same screen-recording permission). `displayID` picks the screen the modal is on —
+    /// normally the one the target window sits on.
+    func captureDisplay(displayID: CGDirectDisplayID) async throws -> CapturedDisplayScreenshot {
+        guard permissionChecker.hasScreenRecordingAccess() else {
+            throw WindowScreenshotCaptureError.screenRecordingPermissionDenied
+        }
+        let content = try await SCShareableContent.current
+        guard let display = content.displays.first(where: { $0.displayID == displayID })
+            ?? content.displays.first else {
+            throw WindowScreenshotCaptureError.captureFailed(windowID: 0, reason: "no SCDisplay for \(displayID)")
+        }
+        let filter = SCContentFilter(display: display, excludingWindows: [])
+        let contentInfo = SCShareableContent.info(for: filter)
+        let scale = CGFloat(contentInfo.pointPixelScale)
+        let configuration = SCStreamConfiguration()
+        configuration.width = max(1, Int(ceil(contentInfo.contentRect.width * scale)))
+        configuration.height = max(1, Int(ceil(contentInfo.contentRect.height * scale)))
+        configuration.showsCursor = false
+        configuration.capturesAudio = false
+
+        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+        let pngData = try Self.pngData(for: image, windowID: 0)
+        return CapturedDisplayScreenshot(
+            pngData: pngData,
+            imageWidth: image.width,
+            imageHeight: image.height,
+            displayBounds: CGDisplayBounds(displayID)
+        )
+    }
+
+    /// Capture the ENTIRE desktop across all displays as one image — the widest fallback, for when the
+    /// thing to act on isn't on the active display at all (another monitor, a background app's window).
+    /// Each display is captured and composited into a single canvas laid out in global, top-left-origin
+    /// screen points, so `displayBounds` (the union of every display's frame) maps detected elements to
+    /// screen points exactly like a window or single-display capture.
+    func captureDesktop() async throws -> CapturedDisplayScreenshot {
+        guard permissionChecker.hasScreenRecordingAccess() else {
+            throw WindowScreenshotCaptureError.screenRecordingPermissionDenied
+        }
+        let content = try await SCShareableContent.current
+        let displays = content.displays
+        guard !displays.isEmpty else {
+            throw WindowScreenshotCaptureError.captureFailed(windowID: 0, reason: "no displays")
+        }
+
+        // Union of every display's frame, in global top-left-origin points (the world coordinate space).
+        var desktop = CGRect.null
+        for display in displays { desktop = desktop.union(CGDisplayBounds(display.displayID)) }
+        guard desktop.width >= 1, desktop.height >= 1 else {
+            throw WindowScreenshotCaptureError.captureFailed(windowID: 0, reason: "empty desktop rect")
+        }
+        let canvasWidth = Int(desktop.width.rounded())
+        let canvasHeight = Int(desktop.height.rounded())
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let canvas = CGContext(
+                  data: nil,
+                  width: canvasWidth,
+                  height: canvasHeight,
+                  bitsPerComponent: 8,
+                  bytesPerRow: 0,
+                  space: colorSpace,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else {
+            throw WindowScreenshotCaptureError.captureFailed(windowID: 0, reason: "desktop canvas allocation failed")
+        }
+        canvas.setFillColor(CGColor(gray: 0, alpha: 1))
+        canvas.fill(CGRect(x: 0, y: 0, width: canvasWidth, height: canvasHeight))
+
+        for display in displays {
+            let bounds = CGDisplayBounds(display.displayID)
+            let filter = SCContentFilter(display: display, excludingWindows: [])
+            let info = SCShareableContent.info(for: filter)
+            let scale = CGFloat(info.pointPixelScale)
+            let configuration = SCStreamConfiguration()
+            configuration.width = max(1, Int(ceil(info.contentRect.width * scale)))
+            configuration.height = max(1, Int(ceil(info.contentRect.height * scale)))
+            configuration.showsCursor = false
+            configuration.capturesAudio = false
+            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+            // CGContext is bottom-left origin; place each display so the composite reads top-left like a
+            // normal image. A display whose top sits `topInset` points below the desktop top is drawn so
+            // its top lands at canvasHeight - topInset.
+            let leftInset = bounds.minX - desktop.minX
+            let topInset = bounds.minY - desktop.minY
+            let drawRect = CGRect(
+                x: leftInset,
+                y: CGFloat(canvasHeight) - topInset - bounds.height,
+                width: bounds.width,
+                height: bounds.height
+            )
+            canvas.draw(image, in: drawRect)
+        }
+
+        guard let composite = canvas.makeImage() else {
+            throw WindowScreenshotCaptureError.captureFailed(windowID: 0, reason: "desktop composite failed")
+        }
+        let pngData = try Self.pngData(for: composite, windowID: 0)
+        return CapturedDisplayScreenshot(
+            pngData: pngData,
+            imageWidth: composite.width,
+            imageHeight: composite.height,
+            displayBounds: desktop
+        )
+    }
+}
+
 private extension WindowTargetBounds {
     func intersects(_ other: WindowTargetBounds) -> Bool {
         let maxX = x + width

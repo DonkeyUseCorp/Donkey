@@ -10,9 +10,12 @@ final class UserQuerySpawnOverlayController {
     private var surfacesByID: [String: UserQuerySpawnSurface] = [:]
     private var viewModelsByID: [String: UserQuerySpawnOverlayViewModel] = [:]
     private var pendingGuideRequestsBySpawnID: [String: PointerCoachCursorGuideRequest] = [:]
+    private var dismissedSpawnIDs: Set<String> = []
     private var windowResolver = MacWindowResolver()
     private var localOutsideClickMonitor: Any?
     private var globalOutsideClickMonitor: Any?
+    private var localMouseMoveMonitor: Any?
+    private var globalMouseMoveMonitor: Any?
 
     var followUpSubmitted: ((String, String, String) -> Void)? {
         didSet {
@@ -38,7 +41,11 @@ final class UserQuerySpawnOverlayController {
     ) {
         guard let screen else { return }
 
-        let visibleSpawnStates = spawnStates.filter { $0.phase != .notchCue }
+        let allSpawnIDs = Set(spawnStates.map(\.id))
+        dismissedSpawnIDs.formIntersection(allSpawnIDs)
+        let visibleSpawnStates = spawnStates.filter {
+            $0.phase != .notchCue && !dismissedSpawnIDs.contains($0.id)
+        }
         guard !visibleSpawnStates.isEmpty else {
             if spawnStates.isEmpty {
                 pendingGuideRequestsBySpawnID = [:]
@@ -47,7 +54,6 @@ final class UserQuerySpawnOverlayController {
             return
         }
 
-        let allSpawnIDs = Set(spawnStates.map(\.id))
         let visibleIDs = Set(visibleSpawnStates.map(\.id))
         pendingGuideRequestsBySpawnID = pendingGuideRequestsBySpawnID.filter { allSpawnIDs.contains($0.key) }
         for spawnState in visibleSpawnStates {
@@ -66,6 +72,7 @@ final class UserQuerySpawnOverlayController {
 
     func close() {
         removeOutsideClickMonitoring()
+        removeMouseMoveMonitoring()
         for surface in surfacesByID.values {
             surface.travelWorkItem?.cancel()
             surface.removalWorkItem?.cancel()
@@ -76,6 +83,7 @@ final class UserQuerySpawnOverlayController {
         surfacesByID = [:]
         viewModelsByID = [:]
         pendingGuideRequestsBySpawnID = [:]
+        dismissedSpawnIDs = []
     }
 
     @discardableResult
@@ -90,6 +98,10 @@ final class UserQuerySpawnOverlayController {
             return false
         }
 
+        // Swallow guides for a pointer the user dismissed so the fallback
+        // overlay does not resurrect it.
+        guard !dismissedSpawnIDs.contains(spawnID) else { return true }
+
         guard let surface = surfacesByID[spawnID] else {
             pendingGuideRequestsBySpawnID[spawnID] = request
             return true
@@ -102,6 +114,12 @@ final class UserQuerySpawnOverlayController {
             startDelay: surface.isTraveling ? UserQuerySpawnOverlayViewModel.travelDuration + 0.04 : 0
         )
         return true
+    }
+
+    /// Clears a user dismissal so the next update re-creates the pointer
+    /// surface, emerging from the notch again.
+    func restoreSpawn(id spawnID: String) {
+        dismissedSpawnIDs.remove(spawnID)
     }
 
     private func updateSurface(
@@ -211,19 +229,22 @@ final class UserQuerySpawnOverlayController {
             return
         }
 
+        // A user-dragged cursor keeps its spot through model updates; only an
+        // explicit new guide step moves it again.
+        let effectiveDestination = surface.isUserPositioned ? surface.destination : destination
         let shouldRetarget = !surface.viewModel.freezesMovement &&
-            distance(from: surface.destination, to: destination) > 1
+            distance(from: surface.destination, to: effectiveDestination) > 1
 
         surface.viewModel.update(
             state: spawnState,
-            destination: destination,
+            destination: effectiveDestination,
             screenSize: screen.frame.size
         )
 
         if shouldRetarget {
             animateSurfaceTravel(
                 surface,
-                to: destination,
+                to: effectiveDestination,
                 on: screen
             )
             return
@@ -254,15 +275,19 @@ final class UserQuerySpawnOverlayController {
         let hostingView = UserQuerySpawnHostingView(
             rootView: UserQuerySpawnOverlayView(viewModel: viewModel)
         )
+        // This controller drives the panel frame itself (travel animation, label-layout callbacks). Let
+        // the hosting view ALSO bridge its SwiftUI content size to the window and the two re-enter
+        // layout — `NSHostingView.windowDidLayout` → `updateAnimatedWindowSize` resizes the window mid
+        // display-cycle and AppKit throws an uncaught exception (SIGABRT) during a cursor-travel step.
+        // Empty sizingOptions makes the hosting view a passive content view, so only our explicit frame
+        // updates move the panel.
+        hostingView.sizingOptions = []
         hostingView.frame = CGRect(origin: .zero, size: globalFrame.size)
         hostingView.autoresizingMask = [.width, .height]
         hostingView.wantsLayer = true
         hostingView.layer?.backgroundColor = NSColor.clear.cgColor
         hostingView.hitTestRegionProvider = { [weak viewModel] in
-            guard let viewModel else { return [] }
-
-            let frame = viewModel.localHitTestFrame
-            return frame.isNull || frame.isEmpty ? [] : [frame]
+            viewModel?.localHitTestFrames ?? []
         }
 
         let panel = UserQuerySpawnPanel(
@@ -347,6 +372,47 @@ final class UserQuerySpawnOverlayController {
                 animated: false
             )
         }
+        surface.viewModel.dismissed = { [weak self] spawnID in
+            guard let self else { return }
+
+            self.dismissedSpawnIDs.insert(spawnID)
+            self.fadeAndRemove(id: spawnID)
+        }
+        surface.viewModel.cursorDragged = { [weak self, weak surface] globalPoint in
+            guard let self,
+                  let surface else {
+                return
+            }
+
+            self.moveSurfaceCursor(surface, toGlobalPoint: globalPoint)
+        }
+    }
+
+    /// Repositions a holding cursor under the user's drag. The global AppKit
+    /// mouse point (bottom-left origin) is converted to the overlay's
+    /// top-left-origin screen-local space before being applied.
+    private func moveSurfaceCursor(
+        _ surface: UserQuerySpawnSurface,
+        toGlobalPoint globalPoint: CGPoint
+    ) {
+        let screenFrame = surface.screen.frame
+        let localPoint = UserQuerySpawnGeometry.clampedPoint(
+            CGPoint(
+                x: globalPoint.x - screenFrame.minX,
+                y: screenFrame.maxY - globalPoint.y
+            ),
+            in: screenFrame.size
+        )
+        surface.travelWorkItem?.cancel()
+        surface.isTraveling = false
+        surface.isUserPositioned = true
+        surface.destination = localPoint
+        surface.viewModel.setPosition(localPoint)
+        layoutSurface(
+            surface,
+            on: surface.screen,
+            animated: false
+        )
     }
 
     private func animateSurfaceTravel(
@@ -494,6 +560,11 @@ final class UserQuerySpawnOverlayController {
             preRotateDuration: step.preRotateDuration,
             travelDuration: step.travelDuration
         )
+        // The view model refuses to move while the user drags the cursor or
+        // edits the label; moving the panel anyway would tear the two apart.
+        guard !surface.viewModel.freezesMovement else { return }
+
+        surface.isUserPositioned = false
         animateSurfaceTravel(
             surface,
             to: destination,
@@ -582,14 +653,93 @@ final class UserQuerySpawnOverlayController {
     }
 
     private func updateMouseEventPassthrough(for surface: UserQuerySpawnSurface) {
-        let hitTestFrame = surface.viewModel.localHitTestFrame
-        guard !hitTestFrame.isNull, !hitTestFrame.isEmpty else {
+        defer { updateMouseMoveMonitoring() }
+
+        // A drag in progress must keep receiving events even when the pointer
+        // briefly outruns the panel frame; going click-through would kill it.
+        if surface.viewModel.isCursorDragging {
+            surface.panel.ignoresMouseEvents = false
+            return
+        }
+
+        let hitTestFrames = surface.viewModel.localHitTestFrames
+        guard !hitTestFrames.isEmpty else {
             surface.panel.ignoresMouseEvents = true
             return
         }
 
-        let mouseLocation = surface.panel.convertPoint(fromScreen: NSEvent.mouseLocation)
-        surface.panel.ignoresMouseEvents = !hitTestFrame.contains(mouseLocation)
+        let mouseLocation = overlayLocalPoint(
+            for: NSEvent.mouseLocation,
+            in: surface
+        )
+        surface.panel.ignoresMouseEvents = !hitTestFrames.contains { $0.contains(mouseLocation) }
+    }
+
+    /// Converts a global screen point into the overlay's top-left-origin local
+    /// space. `convertPoint(fromScreen:)` alone is not enough: it returns
+    /// bottom-left-origin window coordinates, and comparing those against the
+    /// flipped `localHitTestFrames` mirrors the interactive regions vertically.
+    private func overlayLocalPoint(
+        for screenPoint: CGPoint,
+        in surface: UserQuerySpawnSurface
+    ) -> CGPoint {
+        let windowPoint = surface.panel.convertPoint(fromScreen: screenPoint)
+        return CGPoint(
+            x: windowPoint.x,
+            y: surface.panel.frame.height - windowPoint.y
+        )
+    }
+
+    /// `ignoresMouseEvents` is only as fresh as its last evaluation, which
+    /// otherwise happens on model updates and layout changes. Without a
+    /// movement monitor, mousing over a quiet holding pointer leaves its panel
+    /// click-through, so hover and drags never start.
+    private func updateMouseMoveMonitoring() {
+        guard surfacesByID.values.contains(where: {
+            !$0.viewModel.localHitTestFrames.isEmpty
+        }) else {
+            removeMouseMoveMonitoring()
+            return
+        }
+
+        installMouseMoveMonitoringIfNeeded()
+    }
+
+    private func installMouseMoveMonitoringIfNeeded() {
+        let mask: NSEvent.EventTypeMask = [.mouseMoved]
+        if localMouseMoveMonitor == nil {
+            localMouseMoveMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
+                Task { @MainActor [weak self] in
+                    self?.refreshMouseEventPassthroughForAllSurfaces()
+                }
+                return event
+            }
+        }
+        if globalMouseMoveMonitor == nil {
+            globalMouseMoveMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.refreshMouseEventPassthroughForAllSurfaces()
+                }
+            }
+        }
+    }
+
+    private func removeMouseMoveMonitoring() {
+        if let localMouseMoveMonitor {
+            NSEvent.removeMonitor(localMouseMoveMonitor)
+            self.localMouseMoveMonitor = nil
+        }
+        if let globalMouseMoveMonitor {
+            NSEvent.removeMonitor(globalMouseMoveMonitor)
+            self.globalMouseMoveMonitor = nil
+        }
+    }
+
+    private func refreshMouseEventPassthroughForAllSurfaces() {
+        for surface in surfacesByID.values {
+            updateMouseEventPassthrough(for: surface)
+        }
+        updateMouseMoveMonitoring()
     }
 
     func cueState(
@@ -628,9 +778,12 @@ final class UserQuerySpawnOverlayController {
 
     private func fadeAndRemove(id spawnID: String) {
         guard let surface = surfacesByID[spawnID] else { return }
+        // Already fading out — restarting would keep postponing the close on
+        // every model update, leaving an invisible panel that swallows clicks.
+        guard surface.removalWorkItem == nil else { return }
 
         surface.travelWorkItem?.cancel()
-        surface.removalWorkItem?.cancel()
+        surface.panel.ignoresMouseEvents = true
         pendingGuideRequestsBySpawnID[spawnID] = nil
         cancelGuide(for: surface)
         surface.viewModel.fadeOut()
@@ -716,8 +869,8 @@ final class UserQuerySpawnOverlayController {
     ) -> Bool {
         guard surface.panel.frame.contains(screenPoint) else { return false }
 
-        let localPoint = surface.panel.convertPoint(fromScreen: screenPoint)
-        return surface.viewModel.localHitTestFrame.contains(localPoint)
+        let localPoint = overlayLocalPoint(for: screenPoint, in: surface)
+        return surface.viewModel.localHitTestFrames.contains { $0.contains(localPoint) }
     }
 
     private func spawnOrigin(in screen: NSScreen, index: Int) -> CGPoint {
@@ -839,6 +992,7 @@ private final class UserQuerySpawnSurface {
     var screen: NSScreen
     var destination: CGPoint
     var isTraveling = false
+    var isUserPositioned = false
     var travelWorkItem: DispatchWorkItem?
     var removalWorkItem: DispatchWorkItem?
     var isPlayingGuide = false
@@ -870,10 +1024,41 @@ private final class UserQuerySpawnPanel: NSPanel {
     override var canBecomeMain: Bool {
         true
     }
+
+    /// Make the standard editing shortcuts work in the composer. It's an NSTextView inside an
+    /// NSScrollView, and NSScrollView doesn't forward `performKeyEquivalent` to its document view, so
+    /// Cmd+V/C/X/A/Z never reach the field on their own — the user can type but not paste. The window
+    /// always receives `performKeyEquivalent` for a key equivalent (before the main menu), so route the
+    /// shortcut to the focused text here. Returns true to consume it so nothing else double-handles it.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if super.performKeyEquivalent(with: event) { return true }
+        guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+              let text = firstResponder as? NSText,
+              let key = event.charactersIgnoringModifiers?.lowercased() else {
+            return false
+        }
+        switch key {
+        case "v": text.paste(nil); return true
+        case "c": text.copy(nil); return true
+        case "x": text.cut(nil); return true
+        case "a": text.selectAll(nil); return true
+        case "z":
+            if event.modifierFlags.contains(.shift) { text.undoManager?.redo() } else { text.undoManager?.undo() }
+            return true
+        default: return false
+        }
+    }
 }
 
 private final class UserQuerySpawnHostingView<Content: View>: NSHostingView<Content> {
     var hitTestRegionProvider: (() -> [CGRect])?
+
+    /// The first click on an inactive panel must reach the SwiftUI gestures
+    /// directly; without this it only focuses the panel and the user has to
+    /// click again to drag or dismiss.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         if let hitTestRegionProvider,

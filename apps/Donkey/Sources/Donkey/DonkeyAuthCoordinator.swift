@@ -96,17 +96,21 @@ final class DonkeyAuthCoordinator: ObservableObject {
     private let configuration: DonkeyAuthConfiguration
     private let stateStore: DonkeyAuthStateStoring
     private let nativeSessionExchanger: any DonkeyNativeSessionExchanging
+    private let cookieStorage: HTTPCookieStorage
 
     init(
         configuration: DonkeyAuthConfiguration = .current(),
         stateStore: DonkeyAuthStateStoring = DonkeyAuthStateStore(),
-        nativeSessionExchanger: any DonkeyNativeSessionExchanging = DonkeyNativeSessionCookieExchanger()
+        nativeSessionExchanger: any DonkeyNativeSessionExchanging = DonkeyNativeSessionCookieExchanger(),
+        cookieStorage: HTTPCookieStorage = .shared
     ) {
         self.configuration = configuration
         self.stateStore = stateStore
         self.nativeSessionExchanger = nativeSessionExchanger
+        self.cookieStorage = cookieStorage
 
         if let session = stateStore.loadSession() {
+            stateStore.markHasEverSignedIn()
             phase = .signedIn(session)
         } else {
             phase = .signedOut
@@ -115,6 +119,13 @@ final class DonkeyAuthCoordinator: ObservableObject {
 
     var isAuthenticated: Bool {
         phase.isSignedIn
+    }
+
+    /// Whether this Mac has completed sign-in at least once. Distinguishes a first install (never
+    /// signed in → show the welcome window) from an expired session (signed in before → drive the
+    /// re-auth through the notch login).
+    var hasEverSignedIn: Bool {
+        stateStore.loadHasEverSignedIn()
     }
 
     func beginGoogleSignIn() {
@@ -198,6 +209,7 @@ final class DonkeyAuthCoordinator: ObservableObject {
             userEmail: nativeSession.userEmail,
             userName: nativeSession.userName
         )
+        stateStore.markHasEverSignedIn()
         stateStore.saveSession(session)
         phase = .signedIn(session)
         authenticationCompleted?(session)
@@ -206,6 +218,24 @@ final class DonkeyAuthCoordinator: ObservableObject {
     func clearFailedState() {
         guard case .failed = phase else { return }
         phase = stateStore.loadSession().map(DonkeyAuthPhase.signedIn) ?? .signedOut
+    }
+
+    /// Drops the local session and its native session cookie, returning to the
+    /// signed-out state. Callers should then surface the login flow again.
+    func signOut() {
+        stateStore.clearSession()
+        stateStore.clearPendingState()
+        clearSessionCookies()
+        phase = .signedOut
+    }
+
+    private func clearSessionCookies() {
+        guard let cookies = cookieStorage.cookies(for: configuration.webBaseURL) else {
+            return
+        }
+        for cookie in cookies {
+            cookieStorage.deleteCookie(cookie)
+        }
     }
 
     private func signInURL(state: String) -> URL? {
@@ -244,9 +274,12 @@ final class DonkeyAuthCoordinator: ObservableObject {
 protocol DonkeyAuthStateStoring {
     func loadSession() -> DonkeyAuthSession?
     func saveSession(_ session: DonkeyAuthSession)
+    func clearSession()
     func loadPendingState() -> String?
     func savePendingState(_ state: String)
     func clearPendingState()
+    func loadHasEverSignedIn() -> Bool
+    func markHasEverSignedIn()
 }
 
 struct DonkeyAuthStateStore: DonkeyAuthStateStoring {
@@ -272,6 +305,10 @@ struct DonkeyAuthStateStore: DonkeyAuthStateStoring {
         defaults.set(data, forKey: Keys.session)
     }
 
+    func clearSession() {
+        defaults.removeObject(forKey: Keys.session)
+    }
+
     func loadPendingState() -> String? {
         defaults.string(forKey: Keys.pendingState)
     }
@@ -284,8 +321,17 @@ struct DonkeyAuthStateStore: DonkeyAuthStateStoring {
         defaults.removeObject(forKey: Keys.pendingState)
     }
 
+    func loadHasEverSignedIn() -> Bool {
+        defaults.bool(forKey: Keys.hasEverSignedIn)
+    }
+
+    func markHasEverSignedIn() {
+        defaults.set(true, forKey: Keys.hasEverSignedIn)
+    }
+
     private enum Keys {
         static let session = "donkey.auth.session"
         static let pendingState = "donkey.auth.pendingState"
+        static let hasEverSignedIn = "donkey.auth.hasEverSignedIn"
     }
 }

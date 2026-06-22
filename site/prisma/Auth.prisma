@@ -5,6 +5,9 @@ model User {
   emailVerified Boolean   @default(false)
   image         String?
   superUser     Boolean   @default(false)
+  // Stripe customer id, one per user, shared across every billing product
+  // (Pro, Vision, one-time credit top-ups) so a customer is never duplicated.
+  stripeCustomerId String? @unique
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   sessions      Session[]
@@ -14,6 +17,10 @@ model User {
   creditLedgerEntries UserCreditLedgerEntry[]
   inferenceUsageEvents InferenceUsageEvent[]
   creditLimits UserCreditLimit[]
+  creditAutoReload CreditAutoReload?
+  apiKeys       Apikey[]
+  visionApiSubscription VisionApiSubscription?
+  proSubscription ProSubscription?
 
   @@map("user")
 }

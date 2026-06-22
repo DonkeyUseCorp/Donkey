@@ -163,6 +163,731 @@ struct GenericHarnessTests {
     }
 
     @Test
+    func runReplansAfterEachObservation() async {
+        // The harness loop must re-plan with the world model the previous tool produced. The planner
+        // observes once, then — seeing the observation now recorded — completes. Proves planning is
+        // driven by observations, not a fixed up-front plan.
+        struct StubReplanningPlanner: HarnessNextStepPlanning {
+            func planNextStep(for task: HarnessTaskState) async -> HarnessToolCall? {
+                if task.worldModel.facts["observed"] == "true" {
+                    return HarnessToolCall(name: "run.complete", input: ["reason": "done"])
+                }
+                return HarnessToolCall(name: "test.observe")
+            }
+        }
+
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(
+            HarnessTool(
+                descriptor: HarnessToolDescriptor(
+                    name: "test.observe",
+                    pluginID: "test",
+                    summary: "Stub observation tool.",
+                    safetyClass: .readOnly
+                )
+            ) { context in
+                HarnessToolResult(
+                    callID: context.call.id,
+                    toolName: context.call.name,
+                    status: .succeeded,
+                    summary: "observed",
+                    observations: HarnessObservationDelta(facts: ["observed": "true"])
+                )
+            }
+        )
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(
+            id: "task-replan",
+            threadID: "thread-replan",
+            goal: "observe then finish",
+            grantedPermissions: [.lifecycle]
+        )
+
+        let steps = await runtime.run(taskID: task.id, planner: StubReplanningPlanner(), maxSteps: 5)
+
+        #expect(steps.map { $0.toolResult?.toolName } == ["test.observe", "run.complete"])
+        let finalTask = await coordinator.task(id: task.id)
+        #expect(finalTask?.status == .completed)
+    }
+
+    @Test
+    func llmGenerateReturnsInlineTextFromTheModelBoundary() async {
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(
+                textGenerator: { prompt in "RESULT for: \(prompt)" }
+            )
+        )
+        let result = await registry.execute(
+            HarnessToolCall(name: "llm.generate", input: ["prompt": "list 3 songs", "input": "Album X"]),
+            taskID: "t", worldModel: HarnessWorldModel(), grantedPermissions: []
+        )
+        #expect(result.status == .succeeded)
+        #expect(result.metadata["text"]?.contains("RESULT for: list 3 songs") == true)
+        // The input is folded into the prompt the generator sees.
+        #expect(result.metadata["text"]?.contains("Album X") == true)
+    }
+
+    @Test
+    func llmGenerateWritesLongOutputToAFileToBypassCommandLimits() async throws {
+        let long = String(repeating: "Song line\n", count: 500)
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(textGenerator: { _ in long })
+        )
+        let result = await registry.execute(
+            HarnessToolCall(name: "llm.generate", input: ["prompt": "tracklist", "toFile": "true"]),
+            taskID: "t", worldModel: HarnessWorldModel(), grantedPermissions: []
+        )
+        #expect(result.status == .succeeded)
+        let path = try #require(result.metadata["filePath"])
+        let written = try String(contentsOfFile: path, encoding: .utf8)
+        #expect(written == long)
+        #expect(result.metadata["characterCount"] == String(long.count))
+        try? FileManager.default.removeItem(atPath: path)
+    }
+
+    @Test
+    func llmGenerateRoutesToTheMediaBoundaryWhenGivenAFilePath() async throws {
+        let audio = FileManager.default.temporaryDirectory
+            .appendingPathComponent("donkey-media-test-\(UUID().uuidString).mp3")
+        try Data([0x00, 0x01, 0x02]).write(to: audio)
+        defer { try? FileManager.default.removeItem(at: audio) }
+
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(
+                // Fails if the text path is taken by mistake.
+                textGenerator: { _ in "TEXT PATH" },
+                mediaGenerator: { prompt, file, mimeType in
+                    .text("SRT for \(file.lastPathComponent) mime=\(mimeType ?? "nil"): \(prompt)")
+                }
+            )
+        )
+        let result = await registry.execute(
+            HarnessToolCall(name: "llm.generate", input: [
+                "prompt": "transcribe to SRT",
+                "filePath": audio.path,
+                "mimeType": "audio/mpeg"
+            ]),
+            taskID: "t", worldModel: HarnessWorldModel(), grantedPermissions: []
+        )
+        #expect(result.status == .succeeded)
+        let text = result.metadata["text"]
+        // Routed to the media boundary, which saw the file and the forwarded mimeType.
+        #expect(text?.contains("SRT for \(audio.lastPathComponent)") == true)
+        #expect(text?.contains("mime=audio/mpeg") == true)
+        #expect(text?.contains("transcribe to SRT") == true)
+        #expect(text?.contains("TEXT PATH") == false)
+    }
+
+    @Test
+    func llmGenerateSurfacesATruncatedTranscriptAsAFailure() async throws {
+        let audio = FileManager.default.temporaryDirectory
+            .appendingPathComponent("donkey-media-test-\(UUID().uuidString).mp3")
+        try Data([0x00, 0x01]).write(to: audio)
+        defer { try? FileManager.default.removeItem(at: audio) }
+
+        // A transcript cut off at the token cap must not be written as a complete result.
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(mediaGenerator: { _, _, _ in .truncated })
+        )
+        let result = await registry.execute(
+            HarnessToolCall(name: "llm.generate", input: ["prompt": "transcribe", "filePath": audio.path]),
+            taskID: "t", worldModel: HarnessWorldModel(), grantedPermissions: []
+        )
+        #expect(result.status == .failed)
+        #expect(result.metadata["reason"] == "mediaOutputTruncated")
+    }
+
+    @Test
+    func llmGenerateMapsMediaOutcomesToDistinctReasons() async throws {
+        let audio = FileManager.default.temporaryDirectory
+            .appendingPathComponent("donkey-media-test-\(UUID().uuidString).mp3")
+        try Data([0x00]).write(to: audio)
+        defer { try? FileManager.default.removeItem(at: audio) }
+
+        // Each media failure mode reaches the planner as its own reason rather than an opaque nil.
+        let cases: [(HarnessMediaGenerationOutcome, String)] = [
+            (.unreadableFile, "mediaFileUnreadable"),
+            (.tooLarge(bytes: 20_000_000, limit: 14_000_000), "mediaFileTooLarge"),
+            (.unsupportedType("image/png"), "mediaUnsupportedType"),
+            // A timeout / thrown error is retryable and must reach the planner as its own reason, not
+            // as "no text".
+            (.timedOut(reason: "deadline"), "mediaTimedOut"),
+            (.empty, "emptyGeneration")
+        ]
+        for (outcome, expectedReason) in cases {
+            let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+                services: HarnessBuiltInToolServices(mediaGenerator: { _, _, _ in outcome })
+            )
+            let result = await registry.execute(
+                HarnessToolCall(name: "llm.generate", input: ["prompt": "transcribe", "filePath": audio.path]),
+                taskID: "t", worldModel: HarnessWorldModel(), grantedPermissions: []
+            )
+            #expect(result.status == .failed)
+            #expect(result.metadata["reason"] == expectedReason)
+        }
+    }
+
+    @Test
+    func llmGenerateFailsCleanlyWithoutAMediaBoundaryWhenGivenAFilePath() async throws {
+        let audio = FileManager.default.temporaryDirectory
+            .appendingPathComponent("donkey-media-test-\(UUID().uuidString).mp3")
+        try Data([0x00]).write(to: audio)
+        defer { try? FileManager.default.removeItem(at: audio) }
+
+        // Only the text boundary is wired — a media call must not silently fall back to it.
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(textGenerator: { _ in "text" })
+        )
+        let result = await registry.execute(
+            HarnessToolCall(name: "llm.generate", input: ["prompt": "transcribe", "filePath": audio.path]),
+            taskID: "t", worldModel: HarnessWorldModel(), grantedPermissions: []
+        )
+        #expect(result.status == .failed)
+        #expect(result.metadata["reason"] == "mediaGeneratorUnavailable")
+    }
+
+    @Test
+    func llmGenerateRejectsAMissingMediaFile() async {
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(mediaGenerator: { _, _, _ in .text("unused") })
+        )
+        let result = await registry.execute(
+            HarnessToolCall(name: "llm.generate", input: [
+                "prompt": "transcribe",
+                "filePath": "/no/such/donkey-media-\(UUID().uuidString).mp3"
+            ]),
+            taskID: "t", worldModel: HarnessWorldModel(), grantedPermissions: []
+        )
+        #expect(result.status == .invalidInput)
+    }
+
+    @Test
+    func webSearchReturnsRankedResultsFromTheSearcher() async {
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(
+                webSearcher: { query in "Latest Album — https://ex.com\nIt's the newest record for \(query)." }
+            )
+        )
+        let result = await registry.execute(
+            HarnessToolCall(name: "web.search", input: ["query": "taylor swift latest album"]),
+            taskID: "t", worldModel: HarnessWorldModel(), grantedPermissions: []
+        )
+        #expect(result.status == .succeeded)
+        #expect(result.metadata["results"]?.contains("https://ex.com") == true)
+    }
+
+    @Test
+    func webFetchWritesLongPagesToAFile() async throws {
+        let page = String(repeating: "paragraph of readable text\n", count: 400)
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
+            services: HarnessBuiltInToolServices(webFetcher: { _ in page })
+        )
+        let result = await registry.execute(
+            HarnessToolCall(name: "web.fetch", input: ["url": "https://ex.com", "toFile": "true"]),
+            taskID: "t", worldModel: HarnessWorldModel(), grantedPermissions: []
+        )
+        #expect(result.status == .succeeded)
+        let path = try #require(result.metadata["filePath"])
+        #expect(try String(contentsOfFile: path, encoding: .utf8) == page)
+        try? FileManager.default.removeItem(atPath: path)
+    }
+
+    @Test
+    func webToolsFailCleanlyWhenNotConfigured() async {
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        let search = await registry.execute(
+            HarnessToolCall(name: "web.search", input: ["query": "x"]),
+            taskID: "t", worldModel: HarnessWorldModel(), grantedPermissions: []
+        )
+        #expect(search.metadata["reason"] == "webSearchUnavailable")
+    }
+
+    @Test
+    func llmGenerateFailsCleanlyWithoutAModelBoundary() async {
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        let result = await registry.execute(
+            HarnessToolCall(name: "llm.generate", input: ["prompt": "hi"]),
+            taskID: "t", worldModel: HarnessWorldModel(), grantedPermissions: []
+        )
+        #expect(result.status == .failed)
+        #expect(result.metadata["reason"] == "textGeneratorUnavailable")
+    }
+
+    @Test
+    func runStopsWhenThePlannerLoopsOnTheSameCall() async {
+        // A planner that keeps choosing the identical observation never converges. The runtime must
+        // detect the exact repeat and fail safe quickly instead of burning the whole ceiling.
+        struct StubLoopingPlanner: HarnessNextStepPlanning {
+            func planNextStep(for task: HarnessTaskState) async -> HarnessToolCall? {
+                HarnessToolCall(name: "test.noop", input: ["k": "v"])
+            }
+        }
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        // A tool that succeeds but reports no observations, so every call is no-progress.
+        await registry.register(
+            HarnessTool(
+                descriptor: HarnessToolDescriptor(name: "test.noop", pluginID: "test", summary: "noop", safetyClass: .readOnly)
+            ) { context in
+                HarnessToolResult(callID: context.call.id, toolName: context.call.name, status: .succeeded, summary: "noop")
+            }
+        )
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(id: "task-loop", threadID: "t", goal: "loop", grantedPermissions: [.lifecycle])
+
+        let steps = await runtime.run(taskID: task.id, planner: StubLoopingPlanner(), maxSteps: 100)
+
+        // Stops after the repeat guard trips (well under the ceiling), not 100 steps.
+        #expect(steps.count < 5)
+        let finalTask = await coordinator.task(id: task.id)
+        #expect(finalTask?.status == .failedSafe)
+    }
+
+    @Test
+    func runBlocksRepeatingAnAlreadySucceededAction() async {
+        // A planner that keeps re-issuing the same successful state-changing call (the duplicate-note
+        // loop) must only execute it once; the repeats are blocked before they run, and the run stops.
+        struct StubDuplicatePlanner: HarnessNextStepPlanning {
+            func planNextStep(for task: HarnessTaskState) async -> HarnessToolCall? {
+                HarnessToolCall(name: "test.act", input: ["command": "make note"])
+            }
+        }
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(stubTool(name: "test.act", safetyClass: .guardedInput))
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(id: "task-dup", threadID: "t", goal: "dup", grantedPermissions: [.lifecycle])
+
+        let steps = await runtime.run(taskID: task.id, planner: StubDuplicatePlanner(), maxSteps: 30)
+
+        // The action executes exactly once; everything after is a blocked duplicate, so no 16 copies.
+        let realRuns = steps.filter { $0.toolResult?.toolName == "test.act" && $0.toolResult?.status == .succeeded }
+        #expect(realRuns.count == 1)
+        #expect(steps.contains { $0.toolResult?.metadata["reason"] == "duplicateAction" })
+    }
+
+    @Test
+    func runStopsWhenStepsStopMakingProgress() async {
+        // Distinct calls that each succeed but never change the world model are still a stall.
+        struct StubBusyPlanner: HarnessNextStepPlanning {
+            func planNextStep(for task: HarnessTaskState) async -> HarnessToolCall? {
+                HarnessToolCall(name: "test.noop", input: ["n": String(task.toolHistory.count)])
+            }
+        }
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(
+            HarnessTool(
+                descriptor: HarnessToolDescriptor(name: "test.noop", pluginID: "test", summary: "noop", safetyClass: .readOnly)
+            ) { context in
+                HarnessToolResult(callID: context.call.id, toolName: context.call.name, status: .succeeded, summary: "noop")
+            }
+        )
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(id: "task-stall", threadID: "t", goal: "stall", grantedPermissions: [.lifecycle])
+
+        let steps = await runtime.run(taskID: task.id, planner: StubBusyPlanner(), maxSteps: 100, maxNoProgressSteps: 4)
+
+        #expect(steps.count <= 5)
+        let finalTask = await coordinator.task(id: task.id)
+        #expect(finalTask?.status == .failedSafe)
+    }
+
+    @Test
+    func duplicateGuardIgnoresActionsFromAFinishedRun() async {
+        // A task resumed for a new user turn keeps its history, but "already done in this run" must
+        // not match a run that already ended — the live failure: a verification re-list was blocked
+        // because the same call succeeded hours earlier in a run that failed safe.
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(stubTool(name: "test.act", safetyClass: .guardedInput))
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(id: "task-rerun", threadID: "t", goal: "rerun", grantedPermissions: [.lifecycle])
+
+        let call = HarnessToolCall(name: "test.act", input: ["command": "make note"])
+        let first = await runtime.executeToolCall(taskID: task.id, call: call)
+        #expect(first?.toolResult?.status == .succeeded)
+        _ = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "run.failSafe", input: ["reason": "test"]))
+
+        _ = await coordinator.startRunning(taskID: task.id, reason: "follow-up turn")
+        let repeated = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "test.act", input: ["command": "make note"]))
+
+        #expect(repeated?.toolResult?.status == .succeeded)
+        #expect(repeated?.toolResult?.metadata["reason"] != "duplicateAction")
+    }
+
+    @Test
+    func duplicateGuardExemptsDeclaredReadOnlyActions() async {
+        // A multi-action tool (music.playlist style) is state-changing overall, but its declared
+        // read actions are verification — repeating them must never be blocked, while repeating a
+        // state-changing action of the same tool still is.
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(
+            HarnessTool(
+                descriptor: HarnessToolDescriptor(
+                    name: "test.multi",
+                    pluginID: "test",
+                    summary: "multi-action",
+                    inputSchema: ["action": "list | create"],
+                    safetyClass: .reversible,
+                    metadata: [HarnessToolDescriptor.readOnlyActionsMetadataKey: "list,entries"]
+                )
+            ) { context in
+                HarnessToolResult(callID: context.call.id, toolName: context.call.name, status: .succeeded, summary: "ok")
+            }
+        )
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(id: "task-multi", threadID: "t", goal: "multi", grantedPermissions: [.lifecycle])
+
+        let list = HarnessToolCall(name: "test.multi", input: ["action": "list"])
+        _ = await runtime.executeToolCall(taskID: task.id, call: list)
+        let repeatedList = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "test.multi", input: ["action": "list"]))
+        #expect(repeatedList?.toolResult?.status == .succeeded)
+        #expect(repeatedList?.toolResult?.metadata["reason"] != "duplicateAction")
+
+        let create = HarnessToolCall(name: "test.multi", input: ["action": "create"])
+        _ = await runtime.executeToolCall(taskID: task.id, call: create)
+        let repeatedCreate = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "test.multi", input: ["action": "create"]))
+        #expect(repeatedCreate?.toolResult?.metadata["reason"] == "duplicateAction")
+    }
+
+    @Test
+    func runCompleteOnAResumedTaskRequiresFreshEvidence() async {
+        // The live false-completion: a new turn resumed a task whose previous run had created and
+        // verified everything, the user had since undone the result, and the model re-completed
+        // from stale world facts without a single observation this run. A fresh run must succeed
+        // at least one step (an observe is enough) before run.complete is accepted.
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(stubTool(name: "test.act", safetyClass: .guardedInput))
+        await registry.register(
+            HarnessTool(
+                descriptor: HarnessToolDescriptor(name: "test.observe", pluginID: "test", summary: "observe", safetyClass: .readOnly)
+            ) { context in
+                HarnessToolResult(callID: context.call.id, toolName: context.call.name, status: .succeeded, summary: "observed")
+            }
+        )
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(id: "task-stale", threadID: "t", goal: "stale", grantedPermissions: [.lifecycle])
+
+        // Previous run: act, verify, complete.
+        _ = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "test.act", input: ["command": "do it"]))
+        _ = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "test.observe"))
+        _ = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "run.complete", input: ["reason": "done"]))
+
+        // A follow-up turn resumes the task; completing on stale facts alone is rejected.
+        _ = await coordinator.startRunning(taskID: task.id, reason: "follow-up turn")
+        let premature = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "run.complete", input: ["reason": "already done"]))
+        #expect(premature?.toolResult?.status == .failed)
+        #expect(premature?.toolResult?.metadata["reason"] == "completionRequiresEvidence")
+        #expect(premature?.toolResult?.summary.contains("previous run") == true)
+
+        // One succeeded observation this run unlocks completion.
+        _ = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "test.observe"))
+        let completed = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "run.complete", input: ["reason": "verified again"]))
+        #expect(completed?.toolResult?.status == .succeeded)
+        let finalTask = await coordinator.task(id: task.id)
+        #expect(finalTask?.status == .completed)
+    }
+
+    @Test
+    func runStopsWhenTheSameToolKeepsFailingTheSameWayDespiteInterleavedSuccesses() async {
+        // The live failure mode: a broken tool fails identically on every call, but the planner
+        // varies a minor input field and interleaves successful diagnostics that reset the
+        // consecutive streaks. The history-based guard must still stop the run at the third
+        // identical failure.
+        struct StubAlternatingPlanner: HarnessNextStepPlanning {
+            func planNextStep(for task: HarnessTaskState) async -> HarnessToolCall? {
+                task.toolHistory.count.isMultiple(of: 2)
+                    ? HarnessToolCall(name: "test.fail", input: ["attempt": String(task.toolHistory.count)])
+                    : HarnessToolCall(name: "test.observe")
+            }
+        }
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(
+            HarnessTool(
+                descriptor: HarnessToolDescriptor(name: "test.fail", pluginID: "test", summary: "fail", safetyClass: .guardedInput)
+            ) { context in
+                HarnessToolResult(
+                    callID: context.call.id, toolName: context.call.name, status: .failed,
+                    summary: "create returned no item"
+                )
+            }
+        )
+        await registry.register(
+            HarnessTool(
+                descriptor: HarnessToolDescriptor(name: "test.observe", pluginID: "test", summary: "observe", safetyClass: .readOnly)
+            ) { context in
+                HarnessToolResult(
+                    callID: context.call.id, toolName: context.call.name, status: .succeeded,
+                    summary: "observed",
+                    observations: HarnessObservationDelta(facts: ["seen": context.call.id])
+                )
+            }
+        )
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(id: "task-refail", threadID: "t", goal: "refail", grantedPermissions: [.lifecycle])
+
+        let steps = await runtime.run(taskID: task.id, planner: StubAlternatingPlanner(), maxSteps: 100)
+
+        // Three identical failures with successful observes between them — stops at the third
+        // failure (5 steps), far below what the no-progress streak alone would allow.
+        let failures = steps.filter { $0.toolResult?.toolName == "test.fail" }
+        #expect(failures.count == 3)
+        #expect(steps.count == 5)
+        let finalTask = await coordinator.task(id: task.id)
+        #expect(finalTask?.status == .failedSafe)
+    }
+
+    @Test
+    func startRunningClearsFactsCarriedOverFromAFinishedRun() async {
+        // The live failure: a stale "added 10 songs" fact from a finished run convinced the planner
+        // a brand-new playlist was already populated. A fresh run starts with fresh facts; a gate
+        // resume (history not ending in a terminal lifecycle call) keeps them.
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(
+            HarnessTool(
+                descriptor: HarnessToolDescriptor(
+                    name: "test.act",
+                    pluginID: "test",
+                    summary: "act",
+                    safetyClass: .guardedInput,
+                    metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+                )
+            ) { context in
+                HarnessToolResult(
+                    callID: context.call.id, toolName: context.call.name, status: .succeeded,
+                    summary: "did it",
+                    observations: HarnessObservationDelta(facts: ["added.count": "10"])
+                )
+            }
+        )
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(id: "task-fresh-facts", threadID: "t", goal: "facts", grantedPermissions: [.lifecycle])
+
+        _ = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "test.act", input: ["n": "1"]))
+        let midRun = await coordinator.startRunning(taskID: task.id, reason: "not a new run")
+        #expect(midRun?.worldModel.facts["added.count"] == "10")
+
+        _ = await runtime.executeToolCall(taskID: task.id, call: HarnessToolCall(name: "run.complete", input: ["reason": "done"]))
+        let freshRun = await coordinator.startRunning(taskID: task.id, reason: "follow-up turn")
+        #expect(freshRun?.worldModel.facts.isEmpty == true)
+        #expect(freshRun?.toolHistory.isEmpty == false)
+    }
+
+    @Test
+    func runStopsWhenIdenticalReadsLoopWithoutNewInformation() async {
+        // The live loop: identical succeeded list reads, each reporting the same facts, counted as
+        // progress and reset every streak. An exact repeat that leaves the world model unchanged
+        // must not count as progress, even though it reports observations.
+        struct StubRereadingPlanner: HarnessNextStepPlanning {
+            func planNextStep(for task: HarnessTaskState) async -> HarnessToolCall? {
+                HarnessToolCall(name: "test.list", input: ["action": "list"])
+            }
+        }
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(
+            HarnessTool(
+                descriptor: HarnessToolDescriptor(name: "test.list", pluginID: "test", summary: "list", safetyClass: .readOnly)
+            ) { context in
+                HarnessToolResult(
+                    callID: context.call.id, toolName: context.call.name, status: .succeeded,
+                    summary: "Library playlists (1): Favorite Songs",
+                    observations: HarnessObservationDelta(facts: ["playlist.count": "1"])
+                )
+            }
+        )
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(id: "task-reread", threadID: "t", goal: "reread", grantedPermissions: [.lifecycle])
+
+        let steps = await runtime.run(taskID: task.id, planner: StubRereadingPlanner(), maxSteps: 100)
+
+        // The first read adds the fact (real progress); repeats teach nothing and trip the
+        // identical-call guard instead of looping.
+        #expect(steps.count <= 4)
+        let finalTask = await coordinator.task(id: task.id)
+        #expect(finalTask?.status == .failedSafe)
+        // The repeated record carries the warning the planner reads on its next step, so the model
+        // gets one explicit chance to change course before the guard ends the run.
+        #expect(finalTask?.toolHistory.contains { $0.summary.contains("Do not repeat it") } == true)
+    }
+
+    @Test
+    func runStopsOnInvalidInputCallsAlternatingBetweenTools() async {
+        // A degraded planner emitting malformed calls for different tools defeats the
+        // identical-signature guard; the trailing invalid-input run must stop it anyway.
+        struct StubMalformedPlanner: HarnessNextStepPlanning {
+            func planNextStep(for task: HarnessTaskState) async -> HarnessToolCall? {
+                HarnessToolCall(name: task.toolHistory.count.isMultiple(of: 2) ? "test.a" : "test.b")
+            }
+        }
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        for name in ["test.a", "test.b"] {
+            await registry.register(
+                HarnessTool(
+                    descriptor: HarnessToolDescriptor(name: name, pluginID: "test", summary: name, safetyClass: .readOnly)
+                ) { context in
+                    HarnessToolResult(
+                        callID: context.call.id, toolName: context.call.name, status: .invalidInput,
+                        summary: "\(context.call.name) requires an action"
+                    )
+                }
+            )
+        }
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(id: "task-malformed", threadID: "t", goal: "malformed", grantedPermissions: [.lifecycle])
+
+        let steps = await runtime.run(taskID: task.id, planner: StubMalformedPlanner(), maxSteps: 100)
+
+        #expect(steps.count == 3)
+        let finalTask = await coordinator.task(id: task.id)
+        #expect(finalTask?.status == .failedSafe)
+    }
+
+    @Test
+    func longProgressingRunIsNotCutOffByAFixedCap() async {
+        // Each step changes the world model (real progress), so a run longer than the old 40-step cap
+        // completes instead of being truncated — the point of progress-based budgeting.
+        struct StubProgressingPlanner: HarnessNextStepPlanning {
+            func planNextStep(for task: HarnessTaskState) async -> HarnessToolCall? {
+                let done = (task.worldModel.facts["count"].flatMap(Int.init) ?? 0) >= 60
+                return done
+                    ? HarnessToolCall(name: "run.complete", input: ["reason": "done"])
+                    : HarnessToolCall(name: "test.advance")
+            }
+        }
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(
+            HarnessTool(
+                descriptor: HarnessToolDescriptor(name: "test.advance", pluginID: "test", summary: "advance", safetyClass: .readOnly)
+            ) { context in
+                let next = (context.worldModel.facts["count"].flatMap(Int.init) ?? 0) + 1
+                return HarnessToolResult(
+                    callID: context.call.id, toolName: context.call.name, status: .succeeded,
+                    summary: "advanced to \(next)",
+                    observations: HarnessObservationDelta(facts: ["count": String(next)])
+                )
+            }
+        )
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(id: "task-long", threadID: "t", goal: "count to 60", grantedPermissions: [.lifecycle])
+
+        let steps = await runtime.run(taskID: task.id, planner: StubProgressingPlanner())
+
+        // 60 advances + 1 complete — well past the old 40 cap.
+        #expect(steps.count == 61)
+        let finalTask = await coordinator.task(id: task.id)
+        #expect(finalTask?.status == .completed)
+    }
+
+    @Test
+    func runCompleteIsRejectedUntilTheLastActionIsVerified() async {
+        // Acting and immediately declaring victory must not complete the task: the runtime rejects
+        // the unverified run.complete, the planner re-observes, and only then completion lands.
+        struct StubActThenCompletePlanner: HarnessNextStepPlanning {
+            func planNextStep(for task: HarnessTaskState) async -> HarnessToolCall? {
+                switch task.toolHistory.last.map({ ($0.call.name, $0.resultStatus) }) {
+                case nil:
+                    return HarnessToolCall(name: "test.act")
+                case ("test.act", .succeeded)?:
+                    return HarnessToolCall(name: "run.complete", input: ["reason": "claimed done"])
+                case ("run.complete", .failed)?:
+                    return HarnessToolCall(name: "test.observe")
+                default:
+                    return HarnessToolCall(name: "run.complete", input: ["reason": "verified done"])
+                }
+            }
+        }
+
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(stubTool(name: "test.act", safetyClass: .guardedInput))
+        await registry.register(stubTool(name: "test.observe", safetyClass: .readOnly))
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(
+            id: "task-complete-evidence",
+            threadID: "thread-complete-evidence",
+            goal: "act then verify",
+            grantedPermissions: [.lifecycle]
+        )
+
+        let steps = await runtime.run(taskID: task.id, planner: StubActThenCompletePlanner(), maxSteps: 6)
+
+        #expect(steps.map { $0.toolResult?.toolName } == ["test.act", "run.complete", "test.observe", "run.complete"])
+        #expect(steps[1].toolResult?.status == .failed)
+        #expect(steps[1].toolResult?.metadata["reason"] == "completionRequiresEvidence")
+        #expect(steps[1].task.status == .running)
+        let finalTask = await coordinator.task(id: task.id)
+        #expect(finalTask?.status == .completed)
+    }
+
+    @Test
+    func runCompleteIsAcceptedWhenTheLastActionCarriesItsOwnEvidence() async {
+        // Tools that declare their result is evidence (e.g. a shell command's output/exit code)
+        // satisfy the completion gate without a separate re-observe step.
+        struct StubActThenCompletePlanner: HarnessNextStepPlanning {
+            func planNextStep(for task: HarnessTaskState) async -> HarnessToolCall? {
+                task.toolHistory.isEmpty
+                    ? HarnessToolCall(name: "test.evidence-act")
+                    : HarnessToolCall(name: "run.complete", input: ["reason": "command output confirms"])
+            }
+        }
+
+        let coordinator = HarnessTaskCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(
+            stubTool(
+                name: "test.evidence-act",
+                safetyClass: .guardedInput,
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            )
+        )
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createTask(
+            id: "task-complete-self-evidence",
+            threadID: "thread-complete-self-evidence",
+            goal: "act with evidence",
+            grantedPermissions: [.lifecycle]
+        )
+
+        let steps = await runtime.run(taskID: task.id, planner: StubActThenCompletePlanner(), maxSteps: 4)
+
+        #expect(steps.map { $0.toolResult?.toolName } == ["test.evidence-act", "run.complete"])
+        let finalTask = await coordinator.task(id: task.id)
+        #expect(finalTask?.status == .completed)
+    }
+
+    private func stubTool(
+        name: String,
+        safetyClass: HarnessToolSafetyClass,
+        metadata: [String: String] = [:]
+    ) -> HarnessTool {
+        HarnessTool(
+            descriptor: HarnessToolDescriptor(
+                name: name,
+                pluginID: "test",
+                summary: "Stub tool.",
+                safetyClass: safetyClass,
+                metadata: metadata
+            )
+        ) { context in
+            HarnessToolResult(
+                callID: context.call.id,
+                toolName: context.call.name,
+                status: .succeeded,
+                summary: "ok"
+            )
+        }
+    }
+
+    @Test
     func skillRegistryCanRegisterAndSearchSkills() async {
         let registry = HarnessSkillRegistry()
         await registry.register(
@@ -171,7 +896,7 @@ struct GenericHarnessTests {
                 name: "Desktop Browser",
                 summary: "Operate browser tabs and inspect web pages.",
                 description: "Use for browser automation, screenshots, forms, and navigation.",
-                sourceKind: .plugin,
+                sourceKind: .installed,
                 tags: ["browser", "computer-use"],
                 providedToolNames: ["screen.observe", "element.perform"],
                 scripts: [
@@ -273,28 +998,53 @@ struct GenericHarnessTests {
     @Test
     func builtInLocalAppSkillPacksProvideBoundedIntentGuidance() async throws {
         let skills = BuiltInLocalAppSkillPacks.descriptors()
-        #expect(skills.contains { $0.id == "music-media" })
-        #expect(skills.contains { $0.id == "browser-navigation" })
-
-        let context = LocalAppTaskSkillContext.defaultContext(
-            taskDefinitions: LocalAppTaskDefinitionLoader.runtimeSeedDefinitions,
-            appFinderCatalog: []
-        )
-
-        #expect(context.snippets.contains { $0.contains("Skill ID: music-media") })
-        #expect(context.snippets.joined(separator: "\n").contains("metadata.mediaSelection.kind"))
+        #expect(skills.contains { $0.id == "music" })
+        #expect(skills.contains { $0.id == "browser" })
     }
 
     @Test
-    func userQueryHarnessServicesExposeBuiltInMusicSkillScript() async throws {
+    func builtInMusicSkillIsScriptFree() async throws {
+        // Music playback is owned by the native music.* tools; the skill is guidance-only. A script
+        // reappearing here would re-introduce the retired AppleScript/GUI playback path.
         let services = LocalAppUserQueryHarnessServices.builtInSkillBackedServices()
-        let musicSkill = await services.skillRegistry?.descriptor(id: "music-media")
-        let script = await services.generatedScripts.artifact(id: "scripts-play-media-by-search")
+        let musicSkill = await services.skillRegistry?.descriptor(id: "music")
 
-        #expect(musicSkill?.scripts.contains { $0.id == "scripts-play-media-by-search" } == true)
-        #expect(script?.ownerSkillID == "music-media")
-        #expect(script?.validationStatus == .validated)
-        #expect(script?.language == .appleScript)
+        #expect(musicSkill != nil)
+        #expect(musicSkill?.scripts.isEmpty == true)
+    }
+
+    /// The summary is the tool-result body the planner reads, so a skill script's structured
+    /// self-report (`status=not_found`, `escalate.goal=…`) must travel inside it — collapsing a
+    /// failure to a generic one-liner left the planner retrying the identical call instead of
+    /// escalating to vision.
+    @Test
+    func skillScriptSummaryCarriesTheScriptSelfReport() {
+        let notFound = LocalAppUserQueryHarnessServices.skillScriptSummary(
+            succeeded: false,
+            executed: true,
+            output: "status=not_found\nquery=Baby Don't Cry\nescalate.app=Music\nescalate.goal=Play the top song result",
+            error: ""
+        )
+        #expect(notFound.contains("status=not_found"))
+        #expect(notFound.contains("escalate.goal=Play the top song result"))
+        #expect(notFound.contains("do not repeat the same call"))
+
+        let hardError = LocalAppUserQueryHarnessServices.skillScriptSummary(
+            succeeded: false,
+            executed: false,
+            output: "",
+            error: "Music got an error: AppleEvent timed out."
+        )
+        #expect(hardError.contains("AppleEvent timed out"))
+
+        let played = LocalAppUserQueryHarnessServices.skillScriptSummary(
+            succeeded: true,
+            executed: true,
+            output: "status=played\nplayedTitle=Baby Don't Cry\nplayedArtist=EXO",
+            error: ""
+        )
+        #expect(played.contains("succeeded"))
+        #expect(played.contains("playedTitle=Baby Don't Cry"))
     }
 
     @Test
@@ -507,12 +1257,13 @@ struct GenericHarnessTests {
     }
 
     @Test
-    func shellExecRunsSafeCommandsAndBlocksDangerousOnes() async {
+    func shellExecRunsReadsAndGatesStateChanges() async {
         let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
             services: HarnessBuiltInToolServices(commandExecutor: DonkeyCommandBackends.makeExecutor())
         )
         let permissions: Set<HarnessPermission> = [.appControl, .input]
 
+        // A read-only command runs immediately, no consent.
         let ok = await registry.execute(
             HarnessToolCall(id: "sh-1", name: "shell_exec", input: ["command": "echo donkey-ok"]),
             taskID: "task-sh-ok",
@@ -523,14 +1274,17 @@ struct GenericHarnessTests {
         #expect(ok.metadata["stdout"] == "donkey-ok")
         #expect(ok.metadata["exitCode"] == "0")
 
-        let blocked = await registry.execute(
+        // High-risk asks for consent every time and can never be always-allowed.
+        let highRisk = await registry.execute(
             HarnessToolCall(id: "sh-2", name: "shell_exec", input: ["command": "sudo rm -rf /"]),
-            taskID: "task-sh-blocked",
+            taskID: "task-sh-highrisk",
             worldModel: HarnessWorldModel(),
             grantedPermissions: permissions
         )
-        #expect(blocked.status == .failed)
-        #expect(blocked.metadata["reason"] == "blockedCommand")
+        #expect(highRisk.status == .waitingForPermission)
+        #expect(highRisk.metadata["gate"] == "shellConsent")
+        #expect(highRisk.metadata["shell.tier"] == "highRisk")
+        #expect(highRisk.metadata["shell.allowAlways"] == "false")
 
         let multiline = await registry.execute(
             HarnessToolCall(id: "sh-3", name: "shell_exec", input: ["command": "echo a\necho b"]),
@@ -540,30 +1294,41 @@ struct GenericHarnessTests {
         )
         #expect(multiline.status == .invalidInput)
 
-        // Hardened guardrail: a bare `rm` (no flags) is caught as a command word.
+        // A bare `rm` (no flags) is still high-risk.
         let bareRm = await registry.execute(
             HarnessToolCall(id: "sh-4", name: "shell_exec", input: ["command": "rm ~/Documents/notes.txt"]),
             taskID: "task-sh-rm",
             worldModel: HarnessWorldModel(),
             grantedPermissions: permissions
         )
-        #expect(bareRm.status == .failed)
-        #expect(bareRm.metadata["reason"] == "blockedCommand")
+        #expect(bareRm.status == .waitingForPermission)
+        #expect(bareRm.metadata["shell.tier"] == "highRisk")
 
-        // The osascript `do shell script` escape hatch is blocked.
+        // The osascript `do shell script` escape hatch is high-risk.
         let osaShell = await registry.execute(
             HarnessToolCall(id: "sh-5", name: "shell_exec", input: ["command": "osascript -e 'do shell script \"rm -rf ~/x\"'"]),
             taskID: "task-sh-osa",
             worldModel: HarnessWorldModel(),
             grantedPermissions: permissions
         )
-        #expect(osaShell.status == .failed)
-        #expect(osaShell.metadata["reason"] == "blockedCommand")
+        #expect(osaShell.status == .waitingForPermission)
+        #expect(osaShell.metadata["shell.tier"] == "highRisk")
 
-        // A benign redirect to a temp path is NOT a false positive (the old `> /`
-        // rule wrongly blocked this).
+        // A reversible state change gates too, but offers always-allow.
+        let reversible = await registry.execute(
+            HarnessToolCall(id: "sh-6", name: "shell_exec", input: ["command": "defaults write com.apple.dock autohide -bool true"]),
+            taskID: "task-sh-defaults",
+            worldModel: HarnessWorldModel(),
+            grantedPermissions: permissions
+        )
+        #expect(reversible.status == .waitingForPermission)
+        #expect(reversible.metadata["shell.tier"] == "reversibleWrite")
+        #expect(reversible.metadata["shell.allowAlways"] == "true")
+        #expect(reversible.metadata["shell.signature"] == "defaults write")
+
+        // A benign read with a redirect to a temp path runs without a prompt.
         let redirect = await registry.execute(
-            HarnessToolCall(id: "sh-6", name: "shell_exec", input: ["command": "echo donkey > /tmp/donkey-review-test.txt"]),
+            HarnessToolCall(id: "sh-7", name: "shell_exec", input: ["command": "echo donkey > /tmp/donkey-review-test.txt"]),
             taskID: "task-sh-redirect",
             worldModel: HarnessWorldModel(),
             grantedPermissions: permissions
@@ -573,7 +1338,7 @@ struct GenericHarnessTests {
     }
 
     @Test
-    func builtInExecutorsRetrieveMemoryAndResolveApps() async {
+    func builtInExecutorsRetrieveMemory() async {
         let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
             services: HarnessBuiltInToolServices(
                 memoryEntries: [
@@ -581,14 +1346,6 @@ struct GenericHarnessTests {
                         id: "memory-calendar",
                         summary: "Calendar is the preferred scheduling app.",
                         value: "Use Calendar for schedule lookups."
-                    )
-                ],
-                appEntries: [
-                    HarnessAppLookupEntry(
-                        id: "com.apple.iCal",
-                        name: "Calendar",
-                        bundleIdentifier: "com.apple.iCal",
-                        path: "/System/Applications/Calendar.app"
                     )
                 ]
             )
@@ -600,24 +1357,9 @@ struct GenericHarnessTests {
             worldModel: HarnessWorldModel(),
             grantedPermissions: [.memory]
         )
-        let appSearch = await registry.execute(
-            HarnessToolCall(id: "app-search-call", name: "app.search", input: ["query": "calendar"]),
-            taskID: "task-tools",
-            worldModel: HarnessWorldModel(),
-            grantedPermissions: [.appLookup]
-        )
-        let open = await registry.execute(
-            HarnessToolCall(id: "app-open-call", name: "app.openOrFocus", input: ["targetID": "com.apple.iCal"]),
-            taskID: "task-tools",
-            worldModel: HarnessWorldModel(),
-            grantedPermissions: [.appControl]
-        )
 
         #expect(memory.status == .succeeded)
         #expect(memory.observations.facts["memory.retrieve.count"] == "1")
-        #expect(appSearch.metadata["targetIDs"] == "com.apple.iCal")
-        #expect(open.observations.focusedApp == "Calendar")
-        #expect(open.observations.facts["focusedApp.bundleIdentifier"] == "com.apple.iCal")
     }
 
     @Test
@@ -1072,8 +1814,9 @@ struct GenericHarnessTests {
             contentsOf: savedDirectory.appendingPathComponent("SKILL.md"),
             encoding: .utf8
         )
-        let profileData = try Data(contentsOf: savedDirectory.appendingPathComponent("app-profile.json"))
-        let profile = try JSONDecoder().decode(HarnessApplicationProfile.self, from: profileData)
+        let profile = try HarnessApplicationSkillPackWriter.loadProfile(
+            from: savedDirectory.appendingPathComponent("app-profile.json")
+        )
         let scriptSource = try String(
             contentsOf: savedDirectory.appendingPathComponent("scripts/focus-editor.applescript"),
             encoding: .utf8
@@ -1081,11 +1824,22 @@ struct GenericHarnessTests {
         let results = await skillRegistry.search(query: "DraftPad learned app")
 
         #expect(skillMarkdown.contains("DraftPad Learned Application"))
+        // The saved pack must name its app in `apps:` frontmatter so later sessions match it to
+        // DraftPad by display name or bundle id, exactly like a built-in pack.
+        #expect(skillMarkdown.contains("apps: DraftPad, com.example.DraftPad"))
         #expect(profile.observations.map(\.id) == ["main-editor", "file-menu"])
         #expect(profile.generatedScriptIDs == ["focus-editor"])
         #expect(scriptSource.contains("DraftPad"))
         #expect(results.first?.descriptor.id == "learned-draftpad")
         #expect(results.first?.descriptor.scripts.first?.validationStatus == .validated)
+        #expect(results.first?.descriptor.metadata["apps"]?.contains("DraftPad") == true)
+
+        // Cross-session discovery: a fresh filesystem source over the saved root re-discovers the
+        // pack with its app mapping intact — this is how learning compounds across sessions.
+        let rediscovered = HarnessSkillFileSystemSource(roots: [root], sourceKind: .userDirectory).discover()
+        let rediscoveredPack = try #require(rediscovered.first { $0.id == "learned-draftpad" })
+        #expect(rediscoveredPack.metadata["apps"]?.contains("com.example.DraftPad") == true)
+        #expect(rediscoveredPack.scripts.map(\.relativePath) == ["scripts/focus-editor.applescript"])
     }
 
     @Test
@@ -1366,7 +2120,7 @@ struct GenericHarnessTests {
             request: request,
             pointerTask: task,
             traceID: "trace-1",
-            availableToolNames: AppHarnessGenericLifecycleToolNames.localAppTools,
+            availableToolNames: ["screen.observe", "elements.get"],
             grantedPermissions: [.verification]
         )
 
@@ -1374,201 +2128,11 @@ struct GenericHarnessTests {
         #expect(prepared.thread.activeTaskIDs == [task.id])
         #expect(prepared.task.id == task.id)
         #expect(prepared.task.context.turn?.id == "turn-1")
-        #expect(prepared.task.context.availableToolNames == AppHarnessGenericLifecycleToolNames.localAppTools)
+        #expect(prepared.task.context.availableToolNames == ["screen.observe", "elements.get"])
         #expect(prepared.task.grantedPermissions == [.verification])
         #expect(prepared.compactedContext.events.map(\.id) == ["event-1"])
         #expect(prepared.compactedContext.assets.map(\.id) == ["asset-1"])
         #expect(prepared.compactedContext.promptText.contains("Current turn: open calendar"))
-    }
-
-    @Test
-    func userQueryLifecyclePlansLocalAppStepAndStopsForExecutorUserGate() async {
-        let store = InMemoryHarnessThreadStore()
-        let coordinator = HarnessTaskCoordinator()
-        let lifecycle = AppHarnessGenericLifecycle(threadStore: store, coordinator: coordinator)
-        let task = await coordinator.createTask(
-            id: "pointer-task-gate",
-            threadID: "thread-gate",
-            goal: "send a message",
-            grantedPermissions: [.verification]
-        )
-        let intent = TaskIntent(
-            intentID: "intent-1",
-            taskType: "local_app_interaction",
-            targetApp: LocalAppTarget(appName: "Messages"),
-            entities: ["recipient": "Alex"],
-            normalizedEntities: ["recipient": "Alex"],
-            confidence: 0.8,
-            parserSource: .onlineModel,
-            metadata: [
-                "genericHarness.planStepsJSON": """
-                [{"id":"enter-message","summary":"Enter the message.","toolName":"ui.setText","inputEntity":"message","controlID":"editor","focusKey":"","expectedObservation":"Message is entered."}]
-                """
-            ]
-        )
-        let resolution = LocalAppTaskCatalogResolution(
-            status: .needsConfirmation,
-            intent: intent,
-            metadata: ["reason": "missing message"]
-        )
-        _ = await lifecycle.planLocalTaskRun(
-            taskID: task.id,
-            resolution: resolution,
-            fallbackGoal: "send a message",
-            traceID: "trace-gate"
-        )
-        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
-        await registry.register(
-            HarnessTool(
-                descriptor: LocalAppHarnessStepExecutor.descriptors.first {
-                    $0.name == LocalAppActionPlanTool.setText.rawValue
-                }!
-            ) { context in
-                HarnessToolResult(
-                    callID: context.call.id,
-                    toolName: context.call.name,
-                    status: .waitingForUser,
-                    summary: "Need the message text.",
-                    question: "What should I send?"
-                )
-            }
-        )
-        let runtime = GenericHarnessRuntime(
-            coordinator: coordinator,
-            registry: registry
-        )
-
-        let result = await runtime.executeNextPlannedStep(taskID: task.id)
-
-        #expect(result?.stoppedForGate == true)
-        #expect(result?.task.status == .waitingForUser)
-        #expect(result?.task.pendingContinuation?.question == "What should I send?")
-        #expect(result?.task.pendingContinuation?.pendingToolCall?.name == LocalAppActionPlanTool.setText.rawValue)
-        #expect(result?.toolResult?.status == .waitingForUser)
-    }
-
-    @Test
-    func userQueryLifecyclePlansGenericSkillToolSteps() async throws {
-        let store = InMemoryHarnessThreadStore()
-        let coordinator = HarnessTaskCoordinator()
-        let lifecycle = AppHarnessGenericLifecycle(threadStore: store, coordinator: coordinator)
-        let task = await coordinator.createTask(
-            id: "skill-task",
-            threadID: "skill-thread",
-            goal: "play media"
-        )
-        let intent = TaskIntent(
-            intentID: "intent-skill-music",
-            taskType: "local_app_interaction",
-            targetApp: LocalAppTarget(appName: "Music"),
-            entities: [
-                "appName": "Music",
-                "goal": "play media",
-                "query": "Yellow Coldplay"
-            ],
-            normalizedEntities: [
-                "appName": "Music",
-                "goal": "play media",
-                "query": "Yellow Coldplay"
-            ],
-            confidence: 0.9,
-            parserSource: .onlineModel,
-            actionPlan: LocalAppActionPlan(tools: [], inputEntity: "query", focusKey: ""),
-            metadata: [
-                "genericHarness.schemaVersion": "generic_harness_planning",
-                "genericHarness.planStepsJSON": """
-                [{"id":"load-music-skill","summary":"Load the media skill.","toolName":"skill.load","inputEntity":"","controlID":"","focusKey":"","toolInputs":{"skillID":"music-media"},"expectedObservation":"Skill loaded."},{"id":"play-media","summary":"Run the validated script.","toolName":"skill.script.execute","inputEntity":"query","controlID":"","focusKey":"","toolInputs":{"skillID":"music-media","scriptID":"scripts-play-media-by-search"},"expectedObservation":"status=played"}]
-                """,
-                "genericHarness.verificationCriteriaJSON": #"["status=played"]"#,
-                "genericHarness.fallbacksJSON": #"["Ask for a different query."]"#
-            ]
-        )
-        let resolution = LocalAppTaskCatalogResolution(
-            status: .resolved,
-            intent: intent,
-            definition: LocalAppTaskCatalog.genericLocalAppInteractionDefinition(
-                target: LocalAppTarget(appName: "Music", bundleIdentifier: "com.apple.Music"),
-                plan: LocalAppActionPlan(tools: [], inputEntity: "query", focusKey: "")
-            )
-        )
-
-        let planned = await lifecycle.planLocalTaskRun(
-            taskID: task.id,
-            resolution: resolution,
-            fallbackGoal: "play music",
-            traceID: "trace-skill-plan",
-            availableToolNames: ["skill.load", "skill.script.execute"]
-        )
-
-        let steps = try #require(planned?.plan?.steps)
-        let calls = steps.compactMap(\.toolCall)
-        #expect(calls.map(\.name) == ["skill.load", "skill.script.execute"])
-        #expect(calls[0].input["skillID"] == "music-media")
-        #expect(calls[1].input["scriptID"] == "scripts-play-media-by-search")
-        #expect(calls[1].input["input"] == "Yellow Coldplay")
-    }
-
-    @Test
-    func userQueryLifecycleUsesHostedGenericPlanningMetadata() async {
-        let store = InMemoryHarnessThreadStore()
-        let coordinator = HarnessTaskCoordinator()
-        let lifecycle = AppHarnessGenericLifecycle(threadStore: store, coordinator: coordinator)
-        let task = await coordinator.createTask(
-            id: "pointer-task-hosted-plan",
-            threadID: "thread-hosted-plan",
-            goal: "open a site"
-        )
-        let intent = TaskIntent(
-            intentID: "intent-hosted-plan",
-            taskType: "local_app_interaction",
-            targetApp: LocalAppTarget(appName: "Safari"),
-            entities: ["query": "https://example.org"],
-            normalizedEntities: ["query": "https://example.org"],
-            confidence: 0.92,
-            parserSource: .onlineModel,
-            metadata: [
-                "genericHarness.schemaVersion": "generic_harness_planning",
-                "genericHarness.intent.goal": "open example.org in Safari",
-                "genericHarness.ambiguity.class": "safe",
-                "genericHarness.risk.level": "low",
-                "genericHarness.shouldAskBeforeActing": "false",
-                "genericHarness.missingInformationJSON": "[]",
-                "genericHarness.planStepsJSON": """
-                [{"controlID":"addressBar","expectedObservation":"Address bar is focused.","focusKey":"Command+L","id":"focus-address","inputEntity":"","summary":"Focus the browser address bar.","toolName":"ui.focusAddressBar"},{"controlID":"addressBar","expectedObservation":"Requested URL is entered.","focusKey":"","id":"enter-url","inputEntity":"query","summary":"Enter the requested URL.","toolName":"ui.setText"}]
-                """,
-                "genericHarness.verificationCriteriaJSON": #"["The requested website navigation is attempted."]"#,
-                "genericHarness.fallbacksJSON": #"["Ask before navigating if the URL is ambiguous."]"#,
-                "genericHarness.clarification.questionsJSON": #"["Which URL should I open?"]"#,
-                "genericHarness.clarification.policy": "Ask only if the requested URL is missing."
-            ]
-        )
-        let resolution = LocalAppTaskCatalogResolution(
-            status: .resolved,
-            intent: intent
-        )
-
-        _ = await lifecycle.planLocalTaskRun(
-            taskID: task.id,
-            resolution: resolution,
-            fallbackGoal: "open a site",
-            traceID: "trace-hosted-plan"
-        )
-        let planned = await coordinator.task(id: task.id)
-
-        #expect(planned?.intent?.goal == "open example.org in Safari")
-        #expect(planned?.intent?.riskLevel == .low)
-        #expect(planned?.plan?.steps.first?.id == "model-focus-address")
-        #expect(planned?.plan?.steps.first?.toolCall?.name == LocalAppActionPlanTool.focusAddressBar.rawValue)
-        #expect(planned?.plan?.steps.first?.metadata["toolName"] == "ui.focusAddressBar")
-        #expect(planned?.plan?.steps.contains { $0.id == "run-local-app-task" } == false)
-        #expect(planned?.plan?.successCriteria == ["The requested website navigation is attempted."])
-        #expect(planned?.plan?.fallbackPolicy == ["Ask before navigating if the URL is ambiguous."])
-        #expect(planned?.plan?.clarificationPolicy == [
-            "Which URL should I open?",
-            "Ask only if the requested URL is missing."
-        ])
-        #expect(planned?.plan?.metadata["modelPlan.schemaVersion"] == "generic_harness_planning")
-        #expect(planned?.plan?.metadata["modelPlan.stepCount"] == "2")
     }
 
     @Test
@@ -1586,7 +2150,7 @@ struct GenericHarnessTests {
             question: "What should I send?",
             pendingToolCall: HarnessToolCall(
                 id: "pending-run",
-                name: LocalAppActionPlanTool.setText.rawValue
+                name: "ui.setText"
             )
         )
         let pointerTask = UserQueryNotchTask(
@@ -1610,7 +2174,7 @@ struct GenericHarnessTests {
             request: request,
             pointerTask: pointerTask,
             traceID: "trace-answer",
-            availableToolNames: AppHarnessGenericLifecycleToolNames.localAppTools
+            availableToolNames: ["screen.observe", "elements.get"]
         )
 
         #expect(prepared.task.status == .resuming)
@@ -1674,35 +2238,6 @@ struct GenericHarnessTests {
         #expect(approved?.grantedPermissions == [.accessibility, .input])
         #expect(approved?.pendingContinuation == nil)
         #expect(reloaded?.grantedPermissions == [.accessibility, .input])
-    }
-
-    @Test
-    func userQueryLifecyclePlansRecoveryAsGenericToolStep() async {
-        let store = InMemoryHarnessThreadStore()
-        let coordinator = HarnessTaskCoordinator()
-        let lifecycle = AppHarnessGenericLifecycle(threadStore: store, coordinator: coordinator)
-        let task = await coordinator.createTask(
-            id: "pointer-task-recover",
-            threadID: "thread-recover",
-            goal: "open an app",
-            grantedPermissions: [.lifecycle]
-        )
-        _ = await lifecycle.planRecovery(
-            taskID: task.id,
-            reason: "App not found",
-            traceID: "trace-recover"
-        )
-        let runtime = GenericHarnessRuntime(
-            coordinator: coordinator,
-            registry: BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
-        )
-
-        let result = await runtime.executeNextPlannedStep(taskID: task.id)
-
-        #expect(result?.toolResult?.toolName == "run.recover")
-        #expect(result?.toolResult?.status == .succeeded)
-        #expect(result?.task.toolHistory.map(\.call.name) == ["run.recover"])
-        #expect(result?.task.plan?.metadata["planner"] == "genericHarnessUserQueryRecovery")
     }
 
     @Test

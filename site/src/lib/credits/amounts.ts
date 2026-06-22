@@ -1,5 +1,8 @@
 export const zeroCreditMicros = BigInt(0);
 export const creditMicrosPerCredit = BigInt("1000000");
+// $1 = 100 cents = 1,000,000 micros, so 1 cent = 10,000 micros. Single source for
+// the Stripe-cents conversion used by subscription allowances and off-session charges.
+export const creditMicrosPerCent = creditMicrosPerCredit / BigInt(100);
 
 export function creditStringToMicros(value: string | undefined) {
   const trimmed = value?.trim();

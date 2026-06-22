@@ -1,181 +1,79 @@
 "use client";
 
-import { ArrowRight } from "lucide-react";
-
 import {
   Headline,
   PillButton,
   TapedCard,
 } from "@/app/_components/landing/LandingPrimitives";
 import { GITHUB_REPO_URL, openSourceReasons } from "@/app/_components/landing/data";
-import { useMediaQuery } from "@/app/_components/landing/useMediaQuery";
-import { BLACK } from "@/app/_components/landing/theme";
 
 export function OpenSource() {
-  const isDesktop = useMediaQuery("(min-width: 768px)");
-
   return (
-    <section
-      style={{
-        padding: isDesktop ? "96px 48px" : "80px 24px",
-        maxWidth: 1400,
-        margin: "0 auto",
-      }}
-    >
+    <section className="mx-auto max-w-[1400px] px-6 py-20 md:px-12 md:py-24">
       <Headline>
-        Donkey is yours. <span style={{ fontStyle: "italic" }}>All of it.</span>
+        Donkey is yours. <span className="italic">All of it.</span>
       </Headline>
-      <p
-        style={{
-          marginTop: 24,
-          fontSize: 17,
-          lineHeight: 1.55,
-          maxWidth: 600,
-          color: "#454545",
-        }}
-      >
-        Donkey is built in the open. Read the source, run your own build,
-        contribute an agent: it is all on GitHub.
+      <p className="mt-6 max-w-[600px] text-[17px] leading-[1.55] text-[#454545]">
+        Donkey is built in the open. Read the source, host it yourself,
+        contribute and make it better.
       </p>
 
-      <div style={{ marginTop: 32 }}>
+      <div className="mt-8">
         <TapedCard color="cream" shadowColor="coral" tapeColor="coral">
-          <div style={{ padding: isDesktop ? 40 : 24 }}>
-            <div
-              style={{
-                background: BLACK,
-                borderRadius: 12,
-                padding: isDesktop ? "24px" : "20px 18px",
-                fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
-                fontSize: isDesktop ? 15 : 13,
-                color: "#fff",
-                overflowX: "auto",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  marginBottom: 16,
-                  color: "#888",
-                }}
-              >
-                <span
-                  style={{
-                    width: 10,
-                    height: 10,
-                    borderRadius: 999,
-                    background: "#FF5F57",
-                  }}
-                />
-                <span
-                  style={{
-                    width: 10,
-                    height: 10,
-                    borderRadius: 999,
-                    background: "#FEBC2E",
-                  }}
-                />
-                <span
-                  style={{
-                    width: 10,
-                    height: 10,
-                    borderRadius: 999,
-                    background: "#28C840",
-                  }}
-                />
-                <span style={{ marginLeft: 8, fontSize: 12 }}>
+          <div className="p-6 md:p-10">
+            <div className="overflow-x-auto rounded-xl bg-ink px-[18px] py-5 font-code text-[13px] text-white md:p-6 md:text-[15px]">
+              <div className="mb-4 flex items-center gap-2 text-[#888]">
+                <span className="h-[10px] w-[10px] rounded-full bg-[#FF5F57]" />
+                <span className="h-[10px] w-[10px] rounded-full bg-[#FEBC2E]" />
+                <span className="h-[10px] w-[10px] rounded-full bg-[#28C840]" />
+                <span className="ml-2 text-xs">
                   ~/ - DonkeyUseCorp/Donkey
                 </span>
               </div>
-              <div style={{ color: "#b7b7b7", whiteSpace: "nowrap" }}>
-                <span style={{ color: "#5FFFB9" }}>$</span> git clone{" "}
+              <div className="whitespace-nowrap text-[#b7b7b7]">
+                <span className="text-[#5FFFB9]">$</span> git clone{" "}
                 {GITHUB_REPO_URL}
               </div>
-              <div style={{ color: "#b7b7b7", marginTop: 4, whiteSpace: "nowrap" }}>
-                <span style={{ color: "#5FFFB9" }}>$</span> cd donkey && make
-                run
+              <div className="mt-3 text-[#6f6f6f]">
+                # Compile and run the macOS app
               </div>
-              <div style={{ color: "#5FFFB9", marginTop: 12 }}>
-                Donkey running locally - http://localhost:5005
+              <div className="mt-1 whitespace-nowrap text-[#b7b7b7]">
+                <span className="text-[#5FFFB9]">$</span> cd
+                Donkey/apps/Donkey && swift run Donkey
+              </div>
+              <div className="mt-3 text-[#6f6f6f]">
+                # Or run the server yourself
+              </div>
+              <div className="mt-1 whitespace-nowrap text-[#b7b7b7]">
+                <span className="text-[#5FFFB9]">$</span> cd Donkey/site &&
+                npm install && npm run dev
+              </div>
+              <div className="mt-3 text-[#5FFFB9]">
+                Server running - http://localhost:3000
               </div>
             </div>
 
-            <div
-              style={{
-                marginTop: 24,
-                display: "flex",
-                flexWrap: "wrap",
-                gap: 12,
-                alignItems: "center",
-              }}
-            >
-              <PillButton href={GITHUB_REPO_URL} variant="dark" size="md">
-                Star on GitHub <ArrowRight size={14} />
-              </PillButton>
-              <PillButton href="/prototype" variant="secondary" size="md">
-                View prototype
+            <div className="mt-6 flex flex-wrap items-center gap-3">
+              <PillButton href={GITHUB_REPO_URL} variant="secondary" size="md">
+                Star on GitHub
               </PillButton>
             </div>
           </div>
         </TapedCard>
       </div>
 
-      <div
-        style={{
-          marginTop: 24,
-          display: "grid",
-          gridTemplateColumns: isDesktop ? "1fr 1fr" : "1fr",
-          gap: 16,
-        }}
-      >
+      <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
         {openSourceReasons.map((reason) => (
           <TapedCard key={reason.title} color={reason.color} tapeColor="cream">
-            <div
-              style={{
-                padding: 24,
-                display: "flex",
-                alignItems: "flex-start",
-                gap: 16,
-              }}
-            >
-              <div
-                style={{
-                  width: 56,
-                  minWidth: 56,
-                  height: 48,
-                  borderRadius: 12,
-                  border: `2px solid ${BLACK}`,
-                  background: "#fff",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 12,
-                  fontWeight: 600,
-                }}
-              >
+            <div className="flex items-start gap-4 p-6">
+              <div className="flex h-12 w-14 min-w-14 items-center justify-center rounded-xl border-2 border-ink bg-white text-xs font-semibold">
                 {reason.icon}
               </div>
-              <div style={{ flex: 1 }}>
-                <h3
-                  style={{
-                    fontWeight: 600,
-                    fontSize: 22,
-                    lineHeight: 1.15,
-                    margin: "0 0 8px",
-                  }}
-                >
+              <div className="flex-1">
+                <h3 className="mb-2 text-[22px] font-semibold leading-[1.15]">
                   {reason.title}
                 </h3>
-                <p
-                  style={{
-                    fontSize: 14,
-                    lineHeight: 1.55,
-                    color: "#222",
-                    margin: 0,
-                  }}
-                >
+                <p className="text-sm leading-[1.55] text-[#222]">
                   {reason.body}
                 </p>
               </div>

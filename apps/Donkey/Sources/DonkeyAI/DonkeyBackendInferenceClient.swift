@@ -7,8 +7,42 @@ public enum DonkeyBackendInferenceClientError: Error, Equatable, Sendable {
     case invalidResponse
     case invalidURL(String)
     case httpStatus(Int, String)
+    /// The backend rejected the request as unauthenticated (HTTP 401). Distinct from `httpStatus` so
+    /// the app can surface re-login instead of a generic failure, keyed on a typed case (never the
+    /// response body text).
+    case authenticationRequired
+    /// The backend rejected the request for lack of credits (HTTP 402). Distinct from `httpStatus` so
+    /// the app surfaces a "buy credits" message instead of a generic failure. `balance` is the typed
+    /// balance from the JSON error body when present (decoded field, never matched from raw text).
+    case insufficientCredits(balance: String?)
     case missingDownloadPayload(String)
     case invalidBase64(String)
+}
+
+/// Shared, app-agnostic copy for the "out of credits" state. Centralized so every consumer (the step
+/// planner's fail-safe, the image generator, any future caller) surfaces one consistent message and
+/// the same billing destination rather than leaking a raw `httpStatus(402, …)` dump to the user.
+public enum DonkeyCreditExhaustion {
+    /// Where users top up. Shown in the message and used by any UI that opens the billing page.
+    public static let billingURLString = "https://donkeyuse.com/app/settings"
+
+    /// Whether a failure is the credit-exhausted state. A 402 reaches us two ways: the typed
+    /// `.insufficientCredits` from the normal request path, and a raw `.httpStatus(402, …)` when the
+    /// failure surfaces through a streaming error event that skips status-to-error mapping.
+    public static func isExhausted(_ error: Error) -> Bool {
+        switch error {
+        case DonkeyBackendInferenceClientError.insufficientCredits:
+            return true
+        case DonkeyBackendInferenceClientError.httpStatus(402, _):
+            return true
+        default:
+            return false
+        }
+    }
+
+    public static func userMessage() -> String {
+        "You're out of credits."
+    }
 }
 
 public struct DonkeyBackendInferenceConfiguration: Equatable, Sendable {
@@ -91,15 +125,61 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
     public var configuration: DonkeyBackendInferenceConfiguration
     public var httpClient: any AIHTTPClient
     public var fileManager: FileManager
+    /// Fired the moment the backend returns 401 on any request path, before any caller can swallow the
+    /// thrown error. The app uses it to flip into re-login while keeping the running task in place.
+    public var onAuthenticationRequired: (@Sendable () -> Void)?
+    /// Process-wide authority on whether the session is usable; defaults to the shared instance the auth
+    /// coordinator drives. Injectable so tests exercise the signed-out short-circuit without mutating
+    /// global state (the test suite runs in parallel).
+    public var sessionGate: BackendSessionGate
 
     public init(
         configuration: DonkeyBackendInferenceConfiguration,
         httpClient: any AIHTTPClient = URLSessionAIHTTPClient(),
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        onAuthenticationRequired: (@Sendable () -> Void)? = nil,
+        sessionGate: BackendSessionGate = .shared
     ) {
         self.configuration = configuration
         self.httpClient = httpClient
         self.fileManager = fileManager
+        self.onAuthenticationRequired = onAuthenticationRequired
+        self.sessionGate = sessionGate
+    }
+
+    /// Maps a non-2xx status into the right typed error. A 401 fires `onAuthenticationRequired` and
+    /// returns the distinct `.authenticationRequired` case so every request path surfaces an expired
+    /// session the same way; other statuses keep the body message for the planner to read.
+    private func httpError(statusCode: Int, message: @autoclosure () -> String) -> DonkeyBackendInferenceClientError {
+        if statusCode == 401 {
+            onAuthenticationRequired?()
+            return .authenticationRequired
+        }
+        let body = message()
+        // Every 402 from this backend is a credits problem (insufficient balance or a configured
+        // spend limit). Map it to the typed case so callers surface "buy credits" instead of a raw
+        // status dump; the balance is read from the decoded JSON field, never matched from raw text.
+        if statusCode == 402 {
+            return .insufficientCredits(balance: Self.creditBalance(fromBody: body))
+        }
+        return .httpStatus(statusCode, body)
+    }
+
+    /// Pulls the `balance` from a 402 JSON error body, e.g. {"error":"insufficient_credits","balance":"0"}.
+    /// Returns nil for any non-JSON or balance-less body. Decodes the field; does not pattern-match text.
+    private static func creditBalance(fromBody body: String) -> String? {
+        guard let data = body.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return nil
+        }
+        if let balance = object["balance"] as? String {
+            return balance
+        }
+        if let balance = object["balance"] as? NSNumber {
+            return balance.stringValue
+        }
+        return nil
     }
 
     public func listModels(
@@ -151,6 +231,54 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
         return try JSONDecoder().decode(RemoteInferenceJSONValue.self, from: data)
     }
 
+    /// Web search via the backend's Google Search grounding (service-account credentials stay on the
+    /// server; no key in the app). Returns a grounded summary and the source pages it used.
+    public func searchWeb(query: String) async throws -> RemoteWebSearchResult {
+        var request = makeRequest(path: "/api/web/search/")
+        request.httpMethod = "POST"
+        request.httpBody = try JSONEncoder().encode(["query": query])
+        let data = try await send(request)
+        return try JSONDecoder().decode(RemoteWebSearchResult.self, from: data)
+    }
+
+    /// Read a web page through the backend's reader (SSRF-guarded, fetch + cleanup run server-side).
+    /// Returns just the main content as clean markdown — nav/ads/boilerplate stripped — plus the title.
+    public func fetchWeb(url: String) async throws -> RemoteWebFetchResult {
+        var request = makeRequest(path: "/api/web/fetch/")
+        request.httpMethod = "POST"
+        // The backend caps its own fetch at 20s; give the round trip a little headroom over that.
+        request.timeoutInterval = 30
+        request.httpBody = try JSONEncoder().encode(["url": url])
+        let data = try await send(request)
+        return try JSONDecoder().decode(RemoteWebFetchResult.self, from: data)
+    }
+
+    /// Start a Browser Use Cloud agent task through the backend. Returns immediately with our task id;
+    /// poll `pollBrowserRun` for status and result. The backend owns the API key and credit charge.
+    /// Run an agentic browser task and wait for its result. The backend runs it to completion
+    /// (it polls Browser Use server-side) and charges credits there, so this is a single blocking
+    /// call — no client-side polling. Structured output, when requested, comes back as a JSON string.
+    public func runBrowserTask(
+        task: String,
+        startURL: String?,
+        structuredOutputSchemaJSON: String?
+    ) async throws -> RemoteBrowserRunStatus {
+        var request = makeRequest(path: "/api/browser/run/")
+        request.httpMethod = "POST"
+        // The backend runs the task to completion before responding; allow a long round trip.
+        request.timeoutInterval = 300
+        var body: [String: Any] = ["task": task]
+        if let startURL { body["startUrl"] = startURL }
+        if let schema = structuredOutputSchemaJSON,
+           let schemaData = schema.data(using: .utf8),
+           let schemaObject = try? JSONSerialization.jsonObject(with: schemaData) {
+            body["structuredOutputSchema"] = schemaObject
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let data = try await send(request)
+        return try JSONDecoder().decode(RemoteBrowserRunStatus.self, from: data)
+    }
+
     public func parseScreenshot(
         _ understandingRequest: LocalUIUnderstandingRequest,
         imageData: Data? = nil,
@@ -180,15 +308,16 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
         )
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
 
+        try ensureSessionUsable()
         let (lines, response) = try await httpClient.streamLines(request)
         var responseBodyLines: [String] = []
         guard (200..<300).contains(response.statusCode) else {
             for try await line in lines {
                 responseBodyLines.append(line)
             }
-            throw DonkeyBackendInferenceClientError.httpStatus(
-                response.statusCode,
-                responseBodyLines.joined(separator: "\n")
+            throw httpError(
+                statusCode: response.statusCode,
+                message: responseBodyLines.joined(separator: "\n")
             )
         }
 
@@ -278,7 +407,7 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
         imageData: Data,
         options: RemoteVisionParseOptions? = nil
     ) async throws -> RemoteVisionParseResponse {
-        var request = makeRequest(path: "/api/inference/vision")
+        var request = makeRequest(path: "/api/vision")
         request.httpMethod = "POST"
         // OmniParser on a cold/slow RunPod worker can take ~60s, which sits right
         // on URLSession's default 60s request timeout. Give the parse room to land
@@ -323,6 +452,56 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
         body.stream = true
         request.httpBody = try JSONEncoder().encode(body)
         return request
+    }
+
+    /// Stream a chat completion, delivering each text delta to `onDelta` as it arrives and returning
+    /// the full accumulated text. The route emits OpenAI-style SSE chunks — `data:` lines whose
+    /// `choices[0].delta.content` is the next piece — ending with a `[DONE]` sentinel; a terminal
+    /// `event: error` ends the stream with whatever text arrived so far. Mirrors `parseScreenshotStream`'s
+    /// SSE handling (auth pre-flight, status check, line parsing). Used to stream the notch's final reply.
+    public func streamChat(
+        _ completionRequest: RemoteInferenceChatCompletionRequest,
+        onDelta: @escaping @MainActor @Sendable (String) -> Void
+    ) async throws -> String {
+        var request = try makeStreamingChatRequest(completionRequest)
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+
+        try ensureSessionUsable()
+        let (lines, response) = try await httpClient.streamLines(request)
+        guard (200..<300).contains(response.statusCode) else {
+            var bodyLines: [String] = []
+            for try await line in lines {
+                bodyLines.append(line)
+            }
+            throw httpError(
+                statusCode: response.statusCode,
+                message: bodyLines.joined(separator: "\n")
+            )
+        }
+
+        var accumulated = ""
+        for try await line in lines {
+            guard line.hasPrefix("data:") else { continue }
+            let payload = String(line.dropFirst("data:".count)).trimmingCharacters(in: .whitespaces)
+            guard !payload.isEmpty else { continue }
+            if payload == "[DONE]" { break }
+            guard let piece = Self.chatStreamDeltaText(payload), !piece.isEmpty else { continue }
+            accumulated += piece
+            await onDelta(piece)
+        }
+        return accumulated
+    }
+
+    /// Extracts `choices[0].delta.content` from one OpenAI-style streamed chat chunk. Returns nil for a
+    /// chunk that carries no text delta (role-only opener, finish marker) so the caller skips it.
+    static func chatStreamDeltaText(_ jsonLine: String) -> String? {
+        guard let data = jsonLine.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choices = object["choices"] as? [[String: Any]],
+              let delta = choices.first?["delta"] as? [String: Any] else {
+            return nil
+        }
+        return delta["content"] as? String
     }
 
     public func createAssetGeneration(
@@ -383,6 +562,33 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
         }
 
         return downloads
+    }
+
+    /// Decode and write a set of generation outputs FLAT into `directory` (no per-generation nesting),
+    /// returning the written file paths. Each output's backend-supplied filename is sanitized and made
+    /// unique within the batch (collision-suffixed); an output that can't be decoded/fetched is skipped
+    /// rather than aborting the rest. Shared with the image tool so both decode + name + write the same
+    /// way (the image tool just resolves its own destination and default filenames).
+    public func writeOutputsFlat(
+        _ outputs: [RemoteInferenceOutputRef],
+        to directory: URL,
+        defaultFilename: (Int, RemoteInferenceOutputRef) -> String
+    ) async -> [String] {
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        var saved: [String] = []
+        var usedFilenames = Set<String>()
+        for (index, output) in outputs.enumerated() {
+            guard let payload = try? await downloadPayload(for: output) else { continue }
+            let filename = uniqueFilename(
+                preferred: output.filename ?? defaultFilename(index, output),
+                used: &usedFilenames
+            )
+            let fileURL = directory.appendingPathComponent(filename, isDirectory: false)
+            if (try? payload.data.write(to: fileURL, options: [.atomic])) != nil {
+                saved.append(fileURL.path)
+            }
+        }
+        return saved
     }
 
     public static func decodeServerSentEvents(_ data: Data) -> [RemoteInferenceServerSentEvent] {
@@ -496,11 +702,23 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
     }
 
 
+    /// Refuse a request the moment the session is known to be signed out, before any network round
+    /// trip. This is the single chokepoint that stops every always-on loop (Live token mint, vision
+    /// warm cache, planner steps, catalog refresh) from spraying guaranteed-401 calls at the backend
+    /// while logged out — they get the same typed `.authenticationRequired` they'd get from a real 401,
+    /// just instantly and for free. The dev-auth bypass is always treated as authenticated.
+    private func ensureSessionUsable() throws {
+        guard !configuration.devAuthBypass,
+              !sessionGate.isAuthenticated else { return }
+        throw DonkeyBackendInferenceClientError.authenticationRequired
+    }
+
     private func send(_ request: URLRequest) async throws -> Data {
+        try ensureSessionUsable()
         let (data, response) = try await httpClient.send(request)
         guard (200..<300).contains(response.statusCode) else {
             let message = String(data: data, encoding: .utf8) ?? HTTPURLResponse.localizedString(forStatusCode: response.statusCode)
-            throw DonkeyBackendInferenceClientError.httpStatus(response.statusCode, message)
+            throw httpError(statusCode: response.statusCode, message: message)
         }
         return data
     }
@@ -525,7 +743,7 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
         request.httpShouldHandleCookies = true
         let (data, response) = try await httpClient.send(request)
         guard (200..<300).contains(response.statusCode) else {
-            throw DonkeyBackendInferenceClientError.httpStatus(response.statusCode, String(data: data, encoding: .utf8) ?? "")
+            throw httpError(statusCode: response.statusCode, message: String(data: data, encoding: .utf8) ?? "")
         }
         return (data, response.value(forHTTPHeaderField: "Content-Type") ?? output.contentType ?? "application/octet-stream")
     }
@@ -625,6 +843,15 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
     }
 
     private func sanitizedFilename(_ value: String) -> String {
+        AssetFilenameSanitizer.sanitized(value)
+    }
+}
+
+/// Strips path separators and other filesystem-unsafe characters from a backend-supplied filename
+/// (replacing them with `-`) so it can never escape the output directory. Shared by the backend
+/// download path and the image tool so both sanitize the same way.
+enum AssetFilenameSanitizer {
+    static func sanitized(_ value: String) -> String {
         let disallowed = CharacterSet(charactersIn: "/\\?%*:|\"<>")
         let cleaned = value
             .components(separatedBy: disallowed)

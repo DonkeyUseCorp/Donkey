@@ -324,6 +324,13 @@ public struct HarnessApplicationSkillPackWriter: Sendable {
             .appendingPathComponent("LearnedApplications", isDirectory: true)
     }
 
+    /// Decodes a profile `save` wrote (`app-profile.json`), matching its iso8601 date encoding.
+    public static func loadProfile(from url: URL) throws -> HarnessApplicationProfile {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(HarnessApplicationProfile.self, from: Data(contentsOf: url))
+    }
+
     public func save(
         profile: HarnessApplicationProfile,
         scripts: [HarnessGeneratedScriptArtifact] = []
@@ -414,6 +421,9 @@ public struct HarnessApplicationSkillPackWriter: Sendable {
             metadata: [
                 "appName": profile.appName,
                 "bundleIdentifier": profile.bundleIdentifier ?? "",
+                "apps": [profile.appName, profile.bundleIdentifier ?? ""]
+                    .filter { !$0.isEmpty }
+                    .joined(separator: ", "),
                 "directory": skillDirectory.path,
                 "source": "applicationLearning"
             ]
@@ -455,11 +465,15 @@ public struct HarnessApplicationSkillPackWriter: Sendable {
             .map { "- \($0.id): \($0.metadata["purpose"] ?? $0.id)" }
             .joined(separator: "\n")
 
+        let apps = [profile.appName, profile.bundleIdentifier ?? ""]
+            .filter { !$0.isEmpty }
+            .joined(separator: ", ")
         return """
         # \(profile.appName) Learned Application
         id: \(skillID)
         description: Learned surfaces and safe workflows for \(profile.appName).
         tags: application-learning, learned-app, \(sanitizedSlug(profile.appName))
+        apps: \(apps)
         tools: screen.observe, elements.get, element.perform, state.verify
 
         Use this skill when operating \(profile.appName) or a compatible app surface.

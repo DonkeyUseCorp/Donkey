@@ -439,23 +439,6 @@ public final class SQLiteAgentMemoryStore: @unchecked Sendable {
         }
     }
 
-    public func prewarmTaskDefinitions(_ definitions: [LocalAppTaskDefinition]) {
-        for definition in definitions {
-            try? upsert(Self.record(taskDefinition: definition))
-        }
-    }
-
-    public func taskDefinitions() -> [LocalAppTaskDefinition] {
-        (try? records(scope: .global, kinds: [.taskDefinition], now: Self.now()))?
-            .compactMap(Self.taskDefinition(from:))
-            .sorted { lhs, rhs in
-                if lhs.taskType == rhs.taskType {
-                    return lhs.targetApp.appName < rhs.targetApp.appName
-                }
-                return lhs.taskType < rhs.taskType
-            } ?? []
-    }
-
     public func record(
         availability: LocalAppAvailability,
         query: String,
@@ -529,7 +512,7 @@ public final class SQLiteAgentMemoryStore: @unchecked Sendable {
         let results = (try? search(query: AgentMemoryQuery(
             text: query,
             scope: .global,
-            kinds: [.localItem, .negativeLookup, .taskDefinition],
+            kinds: [.localItem, .negativeLookup],
             budget: AgentMemoryRetrievalBudget(maxRecords: limit, maxPromptCharacters: 1_600, minRelevance: 0.05)
         ))) ?? []
 
@@ -970,56 +953,6 @@ public final class SQLiteAgentMemoryStore: @unchecked Sendable {
         )
     }
 
-    private static func record(taskDefinition definition: LocalAppTaskDefinition) -> AgentMemoryRecord {
-        let entityText = definition.entityRules.map(\.name).joined(separator: " ")
-        let workflowText = definition.workflowSteps
-            .flatMap { step in [step.id, step.role.rawValue, step.summary] + step.metadata.flatMap { [$0.key, $0.value] } }
-            .joined(separator: " ")
-        let displayTitle = displayTitle(for: definition)
-        var metadata = definition.metadata
-        metadata["taskType"] = definition.taskType
-        metadata["targetApp"] = definition.targetApp.appName
-        metadata["bundleIdentifier"] = definition.targetApp.bundleIdentifier ?? ""
-        metadata["entityNames"] = definition.entityRules.map(\.name).joined(separator: ",")
-        metadata["observationStrategies"] = definition.observationStrategies.map(\.rawValue).joined(separator: ",")
-        metadata["verificationEntityName"] = definition.verificationEntityName ?? ""
-        metadata["displayTitle"] = displayTitle
-        metadata["taskText"] = "\(definition.taskType) \(entityText) \(workflowText)"
-        metadata["targetAppTitle"] = definition.targetApp.titleContains ?? definition.targetApp.appName
-        if let encodedDefinition = encodedTaskDefinition(definition) {
-            metadata[taskDefinitionJSONMetadataKey] = encodedDefinition
-        }
-
-        return AgentMemoryRecord(
-            id: "task-definition:\(definition.taskType)",
-            scope: .global,
-            kind: .taskDefinition,
-            value: displayTitle,
-            createdAt: now(),
-            durable: true,
-            source: AgentMemorySource(summary: "task-definition-prewarm"),
-            metadata: metadata,
-            confidence: 1,
-            useCount: 1
-        )
-    }
-
-    private static func taskDefinition(from record: AgentMemoryRecord) -> LocalAppTaskDefinition? {
-        guard let encodedDefinition = record.metadata[taskDefinitionJSONMetadataKey],
-              let data = encodedDefinition.data(using: .utf8)
-        else {
-            return nil
-        }
-        return try? JSONDecoder().decode(LocalAppTaskDefinition.self, from: data)
-    }
-
-    private static func encodedTaskDefinition(_ definition: LocalAppTaskDefinition) -> String? {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        guard let data = try? encoder.encode(definition) else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
     private static func localItemID(
         kind: String,
         path: String?,
@@ -1052,7 +985,6 @@ public final class SQLiteAgentMemoryStore: @unchecked Sendable {
                 record.value,
                 record.source.summary
             ] + record.metadata
-                .filter { $0.key != taskDefinitionJSONMetadataKey }
                 .sorted { $0.key < $1.key }
                 .flatMap { [$0.key, $0.value] }
         )
@@ -1070,18 +1002,8 @@ public final class SQLiteAgentMemoryStore: @unchecked Sendable {
         return url.lastPathComponent
     }
 
-    private static func displayTitle(for definition: LocalAppTaskDefinition) -> String {
-        if let displayTitle = definition.metadata["displayTitle"], !displayTitle.isEmpty {
-            return displayTitle
-        }
-        return definition.taskType
-            .split(separator: "_")
-            .map { word in word.prefix(1).uppercased() + word.dropFirst() }
-            .joined(separator: " ")
-    }
-
     private static func exactLocalItemScore(record: AgentMemoryRecord, query: String) -> Double {
-        guard [.localItem, .negativeLookup, .taskDefinition].contains(record.kind) else { return 0 }
+        guard [.localItem, .negativeLookup].contains(record.kind) else { return 0 }
         let normalizedDisplayName = record.metadata[localNormalizedDisplayNameKey]
             ?? LocalAppLookup.normalized(record.value)
         let normalizedQuery = record.metadata[localNormalizedQueryKey]
@@ -1230,7 +1152,6 @@ public final class SQLiteAgentMemoryStore: @unchecked Sendable {
     private static let localAvailableKey = "agentMemory.local.available"
     private static let localSourceKey = "agentMemory.local.source"
     private static let localMatchKey = "agentMemory.local.match"
-    private static let taskDefinitionJSONMetadataKey = "taskDefinitionJSON"
 }
 
 private enum SQLValue {

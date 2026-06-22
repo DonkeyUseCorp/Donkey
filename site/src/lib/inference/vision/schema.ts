@@ -1,17 +1,22 @@
 import { z } from "zod";
 
-// Public B2B vision API contract for POST /api/inference/vision.
+import { geminiModels, geminiModelRoles } from "@/lib/inference/gemini-models";
+
+// Public B2B vision API contract for POST /api/vision.
 //
 // Two stages: parse a screenshot into UI elements (always), and optionally
 // ground a natural-language instruction ("click the play button") to a click
 // target using an LLM. Coordinates are pixels relative to the uploaded image,
 // origin top-left.
 
-// Allow-list of grounding models. Extend deliberately — each must be wired in
-// vision/grounding.ts.
-export const supportedVisionModels = ["gemini-2.5-flash"] as const;
+// Allow-list of grounding models, sourced from the central Gemini registry.
+// Extend deliberately — each must be wired in vision/grounding.ts.
+export const supportedVisionModels = [
+  geminiModels.flash,
+  geminiModels.flashLite,
+] as const;
 export type VisionModel = (typeof supportedVisionModels)[number];
-export const defaultVisionModel: VisionModel = "gemini-2.5-flash";
+export const defaultVisionModel: VisionModel = geminiModelRoles.visionGrounding;
 
 export const visionParseOptionsSchema = z.object({
   boxThreshold: z.number().min(0).max(1).optional(),

@@ -6,7 +6,7 @@ APP_DIR="$ROOT_DIR/apps/Donkey"
 LOG_SCRIPT="$ROOT_DIR/scripts/tail-donkey-logs.sh"
 BUILD_PRODUCTS_DIR="$APP_DIR/.build/debug"
 DONKEY_BIN="$BUILD_PRODUCTS_DIR/Donkey"
-DEV_BUNDLE_IDENTIFIER="${DONKEY_DEV_BUNDLE_IDENTIFIER:-ai.donkey.Donkey.dev}"
+DEV_BUNDLE_IDENTIFIER="${DONKEY_DEV_BUNDLE_IDENTIFIER:-com.donkeyuse.Donkey.dev}"
 DEV_DISPLAY_NAME="${DONKEY_DEV_DISPLAY_NAME:-Donkey Dev}"
 DEV_EXECUTABLE_NAME="${DONKEY_DEV_EXECUTABLE_NAME:-$DEV_DISPLAY_NAME}"
 DEV_APP_DIR="$BUILD_PRODUCTS_DIR/$DEV_DISPLAY_NAME.app"
@@ -29,14 +29,11 @@ LOG_PID=""
 
 export DONKEY_WEB_BASE_URL="${DONKEY_WEB_BASE_URL:-http://localhost:3000}"
 
-# When pointing at a local site, default to dev auth bypass so hosted inference
-# (screenshot parse, vision) authenticates without an in-app login. An explicit
-# DONKEY_DEV_AUTH_BYPASS value (including 0) is always respected.
-case "$DONKEY_WEB_BASE_URL" in
-  http://localhost|http://localhost:*|http://127.0.0.1|http://127.0.0.1:*|http://[::1]|http://[::1]:*)
-    export DONKEY_DEV_AUTH_BYPASS="${DONKEY_DEV_AUTH_BYPASS:-1}"
-    ;;
-esac
+# The app authenticates hosted inference with a real signed-in session: launch
+# it, sign in through Google, and the native session cookie carries the auth.
+# Dev auth bypass is intentionally NOT enabled here. It exists only for scripts
+# that hit the API directly (e.g. the GeminiLive smoke tests, which set
+# DONKEY_DEV_AUTH_BYPASS=1 themselves), not for normal app usage.
 
 stop_running_donkey_apps() {
   killall Donkey >/dev/null 2>&1 || true
@@ -50,6 +47,45 @@ stop_running_donkey_apps() {
     pkill -f '/Donkey Dev\.app/Contents/MacOS/Donkey([[:space:]]|$)' >/dev/null 2>&1 || true
     pkill -f '/Donkey Dev\.app/Contents/MacOS/Donkey Dev([[:space:]]|$)' >/dev/null 2>&1 || true
   fi
+}
+
+# Eject mounted Donkey disk images and drop every other app bundle claiming the donkey:
+# URL scheme from LaunchServices, leaving only this dev build. Each packaged DMG mount and
+# every rebuilt copy registers itself as a donkey:// handler, so without this the OAuth
+# callback (donkey://auth/callback) can get routed to a leftover release copy with a
+# different bundle id — a different UserDefaults, so the saved sign-in state never matches
+# and the running dev notch never receives the callback. The dev app re-registers itself in
+# create_debug_app_bundle, so it stays the sole handler.
+purge_other_donkey_installs() {
+  if command -v hdiutil >/dev/null 2>&1; then
+    local volume
+    for volume in /Volumes/Donkey*; do
+      [ -d "$volume" ] || continue
+      echo "Ejecting $volume ..."
+      hdiutil detach "$volume" -quiet >/dev/null 2>&1 ||
+        hdiutil detach "$volume" -force -quiet >/dev/null 2>&1 || true
+    done
+  fi
+
+  [ -x "$LSREGISTER" ] || return 0
+
+  local claimant
+  while IFS= read -r claimant; do
+    [ -z "$claimant" ] && continue
+    [ "$claimant" = "$DEV_APP_DIR" ] && continue
+    echo "Unregistering stale donkey:// handler: $claimant"
+    "$LSREGISTER" -u "$claimant" >/dev/null 2>&1 || true
+  done < <(
+    "$LSREGISTER" -dump 2>/dev/null | awk -v scheme="$AUTH_CALLBACK_SCHEME" '
+      /^[ \t]*path:/ {
+        line = $0
+        sub(/^[ \t]*path:[ \t]*/, "", line)
+        sub(/ \(0x[0-9a-f]+\)[ \t]*$/, "", line)
+        p = line
+      }
+      $0 ~ ("claimed schemes:.*" scheme ":") { print p }
+    ' | sort -u
+  )
 }
 
 cleanup_child_processes() {
@@ -133,16 +169,7 @@ import sys
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
     config = json.load(handle)
 
-print(
-    "enabled={enabled} mode={mode} cadenceSeconds={cadence} "
-    "screenScope={scope} minConfidence={confidence}".format(
-        enabled=config.get("enabled", False),
-        mode=config.get("mode", "donkeyVision"),
-        cadence=config.get("cadenceSeconds", 1.0),
-        scope=config.get("screenScope", "main"),
-        confidence=config.get("minConfidence", 0.25),
-    )
-)
+print("enabled={enabled}".format(enabled=config.get("enabled", False)))
 PY
   )"
 
@@ -260,6 +287,60 @@ resolve_codesign_identity() {
   printf '%s\n' "-"
 }
 
+# Xcode-issued "Apple Development" certs chain through Apple's WWDR G3 intermediate. The old G3
+# intermediate expired in Feb 2023; a keychain that holds only the expired copy makes codesign
+# unable to build a chain, which silently drops signing to ad-hoc and breaks the TCC screen-
+# recording grant across rebuilds. Make sure a current intermediate is present before we resolve
+# an identity, since `find-identity -v` reports the cert as invalid until the chain is whole.
+ensure_apple_wwdr_intermediate() {
+  # Only relevant when a real Apple Development cert exists and ad-hoc isn't forced; pure ad-hoc
+  # dev needs no chain.
+  [ "${DONKEY_CODESIGN_IDENTITY:-}" = "-" ] && return
+  command -v security >/dev/null 2>&1 || return
+  security find-identity -p codesigning 2>/dev/null | grep -q "Apple Development" || return
+
+  if wwdr_intermediate_is_current; then
+    return
+  fi
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "Warning: missing the current Apple WWDR intermediate and curl is unavailable; signing may fall back to ad-hoc." >&2
+    return
+  fi
+
+  echo "Installing the current Apple WWDR intermediate (the cached one is missing or expired)..."
+  local tmp
+  tmp="$(mktemp -t AppleWWDRCAG3.XXXXXX)" || return
+  if curl -fsSL -o "$tmp" "https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer"; then
+    security import "$tmp" -k "$HOME/Library/Keychains/login.keychain-db" >/dev/null 2>&1 || true
+  else
+    echo "Warning: could not download the Apple WWDR intermediate; signing may fall back to ad-hoc." >&2
+  fi
+  rm -f "$tmp"
+}
+
+# True when the keychain holds at least one non-expired WWDR intermediate.
+wwdr_intermediate_is_current() {
+  command -v openssl >/dev/null 2>&1 || return 1
+  local dir cert result
+  dir="$(mktemp -d)" || return 1
+  security find-certificate -a -c "Worldwide Developer Relations" -p 2>/dev/null |
+    awk -v d="$dir" '
+      /BEGIN CERTIFICATE/ { n++; f = d "/c" n ".pem" }
+      n { print > f }
+    '
+  result=1
+  for cert in "$dir"/c*.pem; do
+    [ -e "$cert" ] || continue
+    if openssl x509 -in "$cert" -checkend 0 >/dev/null 2>&1; then
+      result=0
+      break
+    fi
+  done
+  rm -rf "$dir"
+  return $result
+}
+
 prepare_app_icon() {
   local destination="$RESOURCES_DIR/Donkey.icns"
 
@@ -335,6 +416,8 @@ write_info_plist() {
   </array>
   <key>NSMicrophoneUsageDescription</key>
   <string>Donkey uses the microphone for user-requested voice input.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Donkey transcribes your voice input on-device to turn it into a command.</string>
   <key>NSScreenCaptureUsageDescription</key>
   <string>Donkey captures bounded screenshots for user-requested app context.</string>
   <key>NSAppleEventsUsageDescription</key>
@@ -345,6 +428,8 @@ write_info_plist() {
   <string>Donkey may search Documents files only when you ask it to find or open a local item.</string>
   <key>NSDownloadsFolderUsageDescription</key>
   <string>Donkey may search Downloads files only when you ask it to find or open a local item.</string>
+  <key>NSAppleMusicUsageDescription</key>
+  <string>Donkey plays Apple Music natively when you ask for music.</string>
 </dict>
 </plist>
 PLIST
@@ -384,6 +469,7 @@ create_debug_app_bundle() {
   write_info_plist
 
   if command -v codesign >/dev/null 2>&1; then
+    ensure_apple_wwdr_intermediate
     codesign_identity="$(resolve_codesign_identity)"
     if [ "$codesign_identity" = "-" ]; then
       echo "Signing debug app ad-hoc with a stable dev requirement."
@@ -430,6 +516,11 @@ if [ "${DONKEY_STOP_APPS_BEFORE_BUILD:-1}" = "1" ]; then
   stop_running_donkey_apps
 fi
 
+if [ "${DONKEY_PURGE_OTHER_INSTALLS:-1}" = "1" ]; then
+  echo "Ejecting Donkey volumes and clearing stale donkey:// handlers..."
+  purge_other_donkey_installs
+fi
+
 cd "$APP_DIR"
 
 echo "Building Donkey..."
@@ -451,6 +542,8 @@ fi
 
 echo "Starting Donkey..."
 print_dev_overlay_status
-echo "Hosted inference auth: dev-bypass=${DONKEY_DEV_AUTH_BYPASS:-0} baseURL=$DONKEY_WEB_BASE_URL"
+if [ "${DONKEY_DEV_AUTH_BYPASS:-0}" != "0" ]; then
+  echo "Hosted inference auth: DEV BYPASS ON (no login) baseURL=$DONKEY_WEB_BASE_URL"
+fi
 start_logger
 open -W -n "$DEV_APP_DIR"

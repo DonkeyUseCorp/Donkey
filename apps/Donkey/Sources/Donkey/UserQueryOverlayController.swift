@@ -34,12 +34,13 @@ final class UserQueryOverlayController {
     // are cancelled in order instead of racing into a stale animation origin.
     private var statusHoverPhase: StatusHoverPhase = .collapsed
     private var statusCollapseWorkItem: DispatchWorkItem?
-    private var statusExpansionWorkItem: DispatchWorkItem?
     private var statusHostShrinkWorkItem: DispatchWorkItem?
     private var spawnDesktopEmergeWorkItems: [String: DispatchWorkItem] = [:]
     private var hasPrewarmedInputPanel = false
-    private var hasPrewarmedStatusPanelExpansion = false
     private var lastStatusViewSnapshot: StatusPanelViewSnapshot?
+    /// Memoizes the measured chin-band height by (chin text + width) so the per-frame `notchMetrics()`
+    /// doesn't redo Core Text layout when the surfaced chin text hasn't changed.
+    private var chinHeightCache: (key: String, height: CGFloat)?
 
     init(
         model: UserQueryOverlayModel,
@@ -83,7 +84,6 @@ final class UserQueryOverlayController {
         self.inputPanel = inputPanel
         self.statusPanel = statusPanel
         prewarmInputPanel()
-        prewarmStatusPanelExpansion()
         startActivationMonitoring()
         startAppDeactivationMonitoring()
         positionStatusPanel()
@@ -105,6 +105,10 @@ final class UserQueryOverlayController {
                 }
             )
         )
+        // The controller positions and sizes this panel itself; stop the hosting view from also bridging
+        // its SwiftUI content size to the window, which re-enters layout mid display-cycle and throws an
+        // uncaught AppKit exception (see the spawn overlay).
+        hostingView.sizingOptions = []
         hostingView.frame = CGRect(origin: .zero, size: size)
         hostingView.autoresizingMask = [.width, .height]
         hostingView.wantsLayer = true
@@ -153,6 +157,11 @@ final class UserQueryOverlayController {
     private func makeStatusPanel() -> NSPanel {
         let metrics = notchMetrics()
         let hostingView = UserQueryHostingView(rootView: notchStatusView(metrics: metrics))
+        // The notch status panel is resized explicitly on every step (narration updates, expand/collapse
+        // animations). Letting the hosting view ALSO animate the window size from content re-enters layout
+        // during the display cycle and crashes the app (uncaught AppKit exception) — the exact failure seen
+        // while driving a vision step. Empty sizingOptions makes our explicit frame the only sizing path.
+        hostingView.sizingOptions = []
         hostingView.frame = CGRect(origin: .zero, size: metrics.surfaceSize)
         hostingView.autoresizingMask = [.width, .height]
         hostingView.wantsLayer = true
@@ -182,6 +191,13 @@ final class UserQueryOverlayController {
         panel.mouseDownHandler = { [weak self] in
             self?.focusStatusComposerTextInputIfAvailable()
         }
+        panel.escapeKeyHandler = { [weak self] in
+            // Esc leaves the focused row the same way clicking bare chrome does: highlight and reply clear.
+            self?.model.focusNotchRow(nil)
+        }
+        panel.arrowKeyHandler = { [weak self] direction in
+            self?.handleNotchArrowKey(direction) ?? false
+        }
         panel.level = DonkeyOverlayWindowLevel.userQuery
         panel.collectionBehavior = [
             .canJoinAllSpaces,
@@ -198,8 +214,6 @@ final class UserQueryOverlayController {
         timer = nil
         statusCollapseWorkItem?.cancel()
         statusCollapseWorkItem = nil
-        statusExpansionWorkItem?.cancel()
-        statusExpansionWorkItem = nil
         statusHostShrinkWorkItem?.cancel()
         statusHostShrinkWorkItem = nil
         cancelSpawnDesktopEmergeWorkItems()
@@ -215,7 +229,6 @@ final class UserQueryOverlayController {
         statusPanel = nil
         statusHostingView = nil
         hasPrewarmedInputPanel = false
-        hasPrewarmedStatusPanelExpansion = false
         lastStatusViewSnapshot = nil
     }
 
@@ -469,9 +482,12 @@ final class UserQueryOverlayController {
         }
 
         activateVoiceInputIfNeeded()
-        positionStatusPanel()
+        // Build the notch metrics once per frame (the chin sizing does Core Text measurement) and feed
+        // both the panel position and the view update from it, instead of recomputing it for each.
+        let metrics = notchMetrics()
+        positionStatusPanel(metrics: metrics)
         updateStatusHoverExpansion()
-        updateStatusPanelView()
+        updateStatusPanelView(metrics: metrics)
         updateSpawnOverlay()
         resizeActivePanelIfNeeded(inputPanel)
         updateMouseEventPassthrough(for: inputPanel)
@@ -499,13 +515,13 @@ final class UserQueryOverlayController {
         )
     }
 
-    private func positionStatusPanel(disableAnimations: Bool = true) {
+    private func positionStatusPanel(metrics: NotchMetrics? = nil, disableAnimations: Bool = true) {
         guard let statusPanel,
               let screen = activeScreen() else {
             return
         }
 
-        let metrics = notchMetrics(for: screen)
+        let metrics = metrics ?? notchMetrics(for: screen)
         let frame = CGRect(
             x: screen.frame.midX - metrics.surfaceSize.width / 2,
             y: screen.frame.maxY - metrics.surfaceSize.height,
@@ -534,14 +550,14 @@ final class UserQueryOverlayController {
         }
     }
 
-    private func updateStatusPanelView() {
-        let metrics = notchMetrics()
+    private func updateStatusPanelView(metrics: NotchMetrics? = nil) {
+        let metrics = metrics ?? notchMetrics()
         let snapshot = statusViewSnapshot(metrics: metrics)
         let previousSnapshot = lastStatusViewSnapshot
         guard snapshot != previousSnapshot else { return }
 
         if snapshot.surfaceSize != previousSnapshot?.surfaceSize {
-            positionStatusPanel()
+            positionStatusPanel(metrics: metrics)
         }
 
         lastStatusViewSnapshot = snapshot
@@ -555,14 +571,9 @@ final class UserQueryOverlayController {
         _ hostingView: UserQueryHostingView<UserQueryNotchStatusView>,
         metrics: NotchMetrics
     ) {
-        hostingView.layer?.backgroundColor = statusHostDebugBackgroundColor?.cgColor
         hostingView.layer?.cornerRadius = metrics.hostCornerRadius
         hostingView.layer?.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
         hostingView.layer?.masksToBounds = true
-    }
-
-    private var statusHostDebugBackgroundColor: NSColor? {
-        nil
     }
 
     private func statusViewSnapshot(metrics: NotchMetrics) -> StatusPanelViewSnapshot {
@@ -579,10 +590,14 @@ final class UserQueryOverlayController {
             notchCommandInputTextHeight: model.notchCommandInputTextHeight,
             isNotchCommandInputExpanded: model.isNotchCommandInputExpanded,
             notchTasks: model.notchTasks,
+            notchSurfacedTasks: model.notchSurfacedTasks,
             accentIndex: model.notchAccentIndex,
             spawnState: spawnCue,
             spawnStates: model.spawnStates,
-            selectedSpawnID: model.selectedSpawnID
+            selectedSpawnID: model.selectedSpawnID,
+            replyTargetTaskID: model.replyTargetTaskID,
+            selectedTaskID: model.selectedTaskID,
+            needsLogin: model.needsLogin
         )
     }
 
@@ -594,6 +609,7 @@ final class UserQueryOverlayController {
             layout: metrics.layout,
             surfaceWidth: metrics.surfaceSize.width,
             surfaceHeight: metrics.surfaceSize.height,
+            isHostExpanded: isStatusHostExpanded,
             isExpanded: isStatusExpanded,
             isCurrentTaskPaused: model.isCurrentTaskPaused,
             commandText: Binding(
@@ -607,6 +623,9 @@ final class UserQueryOverlayController {
             commandInputTextHeight: model.notchCommandInputTextHeight,
             isCommandInputExpanded: model.isNotchCommandInputExpanded,
             tasks: model.notchTasks,
+            surfacedTasks: model.notchSurfacedTasks,
+            replyTargetTaskID: model.replyTargetTaskID,
+            selectedTaskID: model.selectedTaskID,
             accentIndex: model.notchAccentIndex,
             spawnState: spawnCue,
             commandSubmitted: { [weak self] text in
@@ -627,13 +646,48 @@ final class UserQueryOverlayController {
             resumeRequested: { [weak self] taskID in
                 self?.model.resumeTask(id: taskID)
             },
-            approvePermissionRequested: { [weak self] taskID in
-                self?.model.approvePermissionGate(id: taskID)
+            dismissRequested: { [weak self] taskID in
+                self?.model.dismissTask(id: taskID)
+            },
+            taskSelected: { [weak self] taskID in
+                self?.restoreSpawnPointer(forTaskID: taskID)
+            },
+            replyRequested: { [weak self] taskID in
+                guard let self else { return }
+                // A click focuses the row exactly as arrowing onto it does: highlight + pinned reply.
+                self.model.focusNotchRow(taskID)
+                self.focusStatusComposerTextInputIfAvailable()
+            },
+            replyModeExited: { [weak self] in
+                self?.model.focusNotchRow(nil)
+            },
+            approvePermissionRequested: { [weak self] taskID, alwaysAllow in
+                self?.model.approvePermissionGate(id: taskID, alwaysAllow: alwaysAllow)
+            },
+            denyPermissionRequested: { [weak self] taskID in
+                self?.model.denyPermissionGate(id: taskID)
             },
             updateRequested: { [weak self] in
                 self?.openAvailableUpdate()
+            },
+            needsLogin: model.needsLogin,
+            loginRequested: { [weak self] in
+                self?.model.requestLogin()
+            },
+            reloadCreditsRequested: { [weak self] taskID in
+                self?.model.reloadCredits(id: taskID)
             }
         )
+    }
+
+    /// Up/Down moves the expanded-notch focus, landing on each row exactly as a click would (highlight +
+    /// pinned reply, other rows dimmed). Consumed (returns true) only while the notch is open and the
+    /// model actually moved the focus; otherwise the arrows fall through to the composer to edit the draft.
+    private func handleNotchArrowKey(_ direction: NotchArrowDirection) -> Bool {
+        guard isStatusExpanded else { return false }
+        let moved = model.moveNotchSelection(direction)
+        if moved { updateStatusPanelView() }
+        return moved
     }
 
     private func notchSpawnCue(metrics: NotchMetrics) -> UserQuerySpawnState? {
@@ -646,6 +700,18 @@ final class UserQueryOverlayController {
 
     private func openAvailableUpdate() {
         model.showUpdateUI()
+    }
+
+    /// Brings back a pointer the user dismissed when its task is clicked in
+    /// the notch; the surface re-emerges and travels to its target again.
+    private func restoreSpawnPointer(forTaskID taskID: String) {
+        guard let spawnID = model.spawnStates.first(where: { $0.taskID == taskID })?.id else {
+            return
+        }
+
+        spawnOverlayController.restoreSpawn(id: spawnID)
+        model.selectSpawn(id: spawnID)
+        updateSpawnOverlay()
     }
 
     private func presentAgentVisualization(
@@ -737,7 +803,7 @@ final class UserQueryOverlayController {
             statusCollapseWorkItem = nil
             statusHostShrinkWorkItem?.cancel()
             statusHostShrinkWorkItem = nil
-            guard statusHoverPhase != .preparingOpen, statusHoverPhase != .expanded else { return }
+            guard statusHoverPhase != .expanded else { return }
             applyStatusExpanded(true)
             return
         }
@@ -747,35 +813,22 @@ final class UserQueryOverlayController {
 
     private func applyStatusExpanded(_ isExpanded: Bool) {
         if isExpanded {
-            guard statusHoverPhase != .preparingOpen, statusHoverPhase != .expanded else { return }
+            guard statusHoverPhase != .expanded else { return }
 
-            statusHoverPhase = .preparingOpen
-            isStatusExpanded = false
-            // First render the collapsed visual notch inside the already-expanded
-            // host. The delayed flip below is the only step that should animate.
-            prepareStatusHostForExpansion()
-
-            let workItem = DispatchWorkItem { [weak self] in
-                guard let self,
-                      self.statusHoverPhase == .preparingOpen,
-                      self.isStatusHostExpanded,
-                      !self.isStatusExpanded else { return }
-                self.isStatusExpanded = true
-                self.statusHoverPhase = .expanded
-                self.statusExpansionWorkItem = nil
-                self.updateStatusPanelView()
-                self.focusStatusComposerTextInputIfAvailable()
-            }
-            statusExpansionWorkItem = workItem
-            DispatchQueue.main.asyncAfter(
-                deadline: .now() + NotchMetrics.openHostPreparationDelay,
-                execute: workItem
-            )
+            // Mouse enter: jump the host window to its expanded size instantly (no animation) so there
+            // is room, then let the visible black surface grow into it. The host resize happens inside
+            // updateStatusPanelView; the surface size, corner radius, and content all animate off the
+            // `isStatusExpanded` change in SwiftUI. The host is already full size, so nothing races.
+            statusHoverPhase = .expanded
+            isStatusHostExpanded = true
+            isStatusExpanded = true
+            // Opening the notch dismisses the surfaced terminal tasks (completed pointers and any held
+            // error chin) piled up in the collapsed surface.
+            model.acknowledgeSurfacedTasks()
+            updateStatusPanelView()
+            focusStatusComposerTextInputIfAvailable()
             return
         }
-
-        statusExpansionWorkItem?.cancel()
-        statusExpansionWorkItem = nil
 
         guard statusHoverPhase != .collapsed else { return }
         guard statusHoverPhase != .closing else {
@@ -786,38 +839,16 @@ final class UserQueryOverlayController {
         }
 
         if isStatusExpanded {
+            // Mouse exit is the reverse: collapse the surface (and fade the content out) first. The
+            // host stays expanded so it keeps containing the shrinking surface; it snaps to the notch
+            // size once the surface has finished collapsing, when the host shrink fires below.
             isStatusExpanded = false
+            model.clearNotchSelection()
             updateStatusPanelView()
         }
 
         statusHoverPhase = .closing
         scheduleStatusHostShrink()
-    }
-
-    private func prepareStatusHostForExpansion() {
-        isStatusHostExpanded = true
-        positionStatusPanel()
-        updateStatusPanelView()
-        flushStatusHostLayout()
-    }
-
-    private func prewarmStatusPanelExpansion() {
-        guard !hasPrewarmedStatusPanelExpansion,
-              statusPanel != nil else { return }
-        hasPrewarmedStatusPanelExpansion = true
-
-        // AppKit and SwiftUI layout must stay on the main actor, but doing this
-        // while the status panel is still hidden keeps first-hover setup work off
-        // the visible animation path.
-        isStatusHostExpanded = true
-        positionStatusPanel()
-        updateStatusPanelView()
-        flushStatusHostLayout()
-
-        isStatusHostExpanded = false
-        positionStatusPanel()
-        updateStatusPanelView()
-        flushStatusHostLayout()
     }
 
     private func prewarmInputPanel() {
@@ -826,12 +857,6 @@ final class UserQueryOverlayController {
         hasPrewarmedInputPanel = true
 
         flushPanelLayout(inputPanel)
-    }
-
-    private func flushStatusHostLayout() {
-        guard let statusPanel else { return }
-
-        flushPanelLayout(statusPanel)
     }
 
     private func flushPanelLayout(_ panel: NSPanel) {
@@ -910,7 +935,8 @@ final class UserQueryOverlayController {
                 expandedContentHeight: statusExpandedContentHeight,
                 isExpanded: isStatusExpanded,
                 isHostExpanded: isStatusHostExpanded,
-                screenWidth: NotchMetrics.defaultScreenWidth
+                screenWidth: NotchMetrics.defaultScreenWidth,
+                needsLogin: model.needsLogin
             )
         }
 
@@ -929,17 +955,86 @@ final class UserQueryOverlayController {
         let voidHeight = hasNotch ? max(safeTop, NotchMetrics.fallbackVoidHeight) : 0
         let voidWidth = hasNotch ? max(measuredVoidWidth, inferredVoidWidth(for: screen, safeTop: safeTop)) : 0
 
+        // The chin band has to know its height before the surface frame is built, but that height
+        // depends on the collapsed width (how wide the chin text can wrap). Resolve the width from a
+        // zero-chin probe first, then size the band to the surfaced tasks' wrapped line count.
+        let widthProbe = NotchMetrics(
+            voidWidth: voidWidth,
+            voidHeight: voidHeight,
+            expandedContentHeight: statusExpandedContentHeight,
+            isExpanded: isStatusExpanded,
+            isHostExpanded: isStatusHostExpanded,
+            screenWidth: screen.frame.width,
+            chinHeight: 0,
+            needsLogin: model.needsLogin
+        )
+        let chinTextWidth = widthProbe.layout.collapsedSurfaceFrame.width - Self.statusChinHorizontalInset
+
         return NotchMetrics(
             voidWidth: voidWidth,
             voidHeight: voidHeight,
             expandedContentHeight: statusExpandedContentHeight,
             isExpanded: isStatusExpanded,
             isHostExpanded: isStatusHostExpanded,
-            screenWidth: screen.frame.width
+            screenWidth: screen.frame.width,
+            chinHeight: statusChinHeight(textWidth: chinTextWidth),
+            needsLogin: model.needsLogin
         )
     }
 
+    /// The collapsed chin hangs below the notch whenever a task is surfaced — running, a completion, or
+    /// a failure the user hasn't dismissed yet. The notch view rotates which one's line it shows. The
+    /// band fits one line by default and grows by a line-height to seat a wrapped second line (capped
+    /// there), keeping the bottom margin constant. Real notch only.
+    private func statusChinHeight(textWidth: CGFloat) -> CGFloat {
+        let surfaced = model.notchSurfacedTasks
+        guard !surfaced.isEmpty else { return 0 }
+        // Cache by the surfaced chin text + width: `notchMetrics()` runs every frame, but the wrapped-line
+        // Core Text measurement only needs to rerun when the text or available width actually changes.
+        let key = "\(Int(textWidth))|" + surfaced.map(\.chinDisplayText).joined(separator: "\u{1}")
+        if let cache = chinHeightCache, cache.key == key { return cache.height }
+        let lines = surfaced.reduce(1) { partial, task in
+            return max(partial, Self.chinLineCount(for: task.chinDisplayText, width: textWidth))
+        }
+        let height = CGFloat(lines) * Self.statusChinLineHeight + Self.statusChinBottomMargin
+        chinHeightCache = (key, height)
+        return height
+    }
+
+    /// Approximate how many lines (1 or 2) the chin text wraps to at `width`, by comparing its wrapped
+    /// height to a single line's height in the chin font. Used to grow the band for a second line.
+    private static func chinLineCount(for text: String, width: CGFloat) -> Int {
+        guard width > 0, !text.isEmpty, chinFontLineHeight > 0 else { return 1 }
+        let wrappedHeight = (text as NSString).boundingRect(
+            with: CGSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: NSFont.systemFont(ofSize: statusChinFontSize)]
+        ).height
+        let lines = Int((wrappedHeight / chinFontLineHeight).rounded())
+        return min(2, max(1, lines))
+    }
+
+    /// A single line's height in the chin font — constant, so measure it once instead of per call.
+    private static let chinFontLineHeight: CGFloat = ("Ag" as NSString).boundingRect(
+        with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+        options: [.usesLineFragmentOrigin, .usesFontLeading],
+        attributes: [.font: NSFont.systemFont(ofSize: statusChinFontSize)]
+    ).height
+
+    /// Chin band geometry, mirroring the prototype: a `statusChinFontSize` line on a `…LineHeight`
+    /// leading, with a constant `…BottomMargin` below the last line. One line totals 23pt (15 + 8);
+    /// a second line adds another 15pt. `…HorizontalInset` is the chin's total left+right text inset.
+    private static let statusChinFontSize: CGFloat = 12
+    private static let statusChinLineHeight: CGFloat = 15
+    private static let statusChinBottomMargin: CGFloat = 8
+    private static let statusChinHorizontalInset: CGFloat = 24
+
     private var statusExpandedContentHeight: CGFloat {
+        // Logged out: the expanded login is a short wide bar (label + Login button), not the full panel.
+        if model.needsLogin {
+            return NotchMetrics.loginExpandedContentHeight
+        }
+
         if hasStatusTaskDisplayText || !model.notchTasks.isEmpty || model.updateState.headerButtonTitle != nil {
             return NotchMetrics.expandedTaskContentHeight
         }
@@ -1303,6 +1398,9 @@ private final class UserQueryPanel: NSPanel {
     var dragRegionProvider: (() -> [CGRect])?
     var escapeKeyHandler: (() -> Void)?
     var mouseDownHandler: (() -> Void)?
+    /// Up/Down arrow handler for the expanded notch. Returns whether it consumed the key; when it does
+    /// not (the composer owns the arrows for text editing), the event falls through to the field.
+    var arrowKeyHandler: ((NotchArrowDirection) -> Bool)?
 
     override var canBecomeKey: Bool {
         true
@@ -1312,7 +1410,42 @@ private final class UserQueryPanel: NSPanel {
         true
     }
 
+    /// Make the standard editing shortcuts work in the composer. It's an NSTextView inside an
+    /// NSScrollView, and NSScrollView doesn't forward `performKeyEquivalent` to its document view, so
+    /// Cmd+V/C/X/A/Z never reach the field on their own — the user can type but not paste. The window
+    /// always receives `performKeyEquivalent` for a key equivalent (before the main menu), so route the
+    /// shortcut to the focused text here. Returns true to consume it so nothing else double-handles it.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if super.performKeyEquivalent(with: event) { return true }
+        guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+              let text = firstResponder as? NSText,
+              let key = event.charactersIgnoringModifiers?.lowercased() else {
+            return false
+        }
+        switch key {
+        case "v": text.paste(nil); return true
+        case "c": text.copy(nil); return true
+        case "x": text.cut(nil); return true
+        case "a": text.selectAll(nil); return true
+        case "z":
+            if event.modifierFlags.contains(.shift) { text.undoManager?.redo() } else { text.undoManager?.undo() }
+            return true
+        default: return false
+        }
+    }
+
     override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown {
+            switch Int(event.keyCode) {
+            case kVK_UpArrow:
+                if arrowKeyHandler?(.up) == true { return }
+            case kVK_DownArrow:
+                if arrowKeyHandler?(.down) == true { return }
+            default:
+                break
+            }
+        }
+
         if event.type == .keyDown,
            event.keyCode == UInt16(kVK_Escape) {
             escapeKeyHandler?()
@@ -1360,10 +1493,14 @@ private struct StatusPanelViewSnapshot: Equatable {
     var notchCommandInputTextHeight: CGFloat
     var isNotchCommandInputExpanded: Bool
     var notchTasks: [UserQueryNotchTask]
+    var notchSurfacedTasks: [UserQueryNotchTask]
     var accentIndex: Int
     var spawnState: UserQuerySpawnState?
     var spawnStates: [UserQuerySpawnState]
     var selectedSpawnID: String?
+    var replyTargetTaskID: String?
+    var selectedTaskID: String?
+    var needsLogin: Bool
 }
 
 private enum StatusHoverPhase {
@@ -1371,7 +1508,6 @@ private enum StatusHoverPhase {
     // the SwiftUI notch surface. These phases keep quick hover churn from leaving
     // one layer expanded while the other is still opening or closing.
     case collapsed
-    case preparingOpen
     case expanded
     case closing
 }

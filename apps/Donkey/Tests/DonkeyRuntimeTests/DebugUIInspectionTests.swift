@@ -32,7 +32,7 @@ struct DebugUIInspectionTests {
     }
 
     @Test
-    func enabledConfigUsesSafeDefaults() throws {
+    func enabledConfigUsesFixedDefaults() throws {
         let url = temporaryDirectory()
             .appendingPathComponent("enabled-dev-overlay.json", isDirectory: false)
         try Data(#"{"enabled":true}"#.utf8).write(to: url, options: .atomic)
@@ -45,21 +45,25 @@ struct DebugUIInspectionTests {
         #expect(config.cadenceSeconds == 1.0)
         #expect(config.screenScope == .main)
         #expect(config.minConfidence == 0.25)
-        #expect(config.activeWindowOnly == false)
+        #expect(config.activeWindowOnly == true)
         #expect(config.targetBundleIdentifiers.isEmpty)
         #expect(config.targetAppNames.isEmpty)
     }
 
     @Test
-    func configLoadsTargetFilters() throws {
+    func configIgnoresEverythingExceptEnabled() throws {
+        // `enabled` is the only knob the file controls; any other tuning fields are ignored and the
+        // fixed defaults stand.
         let url = temporaryDirectory()
-            .appendingPathComponent("targeted-dev-overlay.json", isDirectory: false)
+            .appendingPathComponent("noisy-dev-overlay.json", isDirectory: false)
         try Data(
             """
             {
-              "enabled": true,
-              "activeWindowOnly": true,
-              "targetBundleIdentifiers": ["com.apple.Music", " com.apple.Music "],
+              "enabled": false,
+              "cadenceSeconds": 0.05,
+              "screenScope": "all",
+              "minConfidence": 2,
+              "activeWindowOnly": false,
               "targetAppNames": ["Music"]
             }
             """.utf8
@@ -68,34 +72,12 @@ struct DebugUIInspectionTests {
 
         let config = DebugUIOverlayConfiguration.load(fileURL: url)
 
-        #expect(config.targetBundleIdentifiers == ["com.apple.Music"])
-        #expect(config.targetAppNames == ["Music"])
-        #expect(config.activeWindowOnly == true)
-    }
-
-    @Test
-    func disabledRepoStyleConfigKeepsOverlayOff() throws {
-        let url = temporaryDirectory()
-            .appendingPathComponent("disabled-dev-overlay.json", isDirectory: false)
-        try Data(
-            """
-            {
-              "enabled": false,
-              "cadenceSeconds": 0.05,
-              "screenScope": "all",
-              "minConfidence": 2
-            }
-            """.utf8
-        ).write(to: url, options: .atomic)
-        defer { try? FileManager.default.removeItem(at: url) }
-
-        let config = DebugUIOverlayConfiguration.load(fileURL: url)
-
         #expect(config.enabled == false)
-        #expect(config.mode == "donkeyVision")
-        #expect(config.cadenceSeconds == 0.25)
-        #expect(config.screenScope == .all)
-        #expect(config.minConfidence == 1)
+        #expect(config.cadenceSeconds == 1.0)
+        #expect(config.screenScope == .main)
+        #expect(config.minConfidence == 0.25)
+        #expect(config.activeWindowOnly == true)
+        #expect(config.targetAppNames.isEmpty)
     }
 
     @Test
@@ -165,6 +147,92 @@ struct DebugUIInspectionTests {
         #expect(throws: DebugUIInspectionHostedAdapterError.providerReturnedAction) {
             _ = try DebugUIInspectionResponseDecoder.decode(response)
         }
+    }
+
+    @Test
+    func trackerWithoutCarryForwardClearsPreviousFrameBeforeRenderingNext() {
+        // Mirrors the debug overlay's tracker config (appearanceThreshold 1, disappearanceTolerance 0):
+        // vision reassigns element IDs every parse, so any carry-forward leaves stale boxes stacked on
+        // screen. With no carry-forward, the previous overlay is fully replaced by the next parse.
+        var tracker = DebugUIElementTracker(
+            appearanceThreshold: 1,
+            disappearanceTolerance: 0,
+            movementConfirmationSamples: 1
+        )
+        let first = tracker.update(
+            with: DebugUIInspectionFrame(elements: [
+                element(id: "ai-1-a", label: "Coldplay", x: 10, y: 20),
+                element(id: "ai-1-b", label: "Notifications", x: 100, y: 20)
+            ]),
+            renderNewElementsImmediately: true
+        )
+        #expect(Set(first.elements.map(\.id)) == ["ai-1-a", "ai-1-b"])
+
+        // Next parse: brand-new IDs, no semantic overlap. The old boxes must not linger.
+        let second = tracker.update(
+            with: DebugUIInspectionFrame(elements: [
+                element(id: "ai-2-c", label: "Search", x: 300, y: 400)
+            ]),
+            renderNewElementsImmediately: true
+        )
+        #expect(second.elements.map(\.id) == ["ai-2-c"])
+    }
+
+    @Test
+    func trackerKeepsStableAccessibilityBoxThroughBriefDetectionGap() {
+        // Mirrors the debug overlay's tracker config: vision boxes (ai-) drop immediately, but
+        // stable accessibility boxes (ax-) get a few frames of hysteresis so a single missed scan
+        // does not strobe the overlay.
+        var tracker = DebugUIElementTracker(
+            appearanceThreshold: 1,
+            disappearanceTolerance: 0,
+            movementConfirmationSamples: 1,
+            stableDisappearanceTolerance: 4,
+            stableIDPrefixes: ["ax-", "window-chrome-"]
+        )
+        _ = tracker.update(
+            with: DebugUIInspectionFrame(elements: [
+                element(id: "ax-1.1.1.1", label: "Scroll Area", x: 10, y: 20)
+            ]),
+            renderNewElementsImmediately: true
+        )
+
+        // One scan omits the accessibility box: it must persist instead of flickering out.
+        let gap = tracker.update(with: DebugUIInspectionFrame(elements: []))
+        #expect(gap.elements.map(\.id) == ["ax-1.1.1.1"])
+
+        // A genuinely vanished box still clears once the hysteresis is exhausted.
+        for _ in 0..<4 {
+            _ = tracker.update(with: DebugUIInspectionFrame(elements: []))
+        }
+        let cleared = tracker.update(with: DebugUIInspectionFrame(elements: []))
+        #expect(cleared.elements.isEmpty)
+    }
+
+    @Test
+    func trackerDropsVolatileBoxImmediatelyEvenWithStableHysteresis() {
+        // The stable hysteresis must not leak onto vision boxes — a parse that omits an ai- box
+        // clears it on the very next frame, so stale vision boxes never stack.
+        var tracker = DebugUIElementTracker(
+            appearanceThreshold: 1,
+            disappearanceTolerance: 0,
+            movementConfirmationSamples: 1,
+            stableDisappearanceTolerance: 4,
+            stableIDPrefixes: ["ax-", "window-chrome-"]
+        )
+        _ = tracker.update(
+            with: DebugUIInspectionFrame(elements: [
+                element(id: "ai-1-a", label: "Coldplay", x: 10, y: 20)
+            ]),
+            renderNewElementsImmediately: true
+        )
+        let next = tracker.update(
+            with: DebugUIInspectionFrame(elements: [
+                element(id: "ai-2-b", label: "Search", x: 300, y: 400)
+            ]),
+            renderNewElementsImmediately: true
+        )
+        #expect(next.elements.map(\.id) == ["ai-2-b"])
     }
 
     @Test

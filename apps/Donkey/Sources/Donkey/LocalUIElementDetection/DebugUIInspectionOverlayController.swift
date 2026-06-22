@@ -6,7 +6,7 @@ import DonkeyRuntime
 import QuartzCore
 
 @MainActor
-final class DebugUIInspectionOverlayController {
+final class DebugUIInspectionOverlayController: DebugUIInspectionOverlayRendering {
     private var surfaces: [UInt32: DebugUIInspectionSurface] = [:]
 
     func render(
@@ -199,7 +199,7 @@ private final class DebugUIInspectionSurface {
             containerSize: rootView.bounds.size
         )
         layers.label.string = title
-        layers.label.foregroundColor = nsColor(hex: element.visualStyle.labelColor, alpha: 1).cgColor
+        layers.label.foregroundColor = labelForegroundColor(for: element)
         layers.label.backgroundColor = labelBackgroundColor(for: element)
         layers.label.frame = labelFrame
     }
@@ -229,6 +229,9 @@ private final class DebugUIInspectionSurface {
     private func strokeColor(for element: DebugUIElement) -> CGColor {
         switch sourceKind(for: element) {
         case .ai:
+            if let color = aiPaletteColor(for: element, alpha: 0.98) {
+                return color.cgColor
+            }
             return nsColor(hex: "#FF2D55", alpha: 0.98).cgColor
         case .nativeVisual:
             return nsColor(hex: "#00C7BE", alpha: 0.95).cgColor
@@ -247,6 +250,9 @@ private final class DebugUIInspectionSurface {
     private func labelBackgroundColor(for element: DebugUIElement) -> CGColor {
         switch sourceKind(for: element) {
         case .ai:
+            if let color = aiPaletteColor(for: element, alpha: 0.94) {
+                return color.cgColor
+            }
             return nsColor(hex: "#FF2D55", alpha: 0.94).cgColor
         case .nativeVisual:
             return nsColor(hex: "#00C7BE", alpha: 0.92).cgColor
@@ -260,6 +266,35 @@ private final class DebugUIInspectionSurface {
         case .other:
             return nsColor(hex: element.visualStyle.overlayColor, alpha: 0.92).cgColor
         }
+    }
+
+    // Per-index palette for vision elements, so adjacent boxes read apart instead
+    // of all sharing one AI color. Cycled by the element's `vision.index`.
+    private static let aiPalette = [
+        "#FF3B30", "#FF9500", "#FFCC00", "#34C759",
+        "#00C7BE", "#30B0C7", "#007AFF", "#5856D6",
+        "#AF52DE", "#FF2D55", "#A2845E", "#8E8E93"
+    ]
+
+    private func aiPaletteColor(for element: DebugUIElement, alpha: CGFloat) -> NSColor? {
+        guard sourceKind(for: element) == .ai,
+              let raw = element.metadata["vision.index"],
+              let index = Int(raw)
+        else {
+            return nil
+        }
+        let count = Self.aiPalette.count
+        return nsColor(hex: Self.aiPalette[((index % count) + count) % count], alpha: alpha)
+    }
+
+    private func labelForegroundColor(for element: DebugUIElement) -> CGColor {
+        guard let color = aiPaletteColor(for: element, alpha: 1) else {
+            return nsColor(hex: element.visualStyle.labelColor, alpha: 1).cgColor
+        }
+        // Black on light chips, white on dark — keep the label legible.
+        let srgb = color.usingColorSpace(.sRGB) ?? color
+        let luminance = 0.299 * srgb.redComponent + 0.587 * srgb.greenComponent + 0.114 * srgb.blueComponent
+        return (luminance > 0.6 ? NSColor.black : NSColor.white).cgColor
     }
 
     private func lineDashPattern(for element: DebugUIElement) -> [NSNumber]? {

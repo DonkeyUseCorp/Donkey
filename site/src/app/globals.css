@@ -9,7 +9,12 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
+  --color-ink: #0f0e0d;
+  --color-coral: #ec7868;
+  --color-cream: #faf6ec;
+  --font-system: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-code: ui-monospace, "SF Mono", Menlo, monospace;
+  --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
   --font-heading: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);
@@ -117,6 +122,17 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+}
+
+/* App theme: the signed-in /app surface renders on white instead of the cream
+   landing background. Defined unlayered (like :root, the landing theme) so it
+   wins the cascade — an @layer base rule would lose to the unlayered :root no
+   matter its specificity. Repointing this one token flows everywhere keyed to
+   bg-background: the html/overscroll area, body, and every shadcn component
+   (e.g. the outline button variant). CSS variables inherit from html, so
+   portaled dialogs pick it up too. */
+html.app-surface {
+  --background: oklch(1 0 0);
 }
 
 @layer base {

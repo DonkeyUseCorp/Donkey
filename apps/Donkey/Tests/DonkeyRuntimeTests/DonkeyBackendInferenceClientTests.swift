@@ -36,6 +36,36 @@ struct DonkeyBackendInferenceClientTests {
     }
 
     @Test
+    func streamChatParsesSSEDeltasAndReturnsAccumulatedText() async throws {
+        // OpenAI-style SSE: a role-only opener (no content) is skipped, content chunks accumulate, and
+        // the [DONE] sentinel ends the stream. The default streamLines splits the buffered body by line.
+        let sse = """
+        data: {"choices":[{"delta":{"role":"assistant"}}]}
+
+        data: {"choices":[{"delta":{"content":"Now "}}]}
+
+        data: {"choices":[{"delta":{"content":"playing."}}]}
+
+        data: [DONE]
+
+        """
+        let client = DonkeyBackendInferenceClient(
+            configuration: configuration(),
+            httpClient: FixtureHTTPClient(data: Data(sse.utf8), statusCode: 200)
+        )
+        let collector = StreamDeltaCollector()
+        let full = try await client.streamChat(
+            RemoteInferenceChatCompletionRequest(
+                messages: [RemoteInferenceChatMessage(role: "user", content: .string("hi"))]
+            ),
+            onDelta: { delta in collector.append(delta) }
+        )
+
+        #expect(full == "Now playing.")
+        #expect(collector.values() == ["Now ", "playing."])
+    }
+
+    @Test
     func createResponseUsesBackendProxyAndStoreFalse() async throws {
         let httpClient = FixtureHTTPClient(
             data: Data(#"{"output_text":"{\"taskType\":\"none\"}"}"#.utf8),
@@ -589,187 +619,6 @@ struct DonkeyBackendInferenceClientTests {
     }
 
     @Test
-    func remoteFallbackDoesNotCallBackendWhenPrimaryEvidenceIsGood() async throws {
-        let httpClient = FixtureHTTPClient(
-            data: try JSONEncoder().encode(LocalUIUnderstandingResult(confidence: 0.9)),
-            statusCode: 200
-        )
-        let adapter = RemoteFallbackLocalUIUnderstandingAdapter(
-            primary: StaticUIUnderstandingRunner(
-                result: LocalUIUnderstandingResult(
-                    controls: [
-                        LocalUIUnderstandingControl(
-                            id: "native-search",
-                            label: "Search",
-                            kind: .searchField,
-                            confidence: 0.86
-                        )
-                    ],
-                    confidence: 0.86
-                )
-            ),
-            remote: RemoteScreenshotParsingLocalUIUnderstandingAdapter(
-                client: DonkeyBackendInferenceClient(
-                    configuration: configuration(),
-                    httpClient: httpClient
-                )
-            )
-        )
-
-        let result = try await adapter.understand(
-            LocalUIUnderstandingRequest(
-                traceID: "trace-good-primary",
-                targetID: "target-1"
-            )
-        )
-
-        #expect(result.controls.first?.id == "native-search")
-        #expect(httpClient.requests.isEmpty)
-    }
-
-    @Test
-    func remoteFallbackThrottlesUnchangedScreenshots() async throws {
-        let imageURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("donkey-remote-screenshot-\(UUID().uuidString).png")
-        try Data("same-image".utf8).write(to: imageURL)
-        defer {
-            try? FileManager.default.removeItem(at: imageURL)
-        }
-
-        let remoteResult = LocalUIUnderstandingResult(
-            controls: [
-                LocalUIUnderstandingControl(
-                    id: "remote-button",
-                    label: "Continue",
-                    kind: .button,
-                    confidence: 0.9
-                )
-            ],
-            confidence: 0.9
-        )
-        let httpClient = FixtureHTTPClient(
-            data: try JSONEncoder().encode(remoteResult),
-            statusCode: 200
-        )
-        let adapter = RemoteFallbackLocalUIUnderstandingAdapter(
-            primary: StaticUIUnderstandingRunner(
-                result: LocalUIUnderstandingResult(confidence: 0.1)
-            ),
-            remote: RemoteScreenshotParsingLocalUIUnderstandingAdapter(
-                client: DonkeyBackendInferenceClient(
-                    configuration: configuration(),
-                    httpClient: httpClient
-                )
-            ),
-            throttle: RemoteScreenshotParsingThrottle(minimumInterval: 60)
-        )
-        let request = LocalUIUnderstandingRequest(
-            traceID: "trace-throttle",
-            targetID: "target-throttle",
-            imageFileURL: imageURL,
-            pixelSize: HotLoopSize(width: 100, height: 100, space: .window)
-        )
-
-        let first = try await adapter.understand(request)
-        let second = try await adapter.understand(request)
-
-        #expect(first.controls.first?.id == "remote-button")
-        #expect(second.metadata["remoteScreenshotParsing.status"] == "throttled")
-        #expect(httpClient.requests.count == 1)
-    }
-
-    @Test
-    func remoteFallbackStreamsPartialAndFinalScreenshotEvidence() async throws {
-        let imageURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("donkey-remote-screenshot-stream-\(UUID().uuidString).png")
-        try Data("stream-image".utf8).write(to: imageURL)
-        defer {
-            try? FileManager.default.removeItem(at: imageURL)
-        }
-
-        let partial = LocalUIUnderstandingResult(
-            controls: [
-                LocalUIUnderstandingControl(
-                    id: "partial-row",
-                    label: "Partial Row",
-                    kind: .listItem,
-                    confidence: 0.62
-                )
-            ],
-            confidence: 0.62,
-            metadata: ["screenshotParser.stream": "partial"]
-        )
-        let final = LocalUIUnderstandingResult(
-            controls: [
-                LocalUIUnderstandingControl(
-                    id: "partial-row",
-                    label: "Partial Row",
-                    kind: .listItem,
-                    confidence: 0.62
-                ),
-                LocalUIUnderstandingControl(
-                    id: "final-play",
-                    label: "Play",
-                    kind: .button,
-                    confidence: 0.91
-                )
-            ],
-            confidence: 0.91,
-            metadata: ["screenshotParser.stream": "final"]
-        )
-        let encoder = JSONEncoder()
-        let responseText = [
-            "event: partial",
-            "data: \(String(data: try encoder.encode(partial), encoding: .utf8)!)",
-            "",
-            "event: final",
-            "data: \(String(data: try encoder.encode(final), encoding: .utf8)!)",
-            "",
-        ].joined(separator: "\n")
-        let httpClient = FixtureHTTPClient(
-            data: Data(responseText.utf8),
-            statusCode: 200,
-            headerFields: ["Content-Type": "text/event-stream"]
-        )
-        let adapter = RemoteFallbackLocalUIUnderstandingAdapter(
-            primary: StaticUIUnderstandingRunner(result: LocalUIUnderstandingResult(confidence: 0.1)),
-            remote: RemoteScreenshotParsingLocalUIUnderstandingAdapter(
-                client: DonkeyBackendInferenceClient(
-                    configuration: configuration(),
-                    httpClient: httpClient
-                )
-            ),
-            throttle: RemoteScreenshotParsingThrottle(minimumInterval: 60)
-        )
-
-        let stream = adapter.understandStream(
-            LocalUIUnderstandingRequest(
-                traceID: "trace-stream-fallback",
-                targetID: "target-stream-fallback",
-                imageFileURL: imageURL,
-                pixelSize: HotLoopSize(width: 100, height: 100, space: .window)
-            )
-        )
-        var eventSummaries: [String] = []
-        for try await event in stream {
-            switch event {
-            case .partial(let result):
-                eventSummaries.append("partial:\(result.controls.map(\.id).joined(separator: ",")):\(result.metadata["remoteScreenshotParsing.status"] ?? "")")
-            case .final(let result):
-                eventSummaries.append("final:\(result.controls.map(\.id).joined(separator: ",")):\(result.metadata["remoteScreenshotParsing.status"] ?? "")")
-            }
-        }
-
-        #expect(eventSummaries == [
-            "partial:partial-row:streaming",
-            "final:partial-row,final-play:used",
-        ])
-        let request = try #require(httpClient.requests.first)
-        let object = try #require(request.httpBodyJSONObject)
-        #expect(object["stream"] as? Bool == true)
-    }
-
-    @Test
     func configurationUsesWebBaseEnvironmentURL() throws {
         let configuration = try DonkeyBackendInferenceConfiguration.fromEnvironment([
             "DONKEY_WEB_BASE_URL": "https://web.donkey.example",
@@ -1044,6 +893,71 @@ struct DonkeyBackendInferenceClientTests {
         #expect(downloads[0].contentType == "image/png")
     }
 
+    @Test
+    func signedOutSessionShortCircuitsRequestsWithoutHittingTheNetwork() async {
+        // While signed out the client must refuse every request locally — no network round trip — so the
+        // always-on loops stop spraying guaranteed-401 calls. It returns the same typed error a real 401
+        // would, instantly. A local gate instance keeps this independent of the parallel test run.
+        let gate = BackendSessionGate()
+        gate.update(isAuthenticated: false)
+
+        let httpClient = FixtureHTTPClient(data: Data("{}".utf8), statusCode: 200)
+        let client = DonkeyBackendInferenceClient(
+            configuration: configuration(),
+            httpClient: httpClient,
+            sessionGate: gate
+        )
+
+        await #expect(throws: DonkeyBackendInferenceClientError.authenticationRequired) {
+            _ = try await client.createResponse(
+                RemoteInferenceResponseCreateRequest(model: "router/large", input: .string("hi"))
+            )
+        }
+        // Never reached the transport.
+        #expect(httpClient.requests.isEmpty)
+    }
+
+    @Test
+    func http402MapsToInsufficientCreditsWithParsedBalance() async {
+        // A 402 means the balance is spent (or a spend limit was hit). The client maps it to the typed
+        // `.insufficientCredits` case with the balance decoded from the JSON body, so callers surface a
+        // "buy credits" message instead of a raw `httpStatus(402, …)` dump.
+        let body = Data(#"{"error":"insufficient_credits","message":"out of credits","balance":"0"}"#.utf8)
+        let client = DonkeyBackendInferenceClient(
+            configuration: configuration(),
+            httpClient: FixtureHTTPClient(data: body, statusCode: 402)
+        )
+
+        await #expect(throws: DonkeyBackendInferenceClientError.insufficientCredits(balance: "0")) {
+            _ = try await client.createResponse(
+                RemoteInferenceResponseCreateRequest(model: "router/large", input: .string("hi"))
+            )
+        }
+    }
+
+    @Test
+    func devAuthBypassIgnoresTheSignedOutGate() async throws {
+        // The dev-auth bypass is always treated as authenticated, so the gate never blocks it.
+        let gate = BackendSessionGate()
+        gate.update(isAuthenticated: false)
+
+        let httpClient = FixtureHTTPClient(data: Data("{}".utf8), statusCode: 200)
+        let client = DonkeyBackendInferenceClient(
+            configuration: DonkeyBackendInferenceConfiguration(
+                baseURL: URL(string: "https://donkey.example")!,
+                clientID: "client-1",
+                devAuthBypass: true
+            ),
+            httpClient: httpClient,
+            sessionGate: gate
+        )
+
+        _ = try await client.createResponse(
+            RemoteInferenceResponseCreateRequest(model: "router/large", input: .string("hi"))
+        )
+        #expect(httpClient.requests.count == 1)
+    }
+
     private func configuration() -> DonkeyBackendInferenceConfiguration {
         DonkeyBackendInferenceConfiguration(
             baseURL: URL(string: "https://donkey.example")!,
@@ -1058,7 +972,7 @@ struct DonkeyBackendInferenceClientTests {
         try FileManager.default.createDirectory(at: bundleURL, withIntermediateDirectories: true)
 
         var plist: [String: Any] = [
-            "CFBundleIdentifier": "ai.donkey.tests.\(UUID().uuidString)",
+            "CFBundleIdentifier": "com.donkeyuse.tests.\(UUID().uuidString)",
             "CFBundlePackageType": "BNDL"
         ]
         for (key, value) in info {
@@ -1095,6 +1009,24 @@ struct DonkeyBackendInferenceClientTests {
             error: nil,
             metadata: [:]
         )
+    }
+}
+
+private final class StreamDeltaCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var deltas: [String] = []
+
+    func append(_ delta: String) {
+        lock.lock()
+        deltas.append(delta)
+        lock.unlock()
+    }
+
+    func values() -> [String] {
+        lock.lock()
+        let snapshot = deltas
+        lock.unlock()
+        return snapshot
     }
 }
 

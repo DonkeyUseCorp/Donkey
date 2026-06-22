@@ -12,10 +12,6 @@ let package = Package(
             name: "Donkey",
             targets: ["Donkey"]
         ),
-        .executable(
-            name: "DonkeyUIUnderstandingSidecar",
-            targets: ["DonkeyUIUnderstandingSidecar"]
-        ),
         .library(
             name: "DonkeyContracts",
             targets: ["DonkeyContracts"]
@@ -88,12 +84,6 @@ let package = Package(
             ],
             swiftSettings: [
                 .define("DONKEY_DEBUG_OVERLAY", .when(configuration: .debug))
-            ]
-        ),
-        .executableTarget(
-            name: "DonkeyUIUnderstandingSidecar",
-            dependencies: [
-                "DonkeyRuntime"
             ]
         ),
         .testTarget(

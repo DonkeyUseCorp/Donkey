@@ -1,6 +1,19 @@
 import Foundation
 
 public struct HarnessToolDescriptor: Codable, Equatable, Sendable {
+    /// Descriptor metadata key a tool sets to "true" when its successful result is itself
+    /// verification evidence (e.g. a shell command returning output and exit code). The runtime's
+    /// completion gate accepts such a step as the post-action check; other state-changing tools
+    /// need a later read-only observation before `run.complete` is accepted.
+    public static let resultIsEvidenceMetadataKey = "resultIsEvidence"
+
+    /// Descriptor metadata key for a multi-action tool (one whose `action` input selects the
+    /// operation) naming, comma-separated, the `action` values that are pure reads. The runtime's
+    /// duplicate-action guard exempts those calls: re-listing or re-reading is legitimate
+    /// verification even when the tool's overall safety class is state-changing, and the guard
+    /// must never block the re-read its own rejection message asks for.
+    public static let readOnlyActionsMetadataKey = "readOnlyActions"
+
     public var name: String
     public var pluginID: String
     public var summary: String
@@ -153,7 +166,8 @@ public enum BuiltInHarnessToolCatalog {
             descriptor(
                 "conversation.respond",
                 pluginID: "core.conversation",
-                summary: "Respond conversationally without taking external action.",
+                summary: "Answer the user or chat when the request needs a reply rather than an action. Set 'response' to the message.",
+                input: ["response": "The message to say to the user."],
                 permissions: [.conversation],
                 safety: .readOnly
             ),
@@ -262,25 +276,6 @@ public enum BuiltInHarnessToolCatalog {
                 ]
             ),
             descriptor(
-                "app.search",
-                pluginID: "core.computer-use",
-                summary: "Search installed apps, running apps, files, folders, default handlers, and capability catalog entries.",
-                input: ["query": "Structured app/item/capability query."],
-                output: ["matches": "Ranked local apps/items/capabilities."],
-                permissions: [.appLookup],
-                safety: .readOnly
-            ),
-            descriptor(
-                "app.openOrFocus",
-                pluginID: "core.computer-use",
-                summary: "Open or focus a validated local app or item.",
-                input: ["targetID": "Resolved app or local item target."],
-                output: ["focusedApp": "Focused application after the action."],
-                permissions: [.appControl],
-                safety: .reversible,
-                verification: ["focused app or opened local item is observed"]
-            ),
-            descriptor(
                 "screen.observe",
                 pluginID: "core.computer-use",
                 summary: "Observe current screen/window state with bounded Accessibility and screenshot evidence.",
@@ -378,13 +373,16 @@ public enum BuiltInHarnessToolCatalog {
             descriptor(
                 "automation.applescript.validate",
                 pluginID: "core.automation",
-                summary: "Validate a generated AppleScript artifact before execution.",
+                summary: "Validate a generated AppleScript artifact before execution: static safety checks, unresolved-parameter detection, and a real compile against the target app's scripting dictionary, so wrong terminology is rejected here with the actual compiler error instead of failing at execution.",
                 input: [
                     "scriptArtifactID": "Generated AppleScript artifact identifier.",
                     "targetApp": "Resolved app name and bundle identifier.",
                     "validationPolicy": "Static checks, allowed APIs, target app, permissions, and review state."
                 ],
-                output: ["validationStatus": "validated or rejected with reason."],
+                output: [
+                    "validationStatus": "validated or rejected with reason.",
+                    "compile.errorMessage": "The AppleScript compiler's actual error message when the compile gate rejects the script — regenerate with this error in context."
+                ],
                 permissions: [.appLookup],
                 safety: .readOnly,
                 requiredContext: ["generated AppleScript artifact", "validation policy"],
@@ -498,6 +496,132 @@ public enum BuiltInHarnessToolCatalog {
                 verification: ["skill pack includes SKILL.md, app-profile.json, workflows.json, evidence index, and only validated scripts"]
             ),
             descriptor(
+                "llm.generate",
+                pluginID: "core.model",
+                summary: "Run a one-off LLM call and return generated text. Use it to compose, transform, summarize, classify, rephrase, or massage text — e.g. produce a tracklist or a clean note body, or rewrite a raw status into a friendly one-line message. Pass `filePath` to a local audio or video file to transcribe, translate, caption, or answer questions about it; the `prompt` decides the output (e.g. \"transcribe to SRT with timestamps\", \"transcribe and translate the text to Spanish, keep the timestamps\"). Set toFile=true for long output (a transcript, a tracklist, a long note body): the text is written to a temp file and the file path is returned, so it bypasses the shell command-length limit when you then build a subtitle file, note, or document from it.",
+                input: [
+                    "prompt": "The instruction for the model (what to produce).",
+                    "input": "Optional source text the prompt operates on.",
+                    "filePath": "Optional path to a local audio/video file to transcribe, translate, or analyze. Hand over compact audio (extract it first) and chunk long media.",
+                    "mimeType": "Optional MIME type for filePath (e.g. audio/mpeg, video/mp4); inferred from the file extension when omitted.",
+                    "toFile": "\"true\" to write the result to a temp file and return its path instead of inline text."
+                ],
+                output: [
+                    "text": "The generated text (a short preview when written to a file).",
+                    "filePath": "Path to the file holding the full output, when toFile=true."
+                ],
+                optionalInputKeys: ["input", "filePath", "mimeType", "toFile"],
+                permissions: [],
+                safety: .sensitive,
+                verification: ["the returned text (or file) contains the requested content"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            descriptor(
+                "files.describe",
+                pluginID: "core.files",
+                summary: "Understand a batch of files: for a `directory` (or explicit `paths`) it returns one structured description per file — kind (text/image/pdf/audio/video/binary), a summary, extracted text (OCR for images, text for PDFs), byte size, and attributes like dimensions. This is the file-understanding layer every file task builds on: call it first to learn what files contain, then carry out the operation yourself with general tools — `llm.generate` to decide new names/labels from the content, `shell_exec` to apply (`mv` to rename, `sips`/`ffmpeg` to resize/convert), and verify. Read-only — it changes nothing.",
+                input: [
+                    "directory": "Folder whose files should be described (every regular, non-hidden file in it).",
+                    "paths": "Explicit comma/newline-separated file paths to describe instead of a whole directory.",
+                    "maxFiles": "Optional cap on how many files to process (default 50, max 200)."
+                ],
+                output: [
+                    "understanding": "JSON array of {path, fileName, kind, summary, textContent, byteSize, attributes} per file.",
+                    "count": "How many files were described."
+                ],
+                optionalInputKeys: ["directory", "paths", "maxFiles"],
+                permissions: [],
+                safety: .sensitive,
+                verification: ["the returned understanding covers the requested files"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            descriptor(
+                "image.edit",
+                pluginID: "core.image",
+                summary: "Edit an existing image with a generative image model: describe the change in `prompt` and pass the source `inputPath`. Use it for semantic edits that sips/magick cannot do — remove or replace a background, add or remove an object, restyle, relight, or change a scene. To match a reference photo's look, pass the reference(s) as `referencePaths` and ask to match them. Writes a NEW image file and returns its path; it never overwrites the source. Costs image-generation credits per image, so for a batch confirm with the user first, then call once per file.",
+                input: [
+                    "prompt": "What to change, in plain words (e.g. \"remove the background\", \"make the sky a sunset\").",
+                    "inputPath": "Path to the source image to edit.",
+                    "referencePaths": "Optional comma/newline-separated reference image paths to condition on (e.g. a style/look reference).",
+                    "model": "Optional model id override; omit to use the default image model.",
+                    "outDir": "Optional output directory; a relative path like `edited` lands beside the source image. Omit to save next to the source."
+                ],
+                output: [
+                    "paths": "Newline-separated paths to the saved image file(s).",
+                    "count": "How many images were saved."
+                ],
+                optionalInputKeys: ["referencePaths", "model", "outDir"],
+                permissions: [],
+                safety: .reversible,
+                verification: ["the returned image file exists and reflects the requested edit"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            descriptor(
+                "image.generate",
+                pluginID: "core.image",
+                summary: "Generate a brand-new image from a text `prompt` with a generative image model — use when there is no source image to edit. Writes a new image file and returns its path. Costs image-generation credits per image.",
+                input: [
+                    "prompt": "Description of the image to create.",
+                    "model": "Optional model id override; omit to use the default image model.",
+                    "outDir": "Optional output directory for the result; omit to save to Downloads."
+                ],
+                output: [
+                    "paths": "Newline-separated paths to the saved image file(s).",
+                    "count": "How many images were saved."
+                ],
+                optionalInputKeys: ["model", "outDir"],
+                permissions: [],
+                safety: .reversible,
+                verification: ["the returned image file exists"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            descriptor(
+                "web.search",
+                pluginID: "core.web",
+                summary: "Search the web and return ranked results (title, URL, snippet). Use it for current facts the model can't be sure of — an artist's latest album, today's news, a product spec, an address. Follow up with web.fetch to read a result in full.",
+                input: ["query": "What to search for.", "count": "How many results (default 5, max 10)."],
+                output: ["results": "Ranked results: title — URL, then snippet, per result."],
+                permissions: [],
+                safety: .readOnly,
+                verification: ["the results are relevant to the query"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            descriptor(
+                "web.fetch",
+                pluginID: "core.web",
+                summary: "Read a web page and return its main content as clean markdown — nav, ads, and boilerplate removed, with the title, headings, links, and lists kept. Use it to read a page from web.search or a URL the user gave. Set toFile=true for a long page so you build a note/document from the file instead of a length-limited command.",
+                input: [
+                    "url": "The page URL to read.",
+                    "toFile": "\"true\" to write the page content to a temp file and return its path."
+                ],
+                output: [
+                    "text": "The page's main content as markdown (a preview when written to a file).",
+                    "filePath": "Path to the file holding the full text, when toFile=true."
+                ],
+                permissions: [],
+                safety: .readOnly,
+                verification: ["the fetched text matches the requested page"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            descriptor(
+                "web.automate",
+                pluginID: "core.web",
+                summary: "Run an agentic browser task in the cloud: navigate, click, fill forms, log in, and extract data across pages, then return the result. Use this only when reading (web.fetch) and local capture (web_snapshot) cannot do it — e.g. a multi-step flow, a site behind a login, or heavy bot-protection. This drives a real browser and SPENDS the user's credits, so confirm with the user before running anything that logs in, submits, or pays. Put the starting site in `task` or `startUrl`; pass a `schema` to get structured JSON back.",
+                input: [
+                    "task": "Plain-language description of the whole browser task to accomplish.",
+                    "startUrl": "Optional URL to start at (otherwise name the site in `task`).",
+                    "schema": "Optional JSON Schema string; when set, the result is structured JSON conforming to it."
+                ],
+                output: [
+                    "text": "The agent's final result — its output text or extracted data, with the run status and any recording link."
+                ],
+                optionalInputKeys: ["startUrl", "schema"],
+                permissions: [],
+                safety: .sensitive,
+                verification: ["the task's reported result satisfies the goal"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            descriptor(
                 "state.verify",
                 pluginID: "core.verification",
                 summary: "Verify the expected outcome using world-model evidence and task-specific success criteria.",
@@ -505,6 +629,15 @@ public enum BuiltInHarnessToolCatalog {
                 output: ["verified": "Boolean-like verification result with evidence."],
                 permissions: [.verification],
                 safety: .readOnly
+            ),
+            descriptor(
+                "wait",
+                pluginID: "core.timing",
+                summary: "Pause briefly while the app settles (a page loads, a window opens, an animation finishes), then re-plan. Prefer this over re-observing in a tight loop when the UI is still catching up.",
+                input: ["seconds": "How long to wait, 0.1–10 (default 1)."],
+                permissions: [],
+                safety: .readOnly,
+                verification: ["re-observe after waiting to confirm the expected state arrived"]
             ),
             descriptor(
                 "run.pause",
@@ -571,6 +704,7 @@ public enum BuiltInHarnessToolCatalog {
         summary: String,
         input: [String: String] = [:],
         output: [String: String] = [:],
+        optionalInputKeys: [String] = [],
         permissions: [HarnessPermission],
         safety: HarnessToolSafetyClass,
         requiredContext: [String] = [],
@@ -582,6 +716,7 @@ public enum BuiltInHarnessToolCatalog {
             pluginID: pluginID,
             summary: summary,
             inputSchema: input,
+            optionalInputKeys: optionalInputKeys,
             outputSchema: output,
             requiredPermissions: permissions,
             safetyClass: safety,

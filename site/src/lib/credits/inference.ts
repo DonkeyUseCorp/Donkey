@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -14,13 +14,21 @@ import {
 import { isJsonObject, toJsonValue } from "@/lib/inference/json";
 import type { JsonObject, JsonValue } from "@/lib/inference/providers";
 
+// UserCreditGrant.unit values. Dollar grants ("credit") feed the account
+// balance and pay for hosted inference; vision-call grants ("vision_call") are
+// an off-balance integer count consumed only by the Vision API quota path.
+export const creditGrantUnit = "credit";
+export const visionCallGrantUnit = "vision_call";
+export type CreditGrantUnit = typeof creditGrantUnit | typeof visionCallGrantUnit;
+
 export const inferenceUsageRoutes = {
   assets: "/api/inference/assets/",
   assetsRefresh: "/api/inference/assets/refresh/",
+  browserRun: "/api/browser/run/",
   chatCompletions: "/api/inference/chat/completions/",
   responses: "/api/inference/responses/",
   screenshotParse: "/api/inference/screenshots/parse/",
-  vision: "/api/inference/vision/",
+  vision: "/api/vision/",
 } as const;
 
 type CreditsDatabase = PrismaClient | Prisma.TransactionClient;
@@ -63,6 +71,10 @@ type InferenceUsageInput = {
   usage?: JsonValue;
   errorCode?: string;
   metadata?: JsonObject;
+  // "included" records the event for usage/quota tracking without charging the
+  // money-credit balance (the call is covered by a subscription, e.g. the
+  // Vision API product). Defaults to "credits".
+  billingMode?: "credits" | "included";
 };
 
 type CreditPreflightInput = {
@@ -70,6 +82,11 @@ type CreditPreflightInput = {
   route: string;
   provider?: string;
   model?: string;
+  // Opt-in: reject an unpriced (provider, model) at the preflight, before the provider runs. Only
+  // safe when the billed model equals this requested model (e.g. asset generation). Routes whose
+  // billed model differs from the request (a provider that pins its own model) must leave this off
+  // and rely on the post-generation price resolution instead.
+  enforceModelPrice?: boolean;
 };
 
 export type RecordedInferenceUsage = {
@@ -95,20 +112,27 @@ export class CreditLimitExceededError extends Error {
   }
 }
 
-export async function ensureCreditAccount(userId: string) {
-  const account = await ensureCreditAccountRecord(prisma, userId);
-  const initialGrantMicros = initialFreeCreditMicros();
-  if (initialGrantMicros > zeroCreditMicros) {
-    await grantCredits({
-      userId,
-      amountMicros: initialGrantMicros,
-      source: "free",
-      sourceId: `first-use:${userId}`,
-      description: "Initial free credits",
-    });
+// A billable (route, provider, model) has no configured price — neither a code-level rate in
+// provider-pricing.ts nor a DB override. We fail loudly instead of charging a guessed default,
+// and we fail at the preflight (before the provider runs and bills upstream) whenever the model
+// is known, so an unpriced model never produces an externally-billed-but-uncharged generation.
+export class CreditRateNotConfiguredError extends Error {
+  public constructor(
+    public readonly route: string,
+    public readonly provider: string,
+    public readonly model: string,
+  ) {
+    super(
+      `No credit price configured for provider="${provider}" model="${model}" on route="${route}".`,
+    );
+    this.name = "CreditRateNotConfiguredError";
   }
+}
 
-  return account;
+export async function ensureCreditAccount(userId: string) {
+  // Signup grants are provisioned once at user creation (see
+  // provisionSignupGrants); this only guarantees the account row exists.
+  return ensureCreditAccountRecord(prisma, userId);
 }
 
 export async function grantCredits(input: {
@@ -116,6 +140,7 @@ export async function grantCredits(input: {
   amountMicros: bigint;
   source: string;
   sourceId?: string;
+  unit?: CreditGrantUnit;
   expiresAt?: Date;
   periodStart?: Date;
   periodEnd?: Date;
@@ -126,11 +151,18 @@ export async function grantCredits(input: {
     throw new Error("Credit grants must be positive.");
   }
 
+  const unit = input.unit ?? creditGrantUnit;
+  // Only dollar grants move the account balance and write a balance-tracking
+  // ledger entry. Vision-call grants are an off-balance count, so they create
+  // just the grant row.
+  const affectsBalance = unit === creditGrantUnit;
+
   if (input.sourceId) {
     const existing = await prisma.userCreditGrant.findFirst({
       where: {
         source: input.source,
         sourceId: input.sourceId,
+        unit,
         userId: input.userId,
       },
     });
@@ -143,19 +175,21 @@ export async function grantCredits(input: {
     return await prisma.$transaction(
       async (tx) => {
         const account = await ensureCreditAccountRecord(tx, input.userId);
-        const updatedAccount = await tx.userCreditAccount.update({
-          data: {
-            balanceMicros: {
-              increment: input.amountMicros,
-            },
-            lifetimeGrantedMicros: {
-              increment: input.amountMicros,
-            },
-          },
-          where: {
-            id: account.id,
-          },
-        });
+        const updatedAccount = affectsBalance
+          ? await tx.userCreditAccount.update({
+              data: {
+                balanceMicros: {
+                  increment: input.amountMicros,
+                },
+                lifetimeGrantedMicros: {
+                  increment: input.amountMicros,
+                },
+              },
+              where: {
+                id: account.id,
+              },
+            })
+          : account;
 
         const grant = await tx.userCreditGrant.create({
           data: {
@@ -169,24 +203,27 @@ export async function grantCredits(input: {
             remainingAmountMicros: input.amountMicros,
             source: input.source,
             sourceId: input.sourceId,
+            unit,
             userId: input.userId,
           },
         });
 
-        await tx.userCreditLedgerEntry.create({
-          data: {
-            accountId: account.id,
-            amountMicros: input.amountMicros,
-            balanceAfterMicros: updatedAccount.balanceMicros,
-            description: input.description,
-            grantId: grant.id,
-            metadata: prismaJson(input.metadata),
-            source: input.source,
-            sourceId: input.sourceId,
-            type: "grant",
-            userId: input.userId,
-          },
-        });
+        if (affectsBalance) {
+          await tx.userCreditLedgerEntry.create({
+            data: {
+              accountId: account.id,
+              amountMicros: input.amountMicros,
+              balanceAfterMicros: updatedAccount.balanceMicros,
+              description: input.description,
+              grantId: grant.id,
+              metadata: prismaJson(input.metadata),
+              source: input.source,
+              sourceId: input.sourceId,
+              type: "grant",
+              userId: input.userId,
+            },
+          });
+        }
 
         return grant;
       },
@@ -204,6 +241,7 @@ export async function grantCredits(input: {
         where: {
           source: input.source,
           sourceId: input.sourceId,
+          unit,
           userId: input.userId,
         },
       });
@@ -243,8 +281,29 @@ export async function assertCanUseInference(input: CreditPreflightInput) {
   }
 
   await assertWithinConfiguredLimits(input);
+  await assertModelIsPriceable(input);
 
   return account;
+}
+
+// When the model that will be billed is already known at preflight, confirm it has a configured
+// price before the provider runs. This turns an unpriced model into a clean, pre-generation
+// failure instead of an upstream-billed generation that throws while recording usage. The billed
+// model isn't always known up front (some adapters resolve a default from an omitted model); those
+// cases still fail loudly post-generation via resolveCreditRate — never via a guessed fallback.
+async function assertModelIsPriceable(input: CreditPreflightInput) {
+  if (!input.enforceModelPrice) {
+    return;
+  }
+  const provider = input.provider?.trim();
+  const model = input.model?.trim();
+  if (!provider || !model) {
+    return;
+  }
+
+  // Throws CreditRateNotConfiguredError when no code or DB price exists (and the route isn't
+  // flat-priced); the returned rate is discarded — recordInferenceUsage resolves it again in-tx.
+  await resolveCreditRate(prisma, input.route, provider, model);
 }
 
 export async function requireInferenceCredits(input: CreditPreflightInput) {
@@ -267,24 +326,32 @@ export async function requireInferenceCredits(input: CreditPreflightInput) {
 }
 
 export async function recordInferenceUsage(input: InferenceUsageInput) {
-  return prisma.$transaction(
+  const recorded = await prisma.$transaction(
     async (tx): Promise<RecordedInferenceUsage> => {
+      const included = input.billingMode === "included";
+      // "included" calls never read or charge the balance, so skip the
+      // grant-expiry scan; we still ensure the account row exists because the
+      // usage event references it.
       const account = await ensureCreditAccountRecord(tx, input.userId);
-      const balanceAfterExpiry = await expireCreditsForAccount(
-        tx,
-        account.id,
-        input.userId,
-        account.balanceMicros,
-        new Date(),
-      );
-      const rate = input.status === "succeeded"
+      const balanceAfterExpiry = included
+        ? account.balanceMicros
+        : await expireCreditsForAccount(
+            tx,
+            account.id,
+            input.userId,
+            account.balanceMicros,
+            new Date(),
+          );
+      const rate = !included && input.status === "succeeded"
         ? await resolveCreditRate(tx, input.route, input.provider, input.model)
         : zeroCreditRate();
       const normalizedUsage = normalizeProviderUsage(input.usage);
-      const creditCostMicros = input.status === "succeeded"
+      const creditCostMicros = !included && input.status === "succeeded"
         ? costForUsage(rate, normalizedUsage)
         : zeroCreditMicros;
-      const billingStatus = billingStatusFor(input.status, creditCostMicros);
+      const billingStatus = included
+        ? "included"
+        : billingStatusFor(input.status, creditCostMicros);
       const usageEvent = await tx.inferenceUsageEvent.create({
         data: {
           accountId: account.id,
@@ -352,6 +419,34 @@ export async function recordInferenceUsage(input: InferenceUsageInput) {
       isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
     },
   );
+
+  // After a real charge commits, top up the balance via auto-reload if it fell
+  // below the user's threshold. Scheduled with next/server `after` so it runs
+  // off the response path AND the serverless runtime keeps the function alive
+  // until it finishes (an un-awaited promise can be dropped after the response).
+  // The dynamic import breaks the module cycle (billing -> credits -> billing);
+  // the post-charge balance is passed in so the trigger needn't re-read it.
+  if (input.billingMode !== "included" && recorded.creditCostMicros > zeroCreditMicros) {
+    const balanceMicros = recorded.remainingBalanceMicros;
+    try {
+      after(async () => {
+        try {
+          const { maybeTriggerCreditAutoReload } = await import(
+            "@/lib/billing/credit-auto-reload"
+          );
+          await maybeTriggerCreditAutoReload(input.userId, balanceMicros);
+        } catch (error) {
+          console.error("[credit-auto-reload] trigger failed", error);
+        }
+      });
+    } catch (error) {
+      // `after` throws outside a request scope (e.g. a script/test). Don't let
+      // that break usage recording — auto-reload is best-effort.
+      console.error("[credit-auto-reload] could not schedule trigger", error);
+    }
+  }
+
+  return recorded;
 }
 
 export async function recordFailedInferenceUsage(input: {
@@ -363,6 +458,7 @@ export async function recordFailedInferenceUsage(input: {
   model: string;
   errorCode: string;
   metadata?: JsonObject;
+  billingMode?: "credits" | "included";
 }) {
   try {
     await recordInferenceUsage({
@@ -408,6 +504,9 @@ export async function getCreditBalance(userId: string) {
           gt: zeroCreditMicros,
         },
         status: "active",
+        // The dollar balance view lists dollar grants only; vision-call grants
+        // are surfaced through the Vision API quota path.
+        unit: creditGrantUnit,
         userId,
         OR: [
           {
@@ -544,6 +643,25 @@ export function creditErrorResponse(error: unknown) {
     );
   }
 
+  if (error instanceof CreditRateNotConfiguredError) {
+    // A configured-pricing gap is a server-side misconfiguration, surfaced cleanly (and logged)
+    // instead of crashing the request as an unhandled 500.
+    console.error("[inference-credits] no credit price configured", {
+      route: error.route,
+      provider: error.provider,
+      model: error.model,
+    });
+    return NextResponse.json(
+      {
+        error: "credit_price_not_configured",
+        message: "No price is configured for the requested model.",
+      },
+      {
+        status: 500,
+      },
+    );
+  }
+
   return null;
 }
 
@@ -580,6 +698,9 @@ async function expireCreditsForAccount(
         gt: zeroCreditMicros,
       },
       status: "active",
+      // Dollar grants only — vision-call grants are off-balance and expire via
+      // their own path, so they must never decrement balanceMicros here.
+      unit: creditGrantUnit,
     },
   });
 
@@ -629,27 +750,26 @@ async function debitGrants(
 ) {
   let remainingCostMicros = creditCostMicros;
   const grants = await tx.userCreditGrant.findMany({
-    orderBy: [
-      {
-        expiresAt: {
-          sort: "asc",
-          nulls: "last",
-        },
-      },
-      {
-        createdAt: "asc",
-      },
-    ],
     where: {
       accountId,
       remainingAmountMicros: {
         gt: zeroCreditMicros,
       },
       status: "active",
+      // Dollar inference only spends dollar grants — vision-call grants are a
+      // separate denomination and must never be debited here.
+      unit: creditGrantUnit,
     },
   });
 
-  for (const grant of grants) {
+  // Consumption priority: spend the subscription / periodic allotment (any grant with an expiry or a
+  // billing period) BEFORE prepaid purchased credits, which never expire. Within the expiring set the
+  // soonest-to-expire is spent first so nothing is wasted; permanent purchased credits are spent last,
+  // oldest first. This ordering is exactly why top-ups are granted with no expiry (see grantCredits
+  // callers): a non-expiring grant sorts to the back of the queue.
+  const ordered = [...grants].sort(compareGrantConsumptionOrder);
+
+  for (const grant of ordered) {
     if (remainingCostMicros <= zeroCreditMicros) {
       return;
     }
@@ -670,6 +790,41 @@ async function debitGrants(
     remainingCostMicros -= debitMicros;
   }
 
+}
+
+type GrantConsumptionFields = {
+  expiresAt: Date | null;
+  periodEnd: Date | null;
+  createdAt: Date;
+};
+
+// When a grant runs out (its expiry or billing-period end), as epoch millis, or null if it never
+// expires. A subscription/periodic grant has one of these; a purchased top-up has neither.
+function grantConsumptionDeadline(grant: GrantConsumptionFields): number | null {
+  const deadline = grant.expiresAt ?? grant.periodEnd;
+  return deadline ? deadline.getTime() : null;
+}
+
+// Orders grants for debit: expiring (subscription/periodic) credits ahead of non-expiring (purchased)
+// ones, soonest deadline first, then oldest grant first. Keeps use-it-or-lose-it credit from being
+// wasted while never-expiring purchased credit waits at the back.
+function compareGrantConsumptionOrder(
+  left: GrantConsumptionFields,
+  right: GrantConsumptionFields,
+): number {
+  const leftDeadline = grantConsumptionDeadline(left);
+  const rightDeadline = grantConsumptionDeadline(right);
+
+  if (leftDeadline === null && rightDeadline !== null) {
+    return 1;
+  }
+  if (leftDeadline !== null && rightDeadline === null) {
+    return -1;
+  }
+  if (leftDeadline !== null && rightDeadline !== null && leftDeadline !== rightDeadline) {
+    return leftDeadline - rightDeadline;
+  }
+  return left.createdAt.getTime() - right.createdAt.getTime();
 }
 
 async function assertWithinConfiguredLimits(input: CreditPreflightInput) {
@@ -763,13 +918,13 @@ function limitMatchesPreflight(
 }
 
 async function resolveCreditRate(
-  tx: Prisma.TransactionClient,
+  db: CreditsDatabase,
   route: string,
   provider: string,
   model: string,
 ): Promise<CreditRateSnapshot> {
   const now = new Date();
-  const rates = await tx.inferenceCreditRate.findMany({
+  const rates = await db.inferenceCreditRate.findMany({
     orderBy: [
       {
         version: "desc",
@@ -835,10 +990,18 @@ async function resolveCreditRate(
     );
   }
 
-  return rateSnapshot(
-    globalRate,
-    providerDefaultRate,
-  );
+  if (globalRate) {
+    return rateSnapshot(globalRate, providerDefaultRate);
+  }
+
+  // Flat-priced routes (vision, refresh) don't need per-model pricing.
+  if (routeHasFlatPrice(route)) {
+    return providerDefaultRate;
+  }
+
+  // Every billable model must have a price — a code-level rate in provider-pricing.ts or a DB
+  // override. Fail loudly instead of silently charging a default so a missing price is caught.
+  throw new CreditRateNotConfiguredError(route, provider, model);
 }
 
 function rateSnapshot(
@@ -870,25 +1033,38 @@ function rateSnapshot(
   };
 }
 
+// Flat per-call price for an app vision parse. Vision reports no token usage, so
+// each successful app (credits-billed) call is charged this flat amount. A DB
+// InferenceCreditRate row still overrides it.
+export const visionCallDefaultMicros = creditStringToMicros("0.004");
+
+// Routes priced per call regardless of model (no per-model pricing required): refresh is free
+// and a vision parse is a flat per-call charge. Every other route bills against a model price.
+function routeHasFlatPrice(route: string): boolean {
+  return (
+    route === inferenceUsageRoutes.assetsRefresh ||
+    route === inferenceUsageRoutes.vision
+  );
+}
+
 function defaultCreditRate(
   route: string,
   provider: string,
   model: string,
 ): CreditRateSnapshot {
-  const defaultRequestMicros = route === inferenceUsageRoutes.assetsRefresh
-    ? zeroCreditMicros
-    : creditStringToMicros("1");
+  const flatRequestMicros =
+    route === inferenceUsageRoutes.vision ? visionCallDefaultMicros : zeroCreditMicros;
   const providerPricing = providerCreditPricing(provider, model);
 
   return {
     id: null,
     version: null,
-    baseCostMicros: providerPricing ? zeroCreditMicros : defaultRequestMicros,
+    baseCostMicros: providerPricing ? zeroCreditMicros : flatRequestMicros,
     inputTokenCostMicros: zeroCreditMicros,
     outputTokenCostMicros: zeroCreditMicros,
     totalTokenCostMicros: zeroCreditMicros,
     characterCostMicros: zeroCreditMicros,
-    fallbackCostMicros: defaultRequestMicros,
+    fallbackCostMicros: flatRequestMicros,
     providerPricing,
   };
 }
@@ -1153,6 +1329,48 @@ function normalizedUsageJson(usage: NormalizedUsage): JsonObject {
   };
 }
 
+// The token/usage numbers the usage UI surfaces to explain a call's cost. Read
+// here, right next to normalizedUsageJson which writes them, so the field names
+// stay in sync — renaming a field updates both in one place.
+export type InferenceUsageBreakdown = {
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  generationCount: number;
+  durationMillis: number;
+};
+
+export function readInferenceUsageBreakdown(
+  normalizedUsage: unknown,
+): InferenceUsageBreakdown {
+  const source =
+    normalizedUsage &&
+    typeof normalizedUsage === "object" &&
+    !Array.isArray(normalizedUsage)
+      ? (normalizedUsage as Record<string, unknown>)
+      : {};
+  // Values are written as stringified BigInts (see normalizedUsageJson).
+  const num = (key: keyof InferenceUsageBreakdown): number => {
+    const value = source[key];
+    const parsed =
+      typeof value === "string"
+        ? Number(value)
+        : typeof value === "number"
+          ? value
+          : 0;
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  return {
+    cachedInputTokens: num("cachedInputTokens"),
+    durationMillis: num("durationMillis"),
+    generationCount: num("generationCount"),
+    inputTokens: num("inputTokens"),
+    outputTokens: num("outputTokens"),
+    totalTokens: num("totalTokens"),
+  };
+}
+
 function nestedJsonValue(
   value: JsonObject,
   objectKey: string,
@@ -1214,10 +1432,6 @@ function billingStatusFor(status: InferenceUsageStatus, creditCostMicros: bigint
   }
 
   return creditCostMicros > zeroCreditMicros ? "charged" : "zero_cost";
-}
-
-function initialFreeCreditMicros() {
-  return creditStringToMicros(process.env.DONKEY_INITIAL_FREE_CREDITS);
 }
 
 function prismaJson(value: JsonValue | undefined): Prisma.InputJsonValue | undefined {

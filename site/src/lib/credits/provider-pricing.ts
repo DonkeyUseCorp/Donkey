@@ -2,6 +2,13 @@ import {
   creditStringToMicros,
   zeroCreditMicros,
 } from "@/lib/credits/amounts";
+import {
+  elevenLabsModels,
+  type ElevenLabsRunModel,
+} from "@/lib/inference/elevenlabs-models";
+import { geminiModels, type GeminiModel } from "@/lib/inference/gemini-models";
+import { openaiModels, type OpenAIRunModel } from "@/lib/inference/openai-models";
+import { browserUsePerStepUsd } from "@/lib/browser/pricing";
 
 export type ProviderCreditPricing = {
   inputTokenCostMicrosPerMillion?: bigint;
@@ -21,7 +28,6 @@ export type ProviderCreditPricing = {
 const providerMarginNumerator = BigInt(13);
 const providerMarginDenominator = BigInt(10);
 const openAILongContextThresholdTokens = BigInt(272000);
-const geminiLongContextThresholdTokens = BigInt(200000);
 
 export function providerCreditPricing(
   provider: string,
@@ -39,14 +45,52 @@ export function providerCreditPricing(
   if (normalizedProvider === "elevenlabs") {
     return elevenLabsCreditPricing(normalizedModel);
   }
+  if (normalizedProvider === "browser-use") {
+    return browserUseCreditPricing();
+  }
 
   return undefined;
+}
+
+// Every OpenAI model the gateway selects must appear here: the Record is keyed by the
+// OpenAIRunModel union, so adding a run model without a price fails the type-check (and the
+// build). Matched exactly (not by prefix) so it never shadows a more specific table entry.
+const openaiRunModelPricing: Record<OpenAIRunModel, ProviderCreditPricing> = {
+  [openaiModels.computerUse]: textTokenPricing({
+    model: "gpt-5.5",
+    input: "5",
+    cachedInput: "0.5",
+    output: "30",
+    longContext: { input: "10", cachedInput: "1", output: "45" },
+  }),
+  [openaiModels.debugInspection]: textTokenPricing({
+    model: "gpt-5.4",
+    input: "2.5",
+    cachedInput: "0.25",
+    output: "15",
+    longContext: { input: "5", cachedInput: "0.5", output: "22.5" },
+  }),
+};
+
+function browserUseCreditPricing(): ProviderCreditPricing {
+  // Browser Use Cloud bills ~$0.01/task init + a per-step LLM fee, and the API
+  // exposes stepCount (not a USD cost), so we price per step. The per-step rate
+  // (which folds in the init fee) lives with the spend cap in browser/pricing.ts;
+  // usdWithMargin adds the 1.3x. Charged as generationCount = stepCount.
+  return {
+    generationCostMicros: usdWithMargin(browserUsePerStepUsd),
+  };
 }
 
 function openAICreditPricing(model: string): ProviderCreditPricing | undefined {
   const audioPricing = openAIAudioCreditPricing(model);
   if (audioPricing) {
     return audioPricing;
+  }
+
+  const runModelPricing = openaiRunModelPricing[model as OpenAIRunModel];
+  if (runModelPricing) {
+    return runModelPricing;
   }
 
   const matched = openAITextCreditRates.find((rate) => modelMatches(model, rate.model));
@@ -162,17 +206,7 @@ const openAITextCreditRates: {
       output: "270",
     },
   },
-  {
-    model: "gpt-5.5",
-    input: "5",
-    cachedInput: "0.5",
-    output: "30",
-    longContext: {
-      input: "10",
-      cachedInput: "1",
-      output: "45",
-    },
-  },
+  // gpt-5.5 and gpt-5.4 are gateway-run models — priced in openaiRunModelPricing.
   {
     model: "gpt-5.4-pro",
     input: "30",
@@ -193,17 +227,6 @@ const openAITextCreditRates: {
     input: "0.2",
     cachedInput: "0.02",
     output: "1.25",
-  },
-  {
-    model: "gpt-5.4",
-    input: "2.5",
-    cachedInput: "0.25",
-    output: "15",
-    longContext: {
-      input: "5",
-      cachedInput: "0.5",
-      output: "22.5",
-    },
   },
   { model: "gpt-5.2-pro", input: "21", output: "168" },
   { model: "gpt-5.2", input: "1.75", cachedInput: "0.175", output: "14" },
@@ -230,71 +253,63 @@ const openAITextCreditRates: {
   { model: "computer-use-preview", input: "3", output: "12" },
 ];
 
+// Every Gemini model we run must appear here: the Record is keyed by the GeminiModel union,
+// so adding a model to gemini-models.ts without a price fails the type-check (and the build).
+const geminiModelPricing: Record<GeminiModel, ProviderCreditPricing> = {
+  [geminiModels.flash]: textTokenPricing({
+    model: "gemini-3.5-flash",
+    input: "1.5",
+    cachedInput: "0.15",
+    output: "9",
+  }),
+  [geminiModels.flashComputerUse]: textAudioTokenPricing({
+    input: "0.5",
+    cachedInput: "0.05",
+    output: "3",
+    inputAudio: "1",
+  }),
+  [geminiModels.flashLite]: textAudioTokenPricing({
+    input: "0.25",
+    cachedInput: "0.025",
+    output: "1.5",
+    inputAudio: "0.5",
+  }),
+  // Generative image editing/generation ("nano banana") bills per output image:
+  // ~1290 output tokens at $30/1M ≈ $0.039 each.
+  [geminiModels.flashImage]: { generationCostMicros: usdWithMargin("0.039") },
+};
+
 function geminiCreditPricing(model: string): ProviderCreditPricing | undefined {
-  if (modelMatches(model, "gemini-3.5-flash")) {
-    return textTokenPricing({
-      model: "gemini-3.5-flash",
-      input: "1.5",
-      cachedInput: "0.15",
-      output: "9",
-    });
+  // Exact match wins, so a specific id is never shadowed by a broader prefix entry (e.g. an image
+  // model "…-flash-image" under the "…-flash" text prefix). For dated/snapshot ids that only match
+  // by prefix, try the longest (most specific) key first for the same reason.
+  const exact = geminiModelPricing[model as GeminiModel];
+  if (exact) {
+    return exact;
   }
-  if (modelMatches(model, "gemini-3-flash-preview")) {
-    return textAudioTokenPricing({
-      input: "0.5",
-      cachedInput: "0.05",
-      output: "3",
-      inputAudio: "1",
-    });
-  }
-  if (modelMatches(model, "gemini-3.1-flash-lite")) {
-    return textAudioTokenPricing({
-      input: "0.25",
-      cachedInput: "0.025",
-      output: "1.5",
-      inputAudio: "0.5",
-    });
-  }
-  if (modelMatches(model, "gemini-2.5-pro")) {
-    return textAudioTokenPricing({
-      input: "1.25",
-      cachedInput: "0.13",
-      output: "10",
-      inputAudio: "1.25",
-      longContextThresholdTokens: geminiLongContextThresholdTokens,
-      longContext: {
-        inputTokenCostMicrosPerMillion: usdPerMillionWithMargin("2.5"),
-        cachedInputTokenCostMicrosPerMillion: usdPerMillionWithMargin("0.25"),
-        outputTokenCostMicrosPerMillion: usdPerMillionWithMargin("15"),
-        inputAudioTokenCostMicrosPerMillion: usdPerMillionWithMargin("2.5"),
-      },
-    });
-  }
-  if (modelMatches(model, "gemini-2.5-flash-lite")) {
-    return textAudioTokenPricing({
-      input: "0.1",
-      cachedInput: "0.01",
-      output: "0.4",
-      inputAudio: "0.3",
-    });
-  }
-  if (modelMatches(model, "gemini-2.5-flash")) {
-    return textAudioTokenPricing({
-      input: "0.3",
-      cachedInput: "0.03",
-      output: "2.5",
-      inputAudio: "1",
-    });
+
+  const byLongestPrefix = Object.entries(geminiModelPricing).sort(
+    ([a], [b]) => b.length - a.length,
+  );
+  for (const [id, pricing] of byLongestPrefix) {
+    if (modelMatches(model, id)) {
+      return pricing;
+    }
   }
 
   return undefined;
 }
 
+// Every ElevenLabs model the gateway selects must appear here: the Record is keyed by the
+// ElevenLabsRunModel union, so adding a run model without a price fails the build.
+const elevenLabsRunModelPricing: Record<ElevenLabsRunModel, ProviderCreditPricing> = {
+  [elevenLabsModels.music]: { durationSecondCostMicros: usdWithMargin("0.005") },
+};
+
 function elevenLabsCreditPricing(model: string): ProviderCreditPricing | undefined {
-  if (modelMatches(model, "music_v1")) {
-    return {
-      durationSecondCostMicros: usdWithMargin("0.005"),
-    };
+  const runModelPricing = elevenLabsRunModelPricing[model as ElevenLabsRunModel];
+  if (runModelPricing) {
+    return runModelPricing;
   }
   if (modelMatches(model, "eleven_text_to_sound_v2")) {
     return {

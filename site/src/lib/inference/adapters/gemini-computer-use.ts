@@ -2,16 +2,26 @@ import {
   ApiError,
   Environment,
   GoogleGenAI,
+  ThinkingLevel,
 } from "@google/genai";
-import { JWT, type JWTInput } from "google-auth-library";
 import type {
   Content,
   GenerateContentConfig,
   GenerateContentParameters,
-  GoogleGenAIOptions,
+  GenerateContentResponse,
   Tool,
 } from "@google/genai";
 
+import {
+  geminiApiError,
+  geminiCandidateParts,
+  geminiCandidates,
+  geminiClientConfig,
+  stringValue,
+  type AdapterEnvironment,
+  type GeminiClientFactory,
+} from "@/lib/inference/adapters/gemini-client";
+import { geminiModelRoles } from "@/lib/inference/gemini-models";
 import { ensureConfigured } from "@/lib/inference/http";
 import {
   isJsonObject,
@@ -29,19 +39,14 @@ import {
   type ResponseCreateRequest,
   type ResponseCreateResult,
   type TextCompletionResult,
+  type TextStreamResult,
 } from "@/lib/inference/providers";
-
-type AdapterEnvironment = Record<string, string | undefined>;
-type GeminiClient = Pick<GoogleGenAI, "models">;
-type GeminiClientFactory = (options: GoogleGenAIOptions) => GeminiClient;
 
 const providerID = "gemini-computer-use";
 const geminiProviderID = "gemini";
-const defaultDecisionResponsesModel = "gemini-3.1-flash-lite";
-const defaultVertexResponsesModel = "gemini-3.5-flash";
-const defaultComputerUseModel = "gemini-3-flash-preview";
-const vertexLocation = "global";
-const vertexAIScope = "https://www.googleapis.com/auth/cloud-platform";
+const defaultDecisionResponsesModel = geminiModelRoles.fastDecision;
+const defaultVertexResponsesModel = geminiModelRoles.chat;
+const defaultComputerUseModel = geminiModelRoles.browserComputerUse;
 
 export const geminiBrowserInteractionToolType = "donkey_gemini_browser_interaction";
 export const debugUIInspectionToolType = "donkey_debug_ui_inspection";
@@ -189,6 +194,66 @@ export function createGeminiComputerUseProvider(
     };
   }
 
+  // Stream a chat completion as Server-Sent Events. Each model chunk is re-emitted as an
+  // OpenAI-style `data: {choices:[{delta:{content}}]}` line so the desktop client parses one stable
+  // shape regardless of provider, ending with the `[DONE]` sentinel. Used by the notch to stream the
+  // assistant's final reply token-by-token into the chin and the open task row.
+  async function streamCompletion(
+    request: ChatCompletionRequest,
+  ): Promise<TextStreamResult> {
+    ensureConfigured(configured);
+
+    const model = requestedChatModel(request, defaultVertexResponsesModel);
+    const body = toJsonObject(request);
+    const requestParameters: GenerateContentParameters = {
+      model,
+      contents: contentsFromInput(toJsonValue(request.messages)),
+      config: generationConfigFromBody(body),
+    };
+    const client = clientFactory(clientConfig.options);
+
+    let iterator: AsyncGenerator<GenerateContentResponse>;
+    try {
+      iterator = await client.models.generateContentStream(requestParameters);
+    } catch (error) {
+      throw geminiProviderError(error);
+    }
+
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        try {
+          for await (const chunk of iterator) {
+            const piece = streamChunkText(chunk);
+            if (!piece) {
+              continue;
+            }
+            const event = { choices: [{ index: 0, delta: { content: piece } }] };
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+          }
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        } catch (error) {
+          // A mid-stream provider failure is surfaced as a terminal SSE error event so the client
+          // stops cleanly with whatever it has, rather than hanging on a truncated stream.
+          const message = error instanceof Error ? error.message : "stream failed";
+          controller.enqueue(
+            encoder.encode(`event: error\ndata: ${JSON.stringify({ message })}\n\n`),
+          );
+        } finally {
+          controller.close();
+        }
+      },
+    });
+
+    return {
+      provider: geminiProviderID,
+      model,
+      response: new Response(stream, {
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    };
+  }
+
   return {
     id: providerID,
     configured,
@@ -197,10 +262,21 @@ export function createGeminiComputerUseProvider(
     canCreateResponse: (request) => {
       return !hasExplicitUnsupportedTools(request.body.tools);
     },
+    // This adapter renders input_audio/input_video parts (see mediaPart); declare it so the router
+    // routes media requests here by capability rather than only because OpenAI declines them.
+    handlesResponseMedia: () => true,
     listModels,
     completeText,
+    streamCompletion,
     createResponse,
   };
+}
+
+// The incremental text of one streamed model chunk: the SDK's concatenated `.text` getter, falling
+// back to an empty string for a chunk that carries only metadata (usage, finish reason).
+function streamChunkText(chunk: GenerateContentResponse): string {
+  const text = (chunk as { text?: unknown }).text;
+  return typeof text === "string" ? text : "";
 }
 
 function geminiGenerateContentParameters(
@@ -317,6 +393,15 @@ function partFromValue(value: JsonValue): JsonObject {
     return imagePart(value);
   }
 
+  if (
+    value.type === "input_audio" ||
+    value.type === "audio" ||
+    value.type === "input_video" ||
+    value.type === "video"
+  ) {
+    return mediaPart(value);
+  }
+
   const text = stringValue(value.text);
   if (text) {
     return { text };
@@ -355,6 +440,56 @@ function imagePart(value: JsonObject): JsonObject {
   }
 
   return { text: JSON.stringify(value) };
+}
+
+// Audio/video content part. Mirrors imagePart: inline base64 becomes inlineData; a URI becomes
+// fileData. On Vertex, fileData.fileUri must be a gs:// Cloud Storage URI (or, for video, a YouTube
+// URL) — a plain https object URL is rejected by Vertex at request time. The gs:// form backs the
+// staged long-media path. Vertex reads audio and video the same way it reads images.
+function mediaPart(value: JsonObject): JsonObject {
+  const isVideo = value.type === "input_video" || value.type === "video";
+  const mimeType =
+    stringValue(value.mime_type) ||
+    stringValue(value.mimeType) ||
+    (isVideo ? "video/mp4" : "audio/mpeg");
+  const base64 =
+    stringValue(value.dataBase64) ||
+    stringValue(value.data_base64) ||
+    stringValue(value.audio_base64) ||
+    stringValue(value.video_base64);
+  if (base64) {
+    return {
+      inlineData: {
+        mimeType,
+        data: base64,
+      },
+    };
+  }
+
+  const fileURI =
+    stringValue(value.fileUri) ||
+    stringValue(value.file_uri) ||
+    stringValue(value.url);
+  if (fileURI?.startsWith("data:")) {
+    const inline = dataURLToInlineData(fileURI);
+    if (inline) {
+      return inline;
+    }
+  }
+
+  if (fileURI) {
+    return {
+      fileData: {
+        mimeType,
+        fileUri: fileURI,
+      },
+    };
+  }
+
+  // A media part with no recognized base64 or URI key: emit a short marker rather than
+  // JSON.stringify(value), which would inline a multi-megabyte base64 blob under an unexpected key
+  // as prompt text and blow the token budget.
+  return { text: "[unsupported media part: no inline data or file URI]" };
 }
 
 function functionResponsePart(value: JsonObject): JsonObject {
@@ -401,6 +536,25 @@ function dataURLToInlineData(value: string): JsonObject | null {
   };
 }
 
+// Maps a caller's `thinking_level` string to the SDK enum. Accepts the documented lowercase values
+// (and tolerates casing); returns undefined for anything unrecognized so the caller can fall back to
+// the legacy thinking_budget path.
+function thinkingLevelFromBody(body: JsonObject): ThinkingLevel | undefined {
+  const raw = stringValue(body.thinking_level) ?? stringValue(body.thinkingLevel);
+  switch (raw?.trim().toLowerCase()) {
+    case "minimal":
+      return ThinkingLevel.MINIMAL;
+    case "low":
+      return ThinkingLevel.LOW;
+    case "medium":
+      return ThinkingLevel.MEDIUM;
+    case "high":
+      return ThinkingLevel.HIGH;
+    default:
+      return undefined;
+  }
+}
+
 function generationConfigFromBody(body: JsonObject): Partial<GenerateContentConfig> {
   const config: Partial<GenerateContentConfig> = {};
   const temperature = numberValue(body.temperature);
@@ -419,9 +573,18 @@ function generationConfigFromBody(body: JsonObject): Partial<GenerateContentConf
   }
   // Bound reasoning so thinking tokens (which count against maxOutputTokens) can't starve the
   // structured output. Callers driving tight per-turn loops pass a small budget; 0 disables thinking.
+  // Gemini 3.x models (e.g. gemini-3.5-flash) take thinking_level (minimal|low|medium|high), NOT the
+  // integer thinking_budget — passing the budget to them is silently ignored. Prefer the level when the
+  // caller sets it; the two are mutually exclusive. Older 2.x models still use thinking_budget. In both
+  // cases request the thought summary so callers can persist the reasoning (the normalized response
+  // separates it from output_text).
+  const thinkingLevel = thinkingLevelFromBody(body);
   const thinkingBudget = numberValue(body.thinking_budget) ?? numberValue(body.thinkingBudget);
-  if (thinkingBudget !== undefined) {
-    config.thinkingConfig = { thinkingBudget };
+  if (thinkingLevel !== undefined) {
+    config.thinkingConfig = { thinkingLevel, includeThoughts: true };
+  } else if (thinkingBudget !== undefined) {
+    config.thinkingConfig =
+      thinkingBudget > 0 ? { thinkingBudget, includeThoughts: true } : { thinkingBudget };
   }
   const responseFormat = responseFormatFromBody(body);
   if (responseFormat?.json) {
@@ -625,22 +788,19 @@ function normalizedGeminiResponse(
   raw: JsonValue,
   registeredTools: string[],
 ): JsonObject {
-  const candidates = isJsonObject(raw) && Array.isArray(raw.candidates)
-    ? raw.candidates
-    : [];
-  const firstCandidate = candidates.find(isJsonObject);
-  const parts =
-    firstCandidate &&
-    isJsonObject(firstCandidate.content) &&
-    Array.isArray(firstCandidate.content.parts)
-      ? firstCandidate.content.parts
-      : [];
-  const textParts = parts
-    .filter(isJsonObject)
+  const partObjects = geminiCandidateParts(geminiCandidates(raw)[0]);
+  // Thought summaries (parts flagged `thought: true` when includeThoughts is on) must NOT land in
+  // output_text — that field carries the structured JSON the caller parses. Keep them separate so the
+  // reasoning can be persisted to the thread without corrupting the tool-call payload.
+  const reasoningParts = partObjects
+    .filter((part) => part.thought === true)
     .map((part) => stringValue(part.text))
     .filter((part): part is string => Boolean(part));
-  const calls = parts
-    .filter(isJsonObject)
+  const textParts = partObjects
+    .filter((part) => part.thought !== true)
+    .map((part) => stringValue(part.text))
+    .filter((part): part is string => Boolean(part));
+  const calls = partObjects
     .map(functionCallFromPart)
     .filter((part): part is JsonObject => Boolean(part));
 
@@ -648,6 +808,7 @@ function normalizedGeminiResponse(
     id: stringValue(isJsonObject(raw) ? raw.responseId : undefined) ?? `gemini-${Date.now()}`,
     object: "response",
     output_text: textParts.join("\n").trim(),
+    reasoning_text: reasoningParts.join("\n").trim(),
     output: [
       {
         type: "message",
@@ -742,123 +903,8 @@ function requestedChatModel(request: ChatCompletionRequest, fallback: string) {
   return request.model?.trim() || request.models?.[0]?.trim() || fallback;
 }
 
-function geminiClientConfig(environment: AdapterEnvironment): {
-  configured: boolean;
-  options: GoogleGenAIOptions;
-  service: "vertex-ai";
-} {
-  const apiVersion = environment.GEMINI_API_VERSION?.trim() || undefined;
-  const timeout = numberFromString(environment.GEMINI_TIMEOUT_MS);
-  const httpOptions: GoogleGenAIOptions["httpOptions"] | undefined =
-    timeout === undefined ? undefined : { timeout };
-  const googleCredentials = googleCredentialsFromEnvironment(environment);
-  const project = googleCredentials?.project_id;
-
-  const options: GoogleGenAIOptions = {
-    vertexai: true,
-    location: vertexLocation,
-  };
-  if (project) {
-    options.project = project;
-  }
-  if (apiVersion) {
-    options.apiVersion = apiVersion;
-  }
-  if (httpOptions) {
-    options.httpOptions = httpOptions;
-  }
-  if (googleCredentials) {
-    options.googleAuthOptions = {
-      authClient: googleAuthClient(googleCredentials),
-    };
-  }
-
-  return {
-    configured: Boolean(project),
-    options,
-    service: "vertex-ai",
-  };
-}
-
-function googleCredentialsFromEnvironment(
-  environment: AdapterEnvironment,
-): JWTInput | undefined {
-  const rawCredentials = environment.GOOGLE_APPLICATION_CREDENTIALS_JSON?.trim();
-  if (!rawCredentials) {
-    return undefined;
-  }
-
-  return serviceAccountCredentials(rawCredentials);
-}
-
-function googleAuthClient(credentials: JWTInput) {
-  return new JWT({
-    email: credentials.client_email,
-    key: credentials.private_key,
-    keyId: credentials.private_key_id,
-    scopes: [vertexAIScope],
-  });
-}
-
-function serviceAccountCredentials(rawCredentials: string): JWTInput {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawCredentials);
-  } catch {
-    throw new InferenceProviderError("Google service account JSON is invalid.", {
-      statusCode: 500,
-      code: "invalid_google_service_account_json",
-    });
-  }
-
-  const credentials = toJsonValue(parsed);
-  if (!isJsonObject(credentials)) {
-    throw new InferenceProviderError("Google service account JSON must be an object.", {
-      statusCode: 500,
-      code: "invalid_google_service_account_json",
-    });
-  }
-
-  const clientEmail = stringValue(credentials.client_email);
-  const privateKey = stringValue(credentials.private_key);
-  if (!clientEmail || !privateKey) {
-    throw new InferenceProviderError(
-      "Google service account JSON must include client_email and private_key.",
-      {
-        statusCode: 500,
-        code: "invalid_google_service_account_json",
-      },
-    );
-  }
-
-  return {
-    type: stringValue(credentials.type),
-    project_id: stringValue(credentials.project_id),
-    private_key_id: stringValue(credentials.private_key_id),
-    private_key: privateKey,
-    client_email: clientEmail,
-    client_id: stringValue(credentials.client_id),
-    universe_domain: stringValue(credentials.universe_domain),
-  };
-}
-
 function geminiProviderError(error: unknown) {
-  if (error instanceof ApiError) {
-    return new InferenceProviderError("Gemini request failed.", {
-      statusCode: error.status,
-      code: "provider_error",
-      details: {
-        status: error.status,
-        message: error.message,
-      },
-    });
-  }
-
-  return new InferenceProviderError("Gemini request failed.", {
-    details: {
-      message: error instanceof Error ? error.message : "Unknown error",
-    },
-  });
+  return geminiApiError("Gemini request failed.", error);
 }
 
 function chatCompletionBody(
@@ -926,18 +972,6 @@ function staticModel(model: string, computerUse: boolean): InferenceModel {
   };
 }
 
-function stringValue(value: JsonValue | undefined): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
 function numberValue(value: JsonValue | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function numberFromString(value: string | undefined): number | undefined {
-  if (!value?.trim()) {
-    return undefined;
-  }
-  const number = Number(value);
-  return Number.isFinite(number) ? number : undefined;
 }

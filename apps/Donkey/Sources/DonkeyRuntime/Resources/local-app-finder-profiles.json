@@ -92,10 +92,10 @@
       "appID": "com.apple.systempreferences",
       "appName": "System Settings",
       "bundleIdentifier": "com.apple.systempreferences",
-      "description": "System settings are denied for generic local-app automation.",
+      "description": "Settings are changed with system tools (defaults, networksetup, osascript) through shell_exec, not by driving the System Settings UI, so the GUI itself is not a generic-automation target.",
       "supportStatus": "denied",
       "capabilities": [],
-      "denyReason": "System settings are denied for generic local-app automation.",
+      "denyReason": "Settings are changed via system tools through shell_exec, not by automating the System Settings UI.",
       "metadata": {}
     }
   ],

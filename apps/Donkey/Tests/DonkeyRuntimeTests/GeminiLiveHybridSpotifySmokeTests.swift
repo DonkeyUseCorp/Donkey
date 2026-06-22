@@ -9,10 +9,11 @@ import Testing
 /// Live, doubly-gated: the **hybrid** flow through the REAL production controller.
 /// `GeminiLiveVoiceController` runs the fast realtime command session
 /// (`gemini-live-2.5-flash`) with the Command Layer tools plus the `vision_control`
-/// escalation. For "play Coldplay on Spotify" — which `music_play` can't do
-/// (Apple-Music only) — the 2.5 model calls `vision_control`, and the controller
-/// runs the gemini-3.5 `VertexVisionDriver` to operate Spotify. The test only feeds
-/// the controller a text turn and verifies real Coldplay playback.
+/// escalation. For "play Coldplay on Spotify" — whose installed skill
+/// (`app_skill` → spotify-operate) says the app must be driven by vision — the
+/// 2.5 model calls `vision_control`, and the controller runs the gemini-3.5
+/// `VertexVisionDriver` to operate Spotify. The test only feeds the controller a
+/// text turn and verifies real Coldplay playback.
 ///
 /// Behavior probe: both the model's choice to escalate and the vision grounding are
 /// probabilistic — read the printed line (validated: escalates, ~8 vision turns,

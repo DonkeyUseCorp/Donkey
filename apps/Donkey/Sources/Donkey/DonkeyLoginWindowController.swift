@@ -10,7 +10,7 @@ final class DonkeyLoginWindowController: NSWindowController {
 
         let contentView = DonkeyLoginView(authCoordinator: authCoordinator)
         let window = NSWindow(
-            contentRect: CGRect(x: 0, y: 0, width: 820, height: 680),
+            contentRect: CGRect(x: 0, y: 0, width: 820, height: 600),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -134,35 +134,35 @@ private struct DonkeyWelcomeScreen: View {
             Spacer(minLength: 118)
 
             DonkeyAppIconMark()
-                .frame(width: 116, height: 116)
-                .padding(.bottom, 44)
+                .frame(width: 88, height: 88)
+                .padding(.bottom, 28)
 
             Text("Donkey")
-                .font(.system(size: 56, weight: .bold, design: .serif))
+                .font(.system(size: 34, weight: .semibold))
                 .foregroundStyle(.white)
-                .padding(.bottom, 18)
+                .padding(.bottom, 10)
 
             Text("Get Donkey set up on this Mac.")
-                .font(.system(size: 22, weight: .regular))
-                .foregroundStyle(.white.opacity(0.58))
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(.white.opacity(0.5))
 
-            Spacer(minLength: 102)
+            Spacer().frame(height: 132)
 
             Button(action: getStarted) {
                 Text("Get started")
-                    .font(.system(size: 23, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.black.opacity(0.84))
                     .frame(maxWidth: .infinity)
-                    .frame(height: 60)
+                    .frame(height: 42)
                     .background(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .fill(Color.white.opacity(0.96))
                     )
             }
             .buttonStyle(.plain)
-            .frame(width: 420)
+            .frame(width: 294)
             .accessibilityLabel("Get started")
-            .padding(.bottom, 70)
+            .padding(.bottom, 56)
         }
         .padding(.horizontal, 52)
     }
@@ -176,13 +176,13 @@ private struct DonkeyGoogleSignInScreen<StatusText: View>: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Spacer(minLength: 142)
+            Spacer(minLength: 64)
 
             Text("Sign In")
-                .font(.system(size: 48, weight: .bold, design: .serif))
+                .font(.system(size: 34, weight: .semibold))
                 .foregroundStyle(.white)
 
-            Spacer(minLength: 90)
+            Spacer().frame(height: 72)
 
             VStack(spacing: 18) {
                 Button {
@@ -200,9 +200,9 @@ private struct DonkeyGoogleSignInScreen<StatusText: View>: View {
                     .foregroundStyle(statusColor)
                     .frame(height: 20)
             }
-            .frame(width: 360, height: 184)
+            .frame(width: 360, height: 120)
 
-            Spacer(minLength: 170)
+            Spacer(minLength: 64)
         }
         .padding(.horizontal, 52)
     }

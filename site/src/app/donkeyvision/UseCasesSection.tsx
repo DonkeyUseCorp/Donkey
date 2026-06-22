@@ -1,3 +1,4 @@
+import { InlineMarkup } from "@/app/donkeyvision/codeHighlight";
 import { useCases } from "@/app/donkeyvision/data";
 import type { Feature } from "@/app/donkeyvision/types";
 
@@ -8,16 +9,14 @@ type Props = {
 export function UseCasesSection() {
   return (
     <section className="mx-auto w-full max-w-[1400px] px-6 py-20 md:px-12">
-      <div className="mb-10 flex flex-col justify-between gap-5 md:flex-row md:items-end">
-        <div>
-          <h2 className="max-w-3xl text-4xl font-semibold leading-none md:text-6xl">
-            Screen understanding for software that exposes no API.
-          </h2>
-        </div>
-        <p className="max-w-lg text-lg leading-8 text-[#454545]">
-          Send a screenshot from any application and get back a structured UI
-          map. Add an instruction when your product needs one target instead of
-          the full element list.
+      <div className="mb-10">
+        <h2 className="text-4xl font-semibold leading-none md:whitespace-nowrap md:text-6xl">
+          Use screenshots when there is no API.
+        </h2>
+        <p className="mt-5 max-w-2xl text-lg leading-8 text-[#454545]">
+          Send a screenshot from any application. Donkey Vision returns detected
+          UI elements, labels, bounding boxes, center points, and optional
+          prompt-matched click targets.
         </p>
       </div>
       <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-4">
@@ -38,7 +37,9 @@ function UseCaseCard({ feature }: Props) {
         <Icon size={22} aria-hidden="true" />
       </div>
       <h3 className="text-xl font-semibold leading-7">{feature.title}</h3>
-      <p className="mt-3 text-sm leading-6 text-[#555]">{feature.description}</p>
+      <p className="mt-3 text-sm leading-6 text-[#555]">
+        <InlineMarkup text={feature.description} />
+      </p>
     </div>
   );
 }

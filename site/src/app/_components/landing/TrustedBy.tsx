@@ -1,7 +1,5 @@
 "use client";
 
-import { ArrowRight } from "lucide-react";
-
 import { GITHUB_REPO_URL } from "@/app/_components/landing/data";
 import { useMediaQuery } from "@/app/_components/landing/useMediaQuery";
 import { BLACK, CREAM } from "@/app/_components/landing/theme";
@@ -68,7 +66,7 @@ export function TrustedBy() {
             fontWeight: 600,
           }}
         >
-          View on GitHub <ArrowRight size={14} />
+          View on GitHub
         </span>
       </a>
     </section>

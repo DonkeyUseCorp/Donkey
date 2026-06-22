@@ -1,3 +1,4 @@
+import AppKit
 import DonkeyAI
 import DonkeyContracts
 import DonkeyHarness
@@ -15,6 +16,69 @@ private enum UserQueryLog {
     static let commands = Logger(subsystem: "com.donkey.app", category: "user-query")
 }
 
+/// End-to-end vision-grounding telemetry. Intentionally NOT `#if DEBUG`-gated and mirrored to
+/// stdout: these are the latency numbers we capture for marketing, so they must be visible when
+/// running a release binary from the terminal — not just in a debug build's os_log stream.
+private enum VisionGroundingLog {
+    static let logger = Logger(subsystem: "com.donkey.app", category: "vision-grounding")
+
+    static func emit(_ message: String) {
+        logger.notice("\(message, privacy: .public)")
+        print("[grounding-e2e] \(message)")
+    }
+}
+
+/// Serializes FOREGROUND harness runs so only one holds window focus at a time. Background runs route
+/// input by pid and never raise an app, so they parallelize freely and never touch this gate; two
+/// foreground runs, by contrast, would fight over the frontmost app, so they queue here and run their
+/// visible work one at a time (FIFO). A run still does all its planning/observation concurrently — it
+/// only waits for the token around the loop that actually drives the GUI.
+actor ForegroundFocusGate {
+    private var locked = false
+    private var waiters: [(id: Int, continuation: CheckedContinuation<Bool, Never>)] = []
+    private var nextWaiterID = 0
+
+    /// Returns true if the caller now holds the token (and must `release()`), false if it was cancelled
+    /// while waiting (and must NOT release — it never held the token).
+    func acquire() async -> Bool {
+        if !locked {
+            locked = true
+            return true
+        }
+        let id = nextWaiterID
+        nextWaiterID += 1
+        // Cancellation removes and resumes the waiter rather than leaving it parked forever; a cancelled
+        // waiter never held the token, so it returns false and `locked` (held by the active run) is
+        // untouched. Without this, release() would hand the token to a dead continuation and deadlock
+        // every later foreground run.
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                if Task.isCancelled {
+                    continuation.resume(returning: false)
+                } else {
+                    waiters.append((id, continuation))
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelWaiter(id) }
+        }
+    }
+
+    private func cancelWaiter(_ id: Int) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+        waiters.remove(at: index).continuation.resume(returning: false)
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            locked = false
+        } else {
+            // Hand the token directly to the next waiter; ownership transfers, so `locked` stays true.
+            waiters.removeFirst().continuation.resume(returning: true)
+        }
+    }
+}
+
 struct UserQueryCommandHandlingResult: Equatable, Sendable {
     var status: LocalAppTaskLiveRunStatus
     var threadStatus: UserQueryTaskStatus
@@ -23,7 +87,6 @@ struct UserQueryCommandHandlingResult: Equatable, Sendable {
     var taskLabel: String?
     var traceID: String
     var metadata: [String: String]
-    var documentReviewRequest: DocumentFormFillReviewRequest?
     var agentVisualizationPlan: AgentVisualizationPlan?
     var cursorOverlayRequest: PointerCoachCursorGuideRequest?
 
@@ -35,7 +98,6 @@ struct UserQueryCommandHandlingResult: Equatable, Sendable {
         traceID: String,
         metadata: [String: String],
         taskLabel: String? = nil,
-        documentReviewRequest: DocumentFormFillReviewRequest? = nil,
         agentVisualizationPlan: AgentVisualizationPlan? = nil,
         cursorOverlayRequest: PointerCoachCursorGuideRequest? = nil
     ) {
@@ -46,21 +108,9 @@ struct UserQueryCommandHandlingResult: Equatable, Sendable {
         self.taskLabel = taskLabel
         self.traceID = traceID
         self.metadata = metadata
-        self.documentReviewRequest = documentReviewRequest
         self.agentVisualizationPlan = agentVisualizationPlan
         self.cursorOverlayRequest = cursorOverlayRequest
     }
-}
-
-struct DocumentFormFillReviewRequest: Equatable, Sendable {
-    var plan: DocumentFormFillPlan
-    var definition: LocalAppTaskDefinition
-    var traceID: String
-}
-
-private struct UserQueryModelIntentInput: Equatable, Sendable {
-    var command: String
-    var contextSnippets: [String]
 }
 
 struct UserQueryCommandContext: Sendable {
@@ -79,55 +129,82 @@ protocol UserQueryCommandHandling: Sendable {
         context: UserQueryCommandContext?
     ) async -> UserQueryCommandHandlingResult
     func pauseCommand(taskID: String) async -> Bool
-    func resumeCommand(taskID: String) async -> Bool
-    func approvePermissionGate(taskID: String) async -> Bool
+    func approvePermissionGate(taskID: String, alwaysAllow: Bool) async -> Bool
+    /// Re-run the harness loop for a task whose permission gate was just
+    /// approved, so the granted command actually executes. Returns nil when the
+    /// task is unknown.
+    func continueApprovedCommand(
+        taskID: String,
+        context: UserQueryCommandContext?
+    ) async -> UserQueryCommandHandlingResult?
+    /// Queue a follow-up instruction onto a task whose loop is still running so it folds it in at its
+    /// next step. Returns true when the task is live (a loop will pick it up); false means the caller
+    /// should fall back to resuming the task with the instruction as a fresh turn.
+    func injectFollowUp(taskID: String, text: String) async -> Bool
+    /// Re-run a previously-interrupted task in the BACKGROUND (no focus steal), for unattended
+    /// auto-resume on relaunch. Returns nil when the task is unknown or has no goal to resume.
+    func autoResumeCommand(
+        taskID: String,
+        context: UserQueryCommandContext?
+    ) async -> UserQueryCommandHandlingResult?
+    /// Set by the overlay so a mid-run hosted 401 (an expired session) surfaces re-login. The inference
+    /// client fires it off the main actor, so the hook hops back to the main actor itself.
+    var onAuthenticationRequired: (@MainActor @Sendable () -> Void)? { get set }
 }
 
 extension UserQueryCommandHandling {
     func handleSubmittedCommand(_ command: String) async -> UserQueryCommandHandlingResult {
         await handleSubmittedCommand(command, context: nil)
     }
+
+    func continueApprovedCommand(
+        taskID: String,
+        context: UserQueryCommandContext?
+    ) async -> UserQueryCommandHandlingResult? {
+        nil
+    }
+
+    func injectFollowUp(taskID: String, text: String) async -> Bool {
+        false
+    }
+
+    func autoResumeCommand(
+        taskID: String,
+        context: UserQueryCommandContext?
+    ) async -> UserQueryCommandHandlingResult? {
+        nil
+    }
 }
 
 struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
-    var catalog: LocalAppTaskCatalog
-    var taskIntentAdapter: any TaskIntentParsingAdapter
-    var appController: any LocalAppTaskAppControlling
-    var actionEngineFactory: LocalAppHarnessStepExecutor.ActionEngineFactory
     var permissionPolicy: ToolCallPolicy
-    var redactor: AIHarnessRedactor
-    var memoryRetriever: SemanticRunMemoryRetriever
     var coordinatorRegistry: UserQueryRunCoordinatorRegistry
     var genericHarnessLifecycle: AppHarnessGenericLifecycle
-    var memoryStore: SQLiteAgentMemoryStore?
+    /// Shared across every run (the actor is a reference, so struct copies captured into run Tasks share
+    /// one gate): only one foreground run drives the GUI at a time. See `ForegroundFocusGate`.
+    let foregroundFocusGate = ForegroundFocusGate()
+    /// Set by the overlay model; fired when any hosted request in a turn returns 401 so the app can
+    /// surface re-login. Optional, so existing construction sites are unaffected.
+    var onAuthenticationRequired: (@MainActor @Sendable () -> Void)?
 
     init(
-        catalog: LocalAppTaskCatalog = .defaultLocal(),
-        taskIntentAdapter: (any TaskIntentParsingAdapter)? = nil,
-        appController: any LocalAppTaskAppControlling = MacLocalAppTaskController(
-            uiUnderstandingRunner: DonkeyUIUnderstandingRunnerFactory.defaultRunner()
-        ),
-        actionEngineFactory: @escaping LocalAppHarnessStepExecutor.ActionEngineFactory = LocalAppTaskActionEngines.keyboardOrAutomation(for:),
         permissionPolicy: ToolCallPolicy = ToolCallPolicy(
             allowedCapabilities: ToolCallPolicy.defaultAllowedCapabilities.union([.input]),
             deniedCapabilities: []
         ),
-        redactor: AIHarnessRedactor = AIHarnessRedactor(),
-        memoryRetriever: SemanticRunMemoryRetriever = SemanticRunMemoryRetriever(),
         coordinatorRegistry: UserQueryRunCoordinatorRegistry = UserQueryRunCoordinatorRegistry(),
-        genericHarnessLifecycle: AppHarnessGenericLifecycle = AppHarnessGenericLifecycle(),
-        memoryStore: SQLiteAgentMemoryStore? = .shared
+        genericHarnessLifecycle: AppHarnessGenericLifecycle = AppHarnessGenericLifecycle()
     ) {
-        self.catalog = catalog
-        self.coordinatorRegistry = coordinatorRegistry
-        self.taskIntentAdapter = taskIntentAdapter ?? HostedTaskIntentParsingAdapter()
-        self.appController = appController
-        self.actionEngineFactory = actionEngineFactory
         self.permissionPolicy = permissionPolicy
-        self.redactor = redactor
-        self.memoryRetriever = memoryRetriever
+        self.coordinatorRegistry = coordinatorRegistry
         self.genericHarnessLifecycle = genericHarnessLifecycle
-        self.memoryStore = memoryStore
+    }
+
+    /// Bridges the struct's main-actor auth-expiry hook to the inference client's off-actor callback,
+    /// hopping back to the main actor. Nil when no hook is set, so the client stays silent.
+    private func backendAuthExpiryHook() -> (@Sendable () -> Void)? {
+        guard let onAuthenticationRequired else { return nil }
+        return { Task { @MainActor in onAuthenticationRequired() } }
     }
 
     func handleSubmittedCommand(
@@ -151,7 +228,11 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         traceID: String,
         taskID: String
     ) async -> UserQueryCommandHandlingResult {
-        let harnessRequest = Self.harnessRequest(command: command, context: context)
+        // Redact PII/secrets before the command becomes the task goal: the hosted planner forwards the
+        // goal to the backend on every step, and the goal is the only user text this route sends to a
+        // model, so redacting here keeps secrets on-device without touching the planner.
+        let redactedCommand = AIHarnessRedactor().redact(command, surface: .modelContext).redactedText
+        let harnessRequest = Self.harnessRequest(command: redactedCommand, context: context)
         let genericPreparedTurn = await genericHarnessLifecycle.prepareUserQueryTurn(
             request: harnessRequest,
             pointerTask: context?.task,
@@ -189,227 +270,134 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             return result
         }
 
-        let coordinator = await coordinatorRegistry.coordinator(for: taskID)
-        let modelInput = Self.modelInput(
-            for: command,
+        // Every typed query runs the generic harness loop against the frontmost app: the planner
+        // re-plans per observation and picks AX/vision to see and AX/vision/scripts to act.
+        return await runHarnessLoop(
+            command: redactedCommand,
+            traceID: traceID,
+            taskID: taskID,
+            preparedTurnMetadata: Self.genericHarnessMetadata(preparedTurn: genericPreparedTurn),
+            visualize: context?.agentVisualizationChanged,
+            progress: Self.progressLabeler(context?.spawnProgressChanged),
+            answerStream: Self.answerDeltaSink(context?.spawnProgressChanged)
+        )
+    }
+
+    func continueApprovedCommand(
+        taskID: String,
+        context: UserQueryCommandContext?
+    ) async -> UserQueryCommandHandlingResult? {
+        // Interactive resume (gate approval, tap Resume): let the understanding boundary pick foreground
+        // vs. background as it would for any turn.
+        await resumeExistingTask(taskID: taskID, context: context, tracePrefix: "user-query-resume")
+    }
+
+    func injectFollowUp(taskID: String, text: String) async -> Bool {
+        guard let task = await genericHarnessLifecycle.taskState(taskID: taskID) else { return false }
+        switch task.status {
+        case .running, .resuming:
+            // A live loop drains the queue. The returned flag is authoritative — false means the loop
+            // ended in the meantime, so the caller resumes the task instead (which drains it on start).
+            return await genericHarnessLifecycle.coordinator.enqueueUserMessage(taskID: taskID, text: text)
+        case .waitingForPermission:
+            // Blocked on the user at a permission gate. Queue the follow-up WITHOUT resuming, so the gate
+            // is preserved; it drains when the user approves and the loop resumes. Report accepted so the
+            // caller does not start a competing run that would clear the pending gate.
+            _ = await genericHarnessLifecycle.coordinator.enqueueUserMessage(taskID: taskID, text: text)
+            return true
+        default:
+            // No live or gated loop (paused, timedOut, completed, failedSafe, interrupted, cancelled, or a
+            // clarification awaiting an answer): the caller resumes/answers, and that run drains the queue.
+            return false
+        }
+    }
+
+    func autoResumeCommand(
+        taskID: String,
+        context: UserQueryCommandContext?
+    ) async -> UserQueryCommandHandlingResult? {
+        // Unattended relaunch resume: force background so it never raises an app or moves the cursor.
+        await resumeExistingTask(
+            taskID: taskID,
             context: context,
-            compactedContext: genericPreparedTurn.compactedContext
+            tracePrefix: "user-query-autoresume",
+            forcedExecutionPreference: .background
         )
-        let commandRedaction = redactor.redact(modelInput.command, surface: .modelContext)
-        let contextRedactions = modelInput.contextSnippets.map {
-            redactor.redact($0, surface: .modelContext)
+    }
+
+    /// Task metadata keys for the drive target resolved on the first run, so a resume drives the same app.
+    static let driveTargetAppMetadataKey = "harness.driveTargetApp"
+    static let driveTargetBundleMetadataKey = "harness.driveTargetBundleID"
+
+    /// Shared resume path: re-run an existing task's persisted goal as a fresh loop (its stored world
+    /// model and history carry the work forward), pinned to the target the task resolved on its first run.
+    /// Returns nil when the task is unknown or has no goal.
+    private func resumeExistingTask(
+        taskID: String,
+        context: UserQueryCommandContext?,
+        tracePrefix: String,
+        forcedExecutionPreference: ExecutionPreference? = nil
+    ) async -> UserQueryCommandHandlingResult? {
+        guard let task = await genericHarnessLifecycle.taskState(taskID: taskID),
+              !task.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
         }
-        let redactedContextSnippets = contextRedactions.map(\.redactedText)
-        let redactionCount = commandRedaction.redactionCount
-            + contextRedactions.reduce(0) { $0 + $1.redactionCount }
-        let memoryProposalDecisions = (try? ProviderDecodedMemoryProposalHandler.decisions(
-            from: Data("[]".utf8),
-            decidedAt: Self.now()
-        )) ?? []
-        let parseStartedAt = Self.uptimeMilliseconds()
-        let taskIntentResult = await resolveTaskIntent(
-            command: commandRedaction.redactedText,
-            contextSnippets: redactedContextSnippets,
-            availableToolNames: Self.genericHarnessToolNames(),
-            sourceTraceID: traceID
-        )
-        let resolution = taskIntentResult.resolution
-        let parseLatencyMS = Self.uptimeMilliseconds() - parseStartedAt
-        logModelResolution(
-            command: commandRedaction.redactedText,
-            traceID: traceID,
-            resolution: resolution,
-            trace: taskIntentResult.trace,
-            latencyMS: parseLatencyMS
-        )
-        let semanticMemoryResults = await retrieveSemanticMemory(
-            command: commandRedaction.redactedText,
-            resolution: resolution
-        )
-        let modelObservability = AIModelObservabilityReportBuilder.build(from: [taskIntentResult.trace])
-        let modelMetadata = [
-            "appHarness.router": "genericHarnessPlanner",
-            "appHarness.context.promptCharacters": String(genericPreparedTurn.compactedContext.promptText.count),
-            "appHarness.context.redactionCount": String(redactionCount),
-            "intentParser": "hostedHarnessPlanner",
-            "latency.commandParseMS": Self.formatLatency(parseLatencyMS),
-            "modelCallID": taskIntentResult.trace.id,
-            "modelCallStatus": taskIntentResult.trace.status.rawValue,
-            "modelValidationStatus": taskIntentResult.trace.validationStatus,
-            "modelObservability.callCount": String(modelObservability.callCount),
-            "modelObservability.acceptedCount": String(modelObservability.acceptedCount),
-            "modelObservability.recoverySuccessCount": String(modelObservability.recoverySuccessCount),
-            "redaction.modelContext.count": String(redactionCount),
-            "semanticMemory.resultCount": String(semanticMemoryResults.count),
-            "semanticMemory.recordIDs": semanticMemoryResults.map(\.record.id).joined(separator: ","),
-            "semanticMemory.targetID": semanticMemoryTargetID(for: resolution) ?? "",
-            "memoryProposal.decisionCount": String(memoryProposalDecisions.count)
-        ]
-        .merging(Self.contextMetadata(context)) { current, _ in current }
-        .merging(Self.genericHarnessMetadata(preparedTurn: genericPreparedTurn)) { current, _ in current }
-
-        await coordinator.recordToolEvent(
-            capability: .model,
-            decision: .allow,
-            toolName: "generic-harness-planner",
-            summary: "Planned user query turn",
-            traceID: traceID,
-            metadata: [
-                "modelCallID": taskIntentResult.trace.id,
-                "modelCallStatus": taskIntentResult.trace.status.rawValue,
-                "modelValidationStatus": taskIntentResult.trace.validationStatus
-            ]
-        )
-
-        if taskIntentResult.trace.metadata["genericHarness.intent.route"] == "guidance" {
-            return await handleGuidance(
-                trace: taskIntentResult.trace, traceID: traceID, taskID: taskID,
-                modelMetadata: modelMetadata
-            )
+        var forcedDriveTarget: (appName: String, bundleIdentifier: String?)?
+        if let app = task.metadata[Self.driveTargetAppMetadataKey], !app.isEmpty {
+            let bundle = task.metadata[Self.driveTargetBundleMetadataKey]
+            forcedDriveTarget = (app, (bundle?.isEmpty == false) ? bundle : nil)
         }
-
-        if Self.shouldFailSafelyWithoutLocalTask(resolution) {
-            return await handleFailSafe(
-                resolution: resolution, traceID: traceID, taskID: taskID,
-                modelMetadata: modelMetadata
-            )
-        }
-
-        if Self.shouldAskClarificationBeforeLocalTask(resolution) {
-            return await handleClarification(
-                resolution: resolution, traceID: traceID, taskID: taskID,
-                modelMetadata: modelMetadata
-            )
-        }
-
-        if Self.shouldRespondWithoutLocalTask(resolution) {
-            return await handleConversation(
-                resolution: resolution, traceID: traceID, taskID: taskID,
-                modelMetadata: modelMetadata
-            )
-        }
-
-        // Execution-strategy router: for a non-scriptable target app (Electron, no dictionary), the
-        // AppleScript/skill path can't act — drive it by vision instead. Scriptable/unknown apps fall
-        // through to the AppleScript-first generic harness loop below.
-        if let visionResult = await handleVisionActionIfNonScriptable(
-            resolution: resolution,
-            trace: taskIntentResult.trace,
-            command: commandRedaction.redactedText,
-            traceID: traceID,
+        return await runHarnessLoop(
+            command: task.goal,
+            traceID: "\(tracePrefix)-\(UUID().uuidString)",
             taskID: taskID,
-            modelMetadata: modelMetadata
-        ) {
-            return visionResult
-        }
+            preparedTurnMetadata: [:],
+            forcedExecutionPreference: forcedExecutionPreference,
+            forcedDriveTarget: forcedDriveTarget,
+            visualize: context?.agentVisualizationChanged,
+            progress: Self.progressLabeler(context?.spawnProgressChanged),
+            answerStream: Self.answerDeltaSink(context?.spawnProgressChanged)
+        )
+    }
 
-        let decision = AppHarnessDecision(
-            kind: .runLocalTask,
-            taskIntentID: resolution.intent?.intentID,
-            traceID: traceID,
-            metadata: [
-                "structuredDecision": "true",
-                "router": "modelLocalAppTask",
-                "resolution.status": resolution.status.rawValue
-            ]
-        )
-        _ = await genericHarnessLifecycle.planLocalTaskRun(
-            taskID: taskID,
-            resolution: resolution,
-            fallbackGoal: commandRedaction.redactedText,
-            traceID: traceID,
-            availableToolNames: Self.genericHarnessToolNames()
-        )
-        var harnessServices = LocalAppUserQueryHarnessServices.builtInSkillBackedServices()
-        let appleScriptGenerationAdapter = HostedAppleScriptGenerationAdapter()
-        harnessServices.appleScriptGenerator = { request in
-            await appleScriptGenerationAdapter.generateAppleScript(request)
+    /// The single bridge from the harness's lifecycle status to the notch row's status. Exhaustive on
+    /// `HarnessTaskStatus` so a new harness case is a compile error here rather than silently collapsing
+    /// to `.failed`. `.running`/`.resuming` only appear if a run returned still-runnable (a bug); they map
+    /// to the retryable `.timedOut` so the row never looks live with no loop behind it.
+    static func userQueryStatus(forHarness status: HarnessTaskStatus?) -> UserQueryTaskStatus {
+        switch status {
+        case .completed: return .completed
+        case .paused: return .paused
+        case .timedOut: return .timedOut
+        case .interrupted: return .interrupted
+        case .waitingForUser: return .waitingForClarification
+        case .waitingForPermission: return .waitingForPermission
+        case .failedSafe, .cancelled: return .failed
+        case .running, .resuming, .none: return .timedOut
         }
-        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(
-            services: harnessServices
-        )
-        let localStepExecutor = LocalAppHarnessStepExecutor(
-            command: commandRedaction.redactedText,
-            traceID: traceID,
-            resolution: resolution,
-            metadata: modelMetadata.merging([
-                "appHarness.decision": AppHarnessDecisionKind.runLocalTask.rawValue,
-                "genericHarness.taskID": taskID
-            ]) { current, _ in current },
-            appController: appController,
-            actionEngineFactory: actionEngineFactory,
-            permissionPolicy: permissionPolicy,
-            coordinator: coordinator
-        )
-        await localStepExecutor.registerTools(in: registry)
-        let genericRuntime = GenericHarnessRuntime(
-            coordinator: genericHarnessLifecycle.coordinator,
-            registry: registry
-        )
-        let runSteps = await executeGenericHarnessLoop(
-            taskID: taskID,
-            runtime: genericRuntime
-        )
-        Self.recordAppleScriptScriptability(resolution: resolution, runSteps: runSteps)
-        let runStep = runSteps.last
-        let verificationStep = runSteps.last { step in
-            step.toolResult?.toolName == LocalAppActionPlanTool.verifyCommand.rawValue
-                || step.toolResult?.toolName == LocalAppActionPlanTool.verifyVisibleText.rawValue
-        }
-        let result = Self.integratingGenericToolOutcome(
-            into: await localStepExecutor.currentResult(),
-            runSteps: runSteps
-        )
-        let finalized = await finalizeGenericHarnessTask(
-            taskID: taskID,
-            result: result,
-            runStep: runStep,
-            verificationStep: verificationStep,
-            runtime: genericRuntime
-        )
-        let finalizedTask = await genericHarnessLifecycle.taskState(taskID: taskID)
-        logActionTraces(for: result)
+    }
 
-        let agentVisualizationPlan = Self.agentVisualizationPlan(from: runSteps)
-            ?? LocalAppTaskAgentVisualizationBuilder.plan(
-                for: result,
-                sourceTraceID: traceID
-            ).map(groundAgentVisualizationPlan)
-        let localTaskMetadata = Self.genericHarnessTaskMetadata(finalizedTask ?? runStep?.task)
-            .merging(result.metadata) { current, _ in current }
-            .merging([
-                "appHarness.decision": AppHarnessDecisionKind.runLocalTask.rawValue,
-                "appHarness.router": "modelLocalAppTask"
-            ]) { current, _ in current }
-            .merging(Self.genericHarnessMetadata(
-                preparedTurn: genericPreparedTurn,
-                runStep: runStep,
-                verificationStep: finalized.verificationStep,
-                recoveryStep: finalized.recoveryStep
-            )) { current, _ in current }
-        let handlingResult = UserQueryCommandHandlingResult(
-            status: result.status,
-            threadStatus: Self.userQueryStatus(for: finalizedTask)
-                ?? threadStatus(for: result, runStep: runStep),
-            decision: decision,
-            summary: summary(for: result, task: finalizedTask, runStep: runStep),
-            traceID: traceID,
-            metadata: localTaskMetadata,
-            taskLabel: taskLabel(for: result),
-            documentReviewRequest: documentReviewRequest(
-                traceID: traceID,
-                result: result
-            ),
-            agentVisualizationPlan: agentVisualizationPlan,
-            cursorOverlayRequest: agentVisualizationPlan?.cursorOverlayRequest()
-        )
-        await coordinatorRegistry.finish(taskID: taskID)
-        logHandlingResult(
-            handlingResult,
-            stage: "localTask",
-            hint: runHint(for: result)
-        )
-        return handlingResult
+    /// Adapt the spawn-progress callback into a plain narration sink the run
+    /// loop can feed with one-line status labels.
+    private static func progressLabeler(
+        _ spawnProgressChanged: (@MainActor @Sendable (UserQuerySpawnProgressUpdate) -> Void)?
+    ) -> (@MainActor @Sendable (String) -> Void)? {
+        guard let spawnProgressChanged else { return nil }
+        return { label in
+            spawnProgressChanged(UserQuerySpawnProgressUpdate(label: label))
+        }
+    }
+
+    /// Adapt the spawn-progress callback into a delta sink for the streamed final answer: each chunk is
+    /// forwarded as an `answerDelta` so the model accumulates it onto the task's detail (the chin and the
+    /// open row stream it), rather than replacing the status line the way a `label` update does.
+    private static func answerDeltaSink(
+        _ spawnProgressChanged: (@MainActor @Sendable (UserQuerySpawnProgressUpdate) -> Void)?
+    ) -> (@MainActor @Sendable (String) -> Void)? {
+        guard let spawnProgressChanged else { return nil }
+        return { delta in
+            spawnProgressChanged(UserQuerySpawnProgressUpdate(answerDelta: delta))
+        }
     }
 
     func pauseCommand(taskID: String) async -> Bool {
@@ -419,37 +407,606 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         ) != nil
     }
 
-    func resumeCommand(taskID: String) async -> Bool {
-        await genericHarnessLifecycle.resumeTask(
-            taskID: taskID,
-            reason: "User query resumed task"
-        ) != nil
-    }
-
-    func approvePermissionGate(taskID: String) async -> Bool {
+    func approvePermissionGate(taskID: String, alwaysAllow: Bool) async -> Bool {
         await genericHarnessLifecycle.approvePermissionGate(
             taskID: taskID,
+            decision: alwaysAllow ? .allowAlways : .allow,
             reason: "User query approved pending permissions"
         ) != nil
     }
 
-    // MARK: - Non-Local-Task Routing
+    // MARK: - Harness Run (frontmost app)
 
-    private func handleFailSafe(
-        resolution: LocalAppTaskCatalogResolution,
+    /// The only route: satisfies the typed query by running the generic harness loop
+    /// (`GenericHarnessRuntime.run`) against the frontmost app. The loop re-plans after every
+    /// observation via `HostedHarnessStepPlanner`, which picks the next tool — AX or vision to see,
+    /// AX/vision/keyboard/AppleScript to act — and console-logs the grounding latency for telemetry.
+    ///
+    /// `@MainActor` because window resolution, the tools, and the timing accumulators all run on the
+    /// main actor.
+    @MainActor
+    private func runHarnessLoop(
+        command: String,
         traceID: String,
         taskID: String,
-        modelMetadata: [String: String]
+        preparedTurnMetadata: [String: String],
+        forcedExecutionPreference: ExecutionPreference? = nil,
+        forcedDriveTarget: (appName: String, bundleIdentifier: String?)? = nil,
+        visualize: (@MainActor @Sendable (AgentVisualizationPlan) -> Void)? = nil,
+        progress: (@MainActor @Sendable (String) -> Void)? = nil,
+        answerStream: (@MainActor @Sendable (String) -> Void)? = nil
     ) async -> UserQueryCommandHandlingResult {
-        let response = Self.modelUnavailableResponse(for: resolution)
+        guard permissionPolicy.allowedCapabilities.contains(.input) else {
+            return await failHarnessRun(
+                command: command,
+                response: "Vision navigation needs input permission, which isn't granted.",
+                reason: "inputNotPermitted",
+                appName: "",
+                traceID: traceID,
+                taskID: taskID,
+                preparedTurnMetadata: preparedTurnMetadata
+            )
+        }
+        // A resume pins the task's original target, so it can drive that app even when it (or nothing) is
+        // frontmost — which is the common case right after a relaunch. A fresh turn with no frontmost app
+        // and no pinned target still has nothing to drive, so it fails cleanly.
+        let frontmost = MacWindowResolver().frontmostUserAppTarget()
+        guard forcedDriveTarget != nil || frontmost != nil else {
+            return await failHarnessRun(
+                command: command,
+                response: "I couldn't find a frontmost app window to navigate. Focus the app you want, then type your request.",
+                reason: "noFrontmostApp",
+                appName: "",
+                traceID: traceID,
+                taskID: taskID,
+                preparedTurnMetadata: preparedTurnMetadata
+            )
+        }
+        let frontmostAppName = frontmost?.appName ?? forcedDriveTarget?.appName ?? "the frontmost app"
+        let frontmostBundleIdentifier = frontmost?.bundleIdentifier ?? forcedDriveTarget?.bundleIdentifier
+
+        guard let configuration = try? DonkeyBackendInferenceConfiguration.fromEnvironment() else {
+            return await failHarnessRun(
+                command: command,
+                response: "The vision backend isn't configured (set DONKEY_WEB_BASE_URL), so I couldn't navigate by vision.",
+                reason: "visionBackendUnavailable",
+                appName: frontmostAppName,
+                traceID: traceID,
+                taskID: taskID,
+                preparedTurnMetadata: preparedTurnMetadata
+            )
+        }
+        // One client serves the whole turn — understanding, planner, and hosted adapters all share it —
+        // so wiring the auth-expiry hook here catches a 401 on any of those paths, even the ones that
+        // swallow the thrown error.
+        let backend = DonkeyBackendInferenceClient(
+            configuration: configuration,
+            onAuthenticationRequired: backendAuthExpiryHook()
+        )
+
+        // The thread is the COMPLETE, human-readable record of the turn (like ChatGPT/Claude), written
+        // live as markdown. It is opened here — before the very first model call — so the trace manager
+        // can record even the pre-loop understanding decision into it. The header uses the frontmost app
+        // (the app in front when the user asked); the resolved drive target is shown in the planning
+        // block below.
+        let transcript = ThreadTranscript(id: taskID)
+        transcript.begin(id: taskID, app: frontmostAppName)
+        transcript.userMessage(command)
+        // The turn-trace manager: the single sink every model call and every executed step reports to,
+        // so the whole decision path — prompts, replies, sensing modality, and per-call timing — is
+        // traceable in the thread file. The model boundaries hold it as `any HarnessTurnTracing`.
+        let trace = HarnessTurnTrace(transcript: transcript)
+
+        // Understand the request ONCE before the loop: restate the goal, identify the target app,
+        // extract parameters, and decide whether to clarify. Degrades to driving the raw command when
+        // it returns nil — or when the call outlives its deadline — so a backend hiccup never
+        // dead-ends or silently stalls the run.
+        let understandingBoundary = HostedHarnessRequestUnderstanding(backend: backend, trace: trace)
+        let understanding = await AIDeadline.race(seconds: Self.understandingTimeoutSeconds) {
+            await understandingBoundary.understand(command: command, frontmostAppName: frontmostAppName)
+        }
+        if let restated = understanding?.restatedGoal, !restated.isEmpty {
+            progress?(restated)
+        }
+
+        // Drive the understood target app whenever it names a running or installed app; else the
+        // frontmost app. An installed-but-not-running target stays pinned by name — the see/act tools
+        // re-resolve its window each call, so it works as soon as the planner launches it. A resume pins
+        // the task's original target so the work continues against the right app, not whatever is in front.
+        let driveTarget: (appName: String, bundleIdentifier: String?)
+        if let forcedDriveTarget {
+            driveTarget = (forcedDriveTarget.appName, forcedDriveTarget.bundleIdentifier)
+        } else {
+            driveTarget = Self.resolveDriveTarget(
+                understanding: understanding,
+                frontmostAppName: frontmostAppName,
+                frontmostBundleIdentifier: frontmostBundleIdentifier
+            )
+        }
+        let appName = driveTarget.appName
+        let bundleIdentifier = driveTarget.bundleIdentifier
+        // Pin the resolved target on the task so a later resume drives the same app (see forcedDriveTarget).
+        await genericHarnessLifecycle.coordinator.recordMetadata(taskID: taskID, [
+            Self.driveTargetAppMetadataKey: appName,
+            Self.driveTargetBundleMetadataKey: bundleIdentifier ?? ""
+        ])
+
+        let appGuidance = BuiltInLocalAppSkillPacks.appOperatingGuidance(
+            forApp: appName,
+            bundleIdentifier: bundleIdentifier
+        )
+
+        // Drive the frontmost app through the GENERIC HARNESS LOOP: the harness re-plans after every
+        // observation, consulting `HostedHarnessStepPlanner` (the model boundary) to pick the next
+        // tool. The planner chooses how to SEE (ax.observe vs. vision.capture) and how to ACT (ax.click,
+        // vision.click, keyboard/text input, generated AppleScript), or `run.complete` when done —
+        // vision is just one tool among many. The always-on warm-cache monitor is suspended for the
+        // duration so it never races us on a parse.
+        let analyzer = HostedDebugUIInspectionAnalyzer(backend: backend)
+        let appKey = (bundleIdentifier?.isEmpty == false ? bundleIdentifier! : appName)
+
+        // Built-in action/lifecycle/skill tools, minus the placeholder see/act tools that the real AX +
+        // vision tools below replace, and restricted to what this turn is permitted to run.
+        var harnessServices = LocalAppUserQueryHarnessServices.builtInSkillBackedServices()
+        let appleScriptGenerationAdapter = HostedAppleScriptGenerationAdapter()
+        harnessServices.appleScriptGenerator = { request in
+            await appleScriptGenerationAdapter.generateAppleScript(request)
+        }
+        // Generic LLM tool: lets the planner compose/transform text mid-task (build a tracklist,
+        // a clean note body, a friendly status line) through the same hosted route.
+        let textGenerator = HostedTextGenerator(backend: backend)
+        harnessServices.textGenerator = { prompt in
+            await textGenerator.generate(prompt)
+        }
+        // Generative image editing/generation behind image.edit / image.generate. Provider stays
+        // unset so the backend routes kind=image to its configured image model; this adapter only
+        // encodes inputs and writes the returned files.
+        let imageGenerator = HostedImageGenerator(backend: backend)
+        harnessServices.imageGenerator = { request in
+            await imageGenerator.generate(request)
+        }
+        // Same boundary, multimodal arm: transcribe/translate/caption a local audio or video file
+        // (the media skill extracts audio and reaches for this to subtitle a clip).
+        harnessServices.mediaGenerator = { prompt, fileURL, mimeType in
+            await textGenerator.generate(prompt, attachmentPath: fileURL, mimeType: mimeType)
+        }
+        // Web research goes through the backend on the service-account credential — no key in the
+        // app. Search uses Google Search grounding; fetch reads a page and returns clean markdown
+        // (nav/ads/boilerplate stripped server-side) so the model gets the article, not raw HTML.
+        let hostedWebSearch = HostedWebSearch(backend: backend)
+        let hostedWebFetch = HostedWebFetch(backend: backend)
+        let hostedWebAutomate = HostedWebAutomate(backend: backend)
+        harnessServices.webSearcher = { query in await hostedWebSearch.search(query) }
+        harnessServices.webFetcher = { url in await hostedWebFetch.fetch(url) }
+        harnessServices.webAutomator = { request in await hostedWebAutomate.run(request) }
+        // File understanding behind files.describe: OCR + dimensions for images/screenshots, text for
+        // PDFs, Foundation content for text files. Cached per file so the describe pass and any later
+        // operation reuse one understanding.
+        harnessServices.fileUnderstanding = { url in await FileUnderstandingProvider.understand(url) }
+        let granted = Self.userQueryGrantedPermissions
+        let replacedBuiltIns: Set<String> = ["screen.observe", "elements.get", "element.perform", "text.enter", "keyboard.press"]
+        let builtInDescriptors = BuiltInHarnessToolCatalog.descriptors.filter { descriptor in
+            !replacedBuiltIns.contains(descriptor.name)
+                && Set(descriptor.requiredPermissions).isSubset(of: granted)
+        }
+        let registry = HarnessToolRegistry(
+            tools: BuiltInHarnessToolExecutors.tools(descriptors: builtInDescriptors, services: harnessServices)
+        )
+        // Background is the default operating mode: the agent acts on a safe, on-active-Space window
+        // without raising the app or moving the cursor — the AX action lane for advertised controls, the
+        // pid-routed event-post lane for coordinate/scroll/drag/keystroke input. The understanding
+        // boundary flips this to foreground only when the turn's point is for the user to watch. When
+        // understanding is unavailable we still default to background (each lane degrades to foreground on
+        // its own when an action can't be delivered that way).
+        // An unattended auto-resume forces background so it never raises an app or moves the cursor while
+        // the user is away; an interactive turn lets the understanding boundary decide.
+        let executionPreference = forcedExecutionPreference ?? understanding?.executionPreference ?? .background
+        let axProvider = AXComputerUseToolProvider(
+            appName: appName,
+            bundleIdentifier: bundleIdentifier,
+            executionPreference: executionPreference
+        )
+        let visionProvider = VisionComputerUseToolProvider(
+            appName: appName,
+            appKey: appKey,
+            bundleIdentifier: bundleIdentifier,
+            executionPreference: executionPreference,
+            analyzer: analyzer
+        )
+        let pointerProvider = PointerComputerUseToolProvider(
+            appName: appName,
+            bundleIdentifier: bundleIdentifier,
+            executionPreference: executionPreference
+        )
+        // Native music playback (MusicKit): search/play/transport/status with no Music-app GUI or
+        // AppleScript. Declares no harness permissions — MusicKit runs its own consent flow.
+        let musicProvider = MusicPlaybackToolProvider(service: MusicKitPlaybackService())
+        // Register the AX/vision/pointer/music see/act tools only when this turn holds their
+        // permissions, mirroring the built-in descriptor filter so the planner is never offered a
+        // tool it can't run.
+        for tool in axProvider.makeTools() + visionProvider.makeTools() + pointerProvider.makeTools()
+            + musicProvider.makeTools()
+        where Set(tool.descriptor.requiredPermissions).isSubset(of: granted) {
+            await registry.register(tool)
+        }
+        let runtime = GenericHarnessRuntime(
+            coordinator: genericHarnessLifecycle.coordinator,
+            registry: registry
+        )
+        let plannerDescriptors = await registry.descriptors()
+        let environmentSummary = await SystemToolCapabilityProbe.shared.summary()
+        // Every step, surface the other windows on screen (all apps/displays) to the planner so a
+        // request that lives in a window the user isn't looking at can be found and switched to. Donkey's
+        // own windows are filtered out by bundle id so the agent never targets its own overlay.
+        let ownBundleID = Bundle.main.bundleIdentifier
+        let planner = HostedHarnessStepPlanner(
+            backend: backend,
+            descriptors: plannerDescriptors,
+            appName: appName,
+            appGuidance: appGuidance,
+            understanding: understanding,
+            environmentSummary: environmentSummary,
+            skillCatalog: Self.installedSkillCatalog(),
+            trace: trace,
+            openWindows: {
+                MacWindowResolver().enumerateCandidates().filter { candidate in
+                    guard let ownBundleID, let candidateBundle = candidate.bundleIdentifier else { return true }
+                    return candidateBundle.caseInsensitiveCompare(ownBundleID) != .orderedSame
+                }
+            },
+            // Attach a compressed screenshot of the user's frontmost window to every step so a multimodal
+            // planner always sees the screen, not just AX/vision text. Best-effort: a capture failure
+            // returns nil and the step proceeds text-only, never breaking the planner.
+            captureScreenshot: {
+                guard let target = MacWindowResolver().frontmostUserAppTarget(),
+                      let shot = try? await ScreenCaptureKitWindowScreenshotCapturer().capture(target: target) else {
+                    return nil
+                }
+                return ScreenshotCompression.compressedForModel(shot).base64DataURL
+            }
+        )
+        _ = await genericHarnessLifecycle.coordinator.startRunning(
+            taskID: taskID,
+            reason: "User query harness run"
+        )
+
+        VisionGroundingLog.emit(
+            "start traceID=\(traceID) app=\(appName) goal=\"\(command)\""
+        )
+        let e2eStartMS = Self.uptimeMilliseconds()
+        // Suspend the warm-cache monitor for the whole drive so it never races us writing the same
+        // app's parse. The run between these calls has no early exit, so resume always pairs with it.
+        VisionWarmCacheActivity.shared.suspend()
+        // Realtime per-step feedback: narrate every step through the spawn cursor's label (the
+        // planner's one-line reason, falling back to the tool's own summary), and after each step that
+        // physically moved the pointer (a click), animate the overlay cursor traveling to that exact
+        // target, so the visualization tracks what the harness is actually doing.
+        //
+        // The thread is the COMPLETE session record: the turn's upfront planning (or its absence) is
+        // part of the conversation, not just an internal step. A follow-up turn (clarification
+        // answer, permission grant) appends its own planning block mid-thread.
+        if let understanding {
+            transcript.planning(
+                goal: understanding.restatedGoal,
+                targetApp: understanding.targetAppName,
+                parameters: understanding.parameters,
+                successCriteria: understanding.successCriteria,
+                clarification: understanding.needsClarification ? understanding.clarifyingQuestion : nil
+            )
+        } else {
+            transcript.systemEvent("Understanding was unavailable (timed out or failed); driving the raw command.")
+        }
+        VisionGroundingLog.emit("thread traceID=\(traceID) path=\(transcript.threadPath)")
+
+        // On a background turn the agent acts without taking over the user's cursor, so the cosmetic
+        // traveling cursor is suppressed and progress is narrated through the notch text only. (AX-lane
+        // background actions already report no screen point, so they produce no cursor plan; this also
+        // covers background coordinate/scroll/drag posts, which move no real pointer.) The overlay never
+        // drives real input either way — realPointerMoved stays false.
+        let suppressBackgroundCursorPlayback = executionPreference == .background
+
+        // Always set onStep so every turn is recorded; the overlay narration/cursor is layered on top
+        // when a UI is attached.
+        let onStep: (@Sendable (HarnessStepExecutionResult) async -> Void)? = { (step: HarnessStepExecutionResult) async -> Void in
+            await MainActor.run {
+                let narration = Self.stepNarration(for: step, planner: planner)
+                if let result = step.toolResult {
+                    // One grouped block per step through the trace manager: the model's full thought
+                    // summary (persisted here and nowhere else, so the planning context stays bounded),
+                    // its warm one-line narration, the action with its input, the output, any planning retries
+                    // hit while choosing this step, and the timing the manager attaches — decision time
+                    // vs. tool time plus which sensing modality the step used. The overlay/progress gets
+                    // only the clipped one-line narration below.
+                    trace.recordStep(
+                        number: step.task.toolHistory.count,
+                        thought: planner.lastThinking,
+                        narration: planner.lastNarration,
+                        tool: result.toolName,
+                        input: step.task.toolHistory.last?.call.input ?? [:],
+                        status: result.status.rawValue,
+                        output: result.summary,
+                        planningErrors: planner.lastPlanningErrors,
+                        modality: Self.sensingModality(forTool: result.toolName),
+                        cacheHit: result.metadata["usedCache"].map { $0 == "true" },
+                        elementCount: result.metadata["elementCount"].flatMap(Int.init)
+                    )
+                } else {
+                    // No tool executed (the call never ran), but planning failures are still part of
+                    // the session and must be readable in the thread — a step that ends in
+                    // run.failSafe is otherwise a mystery.
+                    for planningError in planner.lastPlanningErrors {
+                        transcript.error(planningError)
+                    }
+                }
+                // Every step narrates through the spawn label (a lightweight text update), so the user
+                // is kept informed even on steps that don't move the pointer — observe, shell, wait,
+                // verify. The cursor itself only travels (a heavier window-animating overlay playback)
+                // on steps that actually moved it; re-running that playback every step thrashes window
+                // layout, so it stays gated to real pointer moves.
+                if let progress, let narration {
+                    progress(narration)
+                }
+                // The animated cursor playback is cosmetic and separate from the real input. It animates
+                // an overlay panel's window frame, which can re-enter AppKit's layout cycle on some macOS
+                // builds; this escape hatch turns the playback off (text narration still updates) so a
+                // run can proceed without it.
+                guard !Self.cursorVisualizationDisabled else { return }
+                // Background turns narrate through the notch only; no traveling cursor on a window the
+                // user isn't driving. Text narration above still fires every step.
+                guard !suppressBackgroundCursorPlayback else { return }
+                guard let present = visualize else { return }
+                let screenSize = (NSScreen.main ?? NSScreen.screens.first)?.frame.size ?? .zero
+                guard let plan = Self.cursorVisualizationPlan(
+                    for: step,
+                    appName: appName,
+                    traceID: traceID,
+                    screenSize: screenSize
+                ) else { return }
+                present(plan)
+            }
+        }
+        // Step budget is progress-based, not a fixed count: the runtime keeps going while the task
+        // advances and stops fast when it stalls or loops, so a long legitimate task isn't cut off.
+        // A foreground run waits its turn for window focus so concurrent foreground turns don't fight
+        // over the frontmost app; background runs route by pid and never take the gate.
+        let holdsForegroundFocus = executionPreference == .foreground
+            ? await foregroundFocusGate.acquire()
+            : false
+        let runSteps = await runtime.run(taskID: taskID, planner: planner, onStep: onStep)
+        if holdsForegroundFocus {
+            await foregroundFocusGate.release()
+        }
+        VisionWarmCacheActivity.shared.resume()
+
+        let finalTask = await genericHarnessLifecycle.coordinator.task(id: taskID)
+        let finalStatus = finalTask?.status
+        let completed = finalStatus == .completed
+        let awaitingUser = finalStatus == .waitingForUser
+        let awaitingPermission = finalStatus == .waitingForPermission
+        let outcomeReason = completed ? "ok"
+            : (awaitingUser ? "awaitingUser"
+            : (awaitingPermission ? "awaitingPermission"
+            : (finalStatus == .failedSafe ? "failedSafe"
+            : (finalStatus == .timedOut ? "timedOut"
+            : (finalStatus == .paused ? "paused" : "stopped")))))
+        let turns = runSteps.count
+        let anyTurnUsedCache = runSteps.contains { $0.toolResult?.metadata["usedCache"] == "true" }
+        let totalParseMS = runSteps.reduce(0.0) { $0 + ($1.toolResult?.metadata["parseMS"].flatMap(Double.init) ?? 0) }
+        let timeToFirstActionMS = planner.firstActionUptimeMS.map { $0 - e2eStartMS }
+        let e2eTotalMS = Self.uptimeMilliseconds() - e2eStartMS
+        let averagePerTurnMS = turns > 0 ? e2eTotalMS / Double(turns) : 0
+        if let timeToFirstActionMS {
+            VisionGroundingLog.emit(
+                "time-to-first-action traceID=\(traceID) app=\(appName) ms=\(Self.formatLatency(timeToFirstActionMS))"
+            )
+        }
+        VisionGroundingLog.emit(
+            "complete traceID=\(traceID) app=\(appName) completed=\(completed) reason=\(outcomeReason) turns=\(turns) usedCache=\(anyTurnUsedCache) parseMS=\(Self.formatLatency(totalParseMS)) e2eTotalMS=\(Self.formatLatency(e2eTotalMS)) timeToFirstActionMS=\(Self.formatLatency(timeToFirstActionMS ?? 0)) avgPerTurnMS=\(Self.formatLatency(averagePerTurnMS))"
+        )
+
+        // Close the per-step trace with a compact whole-turn timing line, so the run's total cost and
+        // time-to-first-action sit at the foot of the thread next to the per-step breakdown.
+        trace.recordTurnTiming(e2eTotalMS: e2eTotalMS, timeToFirstActionMS: timeToFirstActionMS, steps: turns)
+
+        // Record the assistant's final answer to close the turn, then write a compacted, structured
+        // thread summary. A deterministic summary lands immediately; an LLM-written one replaces it in
+        // the background so the result isn't delayed by the summary call.
+        let finalDetail = runSteps.last?.toolResult?.summary ?? finalTask?.goal ?? command
+        transcript.systemEvent("Run finished: \(outcomeReason) after \(turns) step(s).")
+        transcript.response(finalDetail)
+        transcript.writeSummary(Self.deterministicThreadSummary(
+            command: command, app: appName, outcome: outcomeReason, steps: runSteps, finalDetail: finalDetail
+        ))
+        let threadText = (try? String(contentsOfFile: transcript.threadPath, encoding: .utf8)) ?? ""
+        if !threadText.isEmpty {
+            Task.detached {
+                let prompt = """
+                Summarize this conversation thread into a compact markdown brief with these exact \
+                sections (omit a section only if truly empty): ## Goal, ## Progress, ## Key Decisions, \
+                ## Next Steps, ## Critical Context. Be concrete and short.
+
+                THREAD:
+                \(threadText)
+                """
+                let summaryStartedAt = RunTraceTimestamp.now()
+                let enhanced = await textGenerator.generate(prompt)
+                trace.recordModelCall(TraceModelCall(
+                    kind: .threadSummary,
+                    prompt: prompt,
+                    response: enhanced ?? "<no output>",
+                    status: (enhanced?.isEmpty == false) ? .ok : .empty,
+                    startedAt: summaryStartedAt,
+                    endedAt: .now()
+                ))
+                if let enhanced, !enhanced.isEmpty {
+                    transcript.writeSummary(enhanced)
+                }
+            }
+        }
+
+        let baseMetadata = preparedTurnMetadata.merging([
+            "appHarness.router": "harness",
+            "harness.app": appName,
+            "harness.completed": String(completed),
+            "harness.turns": String(turns),
+            "harness.reason": outcomeReason,
+            "grounding.e2eTotalMS": Self.formatLatency(e2eTotalMS),
+            "grounding.timeToFirstActionMS": Self.formatLatency(timeToFirstActionMS ?? 0),
+            "grounding.avgPerTurnMS": Self.formatLatency(averagePerTurnMS),
+            "grounding.usedCache": String(anyTurnUsedCache),
+            "grounding.parseMS": Self.formatLatency(totalParseMS)
+        ]) { _, new in new }
+
+        // The planner can end a turn three ways: ask the user (user.clarify → waitingForUser), answer
+        // conversationally (conversation.respond), or finish an action (run.complete). Surface whichever
+        // happened rather than always reporting "Done".
+        if awaitingUser {
+            let question = finalTask?.pendingContinuation?.question.flatMap { $0.isEmpty ? nil : $0 }
+                ?? "Could you clarify what you'd like me to do?"
+            let decision = AppHarnessDecision(
+                kind: .askClarification,
+                message: question,
+                traceID: traceID,
+                metadata: ["structuredDecision": "true", "router": "harness"]
+            )
+            let result = UserQueryCommandHandlingResult(
+                status: .needsConfirmation,
+                threadStatus: .waitingForClarification,
+                decision: decision,
+                summary: question,
+                traceID: traceID,
+                metadata: baseMetadata.merging([
+                    "appHarness.decision": AppHarnessDecisionKind.askClarification.rawValue
+                ]) { _, new in new }
+            )
+            await coordinatorRegistry.finish(taskID: taskID)
+            logHandlingResult(result, stage: "harness", hint: "Asked the user to clarify.")
+            return result
+        }
+
+        // A permission gate (e.g. shell-command consent) is a hard stop that waits for the user's
+        // allow-once / always-allow decision, not a failure. Surface it with the consent metadata the
+        // notch controls read; approval re-enters the loop via `continueApprovedCommand`.
+        if awaitingPermission {
+            let continuation = finalTask?.pendingContinuation
+            let summary = runSteps.last?.toolResult?.summary
+                ?? continuation?.reason
+                ?? "Waiting for your approval."
+            let decision = AppHarnessDecision(
+                kind: .respond,
+                message: summary,
+                traceID: traceID,
+                metadata: ["structuredDecision": "true", "router": "harness"]
+            )
+            let missingPermissions: String = (continuation?.missingPermissions ?? [])
+                .map(\.rawValue).joined(separator: ",")
+            let consentMetadata: [String: String] = [
+                "appHarness.decision": AppHarnessDecisionKind.respond.rawValue,
+                "genericHarness.shellConsent.command": continuation?.metadata["shell.command"] ?? "",
+                "genericHarness.shellConsent.tier": continuation?.metadata["shell.tier"] ?? "",
+                "genericHarness.shellConsent.reason": continuation?.metadata["shell.reason"] ?? "",
+                "genericHarness.shellConsent.allowAlways": continuation?.metadata["shell.allowAlways"] ?? "",
+                "genericHarness.missingPermissions": missingPermissions
+            ]
+            let result = UserQueryCommandHandlingResult(
+                status: .needsConfirmation,
+                threadStatus: .waitingForPermission,
+                decision: decision,
+                summary: summary,
+                traceID: traceID,
+                metadata: baseMetadata.merging(consentMetadata) { _, new in new }
+            )
+            await coordinatorRegistry.finish(taskID: taskID)
+            logHandlingResult(result, stage: "harness", hint: "Stopped at a permission gate.")
+            return result
+        }
+
+        let conversationMessage = finalTask?.toolHistory.last { $0.call.name == "conversation.respond" }
+            .flatMap { $0.call.input["response"] ?? $0.call.input["message"] }
+            .flatMap { $0.isEmpty ? nil : $0 }
+        var response = conversationMessage
+            ?? planner.lastNarration
+            ?? (completed ? "Done." : "I tried operating \(appName) but couldn't confirm the goal was finished.")
+
+        // Stream the assistant's final reply token-by-token into the notch (the chin and the open task
+        // row) when the turn produced a real text answer. It is re-composed from the harness's drafted
+        // answer so it stays grounded; the streamed text becomes the authoritative reply, and a failed
+        // or empty stream falls back to the draft already computed above. Only conversational answers
+        // stream — an action that merely finished ("Done.") has no message worth typing out.
+        if completed, let conversationMessage, let answerStream {
+            let prompt = Self.finalAnswerPrompt(goal: command, draftAnswer: conversationMessage)
+            if let streamed = await textGenerator.generateStreaming(prompt, onDelta: answerStream),
+               !streamed.isEmpty {
+                response = streamed
+            }
+        }
+        let decision = AppHarnessDecision(
+            kind: .respond,
+            message: response,
+            traceID: traceID,
+            metadata: ["structuredDecision": "true", "router": "harness", "harness.completed": String(completed)]
+        )
+        // The runtime sets the task's terminal status authoritatively (run.complete, a stall fail-safe,
+        // the step-ceiling timeout, a user pause, or a gate), so the row status maps straight from it.
+        // Defensive only: if a run somehow returned still-runnable, mark it timed out (retryable) rather
+        // than leaving a row that looks live with no loop behind it.
+        await genericHarnessLifecycle.coordinator.timeOutIfRunnable(
+            taskID: taskID,
+            reason: "User query harness run returned without a terminal status"
+        )
+        let threadStatus = Self.userQueryStatus(forHarness: finalStatus)
+        // A run that failed safe for lack of credits carries a typed flag the notch reads to show the
+        // reload CTA banner (instead of inferring the credit state from the narration text).
+        var responseMetadata = [
+            "appHarness.decision": AppHarnessDecisionKind.respond.rawValue
+        ]
+        if planner.lastFailureRequiresCreditReload {
+            responseMetadata[UserQueryTaskMetadataKey.creditReloadRequired] = "true"
+        }
+        let result = UserQueryCommandHandlingResult(
+            status: completed ? .completed : .failedSafe,
+            threadStatus: threadStatus,
+            decision: decision,
+            summary: response,
+            traceID: traceID,
+            metadata: baseMetadata.merging(responseMetadata) { _, new in new }
+        )
+        await coordinatorRegistry.finish(taskID: taskID)
+        logHandlingResult(
+            result,
+            stage: "harness",
+            hint: completed ? "Operated \(appName)." : "Harness run stopped: \(outcomeReason)."
+        )
+        return result
+    }
+
+    /// Fail-safe exit for the vision-navigation route when it can't even start (no frontmost app,
+    /// backend unconfigured, input not permitted). Mirrors the other non-local routes' lifecycle.
+    /// Even an aborted start gets a thread file: the thread is the session's complete record, and a
+    /// turn that produced nothing on disk is indistinguishable from a turn that never happened.
+    private func failHarnessRun(
+        command: String,
+        response: String,
+        reason: String,
+        appName: String,
+        traceID: String,
+        taskID: String,
+        preparedTurnMetadata: [String: String]
+    ) async -> UserQueryCommandHandlingResult {
+        VisionGroundingLog.emit("aborted traceID=\(traceID) reason=\(reason) app=\(appName)")
+        let transcript = ThreadTranscript(id: taskID)
+        transcript.begin(id: taskID, app: appName)
+        transcript.userMessage(command)
+        transcript.error("Run could not start (\(reason)).")
+        transcript.response(response)
         let decision = AppHarnessDecision(
             kind: .respond,
             message: response,
             traceID: traceID,
             metadata: [
                 "structuredDecision": "true",
-                "router": "modelUnavailable",
-                "resolution.status": resolution.status.rawValue
+                "router": "harness",
+                "harness.abortReason": reason
             ]
         )
         let result = UserQueryCommandHandlingResult(
@@ -458,595 +1015,59 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             decision: decision,
             summary: response,
             traceID: traceID,
-            metadata: modelMetadata.merging([
+            metadata: preparedTurnMetadata.merging([
                 "appHarness.decision": AppHarnessDecisionKind.respond.rawValue,
-                "router": "modelUnavailable",
-                "resolution.status": resolution.status.rawValue,
-                "resolution.reason": resolution.metadata["reason"] ?? ""
+                "appHarness.router": "harness",
+                "harness.abortReason": reason
             ]) { _, new in new }
         )
         _ = await genericHarnessLifecycle.coordinator.failSafe(
             taskID: taskID,
-            reason: "Hosted command parser did not produce a safe action plan"
+            reason: "User query harness run could not start: \(reason)"
         )
         await coordinatorRegistry.finish(taskID: taskID)
-        logHandlingResult(
-            result,
-            stage: "modelUnavailable",
-            hint: "The hosted planner failed before producing executable intent; no local task was run."
-        )
+        logHandlingResult(result, stage: "harness", hint: response)
         return result
-    }
-
-    private func handleClarification(
-        resolution: LocalAppTaskCatalogResolution,
-        traceID: String,
-        taskID: String,
-        modelMetadata: [String: String]
-    ) async -> UserQueryCommandHandlingResult {
-        let question = Self.clarificationQuestion(for: resolution)
-        let decision = AppHarnessDecision(
-            kind: .askClarification,
-            message: question,
-            missingDetail: resolution.metadata["reason"],
-            traceID: traceID,
-            metadata: [
-                "structuredDecision": "true",
-                "router": "modelClarification",
-                "resolution.status": resolution.status.rawValue
-            ]
-        )
-        let result = UserQueryCommandHandlingResult(
-            status: .needsConfirmation,
-            threadStatus: .waitingForClarification,
-            decision: decision,
-            summary: question,
-            traceID: traceID,
-            metadata: modelMetadata.merging([
-                "appHarness.decision": AppHarnessDecisionKind.askClarification.rawValue,
-                "router": "modelClarification",
-                "resolution.status": resolution.status.rawValue,
-                "resolution.reason": resolution.metadata["reason"] ?? ""
-            ]) { _, new in new }
-        )
-        _ = await genericHarnessLifecycle.coordinator.waitForUser(
-            taskID: taskID,
-            question: question,
-            reason: "Generic harness planner requested clarification"
-        )
-        await coordinatorRegistry.finish(taskID: taskID)
-        logHandlingResult(
-            result,
-            stage: "clarification",
-            hint: "The harness planner asked for a missing detail before selecting an action tool."
-        )
-        return result
-    }
-
-    private func handleConversation(
-        resolution: LocalAppTaskCatalogResolution,
-        traceID: String,
-        taskID: String,
-        modelMetadata: [String: String]
-    ) async -> UserQueryCommandHandlingResult {
-        let response = Self.conversationResponse(for: resolution)
-        let decision = AppHarnessDecision(
-            kind: .respond,
-            message: response,
-            traceID: traceID,
-            metadata: [
-                "structuredDecision": "true",
-                "router": "modelConversation",
-                "resolution.status": resolution.status.rawValue
-            ]
-        )
-        let result = UserQueryCommandHandlingResult(
-            status: .completed,
-            threadStatus: .chatting,
-            decision: decision,
-            summary: response,
-            traceID: traceID,
-            metadata: modelMetadata.merging([
-                "appHarness.decision": AppHarnessDecisionKind.respond.rawValue,
-                "router": "modelConversation",
-                "resolution.status": resolution.status.rawValue,
-                "resolution.reason": resolution.metadata["reason"] ?? ""
-            ]) { _, new in new }
-        )
-        _ = await genericHarnessLifecycle.coordinator.complete(
-            taskID: taskID,
-            reason: "User query conversation response"
-        )
-        await coordinatorRegistry.finish(taskID: taskID)
-        logHandlingResult(
-            result,
-            stage: "conversation",
-            hint: "No local task intent was produced; responded in the thread."
-        )
-        return result
-    }
-
-    /// Guidance route: show the user where something is by grounding the requested controls in the
-    /// target app's accessibility tree and presenting a cursor overlay. Visualization only — no
-    /// input, no app state change. Works for any app with an accessibility tree (native or Electron).
-    private func handleGuidance(
-        trace: AIModelCallTrace,
-        traceID: String,
-        taskID: String,
-        modelMetadata: [String: String]
-    ) async -> UserQueryCommandHandlingResult {
-        let appName = trace.metadata["genericHarness.intent.targetApp"].flatMap { $0.isEmpty ? nil : $0 }
-        let targets = Self.guidanceTargets(from: trace.metadata["guidanceTargets"] ?? "")
-        let title = trace.metadata["genericHarness.intent.goal"].flatMap { $0.isEmpty ? nil : $0 } ?? "Here you go"
-        let outcome = await MainActor.run {
-            GuidanceOverlayFlow.cursorGuide(
-                appName: appName,
-                bundleIdentifier: nil,
-                targets: targets,
-                title: title,
-                traceID: traceID
-            )
-        }
-        let located = outcome.request != nil
-        // Prefer the model's own narration; fall back only when it didn't provide one (or when we
-        // couldn't actually ground the control at runtime, which the planner can't know up front).
-        let modelResponse = trace.metadata["assistantResponse"].flatMap { $0.isEmpty ? nil : $0 }
-        let response = located
-            ? (modelResponse ?? "Here it is — follow the pointer.")
-            : "I couldn't locate that on screen right now."
-        let decision = AppHarnessDecision(
-            kind: .respond,
-            message: response,
-            traceID: traceID,
-            metadata: [
-                "structuredDecision": "true",
-                "router": "modelGuidance",
-                "guidance.reason": outcome.reason
-            ]
-        )
-        let result = UserQueryCommandHandlingResult(
-            status: .completed,
-            threadStatus: .chatting,
-            decision: decision,
-            summary: response,
-            traceID: traceID,
-            metadata: modelMetadata.merging([
-                "appHarness.decision": AppHarnessDecisionKind.respond.rawValue,
-                "router": "modelGuidance",
-                "guidance.reason": outcome.reason,
-                "guidance.targetCount": String(targets.count),
-                "guidance.resolvedApp": outcome.resolvedAppName ?? ""
-            ]) { _, new in new },
-            cursorOverlayRequest: outcome.request
-        )
-        _ = await genericHarnessLifecycle.coordinator.complete(
-            taskID: taskID,
-            reason: "User query guidance overlay"
-        )
-        await coordinatorRegistry.finish(taskID: taskID)
-        logHandlingResult(
-            result,
-            stage: "guidance",
-            hint: located ? "Guided with a pointer overlay." : "No grounded control to point at."
-        )
-        return result
-    }
-
-    /// Parses planner `guidanceTargets` into ordered path targets. The planner emits a JSON array of
-    /// `{label, query}` objects — robust to labels/queries that contain punctuation (`:`, `;`, …),
-    /// which a delimiter-based format would mis-split. A legacy `"Label::query; …"` string is still
-    /// accepted as a fallback for older planner output.
-    private static func guidanceTargets(from raw: String) -> [AccessibilityCursorPathTarget] {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return [] }
-
-        if let data = trimmed.data(using: .utf8),
-           let decoded = try? JSONDecoder().decode([GuidanceTargetWire].self, from: data) {
-            return decoded.compactMap(\.pathTarget)
-        }
-
-        return trimmed.components(separatedBy: ";").compactMap { entry in
-            let parts = entry.components(separatedBy: "::")
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            let query = (parts.count > 1 ? parts[1] : parts.first ?? "")
-            guard !query.isEmpty else { return nil }
-            let label = (parts.count > 1 && !parts[0].isEmpty) ? parts[0] : query
-            return AccessibilityCursorPathTarget(query: query, label: label, kind: .targetControl)
-        }
-    }
-
-    private struct GuidanceTargetWire: Decodable {
-        var label: String?
-        var query: String
-
-        var pathTarget: AccessibilityCursorPathTarget? {
-            let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmedQuery.isEmpty else { return nil }
-            let trimmedLabel = (label ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return AccessibilityCursorPathTarget(
-                query: trimmedQuery,
-                label: trimmedLabel.isEmpty ? trimmedQuery : trimmedLabel,
-                kind: .targetControl
-            )
-        }
-    }
-
-    // MARK: - Vision Action Route (non-scriptable apps)
-
-    /// If the resolved target app genuinely can't be driven by AppleScript/keystrokes — an Electron app,
-    /// or one this machine has LEARNED fails AppleScript — drive it by vision via the shared
-    /// `VisionActionDriver`. Returns nil (use the normal AppleScript/keystroke path) when the app is
-    /// scriptable, when it merely lacks a dictionary (System-Events keystrokes still work), when input
-    /// isn't permitted, or when the hosted backend can't be reached. Honors the planner's confirm
-    /// request: an action flagged `needsConfirmation` asks the user first rather than auto-driving.
-    private func handleVisionActionIfNonScriptable(
-        resolution: LocalAppTaskCatalogResolution,
-        trace: AIModelCallTrace,
-        command: String,
-        traceID: String,
-        taskID: String,
-        modelMetadata: [String: String]
-    ) async -> UserQueryCommandHandlingResult? {
-        guard permissionPolicy.allowedCapabilities.contains(.input) else { return nil }
-        guard let intent = resolution.intent else { return nil }
-        let appName = intent.targetApp.appName
-        guard !appName.isEmpty, appName.lowercased() != "none" else { return nil }
-        let bundleIdentifier = intent.targetApp.bundleIdentifier
-
-        let scriptability = AppCapabilityService.shared.scriptability(
-            bundleIdentifier: bundleIdentifier,
-            appName: appName
-        )
-        guard ExecutionStrategySelector.strategy(scriptability: scriptability) == .accessibilityUI else {
-            return nil
-        }
-        // Only pre-empt the AppleScript/keystroke path for apps that truly can't use it: Electron
-        // (Chromium-rendered, no usable dictionary/keystroke automation) or apps that have actually
-        // failed AppleScript here. A native app that merely lacks a scripting dictionary can still be
-        // driven by System-Events keystrokes, so leave it on the existing path.
-        let isElectron = MacAppScriptabilityProbe().facts(
-            bundleIdentifier: bundleIdentifier,
-            appName: appName
-        ).isElectron
-        let learnedFailure = AppCapabilityService.shared.hasLearnedAppleScriptFailure(bundleIdentifier: bundleIdentifier)
-        guard isElectron || learnedFailure else { return nil }
-
-        guard let configuration = try? DonkeyBackendInferenceConfiguration.fromEnvironment() else {
-            return nil
-        }
-
-        // Never auto-drive the real pointer/keyboard for an action the planner asked to confirm; ask.
-        if intent.needsConfirmation {
-            return await confirmVisionAction(
-                appName: appName,
-                trace: trace,
-                traceID: traceID,
-                taskID: taskID,
-                modelMetadata: modelMetadata
-            )
-        }
-
-        let backend = DonkeyBackendInferenceClient(configuration: configuration)
-        let goal = trace.metadata["genericHarness.intent.goal"]
-            .flatMap { $0.isEmpty ? nil : $0 } ?? command
-        let appGuidance = BuiltInLocalAppSkillPacks.appOperatingGuidance(
-            forApp: appName,
-            bundleIdentifier: bundleIdentifier
-        )
-
-        let outcome = await VisionActionDriver.drive(
-            appName: appName,
-            bundleIdentifier: bundleIdentifier,
-            goal: goal,
-            appGuidance: appGuidance,
-            backend: backend
-        )
-
-        let response = outcome.completed
-            ? (outcome.lastNarration ?? "Done.")
-            : "I tried operating \(appName) but couldn't confirm the goal was finished."
-        let decision = AppHarnessDecision(
-            kind: .respond,
-            message: response,
-            traceID: traceID,
-            metadata: [
-                "structuredDecision": "true",
-                "router": "modelVisionAction",
-                "visionAction.completed": String(outcome.completed)
-            ]
-        )
-        let result = UserQueryCommandHandlingResult(
-            status: outcome.completed ? .completed : .failedSafe,
-            threadStatus: outcome.completed ? .completed : .failed,
-            decision: decision,
-            summary: response,
-            traceID: traceID,
-            metadata: modelMetadata.merging([
-                "appHarness.decision": AppHarnessDecisionKind.respond.rawValue,
-                "appHarness.router": "modelVisionAction",
-                "visionAction.app": appName,
-                "visionAction.completed": String(outcome.completed),
-                "visionAction.turns": String(outcome.turns),
-                "visionAction.reason": outcome.reason
-            ]) { _, new in new }
-        )
-        if outcome.completed {
-            _ = await genericHarnessLifecycle.coordinator.complete(
-                taskID: taskID,
-                reason: "User query vision action completed"
-            )
-        } else {
-            _ = await genericHarnessLifecycle.coordinator.failSafe(
-                taskID: taskID,
-                reason: "User query vision action did not confirm completion"
-            )
-        }
-        await coordinatorRegistry.finish(taskID: taskID)
-        logHandlingResult(
-            result,
-            stage: "visionAction",
-            hint: outcome.completed ? "Drove \(appName) by vision." : "Vision action stopped: \(outcome.reason)."
-        )
-        return result
-    }
-
-    /// Asks the user before driving an app by vision, when the planner flagged the action for
-    /// confirmation. Mirrors the clarification route — no input is performed.
-    private func confirmVisionAction(
-        appName: String,
-        trace: AIModelCallTrace,
-        traceID: String,
-        taskID: String,
-        modelMetadata: [String: String]
-    ) async -> UserQueryCommandHandlingResult {
-        let goal = trace.metadata["genericHarness.intent.goal"].flatMap { $0.isEmpty ? nil : $0 }
-        let question = goal.map { "I can do that in \(appName) by controlling it directly (\($0)). Want me to go ahead?" }
-            ?? "I can do that in \(appName) by controlling it directly. Want me to go ahead?"
-        let decision = AppHarnessDecision(
-            kind: .askClarification,
-            message: question,
-            traceID: traceID,
-            metadata: [
-                "structuredDecision": "true",
-                "router": "modelVisionActionConfirm"
-            ]
-        )
-        let result = UserQueryCommandHandlingResult(
-            status: .needsConfirmation,
-            threadStatus: .waitingForClarification,
-            decision: decision,
-            summary: question,
-            traceID: traceID,
-            metadata: modelMetadata.merging([
-                "appHarness.decision": AppHarnessDecisionKind.askClarification.rawValue,
-                "appHarness.router": "modelVisionActionConfirm",
-                "visionAction.app": appName
-            ]) { _, new in new }
-        )
-        _ = await genericHarnessLifecycle.coordinator.waitForUser(
-            taskID: taskID,
-            question: question,
-            reason: "Vision action requires confirmation before driving the app"
-        )
-        await coordinatorRegistry.finish(taskID: taskID)
-        logHandlingResult(
-            result,
-            stage: "visionActionConfirm",
-            hint: "Asked before driving \(appName) by vision."
-        )
-        return result
-    }
-
-    /// Records whether the AppleScript path actually worked for the target app, so the strategy router
-    /// learns per machine: repeated failures flip an app to the accessibility/vision path, a success
-    /// keeps it on AppleScript. Best-effort — only fires when the run executed an AppleScript action
-    /// and we know the app's bundle identifier.
-    private static func recordAppleScriptScriptability(
-        resolution: LocalAppTaskCatalogResolution,
-        runSteps: [HarnessStepExecutionResult]
-    ) {
-        guard let bundleIdentifier = (resolution.definition?.targetApp.bundleIdentifier
-            ?? resolution.intent?.targetApp.bundleIdentifier),
-            !bundleIdentifier.isEmpty
-        else {
-            return
-        }
-        let appName = resolution.definition?.targetApp.appName ?? resolution.intent?.targetApp.appName
-
-        var sawAppleScript = false
-        var anySucceeded = false
-        for step in runSteps {
-            guard let toolResult = step.toolResult else { continue }
-            let isAppleScript = toolResult.metadata["liveInputBackend"] == "mac-apple-script"
-                || toolResult.metadata["appleScript.output"] != nil
-                || toolResult.toolName == "automation.applescript.execute"
-            guard isAppleScript else { continue }
-            sawAppleScript = true
-            if toolResult.status == .succeeded { anySucceeded = true }
-        }
-        guard sawAppleScript else { return }
-        AppCapabilityService.shared.recordAppleScriptOutcome(
-            bundleIdentifier: bundleIdentifier,
-            appName: appName,
-            succeeded: anySucceeded
-        )
     }
 
     // MARK: - Generic Harness Task Execution
 
-    private func finalizeGenericHarnessTask(
-        taskID: String,
-        result: LocalAppTaskLiveRunResult,
-        runStep: HarnessStepExecutionResult?,
-        verificationStep: HarnessStepExecutionResult?,
-        runtime: GenericHarnessRuntime
-    ) async -> UserQueryGenericFinalizeResult {
-        switch result.status {
-        case .completed:
-            if verificationStep?.toolResult?.status == .failed {
-                let recoveryStep = await recoverGenericHarnessTask(
-                    taskID: taskID,
-                    reason: verificationStep?.toolResult?.summary ?? "Verification failed",
-                    traceID: result.traceID,
-                    runtime: runtime
-                )
-                _ = await genericHarnessLifecycle.coordinator.failSafe(
-                    taskID: taskID,
-                    reason: "User query verification failed"
-                )
-                return UserQueryGenericFinalizeResult(
-                    verificationStep: verificationStep,
-                    recoveryStep: recoveryStep
-                )
-            }
+    /// A compacted, structured thread summary built deterministically from the run — written
+    /// immediately, then replaced by an LLM-written version in the background. Mirrors the Hermes
+    /// compaction sections so the summary stays consistent whether or not the LLM call lands.
+    static func deterministicThreadSummary(
+        command: String,
+        app: String,
+        outcome: String,
+        steps: [HarnessStepExecutionResult],
+        finalDetail: String
+    ) -> String {
+        let keyDecisions = steps.compactMap { step -> String? in
+            guard let result = step.toolResult else { return nil }
+            return "- `\(result.toolName)` → \(result.status.rawValue): \(result.summary.prefix(120))"
+        }.joined(separator: "\n")
+        let progress = outcome == "ok" ? "Completed." : "Ended: \(outcome)."
+        let nextSteps = outcome == "ok"
+            ? "- None — task complete."
+            : "- Resume or retry; the task did not complete."
+        return """
+        # Thread Summary
 
-            _ = await genericHarnessLifecycle.coordinator.complete(
-                taskID: taskID,
-                reason: "User query local task completed"
-            )
-            return UserQueryGenericFinalizeResult(verificationStep: verificationStep)
-        case .needsUserReview:
-            _ = await genericHarnessLifecycle.coordinator.waitForUser(
-                taskID: taskID,
-                question: "Review the local app result before I continue.",
-                reason: "User query local app verification needs review"
-            )
-            return UserQueryGenericFinalizeResult(verificationStep: verificationStep)
-        case .needsConfirmation, .unsupportedCommand:
-            _ = await genericHarnessLifecycle.coordinator.waitForUser(
-                taskID: taskID,
-                question: summary(for: result, task: runStep?.task, runStep: runStep),
-                reason: "User query local app task needs clarification"
-            )
-            return UserQueryGenericFinalizeResult()
-        case .appUnavailable, .failedSafe:
-            let recoveryStep = await recoverGenericHarnessTask(
-                taskID: taskID,
-                reason: summary(for: result, task: runStep?.task, runStep: runStep),
-                traceID: result.traceID,
-                runtime: runtime
-            )
-            _ = await genericHarnessLifecycle.coordinator.failSafe(
-                taskID: taskID,
-                reason: summary(for: result, task: runStep?.task, runStep: runStep)
-            )
-            return UserQueryGenericFinalizeResult(
-                recoveryStep: recoveryStep
-            )
-        }
-    }
+        ## Goal
+        \(command)
 
-    private func recoverGenericHarnessTask(
-        taskID: String,
-        reason: String,
-        traceID: String,
-        runtime: GenericHarnessRuntime
-    ) async -> HarnessStepExecutionResult? {
-        _ = await genericHarnessLifecycle.planRecovery(
-            taskID: taskID,
-            reason: reason,
-            traceID: traceID
-        )
-        return await runtime.executeNextPlannedStep(taskID: taskID)
-    }
+        ## Progress
+        \(progress) \(steps.count) step(s)\(app.isEmpty ? "" : " in \(app)").
 
-    private func executeGenericHarnessLoop(
-        taskID: String,
-        runtime: GenericHarnessRuntime,
-        maxSteps: Int = 16
-    ) async -> [HarnessStepExecutionResult] {
-        var results: [HarnessStepExecutionResult] = []
-        for _ in 0..<maxSteps {
-            guard let result = await runtime.executeNextPlannedStep(taskID: taskID) else {
-                break
-            }
-            results.append(result)
-            if result.stoppedForGate || Self.shouldStopHarnessLoop(after: result.toolResult) {
-                break
-            }
-        }
-        return results
-    }
+        ## Key Decisions
+        \(keyDecisions.isEmpty ? "- (none)" : keyDecisions)
 
-    private static func shouldStopHarnessLoop(after result: HarnessToolResult?) -> Bool {
-        switch result?.status {
-        case .failed, .unknownTool, .invalidInput, .permissionDenied, .waitingForUser, .waitingForPermission:
-            return true
-        case .succeeded, nil:
-            return false
-        }
-    }
+        ## Next Steps
+        \(nextSteps)
 
-    private static func integratingGenericToolOutcome(
-        into result: LocalAppTaskLiveRunResult,
-        runSteps: [HarnessStepExecutionResult]
-    ) -> LocalAppTaskLiveRunResult {
-        guard result.actionTraces.isEmpty,
-              result.status == .failedSafe
-        else {
-            return result
-        }
-
-        let toolResults = runSteps.compactMap(\.toolResult)
-        guard let toolResult = toolResults.last else {
-            return result
-        }
-        let completedGenericAction = toolResults.last { result in
-            result.status == .succeeded
-                && (
-                    result.toolName == "skill.script.execute"
-                        || result.toolName == "automation.applescript.execute"
-                )
-        }
-
-        switch toolResult.status {
-        case .succeeded where completedGenericAction != nil:
-            var completed = result
-            let actionResult = completedGenericAction ?? toolResult
-            completed.status = .completed
-            completed.metadata = result.metadata
-                .merging(actionResult.metadata) { current, _ in current }
-                .merging(toolResult.metadata) { current, _ in current }
-            completed.metadata["reason"] = "genericToolCompleted"
-            completed.metadata["genericTool.completed"] = actionResult.toolName
-            return completed
-        case .waitingForUser:
-            var waiting = result
-            waiting.status = .needsConfirmation
-            waiting.metadata = result.metadata.merging(toolResult.metadata) { current, _ in current }
-            waiting.metadata["reason"] = "genericToolNeedsUser"
-            waiting.metadata["genericTool.waiting"] = toolResult.toolName
-            return waiting
-        default:
-            return result
-        }
-    }
-
-    private static func agentVisualizationPlan(
-        from runSteps: [HarnessStepExecutionResult]
-    ) -> AgentVisualizationPlan? {
-        for step in runSteps.reversed() {
-            guard step.toolResult?.toolName == AppHarnessGenericLifecycleToolNames.agentPathVisualize,
-                  let text = step.toolResult?.metadata["agentVisualization.planJSON"],
-                  let data = text.data(using: .utf8),
-                  let plan = try? JSONDecoder().decode(AgentVisualizationPlan.self, from: data)
-            else {
-                continue
-            }
-            return plan
-        }
-        return nil
-    }
-
-    private func groundAgentVisualizationPlan(_ plan: AgentVisualizationPlan) -> AgentVisualizationPlan {
-        let candidates = MacWindowResolver().enumerateCandidates()
-        guard !candidates.isEmpty else { return plan }
-
-        return AgentVisualizationGrounder().ground(
-            plan: plan,
-            targetAppName: plan.metadata["targetApp"],
-            candidates: candidates
-        )
+        ## Critical Context
+        \(finalDetail)
+        """
     }
 
     private func logSubmittedCommand(
@@ -1064,111 +1085,6 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         )
     }
 
-    private func resolveTaskIntent(
-        command: String,
-        contextSnippets: [String],
-        availableToolNames: [String],
-        sourceTraceID: String
-    ) async -> (resolution: LocalAppTaskCatalogResolution, trace: AIModelCallTrace) {
-        let request = TaskIntentAdapterRequest(
-            command: command,
-            taskDefinitions: catalog.taskDefinitions,
-            contextSnippets: contextSnippets,
-            appFinderCatalog: catalog.appFinderCatalogEntries(),
-            availableToolNames: availableToolNames,
-            sourceTraceID: sourceTraceID
-        )
-        let result = await taskIntentAdapter.parseTaskIntent(request)
-
-        guard let intent = result.intent else {
-            var metadata = [
-                "reason": "hostedModelIntentUnavailable",
-                "modelCallStatus": result.trace.status.rawValue,
-                "modelValidationStatus": result.trace.validationStatus
-            ]
-            if result.trace.validationStatus == "noTaskIntent" {
-                metadata["reason"] = "noSupportedTaskIntent"
-                metadata["responseMode"] = "conversation"
-                metadata["assistantResponse"] = "I'm here. What would you like to work on?"
-            }
-            Self.mergeNonEmpty(
-                from: result.trace.metadata,
-                keys: ["responseMode", "assistantResponse"],
-                into: &metadata
-            )
-            Self.mergeNonEmpty(
-                from: result.trace.metadata,
-                keys: [
-                    "reason", "detail", "error", "backend.provider",
-                    "http.status", "http.bodyPreview",
-                    "modelOutput.empty", "modelOutput.preview",
-                    "fallback.status", "fallback.validation", "fallback.reason",
-                    "fallback.http.status", "fallback.http.bodyPreview",
-                    "provider", "privacy.store"
-                ],
-                into: &metadata,
-                keyPrefix: "model."
-            )
-            return (
-                LocalAppTaskCatalogResolution(
-                    status: .needsConfirmation,
-                    metadata: metadata
-                ),
-                result.trace
-            )
-        }
-
-        return (catalog.resolve(intent: intent), result.trace)
-    }
-
-    private func logModelResolution(
-        command: String,
-        traceID: String,
-        resolution: LocalAppTaskCatalogResolution,
-        trace: AIModelCallTrace,
-        latencyMS: Double
-    ) {
-        guard UserQueryLog.isEnabled else { return }
-
-        let taskType = resolution.definition?.taskType ?? resolution.intent?.taskType ?? ""
-        let reason = resolution.metadata["reason"] ?? ""
-        let modelReason = Self.metadataValue(
-            in: resolution.metadata,
-            keys: ["model.reason", "model.fallback.reason"]
-        )
-            ?? Self.metadataValue(
-                in: trace.metadata,
-                keys: ["reason", "fallback.reason"]
-            )
-            ?? ""
-        let modelDetail = Self.metadataValue(
-            in: resolution.metadata,
-            keys: [
-                "model.detail",
-                "model.error",
-                "model.http.bodyPreview",
-                "model.fallback.http.bodyPreview",
-                "model.sidecar.outputPreview"
-            ]
-        )
-            ?? Self.metadataValue(
-                in: trace.metadata,
-                keys: [
-                    "detail",
-                    "error",
-                    "http.bodyPreview",
-                    "fallback.http.bodyPreview",
-                    "sidecar.outputPreview"
-                ]
-            )
-            ?? ""
-        let fallbackStatus = trace.metadata["fallback.status"] ?? ""
-        let latency = Self.formatLatency(latencyMS)
-        UserQueryLog.commands.notice(
-            "intent resolved traceID=\(traceID, privacy: .public) resolution=\(resolution.status.rawValue, privacy: .public) taskType=\(taskType, privacy: .public) reason=\(reason, privacy: .public) modelStatus=\(trace.status.rawValue, privacy: .public) validation=\(trace.validationStatus, privacy: .public) modelReason=\(modelReason, privacy: .public) modelDetail=\(modelDetail, privacy: .public) fallbackStatus=\(fallbackStatus, privacy: .public) latencyMS=\(latency, privacy: .public) command=\(command, privacy: .public)"
-        )
-    }
-
     private func logHandlingResult(
         _ result: UserQueryCommandHandlingResult,
         stage: String,
@@ -1182,371 +1098,62 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         )
     }
 
-    private func logActionTraces(for result: LocalAppTaskLiveRunResult) {
-        guard UserQueryLog.isEnabled else { return }
+    /// Prompt for the streamed final reply: relay the harness's drafted answer to the user, grounded
+    /// strictly in that draft so the streamed message can't drift from what the run actually found.
+    private static func finalAnswerPrompt(goal: String, draftAnswer: String) -> String {
+        """
+        Relay Donkey's reply to the user for this finished request. Base it strictly on the draft \
+        below — do not add facts, steps, or speculation. Reply directly to the user in a concise, \
+        friendly voice; if the draft already reads well, lightly polish it. Output only the reply \
+        text, with no preamble.
 
-        for trace in result.actionTraces {
-            let command = trace.command
-            let backend = trace.metadata["liveInputBackend"] ?? "unknown"
-            let inputMode = trace.metadata["inputMode"] ?? inputModeDescription(
-                backend: backend,
-                commandKind: command.kind
-            )
-            let workflowStepID = command.metadata["workflowStepID"] ?? ""
-            let controlID = command.metadata["controlID"] ?? ""
-            let target = actionTargetDescription(for: command)
-            let elementClick = isElementClick(command)
-            let appleScriptAction = trace.metadata["appleScript.action"] ?? command.metadata["appleScript.action"] ?? ""
-            let appleScriptOutput = trace.metadata["appleScript.output"] ?? ""
-            let accessibilityResult = trace.metadata["accessibility.result"] ?? ""
-            let overlayPointer = backend == "mac-apple-script" ? "fallbackOnly" : "visualOnly"
-
-            UserQueryLog.commands.notice(
-                "local action traceID=\(result.traceID, privacy: .public) commandID=\(command.id, privacy: .public) workflowStepID=\(workflowStepID, privacy: .public) kind=\(command.kind.rawValue, privacy: .public) backend=\(backend, privacy: .public) inputMode=\(inputMode, privacy: .public) executed=\(String(trace.executed), privacy: .public) decision=\(decisionDescription(trace.decision), privacy: .public) elementClick=\(String(elementClick), privacy: .public) controlID=\(controlID, privacy: .public) target=\(target, privacy: .public) overlayPointer=\(overlayPointer, privacy: .public) appleScriptAction=\(appleScriptAction, privacy: .public) appleScriptOutput=\(appleScriptOutput, privacy: .public) accessibilityResult=\(accessibilityResult, privacy: .public)"
-            )
-        }
+        User request: \(goal)
+        Draft reply: \(draftAnswer)
+        """
     }
 
-    private static func metadataValue(in metadata: [String: String], keys: [String]) -> String? {
-        for key in keys {
-            if let value = metadata[key] {
-                return value
-            }
-        }
-        return nil
-    }
+    /// Deadline for the one-shot understanding call; past it the run degrades to
+    /// driving the raw command instead of stalling silently.
+    private static let understandingTimeoutSeconds: TimeInterval = 15
 
-    private static func mergeNonEmpty(
-        from source: [String: String],
-        keys: [String],
-        into target: inout [String: String],
-        keyPrefix: String = ""
-    ) {
-        for key in keys {
-            if let value = source[key], !value.isEmpty {
-                target["\(keyPrefix)\(key)"] = value
-            }
-        }
-    }
-
-    private func runHint(for result: LocalAppTaskLiveRunResult) -> String {
-        if let reason = result.metadata["reason"], !reason.isEmpty {
-            if reason == "missingModelPlannedCommand",
-               let missingTool = result.metadata["missingTool"],
-               !missingTool.isEmpty {
-                return "Run reason: \(reason) at \(missingTool)."
-            }
-            return "Run reason: \(reason)."
-        }
-        if let automationBackend = result.metadata["automation.backend"],
-           !automationBackend.isEmpty {
-            let automationAction = result.metadata["automation.action"] ?? ""
-            return "Automation \(automationBackend) \(automationAction) finished with status \(result.status.rawValue)."
-        }
-        if let verificationStatus = result.metadata["verification.status"],
-           let verificationSummary = result.metadata["verification.summary"] {
-            return "Verification \(verificationStatus): \(verificationSummary)."
-        }
-        return "Local app workflow finished with status \(result.status.rawValue)."
-    }
-
-    private func inputModeDescription(
-        backend: String,
-        commandKind: ActionEngineCommandKind
-    ) -> String {
-        if backend.contains("apple-script") { return "appAutomation" }
-        if backend.contains("accessibility") { return "accessibilityElement" }
-        if backend.contains("keyboard") { return "keyboard" }
-        return commandKind.rawValue
-    }
-
-    private func actionTargetDescription(for command: ActionEngineCommand) -> String {
-        if let controlID = command.metadata["controlID"],
-           !controlID.isEmpty {
-            return "control:\(controlID)"
-        }
-
-        guard let bounds = command.targetBounds else {
-            return "none"
-        }
-        return String(
-            format: "bounds:x=%.3f,y=%.3f,w=%.3f,h=%.3f,space=%@",
-            bounds.origin.x,
-            bounds.origin.y,
-            bounds.size.width,
-            bounds.size.height,
-            bounds.space.rawValue
-        )
-    }
-
-    private func isElementClick(_ command: ActionEngineCommand) -> Bool {
-        (command.kind == .tap || command.kind == .mouse) &&
-            (command.targetBounds != nil || command.metadata["controlID"]?.isEmpty == false)
-    }
-
-    private func decisionDescription(_ decision: ActionEngineCommandDecision) -> String {
-        switch decision {
-        case .skippedNoLiveInput:
-            return "skippedNoLiveInput"
-        case .executedLive:
-            return "executedLive"
-        case .denied(let reason):
-            return "denied:\(reason)"
-        }
-    }
-
-    private static func shouldRespondWithoutLocalTask(_ resolution: LocalAppTaskCatalogResolution) -> Bool {
-        guard resolution.status == .needsConfirmation else { return false }
-        if resolution.metadata["responseMode"] == "conversation",
-           resolution.metadata["assistantResponse"]?.isEmpty == false {
-            return true
-        }
-        return resolution.metadata["reason"] == "lowConfidenceIntent"
-            && resolution.metadata["assistantResponse"]?.isEmpty == false
-    }
-
-    private static func shouldFailSafelyWithoutLocalTask(_ resolution: LocalAppTaskCatalogResolution) -> Bool {
-        guard resolution.status == .needsConfirmation,
-              resolution.intent == nil,
-              resolution.metadata["reason"] == "hostedModelIntentUnavailable"
-        else {
-            return false
-        }
-        return resolution.metadata["responseMode"] != "conversation"
-    }
-
-    private static func shouldAskClarificationBeforeLocalTask(_ resolution: LocalAppTaskCatalogResolution) -> Bool {
-        guard resolution.status == .needsConfirmation,
-              shouldRespondWithoutLocalTask(resolution) == false
-        else {
-            return false
-        }
-        return resolution.intent == nil
-            || resolution.intent?.needsConfirmation == true
-            || resolution.metadata["responseMode"] == "clarification"
-    }
-
-    private static func clarificationQuestion(for resolution: LocalAppTaskCatalogResolution) -> String {
-        if let assistantResponse = resolution.metadata["assistantResponse"],
-           !assistantResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return assistantResponse
-        }
-        if let reason = resolution.metadata["reason"],
-           !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let readableDetail = reason
-                .split(separator: "_")
-                .joined(separator: " ")
-            return "What \(readableDetail) should I use?"
-        }
-        return "What detail should I use?"
-    }
-
-    private static func conversationResponse(for resolution: LocalAppTaskCatalogResolution) -> String {
-        if let assistantResponse = resolution.metadata["assistantResponse"],
-           !assistantResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return assistantResponse
-        }
-        if resolution.metadata["reason"] == "hostedModelIntentUnavailable" {
-            let modelStatus = resolution.metadata["modelCallStatus"] ?? ""
-            if modelStatus == AIModelCallStatus.missingCredentials.rawValue {
-                return "The hosted command parser is not configured yet, so I couldn't safely run that action."
-            }
-            if modelStatus == AIModelCallStatus.providerOutage.rawValue
-                || modelStatus == AIModelCallStatus.timeout.rawValue {
-                return "The hosted command parser is not available right now, so I couldn't safely run that action."
-            }
-        }
-        return "I can help, but I need a clearer request before opening an app."
-    }
-
-    private static func modelUnavailableResponse(for resolution: LocalAppTaskCatalogResolution) -> String {
-        let modelStatus = resolution.metadata["modelCallStatus"] ?? ""
-        if modelStatus == AIModelCallStatus.missingCredentials.rawValue {
-            return "The hosted command parser is not configured yet, so I couldn't safely run that action."
-        }
-        if modelStatus == AIModelCallStatus.providerOutage.rawValue
-            || modelStatus == AIModelCallStatus.timeout.rawValue
-            || modelStatus == AIModelCallStatus.rateLimited.rawValue {
-            return "The hosted command parser is not available right now, so I couldn't safely run that action."
-        }
-        return "The hosted command parser failed before it produced a safe action plan, so I didn't run anything."
-    }
-
-    private func retrieveSemanticMemory(
-        command: String,
-        resolution: LocalAppTaskCatalogResolution
-    ) async -> [RunMemorySemanticResult] {
-        guard let memoryStore,
-              let targetID = semanticMemoryTargetID(for: resolution)
-        else {
-            return []
-        }
-
-        return (try? memoryStore.search(query: AgentMemoryQuery(
-                text: command,
-                targetID: targetID,
-                scope: .target,
-                kinds: [.targetFact, .workflowMemory, .userInstruction],
-                budget: RunMemoryRetrievalBudget(maxRecords: 3, maxPromptCharacters: 800)
-        ))) ?? []
-    }
-
-    private func semanticMemoryTargetID(
-        for resolution: LocalAppTaskCatalogResolution
+    /// One short line describing the step that just ran, for the spawn cursor's
+    /// label: the planner's stated reason, else the tool result's own summary.
+    @MainActor
+    static func stepNarration(
+        for step: HarnessStepExecutionResult,
+        planner: HostedHarnessStepPlanner
     ) -> String? {
-        guard let definition = resolution.definition else { return nil }
-        return LocalAppTaskAdapter(definition: definition).targetID
-    }
-
-    private func documentReviewRequest(
-        traceID: String,
-        result: LocalAppTaskLiveRunResult
-    ) -> DocumentFormFillReviewRequest? {
-        guard result.status == .needsUserReview,
-              let plan = result.documentFormFillPlan,
-              let definition = result.resolution.definition
-        else {
+        let candidate = planner.lastNarration ?? step.toolResult?.summary
+        guard var narration = candidate?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: .newlines).first,
+            !narration.isEmpty else {
             return nil
         }
-
-        return DocumentFormFillReviewRequest(
-            plan: plan,
-            definition: definition,
-            traceID: traceID
-        )
+        let maxLength = 90
+        if narration.count > maxLength {
+            narration = String(narration.prefix(maxLength)).trimmingCharacters(in: .whitespaces) + "…"
+        }
+        return narration
     }
 
-    private func statusSummary(for result: LocalAppTaskLiveRunResult) -> String {
-        switch result.status {
-        case .completed:
-            return "Done"
-        case .needsUserReview:
-            if let proposalCount = result.documentFormFillPlan?.proposals.count,
-               proposalCount > 0 {
-                return "Review \(proposalCount) fields"
-            }
-            return "Needs review"
-        case .needsConfirmation:
-            if let reason = result.resolution.metadata["reason"] {
-                guard reason != "hostedModelIntentUnavailable",
-                      reason != "needsConfirmation"
-                else {
-                    return "Need more detail"
-                }
-                return "Need \(reason)"
-            }
-            return "Need more detail"
-        case .appUnavailable:
-            if let appName = result.resolution.metadata["targetApp"] ?? result.resolution.availability?.target.appName {
-                return "\(appName) not found"
-            }
-            return "App not found"
-        case .unsupportedCommand:
-            return "Need more detail"
-        case .failedSafe:
-            return "Stopped safely"
+    /// Which sensing modality a step used, matched on the executed tool's typed registry name (never on
+    /// user text). Only the two observation tools sense fresh elements; everything else (clicks, input,
+    /// shell, wait, verify) senses nothing, so its step shows no modality.
+    private static func sensingModality(forTool toolName: String) -> TraceModality {
+        switch toolName {
+        case "ax.observe": return .accessibility
+        case "vision.capture": return .vision
+        default: return .none
         }
     }
 
-    private func summary(
-        for result: LocalAppTaskLiveRunResult,
-        task: HarnessTaskState?,
-        runStep: HarnessStepExecutionResult?
-    ) -> String {
-        if let task,
-           task.status == .waitingForPermission {
-            return Self.permissionGateSummary(for: task)
-        }
-
-        if let task,
-           task.status == .interrupted {
-            return Self.interruptionSummary(for: task)
-        }
-
-        if let question = task?.pendingContinuation?.question,
-           !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return question
-        }
-
-        if let task = runStep?.task,
-           task.status == .waitingForPermission {
-            return Self.permissionGateSummary(for: task)
-        }
-
-        if let task = runStep?.task,
-           task.status == .interrupted {
-            return Self.interruptionSummary(for: task)
-        }
-
-        if let question = runStep?.task.pendingContinuation?.question,
-           !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return question
-        }
-
-        return statusSummary(for: result)
-    }
-
-    private func threadStatus(
-        for result: LocalAppTaskLiveRunResult,
-        runStep: HarnessStepExecutionResult? = nil
-    ) -> UserQueryTaskStatus {
-        if let status = Self.userQueryStatus(for: runStep?.task) {
-            return status
-        }
-
-        switch result.status {
-        case .completed:
-            return .completed
-        case .needsUserReview:
-            return .waitingForReview
-        case .needsConfirmation, .unsupportedCommand:
-            return .waitingForClarification
-        case .appUnavailable, .failedSafe:
-            return .failed
-        }
-    }
-
-    private func taskLabel(for result: LocalAppTaskLiveRunResult) -> String? {
-        guard result.status == .completed || result.status == .needsUserReview,
-              let definition = result.resolution.definition
-        else {
-            return nil
-        }
-
-        let entities = result.resolution.intent?.normalizedEntities ?? [:]
-        if let template = definition.metadata["taskLabelTemplate"],
-           let label = Self.renderTemplate(template, entities: entities),
-           !label.isEmpty {
-            return label
-        }
-
-        return Self.displayTitle(for: definition)
-    }
-
-    private static func displayTitle(for definition: LocalAppTaskDefinition) -> String {
-        if let displayTitle = definition.metadata["displayTitle"], !displayTitle.isEmpty {
-            return displayTitle
-                .split(separator: " ")
-                .map { word in word.prefix(1).uppercased() + word.dropFirst() }
-                .joined(separator: " ")
-        }
-
-        return definition.taskType
-            .split(separator: "_")
-            .map { word in word.prefix(1).uppercased() + word.dropFirst() }
-            .joined(separator: " ")
-    }
-
-    private static func renderTemplate(
-        _ template: String,
-        entities: [String: String]
-    ) -> String? {
-        var rendered = template
-        for (name, value) in entities {
-            rendered = rendered.replacingOccurrences(of: "{\(name)}", with: value)
-        }
-        guard !rendered.contains("{") else { return nil }
-        return rendered.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Escape hatch to suppress the cosmetic animated-cursor playback (set `DONKEY_DISABLE_CURSOR_VIZ=1`).
+    /// The playback animates an overlay window's frame, which can trip a re-entrant AppKit layout crash on
+    /// some macOS builds; turning it off lets a run proceed (the harness still does the real vision input
+    /// and the text narration still updates).
+    static var cursorVisualizationDisabled: Bool {
+        ProcessInfo.processInfo.environment["DONKEY_DISABLE_CURSOR_VIZ"] == "1"
     }
 
     private static func uptimeMilliseconds() -> Double {
@@ -1555,54 +1162,6 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
 
     private static func formatLatency(_ milliseconds: Double) -> String {
         String(format: "%.3f", max(0, milliseconds))
-    }
-
-    private static func now() -> RunTraceTimestamp {
-        RunTraceTimestamp(
-            wallClock: Date(),
-            monotonicUptimeNanoseconds: UInt64(ProcessInfo.processInfo.systemUptime * 1_000_000_000)
-        )
-    }
-
-    private static func modelInput(
-        for command: String,
-        context: UserQueryCommandContext?,
-        compactedContext: HarnessCompactedThreadContext
-    ) -> UserQueryModelIntentInput {
-        let modelCommand = compactedContext.currentTurn?.text ?? command
-        let compactedPrompt = compactedContext.promptText
-        guard let context, context.isFollowUp else {
-            return UserQueryModelIntentInput(
-                command: modelCommand,
-                contextSnippets: [compactedPrompt].filter { !$0.isEmpty }
-            )
-        }
-
-        let taskContext = [
-            "Existing task title: \(context.task.title)",
-            "Existing task original request: \(context.task.commandText)",
-            "Existing task status: \(context.task.status.rawValue)"
-        ]
-        .compactMap(\.self)
-        .joined(separator: "\n\n")
-
-        return UserQueryModelIntentInput(
-            command: modelCommand,
-            contextSnippets: [
-                taskContext,
-                compactedPrompt
-            ].filter { !$0.isEmpty }
-        )
-    }
-
-    private static func runtimeCapabilities(for catalog: LocalAppTaskCatalog) -> [String] {
-        catalog.taskDefinitions
-            .map { definition in
-                let title = displayTitle(for: definition)
-                let entities = definition.entityRules.map(\.name).joined(separator: ",")
-                return "\(definition.taskType): \(title) app=\(definition.targetApp.appName) entities=\(entities)"
-            }
-            .sorted()
     }
 
     private static var userQueryGrantedPermissions: Set<HarnessPermission> {
@@ -1620,6 +1179,111 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         ]
     }
 
+    /// Picks the app the harness drive operates. The understood target app wins whenever it names a
+    /// real app: a running window resolves to its exact name and bundle id, and an installed-but-not-
+    /// running app is still pinned by name — the see/act providers re-resolve the target window on
+    /// every call, so the target starts working the moment the planner launches it. Pinning to the
+    /// frontmost app instead aims every observe/click (and the focus guard's recovery activation) at
+    /// an unrelated window for the whole run, and preloads the wrong app's guidance. Only a name that
+    /// matches nothing running and nothing installed falls back to the frontmost app.
+    @MainActor
+    static func resolveDriveTarget(
+        understanding: HarnessRequestUnderstanding?,
+        frontmostAppName: String,
+        frontmostBundleIdentifier: String?,
+        resolveRunningWindow: (String) -> (appName: String?, bundleIdentifier: String?)? = { requested in
+            AccessibilityObserver.resolveTarget(appName: requested, bundleIdentifier: nil)
+                .map { ($0.appName, $0.bundleIdentifier) }
+        },
+        resolveInstalledBundle: (String) -> URL? = { requested in
+            MacAppScriptabilityProbe().bundleURL(bundleIdentifier: nil, appName: requested)
+        }
+    ) -> (appName: String, bundleIdentifier: String?) {
+        guard let requested = understanding?.targetAppName,
+              !requested.isEmpty,
+              requested.caseInsensitiveCompare(frontmostAppName) != .orderedSame
+        else {
+            return (frontmostAppName, frontmostBundleIdentifier)
+        }
+        if let resolved = resolveRunningWindow(requested) {
+            return (resolved.appName ?? requested, resolved.bundleIdentifier)
+        }
+        if let bundleURL = resolveInstalledBundle(requested) {
+            return (requested, Bundle(url: bundleURL)?.bundleIdentifier)
+        }
+        return (frontmostAppName, frontmostBundleIdentifier)
+    }
+
+    /// A compact, one-line-per-skill catalog of every installed app skill — id, description, the apps it
+    /// covers, and any validated `skill_run` scripts — surfaced to the planner each step. App-specific
+    /// guidance is only preloaded for the resolved GUI drive target, so without this the planner never
+    /// learns that a skill owns a domain (e.g. native music playback, Notes capture by script) when the
+    /// task has no GUI target app — and it improvises fragile commands instead of following the skill.
+    /// Lists every skill unconditionally; the planner does the routing, so no intent is matched here.
+    private static func installedSkillCatalog() -> String? {
+        let skills = BuiltInLocalAppSkillPacks.descriptors().sorted { $0.id < $1.id }
+        guard !skills.isEmpty else { return nil }
+        let lines = skills.map { skill -> String in
+            let apps = (skill.metadata["apps"]?.isEmpty == false) ? " · apps: \(skill.metadata["apps"]!)" : ""
+            let scripts = skill.scripts.isEmpty
+                ? ""
+                : " · skill_run: " + skill.scripts.map { script in
+                    script.purpose.isEmpty ? script.id : "\(script.id) (\(script.purpose))"
+                }.joined(separator: ", ")
+            return "  - \(skill.id) — \(skill.description)\(apps)\(scripts)"
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Builds a one-step cursor-path visualization toward the exact screen point a just-executed action
+    /// clicked, in screen-normalized coordinates for the overlay. Returns nil for steps that did not
+    /// move the pointer (observation, conversation, AXPress without a coordinate fallback).
+    static func cursorVisualizationPlan(
+        for step: HarnessStepExecutionResult,
+        appName: String,
+        traceID: String,
+        screenSize: CGSize
+    ) -> AgentVisualizationPlan? {
+        guard let result = step.toolResult,
+              result.status == .succeeded,
+              let raw = result.metadata["screenPoint"],
+              screenSize.width > 0, screenSize.height > 0 else {
+            return nil
+        }
+        let parts = raw.split(separator: ",")
+        guard parts.count == 2,
+              let px = Double(parts[0].trimmingCharacters(in: .whitespaces)),
+              let py = Double(parts[1].trimmingCharacters(in: .whitespaces)) else {
+            return nil
+        }
+        let label = result.metadata["label"].flatMap { $0.isEmpty ? nil : $0 } ?? appName
+        let target = AgentVisualizationStepTarget(
+            point: HotLoopPoint(
+                x: px / Double(screenSize.width),
+                y: py / Double(screenSize.height),
+                space: .normalizedTarget
+            ),
+            description: label,
+            source: .actionTrace,
+            confidence: 0.95
+        )
+        return AgentVisualizationPlan(
+            title: appName,
+            executionMode: .live,
+            sourceTraceID: traceID,
+            steps: [
+                AgentVisualizationStep(
+                    kind: .moveToTarget,
+                    label: label,
+                    target: target,
+                    travelDuration: 0.45,
+                    holdDuration: 0.5
+                )
+            ],
+            metadata: ["realPointerMoved": "true"]
+        )
+    }
+
     static func genericHarnessToolNames() -> [String] {
         let allowedSensitiveTools: Set<String> = [
             "automation.applescript.generate"
@@ -1634,71 +1298,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                         || allowedSensitiveTools.contains(descriptor.name)
                 }
                 .map(\.name)
-                + LocalAppHarnessStepExecutor.descriptors.map(\.name)
         )).sorted()
-    }
-
-    private static func userQueryStatus(for task: HarnessTaskState?) -> UserQueryTaskStatus? {
-        guard let task else { return nil }
-
-        switch task.status {
-        case .running, .resuming:
-            return nil
-        case .paused:
-            return .paused
-        case .waitingForUser:
-            return .waitingForClarification
-        case .waitingForPermission:
-            return .waitingForPermission
-        case .interrupted:
-            return .interrupted
-        case .completed:
-            return .completed
-        case .failedSafe, .cancelled:
-            return .failed
-        }
-    }
-
-    private static func genericHarnessTaskMetadata(_ task: HarnessTaskState?) -> [String: String] {
-        guard let task else { return [:] }
-
-        var metadata: [String: String] = [
-            "genericHarness.taskStatus": task.status.rawValue
-        ]
-        if let continuation = task.pendingContinuation {
-            metadata["genericHarness.pendingReason"] = continuation.reason
-            metadata["genericHarness.pendingStage"] = continuation.stage.rawValue
-            metadata["genericHarness.pendingToolName"] = continuation.pendingToolCall?.name ?? ""
-            metadata["genericHarness.pendingToolCallID"] = continuation.pendingToolCall?.id ?? ""
-            metadata["genericHarness.pendingQuestion"] = continuation.question ?? ""
-            metadata["genericHarness.missingPermissions"] = continuation.missingPermissions
-                .map(\.rawValue)
-                .joined(separator: ",")
-            metadata["genericHarness.newGoal"] = continuation.metadata["newGoal"] ?? ""
-        }
-        return metadata
-    }
-
-    private static func permissionGateSummary(for task: HarnessTaskState) -> String {
-        let permissions = task.pendingContinuation?.missingPermissions ?? []
-        let permissionText = permissions.isEmpty
-            ? "permission"
-            : permissions.map(\.rawValue).joined(separator: ", ")
-        let pendingTool = task.pendingContinuation?.pendingToolCall?.name
-        if let pendingTool, !pendingTool.isEmpty {
-            return "Approve \(permissionText) for \(pendingTool)"
-        }
-
-        return "Approve \(permissionText)"
-    }
-
-    private static func interruptionSummary(for task: HarnessTaskState) -> String {
-        if let newGoal = task.pendingContinuation?.metadata["newGoal"],
-           !newGoal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "Changed course: \(newGoal)"
-        }
-
-        return "Changed course"
     }
 
     private static func harnessRequest(
@@ -1738,32 +1338,12 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             "genericHarness.runStoppedForGate": runStep.map { String($0.stoppedForGate) } ?? "",
             "genericHarness.verificationToolStatus": verificationStep?.toolResult?.status.rawValue ?? "",
             "genericHarness.recoveryToolStatus": recoveryStep?.toolResult?.status.rawValue ?? "",
-            "genericHarness.pendingQuestion": runStep?.task.pendingContinuation?.question ?? ""
+            "genericHarness.pendingQuestion": runStep?.task.pendingContinuation?.question ?? "",
+            "genericHarness.shellConsent.command": runStep?.task.pendingContinuation?.metadata["shell.command"] ?? "",
+            "genericHarness.shellConsent.tier": runStep?.task.pendingContinuation?.metadata["shell.tier"] ?? "",
+            "genericHarness.shellConsent.reason": runStep?.task.pendingContinuation?.metadata["shell.reason"] ?? "",
+            "genericHarness.shellConsent.allowAlways": runStep?.task.pendingContinuation?.metadata["shell.allowAlways"] ?? ""
         ]
-    }
-
-    private static func contextMetadata(_ context: UserQueryCommandContext?) -> [String: String] {
-        guard let context else { return [:] }
-
-        return [
-            "taskContext.taskID": context.task.id,
-            "taskContext.isFollowUp": String(context.isFollowUp),
-            "taskContext.eventCount": String(context.recentEvents.count),
-            "taskContext.assetCount": String(context.assets.count)
-        ]
-    }
-}
-
-private struct UserQueryGenericFinalizeResult: Equatable, Sendable {
-    var verificationStep: HarnessStepExecutionResult?
-    var recoveryStep: HarnessStepExecutionResult?
-
-    init(
-        verificationStep: HarnessStepExecutionResult? = nil,
-        recoveryStep: HarnessStepExecutionResult? = nil
-    ) {
-        self.verificationStep = verificationStep
-        self.recoveryStep = recoveryStep
     }
 }
 

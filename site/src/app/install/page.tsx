@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 
 import { Footer } from "@/app/_components/landing/Footer";
 import { TopNav } from "@/app/_components/landing/TopNav";
-import { DONKEY_DOWNLOAD_URL } from "@/app/_components/landing/data";
 import { BG, BLACK } from "@/app/_components/landing/theme";
 import { InstallInstructions } from "@/app/install/_components/InstallInstructions";
 
@@ -24,7 +23,7 @@ export default function InstallPage() {
         WebkitFontSmoothing: "antialiased",
       }}
     >
-      <TopNav ctaHref={DONKEY_DOWNLOAD_URL} ctaLabel="Download" />
+      <TopNav />
       <InstallInstructions />
       <Footer />
     </main>

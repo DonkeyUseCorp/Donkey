@@ -1,12 +1,11 @@
 "use client";
 
-import { ArrowRight, Boxes, Crosshair, Gauge } from "lucide-react";
+import { Boxes, Crosshair, Gauge } from "lucide-react";
 
 import {
   Headline,
   PillButton,
 } from "@/app/_components/landing/LandingPrimitives";
-import { ContactSalesButton } from "@/app/_components/landing/ContactSalesButton";
 
 const points = [
   {
@@ -30,9 +29,6 @@ export function DonkeyVisionCTA() {
         <div className="absolute inset-0 translate-x-2 translate-y-2 rounded-2xl bg-[#A8D5E8]" />
         <div className="relative grid gap-8 rounded-2xl border-2 border-[#0F0E0D] bg-[#0F0E0D] p-8 text-white md:grid-cols-[minmax(0,1fr)_minmax(320px,0.56fr)] md:p-12">
           <div className="min-w-0">
-            <div className="mb-5 inline-flex w-fit rounded-md bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-[#0F0E0D]">
-              Donkey Vision API
-            </div>
             <Headline size="lg">
               Building computer-use agents?
             </Headline>
@@ -43,14 +39,9 @@ export function DonkeyVisionCTA() {
               access or app-specific integrations.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
-              <PillButton href="/donkeyvision" variant="primary" size="lg">
-                Explore Donkey Vision <ArrowRight size={18} />
+              <PillButton href="/donkeyvision" variant="secondary" size="lg">
+                Explore Donkey Vision
               </PillButton>
-              <ContactSalesButton
-                className="inline-flex min-h-14 items-center justify-center gap-2 rounded-full bg-[#EC7868] px-7 py-4 text-base font-semibold text-[#0F0E0D] transition hover:-translate-y-0.5"
-              >
-                Contact us
-              </ContactSalesButton>
             </div>
           </div>
           <div className="grid content-center gap-4">

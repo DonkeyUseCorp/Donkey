@@ -8,21 +8,68 @@ import { MediaSection } from "@/app/donkeyvision/MediaSection";
 import { PricingSection } from "@/app/donkeyvision/PricingSection";
 import { ProofSection } from "@/app/donkeyvision/ProofSection";
 import { UseCasesSection } from "@/app/donkeyvision/UseCasesSection";
+import { VisionCompareSection } from "@/app/donkeyvision/VisionCompareSection";
 
 export const dynamic = "force-static";
 
 export const metadata: Metadata = {
-  title: "Donkey Vision | Donkey",
+  title: "OmniParser API for UI Element Detection | Donkey Vision",
   description:
-    "A low-latency API for detecting interactable UI elements in screenshots and grounding natural-language UI requests.",
+    "Donkey Vision is a fast, OmniParser-compatible API for detecting interactable UI elements in screenshots — bounding boxes, center points, and labels.",
+  keywords: [
+    "OmniParser API",
+    "OmniParser",
+    "OmniParser-compatible API",
+    "UI element detection API",
+    "screenshot UI parsing API",
+    "computer use vision API",
+    "Donkey Vision",
+  ],
+  alternates: {
+    canonical: "https://donkeyuse.com/donkeyvision",
+  },
+  openGraph: {
+    type: "website",
+    url: "https://donkeyuse.com/donkeyvision",
+    siteName: "Donkey",
+    title: "OmniParser API for UI Element Detection | Donkey Vision",
+    description:
+      "Donkey Vision is a fast, OmniParser-compatible API for detecting interactable UI elements in screenshots — bounding boxes, center points, and labels.",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "OmniParser API for UI Element Detection | Donkey Vision",
+    description:
+      "Donkey Vision is a fast, OmniParser-compatible API for detecting interactable UI elements in screenshots — bounding boxes, center points, and labels.",
+  },
+};
+
+const structuredData = {
+  "@context": "https://schema.org",
+  "@type": "WebAPI",
+  name: "Donkey Vision",
+  alternateName: "OmniParser API",
+  url: "https://donkeyuse.com/donkeyvision",
+  description:
+    "Donkey Vision is a fast, OmniParser-compatible API for detecting interactable UI elements in screenshots — bounding boxes, center points, and labels.",
+  provider: {
+    "@type": "Organization",
+    name: "Donkey",
+    url: "https://donkeyuse.com",
+  },
 };
 
 export default function DonkeyVisionPage() {
   return (
-    <main className="min-h-screen w-full overflow-x-hidden bg-[#F5EFE0] font-[-apple-system,BlinkMacSystemFont,'Segoe_UI',sans-serif] text-[#0F0E0D]">
-      <TopNav ctaHref="#contact" ctaLabel="Contact us" />
+    <main className="min-h-screen w-full overflow-x-clip bg-[#F5EFE0] font-[-apple-system,BlinkMacSystemFont,'Segoe_UI',sans-serif] text-[#0F0E0D]">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
+      />
+      <TopNav wordmark="donkey vision" />
       <HeroSection />
       <ProofSection />
+      <VisionCompareSection />
       <ApiSection />
       <UseCasesSection />
       <MediaSection />

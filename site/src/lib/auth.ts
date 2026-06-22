@@ -1,8 +1,14 @@
+import { apiKey } from "@better-auth/api-key";
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { oneTimeToken } from "better-auth/plugins";
 
+import { provisionSignupGrants } from "@/lib/onboarding/signup-grants";
 import { prisma } from "@/lib/prisma";
+
+// Prefix for issued Vision API keys. The full secret is shown to the developer
+// once at creation; only a hash is stored (handled by the apiKey plugin).
+export const visionApiKeyPrefix = "dk_live_";
 
 function macAuthRedirectOrigins() {
   const configuredOrigins = process.env.DONKEY_MAC_AUTH_REDIRECT_ORIGINS
@@ -22,6 +28,18 @@ export const auth = betterAuth({
   database: prismaAdapter(prisma, {
     provider: "postgresql",
   }),
+  databaseHooks: {
+    user: {
+      create: {
+        // Every new account is provisioned with its signup grants (app credits
+        // + free Vision API calls). provisionSignupGrants is idempotent and
+        // swallows its own errors, so it never blocks user creation.
+        after: async (user) => {
+          await provisionSignupGrants(user.id);
+        },
+      },
+    },
+  },
   emailAndPassword: {
     enabled: false,
   },
@@ -35,6 +53,15 @@ export const auth = betterAuth({
     oneTimeToken({
       expiresIn: 60,
       storeToken: "hashed",
+    }),
+    apiKey({
+      // We enforce our own monthly call quota and per-key rate limit on the
+      // vision route, so the plugin's built-in rate limiting stays off.
+      defaultPrefix: visionApiKeyPrefix,
+      enableMetadata: true,
+      rateLimit: {
+        enabled: false,
+      },
     }),
   ],
 });

@@ -23,12 +23,18 @@ public enum AccessibilityObserver {
             return nil
         }
         let limits = MacAccessibilitySnapshotLimits(maxDepth: 8, maxChildrenPerNode: 120, maxTotalNodes: 1_200)
+        // Retain the live AXUIElement for each node so a later action resolves against the exact control
+        // we observed (identity-stable across list reordering) instead of re-walking by node index.
+        var handles: [String: AXUIElement] = [:]
         guard let tree = try? ApplicationServicesMacAccessibilitySnapshotCapturer().captureTree(
             target: target,
-            limits: limits
+            limits: limits,
+            onNode: { _ in },
+            onLiveElement: { nodeID, element in handles[nodeID] = element }
         ) else {
             return nil
         }
+        MacAccessibilityElementHandleCache.shared.replace(processID: target.processID, handles: handles)
         let snapshot = MacAccessibilitySnapshot(
             target: target,
             limits: limits,

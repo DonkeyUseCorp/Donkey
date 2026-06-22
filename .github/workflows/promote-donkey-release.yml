@@ -23,7 +23,9 @@ concurrency:
 jobs:
   release:
     name: Build and release
-    runs-on: macos-latest
+    # The macos-26 image carries the Xcode 26 SDK that defines the SpeechAnalyzer /
+    # SpeechTranscriber APIs the app compiles against (gated to macOS 26 at runtime).
+    runs-on: macos-26
 
     steps:
       - name: Check out repository
@@ -111,6 +113,21 @@ jobs:
           if ! command -v magick >/dev/null 2>&1; then
             brew install imagemagick
           fi
+
+      # The bundled CLI tools (ffmpeg, lit, pdf-fill, qpdf, …) are gitignored and
+      # built/fetched by fetch-bundled-tools.sh. Cache the result so we don't rebuild
+      # ffmpeg/Rust from source every release; the key busts when the recipe or the
+      # in-repo pdf-fill source changes.
+      - name: Restore bundled tools cache
+        id: tools-cache
+        uses: actions/cache@v4
+        with:
+          path: vendor/donkey-tools
+          key: donkey-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-bundled-tools.sh', 'tools/pdf-fill/main.swift') }}
+
+      - name: Vendor bundled tools
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        run: ./scripts/fetch-bundled-tools.sh
 
       - name: Package Donkey
         env:

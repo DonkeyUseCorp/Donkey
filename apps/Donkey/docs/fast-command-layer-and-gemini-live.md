@@ -37,15 +37,18 @@ A deliberately small set:
 |---|---|
 | `shell_exec` | runs a safe, single-line shell command via `/bin/zsh -c` and returns its output — the primary, general-purpose tool |
 | `apps_list` | reuses `MacLocalAppAvailabilityProvider.installedApplications()` (Spotlight-backed, names + bundle ids, includes Apple native apps) + running apps so the model targets exact names instead of guessing; the installed list is paginated (`filter`/`offset`/`limit`, with `hasMore`/`nextOffset` in the result) so the full catalog survives the response cap |
-| `music_play` | reuses the bundled, pre-validated `music-media` `play-media-by-search.applescript` (a multi-step search→play workflow a one-liner can't reproduce) |
+| `app_skill` | looks up the installed operating playbook (skill pack) for a specific app — discovered by the skill's `apps:` frontmatter, never a hardcoded list — and advertises the skill's validated scripts |
+| `skill_run` | executes a validated script an installed skill ships (by the `skillID`/`scriptID` that `app_skill` advertised) — the generic native fast path for any skill-covered multi-step workflow a one-liner can't reproduce (e.g. the `music-media` search→play script) |
 
 `shell_exec` is the **primary, general-purpose tool** (the same capability the competitor's
 Realtime setup exposes) — listed first and prioritized in the system instruction. It handles most
 requests directly: opening/quitting/controlling apps (`open -a Spotify`, `osascript -e '…'`),
 changing settings, opening URLs (`open https://…`), and reading system state. Earlier dedicated
 tools (`app.open`, `app.quit`, `browser.open_url`, `system.set_volume`) were **removed** as
-redundant once `shell_exec` could do them reliably; only the two that earn their keep remain —
-`apps_list` (discovery is awkward via raw shell) and `music_play` (encapsulated workflow). The
+redundant once `shell_exec` could do them reliably; what remains is generic — `apps_list`
+(discovery is awkward via raw shell) and the `app_skill`/`skill_run` pair (skill discovery and
+validated-script execution; the earlier hardcoded `music_play` tool became the `music-media`
+skill's script, reachable through them). The
 model is told to send only safe single-line commands; a backstop guardrail in
 `DonkeyCommandBackends` enforces single-line input, a length cap, and a hard ~12s timeout
 (SIGTERM→SIGKILL). Unsafe commands are caught by a **command-word** check on each pipeline/segment

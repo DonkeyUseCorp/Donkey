@@ -54,64 +54,6 @@ struct ManualCaptureDebugLaunchHandler {
                 .run()
                 printLines(ReflexLatencyReportFormatter.lines(for: report))
                 return 0
-            case .localRuntimeStatus:
-                let manager = try LocalModelRuntimeSetupManager()
-                printLines(
-                    ManualCaptureDebugCommandFormatter.lines(
-                        for: try manager.statuses()
-                    )
-                )
-                return 0
-            case .localRuntimeSupport:
-                let manager = try LocalModelRuntimeSetupManager()
-                printLines(
-                    ManualCaptureDebugCommandFormatter.lines(
-                        for: try manager.supportSnapshot()
-                    )
-                )
-                return 0
-            case .localRuntimeInstructions:
-                let manager = try LocalModelRuntimeSetupManager()
-                printLines(
-                    ManualCaptureDebugCommandFormatter.lines(
-                        for: manager.instructions()
-                    )
-                )
-                return 0
-            case .installLocalRuntime(let options):
-                let manager = try LocalModelRuntimeSetupManager()
-                let installation = try manager.registerDownloadedRuntime(
-                    runtimeID: options.runtimeID,
-                    downloadedDirectory: options.sourceDirectory
-                )
-                let spec = try manager.status(for: options.runtimeID).spec
-                printLines(
-                    ManualCaptureDebugCommandFormatter.lines(
-                        for: installation,
-                        spec: spec
-                    )
-                )
-                return 0
-            case .repairLocalRuntime(let runtimeID):
-                let manager = try LocalModelRuntimeSetupManager()
-                let report = try await manager.repairRuntime(runtimeID: runtimeID)
-                printLines([
-                    "local runtime repaired",
-                    "runtime=\(report.runtimeID.rawValue)",
-                    "download=\(report.downloadResult.state.rawValue)",
-                    "modelPreparation=\(report.modelPreparation.state.rawValue)",
-                    "health=\(report.health.state.rawValue)"
-                ])
-                return 0
-            case .removeLocalRuntime(let runtimeID):
-                let manager = try LocalModelRuntimeSetupManager()
-                let removed = try manager.removeRuntime(runtimeID: runtimeID)
-                printLines([
-                    "local runtime removed",
-                    "runtime=\(runtimeID.rawValue)",
-                    "removed=\(removed)"
-                ])
-                return 0
             case .localAppTask(let options):
                 let result = await LocalAppUserQueryCommandHandler()
                     .handleSubmittedCommand(options.command)

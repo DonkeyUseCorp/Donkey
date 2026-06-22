@@ -3,8 +3,8 @@ import type { Metadata } from "next";
 import { MacAuthRedirector } from "@/app/mac-auth/MacAuthRedirector";
 
 export const metadata: Metadata = {
-  title: "Sign in to Donkey for Mac",
-  description: "Continue Google sign-in for Donkey for Mac.",
+  title: "Log in to Donkey for Mac",
+  description: "Continue Google login for Donkey for Mac.",
 };
 
 type SearchParams = Record<string, string | string[] | undefined>;

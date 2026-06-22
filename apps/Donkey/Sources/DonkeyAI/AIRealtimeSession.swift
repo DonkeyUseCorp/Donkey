@@ -32,10 +32,14 @@ public enum AIRealtimeEvent: Equatable, Sendable {
     case partialTranscript(String)
     case finalTranscript(String)
     case toolCalls([AIRealtimeToolCall])
+    /// A chunk of the model's text answer (text response modality).
+    case textOut(String)
     case audioOut(Data)
     /// User barged in; discard any buffered output audio.
     case interrupted
     case generationComplete
+    /// The model finished its turn; any buffered text/transcript is complete.
+    case turnComplete
     /// Server will close the socket soon; reconnect within `timeLeftMS`.
     case goAway(timeLeftMS: Int)
     /// Opaque handle to resume this session after a reconnect.

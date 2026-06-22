@@ -10,13 +10,17 @@ public struct UserQueryNotchLayout: Equatable, Sendable {
     public var expandedVisibleHeight: CGFloat
     public var contentHorizontalInset: CGFloat
     public var visibleHeight: CGFloat
-    public var cornerRadius: CGFloat
     public var collapsedSurfaceFrame: CGRect
     public var expandedSurfaceFrame: CGRect
     public var expandedContentFrame: CGRect
     public var collapsedCornerRadius: CGFloat
     public var expandedCornerRadius: CGFloat
     public var canRenderTextInTopRow: Bool
+    /// Height of the chin band that hangs below the collapsed notch row while a task streams
+    /// (0 when there is nothing to stream). The notch row itself stays `collapsedVisibleHeight`.
+    public var chinHeight: CGFloat
+    /// Logged out: render the login call-to-action instead of the task surface.
+    public var needsLogin: Bool
 
     public init(
         voidWidth: CGFloat,
@@ -25,13 +29,14 @@ public struct UserQueryNotchLayout: Equatable, Sendable {
         expandedVisibleHeight: CGFloat,
         contentHorizontalInset: CGFloat,
         visibleHeight: CGFloat,
-        cornerRadius: CGFloat,
         collapsedSurfaceFrame: CGRect,
         expandedSurfaceFrame: CGRect,
         expandedContentFrame: CGRect,
         collapsedCornerRadius: CGFloat,
         expandedCornerRadius: CGFloat,
-        canRenderTextInTopRow: Bool
+        canRenderTextInTopRow: Bool,
+        chinHeight: CGFloat = 0,
+        needsLogin: Bool = false
     ) {
         self.voidWidth = voidWidth
         self.voidHeight = voidHeight
@@ -39,13 +44,14 @@ public struct UserQueryNotchLayout: Equatable, Sendable {
         self.expandedVisibleHeight = expandedVisibleHeight
         self.contentHorizontalInset = contentHorizontalInset
         self.visibleHeight = visibleHeight
-        self.cornerRadius = cornerRadius
         self.collapsedSurfaceFrame = collapsedSurfaceFrame
         self.expandedSurfaceFrame = expandedSurfaceFrame
         self.expandedContentFrame = expandedContentFrame
         self.collapsedCornerRadius = collapsedCornerRadius
         self.expandedCornerRadius = expandedCornerRadius
         self.canRenderTextInTopRow = canRenderTextInTopRow
+        self.chinHeight = chinHeight
+        self.needsLogin = needsLogin
     }
 
     public var shouldRenderExpandedTopRowVoidMarker: Bool {
@@ -66,8 +72,10 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
     public static let expandedTaskContentHeight: CGFloat = 280
     public static let inputHorizontalMargin: CGFloat = 14
     public static let compactCommandContentVerticalPadding: CGFloat = 30
-    public static let openHostPreparationDelay: TimeInterval = 1.0 / 60.0
-    public static let closeAnimationDuration: TimeInterval = 0.22
+    /// How long the open host window lingers after the surface starts collapsing, before it snaps to
+    /// the notch size. Timed just past the surface close animation (0.22s) so the host always stays
+    /// large enough to contain the still-shrinking surface, then closes once it has reached the notch.
+    public static let closeAnimationDuration: TimeInterval = 0.26
 
     public var voidWidth: CGFloat
     public var voidHeight: CGFloat
@@ -75,6 +83,19 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
     public var isExpanded: Bool
     public var isHostExpanded: Bool
     public var screenWidth: CGFloat
+    /// Chin band below the collapsed notch row while a task streams (0 otherwise).
+    public var chinHeight: CGFloat
+    /// Logged out: render the login call-to-action instead of the task surface. Collapsed shows just
+    /// the "Login to use Donkey" line; expanding reveals a wide, short bar with the Login button.
+    public var needsLogin: Bool
+
+    /// Height of the short collapsed login band that seats the "Login to use Donkey" line below the
+    /// void on a real notch. No-notch displays render the line inline in the top row.
+    public static let loginCollapsedBandHeight: CGFloat = 22
+
+    /// Expanded login content height: a short bar holding the label + Login button, not the full task
+    /// panel. The expanded surface adds the void top inset on top of this.
+    public static let loginExpandedContentHeight: CGFloat = 52
 
     public init(
         voidWidth: CGFloat,
@@ -82,7 +103,9 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
         expandedContentHeight: CGFloat,
         isExpanded: Bool,
         isHostExpanded: Bool,
-        screenWidth: CGFloat
+        screenWidth: CGFloat,
+        chinHeight: CGFloat = 0,
+        needsLogin: Bool = false
     ) {
         self.voidWidth = voidWidth
         self.voidHeight = voidHeight
@@ -90,6 +113,8 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
         self.isExpanded = isExpanded
         self.isHostExpanded = isHostExpanded
         self.screenWidth = screenWidth
+        self.chinHeight = chinHeight
+        self.needsLogin = needsLogin
     }
 
     public var surfaceSize: CGSize {
@@ -117,14 +142,21 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
             expandedVisibleHeight: expandedVisibleHeight,
             contentHorizontalInset: 14,
             visibleHeight: visibleHeight,
-            cornerRadius: isExpanded ? Self.expandedCornerRadius : Self.collapsedCornerRadius,
             collapsedSurfaceFrame: collapsedSurfaceFrame,
             expandedSurfaceFrame: expandedSurfaceFrame,
             expandedContentFrame: expandedContentFrame,
             collapsedCornerRadius: Self.collapsedCornerRadius,
             expandedCornerRadius: Self.expandedCornerRadius,
-            canRenderTextInTopRow: canRenderTextInTopRow
+            canRenderTextInTopRow: canRenderTextInTopRow,
+            chinHeight: effectiveChinHeight,
+            needsLogin: needsLogin
         )
+    }
+
+    /// Only the real notch (with a void) grows a chin; no-notch displays show the
+    /// streaming line inline in the collapsed row instead.
+    private var effectiveChinHeight: CGFloat {
+        canRenderTextInTopRow ? 0 : chinHeight
     }
 
     private var visibleHeight: CGFloat {
@@ -162,8 +194,15 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
             x: 0,
             y: 0,
             width: collapsedSurfaceWidth,
-            height: collapsedVisibleHeight
+            height: collapsedVisibleHeight + collapsedExtraHeight
         )
+    }
+
+    /// The band below the collapsed notch row: the login call-to-action when logged out (real notch
+    /// only — no-notch displays render it inline), otherwise the streaming chin.
+    private var collapsedExtraHeight: CGFloat {
+        guard needsLogin else { return effectiveChinHeight }
+        return canRenderTextInTopRow ? 0 : Self.loginCollapsedBandHeight
     }
 
     private var expandedContentFrame: CGRect {
@@ -176,6 +215,7 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
     }
 
     private var collapsedSurfaceWidth: CGFloat {
+        // Logged out keeps the normal collapsed width — the bar just reads "Login to use Donkey".
         min(
             Self.expandedContentDesignFrame.width,
             max(
@@ -233,6 +273,7 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
     )
     private static let collapsedSideLaneWidth: CGFloat = 34
     private static let collapsedCornerRadius: CGFloat = 14
-    private static let expandedCornerRadius: CGFloat = 26
+    // Prototype spec: the expanded notch window and its input box both use a 14px radius.
+    private static let expandedCornerRadius: CGFloat = 14
     private static let maximumExpandedContentTopInset: CGFloat = 44
 }

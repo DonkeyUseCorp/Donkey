@@ -2,7 +2,7 @@ import type { CardColor } from "@/app/_components/landing/theme";
 
 export const GITHUB_REPO_URL = "https://github.com/DonkeyUseCorp/Donkey";
 export const DONKEY_INSTALL_URL = "/install";
-export const DONKEY_LATEST_VERSION = "0.1.1";
+export const DONKEY_LATEST_VERSION = "0.1.4";
 export const DONKEY_LATEST_RELEASE_TAG = `v${DONKEY_LATEST_VERSION}`;
 export const DONKEY_DOWNLOAD_URL = `${GITHUB_REPO_URL}/releases/download/${DONKEY_LATEST_RELEASE_TAG}/Donkey.dmg`;
 
@@ -131,14 +131,14 @@ export const openSourceReasons = [
   {
     color: "yellow",
     icon: "Models",
-    title: "Bring your own model.",
-    body: "Swap in any LLM provider: OpenAI, Ollama, or another local model. Donkey is the runtime, not a wrapper around one API.",
+    title: "Bring your own keys.",
+    body: "Donkey wraps one provider today, but you hold the keys: plug in your own, or fork the code to add another. Want a provider supported out of the box? Open an issue.",
   },
   {
     color: "mint",
-    icon: "SDK",
-    title: "Write your own agents.",
-    body: "Fork Coder, build a Researcher, ship it back upstream, or keep it private.",
+    icon: "Data",
+    title: "Know where your data goes.",
+    body: "Donkey is open source, so you can see exactly what leaves your Mac and where it goes. No hidden telemetry, no surprise uploads.",
   },
   {
     color: "pink",

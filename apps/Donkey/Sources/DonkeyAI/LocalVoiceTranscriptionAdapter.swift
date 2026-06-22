@@ -106,104 +106,6 @@ public enum LocalVoiceTranscriptionRuntimeError: Error, Equatable, Sendable {
     case invalidOutput(String)
 }
 
-public struct ProcessBackedParakeetTranscriptionRuntime: LocalVoiceTranscriptionRuntime {
-    public var sidecarRunner: any LocalJSONSidecarRunning
-    public var encoder: JSONEncoder
-    public var decoder: JSONDecoder
-
-    public init(
-        sidecarRunner: any LocalJSONSidecarRunning = ProcessBackedLocalJSONSidecarRunner(),
-        encoder: JSONEncoder = JSONEncoder(),
-        decoder: JSONDecoder = JSONDecoder()
-    ) {
-        self.sidecarRunner = sidecarRunner
-        self.encoder = encoder
-        self.decoder = decoder
-    }
-
-    public func transcribe(
-        audio: LocalVoiceAudioBuffer,
-        model: AIModelRegistryEntry
-    ) async throws -> LocalVoiceTranscript {
-        let request = ParakeetSidecarRequest(
-            audioID: audio.id,
-            format: audio.format,
-            sampleRateHz: audio.sampleRateHz,
-            channelCount: audio.channelCount,
-            durationMS: audio.durationMS,
-            audioBase64: audio.data.base64EncodedString(),
-            modelID: model.modelID,
-            metadata: audio.metadata
-        )
-        let inputData = try encoder.encode(request)
-        let result = await sidecarRunner.run(
-            LocalJSONSidecarRequest(
-                environmentVariableName: "DONKEY_PARAKEET_TRANSCRIBER",
-                inputData: inputData,
-                timeoutMS: model.timeoutMS,
-                metadata: [
-                    "sidecar.role": "voiceTranscription",
-                    "modelID": model.modelID
-                ]
-            )
-        )
-        guard result.status == .completed else {
-            throw LocalVoiceTranscriptionRuntimeError.runtimeUnavailable(
-                result.metadata["sidecar.reason"] ?? result.status.rawValue
-            )
-        }
-
-        do {
-            let response = try decoder.decode(ParakeetSidecarResponse.self, from: result.outputData)
-            return LocalVoiceTranscript(
-                text: response.text,
-                language: response.language,
-                confidence: response.confidence,
-                segments: response.segments,
-                metadata: result.metadata.merging(response.metadata) { current, _ in current }
-                    .merging([
-                        "latency.parakeetTranscriptionMS": result.latencyMS.map { String(format: "%.3f", $0) } ?? ""
-                    ]) { current, _ in current }
-            )
-        } catch {
-            throw LocalVoiceTranscriptionRuntimeError.invalidOutput(String(describing: error))
-        }
-    }
-}
-
-private struct ParakeetSidecarRequest: Codable, Equatable, Sendable {
-    var audioID: String
-    var format: String
-    var sampleRateHz: Int
-    var channelCount: Int
-    var durationMS: Double
-    var audioBase64: String
-    var modelID: String
-    var metadata: [String: String]
-}
-
-private struct ParakeetSidecarResponse: Codable, Equatable, Sendable {
-    var text: String
-    var language: String?
-    var confidence: Double
-    var segments: [String]
-    var metadata: [String: String]
-
-    init(
-        text: String,
-        language: String? = nil,
-        confidence: Double = 0,
-        segments: [String] = [],
-        metadata: [String: String] = [:]
-    ) {
-        self.text = text
-        self.language = language
-        self.confidence = confidence
-        self.segments = segments
-        self.metadata = metadata
-    }
-}
-
 public enum LocalVoiceAudioNormalizer {
     public static func parakeetCompatibleAudio(
         from audio: LocalVoiceAudioBuffer
@@ -388,7 +290,11 @@ public struct LocalVoiceTranscriptionAdapter: Sendable {
                     startedAt: startedAt,
                     status: .completed,
                     validationStatus: "transcriptDecoded",
-                    metadata: metadata(for: request.audio, preparedAudio: preparedAudio, transcript: transcript)
+                    metadata: metadata(for: request.audio, preparedAudio: preparedAudio, transcript: transcript),
+                    // On a network fallback the answering backend differs from the routed Apple entry;
+                    // report the backend that actually answered, derived from the transcript metadata.
+                    backendModelID: transcript.metadata["transcript.model"],
+                    isNetworkFallback: transcript.metadata["transcript.backend"].map { !$0.hasPrefix("apple") }
                 )
             )
         } catch is CancellationError {
@@ -426,14 +332,21 @@ public struct LocalVoiceTranscriptionAdapter: Sendable {
         startedAt: RunTraceTimestamp,
         status: AIModelCallStatus,
         validationStatus: String,
-        metadata: [String: String]
+        metadata: [String: String],
+        backendModelID: String? = nil,
+        isNetworkFallback: Bool? = nil
     ) -> AIModelCallTrace {
         let completedAt = now()
+        // When a network backend actually answered (a fallback away from the routed Apple entry), the
+        // trace's provider/modelID must report that backend, not the local Apple entry. Both signals
+        // are derived from the transcript metadata, so this stays general (no hardcoded provider name).
+        let provider: AIModelProvider = (isNetworkFallback == true) ? .donkeyBackend : (model?.provider ?? .localRuntime)
+        let resolvedModelID = backendModelID?.nilIfEmpty ?? model?.modelID ?? "unrouted"
         return AIModelCallTrace(
             id: "voice-transcription-\(sourceTraceID)",
             role: .voiceTranscription,
-            provider: model?.provider ?? .localRuntime,
-            modelID: model?.modelID ?? "unrouted",
+            provider: provider,
+            modelID: resolvedModelID,
             promptVersion: model?.promptVersion ?? "voice-transcription-v1",
             schemaID: "voice-transcript-v1",
             latencyMS: startedAt.milliseconds(until: completedAt),
@@ -475,6 +388,12 @@ public struct LocalVoiceTranscriptionAdapter: Sendable {
             values["transcript.confidence"] = String(transcript.confidence)
             values["transcript.language"] = transcript.language ?? ""
             values["transcript.segmentCount"] = String(transcript.segments.count)
+            // Surface which backend actually answered (apple-speechanalyzer / apple-sfspeech / gemini)
+            // so the trace reflects reality: a fallback to a network backend is not local-only.
+            values.merge(transcript.metadata) { _, new in new }
+            if let backend = transcript.metadata["transcript.backend"] {
+                values["localOnly"] = backend.hasPrefix("apple") ? "true" : "false"
+            }
         }
         return values
     }
@@ -485,6 +404,10 @@ public struct LocalVoiceTranscriptionAdapter: Sendable {
             monotonicUptimeNanoseconds: UInt64(ProcessInfo.processInfo.systemUptime * 1_000_000_000)
         )
     }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
 private extension LocalVoiceAudioBuffer {
