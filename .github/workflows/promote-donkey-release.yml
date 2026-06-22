@@ -133,7 +133,11 @@ jobs:
           keychain="$RUNNER_TEMP/donkey-signing.keychain-db"
           kpw="$(uuidgen)"
           security create-keychain -p "$kpw" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
+          # No -t/-lut: disable the auto-lock timeout entirely so the keychain stays unlocked across the
+          # later (separate) Package step. With a timeout the long Swift build can elapse and re-lock it,
+          # hiding the private key from codesign — which then reports "no identity found". Safe on an
+          # ephemeral CI runner.
+          security set-keychain-settings "$keychain"
           security unlock-keychain -p "$kpw" "$keychain"
           echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
           security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$CERT_PASSWORD" -T /usr/bin/codesign
@@ -157,6 +161,9 @@ jobs:
             echo "$NOTARY_KEY_P8" | base64 --decode > "$RUNNER_TEMP/notary.p8"
           fi
           echo "identity=$SIGN_IDENTITY" >> "$GITHUB_OUTPUT"
+          # Hand the keychain path to the Package step so codesign can target it explicitly (--keychain)
+          # rather than depending on the search-list state set above carrying across steps.
+          echo "keychain=$keychain" >> "$GITHUB_OUTPUT"
 
       # The bundled CLI tools (ffmpeg, lit, pdf-fill, …) are NOT baked into the app: it downloads
       # them on first run from the artifact published by the Publish Bundled Tools workflow, so the
@@ -168,6 +175,7 @@ jobs:
           DONKEY_SPARKLE_FEED_URL: https://donkeyuse.com/appcast.xml
           DONKEY_SPARKLE_PUBLIC_ED_KEY: ${{ secrets.DONKEY_SPARKLE_PUBLIC_ED_KEY }}
           DONKEY_APP_SIGN_IDENTITY: ${{ steps.signing.outputs.identity }}
+          DONKEY_SIGN_KEYCHAIN: ${{ steps.signing.outputs.keychain }}
           DONKEY_NOTARY_KEY_P8: ${{ runner.temp }}/notary.p8
           DONKEY_NOTARY_KEY_ID: ${{ secrets.DONKEY_NOTARY_KEY_ID }}
           DONKEY_NOTARY_ISSUER_ID: ${{ secrets.DONKEY_NOTARY_ISSUER_ID }}

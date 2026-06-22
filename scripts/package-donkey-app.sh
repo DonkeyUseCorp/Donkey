@@ -216,6 +216,11 @@ sign_app() {
     return 0
   fi
   local base=(--force --options runtime --timestamp --sign "$APP_SIGN_IDENTITY")
+  # Target the signing keychain explicitly when the release workflow points us at one. Relying on the
+  # user keychain search list is unreliable here: the keychain is imported in a separate CI step, and
+  # that search-list state doesn't dependably reach codesign in this step (hence "no identity found"
+  # even though the identity imported fine).
+  [ -n "${DONKEY_SIGN_KEYCHAIN:-}" ] && base=(--keychain "$DONKEY_SIGN_KEYCHAIN" "${base[@]}")
   local sparkle="$FRAMEWORKS_DIR/Sparkle.framework"
   if [ -d "$sparkle" ]; then
     # Versions/Current keeps this agnostic to Sparkle's version letter.
@@ -255,7 +260,9 @@ notarize_app() {
 # opens without a Gatekeeper prompt.
 notarize_dmg() {
   [ "$APP_SIGN_IDENTITY" = "-" ] && return 0
-  codesign --force --timestamp --sign "$APP_SIGN_IDENTITY" "$DMG_PATH"
+  local dmg_sign=(--force --timestamp --sign "$APP_SIGN_IDENTITY")
+  [ -n "${DONKEY_SIGN_KEYCHAIN:-}" ] && dmg_sign=(--keychain "$DONKEY_SIGN_KEYCHAIN" "${dmg_sign[@]}")
+  codesign "${dmg_sign[@]}" "$DMG_PATH"
   echo "Notarizing the disk image ..."
   notarytool_submit "$DMG_PATH"
   xcrun stapler staple "$DMG_PATH"
@@ -297,6 +304,7 @@ stage_bundled_tools() {
   # (e.g. exiftool) just no-ops here.
   local sopts=(--force --sign "$APP_SIGN_IDENTITY")
   [ "$APP_SIGN_IDENTITY" != "-" ] && sopts+=(--options runtime --timestamp)
+  [ -n "${DONKEY_SIGN_KEYCHAIN:-}" ] && sopts+=(--keychain "$DONKEY_SIGN_KEYCHAIN")
   find "$dest_dir" -type f -perm -u+x -print0 | while IFS= read -r -d '' tool; do
     chmod +x "$tool"
     codesign "${sopts[@]}" "$tool" >/dev/null 2>&1 || true
