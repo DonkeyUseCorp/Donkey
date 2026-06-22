@@ -913,9 +913,10 @@ final class UIUnderstandingCoordinator {
                     "debug inspection background warm windows=\(backgroundWarmCount, privacy: .public)"
                 )
             }
-            // Accessibility is local and cheap, so warm every background window that has no cached
-            // accessibility yet; vision is a slow network parse, so warm just one window per pass.
-            self.warmBackgroundAccessibility(screens: screens, excluding: activeWindowIDs)
+            // Warm background windows that have no cached accessibility yet — the scan runs off the
+            // main actor since a cold first-launch walk is slow; vision is a slow network parse, so
+            // warm just one window per pass.
+            await self.warmBackgroundAccessibility(screens: screens, excluding: activeWindowIDs)
             await self.warmNextBackgroundVisionWindow(screens: screens, excluding: activeWindowIDs)
         }
     }
@@ -962,22 +963,35 @@ final class UIUnderstandingCoordinator {
     private func warmBackgroundAccessibility(
         screens: [DebugUIScreenSurface],
         excluding activeWindowIDs: Set<UInt32>
-    ) {
+    ) async {
         let pending = backgroundWarmTargets(on: screens, excluding: activeWindowIDs)
             .filter { !hasCachedAccessibility(forWindow: $0.windowID) }
         guard !pending.isEmpty else { return }
         let pendingWindowIDs = Set(pending.map(\.windowID))
 
+        // The accessibility tree walk is slow cross-process IPC — a cold first-launch scan can run
+        // long enough to beachball if it happens on the main actor. Snapshot the Sendable inputs and
+        // run `inspect` off the main actor, then resume here to merge (AX reads are thread-safe and
+        // the service and its results are Sendable). The `isWarmingBackground` guard around this pass
+        // stays held across the await, so scans never overlap.
+        let service = accessibilityInspectionService
+        let scope = currentConfig.screenScope
+        let minConfidence = currentConfig.minConfidence
+        let targetBundleIdentifiers = currentConfig.targetBundleIdentifiers
+        let targetAppNames = currentConfig.targetAppNames
+
         let results: [DebugUIAccessibilityInspectionResult]
         do {
-            results = try accessibilityInspectionService.inspect(
-                scope: currentConfig.screenScope,
-                minConfidence: currentConfig.minConfidence,
-                frontmostOnly: false,
-                focusedOnly: false,
-                targetBundleIdentifiers: currentConfig.targetBundleIdentifiers,
-                targetAppNames: currentConfig.targetAppNames
-            )
+            results = try await Task.detached(priority: .utility) {
+                try service.inspect(
+                    scope: scope,
+                    minConfidence: minConfidence,
+                    frontmostOnly: false,
+                    focusedOnly: false,
+                    targetBundleIdentifiers: targetBundleIdentifiers,
+                    targetAppNames: targetAppNames
+                )
+            }.value
         } catch {
             UIUnderstandingLog.overlay.debug(
                 "debug inspection background accessibility warm skipped error=\(String(describing: error), privacy: .public)"
