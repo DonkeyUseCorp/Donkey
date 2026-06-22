@@ -69,6 +69,14 @@ public enum ShellCommandClassifier {
             return ShellCommandClassification(tier: .highRisk, signature: needle.trimmingCharacters(in: .whitespaces), reason: reason)
         }
 
+        // A redirect into a real device file (e.g. `> /dev/disk0`) can destroy a disk, but the benign
+        // pseudo-device redirects — `2>/dev/null`, `>/dev/stdout`, `>/dev/fd/3` — are the single most
+        // common reason a read-only probe looks dangerous, so they must NOT escalate. A blunt `>/dev`
+        // substring caught both; this distinguishes the device name.
+        if redirectsToRealDevice(lowered) {
+            return ShellCommandClassification(tier: .highRisk, signature: "> /dev", reason: "writes to a device file")
+        }
+
         // Split into command segments on shell separators and substitution
         // boundaries, then classify each segment's effective executable. The
         // overall tier is the most restrictive segment; the signature/reason
@@ -95,6 +103,12 @@ public enum ShellCommandClassifier {
     private static func classifySegment(_ tokens: [String]) -> ShellCommandClassification {
         var tokens = tokens
         var executable = normalizedExecutable(tokens.removeFirst())
+
+        // `command -v X` / `command -V X` only test whether X exists; they never run it, so judge them
+        // as reads instead of unwrapping `command` to the (often unrecognized) inner tool and prompting.
+        if executable == "command", let first = tokens.first?.lowercased(), first == "-v" || first == "-V".lowercased() {
+            return ShellCommandClassification(tier: .read, signature: "command -v", reason: nil)
+        }
 
         // Unwrap argument-runner wrappers to the real command they execute.
         var unwrapGuard = 0
@@ -198,7 +212,8 @@ public enum ShellCommandClassifier {
         var inSingle = false
         var inDouble = false
         var escaped = false
-        for character in command {
+        let chars = Array(command)
+        for (idx, character) in chars.enumerated() {
             if escaped {
                 current.append(character)
                 escaped = false
@@ -219,10 +234,23 @@ public enum ShellCommandClassifier {
                 current.append(character)
                 continue
             }
-            if !inSingle, !inDouble, ";|&\n`(".contains(character) {
-                segments.append(current)
-                current = ""
-                continue
+            if !inSingle, !inDouble {
+                // `&` is redirect syntax, not a separator, when it is part of `>&` (e.g. `2>&1`, `>&2`)
+                // or `&>` (redirect both streams). Splitting there would peel the `1` off `2>&1` into a
+                // bogus command segment and gate a read-only command needlessly.
+                if character == "&" {
+                    let prevIsRedirect = current.last == ">"
+                    let nextIsRedirect = idx + 1 < chars.count && chars[idx + 1] == ">"
+                    if prevIsRedirect || nextIsRedirect {
+                        current.append(character)
+                        continue
+                    }
+                }
+                if ";|&\n`(".contains(character) {
+                    segments.append(current)
+                    current = ""
+                    continue
+                }
             }
             current.append(character)
         }
@@ -260,6 +288,41 @@ public enum ShellCommandClassifier {
     private static func referencesSensitiveDomain(_ tokens: [String]) -> Bool {
         let joined = tokens.joined(separator: " ").lowercased()
         return sensitiveDomainNeedles.contains { joined.contains($0) }
+    }
+
+    /// True if the command redirects output into a real device file under `/dev` (e.g. `> /dev/disk0`,
+    /// `>> /dev/rdisk1`). A redirect is `/dev/` immediately preceded by `>` (after optional whitespace and
+    /// an fd number like the `2` in `2>`). The well-known pseudo-devices are writable harmlessly and are
+    /// excluded so the ubiquitous `2>/dev/null` idiom on a read-only command stays read-only.
+    private static func redirectsToRealDevice(_ lowered: String) -> Bool {
+        let safeDevices: Set<String> = [
+            "null", "zero", "stdout", "stderr", "stdin", "tty", "console", "random", "urandom", "fd"
+        ]
+        let chars = Array(lowered)
+        let marker = Array("/dev/")
+        var i = 0
+        while i + marker.count <= chars.count {
+            guard Array(chars[i ..< i + marker.count]) == marker else {
+                i += 1
+                continue
+            }
+            // Scan back past whitespace; the char before the target must be a redirect `>`.
+            var j = i - 1
+            while j >= 0, chars[j] == " " || chars[j] == "\t" { j -= 1 }
+            if j >= 0, chars[j] == ">" {
+                var k = i + marker.count
+                var name = ""
+                while k < chars.count, chars[k].isLetter || chars[k].isNumber || chars[k] == "_" {
+                    name.append(chars[k])
+                    k += 1
+                }
+                if !safeDevices.contains(name) {
+                    return true
+                }
+            }
+            i += marker.count
+        }
+        return false
     }
 
     // MARK: - Tables
@@ -354,8 +417,6 @@ public enum ShellCommandClassifier {
         ("|zsh", "pipes output into a shell"),
         (":(){", "fork bomb"),
         ("do shell script", "AppleScript shell escape"),
-        ("> /dev", "writes to a device file"),
-        (">/dev", "writes to a device file"),
         ("> /system", "writes under /System"),
         (">/system", "writes under /System"),
         ("> /usr", "writes under /usr"),

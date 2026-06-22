@@ -52,6 +52,24 @@ struct ShellCommandClassifierTests {
         #expect(tier("sed -n '1,5p' file.txt") == .read)
     }
 
+    @Test
+    func benignDevNullRedirectsStayRead() {
+        // The motivating bug: a read-only dependency probe ending in `2>/dev/null` must NOT be escalated
+        // to high-risk just because it redirects stderr to the null device.
+        #expect(tier("which brew || find /opt/homebrew/bin/brew /usr/local/bin/brew -type f 2>/dev/null") == .read)
+        #expect(tier("command -v yt-dlp 2>/dev/null") == .read)
+        #expect(tier("ls -la 2>/dev/null") == .read)
+        #expect(tier("grep foo file.txt >/dev/null 2>&1") == .read)
+        #expect(tier("cat log >/dev/stdout") == .read)
+    }
+
+    @Test
+    func redirectIntoRealDeviceStaysHighRisk() {
+        // A redirect into an actual device file can destroy a disk; still gated every time.
+        #expect(tier("cat boot.img > /dev/disk0") == .highRisk)
+        #expect(tier("echo x >>/dev/rdisk1") == .highRisk)
+    }
+
     // MARK: Reversible writes prompt (allow-once / always-allow)
 
     @Test
