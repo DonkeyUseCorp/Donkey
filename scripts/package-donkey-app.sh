@@ -336,11 +336,27 @@ fi
 
 rm -rf "$RUNTIME_PACKAGE_DIR"
 
-RESOURCE_BUNDLE="$(find "$BUILD_DIR/.build" -path "*/release/Donkey_Donkey.bundle" -type d | head -n 1 || true)"
-if [ -n "$RESOURCE_BUNDLE" ]; then
-  cp -R "$RESOURCE_BUNDLE" "$RESOURCES_DIR/"
-elif [ -d "$BUILD_DIR/.build/release/Donkey_Donkey.resources" ]; then
+# Copy every SwiftPM-generated resource bundle, not just the executable target's.
+# Each target with resources (Donkey, DonkeyRuntime, ...) produces its own
+# Donkey_<Target>.bundle, and the generated Bundle.module accessor fatalErrors at
+# launch if its bundle is missing. Missing Donkey_DonkeyRuntime.bundle is what made
+# BundledToolsInstaller crash the app on first launch.
+RELEASE_DIR="$(find "$BUILD_DIR/.build" -type d -path "*/release" -name release | head -n 1 || true)"
+copied_any_bundle=0
+if [ -n "$RELEASE_DIR" ]; then
+  for resource_bundle in "$RELEASE_DIR"/Donkey_*.bundle; do
+    [ -d "$resource_bundle" ] || continue
+    cp -R "$resource_bundle" "$RESOURCES_DIR/"
+    copied_any_bundle=1
+  done
+fi
+if [ "$copied_any_bundle" -eq 0 ] && [ -d "$BUILD_DIR/.build/release/Donkey_Donkey.resources" ]; then
   cp -R "$BUILD_DIR/.build/release/Donkey_Donkey.resources/." "$RESOURCES_DIR/"
+  copied_any_bundle=1
+fi
+if [ "$copied_any_bundle" -eq 0 ]; then
+  echo "No SwiftPM resource bundles found to stage; the app will crash at launch." >&2
+  exit 1
 fi
 find "$APP_DIR" -name dev-overlay.json -type f -delete
 prepare_app_icon
