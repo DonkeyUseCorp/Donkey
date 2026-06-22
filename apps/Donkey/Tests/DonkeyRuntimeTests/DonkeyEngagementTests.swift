@@ -1,7 +1,9 @@
-import XCTest
+import Foundation
+import Testing
 @testable import DonkeyAI
 
-final class DonkeyEngagementTests: XCTestCase {
+@Suite
+struct DonkeyEngagementTests {
     /// Drives the tracker's clock from the test so window expiry is deterministic.
     private final class Clock: @unchecked Sendable {
         private let lock = NSLock()
@@ -10,45 +12,49 @@ final class DonkeyEngagementTests: XCTestCase {
         func advance(_ ms: Double) { lock.lock(); nowMS += ms; lock.unlock() }
     }
 
-    func testIdleByDefault() {
+    @Test
+    func idleByDefault() {
         let engagement = DonkeyEngagement(uptimeMS: { 0 })
-        XCTAssertFalse(engagement.isEngaged(), "Nothing submitted or running: not engaged.")
+        #expect(!engagement.isEngaged(), "Nothing submitted or running: not engaged.")
     }
 
-    func testInteractionOpensWindowThenExpires() {
+    @Test
+    func interactionOpensWindowThenExpires() {
         let clock = Clock()
         let engagement = DonkeyEngagement(uptimeMS: clock.read)
         engagement.noteInteraction()
-        XCTAssertTrue(engagement.isEngaged(windowMS: 1_000), "Just interacted: engaged.")
+        #expect(engagement.isEngaged(windowMS: 1_000), "Just interacted: engaged.")
         clock.advance(999)
-        XCTAssertTrue(engagement.isEngaged(windowMS: 1_000), "Inside the window: still engaged.")
+        #expect(engagement.isEngaged(windowMS: 1_000), "Inside the window: still engaged.")
         clock.advance(2)
-        XCTAssertFalse(engagement.isEngaged(windowMS: 1_000), "Past the window: idled out.")
+        #expect(!engagement.isEngaged(windowMS: 1_000), "Past the window: idled out.")
     }
 
-    func testActiveRunStaysEngagedRegardlessOfWindow() {
+    @Test
+    func activeRunStaysEngagedRegardlessOfWindow() {
         let clock = Clock()
         let engagement = DonkeyEngagement(uptimeMS: clock.read)
         engagement.beginRun()
         clock.advance(10_000)
-        XCTAssertTrue(engagement.isEngaged(windowMS: 1_000), "A run in flight is engaged no matter how long.")
+        #expect(engagement.isEngaged(windowMS: 1_000), "A run in flight is engaged no matter how long.")
         engagement.endRun()
-        XCTAssertTrue(engagement.isEngaged(windowMS: 1_000), "endRun stamps an interaction: brief lingering window.")
+        #expect(engagement.isEngaged(windowMS: 1_000), "endRun stamps an interaction: brief lingering window.")
         clock.advance(1_001)
-        XCTAssertFalse(engagement.isEngaged(windowMS: 1_000), "After the post-run window: idled out.")
+        #expect(!engagement.isEngaged(windowMS: 1_000), "After the post-run window: idled out.")
     }
 
-    func testNestedRunsBalanceAndDoNotUnderflow() {
+    @Test
+    func nestedRunsBalanceAndDoNotUnderflow() {
         let clock = Clock()
         let engagement = DonkeyEngagement(uptimeMS: clock.read)
         engagement.beginRun()
         engagement.beginRun()
         engagement.endRun()
-        XCTAssertTrue(engagement.isEngaged(windowMS: 1_000), "One run still active: engaged.")
+        #expect(engagement.isEngaged(windowMS: 1_000), "One run still active: engaged.")
         engagement.endRun()
         // Extra endRun must not drive depth negative and wedge engagement on forever.
         engagement.endRun()
         clock.advance(1_001)
-        XCTAssertFalse(engagement.isEngaged(windowMS: 1_000), "Depth floors at zero; window expires normally.")
+        #expect(!engagement.isEngaged(windowMS: 1_000), "Depth floors at zero; window expires normally.")
     }
 }
