@@ -4,8 +4,11 @@ Donkey Vision is the observation layer that turns the user's windows into
 structured UI understanding the agent can reason about. It is not one model or
 one provider — it is a fusion system: local Mac evidence gives grounded
 geometry, and hosted AI enrichment interprets what those grounded regions
-mean. The engine runs always-on and headless in every build; the developer
-overlay is just a window into it, gated separately.
+mean. The engine is wired headless into every build; the developer overlay is
+just a window into it, gated separately. It does not parse the whole time the
+app is open, though: the hosted parse only runs while the user is engaging
+Donkey — a task in flight, or a command submitted in the last minute — so an
+app left idle stops spending instead of re-parsing the screen forever.
 
 **The one rule:** local geometry wins. If a grounded local box exists from
 Accessibility or window-chrome geometry, an overlapping AI box may enrich its
