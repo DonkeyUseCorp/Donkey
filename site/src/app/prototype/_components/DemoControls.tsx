@@ -14,6 +14,8 @@ type Props = {
   setUpdateAvailable: (available: boolean) => void;
   missingPermissions: boolean;
   setMissingPermissions: (missing: boolean) => void;
+  outOfCredits: boolean;
+  setOutOfCredits: (out: boolean) => void;
   activeTaskId: TaskId;
   setActiveTaskId: (id: TaskId) => void;
   onTriggerAuthError: () => void;
@@ -49,6 +51,8 @@ export function DemoControls({
   setUpdateAvailable,
   missingPermissions,
   setMissingPermissions,
+  outOfCredits,
+  setOutOfCredits,
   activeTaskId,
   setActiveTaskId,
   onTriggerAuthError,
@@ -58,6 +62,7 @@ export function DemoControls({
   const [notificationsOpen, setNotificationsOpen] = useState(false);
 
   const notifications = [
+    { label: 'Out of Credits', on: outOfCredits, toggle: () => setOutOfCredits(!outOfCredits) },
     { label: 'Update Available', on: updateAvailable, toggle: () => setUpdateAvailable(!updateAvailable) },
     { label: 'Missing Permissions', on: missingPermissions, toggle: () => setMissingPermissions(!missingPermissions) },
   ];

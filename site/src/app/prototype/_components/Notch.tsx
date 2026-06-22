@@ -1,4 +1,4 @@
-import { ArrowUp, CloudSync, MessageCircleWarning, Shield } from 'lucide-react';
+import { ArrowUp, CloudSync, Coins, MessageCircleWarning, Shield } from 'lucide-react';
 import { type FormEvent, type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { DonkeyCursor } from '@/app/prototype/_components/DonkeyCursor';
@@ -13,6 +13,8 @@ type Props = {
   onRestart: () => void;
   missingPermissions: boolean;
   onReviewPermissions: () => void;
+  outOfCredits: boolean;
+  onReloadCredits: () => void;
   expanded: boolean;
   setExpanded: (expanded: boolean) => void;
   liveTasks: LiveTask[];
@@ -99,6 +101,8 @@ export function Notch({
   onRestart,
   missingPermissions,
   onReviewPermissions,
+  outOfCredits,
+  onReloadCredits,
   expanded,
   setExpanded,
   liveTasks,
@@ -162,12 +166,22 @@ export function Notch({
   }, [message]);
   const chinHeight = METRICS.chinBaseHeight + (chinLines - 1) * METRICS.chinLineHeight;
 
-  // App-level notices share a single slot; permissions outranks update since it blocks functionality.
-  const appNotice: 'permissions' | 'update' | null = missingPermissions
-    ? 'permissions'
-    : updateAvailable
-      ? 'update'
-      : null;
+  // App-level notices share a single slot. Out of credits outranks everything — nothing can run
+  // without a balance; permissions then outranks an update since it blocks functionality.
+  const appNotice: 'credits' | 'permissions' | 'update' | null = outOfCredits
+    ? 'credits'
+    : missingPermissions
+      ? 'permissions'
+      : updateAvailable
+        ? 'update'
+        : null;
+  // Each notice's collapsed glyph and expanded label + CTA. Out of credits points the user to reload.
+  const noticeContent = {
+    credits: { Icon: Coins, label: 'Out of Credits', action: 'Reload', onAction: onReloadCredits },
+    permissions: { Icon: Shield, label: 'Missing Permissions', action: 'Review', onAction: onReviewPermissions },
+    update: { Icon: CloudSync, label: 'Update Available', action: 'Restart', onAction: onRestart },
+  } as const;
+  const notice = appNotice ? noticeContent[appNotice] : null;
   const showChin = variant === 'real' && message !== '';
   const isSimulatedExpandedMessage = variant === 'simulated' && message !== '';
 
@@ -478,17 +492,13 @@ export function Notch({
             >
               {collapsedTime}
             </div>
-          ) : appNotice ? (
-            // Shield = missing permissions; cloud-sync = app update available (detected on launch).
+          ) : notice ? (
+            // Coins = out of credits; shield = missing permissions; cloud-sync = app update available.
             <div
               className="absolute right-0 top-0 grid place-items-center text-white/[0.85]"
               style={{ width: METRICS.contentAreaWidth, height: contentRowHeight }}
             >
-              {appNotice === 'permissions' ? (
-                <Shield size={15} strokeWidth={1.9} />
-              ) : (
-                <CloudSync size={15} strokeWidth={1.9} />
-              )}
+              <notice.Icon size={15} strokeWidth={1.9} />
             </div>
           ) : null}
 
@@ -546,8 +556,9 @@ export function Notch({
           )}
         </div>
 
-        {/* Expanded right gutter — the only content on the notch row: an app-level action (update / permissions). */}
-        {appNotice && (
+        {/* Expanded right gutter — the only content on the notch row: an app-level action (reload
+            credits / review permissions / restart to update). */}
+        {notice && (
           <div
             className="absolute right-0 top-0 z-10 flex items-center justify-end gap-2"
             style={{
@@ -558,15 +569,13 @@ export function Notch({
               transition: expanded ? 'opacity 300ms ease-out 150ms' : 'opacity 100ms ease-out',
             }}
           >
-            <span className="whitespace-nowrap text-[11px] leading-none text-white/[0.7]">
-              {appNotice === 'permissions' ? 'Missing Permissions' : 'Update Available'}
-            </span>
+            <span className="whitespace-nowrap text-[11px] leading-none text-white/[0.7]">{notice.label}</span>
             <button
               type="button"
-              onClick={appNotice === 'permissions' ? onReviewPermissions : onRestart}
+              onClick={notice.onAction}
               className="flex items-center rounded bg-white px-2 py-1 text-[11px] font-medium leading-none text-black/[0.82] transition hover:bg-white/[0.92]"
             >
-              {appNotice === 'permissions' ? 'Review' : 'Restart'}
+              {notice.action}
             </button>
           </div>
         )}

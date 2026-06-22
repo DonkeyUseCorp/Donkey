@@ -29,6 +29,8 @@ export default function App() {
   // App-update notification is detected once on launch; the prototype seeds it on.
   const [updateAvailable, setUpdateAvailable] = useState(true);
   const [missingPermissions, setMissingPermissions] = useState(false);
+  // Out of credits gates the notch into a reload call-to-action; the prototype seeds it off.
+  const [outOfCredits, setOutOfCredits] = useState(false);
   // Logged out gates the notch into a login call-to-action; the prototype seeds it off.
   const [loggedOut, setLoggedOut] = useState(false);
   const [liveTasks, setLiveTasks] = useState<LiveTask[]>(INITIAL_LIVE_TASKS);
@@ -265,6 +267,8 @@ export default function App() {
         onRestart={() => setUpdateAvailable(false)}
         missingPermissions={missingPermissions}
         onReviewPermissions={() => setMissingPermissions(false)}
+        outOfCredits={outOfCredits}
+        onReloadCredits={() => setOutOfCredits(false)}
         notchExpanded={isNotchExpanded}
         setNotchExpanded={setNotchExpanded}
         composerVisible={composerVisible}
@@ -293,6 +297,8 @@ export default function App() {
         setUpdateAvailable={setUpdateAvailable}
         missingPermissions={missingPermissions}
         setMissingPermissions={setMissingPermissions}
+        outOfCredits={outOfCredits}
+        setOutOfCredits={setOutOfCredits}
         loggedOut={loggedOut}
         setLoggedOut={setLoggedOut}
         activeTaskId={activeTaskId}

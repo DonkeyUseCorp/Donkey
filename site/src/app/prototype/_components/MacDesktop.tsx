@@ -11,6 +11,8 @@ type Props = {
   onRestart: () => void;
   missingPermissions: boolean;
   onReviewPermissions: () => void;
+  outOfCredits: boolean;
+  onReloadCredits: () => void;
   notchExpanded: boolean;
   setNotchExpanded: (expanded: boolean) => void;
   composerVisible: boolean;
@@ -51,6 +53,8 @@ export function MacDesktop({
   onRestart,
   missingPermissions,
   onReviewPermissions,
+  outOfCredits,
+  onReloadCredits,
   notchExpanded,
   setNotchExpanded,
   composerVisible,
@@ -115,6 +119,8 @@ export function MacDesktop({
         onRestart={onRestart}
         missingPermissions={missingPermissions}
         onReviewPermissions={onReviewPermissions}
+        outOfCredits={outOfCredits}
+        onReloadCredits={onReloadCredits}
         expanded={notchExpanded}
         setExpanded={setNotchExpanded}
         liveTasks={liveTasks}
