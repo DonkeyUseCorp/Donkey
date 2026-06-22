@@ -790,9 +790,11 @@ final class UIUnderstandingCoordinator {
                             screenFrame: screenBounds,
                             minConfidence: currentConfig.minConfidence
                         ).elements
-                        UIUnderstandingLog.overlay.info(
-                            "debug inspection vision parsed windowID=\(windowID, privacy: .public) elapsedMs=\(elapsedMs, privacy: .public) responseElements=\(response.elements.count, privacy: .public) mappedElements=\(parsedElements.count, privacy: .public) minConfidence=\(self.currentConfig.minConfidence, privacy: .public) responseImage=\(Int(response.image.width), privacy: .public)x\(Int(response.image.height), privacy: .public) captureBytes=\(capture.parseImageData.count, privacy: .public)"
-                        )
+                        if overlayActive {
+                            UIUnderstandingLog.overlay.info(
+                                "debug inspection vision parsed windowID=\(windowID, privacy: .public) elapsedMs=\(elapsedMs, privacy: .public) responseElements=\(response.elements.count, privacy: .public) mappedElements=\(parsedElements.count, privacy: .public) minConfidence=\(self.currentConfig.minConfidence, privacy: .public) responseImage=\(Int(response.image.width), privacy: .public)x\(Int(response.image.height), privacy: .public) captureBytes=\(capture.parseImageData.count, privacy: .public)"
+                            )
+                        }
                         elements.removeAll { Self.windowID(for: $0) == windowID }
                         elements += parsedElements
                         if let signature {
