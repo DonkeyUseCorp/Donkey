@@ -114,6 +114,37 @@ jobs:
             brew install imagemagick
           fi
 
+      # Import the Developer ID cert into a throwaway keychain and stage the notary API key, so the app
+      # and DMG are signed + notarized. Absent the secrets this no-ops to ad-hoc signing (runnable
+      # locally, not distributable), so a release without signing configured still builds.
+      - name: Set up Developer ID signing
+        id: signing
+        env:
+          CERT_P12: ${{ secrets.DONKEY_DEVELOPER_ID_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.DONKEY_DEVELOPER_ID_CERT_PASSWORD }}
+          SIGN_IDENTITY: ${{ secrets.DONKEY_TOOLS_SIGN_IDENTITY }}
+          NOTARY_KEY_P8: ${{ secrets.DONKEY_NOTARY_KEY_P8 }}
+        run: |
+          if [ -z "$CERT_P12" ] || [ -z "$SIGN_IDENTITY" ]; then
+            echo "::warning::No Developer ID secrets; the app will be ad-hoc signed (not for distribution)."
+            echo "identity=-" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/donkey-signing.keychain-db"
+          kpw="$(uuidgen)"
+          security create-keychain -p "$kpw" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$kpw" "$keychain"
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kpw" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | sed -e 's/"//g')
+          rm -f "$RUNNER_TEMP/cert.p12"
+          if [ -n "$NOTARY_KEY_P8" ]; then
+            echo "$NOTARY_KEY_P8" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          fi
+          echo "identity=$SIGN_IDENTITY" >> "$GITHUB_OUTPUT"
+
       # The bundled CLI tools (ffmpeg, lit, pdf-fill, …) are NOT baked into the app: it downloads
       # them on first run from the artifact published by the Publish Bundled Tools workflow, so the
       # release package builds without vendoring them here.
@@ -123,6 +154,10 @@ jobs:
           DONKEY_APP_BUILD: ${{ steps.release.outputs.build }}
           DONKEY_SPARKLE_FEED_URL: https://donkeyuse.com/appcast.xml
           DONKEY_SPARKLE_PUBLIC_ED_KEY: ${{ secrets.DONKEY_SPARKLE_PUBLIC_ED_KEY }}
+          DONKEY_APP_SIGN_IDENTITY: ${{ steps.signing.outputs.identity }}
+          DONKEY_NOTARY_KEY_P8: ${{ runner.temp }}/notary.p8
+          DONKEY_NOTARY_KEY_ID: ${{ secrets.DONKEY_NOTARY_KEY_ID }}
+          DONKEY_NOTARY_ISSUER_ID: ${{ secrets.DONKEY_NOTARY_ISSUER_ID }}
         run: ./scripts/package-donkey-app.sh
 
       - name: Generate checksum

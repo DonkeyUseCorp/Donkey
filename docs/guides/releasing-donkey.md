@@ -37,11 +37,17 @@ Use nightly builds to smoke-test the latest default-branch app package. Use
 
 The workflow checks out the latest default branch, derives the next version
 from existing numeric release tags and the selected bump, builds and packages
-`dist/Donkey.dmg`, signs the DMG with the Sparkle private key, creates or
-updates the numeric GitHub Release with the DMG and checksum, updates
-`site/public/appcast.xml` and the website download constant and commits those
-changes, marks the release as GitHub's latest, moves the alias tags, and
-prunes releases beyond the latest 10.
+`dist/Donkey.dmg`, Developer ID-signs and notarizes the app and disk image and
+signs the DMG with the Sparkle private key, creates or updates the numeric
+GitHub Release with the DMG and checksum, updates `site/public/appcast.xml` and
+the website download constant and commits those changes, marks the release as
+GitHub's latest, moves the alias tags, and prunes releases beyond the latest 10.
+
+The app's Developer ID signing + notarization reuses the same secrets as the
+bundled tools (see below); without them the release falls back to an ad-hoc
+signed app that is not distributable. The app is signed with the hardened
+runtime and the Apple Events entitlement (`scripts/assets/donkey.entitlements`)
+it needs to keep automating other apps once hardened.
 
 ## Bundled Tools
 

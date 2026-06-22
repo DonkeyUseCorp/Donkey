@@ -181,6 +181,87 @@ create_drag_to_applications_dmg() {
   rm -rf "$DMG_ROOT" "$DMG_RW_PATH"
 }
 
+# --- Code signing + notarization ----------------------------------------------------------------
+# DONKEY_APP_SIGN_IDENTITY selects how the app is signed:
+#   "-" (default)        ad-hoc — runs locally, NOT distributable (the dev/local path).
+#   "Developer ID ..."   real identity + hardened runtime + secure timestamp, then notarized + stapled
+#                        (the release path; the release workflow imports the cert and sets this).
+APP_SIGN_IDENTITY="${DONKEY_APP_SIGN_IDENTITY:--}"
+APP_ENTITLEMENTS="${DONKEY_APP_ENTITLEMENTS:-$ROOT_DIR/scripts/assets/donkey.entitlements}"
+
+# Submit an artifact (app zip or DMG) to Apple's notary service and wait for the verdict. notarytool
+# exits non-zero if the bundle is rejected, so a bad signature fails the build here.
+notarytool_submit() {
+  local artifact="$1"
+  if [ -f "${DONKEY_NOTARY_KEY_P8:-/nonexistent}" ] && [ -n "${DONKEY_NOTARY_KEY_ID:-}" ] && [ -n "${DONKEY_NOTARY_ISSUER_ID:-}" ]; then
+    xcrun notarytool submit "$artifact" \
+      --key "$DONKEY_NOTARY_KEY_P8" --key-id "$DONKEY_NOTARY_KEY_ID" --issuer "$DONKEY_NOTARY_ISSUER_ID" --wait
+  elif [ -n "${DONKEY_NOTARY_APPLE_ID:-}" ] && [ -n "${DONKEY_NOTARY_TEAM_ID:-}" ] && [ -n "${DONKEY_NOTARY_PASSWORD:-}" ]; then
+    xcrun notarytool submit "$artifact" \
+      --apple-id "$DONKEY_NOTARY_APPLE_ID" --team-id "$DONKEY_NOTARY_TEAM_ID" --password "$DONKEY_NOTARY_PASSWORD" --wait
+  else
+    echo "FATAL: app signed with Developer ID but no notary credentials provided." >&2
+    exit 1
+  fi
+}
+
+# Sign the app bundle. Ad-hoc when no identity; otherwise Developer ID + hardened runtime, signed
+# inside-out (Apple discourages --deep for notarization). Sparkle's nested XPC services and Updater.app
+# are signed first, preserving their own (sandbox) entitlements, then the framework, then the app — which
+# carries the Apple Events entitlement it needs to keep automating other apps under the hardened runtime.
+sign_app() {
+  if [ "$APP_SIGN_IDENTITY" = "-" ]; then
+    codesign --force --deep --sign - "$APP_DIR" >/dev/null
+    echo "Ad-hoc signed $APP_DIR (not for distribution)."
+    return 0
+  fi
+  local base=(--force --options runtime --timestamp --sign "$APP_SIGN_IDENTITY")
+  local sparkle="$FRAMEWORKS_DIR/Sparkle.framework"
+  if [ -d "$sparkle" ]; then
+    # Versions/Current keeps this agnostic to Sparkle's version letter.
+    local cur="$sparkle/Versions/Current" item
+    for item in \
+      "$cur/XPCServices/Downloader.xpc" \
+      "$cur/XPCServices/Installer.xpc" \
+      "$cur/Autoupdate" \
+      "$cur/Updater.app"; do
+      [ -e "$item" ] && codesign "${base[@]}" --preserve-metadata=entitlements "$item"
+    done
+    codesign "${base[@]}" "$sparkle"
+  fi
+  local f
+  while IFS= read -r -d '' f; do codesign "${base[@]}" "$f"; done \
+    < <(find "$FRAMEWORKS_DIR" -type f -name "*.dylib" -print0 2>/dev/null)
+  local ent=()
+  [ -f "$APP_ENTITLEMENTS" ] && ent=(--entitlements "$APP_ENTITLEMENTS")
+  codesign "${base[@]}" "${ent[@]}" "$APP_DIR"
+  echo "Developer ID signed $APP_DIR with '$APP_SIGN_IDENTITY' (hardened runtime)."
+}
+
+# Notarize + staple the signed app so it launches cleanly (even offline) once dragged out of the DMG.
+notarize_app() {
+  [ "$APP_SIGN_IDENTITY" = "-" ] && return 0
+  local zip="$ROOT_DIR/dist/Donkey-app-notarize.zip"
+  rm -f "$zip"
+  /usr/bin/ditto -c -k --keepParent "$APP_DIR" "$zip"
+  echo "Notarizing the app ..."
+  notarytool_submit "$zip"
+  xcrun stapler staple "$APP_DIR"
+  rm -f "$zip"
+  echo "Notarized and stapled $APP_DIR."
+}
+
+# Sign, notarize, and staple the DMG itself (disk images can be stapled, unlike loose binaries), so it
+# opens without a Gatekeeper prompt.
+notarize_dmg() {
+  [ "$APP_SIGN_IDENTITY" = "-" ] && return 0
+  codesign --force --timestamp --sign "$APP_SIGN_IDENTITY" "$DMG_PATH"
+  echo "Notarizing the disk image ..."
+  notarytool_submit "$DMG_PATH"
+  xcrun stapler staple "$DMG_PATH"
+  echo "Notarized and stapled $DMG_PATH."
+}
+
 mkdir -p "$CACHE_DIR/clang" "$CACHE_DIR/swiftpm" "$CACHE_DIR/home"
 export CLANG_MODULE_CACHE_PATH="$CACHE_DIR/clang"
 export SWIFTPM_CACHE_PATH="$CACHE_DIR/swiftpm"
@@ -211,15 +292,15 @@ stage_bundled_tools() {
   rm -rf "$dest_dir"
   mkdir -p "$dest_dir"
   cp -R "$source_dir/." "$dest_dir/"
-  # Ad-hoc sign each executable so the outer --deep sign stays consistent. Release
-  # builds re-sign these with Developer ID + hardened runtime and notarize the DMG
-  # (see docs/guides/releasing-donkey.md); a non-Mach-O script just no-ops here.
-  if command -v codesign >/dev/null 2>&1; then
-    find "$dest_dir" -type f -perm -u+x -print0 | while IFS= read -r -d '' tool; do
-      chmod +x "$tool"
-      codesign --force --sign - "$tool" >/dev/null 2>&1 || true
-    done
-  fi
+  # Sign each baked tool with the app's identity (Developer ID + hardened runtime for a release,
+  # ad-hoc otherwise) so a notarized build doesn't trip on an unsigned Mach-O; a non-Mach-O script
+  # (e.g. exiftool) just no-ops here.
+  local sopts=(--force --sign "$APP_SIGN_IDENTITY")
+  [ "$APP_SIGN_IDENTITY" != "-" ] && sopts+=(--options runtime --timestamp)
+  find "$dest_dir" -type f -perm -u+x -print0 | while IFS= read -r -d '' tool; do
+    chmod +x "$tool"
+    codesign "${sopts[@]}" "$tool" >/dev/null 2>&1 || true
+  done
   echo "Baked bundled tools from $source_dir into $dest_dir (offline override)."
 }
 
@@ -326,11 +407,11 @@ $SPARKLE_PLIST_KEYS
 </plist>
 PLIST
 
-if command -v codesign >/dev/null 2>&1; then
-  codesign --force --deep --sign - "$APP_DIR" >/dev/null
-fi
+sign_app
+notarize_app
 
 create_drag_to_applications_dmg
+notarize_dmg
 
 echo "Packaged $APP_DIR"
 echo "Created drag-to-Applications disk image: $DMG_PATH"
