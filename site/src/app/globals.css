@@ -144,4 +144,10 @@
   html {
     @apply bg-background font-sans;
   }
+  /* The signed-in /app surface renders on white; override the cream landing
+     background on html/body so it does not show through the overscroll area. */
+  html.app-surface,
+  html.app-surface body {
+    @apply bg-white;
+  }
 }
