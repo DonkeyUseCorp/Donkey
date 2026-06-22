@@ -104,7 +104,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         )
     }
 
-    public func planNextStep(for task: HarnessTaskState) async -> HarnessToolCall? {
+    public func planNextStep(for task: HarnessAgentState, rollingContext: String?) async -> HarnessToolCall? {
         // When the upfront understanding flagged the request as ambiguous, ask before doing anything.
         // Gated on a typed field (not raw text) and only on the first step, so a user answer resumes
         // into the normal planning loop. Reuses the harness's existing user.clarify waiting gate.
@@ -130,7 +130,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         for attempt in 0...lastAttempt {
             let decision: Decision
             do {
-                decision = try await decide(task: task, retryNote: retryNote, attempt: attempt)
+                decision = try await decide(task: task, rollingContext: rollingContext, retryNote: retryNote, attempt: attempt)
             } catch {
                 lastFailure = error
                 lastPlanningErrors.append(
@@ -376,7 +376,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     private static let baseMaxOutputTokens = 3_000
     private static let maxOutputTokensCap = 8_000
 
-    private func decide(task: HarnessTaskState, retryNote: String?, attempt: Int) async throws -> Decision {
+    private func decide(task: HarnessAgentState, rollingContext: String?, retryNote: String?, attempt: Int) async throws -> Decision {
         let prompt = DonkeyPrompts.harnessStep(
             task: task,
             descriptors: descriptors,
@@ -385,6 +385,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
             understanding: understanding,
             environmentSummary: environmentSummary,
             skillCatalog: skillCatalog,
+            rollingContext: rollingContext,
             retryNote: retryNote,
             openWindows: openWindows()
         )

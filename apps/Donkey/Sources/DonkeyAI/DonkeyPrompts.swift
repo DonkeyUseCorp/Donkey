@@ -134,13 +134,14 @@ public enum DonkeyPrompts {
     public static let harnessStepMaxDetailedHistorySteps = 12
 
     public static func harnessStep(
-        task: HarnessTaskState,
+        task: HarnessAgentState,
         descriptors: [HarnessToolDescriptor],
         appName: String,
         appGuidance: String?,
         understanding: HarnessRequestUnderstanding?,
         environmentSummary: String?,
         skillCatalog: String? = nil,
+        rollingContext: String? = nil,
         retryNote: String? = nil,
         openWindows: [MacWindowTargetCandidate] = []
     ) -> String {
@@ -150,13 +151,13 @@ public enum DonkeyPrompts {
         // Follow-up instructions the user added after the task started are surfaced in their own block
         // below (right under the goal), so they are excluded from the generic facts dump here.
         let displayFacts = task.worldModel.facts
-            .filter { $0.key != HarnessTaskCoordinator.additionalInstructionsFactKey }
+            .filter { $0.key != HarnessAgentCoordinator.additionalInstructionsFactKey }
         let factsBlock = displayFacts.isEmpty
             ? ""
             : "\nKnown state:\n" + displayFacts.sorted { $0.key < $1.key }
                 .map { "  \($0.key) = \($0.value)" }.joined(separator: "\n") + "\n"
 
-        let followUpInstructions = task.worldModel.facts[HarnessTaskCoordinator.additionalInstructionsFactKey]?
+        let followUpInstructions = task.worldModel.facts[HarnessAgentCoordinator.additionalInstructionsFactKey]?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let followUpBlock = followUpInstructions.isEmpty
             ? ""
@@ -169,6 +170,15 @@ public enum DonkeyPrompts {
             : ""
 
         let historyBlock = harnessStepHistoryBlock(task.toolHistory)
+
+        // Cross-turn conversation memory: recent conversation events plus a rolling summary of older
+        // turns. Distinct from the tool-history block above — that is what THIS run did; this is what the
+        // whole conversation is about, including compacted earlier turns. The full record is on disk.
+        let trimmedRollingContext = rollingContext?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let rollingContextBlock = trimmedRollingContext.isEmpty
+            ? ""
+            : "\nCONVERSATION SO FAR (rolling summary of older turns + recent events; the full record is "
+                + "on disk):\n\(trimmedRollingContext)\n"
 
         let toolsBlock = descriptors
             .sorted { $0.name < $1.name }
@@ -211,7 +221,7 @@ public enum DonkeyPrompts {
         entirely with system tools and have no on-screen UI target; reach for the GUI only when the task
         truly needs it.
         GOAL: \(goalText)
-        \(followUpBlock)\(understandingBlock)
+        \(followUpBlock)\(understandingBlock)\(rollingContextBlock)
         \(historyBlock)
         \(factsBlock)\(environmentBlock)\(guidanceBlock)\(skillCatalogBlock)\(windowsBlock)
         \(elementsBlock)

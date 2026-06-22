@@ -1,12 +1,12 @@
 import Foundation
 
 public struct HarnessStepExecutionResult: Equatable, Sendable {
-    public var task: HarnessTaskState
+    public var task: HarnessAgentState
     public var toolResult: HarnessToolResult?
     public var stoppedForGate: Bool
 
     public init(
-        task: HarnessTaskState,
+        task: HarnessAgentState,
         toolResult: HarnessToolResult? = nil,
         stoppedForGate: Bool = false
     ) {
@@ -21,15 +21,31 @@ public struct HarnessStepExecutionResult: Equatable, Sendable {
 /// updated by the previous tool's result, and returns the next call (or nil to stop). It expresses
 /// completion by returning a `run.complete` lifecycle call, which ends the loop.
 public protocol HarnessNextStepPlanning: Sendable {
-    func planNextStep(for task: HarnessTaskState) async -> HarnessToolCall?
+    func planNextStep(for task: HarnessAgentState, rollingContext: String?) async -> HarnessToolCall?
+}
+
+public extension HarnessNextStepPlanning {
+    /// Convenience for callers without rolling conversation context (e.g. tests).
+    func planNextStep(for task: HarnessAgentState) async -> HarnessToolCall? {
+        await planNextStep(for: task, rollingContext: nil)
+    }
+}
+
+/// Produces the bounded rolling context — recent conversation events plus a rolling summary of older
+/// turns — that a step's planner prompt carries, so a long conversation stays coherent without resending
+/// its whole history. When the rolling context grows past the policy threshold the implementation writes
+/// a fresh summary event back into the conversation, so subsequent steps read the digest, not the raw
+/// older turns. The full record on disk is never touched. Returns nil when there is nothing to carry.
+public protocol HarnessConversationCompacting: Sendable {
+    func rollingContext(agentID: String) async -> String?
 }
 
 public struct GenericHarnessRuntime: Sendable {
-    public var coordinator: HarnessTaskCoordinator
+    public var coordinator: HarnessAgentCoordinator
     public var registry: HarnessToolRegistry
 
     public init(
-        coordinator: HarnessTaskCoordinator,
+        coordinator: HarnessAgentCoordinator,
         registry: HarnessToolRegistry
     ) {
         self.coordinator = coordinator
@@ -55,12 +71,13 @@ public struct GenericHarnessRuntime: Sendable {
     /// `onStep`, when provided, is awaited after each executed step with that step's result.
     @discardableResult
     public func run(
-        taskID: String,
+        agentID: String,
         planner: any HarnessNextStepPlanning,
         maxSteps: Int = 200,
         maxNoProgressSteps: Int = 6,
         maxIdenticalRepeats: Int = 3,
         maxRepeatedFailures: Int = 3,
+        compactor: (any HarnessConversationCompacting)? = nil,
         onStep: (@Sendable (HarnessStepExecutionResult) async -> Void)? = nil
     ) async -> [HarnessStepExecutionResult] {
         var results: [HarnessStepExecutionResult] = []
@@ -73,45 +90,48 @@ public struct GenericHarnessRuntime: Sendable {
         // it is drained at the top of each iteration, and the only stop that actually ends the run is one
         // where `endRunUnlessPending` confirms the queue is empty in the same actor step. A follow-up that
         // slips in at any stop reopens the run for one more pass instead of being silently dropped.
-        await coordinator.beginRun(taskID: taskID)
+        await coordinator.beginRun(agentID: agentID)
 
         loop: while true {
             // Fold any queued follow-up into the world model before planning. A fresh instruction resets
             // the no-progress streak (legitimately new work) but NOT the identical-repeat guard, so a
             // planner looping on one call is still caught; it also reopens a task whose previous step had
             // already finished the run, so the new instruction is acted on rather than dropped.
-            if !(await coordinator.drainUserMessages(taskID: taskID)).isEmpty {
+            if !(await coordinator.drainUserMessages(agentID: agentID)).isEmpty {
                 noProgressStreak = 0
-                await coordinator.reopenForFollowUp(taskID: taskID)
+                await coordinator.reopenForFollowUp(agentID: agentID)
             }
 
             // Runaway backstop: a still-runnable task that exhausts the iteration budget timed out (the
             // goal stands, so it stays retryable) — distinct from a stall (failSafe) or a clean stop.
             if iterations >= maxSteps {
-                await coordinator.timeOutIfRunnable(taskID: taskID, reason: "maxStepsReached")
-                await coordinator.markLoopEnded(taskID: taskID)
+                await coordinator.timeOutIfRunnable(agentID: agentID, reason: "maxStepsReached")
+                await coordinator.markLoopEnded(agentID: agentID)
                 break loop
             }
             iterations += 1
 
-            guard let task = await coordinator.task(id: taskID), task.status.canExecuteTools else {
-                if await coordinator.endRunUnlessPending(taskID: taskID) { break loop } else { continue loop }
+            guard let task = await coordinator.agent(id: agentID), task.status.canExecuteTools else {
+                if await coordinator.endRunUnlessPending(agentID: agentID) { break loop } else { continue loop }
             }
-            guard let call = await planner.planNextStep(for: task) else {
+            // Compact before planning: fold older turns into a rolling summary when the conversation has
+            // grown past the threshold, and hand the planner the bounded recent-events-plus-summary view.
+            let rollingContext = await compactor?.rollingContext(agentID: agentID)
+            guard let call = await planner.planNextStep(for: task, rollingContext: rollingContext) else {
                 // The planner stopped without a lifecycle call: an abnormal stop, not a timeout.
-                await coordinator.failSafeIfRunnable(taskID: taskID, reason: "plannerStopped")
-                if await coordinator.endRunUnlessPending(taskID: taskID) { break loop } else { continue loop }
+                await coordinator.failSafeIfRunnable(agentID: agentID, reason: "plannerStopped")
+                if await coordinator.endRunUnlessPending(agentID: agentID) { break loop } else { continue loop }
             }
             let signature = call.name + "\u{1}" + Self.canonicalInput(call.input)
 
-            guard let step = await executeToolCall(taskID: taskID, call: call) else {
-                await coordinator.failSafeIfRunnable(taskID: taskID, reason: "executeFailed")
-                if await coordinator.endRunUnlessPending(taskID: taskID) { break loop } else { continue loop }
+            guard let step = await executeToolCall(agentID: agentID, call: call) else {
+                await coordinator.failSafeIfRunnable(agentID: agentID, reason: "executeFailed")
+                if await coordinator.endRunUnlessPending(agentID: agentID) { break loop } else { continue loop }
             }
             results.append(step)
             await onStep?(step)
             if step.stoppedForGate || !step.task.status.canExecuteTools {
-                if await coordinator.endRunUnlessPending(taskID: taskID) { break loop } else { continue loop }
+                if await coordinator.endRunUnlessPending(agentID: agentID) { break loop } else { continue loop }
             }
 
             // Stall detection — a step that changes the world or records a succeeded action is
@@ -140,7 +160,7 @@ public struct GenericHarnessRuntime: Sendable {
                     // what it already knows (observed live: a planner re-read identical playlist
                     // entries out of disbelief until the guard killed the run).
                     _ = await coordinator.annotateLastToolRecord(
-                        taskID: taskID,
+                        agentID: agentID,
                         note: "NOTE: this exact call already ran and returned the same result — you "
                             + "already have this information. Do not repeat it; take the next action "
                             + "toward the goal, or report the blocker honestly."
@@ -149,16 +169,16 @@ public struct GenericHarnessRuntime: Sendable {
                     identicalNoProgressStreak = 0
                 }
                 if noProgressStreak >= maxNoProgressSteps {
-                    await failSafeStall(taskID: taskID, reason: "noProgress")
-                    if await coordinator.endRunUnlessPending(taskID: taskID) { break loop } else { continue loop }
+                    await failSafeStall(agentID: agentID, reason: "noProgress")
+                    if await coordinator.endRunUnlessPending(agentID: agentID) { break loop } else { continue loop }
                 }
                 if identicalNoProgressStreak + 1 >= maxIdenticalRepeats {
-                    await failSafeStall(taskID: taskID, reason: "stuckRepeatingCall")
-                    if await coordinator.endRunUnlessPending(taskID: taskID) { break loop } else { continue loop }
+                    await failSafeStall(agentID: agentID, reason: "stuckRepeatingCall")
+                    if await coordinator.endRunUnlessPending(agentID: agentID) { break loop } else { continue loop }
                 }
                 if let reason = Self.repeatedFailureStallReason(after: step, threshold: maxRepeatedFailures) {
-                    await failSafeStall(taskID: taskID, reason: reason)
-                    if await coordinator.endRunUnlessPending(taskID: taskID) { break loop } else { continue loop }
+                    await failSafeStall(agentID: agentID, reason: reason)
+                    if await coordinator.endRunUnlessPending(agentID: agentID) { break loop } else { continue loop }
                 }
             }
             lastCallSignature = signature
@@ -170,8 +190,8 @@ public struct GenericHarnessRuntime: Sendable {
     /// or recorded a succeeded state-changing action. A failed step, or a re-observation that returns
     /// the same world, is no progress. Used to detect a busy-but-stuck loop.
     private static func stepMadeProgress(
-        before: HarnessTaskState,
-        after: HarnessTaskState,
+        before: HarnessAgentState,
+        after: HarnessAgentState,
         result: HarnessToolResult?,
         repeatedSameCall: Bool
     ) -> Bool {
@@ -240,15 +260,15 @@ public struct GenericHarnessRuntime: Sendable {
 
     /// Moves the task to a failed-safe stall state with a typed reason, so a stuck run ends cleanly
     /// instead of burning the whole runaway ceiling.
-    private func failSafeStall(taskID: String, reason: String) async {
-        _ = await coordinator.failSafe(taskID: taskID, reason: "Run stopped: \(reason).")
+    private func failSafeStall(agentID: String, reason: String) async {
+        _ = await coordinator.failSafe(agentID: agentID, reason: "Run stopped: \(reason).")
     }
 
     public func executeToolCall(
-        taskID: String,
+        agentID: String,
         call: HarnessToolCall
     ) async -> HarnessStepExecutionResult? {
-        guard let task = await coordinator.task(id: taskID) else { return nil }
+        guard let task = await coordinator.agent(id: agentID) else { return nil }
         guard task.status.canExecuteTools || Self.canExecuteLifecycleCall(call, when: task.status) else {
             let result = HarnessToolResult(
                 callID: call.id,
@@ -270,7 +290,7 @@ public struct GenericHarnessRuntime: Sendable {
         if call.name == "user.clarify" {
             let question = call.input["question"] ?? "What detail should I use?"
             guard let stoppedTask = await coordinator.waitForUser(
-                taskID: taskID,
+                agentID: agentID,
                 question: question,
                 pendingToolCall: call
             ) else {
@@ -295,7 +315,7 @@ public struct GenericHarnessRuntime: Sendable {
             let permission = call.input["permission"].flatMap(HarnessPermission.init(rawValue:))
             let missing = permission.map { [$0] } ?? []
             guard let stoppedTask = await coordinator.waitForPermission(
-                taskID: taskID,
+                agentID: agentID,
                 missingPermissions: missing,
                 pendingToolCall: call
             ) else {
@@ -321,7 +341,7 @@ public struct GenericHarnessRuntime: Sendable {
         // step (a re-observe, read command, or verification) before run.complete is accepted.
         if call.name == "run.complete", let blocked = await completionEvidenceRejection(call: call, task: task) {
             guard let updatedTask = await coordinator.recordToolResult(
-                taskID: taskID,
+                agentID: agentID,
                 call: call,
                 result: blocked
             ) else {
@@ -336,7 +356,7 @@ public struct GenericHarnessRuntime: Sendable {
         // (re-observing is idempotent and useful).
         if let blocked = await duplicateActionRejection(call: call, task: task) {
             guard let updatedTask = await coordinator.recordToolResult(
-                taskID: taskID,
+                agentID: agentID,
                 call: call,
                 result: blocked
             ) else {
@@ -347,14 +367,14 @@ public struct GenericHarnessRuntime: Sendable {
 
         let result = await registry.execute(
             call,
-            taskID: taskID,
+            agentID: agentID,
             worldModel: task.worldModel,
             grantedPermissions: task.grantedPermissions
         )
 
         if result.status == .permissionDenied {
             guard let stoppedTask = await coordinator.waitForPermission(
-                taskID: taskID,
+                agentID: agentID,
                 missingPermissions: result.missingPermissions,
                 pendingToolCall: call
             ) else {
@@ -369,7 +389,7 @@ public struct GenericHarnessRuntime: Sendable {
 
         if result.status == .waitingForUser {
             guard let stoppedTask = await coordinator.waitForUser(
-                taskID: taskID,
+                agentID: agentID,
                 question: result.question ?? "What detail should I use?",
                 pendingToolCall: call
             ) else {
@@ -384,7 +404,7 @@ public struct GenericHarnessRuntime: Sendable {
 
         if result.status == .waitingForPermission {
             guard let stoppedTask = await coordinator.waitForPermission(
-                taskID: taskID,
+                agentID: agentID,
                 missingPermissions: result.missingPermissions,
                 pendingToolCall: call,
                 metadata: result.metadata
@@ -399,7 +419,7 @@ public struct GenericHarnessRuntime: Sendable {
         }
 
         guard let updatedTask = await coordinator.recordToolResult(
-            taskID: taskID,
+            agentID: agentID,
             call: call,
             result: result
         ) else {
@@ -407,7 +427,7 @@ public struct GenericHarnessRuntime: Sendable {
         }
 
         if let lifecycleTask = await applyLifecycleResult(
-            taskID: taskID,
+            agentID: agentID,
             call: call,
             result: result
         ) {
@@ -425,8 +445,8 @@ public struct GenericHarnessRuntime: Sendable {
         )
     }
 
-    public func executeNextPlannedStep(taskID: String) async -> HarnessStepExecutionResult? {
-        guard let task = await coordinator.task(id: taskID),
+    public func executeNextPlannedStep(agentID: String) async -> HarnessStepExecutionResult? {
+        guard let task = await coordinator.agent(id: agentID),
               task.status.canExecuteTools,
               let step = task.plan?.steps.first(where: { step in
                   guard let call = step.toolCall else { return false }
@@ -437,7 +457,7 @@ public struct GenericHarnessRuntime: Sendable {
             return nil
         }
 
-        return await executeToolCall(taskID: taskID, call: call)
+        return await executeToolCall(agentID: agentID, call: call)
     }
 
     /// Rejects a `run.complete` whose most recent succeeded state-changing step has no succeeded
@@ -452,7 +472,7 @@ public struct GenericHarnessRuntime: Sendable {
     /// the user had deleted the playlist).
     private func completionEvidenceRejection(
         call: HarnessToolCall,
-        task: HarnessTaskState
+        task: HarnessAgentState
     ) async -> HarnessToolResult? {
         let history = Self.currentRunHistory(task.toolHistory)
         if !task.toolHistory.isEmpty, !history.contains(where: { $0.resultStatus == .succeeded }) {
@@ -499,7 +519,7 @@ public struct GenericHarnessRuntime: Sendable {
     /// Returns a failed result that tells the planner to verify and complete instead of repeating.
     private func duplicateActionRejection(
         call: HarnessToolCall,
-        task: HarnessTaskState
+        task: HarnessAgentState
     ) async -> HarnessToolResult? {
         guard !call.name.hasPrefix("run."), !call.name.hasPrefix("conversation.") else { return nil }
         let descriptors = await registry.descriptors()
@@ -531,35 +551,35 @@ public struct GenericHarnessRuntime: Sendable {
     }
 
     private func applyLifecycleResult(
-        taskID: String,
+        agentID: String,
         call: HarnessToolCall,
         result: HarnessToolResult
-    ) async -> HarnessTaskState? {
+    ) async -> HarnessAgentState? {
         guard result.status == .succeeded else { return nil }
         switch call.name {
         case "run.pause":
             return await coordinator.pause(
-                taskID: taskID,
+                agentID: agentID,
                 reason: call.input["reason"] ?? "Task paused by lifecycle tool"
             )
         case "run.resume":
             return await coordinator.resume(
-                taskID: taskID,
+                agentID: agentID,
                 reason: call.input["reason"] ?? "Task resumed by lifecycle tool"
             )
         case "run.cancel":
             return await coordinator.cancel(
-                taskID: taskID,
+                agentID: agentID,
                 reason: call.input["reason"] ?? "Task cancelled by lifecycle tool"
             )
         case "run.complete":
             return await coordinator.complete(
-                taskID: taskID,
+                agentID: agentID,
                 reason: call.input["reason"] ?? "Task completed by lifecycle tool"
             )
         case "run.failSafe":
             return await coordinator.failSafe(
-                taskID: taskID,
+                agentID: agentID,
                 reason: call.input["reason"] ?? "Task failed safe by lifecycle tool"
             )
         default:
@@ -569,7 +589,7 @@ public struct GenericHarnessRuntime: Sendable {
 
     private static func canExecuteLifecycleCall(
         _ call: HarnessToolCall,
-        when status: HarnessTaskStatus
+        when status: HarnessAgentStatus
     ) -> Bool {
         guard call.name == "run.resume" else { return false }
         return [.paused, .interrupted, .timedOut].contains(status)

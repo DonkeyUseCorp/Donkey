@@ -81,7 +81,7 @@ actor ForegroundFocusGate {
 
 struct UserQueryCommandHandlingResult: Equatable, Sendable {
     var status: LocalAppTaskLiveRunStatus
-    var threadStatus: UserQueryTaskStatus
+    var threadStatus: UserQueryConversationStatus
     var decision: AppHarnessDecision
     var summary: String
     var taskLabel: String?
@@ -92,7 +92,7 @@ struct UserQueryCommandHandlingResult: Equatable, Sendable {
 
     init(
         status: LocalAppTaskLiveRunStatus,
-        threadStatus: UserQueryTaskStatus,
+        threadStatus: UserQueryConversationStatus,
         decision: AppHarnessDecision,
         summary: String,
         traceID: String,
@@ -114,9 +114,9 @@ struct UserQueryCommandHandlingResult: Equatable, Sendable {
 }
 
 struct UserQueryCommandContext: Sendable {
-    var task: UserQueryNotchTask
-    var recentEvents: [UserQueryTaskEvent]
-    var assets: [UserQueryTaskAsset]
+    var task: UserQueryConversation
+    var recentEvents: [UserQueryConversationEvent]
+    var assets: [UserQueryConversationAsset]
     var isFollowUp: Bool
     var turnSource: AppHarnessTurnSource = .typedPrompt
     var spawnProgressChanged: (@MainActor @Sendable (UserQuerySpawnProgressUpdate) -> Void)?
@@ -128,23 +128,23 @@ protocol UserQueryCommandHandling: Sendable {
         _ command: String,
         context: UserQueryCommandContext?
     ) async -> UserQueryCommandHandlingResult
-    func pauseCommand(taskID: String) async -> Bool
-    func approvePermissionGate(taskID: String, alwaysAllow: Bool) async -> Bool
+    func pauseCommand(conversationID: String) async -> Bool
+    func approvePermissionGate(conversationID: String, alwaysAllow: Bool) async -> Bool
     /// Re-run the harness loop for a task whose permission gate was just
     /// approved, so the granted command actually executes. Returns nil when the
     /// task is unknown.
     func continueApprovedCommand(
-        taskID: String,
+        conversationID: String,
         context: UserQueryCommandContext?
     ) async -> UserQueryCommandHandlingResult?
     /// Queue a follow-up instruction onto a task whose loop is still running so it folds it in at its
     /// next step. Returns true when the task is live (a loop will pick it up); false means the caller
     /// should fall back to resuming the task with the instruction as a fresh turn.
-    func injectFollowUp(taskID: String, text: String) async -> Bool
+    func injectFollowUp(conversationID: String, text: String) async -> Bool
     /// Re-run a previously-interrupted task in the BACKGROUND (no focus steal), for unattended
     /// auto-resume on relaunch. Returns nil when the task is unknown or has no goal to resume.
     func autoResumeCommand(
-        taskID: String,
+        conversationID: String,
         context: UserQueryCommandContext?
     ) async -> UserQueryCommandHandlingResult?
     /// Set by the overlay so a mid-run hosted 401 (an expired session) surfaces re-login. The inference
@@ -158,18 +158,18 @@ extension UserQueryCommandHandling {
     }
 
     func continueApprovedCommand(
-        taskID: String,
+        conversationID: String,
         context: UserQueryCommandContext?
     ) async -> UserQueryCommandHandlingResult? {
         nil
     }
 
-    func injectFollowUp(taskID: String, text: String) async -> Bool {
+    func injectFollowUp(conversationID: String, text: String) async -> Bool {
         false
     }
 
     func autoResumeCommand(
-        taskID: String,
+        conversationID: String,
         context: UserQueryCommandContext?
     ) async -> UserQueryCommandHandlingResult? {
         nil
@@ -215,13 +215,13 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // warm caches start (and stay) warm around this turn instead of only firing while idle.
         DonkeyEngagement.shared.noteInteraction()
         let traceID = "user-query-\(UUID().uuidString)"
-        let taskID = context?.task.id ?? traceID
-        logSubmittedCommand(command, traceID: traceID, taskID: taskID, context: context)
+        let conversationID = context?.task.id ?? traceID
+        logSubmittedCommand(command, traceID: traceID, conversationID: conversationID, context: context)
         return await continueHandlingNonVisualizationCommand(
             command: command,
             context: context,
             traceID: traceID,
-            taskID: taskID
+            conversationID: conversationID
         )
     }
 
@@ -229,7 +229,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         command: String,
         context: UserQueryCommandContext?,
         traceID: String,
-        taskID: String
+        conversationID: String
     ) async -> UserQueryCommandHandlingResult {
         // Redact PII/secrets before the command becomes the task goal: the hosted planner forwards the
         // goal to the backend on every step, and the goal is the only user text this route sends to a
@@ -266,7 +266,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 ].merging(Self.genericHarnessMetadata(preparedTurn: genericPreparedTurn)) { current, _ in current }
             )
             _ = await genericHarnessLifecycle.coordinator.complete(
-                taskID: genericPreparedTurn.task.id,
+                agentID: genericPreparedTurn.agent.id,
                 reason: "User query empty turn"
             )
             logHandlingResult(result, stage: "empty", hint: "Empty command; no action was run.")
@@ -278,7 +278,8 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         return await runHarnessLoop(
             command: redactedCommand,
             traceID: traceID,
-            taskID: taskID,
+            conversationID: genericPreparedTurn.conversation.id,
+            agentID: genericPreparedTurn.agent.id,
             preparedTurnMetadata: Self.genericHarnessMetadata(preparedTurn: genericPreparedTurn),
             visualize: context?.agentVisualizationChanged,
             progress: Self.progressLabeler(context?.spawnProgressChanged),
@@ -287,26 +288,35 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
     }
 
     func continueApprovedCommand(
-        taskID: String,
+        conversationID: String,
         context: UserQueryCommandContext?
     ) async -> UserQueryCommandHandlingResult? {
         // Interactive resume (gate approval, tap Resume): let the understanding boundary pick foreground
         // vs. background as it would for any turn.
-        await resumeExistingTask(taskID: taskID, context: context, tracePrefix: "user-query-resume")
+        await resumeExistingTask(conversationID: conversationID, context: context, tracePrefix: "user-query-resume")
     }
 
-    func injectFollowUp(taskID: String, text: String) async -> Bool {
-        guard let task = await genericHarnessLifecycle.taskState(taskID: taskID) else { return false }
+    /// Conversation-level controls — pause, gate approval, follow-up, resume — act on the conversation's
+    /// root agent, the parent that manages any subagents (a subagent's gate or follow-up is the parent's to
+    /// handle). For a single-agent conversation the root agent's id equals the conversation id; resolving
+    /// it explicitly keeps these correct once subagents exist.
+    private func managingAgentID(forConversation conversationID: String) async -> String {
+        await genericHarnessLifecycle.coordinator.rootAgents(conversationID: conversationID).first?.id ?? conversationID
+    }
+
+    func injectFollowUp(conversationID: String, text: String) async -> Bool {
+        let agentID = await managingAgentID(forConversation: conversationID)
+        guard let task = await genericHarnessLifecycle.agentState(agentID: agentID) else { return false }
         switch task.status {
         case .running, .resuming:
             // A live loop drains the queue. The returned flag is authoritative — false means the loop
             // ended in the meantime, so the caller resumes the task instead (which drains it on start).
-            return await genericHarnessLifecycle.coordinator.enqueueUserMessage(taskID: taskID, text: text)
+            return await genericHarnessLifecycle.coordinator.enqueueUserMessage(agentID: agentID, text: text)
         case .waitingForPermission:
             // Blocked on the user at a permission gate. Queue the follow-up WITHOUT resuming, so the gate
             // is preserved; it drains when the user approves and the loop resumes. Report accepted so the
             // caller does not start a competing run that would clear the pending gate.
-            _ = await genericHarnessLifecycle.coordinator.enqueueUserMessage(taskID: taskID, text: text)
+            _ = await genericHarnessLifecycle.coordinator.enqueueUserMessage(agentID: agentID, text: text)
             return true
         default:
             // No live or gated loop (paused, timedOut, completed, failedSafe, interrupted, cancelled, or a
@@ -316,12 +326,12 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
     }
 
     func autoResumeCommand(
-        taskID: String,
+        conversationID: String,
         context: UserQueryCommandContext?
     ) async -> UserQueryCommandHandlingResult? {
         // Unattended relaunch resume: force background so it never raises an app or moves the cursor.
         await resumeExistingTask(
-            taskID: taskID,
+            conversationID: conversationID,
             context: context,
             tracePrefix: "user-query-autoresume",
             forcedExecutionPreference: .background
@@ -336,12 +346,13 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
     /// model and history carry the work forward), pinned to the target the task resolved on its first run.
     /// Returns nil when the task is unknown or has no goal.
     private func resumeExistingTask(
-        taskID: String,
+        conversationID: String,
         context: UserQueryCommandContext?,
         tracePrefix: String,
         forcedExecutionPreference: ExecutionPreference? = nil
     ) async -> UserQueryCommandHandlingResult? {
-        guard let task = await genericHarnessLifecycle.taskState(taskID: taskID),
+        let agentID = await managingAgentID(forConversation: conversationID)
+        guard let task = await genericHarnessLifecycle.agentState(agentID: agentID),
               !task.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return nil
         }
@@ -353,7 +364,8 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         return await runHarnessLoop(
             command: task.goal,
             traceID: "\(tracePrefix)-\(UUID().uuidString)",
-            taskID: taskID,
+            conversationID: task.conversationID,
+            agentID: task.id,
             preparedTurnMetadata: [:],
             forcedExecutionPreference: forcedExecutionPreference,
             forcedDriveTarget: forcedDriveTarget,
@@ -364,10 +376,10 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
     }
 
     /// The single bridge from the harness's lifecycle status to the notch row's status. Exhaustive on
-    /// `HarnessTaskStatus` so a new harness case is a compile error here rather than silently collapsing
+    /// `HarnessAgentStatus` so a new harness case is a compile error here rather than silently collapsing
     /// to `.failed`. `.running`/`.resuming` only appear if a run returned still-runnable (a bug); they map
     /// to the retryable `.timedOut` so the row never looks live with no loop behind it.
-    static func userQueryStatus(forHarness status: HarnessTaskStatus?) -> UserQueryTaskStatus {
+    static func userQueryStatus(forHarness status: HarnessAgentStatus?) -> UserQueryConversationStatus {
         switch status {
         case .completed: return .completed
         case .paused: return .paused
@@ -403,16 +415,18 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         }
     }
 
-    func pauseCommand(taskID: String) async -> Bool {
-        await genericHarnessLifecycle.pauseTask(
-            taskID: taskID,
+    func pauseCommand(conversationID: String) async -> Bool {
+        let agentID = await managingAgentID(forConversation: conversationID)
+        return await genericHarnessLifecycle.pauseAgent(
+            agentID: agentID,
             reason: "User query paused task"
         ) != nil
     }
 
-    func approvePermissionGate(taskID: String, alwaysAllow: Bool) async -> Bool {
-        await genericHarnessLifecycle.approvePermissionGate(
-            taskID: taskID,
+    func approvePermissionGate(conversationID: String, alwaysAllow: Bool) async -> Bool {
+        let agentID = await managingAgentID(forConversation: conversationID)
+        return await genericHarnessLifecycle.approvePermissionGate(
+            agentID: agentID,
             decision: alwaysAllow ? .allowAlways : .allow,
             reason: "User query approved pending permissions"
         ) != nil
@@ -431,7 +445,8 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
     private func runHarnessLoop(
         command: String,
         traceID: String,
-        taskID: String,
+        conversationID: String,
+        agentID: String,
         preparedTurnMetadata: [String: String],
         forcedExecutionPreference: ExecutionPreference? = nil,
         forcedDriveTarget: (appName: String, bundleIdentifier: String?)? = nil,
@@ -446,7 +461,8 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 reason: "inputNotPermitted",
                 appName: "",
                 traceID: traceID,
-                taskID: taskID,
+                conversationID: conversationID,
+                agentID: agentID,
                 preparedTurnMetadata: preparedTurnMetadata
             )
         }
@@ -461,7 +477,8 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 reason: "noFrontmostApp",
                 appName: "",
                 traceID: traceID,
-                taskID: taskID,
+                conversationID: conversationID,
+                agentID: agentID,
                 preparedTurnMetadata: preparedTurnMetadata
             )
         }
@@ -475,7 +492,8 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 reason: "visionBackendUnavailable",
                 appName: frontmostAppName,
                 traceID: traceID,
-                taskID: taskID,
+                conversationID: conversationID,
+                agentID: agentID,
                 preparedTurnMetadata: preparedTurnMetadata
             )
         }
@@ -492,8 +510,8 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // can record even the pre-loop understanding decision into it. The header uses the frontmost app
         // (the app in front when the user asked); the resolved drive target is shown in the planning
         // block below.
-        let transcript = ThreadTranscript(id: taskID)
-        transcript.begin(id: taskID, app: frontmostAppName)
+        let transcript = ConversationTranscript(id: conversationID)
+        transcript.begin(id: conversationID, app: frontmostAppName)
         transcript.userMessage(command)
         // The turn-trace manager: the single sink every model call and every executed step reports to,
         // so the whole decision path — prompts, replies, sensing modality, and per-call timing — is
@@ -529,7 +547,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         let appName = driveTarget.appName
         let bundleIdentifier = driveTarget.bundleIdentifier
         // Pin the resolved target on the task so a later resume drives the same app (see forcedDriveTarget).
-        await genericHarnessLifecycle.coordinator.recordMetadata(taskID: taskID, [
+        await genericHarnessLifecycle.coordinator.recordMetadata(agentID: agentID, [
             Self.driveTargetAppMetadataKey: appName,
             Self.driveTargetBundleMetadataKey: bundleIdentifier ?? ""
         ])
@@ -561,6 +579,14 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         harnessServices.textGenerator = { prompt in
             await textGenerator.generate(prompt)
         }
+        // Claude-style rolling compaction: feeds the planner a bounded conversation view each step and
+        // writes a summary event back when the conversation outgrows the threshold.
+        let compactionDriver = ConversationCompactionDriver(
+            conversationStore: genericHarnessLifecycle.conversationStore,
+            coordinator: genericHarnessLifecycle.coordinator,
+            compactor: genericHarnessLifecycle.compactor,
+            generate: { await textGenerator.generate($0) }
+        )
         // Generative image editing/generation behind image.edit / image.generate. Provider stays
         // unset so the backend routes kind=image to its configured image model; this adapter only
         // encodes inputs and writes the returned files.
@@ -669,7 +695,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             }
         )
         _ = await genericHarnessLifecycle.coordinator.startRunning(
-            taskID: taskID,
+            agentID: agentID,
             reason: "User query harness run"
         )
 
@@ -702,7 +728,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         } else {
             transcript.systemEvent("Understanding was unavailable (timed out or failed); driving the raw command.")
         }
-        VisionGroundingLog.emit("thread traceID=\(traceID) path=\(transcript.threadPath)")
+        VisionGroundingLog.emit("conversation traceID=\(traceID) path=\(transcript.conversationPath)")
 
         // On a background turn the agent acts without taking over the user's cursor, so the cosmetic
         // traveling cursor is suppressed and progress is narrated through the notch text only. (AX-lane
@@ -778,7 +804,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         let holdsForegroundFocus = executionPreference == .foreground
             ? await foregroundFocusGate.acquire()
             : false
-        let runSteps = await runtime.run(taskID: taskID, planner: planner, onStep: onStep)
+        let runSteps = await runtime.run(agentID: agentID, planner: planner, compactor: compactionDriver, onStep: onStep)
         if holdsForegroundFocus {
             await foregroundFocusGate.release()
         }
@@ -787,7 +813,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // for a follow-up command before idling out.
         DonkeyEngagement.shared.endRun()
 
-        let finalTask = await genericHarnessLifecycle.coordinator.task(id: taskID)
+        let finalTask = await genericHarnessLifecycle.coordinator.agent(id: agentID)
         let finalStatus = finalTask?.status
         let completed = finalStatus == .completed
         let awaitingUser = finalStatus == .waitingForUser
@@ -826,7 +852,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         transcript.writeSummary(Self.deterministicThreadSummary(
             command: command, app: appName, outcome: outcomeReason, steps: runSteps, finalDetail: finalDetail
         ))
-        let threadText = (try? String(contentsOfFile: transcript.threadPath, encoding: .utf8)) ?? ""
+        let threadText = (try? String(contentsOfFile: transcript.conversationPath, encoding: .utf8)) ?? ""
         if !threadText.isEmpty {
             Task.detached {
                 let prompt = """
@@ -840,7 +866,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 let summaryStartedAt = RunTraceTimestamp.now()
                 let enhanced = await textGenerator.generate(prompt)
                 trace.recordModelCall(TraceModelCall(
-                    kind: .threadSummary,
+                    kind: .conversationSummary,
                     prompt: prompt,
                     response: enhanced ?? "<no output>",
                     status: (enhanced?.isEmpty == false) ? .ok : .empty,
@@ -888,7 +914,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                     "appHarness.decision": AppHarnessDecisionKind.askClarification.rawValue
                 ]) { _, new in new }
             )
-            await coordinatorRegistry.finish(taskID: taskID)
+            await coordinatorRegistry.finish(conversationID: conversationID)
             logHandlingResult(result, stage: "harness", hint: "Asked the user to clarify.")
             return result
         }
@@ -925,7 +951,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 traceID: traceID,
                 metadata: baseMetadata.merging(consentMetadata) { _, new in new }
             )
-            await coordinatorRegistry.finish(taskID: taskID)
+            await coordinatorRegistry.finish(conversationID: conversationID)
             logHandlingResult(result, stage: "harness", hint: "Stopped at a permission gate.")
             return result
         }
@@ -960,7 +986,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // Defensive only: if a run somehow returned still-runnable, mark it timed out (retryable) rather
         // than leaving a row that looks live with no loop behind it.
         await genericHarnessLifecycle.coordinator.timeOutIfRunnable(
-            taskID: taskID,
+            agentID: agentID,
             reason: "User query harness run returned without a terminal status"
         )
         let threadStatus = Self.userQueryStatus(forHarness: finalStatus)
@@ -970,7 +996,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             "appHarness.decision": AppHarnessDecisionKind.respond.rawValue
         ]
         if planner.lastFailureRequiresCreditReload {
-            responseMetadata[UserQueryTaskMetadataKey.creditReloadRequired] = "true"
+            responseMetadata[UserQueryConversationMetadataKey.creditReloadRequired] = "true"
         }
         let result = UserQueryCommandHandlingResult(
             status: completed ? .completed : .failedSafe,
@@ -980,7 +1006,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             traceID: traceID,
             metadata: baseMetadata.merging(responseMetadata) { _, new in new }
         )
-        await coordinatorRegistry.finish(taskID: taskID)
+        await coordinatorRegistry.finish(conversationID: conversationID)
         logHandlingResult(
             result,
             stage: "harness",
@@ -999,12 +1025,13 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         reason: String,
         appName: String,
         traceID: String,
-        taskID: String,
+        conversationID: String,
+        agentID: String,
         preparedTurnMetadata: [String: String]
     ) async -> UserQueryCommandHandlingResult {
         VisionGroundingLog.emit("aborted traceID=\(traceID) reason=\(reason) app=\(appName)")
-        let transcript = ThreadTranscript(id: taskID)
-        transcript.begin(id: taskID, app: appName)
+        let transcript = ConversationTranscript(id: conversationID)
+        transcript.begin(id: conversationID, app: appName)
         transcript.userMessage(command)
         transcript.error("Run could not start (\(reason)).")
         transcript.response(response)
@@ -1031,10 +1058,10 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             ]) { _, new in new }
         )
         _ = await genericHarnessLifecycle.coordinator.failSafe(
-            taskID: taskID,
+            agentID: agentID,
             reason: "User query harness run could not start: \(reason)"
         )
-        await coordinatorRegistry.finish(taskID: taskID)
+        await coordinatorRegistry.finish(conversationID: conversationID)
         logHandlingResult(result, stage: "harness", hint: response)
         return result
     }
@@ -1082,7 +1109,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
     private func logSubmittedCommand(
         _ command: String,
         traceID: String,
-        taskID: String,
+        conversationID: String,
         context: UserQueryCommandContext?
     ) {
         guard UserQueryLog.isEnabled else { return }
@@ -1090,7 +1117,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         let source = context?.turnSource.rawValue ?? AppHarnessTurnSource.typedPrompt.rawValue
         let isFollowUp = context?.isFollowUp ?? false
         UserQueryLog.commands.notice(
-            "command submitted traceID=\(traceID, privacy: .public) taskID=\(taskID, privacy: .public) source=\(source, privacy: .public) followUp=\(String(isFollowUp), privacy: .public) command=\(command, privacy: .public)"
+            "command submitted traceID=\(traceID, privacy: .public) conversationID=\(conversationID, privacy: .public) source=\(source, privacy: .public) followUp=\(String(isFollowUp), privacy: .public) command=\(command, privacy: .public)"
         )
     }
 
@@ -1318,7 +1345,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             turn: AppHarnessTurn(
                 text: command,
                 source: context?.isFollowUp == true ? .followUp : context?.turnSource ?? .typedPrompt,
-                taskID: context?.task.id,
+                conversationID: context?.task.id,
                 isFollowUp: context?.isFollowUp ?? false
             ),
             recentEvents: context?.recentEvents ?? [],
@@ -1335,13 +1362,13 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         recoveryStep: HarnessStepExecutionResult? = nil
     ) -> [String: String] {
         [
-            "genericHarness.threadID": preparedTurn.thread.id,
-            "genericHarness.taskID": preparedTurn.task.id,
-            "genericHarness.taskStatus": (runStep?.task.status ?? preparedTurn.task.status).rawValue,
+            "genericHarness.conversationID": preparedTurn.conversation.id,
+            "genericHarness.agentID": preparedTurn.agent.id,
+            "genericHarness.agentStatus": (runStep?.task.status ?? preparedTurn.agent.status).rawValue,
             "genericHarness.context.promptCharacters": String(preparedTurn.compactedContext.promptText.count),
             "genericHarness.context.eventCount": String(preparedTurn.compactedContext.events.count),
             "genericHarness.context.assetCount": String(preparedTurn.compactedContext.assets.count),
-            "genericHarness.context.activeTaskCount": String(preparedTurn.compactedContext.activeTasks.count),
+            "genericHarness.context.activeTaskCount": String(preparedTurn.compactedContext.activeAgents.count),
             "genericHarness.context.compactionRecordCount": String(preparedTurn.compactedContext.compactionRecords.count),
             "genericHarness.runToolStatus": runStep?.toolResult?.status.rawValue ?? "",
             "genericHarness.runStoppedForGate": runStep.map { String($0.stoppedForGate) } ?? "",
@@ -1359,31 +1386,31 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
 actor UserQueryRunCoordinatorRegistry {
     private var coordinators: [String: RunCoordinator] = [:]
 
-    func coordinator(for taskID: String) -> RunCoordinator {
-        if let coordinator = coordinators[taskID] {
+    func coordinator(for conversationID: String) -> RunCoordinator {
+        if let coordinator = coordinators[conversationID] {
             return coordinator
         }
 
         let coordinator = RunCoordinator()
-        coordinators[taskID] = coordinator
+        coordinators[conversationID] = coordinator
         return coordinator
     }
 
-    func pause(taskID: String, reason: String) async -> Bool {
-        guard let coordinator = coordinators[taskID] else { return false }
+    func pause(conversationID: String, reason: String) async -> Bool {
+        guard let coordinator = coordinators[conversationID] else { return false }
 
         await coordinator.pause(reason: reason)
         return true
     }
 
-    func resume(taskID: String, reason: String) async -> Bool {
-        guard let coordinator = coordinators[taskID] else { return false }
+    func resume(conversationID: String, reason: String) async -> Bool {
+        guard let coordinator = coordinators[conversationID] else { return false }
 
         await coordinator.resume(reason: reason)
         return true
     }
 
-    func finish(taskID: String) {
-        coordinators[taskID] = nil
+    func finish(conversationID: String) {
+        coordinators[conversationID] = nil
     }
 }

@@ -1,7 +1,7 @@
 import DonkeyContracts
 import Foundation
 
-public enum HarnessThreadEventRole: String, Codable, Equatable, Sendable {
+public enum HarnessConversationEventRole: String, Codable, Equatable, Sendable {
     case user
     case assistant
     case system
@@ -10,11 +10,11 @@ public enum HarnessThreadEventRole: String, Codable, Equatable, Sendable {
     case summary
 }
 
-public struct HarnessThread: Codable, Equatable, Sendable {
+public struct HarnessConversation: Codable, Equatable, Sendable {
     public var id: String
     public var title: String
-    public var status: HarnessTaskStatus
-    public var activeTaskIDs: [String]
+    public var status: HarnessAgentStatus
+    public var activeAgentIDs: [String]
     public var createdAt: Date
     public var updatedAt: Date
     public var metadata: [String: String]
@@ -22,8 +22,8 @@ public struct HarnessThread: Codable, Equatable, Sendable {
     public init(
         id: String = UUID().uuidString,
         title: String,
-        status: HarnessTaskStatus = .running,
-        activeTaskIDs: [String] = [],
+        status: HarnessAgentStatus = .running,
+        activeAgentIDs: [String] = [],
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         metadata: [String: String] = [:]
@@ -31,18 +31,18 @@ public struct HarnessThread: Codable, Equatable, Sendable {
         self.id = id
         self.title = title
         self.status = status
-        self.activeTaskIDs = activeTaskIDs
+        self.activeAgentIDs = activeAgentIDs
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.metadata = metadata
     }
 }
 
-public struct HarnessThreadEvent: Codable, Equatable, Sendable, Identifiable {
+public struct HarnessConversationEvent: Codable, Equatable, Sendable, Identifiable {
     public var id: String
-    public var threadID: String
-    public var taskID: String?
-    public var role: HarnessThreadEventRole
+    public var conversationID: String
+    public var agentID: String?
+    public var role: HarnessConversationEventRole
     public var text: String
     public var sequence: Int
     public var isPinned: Bool
@@ -51,9 +51,9 @@ public struct HarnessThreadEvent: Codable, Equatable, Sendable, Identifiable {
 
     public init(
         id: String = UUID().uuidString,
-        threadID: String,
-        taskID: String? = nil,
-        role: HarnessThreadEventRole,
+        conversationID: String,
+        agentID: String? = nil,
+        role: HarnessConversationEventRole,
         text: String,
         sequence: Int,
         isPinned: Bool = false,
@@ -61,8 +61,8 @@ public struct HarnessThreadEvent: Codable, Equatable, Sendable, Identifiable {
         metadata: [String: String] = [:]
     ) {
         self.id = id
-        self.threadID = threadID
-        self.taskID = taskID
+        self.conversationID = conversationID
+        self.agentID = agentID
         self.role = role
         self.text = text
         self.sequence = sequence
@@ -72,10 +72,10 @@ public struct HarnessThreadEvent: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
-public struct HarnessThreadAsset: Codable, Equatable, Sendable, Identifiable {
+public struct HarnessConversationAsset: Codable, Equatable, Sendable, Identifiable {
     public var id: String
-    public var threadID: String
-    public var taskID: String?
+    public var conversationID: String
+    public var agentID: String?
     public var eventID: String?
     public var displayName: String
     public var contentType: String
@@ -86,8 +86,8 @@ public struct HarnessThreadAsset: Codable, Equatable, Sendable, Identifiable {
 
     public init(
         id: String = UUID().uuidString,
-        threadID: String,
-        taskID: String? = nil,
+        conversationID: String,
+        agentID: String? = nil,
         eventID: String? = nil,
         displayName: String,
         contentType: String,
@@ -97,8 +97,8 @@ public struct HarnessThreadAsset: Codable, Equatable, Sendable, Identifiable {
         metadata: [String: String] = [:]
     ) {
         self.id = id
-        self.threadID = threadID
-        self.taskID = taskID
+        self.conversationID = conversationID
+        self.agentID = agentID
         self.eventID = eventID
         self.displayName = displayName
         self.contentType = contentType
@@ -111,8 +111,8 @@ public struct HarnessThreadAsset: Codable, Equatable, Sendable, Identifiable {
 
 public struct HarnessCompactionSnapshot: Codable, Equatable, Sendable, Identifiable {
     public var id: String
-    public var threadID: String
-    public var taskIDs: [String]
+    public var conversationID: String
+    public var agentIDs: [String]
     public var eventIDs: [String]
     public var assetIDs: [String]
     public var promptCharacterCount: Int
@@ -122,8 +122,8 @@ public struct HarnessCompactionSnapshot: Codable, Equatable, Sendable, Identifia
 
     public init(
         id: String = UUID().uuidString,
-        threadID: String,
-        taskIDs: [String],
+        conversationID: String,
+        agentIDs: [String],
         eventIDs: [String],
         assetIDs: [String],
         promptCharacterCount: Int,
@@ -132,8 +132,8 @@ public struct HarnessCompactionSnapshot: Codable, Equatable, Sendable, Identifia
         metadata: [String: String] = [:]
     ) {
         self.id = id
-        self.threadID = threadID
-        self.taskIDs = taskIDs
+        self.conversationID = conversationID
+        self.agentIDs = agentIDs
         self.eventIDs = eventIDs
         self.assetIDs = assetIDs
         self.promptCharacterCount = promptCharacterCount
@@ -143,51 +143,51 @@ public struct HarnessCompactionSnapshot: Codable, Equatable, Sendable, Identifia
     }
 }
 
-public protocol HarnessThreadStoring: Sendable {
-    func upsertThread(_ thread: HarnessThread) async
-    func thread(id: String) async -> HarnessThread?
-    func recentThreads(limit: Int) async -> [HarnessThread]
-    func appendEvent(_ event: HarnessThreadEvent) async
-    func events(threadID: String) async -> [HarnessThreadEvent]
-    func appendAsset(_ asset: HarnessThreadAsset) async
-    func assets(threadID: String) async -> [HarnessThreadAsset]
-    func upsertTaskSnapshot(_ task: HarnessTaskState) async
-    func taskSnapshot(id: String) async -> HarnessTaskState?
-    func taskSnapshots(threadID: String) async -> [HarnessTaskState]
-    func activeTaskSnapshots() async -> [HarnessTaskState]
-    func appendTaskEvent(_ event: HarnessTaskEvent) async
-    func taskEvents(taskID: String) async -> [HarnessTaskEvent]
+public protocol HarnessConversationStoring: Sendable {
+    func upsertConversation(_ conversation: HarnessConversation) async
+    func conversation(id: String) async -> HarnessConversation?
+    func recentConversations(limit: Int) async -> [HarnessConversation]
+    func appendEvent(_ event: HarnessConversationEvent) async
+    func events(conversationID: String) async -> [HarnessConversationEvent]
+    func appendAsset(_ asset: HarnessConversationAsset) async
+    func assets(conversationID: String) async -> [HarnessConversationAsset]
+    func upsertAgentSnapshot(_ agent: HarnessAgentState) async
+    func agentSnapshot(id: String) async -> HarnessAgentState?
+    func agentSnapshots(conversationID: String) async -> [HarnessAgentState]
+    func activeAgentSnapshots() async -> [HarnessAgentState]
+    func appendAgentEvent(_ event: HarnessAgentEvent) async
+    func agentEvents(agentID: String) async -> [HarnessAgentEvent]
     func appendCompactionSnapshot(_ snapshot: HarnessCompactionSnapshot) async
-    func compactionSnapshots(threadID: String, limit: Int) async -> [HarnessCompactionSnapshot]
+    func compactionSnapshots(conversationID: String, limit: Int) async -> [HarnessCompactionSnapshot]
 }
 
-public actor InMemoryHarnessThreadStore: HarnessThreadStoring {
-    private var threadsByID: [String: HarnessThread] = [:]
-    private var eventsByThreadID: [String: [HarnessThreadEvent]] = [:]
-    private var assetsByThreadID: [String: [HarnessThreadAsset]] = [:]
-    private var taskSnapshotsByID: [String: HarnessTaskState] = [:]
-    private var taskEventsByTaskID: [String: [HarnessTaskEvent]] = [:]
-    private var compactionSnapshotsByThreadID: [String: [HarnessCompactionSnapshot]] = [:]
+public actor InMemoryHarnessConversationStore: HarnessConversationStoring {
+    private var conversationsByID: [String: HarnessConversation] = [:]
+    private var eventsByConversationID: [String: [HarnessConversationEvent]] = [:]
+    private var assetsByConversationID: [String: [HarnessConversationAsset]] = [:]
+    private var agentSnapshotsByID: [String: HarnessAgentState] = [:]
+    private var agentEventsByAgentID: [String: [HarnessAgentEvent]] = [:]
+    private var compactionSnapshotsByConversationID: [String: [HarnessCompactionSnapshot]] = [:]
 
     public init() {}
 
-    public func upsertThread(_ thread: HarnessThread) {
-        threadsByID[thread.id] = thread
+    public func upsertConversation(_ conversation: HarnessConversation) {
+        conversationsByID[conversation.id] = conversation
     }
 
-    public func thread(id: String) -> HarnessThread? {
-        threadsByID[id]
+    public func conversation(id: String) -> HarnessConversation? {
+        conversationsByID[id]
     }
 
-    public func recentThreads(limit: Int) -> [HarnessThread] {
-        threadsByID.values
+    public func recentConversations(limit: Int) -> [HarnessConversation] {
+        conversationsByID.values
             .sorted { $0.updatedAt > $1.updatedAt }
             .prefix(max(0, limit))
             .map { $0 }
     }
 
-    public func appendEvent(_ event: HarnessThreadEvent) {
-        var events = eventsByThreadID[event.threadID] ?? []
+    public func appendEvent(_ event: HarnessConversationEvent) {
+        var events = eventsByConversationID[event.conversationID] ?? []
         if let existingIndex = events.firstIndex(where: { $0.id == event.id }) {
             events[existingIndex] = event
         } else {
@@ -199,140 +199,140 @@ public actor InMemoryHarnessThreadStore: HarnessThreadStoring {
             }
             return $0.sequence < $1.sequence
         }
-        eventsByThreadID[event.threadID] = events
+        eventsByConversationID[event.conversationID] = events
     }
 
-    public func events(threadID: String) -> [HarnessThreadEvent] {
-        eventsByThreadID[threadID] ?? []
+    public func events(conversationID: String) -> [HarnessConversationEvent] {
+        eventsByConversationID[conversationID] ?? []
     }
 
-    public func appendAsset(_ asset: HarnessThreadAsset) {
-        var assets = assetsByThreadID[asset.threadID] ?? []
+    public func appendAsset(_ asset: HarnessConversationAsset) {
+        var assets = assetsByConversationID[asset.conversationID] ?? []
         if let existingIndex = assets.firstIndex(where: { $0.id == asset.id }) {
             assets[existingIndex] = asset
         } else {
             assets.append(asset)
         }
         assets.sort { $0.createdAt < $1.createdAt }
-        assetsByThreadID[asset.threadID] = assets
+        assetsByConversationID[asset.conversationID] = assets
     }
 
-    public func assets(threadID: String) -> [HarnessThreadAsset] {
-        assetsByThreadID[threadID] ?? []
+    public func assets(conversationID: String) -> [HarnessConversationAsset] {
+        assetsByConversationID[conversationID] ?? []
     }
 
-    public func upsertTaskSnapshot(_ task: HarnessTaskState) {
-        taskSnapshotsByID[task.id] = task
-        updateActiveTaskIDs(for: task)
+    public func upsertAgentSnapshot(_ agent: HarnessAgentState) {
+        agentSnapshotsByID[agent.id] = agent
+        updateActiveAgentIDs(for: agent)
     }
 
-    public func taskSnapshot(id: String) -> HarnessTaskState? {
-        taskSnapshotsByID[id]
+    public func agentSnapshot(id: String) -> HarnessAgentState? {
+        agentSnapshotsByID[id]
     }
 
-    public func taskSnapshots(threadID: String) -> [HarnessTaskState] {
-        taskSnapshotsByID.values
-            .filter { $0.threadID == threadID }
+    public func agentSnapshots(conversationID: String) -> [HarnessAgentState] {
+        agentSnapshotsByID.values
+            .filter { $0.conversationID == conversationID }
             .sorted { $0.createdAt < $1.createdAt }
     }
 
-    public func activeTaskSnapshots() -> [HarnessTaskState] {
-        taskSnapshotsByID.values
-            .filter(Self.isActiveTask)
+    public func activeAgentSnapshots() -> [HarnessAgentState] {
+        agentSnapshotsByID.values
+            .filter(Self.isActiveAgent)
             .sorted { $0.createdAt < $1.createdAt }
     }
 
-    public func appendTaskEvent(_ event: HarnessTaskEvent) {
-        var events = taskEventsByTaskID[event.taskID] ?? []
+    public func appendAgentEvent(_ event: HarnessAgentEvent) {
+        var events = agentEventsByAgentID[event.agentID] ?? []
         if let existingIndex = events.firstIndex(where: { $0.id == event.id }) {
             events[existingIndex] = event
         } else {
             events.append(event)
         }
         events.sort { $0.createdAt < $1.createdAt }
-        taskEventsByTaskID[event.taskID] = events
+        agentEventsByAgentID[event.agentID] = events
     }
 
-    public func taskEvents(taskID: String) -> [HarnessTaskEvent] {
-        taskEventsByTaskID[taskID] ?? []
+    public func agentEvents(agentID: String) -> [HarnessAgentEvent] {
+        agentEventsByAgentID[agentID] ?? []
     }
 
     public func appendCompactionSnapshot(_ snapshot: HarnessCompactionSnapshot) {
-        var snapshots = compactionSnapshotsByThreadID[snapshot.threadID] ?? []
+        var snapshots = compactionSnapshotsByConversationID[snapshot.conversationID] ?? []
         if let existingIndex = snapshots.firstIndex(where: { $0.id == snapshot.id }) {
             snapshots[existingIndex] = snapshot
         } else {
             snapshots.append(snapshot)
         }
         snapshots.sort { $0.createdAt < $1.createdAt }
-        compactionSnapshotsByThreadID[snapshot.threadID] = snapshots
+        compactionSnapshotsByConversationID[snapshot.conversationID] = snapshots
     }
 
-    public func compactionSnapshots(threadID: String, limit: Int) -> [HarnessCompactionSnapshot] {
-        compactionSnapshotsByThreadID[threadID]?
+    public func compactionSnapshots(conversationID: String, limit: Int) -> [HarnessCompactionSnapshot] {
+        compactionSnapshotsByConversationID[conversationID]?
             .sorted { $0.createdAt > $1.createdAt }
             .prefix(max(0, limit))
             .map { $0 } ?? []
     }
 
-    private static func isActiveTask(_ task: HarnessTaskState) -> Bool {
-        [.running, .paused, .waitingForUser, .waitingForPermission, .interrupted, .resuming, .timedOut].contains(task.status)
+    private static func isActiveAgent(_ agent: HarnessAgentState) -> Bool {
+        [.running, .paused, .waitingForUser, .waitingForPermission, .interrupted, .resuming, .timedOut].contains(agent.status)
     }
 
-    private func updateActiveTaskIDs(for task: HarnessTaskState) {
-        guard var thread = threadsByID[task.threadID] else { return }
+    private func updateActiveAgentIDs(for agent: HarnessAgentState) {
+        guard var conversation = conversationsByID[agent.conversationID] else { return }
 
-        var activeTaskIDs = Set(thread.activeTaskIDs)
-        if Self.isActiveTask(task) {
-            activeTaskIDs.insert(task.id)
-            thread.status = .running
+        var activeAgentIDs = Set(conversation.activeAgentIDs)
+        if Self.isActiveAgent(agent) {
+            activeAgentIDs.insert(agent.id)
+            conversation.status = .running
         } else {
-            activeTaskIDs.remove(task.id)
-            if activeTaskIDs.isEmpty {
-                thread.status = task.status
+            activeAgentIDs.remove(agent.id)
+            if activeAgentIDs.isEmpty {
+                conversation.status = agent.status
             }
         }
-        thread.activeTaskIDs = activeTaskIDs.sorted()
-        thread.updatedAt = task.updatedAt
-        threadsByID[thread.id] = thread
+        conversation.activeAgentIDs = activeAgentIDs.sorted()
+        conversation.updatedAt = agent.updatedAt
+        conversationsByID[conversation.id] = conversation
     }
 }
 
-public actor FileHarnessThreadStore: HarnessThreadStoring {
+public actor FileHarnessConversationStore: HarnessConversationStoring {
     private let storeURL: URL
-    private var snapshot: HarnessThreadStoreSnapshot
+    private var snapshot: HarnessConversationStoreSnapshot
 
     public init(storeURL: URL? = nil) {
-        let resolvedStoreURL = storeURL ?? FileHarnessThreadStore.defaultStoreURL()
+        let resolvedStoreURL = storeURL ?? FileHarnessConversationStore.defaultStoreURL()
         self.storeURL = resolvedStoreURL
-        self.snapshot = FileHarnessThreadStore.loadSnapshot(from: resolvedStoreURL)
+        self.snapshot = FileHarnessConversationStore.loadSnapshot(from: resolvedStoreURL)
     }
 
     public static func defaultStoreURL() -> URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Donkey", isDirectory: true)
             .appendingPathComponent("HarnessStore", isDirectory: true)
-            .appendingPathComponent("store.json")
+            .appendingPathComponent("conversations.json")
     }
 
-    public func upsertThread(_ thread: HarnessThread) {
-        snapshot.threadsByID[thread.id] = thread
+    public func upsertConversation(_ conversation: HarnessConversation) {
+        snapshot.conversationsByID[conversation.id] = conversation
         save()
     }
 
-    public func thread(id: String) -> HarnessThread? {
-        snapshot.threadsByID[id]
+    public func conversation(id: String) -> HarnessConversation? {
+        snapshot.conversationsByID[id]
     }
 
-    public func recentThreads(limit: Int) -> [HarnessThread] {
-        snapshot.threadsByID.values
+    public func recentConversations(limit: Int) -> [HarnessConversation] {
+        snapshot.conversationsByID.values
             .sorted { $0.updatedAt > $1.updatedAt }
             .prefix(max(0, limit))
             .map { $0 }
     }
 
-    public func appendEvent(_ event: HarnessThreadEvent) {
-        var events = snapshot.eventsByThreadID[event.threadID] ?? []
+    public func appendEvent(_ event: HarnessConversationEvent) {
+        var events = snapshot.eventsByConversationID[event.conversationID] ?? []
         if let existingIndex = events.firstIndex(where: { $0.id == event.id }) {
             events[existingIndex] = event
         } else {
@@ -344,82 +344,82 @@ public actor FileHarnessThreadStore: HarnessThreadStoring {
             }
             return $0.sequence < $1.sequence
         }
-        snapshot.eventsByThreadID[event.threadID] = events
+        snapshot.eventsByConversationID[event.conversationID] = events
         save()
     }
 
-    public func events(threadID: String) -> [HarnessThreadEvent] {
-        snapshot.eventsByThreadID[threadID] ?? []
+    public func events(conversationID: String) -> [HarnessConversationEvent] {
+        snapshot.eventsByConversationID[conversationID] ?? []
     }
 
-    public func appendAsset(_ asset: HarnessThreadAsset) {
-        var assets = snapshot.assetsByThreadID[asset.threadID] ?? []
+    public func appendAsset(_ asset: HarnessConversationAsset) {
+        var assets = snapshot.assetsByConversationID[asset.conversationID] ?? []
         if let existingIndex = assets.firstIndex(where: { $0.id == asset.id }) {
             assets[existingIndex] = asset
         } else {
             assets.append(asset)
         }
         assets.sort { $0.createdAt < $1.createdAt }
-        snapshot.assetsByThreadID[asset.threadID] = assets
+        snapshot.assetsByConversationID[asset.conversationID] = assets
         save()
     }
 
-    public func assets(threadID: String) -> [HarnessThreadAsset] {
-        snapshot.assetsByThreadID[threadID] ?? []
+    public func assets(conversationID: String) -> [HarnessConversationAsset] {
+        snapshot.assetsByConversationID[conversationID] ?? []
     }
 
-    public func upsertTaskSnapshot(_ task: HarnessTaskState) {
-        snapshot.taskSnapshotsByID[task.id] = task
-        updateActiveTaskIDs(for: task)
+    public func upsertAgentSnapshot(_ agent: HarnessAgentState) {
+        snapshot.agentSnapshotsByID[agent.id] = agent
+        updateActiveAgentIDs(for: agent)
         save()
     }
 
-    public func taskSnapshot(id: String) -> HarnessTaskState? {
-        snapshot.taskSnapshotsByID[id]
+    public func agentSnapshot(id: String) -> HarnessAgentState? {
+        snapshot.agentSnapshotsByID[id]
     }
 
-    public func taskSnapshots(threadID: String) -> [HarnessTaskState] {
-        snapshot.taskSnapshotsByID.values
-            .filter { $0.threadID == threadID }
+    public func agentSnapshots(conversationID: String) -> [HarnessAgentState] {
+        snapshot.agentSnapshotsByID.values
+            .filter { $0.conversationID == conversationID }
             .sorted { $0.createdAt < $1.createdAt }
     }
 
-    public func activeTaskSnapshots() -> [HarnessTaskState] {
-        snapshot.taskSnapshotsByID.values
-            .filter(Self.isActiveTask)
+    public func activeAgentSnapshots() -> [HarnessAgentState] {
+        snapshot.agentSnapshotsByID.values
+            .filter(Self.isActiveAgent)
             .sorted { $0.createdAt < $1.createdAt }
     }
 
-    public func appendTaskEvent(_ event: HarnessTaskEvent) {
-        var events = snapshot.taskEventsByTaskID[event.taskID] ?? []
+    public func appendAgentEvent(_ event: HarnessAgentEvent) {
+        var events = snapshot.agentEventsByAgentID[event.agentID] ?? []
         if let existingIndex = events.firstIndex(where: { $0.id == event.id }) {
             events[existingIndex] = event
         } else {
             events.append(event)
         }
         events.sort { $0.createdAt < $1.createdAt }
-        snapshot.taskEventsByTaskID[event.taskID] = events
+        snapshot.agentEventsByAgentID[event.agentID] = events
         save()
     }
 
-    public func taskEvents(taskID: String) -> [HarnessTaskEvent] {
-        snapshot.taskEventsByTaskID[taskID] ?? []
+    public func agentEvents(agentID: String) -> [HarnessAgentEvent] {
+        snapshot.agentEventsByAgentID[agentID] ?? []
     }
 
     public func appendCompactionSnapshot(_ snapshot: HarnessCompactionSnapshot) {
-        var snapshots = self.snapshot.compactionSnapshotsByThreadID[snapshot.threadID] ?? []
+        var snapshots = self.snapshot.compactionSnapshotsByConversationID[snapshot.conversationID] ?? []
         if let existingIndex = snapshots.firstIndex(where: { $0.id == snapshot.id }) {
             snapshots[existingIndex] = snapshot
         } else {
             snapshots.append(snapshot)
         }
         snapshots.sort { $0.createdAt < $1.createdAt }
-        self.snapshot.compactionSnapshotsByThreadID[snapshot.threadID] = snapshots
+        self.snapshot.compactionSnapshotsByConversationID[snapshot.conversationID] = snapshots
         save()
     }
 
-    public func compactionSnapshots(threadID: String, limit: Int) -> [HarnessCompactionSnapshot] {
-        snapshot.compactionSnapshotsByThreadID[threadID]?
+    public func compactionSnapshots(conversationID: String, limit: Int) -> [HarnessCompactionSnapshot] {
+        snapshot.compactionSnapshotsByConversationID[conversationID]?
             .sorted { $0.createdAt > $1.createdAt }
             .prefix(max(0, limit))
             .map { $0 } ?? []
@@ -441,45 +441,45 @@ public actor FileHarnessThreadStore: HarnessThreadStoring {
         }
     }
 
-    private static func loadSnapshot(from url: URL) -> HarnessThreadStoreSnapshot {
+    private static func loadSnapshot(from url: URL) -> HarnessConversationStoreSnapshot {
         guard let data = try? Data(contentsOf: url) else {
-            return HarnessThreadStoreSnapshot()
+            return HarnessConversationStoreSnapshot()
         }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode(HarnessThreadStoreSnapshot.self, from: data)) ?? HarnessThreadStoreSnapshot()
+        return (try? decoder.decode(HarnessConversationStoreSnapshot.self, from: data)) ?? HarnessConversationStoreSnapshot()
     }
 
-    private static func isActiveTask(_ task: HarnessTaskState) -> Bool {
-        [.running, .paused, .waitingForUser, .waitingForPermission, .interrupted, .resuming, .timedOut].contains(task.status)
+    private static func isActiveAgent(_ agent: HarnessAgentState) -> Bool {
+        [.running, .paused, .waitingForUser, .waitingForPermission, .interrupted, .resuming, .timedOut].contains(agent.status)
     }
 
-    private func updateActiveTaskIDs(for task: HarnessTaskState) {
-        guard var thread = snapshot.threadsByID[task.threadID] else { return }
+    private func updateActiveAgentIDs(for agent: HarnessAgentState) {
+        guard var conversation = snapshot.conversationsByID[agent.conversationID] else { return }
 
-        var activeTaskIDs = Set(thread.activeTaskIDs)
-        if Self.isActiveTask(task) {
-            activeTaskIDs.insert(task.id)
-            thread.status = .running
+        var activeAgentIDs = Set(conversation.activeAgentIDs)
+        if Self.isActiveAgent(agent) {
+            activeAgentIDs.insert(agent.id)
+            conversation.status = .running
         } else {
-            activeTaskIDs.remove(task.id)
-            if activeTaskIDs.isEmpty {
-                thread.status = task.status
+            activeAgentIDs.remove(agent.id)
+            if activeAgentIDs.isEmpty {
+                conversation.status = agent.status
             }
         }
-        thread.activeTaskIDs = activeTaskIDs.sorted()
-        thread.updatedAt = task.updatedAt
-        snapshot.threadsByID[thread.id] = thread
+        conversation.activeAgentIDs = activeAgentIDs.sorted()
+        conversation.updatedAt = agent.updatedAt
+        snapshot.conversationsByID[conversation.id] = conversation
     }
 }
 
-private struct HarnessThreadStoreSnapshot: Codable {
-    var threadsByID: [String: HarnessThread] = [:]
-    var eventsByThreadID: [String: [HarnessThreadEvent]] = [:]
-    var assetsByThreadID: [String: [HarnessThreadAsset]] = [:]
-    var taskSnapshotsByID: [String: HarnessTaskState] = [:]
-    var taskEventsByTaskID: [String: [HarnessTaskEvent]] = [:]
-    var compactionSnapshotsByThreadID: [String: [HarnessCompactionSnapshot]] = [:]
+private struct HarnessConversationStoreSnapshot: Codable {
+    var conversationsByID: [String: HarnessConversation] = [:]
+    var eventsByConversationID: [String: [HarnessConversationEvent]] = [:]
+    var assetsByConversationID: [String: [HarnessConversationAsset]] = [:]
+    var agentSnapshotsByID: [String: HarnessAgentState] = [:]
+    var agentEventsByAgentID: [String: [HarnessAgentEvent]] = [:]
+    var compactionSnapshotsByConversationID: [String: [HarnessCompactionSnapshot]] = [:]
 }
 
 public struct HarnessCompactionPolicy: Codable, Equatable, Sendable {
@@ -490,6 +490,12 @@ public struct HarnessCompactionPolicy: Codable, Equatable, Sendable {
     public var maxEventCharacters: Int
     public var maxPromptCharacters: Int
     public var preserveWaitingState: Bool
+    /// When the rendered rolling context grows past this, fold the older turns into a fresh summary
+    /// event. Kept below `maxPromptCharacters` so compaction happens before blunt truncation would bite.
+    public var summaryTriggerCharacters: Int
+    /// Minimum new events between two summary events, so the loop does not re-summarize every step once
+    /// it is hovering near the trigger.
+    public var minEventsBetweenSummaries: Int
 
     public init(
         maxEvents: Int = 12,
@@ -498,7 +504,9 @@ public struct HarnessCompactionPolicy: Codable, Equatable, Sendable {
         maxAssets: Int = 6,
         maxEventCharacters: Int = 1_000,
         maxPromptCharacters: Int = 8_000,
-        preserveWaitingState: Bool = true
+        preserveWaitingState: Bool = true,
+        summaryTriggerCharacters: Int = 6_000,
+        minEventsBetweenSummaries: Int = 6
     ) {
         self.maxEvents = max(0, maxEvents)
         self.maxPinnedEvents = max(0, maxPinnedEvents)
@@ -507,41 +515,43 @@ public struct HarnessCompactionPolicy: Codable, Equatable, Sendable {
         self.maxEventCharacters = max(1, maxEventCharacters)
         self.maxPromptCharacters = max(1, maxPromptCharacters)
         self.preserveWaitingState = preserveWaitingState
+        self.summaryTriggerCharacters = max(1, summaryTriggerCharacters)
+        self.minEventsBetweenSummaries = max(1, minEventsBetweenSummaries)
     }
 }
 
-public struct HarnessCompactedThreadContext: Codable, Equatable, Sendable {
-    public var thread: HarnessThread
+public struct HarnessCompactedConversationContext: Codable, Equatable, Sendable {
+    public var conversation: HarnessConversation
     public var currentTurn: AppHarnessTurn?
-    public var events: [HarnessThreadEvent]
-    public var assets: [HarnessThreadAsset]
-    public var activeTasks: [HarnessTaskState]
+    public var events: [HarnessConversationEvent]
+    public var assets: [HarnessConversationAsset]
+    public var activeAgents: [HarnessAgentState]
     public var promptText: String
     public var compactionRecords: [AppHarnessContextCompactionRecord]
     public var metadata: [String: String]
 
     public init(
-        thread: HarnessThread,
+        conversation: HarnessConversation,
         currentTurn: AppHarnessTurn? = nil,
-        events: [HarnessThreadEvent],
-        assets: [HarnessThreadAsset],
-        activeTasks: [HarnessTaskState],
+        events: [HarnessConversationEvent],
+        assets: [HarnessConversationAsset],
+        activeAgents: [HarnessAgentState],
         promptText: String,
         compactionRecords: [AppHarnessContextCompactionRecord],
         metadata: [String: String] = [:]
     ) {
-        self.thread = thread
+        self.conversation = conversation
         self.currentTurn = currentTurn
         self.events = events
         self.assets = assets
-        self.activeTasks = activeTasks
+        self.activeAgents = activeAgents
         self.promptText = promptText
         self.compactionRecords = compactionRecords
         self.metadata = metadata
     }
 }
 
-public struct HarnessThreadCompactor: Sendable {
+public struct HarnessConversationCompactor: Sendable {
     public var policy: HarnessCompactionPolicy
 
     public init(policy: HarnessCompactionPolicy = HarnessCompactionPolicy()) {
@@ -549,12 +559,12 @@ public struct HarnessThreadCompactor: Sendable {
     }
 
     public func compact(
-        thread: HarnessThread,
+        conversation: HarnessConversation,
         currentTurn: AppHarnessTurn? = nil,
-        events: [HarnessThreadEvent],
-        assets: [HarnessThreadAsset],
-        activeTasks: [HarnessTaskState]
-    ) -> HarnessCompactedThreadContext {
+        events: [HarnessConversationEvent],
+        assets: [HarnessConversationAsset],
+        activeAgents: [HarnessAgentState]
+    ) -> HarnessCompactedConversationContext {
         var records: [AppHarnessContextCompactionRecord] = []
         let selectedEvents = compactEvents(events, records: &records)
         let selectedAssets = Array(assets.sorted { $0.createdAt > $1.createdAt }.prefix(policy.maxAssets))
@@ -568,13 +578,13 @@ public struct HarnessThreadCompactor: Sendable {
             )
         )
 
-        let selectedTasks = compactTasks(activeTasks, records: &records)
+        let selectedAgents = compactAgents(activeAgents, records: &records)
         let unboundedPrompt = promptText(
-            thread: thread,
+            conversation: conversation,
             currentTurn: currentTurn,
             events: selectedEvents,
             assets: selectedAssets,
-            activeTasks: selectedTasks
+            activeAgents: selectedAgents
         )
         let boundedPrompt = bounded(unboundedPrompt, maxCharacters: policy.maxPromptCharacters)
         records.append(
@@ -587,29 +597,29 @@ public struct HarnessThreadCompactor: Sendable {
             )
         )
 
-        return HarnessCompactedThreadContext(
-            thread: thread,
+        return HarnessCompactedConversationContext(
+            conversation: conversation,
             currentTurn: currentTurn,
             events: selectedEvents,
             assets: selectedAssets,
-            activeTasks: selectedTasks,
+            activeAgents: selectedAgents,
             promptText: boundedPrompt,
             compactionRecords: records,
             metadata: [
-                "threadStore": "generic-harness",
+                "conversationStore": "generic-harness",
                 "compactor": "smart-priority-v1",
                 "promptTruncated": String(unboundedPrompt.count > boundedPrompt.count),
                 "eventCount": String(selectedEvents.count),
                 "assetCount": String(selectedAssets.count),
-                "activeTaskCount": String(selectedTasks.count)
+                "activeTaskCount": String(selectedAgents.count)
             ]
         )
     }
 
     private func compactEvents(
-        _ events: [HarnessThreadEvent],
+        _ events: [HarnessConversationEvent],
         records: inout [AppHarnessContextCompactionRecord]
-    ) -> [HarnessThreadEvent] {
+    ) -> [HarnessConversationEvent] {
         let sorted = events.sorted {
             if $0.sequence == $1.sequence {
                 return $0.createdAt < $1.createdAt
@@ -648,13 +658,13 @@ public struct HarnessThreadCompactor: Sendable {
         return selected
     }
 
-    private func compactTasks(
-        _ tasks: [HarnessTaskState],
+    private func compactAgents(
+        _ tasks: [HarnessAgentState],
         records: inout [AppHarnessContextCompactionRecord]
-    ) -> [HarnessTaskState] {
-        let selected = tasks.filter { task in
+    ) -> [HarnessAgentState] {
+        let selected = tasks.filter { agent in
             guard policy.preserveWaitingState else { return true }
-            return [.running, .paused, .waitingForUser, .waitingForPermission, .interrupted, .resuming, .timedOut].contains(task.status)
+            return [.running, .paused, .waitingForUser, .waitingForPermission, .interrupted, .resuming, .timedOut].contains(agent.status)
         }
         records.append(
             AppHarnessContextCompactionRecord(
@@ -669,24 +679,24 @@ public struct HarnessThreadCompactor: Sendable {
     }
 
     private func promptText(
-        thread: HarnessThread,
+        conversation: HarnessConversation,
         currentTurn: AppHarnessTurn?,
-        events: [HarnessThreadEvent],
-        assets: [HarnessThreadAsset],
-        activeTasks: [HarnessTaskState]
+        events: [HarnessConversationEvent],
+        assets: [HarnessConversationAsset],
+        activeAgents: [HarnessAgentState]
     ) -> String {
         var lines: [String] = [
-            "Thread: \(thread.title)",
-            "Thread status: \(thread.status.rawValue)"
+            "Conversation: \(conversation.title)",
+            "Conversation status: \(conversation.status.rawValue)"
         ]
         if let currentTurn {
             lines.append("Current turn: \(currentTurn.text)")
         }
-        if !activeTasks.isEmpty {
-            lines.append("Active tasks:")
-            for task in activeTasks {
-                lines.append("- \(task.id) status=\(task.status.rawValue) goal=\(task.goal)")
-                if let continuation = task.pendingContinuation {
+        if !activeAgents.isEmpty {
+            lines.append("Active agents:")
+            for agent in activeAgents {
+                lines.append("- \(agent.id) status=\(agent.status.rawValue) goal=\(agent.goal)")
+                if let continuation = agent.pendingContinuation {
                     lines.append("  pending=\(continuation.stage.rawValue) reason=\(continuation.reason)")
                     if let question = continuation.question {
                         lines.append("  question=\(question)")
@@ -698,7 +708,7 @@ public struct HarnessThreadCompactor: Sendable {
             }
         }
         if !events.isEmpty {
-            lines.append("Thread events:")
+            lines.append("Conversation events:")
             for event in events {
                 lines.append("- [\(event.sequence)] \(event.role.rawValue): \(event.text)")
             }
