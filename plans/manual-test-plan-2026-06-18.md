@@ -157,10 +157,10 @@ Do this once before the runs below.
 - **E:** File written (default `~/Downloads`). PDF: `qpdf --show-npages` ≥ 1 (or `file` says PDF). PNG: `sips -g pixelWidth -g pixelHeight` returns dimensions. No external browser launched; no consent prompt (offscreen WKWebView).
 - **Static analysis:** ✅ Verified — command registered `DonkeyCommandLayer.swift:118-132`; offscreen WKWebView → PDF/PNG, `~/Downloads` default, destination hardening. ⚠️ The 25s load timeout isn't an obvious named constant in the read — watch behavior on a slow page.
 
-### C7 — Capability skills discoverable + tool probe
+### C7 — Capability skills discoverable
 - **S:** Confirm the five new skills are present/discoverable: `media`, `images`, `pdf`, `data`, `web-capture`. Trigger each with a natural ask and confirm it routes (e.g. "convert this CSV" → `data`; "capture this page" → `web-capture`).
-- **E:** Each skill is found by skill search; the ENVIRONMENT tool list shows bundled tools (`ffmpeg`, `yt-dlp`, `lit`, `qpdf`, `exiftool`, `pdf-fill`) as always-present, and optional tools (`magick`, `jq`, `mlr`, `pandoc`) reported only when installed.
-- **Static analysis:** ✅ Verified (with caveat) — all five `SKILL.md` files exist under `…/Resources/BuiltInSkills/`; `SystemToolCapabilityProbe.swift:17-20` lists the optional tools. ⚠️ The stale `.build/` bundle is missing the new skills — **build clean** so they load (see summary caveat 2).
+- **E:** Each skill is found by skill search. Bundled tools (`ffmpeg`, `yt-dlp`, `lit`, `qpdf`, `exiftool`, `pdf-fill`) run by bare name with no consent prompt; an optional tool (`magick`, `jq`, `mlr`, `pandoc`) that isn't installed fails with `command not found` and the skill falls back — availability is discovered by running, not from a pre-built inventory.
+- **Static analysis:** ✅ Verified — all five `SKILL.md` files exist under `…/Resources/BuiltInSkills/`. The capability probe was removed, so there is no ENVIRONMENT tool list to check. ⚠️ The stale `.build/` bundle is missing the new skills — **build clean** so they load (see summary caveat 2).
 
 ### C8 — On-device voice transcription + Gemini fallback
 - **S (on-device):** With network on and macOS speech available, use the voice button to dictate a sentence.

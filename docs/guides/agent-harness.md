@@ -188,15 +188,21 @@ by its argv tokens (typed fields, never natural language) into a risk tier:
 | **highRisk** | `sudo`, `rm`, `dd`, `curl \| sh`, anything touching `com.apple.TCC` | asks every time, can never be remembered |
 
 Consent surfaces in the pointer/notch overlay and reuses the standard
-`waitingForPermission` gate. A capability probe records which command-line
-tools (and versions) exist on the machine, so the planner only reaches for
-what's installed.
+`waitingForPermission` gate. The planner discovers what's available by *doing*,
+not from a pre-built inventory: it runs the command it needs by bare name, and a
+`command not found` failure is just another observation it adapts to — reaching
+for another tool or reporting what's missing. It never pre-probes the machine and
+never installs anything.
 
 Broad capability skills extend this power-user surface beyond the tools macOS
 ships — media (`yt-dlp`, `ffmpeg`), images, PDF/document conversion, data
 manipulation, and web capture. The uncommon command-line tools those skills
 rely on are bundled inside the signed app, so the capability works without the
-user installing anything.
+user installing anything. Because they ship signed as a first-party surface,
+the classifier treats those bundled tools as `read` — they run immediately,
+without a consent prompt, even when they write an output file or fetch the URL
+the user named. The planner never installs software or uses a package manager;
+a missing tool is reported, not fetched.
 
 ## Observation and Action (Computer Use)
 

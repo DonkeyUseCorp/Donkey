@@ -6,9 +6,10 @@ tags: video, audio, media, download, convert, youtube, subtitles, transcribe
 keywords: video, audio, download, youtube, vimeo, mp4, mp3, convert, trim, clip, extract audio, transcode, frame, subtitle, subtitles, caption, captions, transcribe, transcript, translate, srt, vtt
 tools: shell_exec, llm.generate
 
-`yt-dlp` and `ffmpeg`/`ffprobe` are bundled and on the PATH, so use them by bare
-name. Downloading and writing files is reversible — propose the command and let
-the consent gate handle approval; do not fall back to a browser.
+`yt-dlp` and `ffmpeg`/`ffprobe` are bundled, signed, and on the PATH, so use them
+by bare name. They are first-party capability tools: downloading from the user's
+URL and writing the output file run immediately, with no consent prompt — just
+issue the command, and never fall back to a browser to download.
 
 Never probe for or install Homebrew (or any package manager), and never check
 whether these tools exist first — just run them by bare name. The app installs

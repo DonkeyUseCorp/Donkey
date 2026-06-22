@@ -20,7 +20,7 @@ happen in Preview. Creating files is reversible (consent gate).
 
 ## Convert document formats (textutil, built into macOS)
 - `textutil` converts among txt, html, rtf, doc, docx, odt with no extra tools: `textutil -convert docx in.html -output out.docx`, `textutil -convert txt in.docx -output out.txt`, `textutil -convert html in.rtf -output out.html`.
-- Markdown, LaTeX, and EPUB are NOT covered by textutil and need `pandoc`, which is not bundled — use it only when the ENVIRONMENT lists it (`pandoc in.md -o out.docx`); otherwise say plainly that those formats need pandoc installed.
+- Markdown, LaTeX, and EPUB are NOT covered by textutil and need `pandoc`, which is not bundled — run `pandoc in.md -o out.docx` directly, and if it isn't installed (`command not found`), say plainly that those formats need pandoc installed.
 - To make a PDF from a document: convert it to HTML with textutil, then render that HTML to PDF via the `web-capture` skill (headless print).
 
 ## Extract text or structured data from a PDF — use liteparse (`lit`)

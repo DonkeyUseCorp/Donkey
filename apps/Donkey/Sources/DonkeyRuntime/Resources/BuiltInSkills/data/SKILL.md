@@ -8,8 +8,8 @@ tools: shell_exec
 
 `python3` and `sqlite3` ship with macOS — lead with them so a task never depends
 on an uninstalled tool. `jq` and `mlr` are nicer for one-liners but are not
-guaranteed; check the ENVIRONMENT tool list before reaching for them. Writing an
-output file is reversible (consent gate).
+guaranteed; reach for them directly and fall back to `python3` if the command
+isn't found. Writing an output file is reversible (consent gate).
 
 ## python3 — the always-available workhorse (stdlib csv + json)
 - CSV to JSON: `python3 -c "import csv,json,sys; json.dump(list(csv.DictReader(open('in.csv'))), sys.stdout, indent=2)" > out.json`.
@@ -20,7 +20,7 @@ output file is reversible (consent gate).
 ## sqlite3 — SQL over a CSV without a database
 - `sqlite3 :memory: -cmd '.mode csv' -cmd '.import in.csv t' 'select category, count(*) from t group by category'`.
 
-## jq / mlr — only when the ENVIRONMENT block lists them
+## jq / mlr — try them, fall back to python3 if not installed
 - Filter/reshape JSON: `jq '.items[] | {name, id}' in.json`.
 - CSV↔JSON: `mlr --c2j cat in.csv`, `mlr --j2c cat in.json`.
 

@@ -9,9 +9,9 @@ tools: shell_exec, image.edit, image.generate, files.describe
 Two kinds of work: mechanical pixels (size, format, crop, metadata) use the local
 tools; semantic changes (remove a background, restyle, add or remove an object,
 match another photo's look, make an image from scratch) use the generative
-`image.*` tools. `sips` and `exiftool` are bundled; `magick` (ImageMagick) only when
-installed (check the ENVIRONMENT tool list). Editing in place is reversible (consent
-gate); a new `--out` path is safer — prefer it when the original should survive.
+`image.*` tools. `sips` and `exiftool` are bundled; reach for `magick` (ImageMagick)
+directly and fall back to `sips` if it isn't installed. Editing in place is reversible
+(consent gate); a new `--out` path is safer — prefer it when the original should survive.
 
 ## sips — resize, convert, rotate (writes a new file with --out)
 - Resize to a max dimension, aspect preserved: `sips -Z 1024 in.jpg --out small.jpg`.
@@ -22,7 +22,7 @@ gate); a new `--out` path is safer — prefer it when the original should surviv
 
 ## magick — crop, composite (only if installed)
 - Crop a region WxH+X+Y: `magick in.png -crop 200x200+0+0 out.png`.
-- If `magick` is not in the ENVIRONMENT list, do what `sips` can and say plainly what needs ImageMagick; do not pretend it ran.
+- If `magick` isn't installed (the command fails with `command not found`), do what `sips` can and say plainly what needs ImageMagick; do not pretend it ran.
 
 ## exiftool — read and strip metadata
 - Read all metadata: `exiftool in.jpg`. One tag: `exiftool -GPSLatitude -GPSLongitude in.jpg`.
