@@ -55,19 +55,38 @@ to know what to fetch). It runs on demand and whenever the tools recipe changes.
 Every tool is re-signed during the build: relocating their bundled libraries
 invalidates the original signature, and macOS will not run an unsigned binary on
 Apple Silicon. Without the secrets below the tools are only ad-hoc signed — fine
-for local development, not for distribution. Set these repository secrets to
-produce a signed, notarized bundle:
-
-- `DONKEY_DEVELOPER_ID_CERT_P12` / `DONKEY_DEVELOPER_ID_CERT_PASSWORD` — the
-  Developer ID Application certificate (base64-encoded `.p12`) and its password.
-- `DONKEY_TOOLS_SIGN_IDENTITY` — the identity to sign with, e.g.
-  `Developer ID Application: Your Name (TEAMID)`.
-- `DONKEY_NOTARY_KEY_P8` (base64 App Store Connect API key `.p8`),
-  `DONKEY_NOTARY_KEY_ID`, `DONKEY_NOTARY_ISSUER_ID` — the notarization credentials.
+for local development, not for distribution.
 
 Standalone CLI binaries cannot be stapled (only app/dmg/pkg bundles can), so
 notarization here is the online proof that the Developer ID signature is good;
 the signature itself is what lets the downloaded tools run.
+
+### Obtaining the signing secrets
+
+Everything comes from two things created in your Apple Developer account (paid
+program required; the certificate can only be created by the account
+Holder/Admin). An **Apple Development** certificate is the wrong kind — Gatekeeper
+and notarytool reject it; you need **Developer ID Application**.
+
+1. **Developer ID Application certificate.** Create it in Xcode: Settings →
+   Accounts → your team → Manage Certificates → `+` → Developer ID Application. It
+   installs into your login keychain (it is not downloaded as a file). In Keychain
+   Access, expand it to reveal its private key, select **both**, and export a
+   `.p12` (you choose the password). `security find-identity -v -p codesigning`
+   prints the identity string.
+   - `DONKEY_DEVELOPER_ID_CERT_P12` = `base64 -i cert.p12`
+   - `DONKEY_DEVELOPER_ID_CERT_PASSWORD` = the export password
+   - `DONKEY_TOOLS_SIGN_IDENTITY` = the identity, e.g. `Developer ID Application: Name (TEAMID)`
+2. **App Store Connect API key** (notarization), from App Store Connect → Users
+   and Access → Integrations → App Store Connect API. Download the `.p8` (offered
+   once) and read the Key ID and Issuer ID off the page.
+   - `DONKEY_NOTARY_KEY_P8` = `base64 -i AuthKey_XXXX.p8`
+   - `DONKEY_NOTARY_KEY_ID` = the key's Key ID
+   - `DONKEY_NOTARY_ISSUER_ID` = the Issuer ID
+
+Before adding the secrets, confirm you have the right certificate:
+`security find-identity -v -p codesigning` should list a `Developer ID
+Application` line — an Apple Development cert will not work.
 
 ## One-Time Sparkle Setup
 
