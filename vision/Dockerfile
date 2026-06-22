@@ -39,6 +39,16 @@ RUN pip install --upgrade pip \
 # changes and the pattern stops matching.
 RUN python -c "import re,pathlib,sys; p=pathlib.Path('util/utils.py'); s=p.read_text(); s2=re.sub(r'paddle_ocr = PaddleOCR\(.*?\)','paddle_ocr = None',s,count=1,flags=re.S); p.write_text(s2) if s2!=s else sys.exit('paddle_ocr stub failed: pattern not found in util/utils.py')"
 
+# remove_overlap_new appends a raw [x1,y1,x2,y2] list (box1) instead of a dict in
+# its no-OCR branch. When YOLO finds icons but OCR returns zero text boxes (the
+# 'no ocr bbox!!!' path, common on sparse/textless UI regions), get_som_labeled_img
+# then does `sorted(filtered_boxes, key=lambda x: x['content'] ...)` and crashes with
+# TypeError: list indices must be integers or slices, not str. Patch that one branch
+# to append the same dict shape the OCR branch uses (content=None, captioning fills
+# it in). Anchor on the preceding dict-close + else so we touch only remove_overlap_new,
+# not the unused legacy remove_overlap. Fails the build loudly if upstream changes.
+RUN python -c "import re,pathlib,sys; p=pathlib.Path('util/utils.py'); s=p.read_text(); pat=r'(\}\)\n            else:\n                filtered_boxes\.append\()box1(\))'; repl=r\"\1{'type': 'icon', 'bbox': box1_elem['bbox'], 'interactivity': True, 'content': None, 'source':'box_yolo_content_yolo'}\2\"; s2,n=re.subn(pat,repl,s,count=1); p.write_text(s2) if n==1 else sys.exit('remove_overlap_new no-ocr patch failed: pattern not found in util/utils.py')"
+
 # Bake OmniParser V2 weights into the image so workers don't download on cold
 # start. icon_detect (YOLO) weights are AGPL-3.0; icon_caption is MIT.
 RUN mkdir -p weights && \
