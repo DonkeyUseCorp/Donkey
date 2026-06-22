@@ -103,9 +103,9 @@ decision is made.
 - Scriptable app tasks prefer guarded AppleScript before Accessibility, AI
   visual targets, or keyboard input. Completion is verified through the
   generic verification policy, not visible result text for every app.
-- Thread contents persist as markdown under Application Support
-  (`Threads/<id>/thread.md`); Core Data stores durable task metadata, events,
-  and assets for per-run runtime coordination.
+- Conversation contents persist as markdown under Application Support
+  (`Conversations/<id>/conversation.md`); Core Data stores durable conversation
+  metadata, events, and assets for per-run runtime coordination.
 - Command handling emits actionable `com.donkey.app` route/result logs:
   submitted commands, routing decisions, action traces (backend, input mode,
   whether an element click happened, the control or bounds target, and that

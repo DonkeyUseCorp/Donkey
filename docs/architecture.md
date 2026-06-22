@@ -73,9 +73,9 @@ in `guides/agent-harness.md` — it is not repeated here.
 
 | Store | Holds |
 |---|---|
-| Thread markdown (`App Support/Donkey/Threads/<id>/thread.md`) | conversation contents and full reasoning/tool trace ([how to write it](guides/thread-record.md)) |
-| Core Data | durable task metadata, events, and assets for per-run coordination |
-| Task and compaction snapshots | execution state, and exactly what context each model decision saw |
+| Conversation markdown (`App Support/Donkey/Conversations/<id>/conversation.md`) | conversation contents and full reasoning/tool trace ([how to write it](guides/conversation-record.md)) |
+| Core Data | durable conversation metadata, events, and assets for per-run coordination |
+| Agent and compaction snapshots | execution state, and exactly what context each model decision saw |
 | Agent memory (SQLite, FTS5 + local vectors) | local-item records, negative lookups, runtime task definitions, bounded harness hints |
 | Learned skill packs (app-support skills directory) | promoted playbooks and validated scripts |
 

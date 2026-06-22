@@ -18,7 +18,8 @@ Supported product and engineering guides live in `docs/guides/`. This list is th
 - [Agent Harness](guides/agent-harness.md) — the runtime loop that turns a request into completed work: plan, act, verify, recover, and the safety invariants.
 - [Harness Deep Dive](guides/harness-deep-dive.md) — subsystem mechanics, one level below the architecture loop.
 - [Decision System](guides/decision-system.md) — how a turn becomes a conversation, a question, a permission request, or guarded action, and what counts as done.
-- [Thread Record](guides/thread-record.md) — the per-task `thread.md` conversation and trace: what gets written, the entry kinds, and the one-writer append-only rules.
+- [Conversation Record](guides/conversation-record.md) — the per-conversation `conversation.md` record and trace: what gets written, the entry kinds, and the one-writer append-only rules.
+- [Context Compaction](guides/context-compaction.md) — how a long conversation is kept whole on disk while each step gets a bounded rolling slice (recent events plus a rolling summary), and how the end-of-run summary is written.
 - [Donkey Vision](guides/donkey-vision.md) — the observation layer that turns on-screen windows into structured UI the agent can reason about.
 - [Background Input](guides/background-input.md) — driving an app without taking over the cursor or raising it: the foreground/background decision and the delivery lanes.
 
