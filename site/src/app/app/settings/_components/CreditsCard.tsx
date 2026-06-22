@@ -15,6 +15,8 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatUsd } from "@/lib/credits/format-usd";
 import {
+  creditTopUpDefaultDollars,
+  creditTopUpMaxDollars,
   creditTopUpMinDollars,
   creditTopUpPresetsDollars,
 } from "@/lib/credits/top-up";
@@ -39,7 +41,9 @@ export function CreditsCard() {
 
   const customValue = Number.parseInt(customAmount, 10);
   const customValid =
-    Number.isFinite(customValue) && customValue >= creditTopUpMinDollars;
+    Number.isFinite(customValue) &&
+    customValue >= creditTopUpMinDollars &&
+    customValue <= creditTopUpMaxDollars;
 
   return (
     <Card>
@@ -66,10 +70,11 @@ export function CreditsCard() {
           <div className="flex flex-wrap gap-2">
             {creditTopUpPresetsDollars.map((amount) => (
               <Button
+                className={customAmount === String(amount) ? undefined : "bg-card"}
                 disabled={checkout.isPending}
                 key={amount}
-                onClick={() => startCheckout(amount)}
-                variant="outline"
+                onClick={() => setCustomAmount(String(amount))}
+                variant={customAmount === String(amount) ? "default" : "outline"}
               >
                 ${amount}
               </Button>
@@ -78,13 +83,14 @@ export function CreditsCard() {
           <div className="flex items-end gap-2">
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground" htmlFor="custom-amount">
-                Custom amount (USD)
+                Amount (USD)
               </Label>
               <Input
                 className="w-32"
                 id="custom-amount"
                 inputMode="numeric"
-                min={5}
+                max={creditTopUpMaxDollars}
+                min={creditTopUpMinDollars}
                 onChange={(event) => setCustomAmount(event.target.value)}
                 placeholder="50"
                 type="number"
@@ -106,7 +112,7 @@ export function CreditsCard() {
         </div>
 
         <AutoReloadSection
-          onNeedsCard={() => startCheckout(creditTopUpPresetsDollars[1])}
+          onNeedsCard={() => startCheckout(creditTopUpDefaultDollars)}
         />
       </CardContent>
     </Card>
@@ -179,7 +185,7 @@ function AutoReloadSection({ onNeedsCard }: { onNeedsCard: () => void }) {
           <span>$</span>
           <Input
             className="w-20"
-            defaultValue={data?.amountDollars ?? 25}
+            defaultValue={data?.amountDollars ?? creditTopUpDefaultDollars}
             min={5}
             name="amount"
             type="number"

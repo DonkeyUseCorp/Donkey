@@ -49,9 +49,8 @@ export function ProCard() {
           ) : null}
         </CardTitle>
         <CardDescription>
-          A monthly usage allowance for the Donkey app. The included
-          allowance is spent before your purchased credits, and resets each
-          month.
+          A monthly usage allowance for the Donkey app that resets each
+          month. You can still buy credits any time.
         </CardDescription>
       </CardHeader>
       <CardContent className="text-sm text-muted-foreground">
@@ -75,8 +74,8 @@ export function ProCard() {
           </div>
         ) : (
           <p>
-            Subscribe to include a monthly usage allowance. You can still buy
-            credits any time; the included allowance is used first.
+            You&apos;re not subscribed. Subscribe to get a monthly included
+            allowance for the app; you can still buy credits any time.
           </p>
         )}
       </CardContent>

@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { creditMicrosToString, creditStringToMicros } from "@/lib/credits/amounts";
 import { getCreditBalance, grantCredits } from "@/lib/credits/inference";
+import { maxCreditGrantDollars } from "@/lib/credits/top-up";
 import {
   isDonkeySuperUser,
   notFoundResponse,
@@ -12,11 +13,12 @@ import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
-// The target is identified by userId (e.g. "+$100 to me") or by email (the
-// grant-to-user form). At least one is required.
+// The target is identified by userId (grant to self) or by email (grant to
+// another user). At least one is required. A single grant is capped to guard
+// against typos.
 const creditGrantRequestSchema = z
   .object({
-    amountDollars: z.coerce.number().int().positive().max(100),
+    amountDollars: z.coerce.number().int().positive().max(maxCreditGrantDollars),
     description: z.string().trim().min(1).max(500).optional(),
     email: z.string().trim().email().optional(),
     sourceId: z.string().trim().min(1).max(160).optional(),
