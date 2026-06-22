@@ -137,6 +137,10 @@ public final class FrontmostVisionWarmCache {
         // Nothing to keep warm while signed out — the parse would only 401. Skip the expensive capture
         // entirely rather than spending it on a doomed backend call.
         guard BackendSessionGate.shared.isAuthenticated else { return }
+        // Only warm around real Donkey use. While the user isn't engaging Donkey (no task running and
+        // no recent interaction) there is nothing to keep warm for, so skip the parse instead of
+        // draining the backend the whole time the app sits open and idle.
+        guard DonkeyEngagement.shared.isEngaged() else { return }
         guard permissionChecker.hasScreenRecordingAccess() else { return }
         guard let target = MacWindowResolver().frontmostUserAppTarget() else { return }
         let appKey = target.bundleIdentifier.flatMap { $0.isEmpty ? nil : $0 } ?? target.appName ?? ""

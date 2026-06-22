@@ -211,6 +211,9 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         _ command: String,
         context: UserQueryCommandContext?
     ) async -> UserQueryCommandHandlingResult {
+        // A submitted command is a direct Donkey interaction: open the engagement window so the vision
+        // warm caches start (and stay) warm around this turn instead of only firing while idle.
+        DonkeyEngagement.shared.noteInteraction()
         let traceID = "user-query-\(UUID().uuidString)"
         let taskID = context?.task.id ?? traceID
         logSubmittedCommand(command, traceID: traceID, taskID: taskID, context: context)
@@ -677,6 +680,9 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // Suspend the warm-cache monitor for the whole drive so it never races us writing the same
         // app's parse. The run between these calls has no early exit, so resume always pairs with it.
         VisionWarmCacheActivity.shared.suspend()
+        // Keep Donkey "engaged" for the whole run so the understanding warm pass stays alive however
+        // long the task takes; pairs with `endRun` below (this stretch has no early exit).
+        DonkeyEngagement.shared.beginRun()
         // Realtime per-step feedback: narrate every step through the spawn cursor's label (the
         // planner's one-line reason, falling back to the tool's own summary), and after each step that
         // physically moved the pointer (a click), animate the overlay cursor traveling to that exact
@@ -777,6 +783,9 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             await foregroundFocusGate.release()
         }
         VisionWarmCacheActivity.shared.resume()
+        // Run finished: drop the active-run hold and stamp an interaction so warming lingers briefly
+        // for a follow-up command before idling out.
+        DonkeyEngagement.shared.endRun()
 
         let finalTask = await genericHarnessLifecycle.coordinator.task(id: taskID)
         let finalStatus = finalTask?.status

@@ -242,6 +242,13 @@ final class UIUnderstandingCoordinator {
         // backend, which would just 401 while signed out, so it idles until sign-in restores it (the
         // app delegate also stops this coordinator on sign-out). The overlay is gated separately.
         guard BackendSessionGate.shared.isAuthenticated else { return }
+        // Only keep understanding warm around real Donkey use. With no task running and no recent
+        // interaction, nothing reads the store, so skip the whole capture/parse pass (active-window
+        // vision and background warming both) instead of draining the backend while the app idles.
+        // The next command stamps engagement before its first capture, which re-parses inline. The
+        // dev overlay is an explicit opt-in the developer is actively watching, so it keeps rendering
+        // live; production never renders an overlay and so always idles when Donkey isn't in use.
+        guard overlayActive || DonkeyEngagement.shared.isEngaged() else { return }
         guard !isAnalyzing else {
             UIUnderstandingLog.overlay.debug("debug inspection skipped refresh because analysis is already running")
             return
