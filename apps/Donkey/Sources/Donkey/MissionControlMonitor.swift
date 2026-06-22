@@ -4,10 +4,15 @@ import CoreGraphics
 /// Watches for macOS Mission Control and reports when it becomes active or inactive.
 ///
 /// macOS exposes no public notification for Mission Control, so we poll the window
-/// server. When Mission Control opens, the Dock process puts up one or more windows that
-/// span a full display; at rest the Dock owns no full-screen window (its strip is tiny).
-/// That full-screen Dock-owned window is the signal. Desktop elements are excluded so the
-/// always-present wallpaper window (also Dock-owned) doesn't read as a false positive.
+/// server. When Mission Control opens, the Dock process puts up one or more full-display
+/// windows; its space/backdrop surface sits just below the dock window level. That
+/// backdrop is the signal.
+///
+/// Two Dock-owned full-screen windows are NOT Mission Control and must be ruled out: the
+/// always-present wallpaper (drawn at a deeply negative window level) and the auto-hide
+/// Dock's reveal surface (a full-display window drawn whenever the Dock slides into view).
+/// `detectFullScreenDockWindow` documents how Mission Control is told apart from a mere
+/// reveal so that revealing an auto-hidden Dock no longer hides the notch.
 ///
 /// Two things make naive polling feel bad, and this type handles both:
 ///   - The poll runs on a background queue, not a main-thread timer. Mission Control's
@@ -124,7 +129,16 @@ final class MissionControlMonitor: @unchecked Sendable {
         onChange?(active)
     }
 
-    /// Returns true when an on-screen, Dock-owned window covers most of any display.
+    /// Returns true when the on-screen, Dock-owned windows look like Mission Control rather
+    /// than a revealed auto-hide Dock.
+    ///
+    /// Both put up a full-display Dock-owned window, so coverage alone can't tell them apart.
+    /// Two observed traits do, and we require either one so the check degrades safely if a
+    /// macOS release shifts the window levels:
+    ///   - Mission Control draws a backdrop off the dock window level (observed just below
+    ///     it); the lone reveal surface sits at exactly the dock level.
+    ///   - Mission Control draws several full-display surfaces at once; a reveal draws one.
+    /// The wallpaper (a deeply negative level) is always excluded.
     private static func detectFullScreenDockWindow(
         screenSizes: [CGSize],
         coverageThreshold: CGFloat
@@ -134,28 +148,34 @@ final class MissionControlMonitor: @unchecked Sendable {
         guard let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
             return false
         }
+        let dockLevel = Int(CGWindowLevelForKey(.dockWindow))
+
+        var fullDisplayDockWindows = 0
+        var hasWindowOffDockLevel = false
 
         for window in windows {
             guard let owner = window[kCGWindowOwnerName as String] as? String, owner == "Dock" else {
                 continue
             }
-            // Skip the deep background layers (wallpaper, desktop icons); the Mission
-            // Control backdrop sits at or above the normal window layer.
-            if let layer = window[kCGWindowLayer as String] as? Int, layer < 0 {
+            // Skip the deep background layers (wallpaper, desktop icons) at negative levels.
+            guard let layer = window[kCGWindowLayer as String] as? Int, layer >= 0 else {
                 continue
             }
             guard let boundsDict = window[kCGWindowBounds as String] as? NSDictionary,
                   let bounds = CGRect(dictionaryRepresentation: boundsDict) else {
                 continue
             }
+            let coversAnyScreen = screenSizes.contains {
+                bounds.width >= $0.width * coverageThreshold && bounds.height >= $0.height * coverageThreshold
+            }
+            guard coversAnyScreen else { continue }
 
-            for size in screenSizes
-            where bounds.width >= size.width * coverageThreshold
-                && bounds.height >= size.height * coverageThreshold {
-                return true
+            fullDisplayDockWindows += 1
+            if layer != dockLevel {
+                hasWindowOffDockLevel = true
             }
         }
 
-        return false
+        return hasWindowOffDockLevel || fullDisplayDockWindows >= 2
     }
 }
