@@ -124,8 +124,26 @@ public enum ShellCommandClassifier {
 
         let firstArg = tokens.first.map { $0.lowercased() }
 
+        // A command-execution flag runs an arbitrary command the same way `| sh` does, and it can ride
+        // inside an otherwise-trusted tool — find's `-exec`, yt-dlp's `--exec`/`--exec-before-download`.
+        // Gate it high-risk wherever it appears, BEFORE the read/bundled-tool classifications below, so the
+        // escape hatch is never run silently no matter which executable carries it.
+        if tokens.contains(where: isCommandExecutionFlag) {
+            return ShellCommandClassification(tier: .highRisk, signature: "\(executable) -exec", reason: "runs an arbitrary command")
+        }
+
         if let reason = highRiskExecutables[executable] {
             return ShellCommandClassification(tier: .highRisk, signature: executable, reason: reason)
+        }
+
+        // Tools Donkey ships in its own bundled-tools directory (first on PATH) are a first-party
+        // capability surface — the media and document skills run them by bare name, the same way Donkey's
+        // built-in file tools write files. They run immediately instead of being mis-scored as an
+        // unrecognized "write" and gated on every clip or conversion. The escape-hatch flags that would
+        // make one dangerous are already gated above; a dangerous wrapper (`yt-dlp … | sh`, a device
+        // redirect) is caught by the whole-command checks in `classify` before any segment reaches here.
+        if BundledTools.executableNames.contains(executable) {
+            return ShellCommandClassification(tier: .read, signature: executable, reason: nil)
         }
 
         // Per-tool subcommand/flag refinement (read vs write of the same tool).
@@ -332,6 +350,19 @@ public enum ShellCommandClassifier {
     private static let wrapperExecutables: Set<String> = [
         "xargs", "env", "time", "nice", "nohup", "command", "builtin", "stdbuf", "timeout", "caffeinate"
     ]
+
+    /// Flags that make a tool run an arbitrary command — `| sh` smuggled into an argument. Gated
+    /// high-risk wherever they appear, so neither a trusted bundled tool nor a read-tier tool (find)
+    /// can silently spawn a subcommand through them.
+    private static let commandExecutionFlags: Set<String> = [
+        "-exec", "-execdir", "--exec", "--exec-before-download"
+    ]
+
+    /// True when a token is a command-execution flag, including its `--exec=CMD` and `--exec-…` variants.
+    private static func isCommandExecutionFlag(_ token: String) -> Bool {
+        let lower = token.lowercased()
+        return commandExecutionFlags.contains(lower) || lower.hasPrefix("--exec=") || lower.hasPrefix("--exec-")
+    }
 
     /// Read-only inspection tools — safe to run without a prompt. Tools whose
     /// read/write split depends on a subcommand (defaults, pmset, networksetup,

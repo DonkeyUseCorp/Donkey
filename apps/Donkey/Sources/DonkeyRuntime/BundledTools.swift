@@ -7,6 +7,15 @@ import Foundation
 /// `bundled-tools.json` (in the app's resource bundle) is the single source of truth for the version,
 /// download URL, and checksum; scripts/publish-bundled-tools.sh builds the artifact and rewrites it.
 public enum BundledTools {
+    /// Bare executable names of the tools shipped in the bundle — the mandatory media set from
+    /// scripts/publish-bundled-tools.sh plus the document tools fetched in fetch-bundled-tools.sh. Donkey
+    /// resolves these from `installDirectory`, which `shellEnvironment()` puts first on PATH, so capability
+    /// skills run them by bare name. This is the single Swift home for the list; keep it in step with the
+    /// fetch/publish scripts when the bundle gains or drops a tool.
+    public static let executableNames: Set<String> = [
+        "ffmpeg", "ffprobe", "yt-dlp", "lit", "pdf-fill", "qpdf", "exiftool"
+    ]
+
     /// The manifest describing the published tools bundle. An empty `sha256` means nothing is published
     /// yet, so callers should treat the bundle as unavailable rather than downloading something unverified.
     public struct Manifest: Decodable, Sendable, Equatable {
