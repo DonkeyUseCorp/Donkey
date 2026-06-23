@@ -4,7 +4,7 @@ import Foundation
 
 public enum BuiltInLocalAppSkillPacks {
     public static var rootURL: URL? {
-        Bundle.module.resourceURL?.appendingPathComponent("BuiltInSkills", isDirectory: true)
+        DonkeyResourceBundle.runtime?.resourceURL?.appendingPathComponent("BuiltInSkills", isDirectory: true)
     }
 
     /// Built-in skills ship inside the bundle and never change at runtime, so discover them (which

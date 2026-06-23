@@ -1773,7 +1773,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     }
 
     private static func bundledTheme() -> UserQueryTheme {
-        guard let themeURL = Bundle.module.url(forResource: "theme", withExtension: "json"),
+        guard let themeURL = DonkeyResourceBundle.app?.url(forResource: "theme", withExtension: "json"),
               let themeData = try? Data(contentsOf: themeURL),
               let themeConfig = try? JSONDecoder().decode(UserQueryThemeConfig.self, from: themeData),
               let theme = UserQueryTheme.fromConfig(themeConfig) else {

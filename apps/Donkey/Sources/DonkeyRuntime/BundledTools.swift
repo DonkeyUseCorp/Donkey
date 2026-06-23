@@ -60,7 +60,7 @@ public enum BundledTools {
 
     /// Load the bundled manifest from the app's resources. Returns nil if it is missing or malformed.
     public static func loadManifest() -> Manifest? {
-        guard let url = Bundle.module.url(forResource: "bundled-tools", withExtension: "json"),
+        guard let url = DonkeyResourceBundle.runtime?.url(forResource: "bundled-tools", withExtension: "json"),
               let data = try? Data(contentsOf: url)
         else { return nil }
         return try? JSONDecoder().decode(Manifest.self, from: data)

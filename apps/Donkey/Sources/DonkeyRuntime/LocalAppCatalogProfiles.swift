@@ -172,7 +172,7 @@ public struct LocalAppFinderProfileStore: Sendable {
     public static var defaultStore: LocalAppFinderProfileStore {
         let directory = defaultDirectoryURL
         return LocalAppFinderProfileStore(
-            seedCatalogURL: Bundle.module.url(
+            seedCatalogURL: DonkeyResourceBundle.runtime?.url(
                 forResource: "local-app-finder-profiles",
                 withExtension: "json"
             ),

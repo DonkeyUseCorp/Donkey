@@ -1,4 +1,5 @@
 import AppKit
+import DonkeyRuntime
 import SwiftUI
 
 @MainActor
@@ -219,7 +220,7 @@ private struct DonkeyAppIconMark: View {
     }
 
     private static let image: NSImage = {
-        if let url = Bundle.module.url(forResource: "donkey-app-icon", withExtension: "png"),
+        if let url = DonkeyResourceBundle.app?.url(forResource: "donkey-app-icon", withExtension: "png"),
            let image = NSImage(contentsOf: url) {
             return image
         }
@@ -244,7 +245,7 @@ private struct GoogleContinueAsset: View {
     }
 
     private static let image: NSImage? = {
-        guard let url = Bundle.module.url(
+        guard let url = DonkeyResourceBundle.app?.url(
             forResource: "google-continue-dark-rounded",
             withExtension: "png"
         ) else {
