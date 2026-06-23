@@ -11,7 +11,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatUsd } from "@/lib/credits/format-usd";
 import {
   Pagination,
   PaginationContent,
@@ -38,22 +37,92 @@ function callKey(call: RecentCall): string {
   return `${call.createdAt}-${call.product}-${call.requestKind}-${call.costCredits}`;
 }
 
-// Cost rounds to cents for most calls, but per-token app calls are often a small
-// fraction of a cent — show enough precision that they aren't all "$0.00".
+// Cents by default, but show a third decimal when a value carries sub-cent
+// precision (many app calls cost a fraction of a cent) so they aren't all
+// "$0.00". Clean values stay at 2 decimals — min 2 / max 3 fraction digits.
+function formatCostValue(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "$0.00";
+  }
+  return value.toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 3,
+  });
+}
+
 function formatCallCost(call: RecentCall): string {
   if (call.billingStatus === "included") {
     return "Included";
   }
-  const value = Number.parseFloat(call.costCredits);
-  if (!Number.isFinite(value) || value <= 0) {
-    return "$0.00";
+  return formatCostValue(Number.parseFloat(call.costCredits));
+}
+
+// Rows with no conversation (background warming, pre-grouping rows) collect under
+// one bucket. The sentinel can't collide with a real conversation id.
+const NO_CONVERSATION = "__none__";
+
+function conversationKey(call: RecentCall): string {
+  return call.conversationId ?? NO_CONVERSATION;
+}
+
+function conversationLabel(key: string): string {
+  if (key === NO_CONVERSATION) {
+    return "Background / no conversation";
   }
-  // ≥1¢ uses the shared formatter so money renders identically across cards.
-  if (value >= 0.01) {
-    return formatUsd(call.costCredits);
+  // Conversation ids are long opaque strings; a short prefix is enough to tell
+  // groups apart without dominating the row.
+  return `Conversation ${key.slice(0, 8)}`;
+}
+
+// A group's combined cost for its header. All-included groups (the Vision API
+// tab) have no credit cost, so label them "Included" rather than "$0.00".
+function groupCostSummary(calls: RecentCall[]): string {
+  if (calls.every((call) => call.billingStatus === "included")) {
+    return "Included";
   }
-  // Sub-cent: up to 6 decimal places (micro-dollar precision), trailing 0s cut.
-  return `$${value.toFixed(6).replace(/0+$/, "").replace(/\.$/, "")}`;
+  const total = calls.reduce((sum, call) => {
+    const value = Number.parseFloat(call.costCredits);
+    return Number.isFinite(value) ? sum + value : sum;
+  }, 0);
+  return formatCostValue(total);
+}
+
+type GroupedRow = { call: RecentCall; groupKey: string };
+
+// Bucket tab rows by conversation, preserving the server's newest-first order so
+// each group sits at the position of its most recent call, then flatten back to a
+// row list that is now contiguous per conversation.
+function groupRowsByConversation(rows: RecentCall[]): {
+  ordered: GroupedRow[];
+  counts: Map<string, number>;
+  summaries: Map<string, string>;
+} {
+  const order: string[] = [];
+  const byKey = new Map<string, RecentCall[]>();
+  for (const call of rows) {
+    const key = conversationKey(call);
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.push(call);
+    } else {
+      byKey.set(key, [call]);
+      order.push(key);
+    }
+  }
+  const ordered: GroupedRow[] = [];
+  const counts = new Map<string, number>();
+  const summaries = new Map<string, string>();
+  for (const key of order) {
+    const calls = byKey.get(key) ?? [];
+    counts.set(key, calls.length);
+    summaries.set(key, groupCostSummary(calls));
+    for (const call of calls) {
+      ordered.push({ call, groupKey: key });
+    }
+  }
+  return { ordered, counts, summaries };
 }
 
 function formatTokens(value: number): string {
@@ -163,16 +232,20 @@ export function UsageHistoryCard() {
   }
 
   const recent = usage.data?.recent ?? [];
-  const rows = recent.filter((call) => call.product === tab);
+  const tabRows = recent.filter((call) => call.product === tab);
+  // Group by conversation, then page over the flattened (conversation-contiguous)
+  // list so a conversation reads as one block. A group that spans a page boundary
+  // re-shows its header on the next page.
+  const { ordered, counts, summaries } = groupRowsByConversation(tabRows);
 
   const totalPages = Math.min(
     MAX_PAGES,
-    Math.max(1, Math.ceil(rows.length / ROWS_PER_PAGE)),
+    Math.max(1, Math.ceil(ordered.length / ROWS_PER_PAGE)),
   );
   // Clamp in case rows shrank (refetch / tab switch) below the current page.
   const currentPage = Math.min(page, totalPages);
   const pageStart = (currentPage - 1) * ROWS_PER_PAGE;
-  const pageRows = rows.slice(pageStart, pageStart + ROWS_PER_PAGE);
+  const pageRows = ordered.slice(pageStart, pageStart + ROWS_PER_PAGE);
 
   const selectTab = (next: TabKey) => {
     setTab(next);
@@ -186,11 +259,11 @@ export function UsageHistoryCard() {
   };
 
   const focusRow = (index: number) => {
-    const call = pageRows[index];
-    if (!call) {
+    const row = pageRows[index];
+    if (!row) {
       return;
     }
-    setExpanded(callKey(call));
+    setExpanded(callKey(row.call));
     rowRefs.current[index]?.focus();
   };
 
@@ -203,7 +276,7 @@ export function UsageHistoryCard() {
       focusRow(Math.max(index - 1, 0));
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      const key = callKey(pageRows[index]);
+      const key = callKey(pageRows[index].call);
       setExpanded(expanded === key ? null : key);
     } else if (event.key === "Escape") {
       setExpanded(null);
@@ -234,7 +307,7 @@ export function UsageHistoryCard() {
           ))}
         </div>
 
-        {rows.length > 0 ? (
+        {tabRows.length > 0 ? (
           <Table>
             <TableHeader>
               <TableRow>
@@ -246,11 +319,35 @@ export function UsageHistoryCard() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {pageRows.map((call, index) => {
+              {pageRows.map((row, index) => {
+                const call = row.call;
                 const key = callKey(call);
                 const isOpen = expanded === key;
+                // Header before the first row of each conversation block (and at
+                // the page top, since a group can carry over from the prior page).
+                const startsGroup =
+                  index === 0 ||
+                  pageRows[index - 1].groupKey !== row.groupKey;
+                const groupCount = counts.get(row.groupKey) ?? 1;
                 return (
                   <Fragment key={`${key}-${pageStart + index}`}>
+                    {startsGroup ? (
+                      <TableRow className="hover:bg-transparent">
+                        <TableCell
+                          className="bg-muted/40 py-2 text-xs font-medium text-muted-foreground"
+                          colSpan={5}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span>{conversationLabel(row.groupKey)}</span>
+                            <span className="tabular-nums">
+                              {groupCount} {groupCount === 1 ? "call" : "calls"}
+                              {" · "}
+                              {summaries.get(row.groupKey)}
+                            </span>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
                     <TableRow
                       ref={(el) => {
                         rowRefs.current[index] = el;
