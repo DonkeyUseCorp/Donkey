@@ -16,6 +16,15 @@ public enum BundledTools {
         "ffmpeg", "ffprobe", "yt-dlp", "lit", "pdf-fill", "qpdf", "exiftool"
     ]
 
+    /// Tools that unpack a private interpreter/runtime to a temp dir at launch and `dlopen()` it — a
+    /// PyInstaller onefile binary like `yt-dlp`. Under the hardened runtime, library validation rejects
+    /// that load when the extracted framework's Team ID differs from the binary's ("different Team IDs"),
+    /// so a copy signed with the runtime flag but no exception cannot start at all. These need the
+    /// `com.apple.security.cs.disable-library-validation` entitlement; `scripts/sign-bundled-tools.sh`
+    /// signs exactly these with it, and `BundledToolsInstaller` repairs the downloaded copy the same way.
+    /// Keep this list in step with that script.
+    public static let selfExtractingExecutableNames: Set<String> = ["yt-dlp"]
+
     /// The manifest describing the published tools bundle. An empty `sha256` means nothing is published
     /// yet, so callers should treat the bundle as unavailable rather than downloading something unverified.
     public struct Manifest: Decodable, Sendable, Equatable {
