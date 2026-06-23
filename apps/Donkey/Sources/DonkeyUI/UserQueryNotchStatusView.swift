@@ -815,6 +815,8 @@ public struct UserQueryNotchStatusView: View {
     /// Trailing room a row's text leaves for the pinned top-right controls, by control set: a lone Close
     /// (or Stop) button, or a Resume + Close pair. Permission rows carry their own banner controls.
     private func controlsReserve(for conversation: UserQueryConversation) -> CGFloat {
+        // A system-driven row carries no controls (see `topRightControls`), so its text spans the full row.
+        if !conversation.isUserControllable { return 0 }
         if conversation.status == .waitingForPermission { return 0 }
         return rowShowsControlPair(conversation) ? 74 : 44
     }
@@ -822,6 +824,7 @@ public struct UserQueryNotchStatusView: View {
     /// Whether a row shows a two-button pair (Resume + Close, or Reply + Close) vs a single Close/Stop —
     /// mirrors `stateControls`, so the title/subtext reserve the right trailing room for the controls.
     private func rowShowsControlPair(_ conversation: UserQueryConversation) -> Bool {
+        guard conversation.isUserControllable else { return false }
         switch conversation.status {
         case .paused, .interrupted, .timedOut, .waitingForClarification, .waitingForReview:
             return true
@@ -934,7 +937,9 @@ public struct UserQueryNotchStatusView: View {
         // eased highlight would land ~0.12s later and read as "scroll first, then select."
         // Snapping lands the selection with the scroll, so the row reads as selected first.
         .onTapGesture {
-            // Every row is repliable. Tapping the active thread again leaves reply mode; tapping any
+            // A system-driven row (tool setup) isn't repliable — tapping it does nothing.
+            guard conversation.isUserControllable else { return }
+            // Every user row is repliable. Tapping the active thread again leaves reply mode; tapping any
             // other row pins it and focuses the composer, so the user can just start typing. (A running
             // or permission-gated thread takes the message as a queued follow-up; the rest resume.)
             if isReplyTarget {
@@ -967,12 +972,18 @@ public struct UserQueryNotchStatusView: View {
     /// running → stop; paused → resume + close; everything else → close, so any conversation can be deleted.
     @ViewBuilder
     private func topRightControls(_ conversation: UserQueryConversation) -> some View {
-        switch conversation.status {
-        case .waitingForPermission:
-            // The permission banner carries its own Approve / Deny; the row needs no extra control.
+        if !conversation.isUserControllable {
+            // A system-driven row (tool setup) is the app's to run: the user watches it, but it carries no
+            // Stop / Resume / Close — it can't be stopped or dismissed by hand.
             EmptyView()
-        default:
-            stateControls(for: conversation)
+        } else {
+            switch conversation.status {
+            case .waitingForPermission:
+                // The permission banner carries its own Approve / Deny; the row needs no extra control.
+                EmptyView()
+            default:
+                stateControls(for: conversation)
+            }
         }
     }
 
@@ -1412,7 +1423,7 @@ public struct UserQueryNotchStatusView: View {
 
     static func conversationDisplayText(state: UserQueryState) -> String? {
         let text = UserQueryCopy.normalizedDisplayText(state.promptText)
-        guard UserQueryCopy.isTaskDisplayText(text) else {
+        guard UserQueryCopy.isConversationDisplayText(text) else {
             return nil
         }
 

@@ -26,7 +26,7 @@ public enum UserQueryCopy {
         return normalizedText
     }
 
-    public static func isTaskDisplayText(_ text: String) -> Bool {
+    public static func isConversationDisplayText(_ text: String) -> Bool {
         let normalizedText = normalizedDisplayText(text)
         return !normalizedText.isEmpty &&
             normalizedText != defaultPromptPlaceholder

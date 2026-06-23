@@ -74,7 +74,7 @@ public protocol UserQueryFollowUpResolving: Sendable {
     func resolveFollowUp(_ request: UserQueryFollowUpResolverRequest) async -> UserQueryFollowUpResolverResult
 }
 
-public struct HostedTaskFollowUpResolver: UserQueryFollowUpResolving {
+public struct HostedConversationFollowUpResolver: UserQueryFollowUpResolving {
     public static let schemaID = "task_followup_resolution_v1"
 
     public var router: AIModelRouter
@@ -153,7 +153,7 @@ public struct HostedTaskFollowUpResolver: UserQueryFollowUpResolving {
                 return result(entry: entry, request: request, status: .invalidOutput, validationStatus: "invalid", latencyMS: latencyMS)
             }
 
-            let decision = try JSONDecoder().decode(LocalLLMTaskFollowUpDecision.self, from: decisionData)
+            let decision = try JSONDecoder().decode(LocalLLMConversationFollowUpDecision.self, from: decisionData)
             let validCandidateIDs = Set(request.candidates.map(\.conversationID))
             let conversationID = decision.isFollowUp && validCandidateIDs.contains(decision.conversationID) ? decision.conversationID : nil
             return UserQueryFollowUpResolverResult(
@@ -357,7 +357,7 @@ public struct HostedTaskFollowUpResolver: UserQueryFollowUpResolving {
     }
 }
 
-private struct LocalLLMTaskFollowUpDecision: Codable, Equatable, Sendable {
+private struct LocalLLMConversationFollowUpDecision: Codable, Equatable, Sendable {
     var isFollowUp: Bool
     var conversationID: String
     var confidence: Double

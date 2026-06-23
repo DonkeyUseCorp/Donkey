@@ -9,7 +9,7 @@ import Testing
 /// Covers the task-lifecycle changes: follow-up injection into a running loop (instead of restarting it),
 /// concurrent loops on one coordinator, the timed-out status, and the relaunch staleness mapping.
 @Suite
-struct TaskFollowUpInjectionTests {
+struct ConversationFollowUpInjectionTests {
     // A stateless planner for the injection test: complete once the injected instruction has been folded
     // into the world model, otherwise queue one follow-up and take a no-op step. Keying off the fact (not
     // a call counter) keeps it a value type.
@@ -273,14 +273,14 @@ struct TaskFollowUpInjectionTests {
         let paused = task("paused", .paused, ageMinutes: 5)
         let completed = task("done", .completed, ageMinutes: 5)
 
-        let result = UserQueryOverlayModel.restoredTasks(
+        let result = UserQueryOverlayModel.restoredConversations(
             from: [recentRunning, staleRunning, waiting, review, permission, paused, completed],
             now: now
         )
 
         // Only the recently-running task auto-resumes; it keeps running.
         #expect(result.autoResumeIDs == ["recent"])
-        func status(_ id: String) -> UserQueryConversationStatus? { result.tasks.first { $0.id == id }?.status }
+        func status(_ id: String) -> UserQueryConversationStatus? { result.conversations.first { $0.id == id }?.status }
         #expect(status("recent") == .running)
         #expect(status("stale") == .timedOut)              // too old to auto-run → retryable row
         #expect(status("waiting") == .waitingForClarification) // still asking the user → comes back as a Reply row
@@ -289,9 +289,9 @@ struct TaskFollowUpInjectionTests {
         #expect(status("paused") == .paused)               // user-paused (Stop) stays paused
         #expect(status("done") == .completed)              // terminal states untouched
         // The waiting rows keep their persisted detail (the question) rather than a bare "Paused".
-        #expect(result.tasks.first { $0.id == "waiting" }?.detail == "d")
+        #expect(result.conversations.first { $0.id == "waiting" }?.detail == "d")
         // The persisted updatedAt is preserved so elapsed-time stays the real run duration.
-        #expect(result.tasks.first { $0.id == "stale" }?.updatedAt == staleRunning.updatedAt)
+        #expect(result.conversations.first { $0.id == "stale" }?.updatedAt == staleRunning.updatedAt)
     }
 
     @MainActor

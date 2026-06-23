@@ -84,7 +84,7 @@ struct UserQueryCommandHandlingResult: Equatable, Sendable {
     var threadStatus: UserQueryConversationStatus
     var decision: AppHarnessDecision
     var summary: String
-    var taskLabel: String?
+    var conversationLabel: String?
     var traceID: String
     var metadata: [String: String]
     var agentVisualizationPlan: AgentVisualizationPlan?
@@ -97,7 +97,7 @@ struct UserQueryCommandHandlingResult: Equatable, Sendable {
         summary: String,
         traceID: String,
         metadata: [String: String],
-        taskLabel: String? = nil,
+        conversationLabel: String? = nil,
         agentVisualizationPlan: AgentVisualizationPlan? = nil,
         cursorOverlayRequest: PointerCoachCursorGuideRequest? = nil
     ) {
@@ -105,7 +105,7 @@ struct UserQueryCommandHandlingResult: Equatable, Sendable {
         self.threadStatus = threadStatus
         self.decision = decision
         self.summary = summary
-        self.taskLabel = taskLabel
+        self.conversationLabel = conversationLabel
         self.traceID = traceID
         self.metadata = metadata
         self.agentVisualizationPlan = agentVisualizationPlan
@@ -114,7 +114,7 @@ struct UserQueryCommandHandlingResult: Equatable, Sendable {
 }
 
 struct UserQueryCommandContext: Sendable {
-    var task: UserQueryConversation
+    var conversation: UserQueryConversation
     var recentEvents: [UserQueryConversationEvent]
     var assets: [UserQueryConversationAsset]
     var isFollowUp: Bool
@@ -215,7 +215,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // warm caches start (and stay) warm around this turn instead of only firing while idle.
         DonkeyEngagement.shared.noteInteraction()
         let traceID = "user-query-\(UUID().uuidString)"
-        let conversationID = context?.task.id ?? traceID
+        let conversationID = context?.conversation.id ?? traceID
         logSubmittedCommand(command, traceID: traceID, conversationID: conversationID, context: context)
         return await continueHandlingNonVisualizationCommand(
             command: command,
@@ -238,7 +238,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         let harnessRequest = Self.harnessRequest(command: redactedCommand, context: context)
         let genericPreparedTurn = await genericHarnessLifecycle.prepareUserQueryTurn(
             request: harnessRequest,
-            pointerTask: context?.task,
+            pointerTask: context?.conversation,
             traceID: traceID,
             availableToolNames: Self.genericHarnessToolNames(),
             grantedPermissions: Self.userQueryGrantedPermissions
@@ -699,6 +699,12 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // request that lives in a window the user isn't looking at can be found and switched to. Donkey's
         // own windows are filtered out by bundle id so the agent never targets its own overlay.
         let ownBundleID = Bundle.main.bundleIdentifier
+        // Recall durable operating lessons distilled from earlier runs with a related goal, so a trap the
+        // agent already hit once (a broad search that timed out, a wrong tool) steers this run from its
+        // first step. Computed once here against the restated goal; nil when nothing relevant was learned.
+        let restatedGoal = understanding?.restatedGoal
+        let lessonGoal = (restatedGoal?.isEmpty == false ? restatedGoal : nil) ?? command
+        let recalledLessons = RunLessonMemory.recall(forGoal: lessonGoal, store: .shared)
         let planner = HostedHarnessStepPlanner(
             backend: backend,
             descriptors: plannerDescriptors,
@@ -706,6 +712,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             appGuidance: appGuidance,
             understanding: understanding,
             skillCatalog: Self.installedSkillCatalog(),
+            recalledLessons: recalledLessons,
             trace: trace,
             openWindows: {
                 MacWindowResolver().enumerateCandidates().filter { candidate in
@@ -909,6 +916,41 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             }
         }
 
+        // Self-improving loop: distill this run into one durable, general operating lesson and store it,
+        // so a future turn with a related goal recalls it (see the recall at planner construction above)
+        // and avoids a trap this run already paid for. Reuses the agent-memory approval + persistence
+        // path. Gated to runs that plausibly taught something — a non-clean outcome, or a run long enough
+        // to have taken a wrong turn — so a short clean success doesn't spend a model call to learn
+        // nothing. Detached so it never delays the user-facing result.
+        let shouldDistillLesson = outcomeReason != "ok" || turns >= 4
+        if shouldDistillLesson, !threadText.isEmpty {
+            Task.detached {
+                let prompt = DonkeyPrompts.runLessonDistillation(
+                    goal: lessonGoal, outcome: outcomeReason, thread: threadText
+                )
+                let lessonStartedAt = RunTraceTimestamp.now()
+                let raw = await textGenerator.generate(prompt) ?? ""
+                trace.recordModelCall(TraceModelCall(
+                    kind: .lessonDistillation,
+                    prompt: prompt,
+                    response: raw.isEmpty ? "<no output>" : raw,
+                    status: raw.isEmpty ? .empty : .ok,
+                    startedAt: lessonStartedAt,
+                    endedAt: .now()
+                ))
+                guard let distillation = RunLessonMemory.parse(raw),
+                      let proposal = RunLessonMemory.proposal(
+                          for: distillation,
+                          goal: lessonGoal,
+                          outcome: outcomeReason,
+                          traceID: traceID,
+                          now: .now()
+                      )
+                else { return }
+                _ = try? SQLiteAgentMemoryStore.shared?.appendApprovedProposal(proposal, decidedAt: .now())
+            }
+        }
+
         let baseMetadata = preparedTurnMetadata.merging([
             "appHarness.router": "harness",
             "harness.app": appName,
@@ -989,9 +1031,25 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         let conversationMessage = finalTask?.toolHistory.last { $0.call.name == "conversation.respond" }
             .flatMap { $0.call.input["response"] ?? $0.call.input["message"] }
             .flatMap { $0.isEmpty ? nil : $0 }
-        var response = conversationMessage
-            ?? planner.lastNarration
-            ?? (completed ? "Done." : "I tried operating \(appName) but couldn't confirm the goal was finished.")
+        var response: String
+        if let conversationMessage {
+            response = conversationMessage
+        } else if completed {
+            response = planner.lastNarration ?? "Done."
+        } else {
+            // The run did not complete. Echoing `planner.lastNarration` here surfaces the last
+            // forward-looking "I will…" line, which reads as a silent stop — the exact "it didn't tell me
+            // why" failure. Explain what actually went wrong, in plain language, from the real step errors.
+            var explained: String?
+            if let prompt = Self.failureExplanationPrompt(goal: command, steps: runSteps) {
+                let generated = await textGenerator.generate(prompt)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if let generated, !generated.isEmpty { explained = generated }
+            }
+            response = explained
+                ?? planner.lastNarration
+                ?? "I tried operating \(appName) but couldn't confirm the goal was finished."
+        }
 
         // Stream the assistant's final reply token-by-token into the notch (the chin and the open task
         // row) whenever the turn produced a real text answer. It is re-composed from the harness's drafted
@@ -1053,6 +1111,30 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             hint: completed ? "Operated \(appName)." : "Harness run stopped: \(outcomeReason)."
         )
         return result
+    }
+
+    /// Build the prompt that turns a not-completed run's real step errors — which for yt-dlp/ffmpeg are
+    /// buried under page-long signed URLs — into a one-or-two-sentence plain-language "why" for the user.
+    /// Pure and Sendable; the caller runs the model inline so the misleading forward-looking narration the
+    /// notch showed before is replaced by an actual explanation. Returns nil when no step failed.
+    static func failureExplanationPrompt(goal: String, steps: [HarnessStepExecutionResult]) -> String? {
+        let failures = steps.compactMap { step -> String? in
+            guard let result = step.toolResult,
+                  result.status == .failed || result.status == .invalidInput,
+                  !result.summary.isEmpty else { return nil }
+            let oneLine = result.summary.replacingOccurrences(of: "\n", with: " ")
+            return "- \(result.toolName): \(String(oneLine.prefix(300)))"
+        }
+        guard !failures.isEmpty else { return nil }
+        return """
+        A macOS task did not finish. In ONE or TWO plain sentences, tell the user what was attempted and \
+        why it did not finish, then the single most likely next step. Be concrete but human: no URLs, no \
+        file paths, no code, no stack traces, no apology filler.
+
+        GOAL: \(goal)
+        ERRORS (most recent last):
+        \(failures.suffix(4).joined(separator: "\n"))
+        """
     }
 
     /// The conversational arm of the two-tier split: a turn typed `.converse` is answered here, with no
@@ -1251,9 +1333,9 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
     ) {
         guard UserQueryLog.isEnabled else { return }
 
-        let taskLabel = result.taskLabel ?? ""
+        let conversationLabel = result.conversationLabel ?? ""
         UserQueryLog.commands.notice(
-            "command finished traceID=\(result.traceID, privacy: .public) stage=\(stage, privacy: .public) status=\(result.status.rawValue, privacy: .public) threadStatus=\(result.threadStatus.rawValue, privacy: .public) summary=\(result.summary, privacy: .public) taskLabel=\(taskLabel, privacy: .public) hint=\(hint, privacy: .public)"
+            "command finished traceID=\(result.traceID, privacy: .public) stage=\(stage, privacy: .public) status=\(result.status.rawValue, privacy: .public) threadStatus=\(result.threadStatus.rawValue, privacy: .public) summary=\(result.summary, privacy: .public) conversationLabel=\(conversationLabel, privacy: .public) hint=\(hint, privacy: .public)"
         )
     }
 
@@ -1472,7 +1554,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             turn: AppHarnessTurn(
                 text: command,
                 source: context?.isFollowUp == true ? .followUp : context?.turnSource ?? .typedPrompt,
-                conversationID: context?.task.id,
+                conversationID: context?.conversation.id,
                 isFollowUp: context?.isFollowUp ?? false
             ),
             recentEvents: context?.recentEvents ?? [],

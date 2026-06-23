@@ -32,13 +32,6 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // Kick off the first-run download of the bundled CLI tools (ffmpeg/yt-dlp/...) in the background,
-        // so a later media task runs them by bare name instead of hunting for Homebrew. Non-blocking and a
-        // no-op once the current version is installed or when nothing is published yet.
-        Task.detached(priority: .utility) {
-            await BundledToolsInstaller.shared.installIfNeeded()
-        }
-
         let authCoordinator = DonkeyAuthCoordinator()
         self.authCoordinator = authCoordinator
         // Seed the process-wide session gate before any surface is built, so the warm cache, Live
@@ -171,6 +164,13 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         let controller = UserQueryOverlayController(model: model)
         overlayController = controller
         controller.show()
+
+        // Now that the notch surface is live, kick off the first-run download of the bundled CLI tools
+        // (ffmpeg/yt-dlp/...). It surfaces as a system-driven conversation the user can watch but not stop,
+        // and no-ops once the current version is installed or when nothing is published — so this is cheap
+        // to call on every launch and re-sign-in. Tools are only used by agent tasks (which need sign-in),
+        // so downloading once the authenticated notch is up — rather than before login — is the right time.
+        model.startSystemToolsSetupIfNeeded()
 
         // Run as a regular app so Donkey keeps a Dock icon and its menu bar (including Sign Out)
         // while the overlay surfaces are live, instead of receding into an accessory agent.

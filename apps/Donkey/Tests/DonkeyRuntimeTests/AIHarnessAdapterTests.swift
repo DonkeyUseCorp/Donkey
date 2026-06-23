@@ -218,7 +218,7 @@ struct AIHarnessAdapterTests {
             data: Data(#"{"output_text":"{\"isFollowUp\":true,\"agentID\":\"task-1\",\"confidence\":0.82,\"reason\":\"same task\"}"}"#.utf8),
             statusCode: 200
         )
-        let resolver = HostedTaskFollowUpResolver(
+        let resolver = HostedConversationFollowUpResolver(
             configuration: DonkeyBackendInferenceConfiguration(
                 baseURL: URL(string: "https://donkey.example")!,
                 clientID: "client-1"

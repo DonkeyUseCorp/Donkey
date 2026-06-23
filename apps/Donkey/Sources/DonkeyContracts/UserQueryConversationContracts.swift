@@ -24,6 +24,17 @@ public extension UserQueryConversationStatus {
     }
 }
 
+/// Who started a conversation. `user` is the default — anything the person typed, spoke, or resumed,
+/// and which they own (stop, resume, reply, dismiss). `system` is started by the app itself (e.g. the
+/// first-run download of the bundled CLI tools): the person watches its progress like any other
+/// conversation, but it runs to completion under the app's control and is never user-stoppable or
+/// -dismissable. The distinction is typed rather than inferred so the "can't touch it" rule holds by
+/// construction everywhere — the row controls, the lifecycle methods, follow-up routing, and restore.
+public enum UserQueryConversationOrigin: String, Codable, Equatable, Sendable {
+    case user
+    case system
+}
+
 public struct UserQueryConversation: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var title: String
@@ -31,6 +42,7 @@ public struct UserQueryConversation: Codable, Equatable, Identifiable, Sendable 
     public var commandText: String
     public var status: UserQueryConversationStatus
     public var accentIndex: Int
+    public var origin: UserQueryConversationOrigin
     public var createdAt: Date
     public var updatedAt: Date
     public var metadata: [String: String]
@@ -42,6 +54,7 @@ public struct UserQueryConversation: Codable, Equatable, Identifiable, Sendable 
         commandText: String = "",
         status: UserQueryConversationStatus,
         accentIndex: Int,
+        origin: UserQueryConversationOrigin = .user,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         metadata: [String: String] = [:]
@@ -52,10 +65,18 @@ public struct UserQueryConversation: Codable, Equatable, Identifiable, Sendable 
         self.commandText = commandText
         self.status = status
         self.accentIndex = accentIndex
+        self.origin = origin
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.metadata = metadata
     }
+}
+
+public extension UserQueryConversation {
+    /// Whether the person may control this conversation — stop it, resume it, reply to it, or dismiss it.
+    /// Only conversations they started are theirs to control; a system-driven one (tool setup) is watched,
+    /// not operated. Every control surface and lifecycle hook gates on this, so the rule can't be missed.
+    var isUserControllable: Bool { origin == .user }
 }
 
 public extension UserQueryConversation {

@@ -22,18 +22,18 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         didSet {
             // Starting a draft hands the arrows back to the composer for text editing; the row
             // highlight re-engages when the user clicks or arrows onto a row (see `focusNotchRow`).
-            if !notchCommandText.isEmpty { selectedTaskID = nil }
+            if !notchCommandText.isEmpty { selectedConversationID = nil }
         }
     }
     @Published private(set) var notchCommandInputTextHeight = UserQueryLayout.composerInputTextMinimumHeight
     @Published private(set) var isNotchCommandInputExpanded = true
     @Published private(set) var notchAccentIndex = 0
-    @Published private(set) var isCurrentTaskPaused = false
+    @Published private(set) var isCurrentConversationPaused = false
     @Published private(set) var updateState: UserQueryUpdateState
-    @Published private(set) var notchTasks: [UserQueryConversation]
+    @Published private(set) var notchConversations: [UserQueryConversation]
     @Published private(set) var spawnStates: [UserQuerySpawnState] = []
     @Published private(set) var selectedSpawnID: String?
-    /// Logged out: the notch renders a login call-to-action instead of the task surface. The app
+    /// Logged out: the notch renders a login call-to-action instead of the conversation surface. The app
     /// delegate pushes this from the auth coordinator's session state (true while signed out after a
     /// prior sign-in, i.e. an expired session) and clears it once sign-in completes.
     @Published private(set) var needsLogin = false
@@ -42,43 +42,43 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     /// (the Google browser flow). The model never opens browsers or windows itself.
     var loginActionRequested: (() -> Void)?
     /// Fired when a hosted request fails authentication mid-run (an expired session). The app delegate
-    /// wires this to sign out, which flips the notch into login mode while the running tasks stay put.
+    /// wires this to sign out, which flips the notch into login mode while the running conversations stay put.
     var sessionExpired: (() -> Void)?
     /// Fired when the Live session's optional audio streaming should start/stop,
     /// so the mic owner can keep the engine running continuously.
     var onLiveAudioStreamingChanged: ((Bool) -> Void)?
 
     private var commandHandler: any UserQueryCommandHandling
-    private let taskStore: any UserQueryConversationStoring
+    private let conversationStore: any UserQueryConversationStoring
     private let followUpResolver: any UserQueryFollowUpResolving
     private let voiceTranscriber: LocalVoiceTranscriptionAdapter
     private let liveController: GeminiLiveVoiceController
     private var updateChecker: any DonkeyUpdateChecking
     private let appCatalogRefreshLoop: LocalAppDynamicCatalogRefreshLoop
     private var activeAgentIDs: Set<String> = []
-    /// Resume requests made while a task's previous loop was still winding down (e.g. a quick Stop→Resume).
+    /// Resume requests made while a conversation's previous loop was still winding down (e.g. a quick Stop→Resume).
     /// The resume is deferred here and fired by `handleCommandRunResult` once that loop ends, so two loops
-    /// never run on one task and the tap is never silently dropped.
-    private var pendingResumeTaskIDs: Set<String> = []
-    /// The task an explicit Reply tap pinned the next submission to (a task waiting on the user — a
-    /// clarification or review). It routes the answer straight to that task instead of leaving the
+    /// never run on one conversation and the tap is never silently dropped.
+    private var pendingResumeConversationIDs: Set<String> = []
+    /// The conversation an explicit Reply tap pinned the next submission to (a conversation waiting on the user — a
+    /// clarification or review). It routes the answer straight to that conversation instead of leaving the
     /// follow-up resolver to guess, and the expanded panel dims every other row while it is set so the
     /// user sees which thread their reply continues. Consumed by the next submission.
-    @Published private(set) var replyTargetTaskID: String?
-    /// The task row the keyboard arrows currently highlight in the expanded notch, or nil when the
-    /// composer holds the focus. Distinct from `replyTargetTaskID`: arrowing only moves this highlight;
+    @Published private(set) var replyTargetConversationID: String?
+    /// The conversation row the keyboard arrows currently highlight in the expanded notch, or nil when the
+    /// composer holds the focus. Distinct from `replyTargetConversationID`: arrowing only moves this highlight;
     /// pressing Return on it begins a reply (like clicking the row). Typing into the composer clears it
     /// so the arrows return to editing the draft; clicking a row re-engages it.
-    @Published private(set) var selectedTaskID: String?
-    /// Metadata flag marking a terminal task (completed or failed) as seen — set when the user expands
-    /// the notch. It lives on the task (and so is persisted through the task store) rather than in memory,
+    @Published private(set) var selectedConversationID: String?
+    /// Metadata flag marking a terminal conversation (completed or failed) as seen — set when the user expands
+    /// the notch. It lives on the conversation (and so is persisted through the conversation store) rather than in memory,
     /// so an acknowledged failure stays dismissed across relaunches instead of re-surfacing every launch.
     private static let seenMetadataKey = "notch.seen"
 
-    /// Clear the "seen" dismissal a task carries into a fresh running run, so its next terminal state
+    /// Clear the "seen" dismissal a conversation carries into a fresh running run, so its next terminal state
     /// re-surfaces in the collapsed notch. Applied at every stopped→running transition — both the in-place
-    /// resume (`updateTask`) and the matched-resume seed (`taskForSubmittedCommand`), which bypasses
-    /// `updateTask`. The same transitions also reset `conversationsStreamingAnswer`.
+    /// resume (`updateConversation`) and the matched-resume seed (`conversationForSubmittedCommand`), which bypasses
+    /// `updateConversation`. The same transitions also reset `conversationsStreamingAnswer`.
     private static func clearRunMetadata(_ metadata: inout [String: String]) {
         metadata[seenMetadataKey] = nil
     }
@@ -89,30 +89,33 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     /// `clearRunMetadata` at every stopped→running transition so a new run's reply replaces the old one.
     private var conversationsStreamingAnswer: Set<String> = []
 
-    private var lastActiveTaskID: String?
-    /// The task/spawn the in-flight Gemini Live turn reports into, so the user
-    /// sees the same cursor-and-task feedback as a local pipeline run.
+    private var lastActiveConversationID: String?
+    /// The conversation/spawn the in-flight Gemini Live turn reports into, so the user
+    /// sees the same cursor-and-conversation feedback as a local pipeline run.
     private var liveTurn: (conversationID: String, spawnID: String?)?
     private var liveTurnWatchdog: Task<Void, Never>?
-    private static let notchTaskDisplayLimit = 12
+    private static let notchConversationDisplayLimit = 12
     private static let followUpCandidateLimit = 8
+    /// Stable id for the app-managed tool-setup conversation, so a relaunch (or re-download for a new
+    /// version) reuses the one row instead of stacking a fresh one each time. See `startSystemToolsSetupIfNeeded`.
+    private static let toolsSetupConversationID = "system.tools-setup"
     private static let followUpMatchConfidenceThreshold = 0.62
-    /// How long a Live turn may stay silent (no tool, no answer) before the task
+    /// How long a Live turn may stay silent (no tool, no answer) before the conversation
     /// is failed instead of spinning forever.
     private static let liveTurnSilenceLimitSeconds: TimeInterval = 75
 
     init(
         aiProvider: any AIHarnessSnapshotProviding = AIHarnessBoundary(),
         commandHandler: any UserQueryCommandHandling = LocalAppUserQueryCommandHandler(),
-        taskStore: any UserQueryConversationStoring = CoreDataUserQueryConversationStore(),
-        followUpResolver: any UserQueryFollowUpResolving = HostedTaskFollowUpResolver(),
+        conversationStore: any UserQueryConversationStoring = CoreDataUserQueryConversationStore(),
+        followUpResolver: any UserQueryFollowUpResolving = HostedConversationFollowUpResolver(),
         voiceTranscriber: LocalVoiceTranscriptionAdapter = LocalVoiceTranscriptionAdapter(),
         updateChecker: any DonkeyUpdateChecking = SparkleUpdateController(),
         liveController: GeminiLiveVoiceController = GeminiLiveVoiceController(),
         theme: UserQueryTheme = UserQueryOverlayModel.bundledTheme()
     ) {
         self.commandHandler = commandHandler
-        self.taskStore = taskStore
+        self.conversationStore = conversationStore
         self.followUpResolver = followUpResolver
         self.voiceTranscriber = voiceTranscriber
         self.liveController = liveController
@@ -120,15 +123,15 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         self.appCatalogRefreshLoop = LocalAppDynamicCatalogRefreshLoop(
             profileGenerator: HostedLocalAppCatalogProfileGenerator()
         )
-        let restoration = Self.restoredTasks(
-            from: taskStore.loadRecentTasks(limit: Self.notchTaskDisplayLimit),
+        let restoration = Self.restoredConversations(
+            from: conversationStore.loadRecentConversations(limit: Self.notchConversationDisplayLimit),
             now: Date()
         )
-        let restoredTasks = restoration.tasks
-        notchTasks = restoredTasks
-        notchAccentIndex = restoredTasks.first.map { UserQueryAccentPalette.normalizedIndex($0.accentIndex) }
+        let restoredConversations = restoration.conversations
+        notchConversations = restoredConversations
+        notchAccentIndex = restoredConversations.first.map { UserQueryAccentPalette.normalizedIndex($0.accentIndex) }
             ?? UserQueryAccentPalette.firstIndex
-        isCurrentTaskPaused = restoredTasks.first?.status == .paused
+        isCurrentConversationPaused = restoredConversations.first?.status == .paused
         updateState = UserQueryUpdateState(
             currentVersion: updateChecker.currentVersion
         )
@@ -149,20 +152,20 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         checkForUpdates()
         startLiveSessionIfEnabled()
         // A mid-run 401 from the hosted backend means the session expired: surface login (the app
-        // delegate wires `sessionExpired` to the auth coordinator) while the running tasks stay put.
+        // delegate wires `sessionExpired` to the auth coordinator) while the running conversations stay put.
         self.commandHandler.onAuthenticationRequired = { [weak self] in
             self?.handleSessionExpired()
         }
-        autoResumeInterruptedTasks(restoration.autoResumeIDs)
+        autoResumeInterruptedConversations(restoration.autoResumeIDs)
     }
 
-    /// Resume tasks that were actively running when the app last quit (see `restoredTasks`). Each runs as
+    /// Resume conversations that were actively running when the app last quit (see `restoredConversations`). Each runs as
     /// an unattended BACKGROUND turn — the user may not be present — so it never raises an app or moves
-    /// the cursor; progress narrates into the task's own row. Fires once, at launch.
-    private func autoResumeInterruptedTasks(_ conversationIDs: [String]) {
+    /// the cursor; progress narrates into the conversation's own row. Fires once, at launch.
+    private func autoResumeInterruptedConversations(_ conversationIDs: [String]) {
         guard !conversationIDs.isEmpty else { return }
         // Don't drive the harness while signed out — every planner step would 401. The interrupted
-        // tasks stay retryable and resume on the next launch (or manual retry) once signed in.
+        // conversations stay retryable and resume on the next launch (or manual retry) once signed in.
         guard BackendSessionGate.shared.isAuthenticated else { return }
         for conversationID in conversationIDs {
             guard let context = commandContext(conversationID: conversationID, isFollowUp: false, source: .followUp, spawnID: nil) else {
@@ -174,16 +177,137 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
                 await MainActor.run {
                     guard let self else { return }
                     // No goal to resume, or the unattended run couldn't even start (no frontmost app,
-                    // backend off): keep the task retryable rather than failing it, so the user can resume
+                    // backend off): keep the conversation retryable rather than failing it, so the user can resume
                     // it later. Only a run that actually executed reports its real outcome.
                     if result == nil || result?.metadata["harness.abortReason"] != nil {
                         self.activeAgentIDs.remove(conversationID)
-                        self.updateTask(id: conversationID, detail: "Interrupted — resume", status: .timedOut)
+                        self.updateConversation(id: conversationID, detail: "Interrupted — resume", status: .timedOut)
                         return
                     }
                     self.handleCommandRunResult(conversationID: conversationID, spawnID: nil, isFollowUp: false, result: result!)
                 }
             }
+        }
+    }
+
+    // MARK: - System tool setup (first-run bundle download)
+
+    /// Begin the app-managed download of the bundled CLI tools, surfaced as a normal-looking conversation
+    /// the user can watch but never stop, resume, reply to, or dismiss (it is `origin == .system`; every
+    /// control gates on `isUserControllable`). The app delegate calls this once the notch surfaces are up.
+    /// The installer no-ops when the bundle is already current or nothing is published, so it is cheap to
+    /// call on every launch and sign-in, and it handles its own retries — the row just narrates them.
+    func startSystemToolsSetupIfNeeded() {
+        reconcileInterruptedSystemSetup()
+        Task { [weak self] in
+            await BundledToolsInstaller.shared.installIfNeeded(onEvent: { event in
+                Task { @MainActor in self?.applyToolsSetupEvent(event) }
+            })
+        }
+    }
+
+    /// A relaunch tears down the install loop, so a setup row persisted mid-run can't keep advancing on its
+    /// own. Settle it before the fresh install run (which reconciles it for real): if the tools are present
+    /// it reads as ready; otherwise drop the stale row so the run below re-creates it only if work remains.
+    private func reconcileInterruptedSystemSetup() {
+        let id = Self.toolsSetupConversationID
+        guard let conversation = conversation(withID: id),
+              conversation.origin == .system,
+              conversation.status != .completed,
+              conversation.status != .failed else {
+            return
+        }
+        if BundledTools.installedVersion != nil {
+            updateConversation(id: id, detail: "Tools ready", status: .completed)
+        } else {
+            notchConversations.removeAll { $0.id == id }
+            conversationStore.deleteConversation(id: id)
+        }
+    }
+
+    /// Map one installer event onto the setup conversation. Discrete transitions announce through the
+    /// lifecycle path (event log + thread record); the download's percent stream is a detail-only update so
+    /// it doesn't spam an event per percent. The conversation stays `.running` through retries — the user
+    /// can't act on it, so a momentary "failed" would only alarm; only a final give-up reads as `.failed`.
+    private func applyToolsSetupEvent(_ event: BundledToolsSetupEvent) {
+        let id = Self.toolsSetupConversationID
+        switch event {
+        case .started:
+            ensureSystemSetupConversation()
+            announceLifecycle(
+                conversationID: id,
+                UserQueryActivity(kind: .working, summary: "Setting up Donkey’s tools"),
+                status: .running
+            )
+        case .downloading(let fraction):
+            ensureSystemSetupConversation()
+            let line = fraction.map { "Downloading tools — \(Int(($0 * 100).rounded()))%" } ?? "Downloading tools…"
+            if conversation(withID: id)?.detail != line {
+                updateConversation(id: id, detail: line, status: .running)
+            }
+        case .verifying:
+            updateConversation(id: id, detail: "Verifying tools…", status: .running)
+        case .installing:
+            updateConversation(id: id, detail: "Installing tools…", status: .running)
+        case .retrying(let attempt, let maxAttempts):
+            updateConversation(
+                id: id,
+                detail: "Download interrupted — retrying (\(attempt)/\(maxAttempts))…",
+                status: .running
+            )
+        case .completed:
+            announceLifecycle(
+                conversationID: id,
+                UserQueryActivity(kind: .completed, summary: "Tools ready"),
+                status: .completed
+            )
+            scheduleSystemSetupAutoAcknowledge(id: id)
+        case .failed:
+            announceLifecycle(
+                conversationID: id,
+                UserQueryActivity(kind: .failed, summary: "Couldn’t finish setting up tools — Donkey will try again later"),
+                status: .failed
+            )
+            scheduleSystemSetupAutoAcknowledge(id: id)
+        }
+    }
+
+    /// Create the setup row on the first event of a fresh run, or re-open the persisted one to running for a
+    /// new version's download (which clears its "seen" flag so it resurfaces). Reuses the stable id.
+    private func ensureSystemSetupConversation() {
+        let id = Self.toolsSetupConversationID
+        if let existing = conversation(withID: id) {
+            if existing.status != .running {
+                updateConversation(id: id, status: .running)
+            }
+            return
+        }
+        let conversation = UserQueryConversation(
+            id: id,
+            title: "Setting up Donkey’s tools",
+            detail: "Preparing…",
+            commandText: "",
+            status: .running,
+            accentIndex: nextRoundRobinAccentIndex(),
+            origin: .system
+        )
+        prependConversation(conversation)
+    }
+
+    /// The user can't dismiss a system row, so a finished one would otherwise pin the collapsed chin
+    /// forever. Mark it seen after a short read so the chin settles on its own; the row stays in the list
+    /// (and history) like any other completed conversation.
+    private func scheduleSystemSetupAutoAcknowledge(id: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
+            guard let self,
+                  let index = self.notchConversations.firstIndex(where: { $0.id == id }),
+                  Self.isSurfacedTerminalStatus(self.notchConversations[index].status) else {
+                return
+            }
+            var conversation = self.notchConversations[index]
+            conversation.metadata[Self.seenMetadataKey] = "true"
+            self.notchConversations[index] = conversation
+            self.conversationStore.upsertConversation(conversation)
         }
     }
 
@@ -198,7 +322,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         liveController.onComplexRequest = { [weak self] goal in
             // The model explicitly delegated via agent_run: close out the Live
             // turn and run the goal through the full local pipeline (never back
-            // through Live — no loop). The pipeline has its own task/spawn UI.
+            // through Live — no loop). The pipeline has its own conversation/spawn UI.
             guard let self else { return }
             self.finishLiveTurn(detail: "Handed off to the desktop agent", status: .completed)
             self.runLocalCommand(goal, source: .typedPrompt)
@@ -209,7 +333,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             self.promptState.promptText = summary
             guard let liveTurn = self.liveTurn else { return }
             self.updateSpawn(id: liveTurn.spawnID, label: Self.collapsedDisplayText(for: summary), phase: .holding)
-            self.updateTask(id: liveTurn.conversationID, detail: summary, status: .running)
+            self.updateConversation(id: liveTurn.conversationID, detail: summary, status: .running)
             self.appendAgentEvent(conversationID: liveTurn.conversationID, role: .system, text: summary)
             self.restartLiveTurnWatchdog()
         }
@@ -289,9 +413,9 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         loginActionRequested?()
     }
 
-    /// The notch "Reload credits" CTA was tapped on a credit-exhausted task. Open the billing page in
+    /// The notch "Reload credits" CTA was tapped on a credit-exhausted conversation. Open the billing page in
     /// the browser (donkeyuse.com in prod, localhost in dev — the configured web base URL) so the user
-    /// can top up; the task stays on the row so it can be re-run once credits land.
+    /// can top up; the conversation stays on the row so it can be re-run once credits land.
     func reloadCredits(id conversationID: String) {
         let billingURL = DonkeyAuthConfiguration.current().webBaseURL
             .appendingPathComponent("app/settings")
@@ -390,41 +514,41 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     }
 
     /// Send a turn to the Live session with the same visible lifecycle as a
-    /// local run: a task in the rail and a spawn cursor that narrates tool
+    /// local run: a conversation in the rail and a spawn cursor that narrates tool
     /// activity, consent gates, and the final answer.
     private func routeToLiveSession(_ text: String) {
         if liveTurn != nil {
             finishLiveTurn(detail: "Changed course", status: .interrupted)
         }
         let spawnID = beginSpawn(for: text)
-        let task = taskForSubmittedCommand(
+        let conversation = conversationForSubmittedCommand(
             text: text,
-            matchedTaskID: nil,
+            matchedConversationID: nil,
             reservedAccentIndex: spawnID.flatMap { spawn(withID: $0)?.accentIndex }
         )
-        updateSpawn(id: spawnID, conversationID: task.id, accentIndex: task.accentIndex)
-        activeAgentIDs.insert(task.id)
-        lastActiveTaskID = task.id
-        appendAgentEvent(conversationID: task.id, role: .user, text: text)
+        updateSpawn(id: spawnID, conversationID: conversation.id, accentIndex: conversation.accentIndex)
+        activeAgentIDs.insert(conversation.id)
+        lastActiveConversationID = conversation.id
+        appendAgentEvent(conversationID: conversation.id, role: .user, text: text)
         clearSubmissionInputs()
         promptState.isActive = false
         promptState.isVoiceInputActive = false
         promptState.leadingSignalLevel = .thinking
-        promptState.promptText = task.title
-        liveTurn = (task.id, spawnID)
+        promptState.promptText = conversation.title
+        liveTurn = (conversation.id, spawnID)
         restartLiveTurnWatchdog()
         Task { [liveController] in await liveController.sendText(text) }
     }
 
-    /// Close out the in-flight Live turn's task and spawn.
+    /// Close out the in-flight Live turn's conversation and spawn.
     private func finishLiveTurn(detail: String?, status: UserQueryConversationStatus) {
         liveTurnWatchdog?.cancel()
         liveTurnWatchdog = nil
         guard let turn = liveTurn else { return }
         liveTurn = nil
-        updateTask(id: turn.conversationID, detail: detail, status: status)
+        updateConversation(id: turn.conversationID, detail: detail, status: status)
         activeAgentIDs.remove(turn.conversationID)
-        syncPrimaryTaskPausedFlag()
+        syncPrimaryConversationPausedFlag()
         guard let spawnID = turn.spawnID, let index = spawnIndex(id: spawnID) else { return }
         var spawnState = spawnStates[index]
         switch status {
@@ -444,7 +568,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     }
 
     /// Fail the Live turn if the session stays silent (no tool call, no answer)
-    /// past the limit, instead of leaving the task spinning.
+    /// past the limit, instead of leaving the conversation spinning.
     private func restartLiveTurnWatchdog() {
         liveTurnWatchdog?.cancel()
         let limit = Self.liveTurnSilenceLimitSeconds
@@ -459,14 +583,14 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         }
     }
 
-    /// Surface a Live-path shell consent in the notch using the same task
+    /// Surface a Live-path shell consent in the notch using the same conversation
     /// metadata the harness consent UI reads, marked so approval routes back to
     /// the Live controller instead of the harness lifecycle.
     private func presentLiveShellConsent(_ request: GeminiLiveShellConsentRequest) {
         guard let turn = liveTurn else { return }
         liveTurnWatchdog?.cancel()
         updateSpawn(id: turn.spawnID, label: "Waiting for approval", phase: .holding)
-        updateTask(
+        updateConversation(
             id: turn.conversationID,
             detail: request.summary,
             status: .waitingForPermission,
@@ -480,13 +604,13 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         appendAgentEvent(conversationID: turn.conversationID, role: .system, text: request.summary)
         promptState.leadingSignalLevel = .ready
         promptState.promptText = request.summary
-        syncPrimaryTaskPausedFlag()
+        syncPrimaryConversationPausedFlag()
     }
 
     private func runLocalCommand(_ text: String, source: AppHarnessTurnSource = .typedPrompt) {
         let candidates = followUpCandidates()
         let promptFollowUpTarget = promptSubmissionFollowUpTarget()
-        let replyTargetTaskID = consumePendingReplyTarget()
+        let replyTargetConversationID = consumePendingReplyTarget()
         let spawnID: String?
         if let promptFollowUpTarget {
             updateSpawn(
@@ -508,14 +632,14 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         let sourceTraceID = "user-query-followup-\(UUID().uuidString)"
         let confidenceThreshold = Self.followUpMatchConfidenceThreshold
         Task { [weak self, followUpResolver] in
-            let matchedTaskID: String?
-            if let replyTargetTaskID {
-                // An explicit Reply pins the answer to that task — never re-routed by the resolver.
-                matchedTaskID = replyTargetTaskID
+            let matchedConversationID: String?
+            if let replyTargetConversationID {
+                // An explicit Reply pins the answer to that conversation — never re-routed by the resolver.
+                matchedConversationID = replyTargetConversationID
             } else if let conversationID = promptFollowUpTarget?.conversationID {
-                matchedTaskID = conversationID
+                matchedConversationID = conversationID
             } else if candidates.isEmpty {
-                matchedTaskID = nil
+                matchedConversationID = nil
             } else {
                 let resolution = await followUpResolver.resolveFollowUp(
                     UserQueryFollowUpResolverRequest(
@@ -526,16 +650,16 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
                 )
                 if let conversationID = resolution.conversationID,
                    resolution.confidence >= confidenceThreshold {
-                    matchedTaskID = conversationID
+                    matchedConversationID = conversationID
                 } else {
-                    matchedTaskID = nil
+                    matchedConversationID = nil
                 }
             }
 
             await MainActor.run {
                 self?.startCommandRun(
                     text: text,
-                    matchedTaskID: matchedTaskID,
+                    matchedConversationID: matchedConversationID,
                     source: source,
                     spawnID: spawnID
                 )
@@ -546,30 +670,30 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     func handleDroppedAssets(_ drafts: [UserQueryConversationAssetDraft]) {
         guard !drafts.isEmpty else { return }
 
-        let targetTask = taskForDroppedAssets()
+        let targetConversation = conversationForDroppedAssets()
         let assetNames = drafts.map(\.displayName)
         let eventText = Self.assetUploadEventText(assetNames)
-        let eventID = appendAgentEvent(conversationID: targetTask.id, role: .user, text: eventText)
+        let eventID = appendAgentEvent(conversationID: targetConversation.id, role: .user, text: eventText)
         for draft in drafts {
             let assetID = UUID().uuidString
-            taskStore.appendAsset(
+            conversationStore.appendAsset(
                 Self.persistedAsset(
                     from: draft,
                     assetID: assetID,
-                    conversationID: targetTask.id,
+                    conversationID: targetConversation.id,
                     eventID: eventID
                 )
             )
         }
 
-        var updatedTask = targetTask
-        updatedTask.detail = drafts.count == 1 ? "1 asset attached" : "\(drafts.count) assets attached"
-        updatedTask.updatedAt = Date()
-        prependTask(updatedTask)
-        lastActiveTaskID = updatedTask.id
-        promptState.promptText = updatedTask.title
-        promptState.leadingSignalLevel = updatedTask.status == .running ? .thinking : .ready
-        syncPrimaryTaskPausedFlag()
+        var updatedConversation = targetConversation
+        updatedConversation.detail = drafts.count == 1 ? "1 asset attached" : "\(drafts.count) assets attached"
+        updatedConversation.updatedAt = Date()
+        prependConversation(updatedConversation)
+        lastActiveConversationID = updatedConversation.id
+        promptState.promptText = updatedConversation.title
+        promptState.leadingSignalLevel = updatedConversation.status == .running ? .thinking : .ready
+        syncPrimaryConversationPausedFlag()
     }
 
     func markSpawnDesktopEmerged(id spawnID: String) {
@@ -608,7 +732,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         )
         startCommandRun(
             text: trimmedText,
-            matchedTaskID: conversationID,
+            matchedConversationID: conversationID,
             source: .followUp,
             spawnID: spawnID
         )
@@ -616,26 +740,26 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
 
     private func startCommandRun(
         text: String,
-        matchedTaskID: String?,
+        matchedConversationID: String?,
         source: AppHarnessTurnSource = .typedPrompt,
         spawnID: String? = nil
     ) {
-        // A follow-up to a task whose loop is still running — or one blocked at a permission gate — is
-        // queued into that task: the running loop folds it in at its next step, and a gated task keeps its
+        // A follow-up to a conversation whose loop is still running — or one blocked at a permission gate — is
+        // queued into that conversation: the running loop folds it in at its next step, and a gated conversation keeps its
         // gate and drains the follow-up when the user approves. Either way it must NOT start a second run
-        // or clear the gate. Everything else (a brand-new command, or a follow-up to a stopped task) takes
-        // the fresh/resume path below, which runs concurrently with any other in-flight task.
-        let matchedStatus = matchedTaskID.flatMap { task(withID: $0)?.status }
-        if let matchedTaskID, matchedStatus == .running || matchedStatus == .waitingForPermission {
-            queueFollowUpIntoRunningTask(text: text, conversationID: matchedTaskID, source: source, spawnID: spawnID)
+        // or clear the gate. Everything else (a brand-new command, or a follow-up to a stopped conversation) takes
+        // the fresh/resume path below, which runs concurrently with any other in-flight conversation.
+        let matchedStatus = matchedConversationID.flatMap { conversation(withID: $0)?.status }
+        if let matchedConversationID, matchedStatus == .running || matchedStatus == .waitingForPermission {
+            queueFollowUpIntoRunningConversation(text: text, conversationID: matchedConversationID, source: source, spawnID: spawnID)
             return
         }
-        runFreshOrResumedCommand(text: text, matchedTaskID: matchedTaskID, source: source, spawnID: spawnID)
+        runFreshOrResumedCommand(text: text, matchedConversationID: matchedConversationID, source: source, spawnID: spawnID)
     }
 
-    /// Queue a follow-up onto a task whose loop is still running. The live loop picks it up at its next
-    /// step; if the loop happens to finish first, fall back to resuming the task with the instruction.
-    private func queueFollowUpIntoRunningTask(
+    /// Queue a follow-up onto a conversation whose loop is still running. The live loop picks it up at its next
+    /// step; if the loop happens to finish first, fall back to resuming the conversation with the instruction.
+    private func queueFollowUpIntoRunningConversation(
         text: String,
         conversationID: String,
         source: AppHarnessTurnSource,
@@ -644,21 +768,21 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         appendAgentEvent(conversationID: conversationID, role: .user, text: text)
         updateSpawn(id: spawnID, conversationID: conversationID)
         clearSubmissionInputs()
-        lastActiveTaskID = conversationID
+        lastActiveConversationID = conversationID
         promptState.isActive = false
         promptState.isVoiceInputActive = false
         promptState.leadingSignalLevel = .thinking
-        promptState.promptText = task(withID: conversationID)?.title ?? Self.collapsedDisplayText(for: text)
-        syncPrimaryTaskPausedFlag()
+        promptState.promptText = conversation(withID: conversationID)?.title ?? Self.collapsedDisplayText(for: text)
+        syncPrimaryConversationPausedFlag()
         Task { [weak self, commandHandler] in
             let injected = await commandHandler.injectFollowUp(conversationID: conversationID, text: text)
             guard !injected else { return }
-            // Race: the loop finished between the live check and the enqueue. Resume the task with the
+            // Race: the loop finished between the live check and the enqueue. Resume the conversation with the
             // instruction instead. The user event is already recorded, so it is not appended again.
             await MainActor.run {
                 self?.runFreshOrResumedCommand(
                     text: text,
-                    matchedTaskID: conversationID,
+                    matchedConversationID: conversationID,
                     source: source,
                     spawnID: spawnID,
                     appendUserEvent: false
@@ -669,35 +793,35 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
 
     private func runFreshOrResumedCommand(
         text: String,
-        matchedTaskID: String?,
+        matchedConversationID: String?,
         source: AppHarnessTurnSource = .typedPrompt,
         spawnID: String? = nil,
         appendUserEvent: Bool = true
     ) {
-        let isFollowUp = matchedTaskID != nil
+        let isFollowUp = matchedConversationID != nil
         let reservedAccentIndex = spawnID.flatMap { spawn(withID: $0)?.accentIndex }
-        let task = taskForSubmittedCommand(
+        let conversation = conversationForSubmittedCommand(
             text: text,
-            matchedTaskID: matchedTaskID,
+            matchedConversationID: matchedConversationID,
             reservedAccentIndex: reservedAccentIndex
         )
         updateSpawn(
             id: spawnID,
-            conversationID: task.id,
-            accentIndex: task.accentIndex
+            conversationID: conversation.id,
+            accentIndex: conversation.accentIndex
         )
-        activeAgentIDs.insert(task.id)
-        lastActiveTaskID = task.id
+        activeAgentIDs.insert(conversation.id)
+        lastActiveConversationID = conversation.id
         if appendUserEvent {
-            appendAgentEvent(conversationID: task.id, role: .user, text: text)
+            appendAgentEvent(conversationID: conversation.id, role: .user, text: text)
         }
         clearSubmissionInputs()
         promptState.isActive = false
         promptState.leadingSignalLevel = .thinking
-        promptState.promptText = task.title
-        syncPrimaryTaskPausedFlag()
+        promptState.promptText = conversation.title
+        syncPrimaryConversationPausedFlag()
         let context = commandContext(
-            conversationID: task.id,
+            conversationID: conversation.id,
             isFollowUp: isFollowUp,
             source: source,
             spawnID: spawnID
@@ -706,7 +830,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             let result = await commandHandler.handleSubmittedCommand(text, context: context)
             await MainActor.run {
                 self?.handleCommandRunResult(
-                    conversationID: task.id,
+                    conversationID: conversation.id,
                     spawnID: spawnID,
                     isFollowUp: isFollowUp,
                     result: result
@@ -715,7 +839,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         }
     }
 
-    /// Apply a finished pipeline run to the task rail, prompt pill, cursor
+    /// Apply a finished pipeline run to the conversation rail, prompt pill, cursor
     /// replay, and spawn — shared by fresh submissions and post-approval resumes.
     private func handleCommandRunResult(
         conversationID: String,
@@ -723,11 +847,11 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         isFollowUp: Bool,
         result: UserQueryCommandHandlingResult
     ) {
-        updateTask(
+        updateConversation(
             id: conversationID,
-            title: isFollowUp ? nil : result.taskLabel,
+            title: isFollowUp ? nil : result.conversationLabel,
             detail: result.summary,
-            status: Self.taskStatus(for: result),
+            status: Self.conversationStatus(for: result),
             metadata: result.metadata
         )
         appendAgentEvent(conversationID: conversationID, role: .assistant, text: result.summary)
@@ -743,8 +867,8 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             minimumFadeDelay: cursorOverlayRequest.map(Self.visualizationPlaybackDuration)
         )
         // Honor a resume requested while this loop was still winding down (e.g. Stop→Resume): now that the
-        // loop has ended and the task left activeAgentIDs, the resume can start without racing a live loop.
-        if pendingResumeTaskIDs.remove(conversationID) != nil {
+        // loop has ended and the conversation left activeAgentIDs, the resume can start without racing a live loop.
+        if pendingResumeConversationIDs.remove(conversationID) != nil {
             resumeAgent(id: conversationID)
         }
     }
@@ -757,13 +881,13 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     /// consumed; at the composer with a draft already typed, the arrows fall through to edit the text.
     @discardableResult
     func moveNotchSelection(_ direction: NotchArrowDirection) -> Bool {
-        guard !notchTasks.isEmpty else { return false }
-        let lastIndex = notchTasks.count - 1
-        guard let current = selectedTaskID.flatMap({ id in notchTasks.firstIndex { $0.id == id } }) else {
+        guard !notchConversations.isEmpty else { return false }
+        let lastIndex = notchConversations.count - 1
+        guard let current = selectedConversationID.flatMap({ id in notchConversations.firstIndex { $0.id == id } }) else {
             // No row focused yet: enter the list, but only when the composer isn't holding a draft.
             if !notchCommandText.isEmpty { return false }
             let entry = direction == .up ? lastIndex : 0
-            focusNotchRow(notchTasks[entry].id)
+            focusNotchRow(notchConversations[entry].id)
             return true
         }
         let next: Int
@@ -771,7 +895,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         case .up: next = max(0, current - 1)
         case .down: next = min(lastIndex, current + 1)
         }
-        focusNotchRow(notchTasks[next].id)
+        focusNotchRow(notchConversations[next].id)
         return true
     }
 
@@ -780,68 +904,77 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     /// accent, and the other rows dim). Passing nil (Escape, or leaving reply) clears both, the same as
     /// clicking bare chrome.
     func focusNotchRow(_ conversationID: String?) {
-        selectedTaskID = conversationID
-        guard let conversationID, task(withID: conversationID) != nil else {
-            replyTargetTaskID = nil
+        selectedConversationID = conversationID
+        guard let conversationID, let conversation = conversation(withID: conversationID) else {
+            replyTargetConversationID = nil
             return
         }
-        replyTargetTaskID = conversationID
-        lastActiveTaskID = conversationID
+        // A system-driven row (tool setup) can be highlighted, but the user can't reply to it, so it never
+        // becomes the reply target — a Return on it is inert rather than pinning the composer to it.
+        guard conversation.isUserControllable else {
+            replyTargetConversationID = nil
+            return
+        }
+        replyTargetConversationID = conversationID
+        lastActiveConversationID = conversationID
     }
 
     func clearNotchSelection() {
-        selectedTaskID = nil
+        selectedConversationID = nil
     }
 
     /// Take the pinned Reply target, if any, for the submission about to run. Cleared on read so it only
-    /// applies to the one answer (which also un-dims the rows), and dropped if the task is no longer
+    /// applies to the one answer (which also un-dims the rows), and dropped if the conversation is no longer
     /// around (fall back to normal routing).
     private func consumePendingReplyTarget() -> String? {
-        guard let conversationID = replyTargetTaskID else { return nil }
-        replyTargetTaskID = nil
-        // Drop the pin only if the task vanished between the tap and the submit (e.g. it was closed);
+        guard let conversationID = replyTargetConversationID else { return nil }
+        replyTargetConversationID = nil
+        // Drop the pin only if the conversation vanished between the tap and the submit (e.g. it was closed);
         // otherwise the message is pinned to it whatever its current state (`startCommandRun` routes a
         // running/permission-gated target into a queued follow-up, a stopped/terminal one resumes).
-        return task(withID: conversationID) != nil ? conversationID : nil
+        return conversation(withID: conversationID) != nil ? conversationID : nil
     }
 
     func pauseAgent(id conversationID: String) {
-        guard task(withID: conversationID)?.status == .running else { return }
+        guard let conversation = conversation(withID: conversationID),
+              conversation.isUserControllable,
+              conversation.status == .running else { return }
 
         activeAgentIDs.insert(conversationID)
-        lastActiveTaskID = conversationID
+        lastActiveConversationID = conversationID
         announceLifecycle(conversationID: conversationID, UserQueryActivity(kind: .paused), status: .paused)
-        syncPrimaryTaskPausedFlag()
+        syncPrimaryConversationPausedFlag()
         Task { [commandHandler] in
             _ = await commandHandler.pauseCommand(conversationID: conversationID)
         }
     }
 
     func resumeAgent(id conversationID: String) {
-        guard let task = task(withID: conversationID),
-              [.paused, .interrupted, .timedOut, .needsAttention].contains(task.status) else {
+        guard let conversation = conversation(withID: conversationID),
+              conversation.isUserControllable,
+              [.paused, .interrupted, .timedOut, .needsAttention].contains(conversation.status) else {
             return
         }
-        // Only run a task with real work behind it; an info-only row (e.g. an asset drop) has no goal, so
+        // Only run a conversation with real work behind it; an info-only row (e.g. an asset drop) has no goal, so
         // resuming would dead-end. Such rows shouldn't offer Resume, but guard here too.
-        guard !task.commandText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        // If the task's previous loop is still winding down (e.g. just Stopped), defer the resume until it
-        // ends so two loops never run on one task; handleCommandRunResult fires the deferred resume.
+        guard !conversation.commandText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        // If the conversation's previous loop is still winding down (e.g. just Stopped), defer the resume until it
+        // ends so two loops never run on one conversation; handleCommandRunResult fires the deferred resume.
         guard !activeAgentIDs.contains(conversationID) else {
-            pendingResumeTaskIDs.insert(conversationID)
+            pendingResumeConversationIDs.insert(conversationID)
             return
         }
 
         activeAgentIDs.insert(conversationID)
-        lastActiveTaskID = conversationID
+        lastActiveConversationID = conversationID
         // The live line falls back to the running activity ("Thinking"); the record logs "Resuming".
         announceLifecycle(conversationID: conversationID, UserQueryActivity(kind: .resumed), status: .running, liveDetail: "")
         updateSpawn(id: spawnStates.first { $0.conversationID == conversationID }?.id, resumesWork: true)
         promptState.leadingSignalLevel = .thinking
-        promptState.promptText = task.title
-        syncPrimaryTaskPausedFlag()
+        promptState.promptText = conversation.title
+        syncPrimaryConversationPausedFlag()
         // Pausing or a relaunch tears the loop down, so there is no suspended loop to continue in memory:
-        // re-run the task's existing goal as a fresh loop. The persisted world model and history carry the
+        // re-run the conversation's existing goal as a fresh loop. The persisted world model and history carry the
         // context forward, so it continues the work rather than starting over.
         let context = commandContext(conversationID: conversationID, isFollowUp: false, source: .followUp, spawnID: nil)
         Task { [weak self, commandHandler] in
@@ -850,7 +983,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
                 // than leaving it stuck on the optimistic "running" with no loop behind it.
                 await MainActor.run {
                     self?.activeAgentIDs.remove(conversationID)
-                    self?.updateTask(id: conversationID, detail: "Couldn’t resume — tap to retry", status: .timedOut)
+                    self?.updateConversation(id: conversationID, detail: "Couldn’t resume — tap to retry", status: .timedOut)
                 }
                 return
             }
@@ -860,17 +993,17 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         }
     }
 
-    /// The tasks the collapsed notch keeps surfaced as floating pointers: anything running, anything
-    /// blocked on the user (a clarification, a review, or a permission), plus terminal tasks (a finished
+    /// The conversations the collapsed notch keeps surfaced as floating pointers: anything running, anything
+    /// blocked on the user (a clarification, a review, or a permission), plus terminal conversations (a finished
     /// action, a conversational reply, or a failure) the user hasn't dismissed yet by expanding the notch.
     /// A failure — like an auth error —
-    /// holds the chin until acknowledged just as a completion does; a waiting task keeps its pointer lit
+    /// holds the chin until acknowledged just as a completion does; a waiting conversation keeps its pointer lit
     /// and pulsing (and its question in the chin) until the user answers.
-    var notchSurfacedTasks: [UserQueryConversation] {
-        notchTasks.filter { task in
-            task.status == .running ||
-                Self.isWaitingOnUserStatus(task.status) ||
-                (Self.isSurfacedTerminalStatus(task.status) && !Self.isSeen(task))
+    var notchSurfacedConversations: [UserQueryConversation] {
+        notchConversations.filter { conversation in
+            conversation.status == .running ||
+                Self.isWaitingOnUserStatus(conversation.status) ||
+                (Self.isSurfacedTerminalStatus(conversation.status) && !Self.isSeen(conversation))
         }
     }
 
@@ -880,16 +1013,16 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         status.isAwaitingUserResponse || status == .waitingForPermission
     }
 
-    /// Marks every currently-terminal task (a finished action, a conversational reply, or a failure) as
+    /// Marks every currently-terminal conversation (a finished action, a conversational reply, or a failure) as
     /// seen so it stops surfacing in the
     /// collapsed notch. Called when the notch expands — the user is now looking at the full list. The
-    /// flag is written to the task store, so the dismissal sticks across relaunches.
-    func acknowledgeSurfacedTasks() {
-        for index in notchTasks.indices where Self.isSurfacedTerminalStatus(notchTasks[index].status) && !Self.isSeen(notchTasks[index]) {
-            var task = notchTasks[index]
-            task.metadata[Self.seenMetadataKey] = "true"
-            notchTasks[index] = task
-            taskStore.upsertTask(task)
+    /// flag is written to the conversation store, so the dismissal sticks across relaunches.
+    func acknowledgeSurfacedConversations() {
+        for index in notchConversations.indices where Self.isSurfacedTerminalStatus(notchConversations[index].status) && !Self.isSeen(notchConversations[index]) {
+            var conversation = notchConversations[index]
+            conversation.metadata[Self.seenMetadataKey] = "true"
+            notchConversations[index] = conversation
+            conversationStore.upsertConversation(conversation)
         }
     }
 
@@ -899,47 +1032,72 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         status == .completed || status == .chatting || status == .failed
     }
 
-    private static func isSeen(_ task: UserQueryConversation) -> Bool {
-        task.metadata[seenMetadataKey] == "true"
+    private static func isSeen(_ conversation: UserQueryConversation) -> Bool {
+        conversation.metadata[seenMetadataKey] == "true"
     }
 
-    /// Closes a task: removes it from the notch list and tears down its pointer.
-    /// Offered only for stopped (paused/interrupted/failed) and completed tasks —
+    /// Closes a conversation: removes it from the notch list and tears down its pointer.
+    /// Offered only for stopped (paused/interrupted/failed) and completed conversations —
     /// the same affordance the prototype calls "close".
-    func dismissTask(id conversationID: String) {
-        guard let task = task(withID: conversationID) else { return }
-        guard task.status != .running else { return }
+    func dismissConversation(id conversationID: String) {
+        guard let conversation = conversation(withID: conversationID) else { return }
+        // A system-driven conversation (tool setup) is the app's to close, not the user's — it clears
+        // itself once finished (see `scheduleSystemSetupAutoAcknowledge`).
+        guard conversation.isUserControllable else { return }
+        guard conversation.status != .running else { return }
 
-        notchTasks.removeAll { $0.id == conversationID }
+        notchConversations.removeAll { $0.id == conversationID }
         activeAgentIDs.remove(conversationID)
-        // Closing the targeted task ends reply mode so the remaining rows don't stay dimmed.
-        if replyTargetTaskID == conversationID {
-            replyTargetTaskID = nil
+        // Closing the targeted conversation ends reply mode so the remaining rows don't stay dimmed.
+        if replyTargetConversationID == conversationID {
+            replyTargetConversationID = nil
         }
-        if selectedTaskID == conversationID {
-            selectedTaskID = nil
+        if selectedConversationID == conversationID {
+            selectedConversationID = nil
         }
-        if lastActiveTaskID == conversationID {
-            lastActiveTaskID = notchTasks.first?.id
+        if lastActiveConversationID == conversationID {
+            lastActiveConversationID = notchConversations.first?.id
         }
         if let spawnID = spawnStates.first(where: { $0.conversationID == conversationID })?.id {
             removeSpawn(id: spawnID)
         }
-        // Drop the persisted row (and its events/assets) too, so the task does not
-        // reappear when the notch reloads recent tasks on the next launch.
-        taskStore.deleteTask(id: conversationID)
-        syncPrimaryTaskPausedFlag()
+        // Drop the persisted row (and its events/assets) too, so the conversation does not
+        // reappear when the notch reloads recent conversations on the next launch.
+        conversationStore.deleteConversation(id: conversationID)
+        syncPrimaryConversationPausedFlag()
+        // Return the free-floating prompt line to rest once this was the last row. The collapsed notch
+        // reads `promptState` only when no conversation row exists, so a dismissed conversation's summary
+        // left stranded in `promptText` kept rendering — the row read as "still listed" (with a generic
+        // "Needs attention") even though it was gone. Resetting once the list empties is what actually
+        // makes the X clear the notch.
+        resetPromptLineIfNotchEmptied()
+    }
+
+    /// The prompt line the collapsed notch falls back to after a dismissal. Empty list → the resting
+    /// placeholder, never the dismissed conversation's stranded summary; with rows remaining the collapsed
+    /// notch reads them directly, so the line is left as the live flows set it (nil = leave untouched).
+    static func restingPromptText(forRemainingConversations conversations: [UserQueryConversation]) -> String? {
+        conversations.isEmpty ? UserQueryCopy.defaultPromptPlaceholder : nil
+    }
+
+    /// Apply `restingPromptText` to the live prompt state after the notch list changes. Skipped while the
+    /// composer is active so it never clobbers what the user is typing into.
+    private func resetPromptLineIfNotchEmptied() {
+        guard !promptState.isActive,
+              let restingText = Self.restingPromptText(forRemainingConversations: notchConversations) else { return }
+        promptState.promptText = restingText
+        promptState.leadingSignalLevel = .ready
     }
 
     func approvePermissionGate(id conversationID: String, alwaysAllow: Bool = false) {
-        guard let task = task(withID: conversationID),
-              task.status == .waitingForPermission else {
+        guard let conversation = conversation(withID: conversationID),
+              conversation.status == .waitingForPermission else {
             return
         }
 
         // A Live-path shell consent resolves through the Live controller, which
         // re-executes the held command and reports back via onActed/onResponse.
-        if task.metadata["live.shellConsent"] == "true" {
+        if conversation.metadata["live.shellConsent"] == "true" {
             announceLifecycle(
                 conversationID: conversationID,
                 UserQueryActivity(kind: .resumed),
@@ -951,7 +1109,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
                 updateSpawn(id: turn.spawnID, label: UserQueryActivity.Kind.resumed.label, resumesWork: true)
                 restartLiveTurnWatchdog()
             }
-            syncPrimaryTaskPausedFlag()
+            syncPrimaryConversationPausedFlag()
             Task { [liveController] in
                 await liveController.resolvePendingConsent(approved: true, alwaysAllow: alwaysAllow)
             }
@@ -959,13 +1117,13 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         }
 
         activeAgentIDs.insert(conversationID)
-        lastActiveTaskID = conversationID
-        // After approval the task simply resumes; the live line falls back to the running activity
+        lastActiveConversationID = conversationID
+        // After approval the conversation simply resumes; the live line falls back to the running activity
         // ("Thinking") rather than narrating an internal "approving permission" step.
         announceLifecycle(conversationID: conversationID, UserQueryActivity(kind: .resumed), status: .running, liveDetail: "")
         promptState.leadingSignalLevel = .thinking
-        promptState.promptText = task.title
-        syncPrimaryTaskPausedFlag()
+        promptState.promptText = conversation.title
+        syncPrimaryConversationPausedFlag()
         let spawnID = spawnStates.first { $0.conversationID == conversationID }?.id
         updateSpawn(id: spawnID, resumesWork: true)
         let context = commandContext(conversationID: conversationID, isFollowUp: true, spawnID: spawnID)
@@ -974,9 +1132,9 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             guard approved else {
                 await MainActor.run {
                     guard let self else { return }
-                    self.updateTask(id: conversationID, detail: "Approval unavailable", status: .needsAttention)
+                    self.updateConversation(id: conversationID, detail: "Approval unavailable", status: .needsAttention)
                     self.activeAgentIDs.remove(conversationID)
-                    self.syncPrimaryTaskPausedFlag()
+                    self.syncPrimaryConversationPausedFlag()
                 }
                 return
             }
@@ -986,9 +1144,9 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             await MainActor.run {
                 guard let self else { return }
                 guard let result else {
-                    self.updateTask(id: conversationID, detail: "Could not resume the task", status: .needsAttention)
+                    self.updateConversation(id: conversationID, detail: "Could not resume the task", status: .needsAttention)
                     self.activeAgentIDs.remove(conversationID)
-                    self.syncPrimaryTaskPausedFlag()
+                    self.syncPrimaryConversationPausedFlag()
                     return
                 }
                 self.handleCommandRunResult(
@@ -1002,15 +1160,15 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     }
 
     /// User denied a pending permission. The harness loop already exited at the consent gate, so this
-    /// stops the task into a resumable (paused) state — resuming re-runs it and asks again. A Live-path
+    /// stops the conversation into a resumable (paused) state — resuming re-runs it and asks again. A Live-path
     /// consent is also told "no" so it stops re-trying.
     func denyPermissionGate(id conversationID: String) {
-        guard let task = task(withID: conversationID),
-              task.status == .waitingForPermission else {
+        guard let conversation = conversation(withID: conversationID),
+              conversation.status == .waitingForPermission else {
             return
         }
 
-        if task.metadata["live.shellConsent"] == "true" {
+        if conversation.metadata["live.shellConsent"] == "true" {
             Task { [liveController] in
                 await liveController.resolvePendingConsent(approved: false, alwaysAllow: false)
             }
@@ -1026,7 +1184,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             status: .paused
         )
         activeAgentIDs.remove(conversationID)
-        syncPrimaryTaskPausedFlag()
+        syncPrimaryConversationPausedFlag()
     }
 
     func updateNotchCommandInputTextHeight(_ height: CGFloat) {
@@ -1048,7 +1206,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     }
 
     /// Desktop pointer spawning is temporarily disabled. Submissions no longer launch a
-    /// traveling cursor; accent assignment and task tracking continue without one. Flip to re-enable.
+    /// traveling cursor; accent assignment and conversation tracking continue without one. Flip to re-enable.
     private static let spawnPointersEnabled = false
 
     private func beginSpawn(
@@ -1060,7 +1218,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         guard Self.spawnPointersEnabled else { return nil }
 
         let spawnID = UUID().uuidString
-        let displayText = Self.taskLabel(for: text)
+        let displayText = Self.conversationLabel(for: text)
         let labelText = label ?? Self.collapsedDisplayText(for: text)
         let spawnAccentIndex: Int
         if let accentIndex {
@@ -1147,7 +1305,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         spawnState.finishedAt = Date()
 
         // Keep the cursor visible whenever there is a response to read — a clarification, a wait, a
-        // failure, OR a completed task that produced a summary (e.g. "Now playing …"). Only a
+        // failure, OR a completed conversation that produced a summary (e.g. "Now playing …"). Only a
         // completed action with no summary fades out, so the user always gets to see the result on
         // the cursor and several recent results can stay on screen at once.
         let hasReadableResult = UserQuerySpawnLifecycle.keepsVisibleResult(for: result.threadStatus)
@@ -1206,10 +1364,10 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             .id
     }
 
-    /// Only an EXPLICIT spawn selection force-targets an existing task. A bare new prompt is never
-    /// auto-attached to the latest task just because it is the most recent — that route is what made a
-    /// new command hijack a running task. Implicit follow-up matching is left entirely to the typed
-    /// follow-up resolver, which decides against task content rather than recency.
+    /// Only an EXPLICIT spawn selection force-targets an existing conversation. A bare new prompt is never
+    /// auto-attached to the latest conversation just because it is the most recent — that route is what made a
+    /// new command hijack a running conversation. Implicit follow-up matching is left entirely to the typed
+    /// follow-up resolver, which decides against conversation content rather than recency.
     private func promptSubmissionFollowUpTarget() -> (spawnID: String, conversationID: String)? {
         guard let selectedSpawnID,
               let conversationID = conversationIDForInteractableSpawn(id: selectedSpawnID) else {
@@ -1235,13 +1393,13 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         }
     }
 
-    private func prependTask(_ task: UserQueryConversation) {
-        notchTasks.removeAll { $0.id == task.id }
-        notchTasks.insert(task, at: 0)
-        if notchTasks.count > Self.notchTaskDisplayLimit {
-            notchTasks = Array(notchTasks.prefix(Self.notchTaskDisplayLimit))
+    private func prependConversation(_ conversation: UserQueryConversation) {
+        notchConversations.removeAll { $0.id == conversation.id }
+        notchConversations.insert(conversation, at: 0)
+        if notchConversations.count > Self.notchConversationDisplayLimit {
+            notchConversations = Array(notchConversations.prefix(Self.notchConversationDisplayLimit))
         }
-        taskStore.upsertTask(task)
+        conversationStore.upsertConversation(conversation)
     }
 
     private func clearSubmissionInputs() {
@@ -1254,76 +1412,79 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         promptState.isVoiceInputActive = false
     }
 
-    private func taskForSubmittedCommand(
+    private func conversationForSubmittedCommand(
         text: String,
-        matchedTaskID: String?,
+        matchedConversationID: String?,
         reservedAccentIndex: Int? = nil
     ) -> UserQueryConversation {
-        if let matchedTaskID,
-           var task = task(withID: matchedTaskID) {
+        if let matchedConversationID,
+           var conversation = conversation(withID: matchedConversationID) {
             if let reservedAccentIndex {
-                task.accentIndex = UserQueryAccentPalette.normalizedIndex(reservedAccentIndex)
+                conversation.accentIndex = UserQueryAccentPalette.normalizedIndex(reservedAccentIndex)
             }
-            // A follow-up to a task whose loop is still running is queued into it upstream (it never
-            // reaches here). A matched task that reaches this point has a stopped loop, so a new turn
+            // A follow-up to a conversation whose loop is still running is queued into it upstream (it never
+            // reaches here). A matched conversation that reaches this point has a stopped loop, so a new turn
             // resumes it: seed it back to running rather than restarting it under a replaced goal.
             //
             // The chin shows the conversation's latest line (`detail`), so seed both the command and that
             // line with what the user just sent; the agent's narration and reply overwrite `detail` from
             // there. (`appendAgentEvent` also writes these for the resume path, but the inject path seeds
             // straight here, so set them at the source too.)
-            task.commandText = text
-            task.detail = text
-            task.status = .running
-            task.updatedAt = Date()
+            conversation.commandText = text
+            conversation.detail = text
+            conversation.status = .running
+            conversation.updatedAt = Date()
             // Restamp the run-start: a resumed run's elapsed time should measure this run, not the idle
-            // gap since the task was first created (e.g. a task that failed, sat for hours, then resumed).
-            task.createdAt = Date()
-            // This branch seeds the task straight to running without going through `updateTask`, so it
+            // gap since the conversation was first created (e.g. a conversation that failed, sat for hours, then resumed).
+            conversation.createdAt = Date()
+            // This branch seeds the conversation straight to running without going through `updateConversation`, so it
             // must apply the same fresh-run metadata reset (see `clearRunMetadata`): otherwise a replied-to
             // thread keeps its stale "seen" (its next terminal state never re-surfaces) and "streaming
             // answer" flag (the new streamed reply appends onto the old answer).
-            Self.clearRunMetadata(&task.metadata)
-            conversationsStreamingAnswer.remove(task.id)
-            notchAccentIndex = UserQueryAccentPalette.normalizedIndex(task.accentIndex)
-            prependTask(task)
-            return task
+            Self.clearRunMetadata(&conversation.metadata)
+            conversationsStreamingAnswer.remove(conversation.id)
+            notchAccentIndex = UserQueryAccentPalette.normalizedIndex(conversation.accentIndex)
+            prependConversation(conversation)
+            return conversation
         }
 
-        let taskLabel = Self.taskLabel(for: text)
+        let conversationLabel = Self.conversationLabel(for: text)
         let nextAccentIndex = reservedAccentIndex.map(UserQueryAccentPalette.normalizedIndex)
             ?? nextRoundRobinAccentIndex()
         notchAccentIndex = nextAccentIndex
-        let task = UserQueryConversation(
+        let conversation = UserQueryConversation(
             id: UUID().uuidString,
-            title: taskLabel,
+            title: conversationLabel,
             detail: text,
             commandText: text,
             status: .running,
             accentIndex: nextAccentIndex
         )
-        prependTask(task)
-        return task
+        prependConversation(conversation)
+        return conversation
     }
 
-    private func taskForDroppedAssets() -> UserQueryConversation {
-        if let lastActiveTaskID,
-           activeAgentIDs.contains(lastActiveTaskID),
-           let task = task(withID: lastActiveTaskID) {
-            return task
+    private func conversationForDroppedAssets() -> UserQueryConversation {
+        // A drop only ever attaches to one of the user's own conversations — never to a system-driven row
+        // like tool setup, which has no goal to fold an asset into.
+        if let lastActiveConversationID,
+           activeAgentIDs.contains(lastActiveConversationID),
+           let conversation = conversation(withID: lastActiveConversationID),
+           conversation.isUserControllable {
+            return conversation
         }
 
-        if let activeTask = notchTasks.first(where: { $0.status == .running || $0.status == .paused }) {
-            return activeTask
+        if let activeConversation = notchConversations.first(where: { $0.isUserControllable && ($0.status == .running || $0.status == .paused) }) {
+            return activeConversation
         }
 
-        if let recentTask = notchTasks.first {
-            return recentTask
+        if let recentConversation = notchConversations.first(where: { $0.isUserControllable }) {
+            return recentConversation
         }
 
         let nextAccentIndex = nextRoundRobinAccentIndex()
         notchAccentIndex = nextAccentIndex
-        let task = UserQueryConversation(
+        let conversation = UserQueryConversation(
             id: UUID().uuidString,
             title: "Uploaded assets",
             detail: "Assets attached",
@@ -1331,17 +1492,17 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             status: .needsAttention,
             accentIndex: nextAccentIndex
         )
-        prependTask(task)
-        return task
+        prependConversation(conversation)
+        return conversation
     }
 
-    private func task(withID conversationID: String) -> UserQueryConversation? {
-        if let task = notchTasks.first(where: { $0.id == conversationID }) {
-            return task
+    private func conversation(withID conversationID: String) -> UserQueryConversation? {
+        if let conversation = notchConversations.first(where: { $0.id == conversationID }) {
+            return conversation
         }
 
-        return taskStore
-            .loadRecentTasks(limit: max(Self.notchTaskDisplayLimit, Self.followUpCandidateLimit) * 2)
+        return conversationStore
+            .loadRecentConversations(limit: max(Self.notchConversationDisplayLimit, Self.followUpCandidateLimit) * 2)
             .first { $0.id == conversationID }
     }
 
@@ -1351,12 +1512,12 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         source: AppHarnessTurnSource = .typedPrompt,
         spawnID: String? = nil
     ) -> UserQueryCommandContext? {
-        guard let task = task(withID: conversationID) else { return nil }
+        guard let conversation = conversation(withID: conversationID) else { return nil }
 
         return UserQueryCommandContext(
-            task: task,
-            recentEvents: Array(taskStore.loadEvents(conversationID: conversationID).suffix(10)),
-            assets: taskStore.loadAssets(conversationID: conversationID),
+            conversation: conversation,
+            recentEvents: Array(conversationStore.loadEvents(conversationID: conversationID).suffix(10)),
+            assets: conversationStore.loadAssets(conversationID: conversationID),
             isFollowUp: isFollowUp,
             turnSource: source,
             spawnProgressChanged: runProgressHandler(conversationID: conversationID, spawnID: spawnID),
@@ -1364,9 +1525,9 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         )
     }
 
-    /// Streams the agent's live narration into the running task's status line — the planner's per-step
+    /// Streams the agent's live narration into the running conversation's status line — the planner's per-step
     /// reason as it works ("Working out what you need", the restated goal, each tool's one-line summary)
-    /// — so the notch shows what the model is doing now instead of a static seed. The task title keeps
+    /// — so the notch shows what the model is doing now instead of a static seed. The conversation title keeps
     /// showing the user's prompt; only the status subtext advances. When a spawn pointer is present its
     /// cursor label follows the same narration. Returned unconditionally (even with pointers disabled)
     /// so the status line always advances past its "Thinking" seed.
@@ -1377,7 +1538,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         return { [weak self] update in
             guard let self else { return }
 
-            // A streamed answer chunk accumulates onto the task's detail (the chin and the open row both
+            // A streamed answer chunk accumulates onto the conversation's detail (the chin and the open row both
             // read it), so the reply types itself out. It bypasses the label path below, which replaces.
             if let answerDelta = update.answerDelta {
                 self.appendStreamedAnswer(conversationID: conversationID, delta: answerDelta, spawnID: spawnID)
@@ -1385,8 +1546,8 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             }
 
             let label = update.label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !label.isEmpty, self.task(withID: conversationID)?.status == .running {
-                self.updateTask(id: conversationID, detail: label)
+            if !label.isEmpty, self.conversation(withID: conversationID)?.status == .running {
+                self.updateConversation(id: conversationID, detail: label)
             }
             if let spawnID {
                 self.updateSpawn(
@@ -1399,16 +1560,16 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         }
     }
 
-    /// Append one streamed chunk of the assistant's final reply to the running task's detail. The first
+    /// Append one streamed chunk of the assistant's final reply to the running conversation's detail. The first
     /// chunk clears the per-step "Thinking" status and flips the streaming flag so the chin shows the
-    /// growing answer instead of the prompt; later chunks accumulate onto it. No-op once the task has
+    /// growing answer instead of the prompt; later chunks accumulate onto it. No-op once the conversation has
     /// left the running state (a late chunk after completion must not reopen the row's status line).
     private func appendStreamedAnswer(conversationID: String, delta: String, spawnID: String?) {
-        guard let task = task(withID: conversationID), task.status == .running else { return }
+        guard let conversation = conversation(withID: conversationID), conversation.status == .running else { return }
         let isStreaming = conversationsStreamingAnswer.contains(conversationID)
-        let newDetail = isStreaming ? task.detail + delta : delta
+        let newDetail = isStreaming ? conversation.detail + delta : delta
         conversationsStreamingAnswer.insert(conversationID)
-        updateTask(id: conversationID, detail: newDetail)
+        updateConversation(id: conversationID, detail: newDetail)
         if let spawnID {
             updateSpawn(id: spawnID, label: newDetail)
         }
@@ -1424,26 +1585,29 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     }
 
     private func followUpCandidates() -> [UserQueryFollowUpCandidate] {
-        let recent = taskStore.loadRecentTasks(limit: Self.followUpCandidateLimit)
+        let recent = conversationStore.loadRecentConversations(limit: Self.followUpCandidateLimit)
+        // The follow-up resolver only ever continues one of the user's own conversations: a system-driven
+        // row (tool setup) is never a target for the user's next message.
         return Self.activeFollowUpCandidates(from: recent, now: Date())
-            .map { task in
-                let recentEvents = taskStore
-                    .loadEvents(conversationID: task.id)
+            .filter { $0.isUserControllable }
+            .map { conversation in
+                let recentEvents = conversationStore
+                    .loadEvents(conversationID: conversation.id)
                     .suffix(6)
                     .map { event in
                         Self.truncated("\(event.role.rawValue): \(event.text)", maxLength: 220)
                     }
-                let assetNames = taskStore
-                    .loadAssets(conversationID: task.id)
+                let assetNames = conversationStore
+                    .loadAssets(conversationID: conversation.id)
                     .suffix(8)
                     .map(\.displayName)
                 return UserQueryFollowUpCandidate(
-                    conversationID: task.id,
-                    title: task.title,
-                    detail: task.detail,
-                    commandText: task.commandText,
-                    status: task.status,
-                    updatedAt: task.updatedAt,
+                    conversationID: conversation.id,
+                    title: conversation.title,
+                    detail: conversation.detail,
+                    commandText: conversation.commandText,
+                    status: conversation.status,
+                    updatedAt: conversation.updatedAt,
                     recentEvents: recentEvents,
                     assetNames: assetNames
                 )
@@ -1455,9 +1619,9 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else { return nil }
 
-        let sequence = taskStore.loadEvents(conversationID: conversationID).count
+        let sequence = conversationStore.loadEvents(conversationID: conversationID).count
         let eventID = UUID().uuidString
-        taskStore.appendEvent(
+        conversationStore.appendEvent(
             UserQueryConversationEvent(
                 id: eventID,
                 conversationID: conversationID,
@@ -1468,18 +1632,18 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         )
         // The chin shows the latest line of the conversation, and `detail` holds it. A user message is the
         // newest line the instant it is sent, so write it here — the one chokepoint every user turn crosses
-        // (fresh, follow-up, resumed, or folded into a still-running task via the inject path) — rather than
+        // (fresh, follow-up, resumed, or folded into a still-running conversation via the inject path) — rather than
         // at each call site, where a path that forgets leaves the chin reading back an older line. Clear any
         // in-flight streamed answer so the agent's next reply replaces this message instead of appending to
         // it; keep `commandText` in sync for the other surfaces (prompt pill, follow-up matching).
         if role == .user {
             conversationsStreamingAnswer.remove(conversationID)
-            updateTask(id: conversationID, commandText: trimmedText, detail: trimmedText)
+            updateConversation(id: conversationID, commandText: trimmedText, detail: trimmedText)
         }
         return eventID
     }
 
-    /// The single place a lifecycle transition announces itself. It sets the task's live status line
+    /// The single place a lifecycle transition announces itself. It sets the conversation's live status line
     /// from the typed activity, records the event in the in-app conversation store, and appends the
     /// same line to `thread.md` — so the conversation record stays the complete history we can render
     /// back to the user. New transitions pass a different `UserQueryActivity` kind; nothing else moves.
@@ -1490,14 +1654,14 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         liveDetail: String? = nil,
         metadata: [String: String]? = nil
     ) {
-        updateTask(id: conversationID, detail: liveDetail ?? activity.displayText, status: status, metadata: metadata)
+        updateConversation(id: conversationID, detail: liveDetail ?? activity.displayText, status: status, metadata: metadata)
         // In-app event store keeps plain text (structured data for the conversation view); thread.md
         // gets the icon-prefixed markdown line.
         _ = appendAgentEvent(conversationID: conversationID, role: .system, text: activity.displayText)
         recordThreadActivity(conversationID: conversationID, activity)
     }
 
-    /// Appends a typed activity line to the task's `thread.md` conversation record. The thread file
+    /// Appends a typed activity line to the conversation's `thread.md` conversation record. The thread file
     /// already exists from the run, so this only ever appends (off the main thread — small file IO).
     private func recordThreadActivity(conversationID: String, _ activity: UserQueryActivity) {
         let line = activity.transcriptLine
@@ -1506,7 +1670,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         }
     }
 
-    private func updateTask(
+    private func updateConversation(
         id: String,
         title: String? = nil,
         commandText: String? = nil,
@@ -1514,41 +1678,41 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         status: UserQueryConversationStatus? = nil,
         metadata: [String: String]? = nil
     ) {
-        guard let index = notchTasks.firstIndex(where: { $0.id == id }) else { return }
+        guard let index = notchConversations.firstIndex(where: { $0.id == id }) else { return }
 
-        var task = notchTasks[index]
-        let wasRunning = task.status == .running
+        var conversation = notchConversations[index]
+        let wasRunning = conversation.status == .running
         if let title {
-            task.title = title
+            conversation.title = title
         }
         if let commandText {
-            task.commandText = commandText
+            conversation.commandText = commandText
         }
         if let detail {
-            task.detail = detail
+            conversation.detail = detail
         }
         if let status {
-            task.status = status
+            conversation.status = status
         }
         if let metadata {
-            task.metadata = metadata
+            conversation.metadata = metadata
         }
-        // A stopped task re-entering running begins a fresh run: clear the per-run metadata flags and
+        // A stopped conversation re-entering running begins a fresh run: clear the per-run metadata flags and
         // restamp the run-start so elapsed measures this run, not the idle gap before it. Gated on the
         // prior status so the planner's per-step "still running" updates (and streamed-answer deltas,
         // which re-pass the streaming flag) don't keep resetting it mid-run.
         if status == .running, !wasRunning {
-            Self.clearRunMetadata(&task.metadata)
+            Self.clearRunMetadata(&conversation.metadata)
             conversationsStreamingAnswer.remove(id)
-            task.createdAt = Date()
+            conversation.createdAt = Date()
         }
-        task.updatedAt = Date()
-        notchTasks[index] = task
-        taskStore.upsertTask(task)
-        syncPrimaryTaskPausedFlag()
+        conversation.updatedAt = Date()
+        notchConversations[index] = conversation
+        conversationStore.upsertConversation(conversation)
+        syncPrimaryConversationPausedFlag()
     }
 
-    /// How recently a running task must have last advanced to auto-resume itself on relaunch. Inside the
+    /// How recently a running conversation must have last advanced to auto-resume itself on relaunch. Inside the
     /// window the work was clearly in progress and should pick back up; outside it, resuming unattended
     /// work the user likely moved on from (and spending credits while they're away) is the wrong default.
     private static let autoResumeStalenessWindow: TimeInterval = 30 * 60
@@ -1557,7 +1721,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     /// follow-up routing runs through the typed resolver, but only over conversations touched within this
     /// window: one left idle longer is treated as closed, so an unrelated later turn starts a fresh
     /// conversation instead of folding into stale work (observed live: "hi" folding into a day-old
-    /// video-clip task that had never reached a terminal state). This gates eligibility, not selection —
+    /// video-clip conversation that had never reached a terminal state). This gates eligibility, not selection —
     /// among eligible candidates the resolver still decides by content, never by recency. An explicit
     /// Reply or spawn selection bypasses this entirely; the user can always continue an old thread on purpose.
     private static let followUpStalenessWindow: TimeInterval = 30 * 60
@@ -1565,47 +1729,51 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     /// Conversations recent enough to continue with a new turn. Sorted-by-recency input is filtered to the
     /// staleness window; everything older is considered closed and dropped from the follow-up pool.
     static func activeFollowUpCandidates(
-        from tasks: [UserQueryConversation],
+        from conversations: [UserQueryConversation],
         now: Date
     ) -> [UserQueryConversation] {
-        tasks.filter { now.timeIntervalSince($0.updatedAt) <= followUpStalenessWindow }
+        conversations.filter { now.timeIntervalSince($0.updatedAt) <= followUpStalenessWindow }
     }
 
-    /// Maps persisted tasks into their post-relaunch state and collects the IDs to auto-resume. A relaunch
-    /// tears down every live loop, so an in-flight task can't simply keep running — but one that was
+    /// Maps persisted conversations into their post-relaunch state and collects the IDs to auto-resume. A relaunch
+    /// tears down every live loop, so an in-flight conversation can't simply keep running — but one that was
     /// actively working moments ago resumes on its own, while staler or user-blocked work comes back as a
     /// row the user can resume with a tap. The persisted `updatedAt` is preserved throughout so a row's
     /// elapsed time stays the real run duration rather than the gap until the app was reopened.
-    static func restoredTasks(
-        from tasks: [UserQueryConversation],
+    static func restoredConversations(
+        from conversations: [UserQueryConversation],
         now: Date
-    ) -> (tasks: [UserQueryConversation], autoResumeIDs: [String]) {
+    ) -> (conversations: [UserQueryConversation], autoResumeIDs: [String]) {
         var autoResumeIDs: [String] = []
-        let restored = tasks.map { task -> UserQueryConversation in
-            switch task.status {
+        let restored = conversations.map { conversation -> UserQueryConversation in
+            // A system-driven row (tool setup) has no harness loop behind it, so it is never auto-resumed
+            // through the command handler. The install run reconciles it on launch (see
+            // `reconcileInterruptedSystemSetup`); here it just carries through untouched.
+            guard conversation.isUserControllable else { return conversation }
+            switch conversation.status {
             case .running:
                 // Actively running when the app quit. Resume on its own only if that was recent;
                 // otherwise it becomes a retryable row instead of running stale work unattended.
-                if now.timeIntervalSince(task.updatedAt) <= autoResumeStalenessWindow {
-                    autoResumeIDs.append(task.id)
-                    return task
+                if now.timeIntervalSince(conversation.updatedAt) <= autoResumeStalenessWindow {
+                    autoResumeIDs.append(conversation.id)
+                    return conversation
                 }
-                var timedOut = task
+                var timedOut = conversation
                 timedOut.status = .timedOut
                 timedOut.detail = "Timed out — resume"
                 return timedOut
             case .waitingForClarification, .waitingForReview, .waitingForPermission:
                 // The loop that was blocked on the user is gone, but the gate still stands — the question or
-                // the pending approval is persisted in the task's continuation (and shown in its `detail`).
+                // the pending approval is persisted in the conversation's continuation (and shown in its `detail`).
                 // Keep it in that same waiting state rather than collapsing it to paused: pausing is a
-                // deliberate user action (Stop on a running task), never something a relaunch does on the
+                // deliberate user action (Stop on a running conversation), never something a relaunch does on the
                 // user's behalf. A waiting-on-user row keeps its Reply button (and the attention glyph); a
                 // permission row keeps its Approve / Deny banner, and approving re-runs the persisted call
-                // with consent granted. Answering or approving continues the task with the context intact.
-                return task
+                // with consent granted. Answering or approving continues the conversation with the context intact.
+                return conversation
             default:
                 // paused, completed, failed, timedOut, interrupted, needsAttention, chatting: unchanged.
-                return task
+                return conversation
             }
         }
         return (restored, autoResumeIDs)
@@ -1615,38 +1783,38 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         conversationID: String,
         result: UserQueryCommandHandlingResult
     ) {
-        syncPrimaryTaskPausedFlag()
+        syncPrimaryConversationPausedFlag()
         if promptState.isActive {
-            if lastActiveTaskID == conversationID {
-                lastActiveTaskID = notchTasks.first?.id
+            if lastActiveConversationID == conversationID {
+                lastActiveConversationID = notchConversations.first?.id
             }
             return
         }
 
-        if let runningTask = notchTasks.first(where: { activeAgentIDs.contains($0.id) && $0.status == .running }) {
+        if let runningConversation = notchConversations.first(where: { activeAgentIDs.contains($0.id) && $0.status == .running }) {
             promptState.leadingSignalLevel = .thinking
-            promptState.promptText = runningTask.title
+            promptState.promptText = runningConversation.title
             return
         }
 
-        if let pausedTask = notchTasks.first(where: { activeAgentIDs.contains($0.id) && $0.status == .paused }) {
+        if let pausedConversation = notchConversations.first(where: { activeAgentIDs.contains($0.id) && $0.status == .paused }) {
             promptState.leadingSignalLevel = .idle
-            promptState.promptText = pausedTask.title
+            promptState.promptText = pausedConversation.title
             return
         }
 
         promptState.leadingSignalLevel = result.status == .completed ? .ready : .idle
-        promptState.promptText = result.taskLabel ?? result.summary
-        if lastActiveTaskID == conversationID {
-            lastActiveTaskID = notchTasks.first?.id
+        promptState.promptText = result.conversationLabel ?? result.summary
+        if lastActiveConversationID == conversationID {
+            lastActiveConversationID = notchConversations.first?.id
         }
     }
 
-    private func syncPrimaryTaskPausedFlag() {
-        isCurrentTaskPaused = notchTasks.first?.status == .paused
+    private func syncPrimaryConversationPausedFlag() {
+        isCurrentConversationPaused = notchConversations.first?.status == .paused
     }
 
-    private static func taskStatus(for result: UserQueryCommandHandlingResult) -> UserQueryConversationStatus {
+    private static func conversationStatus(for result: UserQueryCommandHandlingResult) -> UserQueryConversationStatus {
         result.threadStatus
     }
 
@@ -1680,25 +1848,25 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     }
 
     private func nextRoundRobinAccentIndex() -> Int {
-        guard let mostRecentAccentIndex = spawnStates.last?.accentIndex ?? notchTasks.first?.accentIndex else {
+        guard let mostRecentAccentIndex = spawnStates.last?.accentIndex ?? notchConversations.first?.accentIndex else {
             return UserQueryAccentPalette.firstIndex
         }
 
         return UserQueryAccentPalette.index(after: mostRecentAccentIndex)
     }
 
-    /// The task's title is the user's prompt, whitespace-collapsed. It is NOT hard-truncated here: every
+    /// The conversation's title is the user's prompt, whitespace-collapsed. It is NOT hard-truncated here: every
     /// place that shows it (the collapsed bar, the prompt pill, each expanded row) renders it on a single
     /// line and tail-truncates to its own available width, so the expanded row title spans the full row
     /// rather than being clipped to a fixed character budget. Capped only by `collapsedDisplayText` so a
     /// runaway prompt can't blob through the store.
-    private static func taskLabel(for text: String) -> String {
+    private static func conversationLabel(for text: String) -> String {
         let collapsed = collapsedDisplayText(for: text)
-        return collapsed.isEmpty ? "New task" : collapsed
+        return collapsed.isEmpty ? "New conversation" : collapsed
     }
 
     /// A cursor label stays a short status line; cap it so a long tool result never blobs over the
-    /// screen. The overlay wraps within this, and the full text is always in the notch task list.
+    /// screen. The overlay wraps within this, and the full text is always in the notch conversation list.
     private static let maxSpawnLabelLength = 200
 
     private static func collapsedDisplayText(for text: String) -> String {
@@ -1754,7 +1922,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         assetID: String,
         displayName: String
     ) -> URL? {
-        guard let assetsDirectory = taskAssetDirectory(conversationID: conversationID) else { return nil }
+        guard let assetsDirectory = conversationAssetDirectory(conversationID: conversationID) else { return nil }
 
         do {
             try FileManager.default.createDirectory(
@@ -1776,7 +1944,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         }
     }
 
-    private static func taskAssetDirectory(conversationID: String) -> URL? {
+    private static func conversationAssetDirectory(conversationID: String) -> URL? {
         guard let applicationSupportURL = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask

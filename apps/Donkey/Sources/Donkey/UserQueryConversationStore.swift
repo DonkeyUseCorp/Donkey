@@ -4,10 +4,10 @@ import Foundation
 
 @MainActor
 protocol UserQueryConversationStoring {
-    func loadRecentTasks(limit: Int) -> [UserQueryConversation]
-    func searchTasks(matching query: String, limit: Int) -> [UserQueryConversation]
-    func upsertTask(_ task: UserQueryConversation)
-    func deleteTask(id: String)
+    func loadRecentConversations(limit: Int) -> [UserQueryConversation]
+    func searchConversations(matching query: String, limit: Int) -> [UserQueryConversation]
+    func upsertConversation(_ conversation: UserQueryConversation)
+    func deleteConversation(id: String)
     func loadEvents(conversationID: String) -> [UserQueryConversationEvent]
     func appendEvent(_ event: UserQueryConversationEvent)
     func loadAssets(conversationID: String) -> [UserQueryConversationAsset]
@@ -24,90 +24,91 @@ final class CoreDataUserQueryConversationStore: UserQueryConversationStoring {
         context = Self.makeContext(storeURL: storeURL ?? Self.defaultStoreURL())
     }
 
-    func loadRecentTasks(limit: Int) -> [UserQueryConversation] {
+    func loadRecentConversations(limit: Int) -> [UserQueryConversation] {
         guard let context else {
             return []
         }
 
-        let request = NSFetchRequest<NSManagedObject>(entityName: Self.taskEntityName)
+        let request = NSFetchRequest<NSManagedObject>(entityName: Self.conversationEntityName)
         request.fetchLimit = limit
         request.sortDescriptors = [
             NSSortDescriptor(key: Self.updatedAtKey, ascending: false)
         ]
 
-        guard let managedTasks = try? context.fetch(request) else {
+        guard let managedConversations = try? context.fetch(request) else {
             return []
         }
 
-        return managedTasks.compactMap(Self.task(from:))
+        return managedConversations.compactMap(Self.conversation(from:))
     }
 
-    func searchTasks(matching query: String, limit: Int) -> [UserQueryConversation] {
+    func searchConversations(matching query: String, limit: Int) -> [UserQueryConversation] {
         guard let context else {
             return []
         }
 
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedQuery.isEmpty else {
-            return loadRecentTasks(limit: limit)
+            return loadRecentConversations(limit: limit)
         }
 
-        let matchingEventTaskIDs = conversationIDsWithMatchingEvents(trimmedQuery)
-        let matchingAssetTaskIDs = conversationIDsWithMatchingAssets(trimmedQuery)
-        let request = NSFetchRequest<NSManagedObject>(entityName: Self.taskEntityName)
+        let matchingEventConversationIDs = conversationIDsWithMatchingEvents(trimmedQuery)
+        let matchingAssetConversationIDs = conversationIDsWithMatchingAssets(trimmedQuery)
+        let request = NSFetchRequest<NSManagedObject>(entityName: Self.conversationEntityName)
         request.fetchLimit = limit
         var predicates = [
             NSPredicate(format: "%K CONTAINS[cd] %@", Self.titleKey, trimmedQuery),
             NSPredicate(format: "%K CONTAINS[cd] %@", Self.detailKey, trimmedQuery),
             NSPredicate(format: "%K CONTAINS[cd] %@", Self.commandTextKey, trimmedQuery)
         ]
-        if !matchingEventTaskIDs.isEmpty {
-            predicates.append(NSPredicate(format: "%K IN %@", Self.idKey, matchingEventTaskIDs))
+        if !matchingEventConversationIDs.isEmpty {
+            predicates.append(NSPredicate(format: "%K IN %@", Self.idKey, matchingEventConversationIDs))
         }
-        if !matchingAssetTaskIDs.isEmpty {
-            predicates.append(NSPredicate(format: "%K IN %@", Self.idKey, matchingAssetTaskIDs))
+        if !matchingAssetConversationIDs.isEmpty {
+            predicates.append(NSPredicate(format: "%K IN %@", Self.idKey, matchingAssetConversationIDs))
         }
         request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: predicates)
         request.sortDescriptors = [
             NSSortDescriptor(key: Self.updatedAtKey, ascending: false)
         ]
 
-        guard let managedTasks = try? context.fetch(request) else {
+        guard let managedConversations = try? context.fetch(request) else {
             return []
         }
 
-        return managedTasks.compactMap(Self.task(from:))
+        return managedConversations.compactMap(Self.conversation(from:))
     }
 
-    func upsertTask(_ task: UserQueryConversation) {
+    func upsertConversation(_ conversation: UserQueryConversation) {
         guard let context else { return }
 
-        let managedTask = Self.existingTask(id: task.id, in: context)
+        let managedConversation = Self.existingConversation(id: conversation.id, in: context)
             ?? NSManagedObject(entity: Self.entityDescription(in: context), insertInto: context)
 
-        managedTask.setValue(task.id, forKey: Self.idKey)
-        managedTask.setValue(task.title, forKey: Self.titleKey)
-        managedTask.setValue(task.detail, forKey: Self.detailKey)
-        managedTask.setValue(task.commandText, forKey: Self.commandTextKey)
-        managedTask.setValue(task.status.rawValue, forKey: Self.statusKey)
-        managedTask.setValue(Int64(task.accentIndex), forKey: Self.accentIndexKey)
-        managedTask.setValue(task.createdAt, forKey: Self.createdAtKey)
-        managedTask.setValue(task.updatedAt, forKey: Self.updatedAtKey)
-        managedTask.setValue(Self.metadataJSONString(task.metadata), forKey: Self.metadataJSONKey)
+        managedConversation.setValue(conversation.id, forKey: Self.idKey)
+        managedConversation.setValue(conversation.title, forKey: Self.titleKey)
+        managedConversation.setValue(conversation.detail, forKey: Self.detailKey)
+        managedConversation.setValue(conversation.commandText, forKey: Self.commandTextKey)
+        managedConversation.setValue(conversation.status.rawValue, forKey: Self.statusKey)
+        managedConversation.setValue(Int64(conversation.accentIndex), forKey: Self.accentIndexKey)
+        managedConversation.setValue(conversation.origin.rawValue, forKey: Self.originKey)
+        managedConversation.setValue(conversation.createdAt, forKey: Self.createdAtKey)
+        managedConversation.setValue(conversation.updatedAt, forKey: Self.updatedAtKey)
+        managedConversation.setValue(Self.metadataJSONString(conversation.metadata), forKey: Self.metadataJSONKey)
 
         try? context.save()
     }
 
-    /// Permanently removes a task and everything attached to it — its row plus all
-    /// stored events and assets — so a dismissed task does not reappear on relaunch.
-    func deleteTask(id: String) {
+    /// Permanently removes a conversation and everything attached to it — its row plus all
+    /// stored events and assets — so a dismissed conversation does not reappear on relaunch.
+    func deleteConversation(id: String) {
         guard let context else { return }
 
-        if let managedTask = Self.existingTask(id: id, in: context) {
-            context.delete(managedTask)
+        if let managedConversation = Self.existingConversation(id: id, in: context) {
+            context.delete(managedConversation)
         }
-        Self.deleteRows(entityName: Self.eventEntityName, conversationIDKey: Self.eventTaskIDKey, conversationID: id, in: context)
-        Self.deleteRows(entityName: Self.assetEntityName, conversationIDKey: Self.assetTaskIDKey, conversationID: id, in: context)
+        Self.deleteRows(entityName: Self.eventEntityName, conversationIDKey: Self.eventConversationIDKey, conversationID: id, in: context)
+        Self.deleteRows(entityName: Self.assetEntityName, conversationIDKey: Self.assetConversationIDKey, conversationID: id, in: context)
 
         try? context.save()
     }
@@ -116,7 +117,7 @@ final class CoreDataUserQueryConversationStore: UserQueryConversationStoring {
         guard let context else { return [] }
 
         let request = NSFetchRequest<NSManagedObject>(entityName: Self.assetEntityName)
-        request.predicate = NSPredicate(format: "%K == %@", Self.assetTaskIDKey, conversationID)
+        request.predicate = NSPredicate(format: "%K == %@", Self.assetConversationIDKey, conversationID)
         request.sortDescriptors = [
             NSSortDescriptor(key: Self.assetCreatedAtKey, ascending: true)
         ]
@@ -136,7 +137,7 @@ final class CoreDataUserQueryConversationStore: UserQueryConversationStoring {
             insertInto: context
         )
         managedAsset.setValue(asset.id, forKey: Self.assetIDKey)
-        managedAsset.setValue(asset.conversationID, forKey: Self.assetTaskIDKey)
+        managedAsset.setValue(asset.conversationID, forKey: Self.assetConversationIDKey)
         managedAsset.setValue(asset.eventID, forKey: Self.assetEventIDKey)
         managedAsset.setValue(asset.source.rawValue, forKey: Self.assetSourceKey)
         managedAsset.setValue(asset.displayName, forKey: Self.assetDisplayNameKey)
@@ -152,7 +153,7 @@ final class CoreDataUserQueryConversationStore: UserQueryConversationStoring {
         guard let context else { return [] }
 
         let request = NSFetchRequest<NSManagedObject>(entityName: Self.eventEntityName)
-        request.predicate = NSPredicate(format: "%K == %@", Self.eventTaskIDKey, conversationID)
+        request.predicate = NSPredicate(format: "%K == %@", Self.eventConversationIDKey, conversationID)
         request.sortDescriptors = [
             NSSortDescriptor(key: Self.eventSequenceKey, ascending: true),
             NSSortDescriptor(key: Self.eventCreatedAtKey, ascending: true)
@@ -173,7 +174,7 @@ final class CoreDataUserQueryConversationStore: UserQueryConversationStoring {
             insertInto: context
         )
         managedEvent.setValue(event.id, forKey: Self.eventIDKey)
-        managedEvent.setValue(event.conversationID, forKey: Self.eventTaskIDKey)
+        managedEvent.setValue(event.conversationID, forKey: Self.eventConversationIDKey)
         managedEvent.setValue(event.role.rawValue, forKey: Self.eventRoleKey)
         managedEvent.setValue(event.text, forKey: Self.eventTextKey)
         managedEvent.setValue(Int64(event.sequence), forKey: Self.eventSequenceKey)
@@ -216,28 +217,31 @@ final class CoreDataUserQueryConversationStore: UserQueryConversationStoring {
 
     private static func model() -> NSManagedObjectModel {
         let model = NSManagedObjectModel()
-        let taskEntity = NSEntityDescription()
-        taskEntity.name = taskEntityName
-        taskEntity.managedObjectClassName = NSStringFromClass(NSManagedObject.self)
-        taskEntity.properties = [
+        let conversationEntity = NSEntityDescription()
+        conversationEntity.name = conversationEntityName
+        conversationEntity.managedObjectClassName = NSStringFromClass(NSManagedObject.self)
+        conversationEntity.properties = [
             attribute(idKey, type: .stringAttributeType, isOptional: false),
             attribute(titleKey, type: .stringAttributeType, isOptional: false),
             attribute(detailKey, type: .stringAttributeType, isOptional: false),
             attribute(commandTextKey, type: .stringAttributeType, isOptional: true),
             attribute(statusKey, type: .stringAttributeType, isOptional: false),
             attribute(accentIndexKey, type: .integer64AttributeType, isOptional: false),
+            // Optional so lightweight migration can add it to stores written before origin existed; a
+            // null on an old row decodes to `.user` below.
+            attribute(originKey, type: .stringAttributeType, isOptional: true),
             attribute(createdAtKey, type: .dateAttributeType, isOptional: false),
             attribute(updatedAtKey, type: .dateAttributeType, isOptional: false),
             attribute(metadataJSONKey, type: .stringAttributeType, isOptional: true)
         ]
-        taskEntity.uniquenessConstraints = [[idKey]]
+        conversationEntity.uniquenessConstraints = [[idKey]]
 
         let eventEntity = NSEntityDescription()
         eventEntity.name = eventEntityName
         eventEntity.managedObjectClassName = NSStringFromClass(NSManagedObject.self)
         eventEntity.properties = [
             attribute(eventIDKey, type: .stringAttributeType, isOptional: false),
-            attribute(eventTaskIDKey, type: .stringAttributeType, isOptional: false),
+            attribute(eventConversationIDKey, type: .stringAttributeType, isOptional: false),
             attribute(eventRoleKey, type: .stringAttributeType, isOptional: false),
             attribute(eventTextKey, type: .stringAttributeType, isOptional: false),
             attribute(eventSequenceKey, type: .integer64AttributeType, isOptional: false),
@@ -250,7 +254,7 @@ final class CoreDataUserQueryConversationStore: UserQueryConversationStoring {
         assetEntity.managedObjectClassName = NSStringFromClass(NSManagedObject.self)
         assetEntity.properties = [
             attribute(assetIDKey, type: .stringAttributeType, isOptional: false),
-            attribute(assetTaskIDKey, type: .stringAttributeType, isOptional: false),
+            attribute(assetConversationIDKey, type: .stringAttributeType, isOptional: false),
             attribute(assetEventIDKey, type: .stringAttributeType, isOptional: true),
             attribute(assetSourceKey, type: .stringAttributeType, isOptional: false),
             attribute(assetDisplayNameKey, type: .stringAttributeType, isOptional: false),
@@ -261,7 +265,7 @@ final class CoreDataUserQueryConversationStore: UserQueryConversationStoring {
         ]
         assetEntity.uniquenessConstraints = [[assetIDKey]]
 
-        model.entities = [taskEntity, eventEntity, assetEntity]
+        model.entities = [conversationEntity, eventEntity, assetEntity]
         return model
     }
 
@@ -278,7 +282,7 @@ final class CoreDataUserQueryConversationStore: UserQueryConversationStoring {
     }
 
     private static func entityDescription(in context: NSManagedObjectContext) -> NSEntityDescription {
-        NSEntityDescription.entity(forEntityName: taskEntityName, in: context)!
+        NSEntityDescription.entity(forEntityName: conversationEntityName, in: context)!
     }
 
     private static func eventEntityDescription(in context: NSManagedObjectContext) -> NSEntityDescription {
@@ -303,8 +307,8 @@ final class CoreDataUserQueryConversationStore: UserQueryConversationStoring {
         }
     }
 
-    private static func existingTask(id: String, in context: NSManagedObjectContext) -> NSManagedObject? {
-        let request = NSFetchRequest<NSManagedObject>(entityName: taskEntityName)
+    private static func existingConversation(id: String, in context: NSManagedObjectContext) -> NSManagedObject? {
+        let request = NSFetchRequest<NSManagedObject>(entityName: conversationEntityName)
         request.fetchLimit = 1
         request.predicate = NSPredicate(format: "%K == %@", idKey, id)
         return try? context.fetch(request).first
@@ -320,7 +324,7 @@ final class CoreDataUserQueryConversationStore: UserQueryConversationStoring {
             return []
         }
 
-        return Array(Set(managedEvents.compactMap { $0.value(forKey: Self.eventTaskIDKey) as? String }))
+        return Array(Set(managedEvents.compactMap { $0.value(forKey: Self.eventConversationIDKey) as? String }))
     }
 
     private func conversationIDsWithMatchingAssets(_ query: String) -> [String] {
@@ -337,31 +341,34 @@ final class CoreDataUserQueryConversationStore: UserQueryConversationStoring {
             return []
         }
 
-        return Array(Set(managedAssets.compactMap { $0.value(forKey: Self.assetTaskIDKey) as? String }))
+        return Array(Set(managedAssets.compactMap { $0.value(forKey: Self.assetConversationIDKey) as? String }))
     }
 
-    private static func task(from managedTask: NSManagedObject) -> UserQueryConversation? {
-        guard let id = managedTask.value(forKey: idKey) as? String,
-              let title = managedTask.value(forKey: titleKey) as? String,
-              let detail = managedTask.value(forKey: detailKey) as? String,
-              let rawStatus = managedTask.value(forKey: statusKey) as? String,
+    private static func conversation(from managedConversation: NSManagedObject) -> UserQueryConversation? {
+        guard let id = managedConversation.value(forKey: idKey) as? String,
+              let title = managedConversation.value(forKey: titleKey) as? String,
+              let detail = managedConversation.value(forKey: detailKey) as? String,
+              let rawStatus = managedConversation.value(forKey: statusKey) as? String,
               let status = UserQueryConversationStatus(rawValue: rawStatus),
-              let createdAt = managedTask.value(forKey: createdAtKey) as? Date,
-              let updatedAt = managedTask.value(forKey: updatedAtKey) as? Date else {
+              let createdAt = managedConversation.value(forKey: createdAtKey) as? Date,
+              let updatedAt = managedConversation.value(forKey: updatedAtKey) as? Date else {
             return nil
         }
 
-        let accentIndex = (managedTask.value(forKey: accentIndexKey) as? NSNumber)?.intValue ?? 0
+        let accentIndex = (managedConversation.value(forKey: accentIndexKey) as? NSNumber)?.intValue ?? 0
+        let origin = (managedConversation.value(forKey: originKey) as? String)
+            .flatMap(UserQueryConversationOrigin.init(rawValue:)) ?? .user
         return UserQueryConversation(
             id: id,
             title: title,
             detail: detail,
-            commandText: managedTask.value(forKey: commandTextKey) as? String ?? title,
+            commandText: managedConversation.value(forKey: commandTextKey) as? String ?? title,
             status: status,
             accentIndex: accentIndex,
+            origin: origin,
             createdAt: createdAt,
             updatedAt: updatedAt,
-            metadata: metadata(fromJSONString: managedTask.value(forKey: metadataJSONKey) as? String)
+            metadata: metadata(fromJSONString: managedConversation.value(forKey: metadataJSONKey) as? String)
         )
     }
 
@@ -386,7 +393,7 @@ final class CoreDataUserQueryConversationStore: UserQueryConversationStoring {
 
     private static func event(from managedEvent: NSManagedObject) -> UserQueryConversationEvent? {
         guard let id = managedEvent.value(forKey: eventIDKey) as? String,
-              let conversationID = managedEvent.value(forKey: eventTaskIDKey) as? String,
+              let conversationID = managedEvent.value(forKey: eventConversationIDKey) as? String,
               let rawRole = managedEvent.value(forKey: eventRoleKey) as? String,
               let role = UserQueryConversationEventRole(rawValue: rawRole),
               let text = managedEvent.value(forKey: eventTextKey) as? String,
@@ -407,7 +414,7 @@ final class CoreDataUserQueryConversationStore: UserQueryConversationStoring {
 
     private static func asset(from managedAsset: NSManagedObject) -> UserQueryConversationAsset? {
         guard let id = managedAsset.value(forKey: assetIDKey) as? String,
-              let conversationID = managedAsset.value(forKey: assetTaskIDKey) as? String,
+              let conversationID = managedAsset.value(forKey: assetConversationIDKey) as? String,
               let rawSource = managedAsset.value(forKey: assetSourceKey) as? String,
               let source = UserQueryConversationAssetSource(rawValue: rawSource),
               let displayName = managedAsset.value(forKey: assetDisplayNameKey) as? String,
@@ -430,7 +437,7 @@ final class CoreDataUserQueryConversationStore: UserQueryConversationStoring {
         )
     }
 
-    private static let taskEntityName = "UserQueryStoredConversation"
+    private static let conversationEntityName = "UserQueryStoredConversation"
     private static let eventEntityName = "UserQueryStoredConversationEvent"
     private static let assetEntityName = "UserQueryStoredConversationAsset"
     private static let idKey = "id"
@@ -439,17 +446,18 @@ final class CoreDataUserQueryConversationStore: UserQueryConversationStoring {
     private static let commandTextKey = "commandText"
     private static let statusKey = "status"
     private static let accentIndexKey = "accentIndex"
+    private static let originKey = "origin"
     private static let createdAtKey = "createdAt"
     private static let updatedAtKey = "updatedAt"
     private static let metadataJSONKey = "metadataJSON"
     private static let eventIDKey = "id"
-    private static let eventTaskIDKey = "conversationID"
+    private static let eventConversationIDKey = "conversationID"
     private static let eventRoleKey = "role"
     private static let eventTextKey = "text"
     private static let eventSequenceKey = "sequence"
     private static let eventCreatedAtKey = "createdAt"
     private static let assetIDKey = "id"
-    private static let assetTaskIDKey = "conversationID"
+    private static let assetConversationIDKey = "conversationID"
     private static let assetEventIDKey = "eventID"
     private static let assetSourceKey = "source"
     private static let assetDisplayNameKey = "displayName"

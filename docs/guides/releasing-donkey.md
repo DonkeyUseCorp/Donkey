@@ -52,8 +52,11 @@ it needs to keep automating other apps once hardened.
 ## Bundled Tools
 
 The capability skills (media, pdf) run CLI tools — `ffmpeg`, `yt-dlp`, and a few
-others — that the app downloads on first launch instead of baking into the app
-download. The `Publish Bundled Tools` workflow builds them from source on an
+others — that the app downloads once the user signs in (so the bundle stays out
+of the app download, and isn't fetched for someone who never gets past sign-in).
+The download surfaces in the notch as a progress conversation the user can watch
+but not stop or dismiss; it retries on its own and no-ops once the published
+version is already installed. The `Publish Bundled Tools` workflow builds them from source on an
 arm64 runner, signs and notarizes them, uploads the bundle as a GitHub release
 asset, and commits the refreshed `bundled-tools.json` (the manifest the app reads
 to know what to fetch). It runs on demand and whenever the tools recipe changes.

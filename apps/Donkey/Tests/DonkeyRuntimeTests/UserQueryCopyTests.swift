@@ -12,9 +12,9 @@ struct UserQueryCopyTests {
 
     @Test
     func placeholderCopyDoesNotBecomeTaskDisplayText() {
-        #expect(!UserQueryCopy.isTaskDisplayText(UserQueryCopy.defaultPromptPlaceholder))
-        #expect(!UserQueryCopy.isTaskDisplayText("  \(UserQueryCopy.defaultPromptPlaceholder)  "))
-        #expect(UserQueryCopy.isTaskDisplayText("Open Safari"))
+        #expect(!UserQueryCopy.isConversationDisplayText(UserQueryCopy.defaultPromptPlaceholder))
+        #expect(!UserQueryCopy.isConversationDisplayText("  \(UserQueryCopy.defaultPromptPlaceholder)  "))
+        #expect(UserQueryCopy.isConversationDisplayText("Open Safari"))
     }
 
     @Test

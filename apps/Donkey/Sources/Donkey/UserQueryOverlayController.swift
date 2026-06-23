@@ -630,18 +630,18 @@ final class UserQueryOverlayController {
             surfaceSize: metrics.surfaceSize,
             isExpanded: isStatusExpanded,
             isHostExpanded: isStatusHostExpanded,
-            isCurrentTaskPaused: model.isCurrentTaskPaused,
+            isCurrentConversationPaused: model.isCurrentConversationPaused,
             notchCommandText: model.notchCommandText,
             notchCommandInputTextHeight: model.notchCommandInputTextHeight,
             isNotchCommandInputExpanded: model.isNotchCommandInputExpanded,
-            notchTasks: model.notchTasks,
-            notchSurfacedTasks: model.notchSurfacedTasks,
+            notchConversations: model.notchConversations,
+            notchSurfacedConversations: model.notchSurfacedConversations,
             accentIndex: model.notchAccentIndex,
             spawnState: spawnCue,
             spawnStates: model.spawnStates,
             selectedSpawnID: model.selectedSpawnID,
-            replyTargetTaskID: model.replyTargetTaskID,
-            selectedTaskID: model.selectedTaskID,
+            replyTargetConversationID: model.replyTargetConversationID,
+            selectedConversationID: model.selectedConversationID,
             needsLogin: model.needsLogin
         )
     }
@@ -656,7 +656,7 @@ final class UserQueryOverlayController {
             surfaceHeight: metrics.surfaceSize.height,
             isHostExpanded: isStatusHostExpanded,
             isExpanded: isStatusExpanded,
-            isCurrentConversationPaused: model.isCurrentTaskPaused,
+            isCurrentConversationPaused: model.isCurrentConversationPaused,
             commandText: Binding(
                 get: { [weak self] in
                     self?.model.notchCommandText ?? ""
@@ -667,10 +667,10 @@ final class UserQueryOverlayController {
             ),
             commandInputTextHeight: model.notchCommandInputTextHeight,
             isCommandInputExpanded: model.isNotchCommandInputExpanded,
-            conversations: model.notchTasks,
-            surfacedConversations: model.notchSurfacedTasks,
-            replyTargetConversationID: model.replyTargetTaskID,
-            selectedConversationID: model.selectedTaskID,
+            conversations: model.notchConversations,
+            surfacedConversations: model.notchSurfacedConversations,
+            replyTargetConversationID: model.replyTargetConversationID,
+            selectedConversationID: model.selectedConversationID,
             accentIndex: model.notchAccentIndex,
             spawnState: spawnCue,
             commandSubmitted: { [weak self] text in
@@ -692,10 +692,10 @@ final class UserQueryOverlayController {
                 self?.model.resumeAgent(id: conversationID)
             },
             dismissRequested: { [weak self] conversationID in
-                self?.model.dismissTask(id: conversationID)
+                self?.model.dismissConversation(id: conversationID)
             },
             conversationSelected: { [weak self] conversationID in
-                self?.restoreSpawnPointer(forTaskID: conversationID)
+                self?.restoreSpawnPointer(forConversationID: conversationID)
             },
             replyRequested: { [weak self] conversationID in
                 guard let self else { return }
@@ -747,9 +747,9 @@ final class UserQueryOverlayController {
         model.showUpdateUI()
     }
 
-    /// Brings back a pointer the user dismissed when its task is clicked in
+    /// Brings back a pointer the user dismissed when its conversation is clicked in
     /// the notch; the surface re-emerges and travels to its target again.
-    private func restoreSpawnPointer(forTaskID conversationID: String) {
+    private func restoreSpawnPointer(forConversationID conversationID: String) {
         guard let spawnID = model.spawnStates.first(where: { $0.conversationID == conversationID })?.id else {
             return
         }
@@ -867,9 +867,9 @@ final class UserQueryOverlayController {
             statusHoverPhase = .expanded
             isStatusHostExpanded = true
             isStatusExpanded = true
-            // Opening the notch dismisses the surfaced terminal tasks (completed pointers and any held
+            // Opening the notch dismisses the surfaced terminal conversations (completed pointers and any held
             // error chin) piled up in the collapsed surface.
-            model.acknowledgeSurfacedTasks()
+            model.acknowledgeSurfacedConversations()
             updateStatusPanelView()
             focusStatusComposerTextInputIfAvailable()
             return
@@ -1002,7 +1002,7 @@ final class UserQueryOverlayController {
 
         // The chin band has to know its height before the surface frame is built, but that height
         // depends on the collapsed width (how wide the chin text can wrap). Resolve the width from a
-        // zero-chin probe first, then size the band to the surfaced tasks' wrapped line count.
+        // zero-chin probe first, then size the band to the surfaced conversations' wrapped line count.
         let widthProbe = NotchMetrics(
             voidWidth: voidWidth,
             voidHeight: voidHeight,
@@ -1033,9 +1033,9 @@ final class UserQueryOverlayController {
     }
 
     /// On a no-notch display the collapsed line renders inline in the top row (a real notch routes it into
-    /// the chin band instead). It shows the same rotating surfaced-task line the chin does, so size the
+    /// the chin band instead). It shows the same rotating surfaced-conversation line the chin does, so size the
     /// pill to the tallest line that can rotate through — the max wrapped-line count across the surfaced
-    /// tasks, or the headline fallback when nothing is surfaced — and grow by one line-height when that is
+    /// conversations, or the headline fallback when nothing is surfaced — and grow by one line-height when that is
     /// two lines. The text width subtracts the pill's pointer lane and gutter, measured narrow so the
     /// prediction never under-counts and clips. A real notch returns 0 — its second line lives in
     /// `statusChinHeight`.
@@ -1043,30 +1043,30 @@ final class UserQueryOverlayController {
         guard !hasNotch else { return 0 }
         let textWidth = collapsedWidth - Self.statusCollapsedTopRowHorizontalReserve
         let headline = UserQueryNotchStatusView.collapsedHeadline(
-            conversations: model.notchTasks,
+            conversations: model.notchConversations,
             state: model.promptState
         )
-        let lines = model.notchSurfacedTasks.reduce(
+        let lines = model.notchSurfacedConversations.reduce(
             Self.chinLineCount(for: headline, width: textWidth)
-        ) { partial, task in
-            max(partial, Self.chinLineCount(for: task.chinDisplayText, width: textWidth))
+        ) { partial, conversation in
+            max(partial, Self.chinLineCount(for: conversation.chinDisplayText, width: textWidth))
         }
         return lines >= 2 ? Self.statusChinLineHeight : 0
     }
 
-    /// The collapsed chin hangs below the notch whenever a task is surfaced — running, a completion, or
+    /// The collapsed chin hangs below the notch whenever a conversation is surfaced — running, a completion, or
     /// a failure the user hasn't dismissed yet. The notch view rotates which one's line it shows. The
     /// band fits one line by default and grows by a line-height to seat a wrapped second line (capped
     /// there), keeping the bottom margin constant. Real notch only.
     private func statusChinHeight(textWidth: CGFloat) -> CGFloat {
-        let surfaced = model.notchSurfacedTasks
+        let surfaced = model.notchSurfacedConversations
         guard !surfaced.isEmpty else { return 0 }
         // Cache by the surfaced chin text + width: `notchMetrics()` runs every frame, but the wrapped-line
         // Core Text measurement only needs to rerun when the text or available width actually changes.
         let key = "\(Int(textWidth))|" + surfaced.map(\.chinDisplayText).joined(separator: "\u{1}")
         if let cache = chinHeightCache, cache.key == key { return cache.height }
-        let lines = surfaced.reduce(1) { partial, task in
-            return max(partial, Self.chinLineCount(for: task.chinDisplayText, width: textWidth))
+        let lines = surfaced.reduce(1) { partial, conversation in
+            return max(partial, Self.chinLineCount(for: conversation.chinDisplayText, width: textWidth))
         }
         let height = CGFloat(lines) * Self.statusChinLineHeight + Self.statusChinBottomMargin
         chinHeightCache = (key, height)
@@ -1112,15 +1112,15 @@ final class UserQueryOverlayController {
             return NotchMetrics.loginExpandedContentHeight
         }
 
-        if hasStatusTaskDisplayText || !model.notchTasks.isEmpty || model.updateState.headerButtonTitle != nil {
-            return NotchMetrics.expandedTaskContentHeight
+        if hasStatusConversationDisplayText || !model.notchConversations.isEmpty || model.updateState.headerButtonTitle != nil {
+            return NotchMetrics.expandedConversationContentHeight
         }
 
         return model.notchCommandInputSurfaceHeight + NotchMetrics.compactCommandContentVerticalPadding
     }
 
-    private var hasStatusTaskDisplayText: Bool {
-        UserQueryCopy.isTaskDisplayText(model.promptState.promptText)
+    private var hasStatusConversationDisplayText: Bool {
+        UserQueryCopy.isConversationDisplayText(model.promptState.promptText)
     }
 
     private func inferredVoidWidth(for screen: NSScreen, safeTop: CGFloat) -> CGFloat {
@@ -1565,18 +1565,18 @@ private struct StatusPanelViewSnapshot: Equatable {
     var surfaceSize: CGSize
     var isExpanded: Bool
     var isHostExpanded: Bool
-    var isCurrentTaskPaused: Bool
+    var isCurrentConversationPaused: Bool
     var notchCommandText: String
     var notchCommandInputTextHeight: CGFloat
     var isNotchCommandInputExpanded: Bool
-    var notchTasks: [UserQueryConversation]
-    var notchSurfacedTasks: [UserQueryConversation]
+    var notchConversations: [UserQueryConversation]
+    var notchSurfacedConversations: [UserQueryConversation]
     var accentIndex: Int
     var spawnState: UserQuerySpawnState?
     var spawnStates: [UserQuerySpawnState]
     var selectedSpawnID: String?
-    var replyTargetTaskID: String?
-    var selectedTaskID: String?
+    var replyTargetConversationID: String?
+    var selectedConversationID: String?
     var needsLogin: Bool
 }
 

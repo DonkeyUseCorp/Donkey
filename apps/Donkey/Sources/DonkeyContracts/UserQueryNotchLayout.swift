@@ -69,7 +69,7 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
     public static let maximumInferredVoidWidth: CGFloat = 220
     public static let defaultScreenWidth: CGFloat = 1512
     public static let minimumPhysicalVoidHeight: CGFloat = 30
-    public static let expandedTaskContentHeight: CGFloat = 280
+    public static let expandedConversationContentHeight: CGFloat = 280
     public static let inputHorizontalMargin: CGFloat = 14
     public static let compactCommandContentVerticalPadding: CGFloat = 30
     /// How long the open host window lingers after the surface starts collapsing, before it snaps to

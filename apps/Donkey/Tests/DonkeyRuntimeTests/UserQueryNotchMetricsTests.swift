@@ -9,7 +9,7 @@ struct UserQueryNotchMetricsTests {
         let metrics = UserQueryNotchMetrics(
             voidWidth: 0,
             voidHeight: 0,
-            expandedContentHeight: UserQueryNotchMetrics.expandedTaskContentHeight,
+            expandedContentHeight: UserQueryNotchMetrics.expandedConversationContentHeight,
             isExpanded: true,
             isHostExpanded: true,
             screenWidth: UserQueryNotchMetrics.defaultScreenWidth
@@ -23,10 +23,10 @@ struct UserQueryNotchMetricsTests {
                 UserQueryNotchLayout.expandedCommandOnlyTopPaddingBelowPhysicalVoid
         )
         #expect(layout.expandedContentFrame.minY == UserQueryNotchMetrics.fallbackVoidHeight)
-        #expect(layout.expandedContentFrame.height == UserQueryNotchMetrics.expandedTaskContentHeight)
+        #expect(layout.expandedContentFrame.height == UserQueryNotchMetrics.expandedConversationContentHeight)
         #expect(
             layout.expandedSurfaceFrame.height ==
-                UserQueryNotchMetrics.expandedTaskContentHeight +
+                UserQueryNotchMetrics.expandedConversationContentHeight +
                 UserQueryNotchMetrics.fallbackVoidHeight
         )
     }
@@ -36,7 +36,7 @@ struct UserQueryNotchMetricsTests {
         let metrics = UserQueryNotchMetrics(
             voidWidth: UserQueryNotchMetrics.fallbackVoidWidth,
             voidHeight: UserQueryNotchMetrics.fallbackVoidHeight,
-            expandedContentHeight: UserQueryNotchMetrics.expandedTaskContentHeight,
+            expandedContentHeight: UserQueryNotchMetrics.expandedConversationContentHeight,
             isExpanded: true,
             isHostExpanded: true,
             screenWidth: UserQueryNotchMetrics.defaultScreenWidth
@@ -50,10 +50,10 @@ struct UserQueryNotchMetricsTests {
                 UserQueryNotchLayout.expandedCommandOnlyTopPaddingBelowPhysicalVoid
         )
         #expect(layout.expandedContentFrame.minY == UserQueryNotchMetrics.fallbackVoidHeight)
-        #expect(layout.expandedContentFrame.height == UserQueryNotchMetrics.expandedTaskContentHeight)
+        #expect(layout.expandedContentFrame.height == UserQueryNotchMetrics.expandedConversationContentHeight)
         #expect(
             layout.expandedSurfaceFrame.height ==
-                UserQueryNotchMetrics.expandedTaskContentHeight +
+                UserQueryNotchMetrics.expandedConversationContentHeight +
                 UserQueryNotchMetrics.fallbackVoidHeight
         )
     }
@@ -64,7 +64,7 @@ struct UserQueryNotchMetricsTests {
             UserQueryNotchMetrics(
                 voidWidth: 0,
                 voidHeight: 0,
-                expandedContentHeight: UserQueryNotchMetrics.expandedTaskContentHeight,
+                expandedContentHeight: UserQueryNotchMetrics.expandedConversationContentHeight,
                 isExpanded: false,
                 isHostExpanded: false,
                 screenWidth: UserQueryNotchMetrics.defaultScreenWidth,
@@ -84,7 +84,7 @@ struct UserQueryNotchMetricsTests {
             UserQueryNotchMetrics(
                 voidWidth: UserQueryNotchMetrics.fallbackVoidWidth,
                 voidHeight: UserQueryNotchMetrics.fallbackVoidHeight,
-                expandedContentHeight: UserQueryNotchMetrics.expandedTaskContentHeight,
+                expandedContentHeight: UserQueryNotchMetrics.expandedConversationContentHeight,
                 isExpanded: false,
                 isHostExpanded: false,
                 screenWidth: UserQueryNotchMetrics.defaultScreenWidth,
