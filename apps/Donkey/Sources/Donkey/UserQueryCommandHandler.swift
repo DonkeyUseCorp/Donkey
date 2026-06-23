@@ -1365,23 +1365,20 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
     /// driving the raw command instead of stalling silently.
     private static let understandingTimeoutSeconds: TimeInterval = 15
 
-    /// One short line describing the step that just ran, for the spawn cursor's
-    /// label: the planner's stated reason, else the tool result's own summary.
+    /// One line describing the step that just ran: the planner's stated reason, else the tool result's
+    /// own summary. The conversation row owns visual truncation with a five-line tail clamp; cursor
+    /// labels are bounded later in the overlay model.
     @MainActor
     static func stepNarration(
         for step: HarnessStepExecutionResult,
         planner: HostedHarnessStepPlanner
     ) -> String? {
         let candidate = planner.lastNarration ?? step.toolResult?.summary
-        guard var narration = candidate?
+        guard let narration = candidate?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .components(separatedBy: .newlines).first,
             !narration.isEmpty else {
             return nil
-        }
-        let maxLength = 90
-        if narration.count > maxLength {
-            narration = String(narration.prefix(maxLength)).trimmingCharacters(in: .whitespaces) + "…"
         }
         return narration
     }

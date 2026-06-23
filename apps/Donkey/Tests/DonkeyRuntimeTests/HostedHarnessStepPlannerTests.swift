@@ -1,3 +1,4 @@
+@testable import Donkey
 import DonkeyAI
 import DonkeyContracts
 import DonkeyHarness
