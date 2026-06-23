@@ -76,9 +76,8 @@ export function InstallInstructions() {
                 maxWidth: 560,
               }}
             >
-              Donkey ships as a standard macOS disk image. Download the DMG,
-              drag the app into Applications, then launch it like any other Mac
-              app.
+              Download the DMG, drag the app into Applications, then launch it
+              like any other Mac app.
             </p>
             <PillButton href={DONKEY_DOWNLOAD_URL} variant="primary" size="lg">
               Download for Mac <ArrowRight size={18} />
@@ -87,42 +86,6 @@ export function InstallInstructions() {
         </div>
 
         <div style={instructionPanelStyle}>
-          <h3
-            style={{
-              color: "#fff",
-              fontSize: "clamp(28px, 3vw, 38px)",
-              fontWeight: 600,
-              letterSpacing: 0,
-              lineHeight: 1.08,
-              margin: 0,
-            }}
-          >
-            Install and open the app
-          </h3>
-          <p
-            style={{
-              color: "#b8b4ad",
-              fontSize: "clamp(17px, 2vw, 22px)",
-              lineHeight: 1.42,
-              margin: "18px 0 0",
-              maxWidth: 980,
-            }}
-          >
-            The desktop app is distributed through GitHub Releases. You can{" "}
-            <a
-              href={DONKEY_DOWNLOAD_URL}
-              style={{
-                color: "#cfcac2",
-                textDecoration: "underline",
-                textDecorationColor: "rgba(207,202,194,0.55)",
-                textUnderlineOffset: 5,
-              }}
-            >
-              download the latest version
-            </a>
-            .
-          </p>
-
           <div style={stepsGridStyle}>
             {installSteps.map((step) => (
               <InstallStepCard key={step.title} step={step} />
@@ -212,7 +175,6 @@ const stepsGridStyle: CSSProperties = {
   display: "grid",
   gap: "clamp(22px, 3vw, 36px)",
   gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))",
-  marginTop: "clamp(46px, 6vw, 72px)",
 };
 
 const stepCardStyle: CSSProperties = {
