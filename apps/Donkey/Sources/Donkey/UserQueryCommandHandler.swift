@@ -485,7 +485,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         let frontmostAppName = frontmost?.appName ?? forcedDriveTarget?.appName ?? "the frontmost app"
         let frontmostBundleIdentifier = frontmost?.bundleIdentifier ?? forcedDriveTarget?.bundleIdentifier
 
-        guard let configuration = try? DonkeyBackendInferenceConfiguration.fromEnvironment() else {
+        guard var configuration = try? DonkeyBackendInferenceConfiguration.fromEnvironment() else {
             return await failHarnessRun(
                 command: command,
                 response: "The vision backend isn't configured (set DONKEY_WEB_BASE_URL), so I couldn't navigate by vision.",
@@ -499,7 +499,9 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         }
         // One client serves the whole turn — understanding, planner, and hosted adapters all share it —
         // so wiring the auth-expiry hook here catches a 401 on any of those paths, even the ones that
-        // swallow the thrown error.
+        // swallow the thrown error. Stamping the conversation here means every billable call this turn
+        // makes carries the id, so backend usage records group under the conversation.
+        configuration.conversationID = conversationID
         let backend = DonkeyBackendInferenceClient(
             configuration: configuration,
             onAuthenticationRequired: backendAuthExpiryHook()

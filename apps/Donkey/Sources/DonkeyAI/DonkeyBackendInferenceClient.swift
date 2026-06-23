@@ -49,6 +49,10 @@ public struct DonkeyBackendInferenceConfiguration: Equatable, Sendable {
     public var baseURL: URL
     public var clientID: String
     public var devAuthBypass: Bool
+    /// The conversation this turn's inference calls belong to, sent as `x-donkey-conversation-id` so the
+    /// backend can group usage by conversation. Left nil for background work with no active conversation
+    /// (vision warming, the debug overlay) — those calls are intentionally ungrouped.
+    public var conversationID: String?
     public static let baseURLConfigurationDescription = "DONKEY_WEB_BASE_URL"
 
     public init(baseURL: URL, clientID: String, devAuthBypass: Bool = false) {
@@ -661,6 +665,9 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
         request.httpShouldHandleCookies = true
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(configuration.clientID, forHTTPHeaderField: "x-donkey-client-id")
+        if let conversationID = configuration.conversationID, !conversationID.isEmpty {
+            request.setValue(conversationID, forHTTPHeaderField: "x-donkey-conversation-id")
+        }
         if configuration.devAuthBypass {
             request.setValue("1", forHTTPHeaderField: "x-donkey-dev-auth-bypass")
         }
