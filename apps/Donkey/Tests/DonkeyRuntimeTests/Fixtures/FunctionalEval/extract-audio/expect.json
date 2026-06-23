@@ -1,0 +1,8 @@
+{
+  "frontmostApp": "Finder",
+  "maxSteps": 14,
+  "expectProduced": [
+    { "kind": "audio" },
+    { "kind": "fileExists", "extension": "mp3" }
+  ]
+}

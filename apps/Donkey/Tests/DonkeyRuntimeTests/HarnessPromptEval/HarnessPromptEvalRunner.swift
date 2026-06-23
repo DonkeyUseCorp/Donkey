@@ -20,10 +20,11 @@ import Foundation
 ///
 ///     env DONKEY_PROMPT_EVAL=1 DONKEY_WEB_BASE_URL=http://localhost:3000 DONKEY_DEV_AUTH_BYPASS=1 \
 ///       DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-///       swift test --filter HarnessPromptEvalTests
+///       swift test --filter PromptEval
 ///
-/// Add a scenario by constructing another `HarnessEvalScenario` (see `HarnessPromptEvalTests`); the
-/// runner is generic over the prompt and the scripted replies.
+/// This file is the shared engine for the `HarnessPromptEval/` folder. Add a category by dropping a new
+/// `<Category>PromptEvalTests.swift` beside it with its own `@Suite` and one `@Test` per scenario, each
+/// building a `HarnessEvalScenario`; the runner is generic over the prompt and the scripted replies.
 
 /// A scripted reply a stubbed tool hands back to the planner. The system is stubbed, so a tool never
 /// touches the real Mac — it returns the observation the scenario wants the model to see next.
@@ -149,16 +150,29 @@ enum HarnessEvalRunner {
         configuration.conversationID = conversationID
         let backend = DonkeyBackendInferenceClient(configuration: configuration)
 
-        // Real one-shot understanding of the turn (turnKind, restated goal, target app, parameters).
+        // Real one-shot understanding of the turn (turnKind, restated goal, target app, parameters, and the
+        // skills it should follow). Feed it the same skill catalog production does so it can pick.
+        let skillCatalog = BuiltInLocalAppSkillPacks.skillSelectionCatalog()
         let understanding = await HostedHarnessRequestUnderstanding(backend: backend)
-            .understand(command: scenario.prompt, frontmostAppName: scenario.frontmostApp)
+            .understand(
+                command: scenario.prompt,
+                frontmostAppName: scenario.frontmostApp,
+                skillCatalog: skillCatalog
+            )
+
+        // Preload the guides for the skills the understanding picked — mirrors production so the eval tests
+        // the real surfacing path, not a stub of it.
+        let preloadedSkillGuides: [String] = (understanding?.relevantSkillIDs ?? [])
+            .prefix(2)
+            .compactMap { BuiltInLocalAppSkillPacks.skillGuidance(forID: $0) }
 
         // Real tool surface; stub executors so the planner sees the true descriptors but nothing executes.
         let descriptors = BuiltInHarnessToolCatalog.descriptors
         let respond = scenario.respond
         let tools = descriptors.map { descriptor in
             HarnessTool(descriptor: descriptor) { context in
-                let reply = respond(context.call) ?? defaultReply(for: context.call)
+                let knownFiles = context.worldModel.facts.compactMap { $0.value == "exists" ? $0.key : nil }.sorted()
+                let reply = respond(context.call) ?? defaultReply(for: context.call, knownFiles: knownFiles)
                 return HarnessToolResult(
                     callID: context.call.id,
                     toolName: context.call.name,
@@ -184,7 +198,8 @@ enum HarnessEvalRunner {
             descriptors: descriptors,
             appName: understanding?.targetAppName ?? "",
             appGuidance: nil,
-            understanding: understanding
+            understanding: understanding,
+            preloadedSkillGuides: preloadedSkillGuides
         )
 
         let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
@@ -201,7 +216,7 @@ enum HarnessEvalRunner {
     /// Default stubbed reply when a scenario does not script the call. Skill lookups get the REAL built-in
     /// `SKILL.md` (so the eval exercises the same guidance the planner reads in production), and everything
     /// else gets a generic success carrying a fact so the step counts as progress and the loop advances.
-    private static func defaultReply(for call: HarnessToolCall) -> HarnessEvalStub {
+    private static func defaultReply(for call: HarnessToolCall, knownFiles: [String]) -> HarnessEvalStub {
         switch call.name {
         case "skill.search":
             return .ok(
@@ -215,9 +230,28 @@ enum HarnessEvalRunner {
                 return .ok(content, facts: ["skill.loaded": id])
             }
             return .ok("Loaded.", facts: ["skill.loaded": id])
+        case "files.describe":
+            let listing = knownFiles.isEmpty
+                ? "The directory is empty."
+                : knownFiles.map { "\($0) — present" }.joined(separator: "; ")
+            return .ok(listing)
         default:
+            // A read-only discovery/verify command (find, ls, stat, ffprobe…) is the model confirming an
+            // output it just produced. Report the files prior steps created so it can move on, instead of
+            // a blank "ran" that sends it re-searching until the duplicate-call guard fails the run.
+            if let command = call.input["command"], isFileProbe(command) {
+                return .ok(knownFiles.isEmpty ? "(no matching files)" : knownFiles.joined(separator: "\n"))
+            }
             return .ok("\(call.name) ran.", facts: ["lastStub": call.name])
         }
+    }
+
+    /// True for a read-only command whose job is to look at the filesystem — so the stub answers with the
+    /// known files rather than a content-free success.
+    private static func isFileProbe(_ command: String) -> Bool {
+        let lowered = command.lowercased()
+        let probes = ["find ", "ls ", "ls\n", "stat ", "test ", "file ", "ffprobe", "du ", "wc ", "realpath", "pwd"]
+        return lowered == "ls" || probes.contains { lowered.contains($0) }
     }
 
     /// Best-effort load of a built-in `SKILL.md` from the DonkeyRuntime resource bundle by a loose id

@@ -1,0 +1,1 @@
+OCR receipt.jpg, then append the merchant and total as a new row in expenses.csv

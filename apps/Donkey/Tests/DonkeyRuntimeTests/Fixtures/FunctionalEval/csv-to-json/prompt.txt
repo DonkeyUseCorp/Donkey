@@ -1,0 +1,1 @@
+In the folder {DIR} there is people.csv. Convert it to a JSON array (one object per row) and save it as a .json file in {DIR}.

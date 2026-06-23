@@ -1,0 +1,1 @@
+extract the audio from meeting.mov as an mp3 and give me a transcript with the action items pulled out

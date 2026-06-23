@@ -1,0 +1,1 @@
+stamp a DRAFT watermark on every PDF in ~/Desktop/contracts

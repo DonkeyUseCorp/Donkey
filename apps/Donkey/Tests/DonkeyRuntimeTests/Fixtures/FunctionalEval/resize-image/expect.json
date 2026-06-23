@@ -1,0 +1,7 @@
+{
+  "frontmostApp": "Finder",
+  "maxSteps": 14,
+  "expectProduced": [
+    { "kind": "imageWidth", "width": 200 }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "frontmostApp": "Finder",
+  "maxSteps": 18,
+  "disk": [
+    { "path": "/Users/davidle/Desktop/trip", "describe": "Folder of 12 JPEG photos (3024x4032, ~4MB each), some with GPS EXIF tags." }
+  ],
+  "responses": [
+    { "tool": "files.describe", "summary": "~/Desktop/trip — 12 JPEG photos, 3024x4032, several carry GPS EXIF tags." },
+    { "tool": "shell_exec", "contains": ["sips"], "summary": "Resized 12 images to 1080px wide." },
+    { "tool": "shell_exec", "contains": ["exiftool"], "summary": "Stripped GPS tags from 12 images." },
+    { "tool": "shell_exec", "contains": ["montage"], "summary": "Wrote contact-sheet.jpg (3x3).", "produces": ["contact-sheet.jpg"] }
+  ],
+  "expect": {
+    "turnKind": "act",
+    "skills": ["images"],
+    "shellAny": [["sips"], ["magick"], ["mogrify"]]
+  }
+}

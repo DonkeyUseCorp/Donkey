@@ -1,0 +1,7 @@
+{
+  "frontmostApp": "Finder",
+  "maxSteps": 16,
+  "expectProduced": [
+    { "kind": "pdfPageCount", "pageCount": 3 }
+  ]
+}

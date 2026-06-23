@@ -279,6 +279,32 @@ struct HostedHarnessStepPlannerTests {
     }
 
     @Test
+    func stepNarrationKeepsFullLineForConversationSubtext() async {
+        let longNarration = "I'll check the Downloads folder to see what files we have for the YouTube clip and subtitle assets before deciding the next command."
+        let planner = makePlanner(
+            httpClient: FixtureHTTPClient(
+                data: Data(#"{"output_text":"{\"tool\":\"ax.observe\",\"narration\":\"\#(longNarration)\"}"}"#.utf8),
+                statusCode: 200
+            ),
+            understanding: nil
+        )
+        let step = HarnessStepExecutionResult(
+            task: task(goal: "create a subtitled clip", toolHistory: []),
+            toolResult: HarnessToolResult(
+                callID: "call-1",
+                toolName: "ax.observe",
+                status: .succeeded,
+                summary: "fallback"
+            )
+        )
+
+        _ = await planner.planNextStep(for: task(goal: "create a subtitled clip", toolHistory: []))
+        let narration = UserQueryCommandHandler.stepNarration(for: step, planner: planner)
+
+        #expect(narration == longNarration)
+    }
+
+    @Test
     func retriesOnceWhenChosenToolMissesAllRequiredInput() async {
         // The exact loop the user hit: the model chose shell_exec with NO command (its required input),
         // which only yields invalidInput and, repeated, fails the run. The planner must retry once with

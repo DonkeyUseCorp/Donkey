@@ -1,0 +1,8 @@
+{
+  "frontmostApp": "Finder",
+  "maxSteps": 4,
+  "expect": {
+    "turnKind": "converse",
+    "notUsed": ["shell_exec", "ax.click", "vision.click", "automation.applescript.execute"]
+  }
+}

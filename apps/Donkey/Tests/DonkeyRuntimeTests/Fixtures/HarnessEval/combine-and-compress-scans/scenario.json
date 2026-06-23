@@ -1,0 +1,16 @@
+{
+  "frontmostApp": "Finder",
+  "maxSteps": 18,
+  "disk": [
+    { "path": "/Users/davidle/Desktop/scans", "describe": "Folder of 8 scanned PDFs, ~3MB each (24MB total)." }
+  ],
+  "responses": [
+    { "tool": "shell_exec", "contains": ["compress"], "summary": "Wrote scans-combined.pdf (4.2MB after downsampling).", "produces": ["scans-combined.pdf"] },
+    { "tool": "shell_exec", "summary": "Combined 8 PDFs into scans-combined-raw.pdf (24MB).", "produces": ["scans-combined-raw.pdf"] }
+  ],
+  "expect": {
+    "turnKind": "act",
+    "skills": ["pdf"],
+    "shellAny": [["qpdf"], ["gs"], ["ghostscript"], ["pdfunite"]]
+  }
+}

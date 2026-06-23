@@ -1,0 +1,11 @@
+{
+  "frontmostApp": "Messages",
+  "maxSteps": 14,
+  "responses": [
+    { "tool": "automation.applescript.execute", "summary": "Sent iMessage to Sarah Le: \"Running 20 minutes late\"." }
+  ],
+  "expect": {
+    "turnKind": "act",
+    "skillsAny": ["imessage", "contacts"]
+  }
+}

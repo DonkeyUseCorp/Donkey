@@ -1,0 +1,16 @@
+{
+  "frontmostApp": "Finder",
+  "maxSteps": 16,
+  "disk": [
+    { "path": "report.pdf", "describe": "PDF, 42 pages, selectable text — a quarterly reliability review.", "contentFile": "report.txt" }
+  ],
+  "responses": [
+    { "tool": "llm.generate", "summary": "Wrote a one-page brief of report.pdf.", "produces": ["report-brief.md"] },
+    { "tool": "shell_exec", "contains": [".md"], "summary": "Wrote ~/Desktop/report-brief.md", "produces": ["report-brief.md"] }
+  ],
+  "expect": {
+    "turnKind": "act",
+    "skillsAny": ["pdf", "documents"],
+    "used": ["llm.generate"]
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "frontmostApp": "Finder",
+  "maxSteps": 18,
+  "disk": [
+    { "path": "/Users/davidle/Desktop/contracts", "describe": "Folder of 6 contract PDFs." }
+  ],
+  "responses": [
+    { "tool": "shell_exec", "summary": "Stamped DRAFT on 6 PDFs (written alongside originals as *-draft.pdf).", "produces": ["contracts-draft"] }
+  ],
+  "expect": {
+    "turnKind": "act",
+    "skills": ["pdf"],
+    "shellAny": [["qpdf"], ["pdftk"], ["stamp"], ["overlay"], ["lit"]]
+  }
+}

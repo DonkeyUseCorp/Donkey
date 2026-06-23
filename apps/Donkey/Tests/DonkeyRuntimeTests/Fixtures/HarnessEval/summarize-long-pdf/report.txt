@@ -1,0 +1,13 @@
+Q3 PLATFORM RELIABILITY REVIEW
+
+Executive summary: availability was 99.92%, below the 99.95% target, driven by two
+incidents in the payments path. Mean time to recovery improved 18% quarter over quarter.
+
+Section 1 — Incidents. INC-204 (payments timeout, 47 min) and INC-219 (cache stampede,
+31 min) accounted for 78 of 83 minutes of downtime. Both traced to missing backpressure.
+
+Section 2 — Capacity. Peak traffic grew 22%. Database CPU headroom fell to 15% at peak;
+read-replica rollout is recommended before Q4 promotions.
+
+Section 3 — Action items. Add backpressure to the payments queue, ship read replicas,
+and add a cache-stampede guard. Owners assigned; target dates in Q4.

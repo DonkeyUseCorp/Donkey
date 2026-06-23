@@ -1,0 +1,12 @@
+{
+  "frontmostApp": "Safari",
+  "maxSteps": 10,
+  "responses": [
+    { "tool": "web.fetch", "summaryFile": "donkeyuse.md" }
+  ],
+  "expect": {
+    "turnKind": "act",
+    "skillsAny": ["web-capture", "web-research"],
+    "used": ["web.fetch"]
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "frontmostApp": "Finder",
+  "maxSteps": 28,
+  "expectProduced": [
+    { "kind": "pdfFields", "containsAll": [
+      ["Blue Harbor Logistics"],
+      ["Columbus"],
+      ["1428 Cedar Mill"],
+      ["47-3829156", "473829156"]
+    ] }
+  ]
+}
