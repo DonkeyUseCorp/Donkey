@@ -233,9 +233,10 @@ canvas, Electron). Both return elements into the world model, which the planner
 reads as text: each element with its geometry, value, and click eligibility, in
 reading order. With a multimodal model the compressed screenshot goes too
 (`ScreenshotCompression.compressedForModel` — ~896px JPEG), so the planner can
-point at pixels AX and the vision parse miss. A non-LLM monitor re-parses on
-large screen changes, keeping the vision cache warm so captures are usually free
-at decision time.
+point at pixels AX and the vision parse miss. Vision is on-demand and tied to the
+run: nothing parses the screen in the background to stay warm — the planner pays
+for a parse only when it chooses to look, and a re-look at an unchanged screen
+within the same run reuses that parse instead of paying again.
 
 Three things keep the planner aware of the whole screen, not just the front
 window. Capture widens in scopes, smallest first — `scope=window` (default),

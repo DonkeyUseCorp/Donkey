@@ -1,92 +1,84 @@
 # Donkey Vision
 
-Donkey Vision is the observation layer that turns the user's windows into
-structured UI understanding the agent can reason about. It is not one model or
-one provider — it is a fusion system: local Mac evidence gives grounded
-geometry, and hosted AI enrichment interprets what those grounded regions
-mean. The engine is wired headless into every build; the developer overlay is
-just a window into it, gated separately. It does not parse the whole time the
-app is open, though: the hosted parse only runs while the user is engaging
-Donkey — a task in flight, or a command submitted in the last minute — so an
-app left idle stops spending instead of re-parsing the screen forever.
+Donkey Vision is how the agent sees pixels that structured Accessibility reads
+miss — canvas, Electron, web shells, custom-drawn controls. It is a tool the
+agent calls, not a background service. When the planner decides during a run
+that structured reads aren't enough, it captures the target window and a hosted
+vision model parses the screenshot into labeled, located UI elements it can then
+click.
 
-**The one rule:** local geometry wins. If a grounded local box exists from
-Accessibility or window-chrome geometry, an overlapping AI box may enrich its
-label but never replaces its rectangle. If an AI box is visibly off, do not
-"fix" it with coordinate offsets — improve local geometry, fusion, or the
-screenshot scope instead.
+There is no always-on engine. Vision work only ever happens inside a live run,
+on the planner's own decision, so an idle app spends nothing on the screen. A
+question comes in, the planner decides whether it needs to look, and only then
+is a screenshot taken and parsed.
 
 ## How It Works
 
+The agent calls one tool — `vision.capture` — when it decides to look:
+
 ```text
-frontmost-window monitor (screenshot fingerprint, re-parses on large change)
+planner decides it needs to see pixels AX missed
   |
   v
-UIUnderstandingCoordinator captures the changed window
-  |- Accessibility read: roles, labels, precise bounds, supported actions
-  |- native visual detection: shapes, rows, panels, icon regions from pixels
-  |- hosted vision parse (POST /api/vision) only when that window's pixels
-  |  changed since the last successful parse; unchanged windows reuse their
-  |  carried-forward boxes
+vision.capture captures the target
+  |- scope=window  (default): the frontmost window
+  |- scope=screen           : the whole display, for a modal/sheet/menu drawn
+  |                           outside the window
+  |- scope=desktop          : all displays, for a target on another monitor
   v
-fusion: local geometry wins; AI enriches labels and fills uncovered gaps
+hosted vision parse (POST /api/vision) turns the screenshot into located,
+labeled elements
   |
   v
-WindowUIUnderstandingStore (per-window cache)
-  |
-  v
-the agent's captureAndAnalyze reads the store first; the debug overlay
-renders the same evidence when enabled
+world model: each element with its geometry and click eligibility; a later
+vision.click maps it back through the window's current bounds
 ```
 
-Local evidence decides *where* things are; AI decides *what* they probably
-mean. Fusion decides which evidence renders or feeds downstream reasoning.
+Within one run, a re-capture of an unchanged window reuses the previous parse
+instead of paying for another — the tool signature-matches the screenshot
+against the parse it wrote on its last capture (`ParsedVisionStore`). Across
+runs nothing is carried forward and nothing is kept warm.
 
-Each source covers the others' blind spots. Accessibility is precise when an
-app exposes native controls, but web and Electron shells leave it sparse or
-stale. Native visual detection finds geometry in any pixels but not semantic
-names. Hosted AI recognizes UI concepts across apps ("this is a search field",
-"this icon is a voice button") but its bounding boxes are approximate — off by
-pixels, too large, or attached to nearby text. AI boxes are evidence, not
-authority.
-
-An older streaming screenshot-parse path is kept compiled behind the
-coordinator's `remoteAIEngine` switch, which is currently hardcoded to the
-vision path.
+Vision complements Accessibility rather than replacing it; they are separate
+tools the planner picks between. Accessibility is precise when an app exposes
+native controls but goes sparse or stale on web and Electron shells. Hosted
+vision recognizes UI concepts across any pixels ("this is a search field", "this
+icon is a voice button"), but its bounding boxes are approximate — off by
+pixels, too large, or attached to nearby text. So vision boxes are evidence the
+planner acts on, not pixel-perfect truth.
 
 ## Safety Boundary
 
-Donkey Vision is observation first; it can also supply a secondary live-input
-target when Accessibility cannot provide a better element. Live input always
-passes through the guarded action boundary: target validation, focus checks,
-permission policy, action eligibility, and runtime verification. Input tries
-Accessibility first, then AI visual targets, then guarded coordinate click
-fallback.
+Vision is observation first; a parsed element can also become a live-input
+target when Accessibility cannot provide a better one. Live input always passes
+through the guarded action boundary: target validation, focus checks, permission
+policy, action eligibility, and runtime verification. Input tries Accessibility
+first, then a vision target, then a guarded coordinate click.
 
 AI-derived evidence is specially constrained:
 
-- AI boxes may be interactable only when they come from a scoped app/window or
-  system-navigation screenshot and are marked `guardedAction`.
-- AI output may provide a coordinate click target only after the Accessibility
-  path fails or is unavailable; the executor clicks the guarded target center,
+- A vision element may drive a coordinate click only after the Accessibility
+  path fails or is unavailable; the executor clicks the element's mapped center,
   never an unbounded desktop coordinate.
-- Screenshots sent to hosted AI must be scoped to an app/window or a
-  system-navigation surface, never the full desktop.
+- Screenshots sent to the hosted model are scoped to an app/window or a
+  system-navigation surface, never the full desktop as a routine default.
 - Screenshots are not persisted or logged as general product data.
 
 ## Developer Overlay
 
-The overlay renders the live fusion result for debugging, with a visible
-source badge on every box:
+The developer overlay is a separate debug tool, not part of the agent's vision
+path. When enabled, it runs its own engine that parses the screen to draw boxes
+over live UI, fusing two local sources of geometry — Accessibility and native
+visual detection — with the hosted AI parse. Its one rule is **local geometry
+wins**: where a grounded local box exists, an overlapping AI box may enrich its
+label but never replaces its rectangle. If an AI box is visibly off, do not
+"fix" it with coordinate offsets — improve local geometry, fusion, or the
+capture scope instead.
 
-| Badge | Source | If a box is off |
-|---|---|---|
-| `AX` | Accessibility | local coordinate mapping bug — fix the Mac geometry path |
-| `CV` | native visual detection | local detector issue — fix detection, not offsets |
-| `AI` | hosted vision parse | expected model localization error — never add coordinate offsets |
-
-The overlay is enabled through `dev-overlay.json` (see
-`docs/guides/user-query-overlay.md` for where the config lives):
+The overlay is decoupled from the agent by construction: it parses only while it
+is enabled, it never feeds the agent, and the agent never reads from it. It
+exists only in debug-overlay builds, and even there it draws (and parses) only
+when `dev-overlay.json` turns it on:
 
 ```json
 {
@@ -94,36 +86,43 @@ The overlay is enabled through `dev-overlay.json` (see
 }
 ```
 
-`enabled` is the only knob: it flips the visible overlay on or off. Cadence,
-scope, confidence, and app filters are fixed sensible defaults in code, not
-config. Do not add a provider field either — Donkey Vision is always local
-evidence plus hosted AI enrichment.
+`enabled` is the only knob. Each box carries a source badge:
+
+| Badge | Source | If a box is off |
+|---|---|---|
+| `AX` | Accessibility | local coordinate mapping bug — fix the Mac geometry path |
+| `CV` | native visual detection | local detector issue — fix detection, not offsets |
+| `AI` | hosted vision parse | expected model localization error — never add coordinate offsets |
+
+See `docs/guides/user-query-overlay.md` for where the config lives.
 
 ## Source Map
 
 | Path | Owns |
 |---|---|
-| `apps/Donkey/Sources/Donkey/LocalUIElementDetection/UIUnderstandingCoordinator.swift` | always-on engine: capture, change detection, parse scheduling |
+| `apps/Donkey/Sources/DonkeyAI/VisionComputerUseTools.swift` | the agent's on-demand `vision.capture`/`vision.click` tools and within-run parse reuse |
+| `apps/Donkey/Sources/Donkey/LocalUIElementDetection/UIUnderstandingCoordinator.swift` | debug overlay engine: capture, change detection, parse scheduling |
 | `apps/Donkey/Sources/Donkey/LocalUIElementDetection/DebugUIInspectionOverlayController.swift` | debug overlay rendering and badges |
-| `apps/Donkey/Sources/DonkeyAI/DebugUIInspectionFrameFusion.swift` | fusion of local and AI evidence |
-| `apps/Donkey/Sources/DonkeyAI/VisionParseDebugUIOverlayMapper.swift` | active AI source mapping |
-| `apps/Donkey/Sources/DonkeyAI/ScreenshotParseDebugUIOverlayMapper.swift` | retained, disabled streaming path |
+| `apps/Donkey/Sources/DonkeyAI/DebugUIInspectionFrameFusion.swift` | fusion of local and AI evidence for the overlay |
+| `apps/Donkey/Sources/DonkeyAI/VisionParseDebugUIOverlayMapper.swift` | AI parse → overlay element mapping |
 | `apps/Donkey/Sources/DonkeyRuntime/LocalUIElementDetection/LocalUIElementDetectionService.swift` | native visual detection |
-| `site/src/lib/inference/vision/`, `site/src/lib/inference/screenshot-parsing/` | backend vision parsing |
+| `site/src/lib/inference/vision/` | backend vision parsing |
 
 ## Maintainer Rules
 
-1. **Model boxes are never pixel-perfect.** Do not add global coordinate
-   offsets to compensate for AI localization.
-2. **Smallest scope that works, escalate when needed.** Screenshots may go to
-   hosted models (the harness sends compressed captures to multimodal models).
-   Start with the target window; widen to a display for cross-window surfaces
-   like modals; fall back to the whole desktop only when the thing to act on
-   isn't visible at a tighter scope. Always compress before sending, and prefer
-   the tightest scope that still shows what the model needs.
-3. **No provider switch.** Provider selection is not the UI or config model
-   for Donkey Vision.
-4. **AI evidence stays marked.** Keep AI boxes visually distinct and tagged so
-   maintainers can see the position came from a model.
-5. **Guarded input only.** AI visual targets drive coordinate clicks only
-   after focus, permission, target-window, and action-eligibility checks pass.
+1. **Vision is on-demand and run-scoped.** It happens only inside a live run,
+   when the planner chooses to look. Do not reintroduce a background warm loop,
+   an always-on parse engine, or any path that parses the screen while no run is
+   asking for it.
+2. **Model boxes are never pixel-perfect.** Do not add global coordinate offsets
+   to compensate for AI localization.
+3. **Smallest scope that works, escalate when needed.** Start with the target
+   window; widen to the display for modals; fall back to the whole desktop only
+   when the target isn't visible at a tighter scope. Always compress before
+   sending.
+4. **No provider switch.** Provider selection is not a UI or config concept for
+   Donkey Vision.
+5. **The overlay stays decoupled.** It is a debug visualization only — keep it
+   from feeding the agent or becoming a vision source the agent depends on.
+6. **Guarded input only.** A vision target drives a coordinate click only after
+   focus, permission, target-window, and action-eligibility checks pass.
