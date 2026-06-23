@@ -42,9 +42,6 @@ public final class VisionComputerUseToolProvider {
     let executionPreference: ExecutionPreference
     let analyzer: any DebugUIInspectionAnalyzing
     let store: ParsedVisionStore
-    /// Fused accessibility + vision understanding kept warm by the always-on `UIUnderstandingCoordinator`.
-    /// Consulted before the LLM vision path so a decision reuses already-extracted elements.
-    let understandingStore: WindowUIUnderstandingStore
     let minConfidence: Double
     let reuseChangedFractionThreshold: Double
     let capture: VisionActionDriver.ScreenshotCapture
@@ -70,7 +67,6 @@ public final class VisionComputerUseToolProvider {
         executionPreference: ExecutionPreference = .foreground,
         analyzer: any DebugUIInspectionAnalyzing,
         store: ParsedVisionStore = .shared,
-        understandingStore: WindowUIUnderstandingStore = .shared,
         minConfidence: Double = 0.25,
         reuseChangedFractionThreshold: Double = VisionComputerUseToolProvider.reuseChangedFractionThreshold,
         capture: @escaping VisionActionDriver.ScreenshotCapture = { try await ScreenCaptureKitWindowScreenshotCapturer().capture(target: $0) },
@@ -84,7 +80,6 @@ public final class VisionComputerUseToolProvider {
         self.executionPreference = executionPreference
         self.analyzer = analyzer
         self.store = store
-        self.understandingStore = understandingStore
         self.minConfidence = minConfidence
         self.reuseChangedFractionThreshold = reuseChangedFractionThreshold
         self.capture = capture
@@ -192,31 +187,22 @@ public final class VisionComputerUseToolProvider {
         let elementImageHeight: Int
 
         if let signature,
-           let understanding = understandingStore.reusableEntry(
-               appKey: appKey,
-               signature: signature,
-               changedFractionThreshold: reuseChangedFractionThreshold
-           ) {
-            // The always-on engine already extracted this window (accessibility + vision), often
-            // while it was in the background. Reuse it so the decision is instant and grounded in
-            // accessibility, not just an inline vision parse.
-            usedCache = true
-            elements = understanding.elements
-            elementImageWidth = understanding.imagePixelWidth
-            elementImageHeight = understanding.imagePixelHeight
-        } else if let signature,
            let reusable = store.reusableEntry(
                appKey: appKey,
                signature: signature,
                changedFractionThreshold: reuseChangedFractionThreshold
            ) {
+            // Reuse an earlier capture from THIS run when the window hasn't changed since (e.g.
+            // capture → click → re-capture on an unchanged screen), so the agent doesn't pay for a
+            // redundant parse. The entry was written by this same tool below on its last cache miss —
+            // nothing parses the screen except this on-demand tool inside a live run.
             usedCache = true
             elements = reusable.elements
             elementImageWidth = reusable.imagePixelWidth
             elementImageHeight = reusable.imagePixelHeight
         } else {
             // Compress only on a cache miss: a reused parse never sends the image, so encoding it
-            // before the reuse check would be wasted work on the common warm-cache path.
+            // before the reuse check would be wasted work on the common reuse path.
             let compressed = ScreenshotCompression.compressedForModel(shot)
             let imageWidth = max(1, Int(compressed.pixelSize.width.rounded()))
             let imageHeight = max(1, Int(compressed.pixelSize.height.rounded()))

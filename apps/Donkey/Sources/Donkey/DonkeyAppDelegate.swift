@@ -15,7 +15,6 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     private var manualPermissionSetupController: MacPermissionSetupWindowController?
     private var overlayController: UserQueryOverlayController?
     private var uiUnderstandingCoordinator: UIUnderstandingCoordinator?
-    private var frontmostVisionWarmCache: FrontmostVisionWarmCache?
     /// Mirrors the auth coordinator's session phase into the overlay's `needsLogin`, so the notch
     /// flips to/from the login call-to-action as the session is established or expires.
     private var authStateCancellable: AnyCancellable?
@@ -84,7 +83,6 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
             andEventID: AEEventID(kAEGetURL)
         )
         overlayController?.stop()
-        frontmostVisionWarmCache?.stop()
         uiUnderstandingCoordinator?.stop()
     }
 
@@ -176,47 +174,36 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         // while the overlay surfaces are live, instead of receding into an accessory agent.
         NSApp.setActivationPolicy(.regular)
 
-        // The UI-understanding engine (AX + AI parse + per-window cache + background warming) runs in
-        // every build and feeds the agent. Only the visual overlay is gated: debug builds inject the
-        // AppKit overlay renderer (shown when the dev-overlay config turns it on), while production
-        // parses headlessly through a no-op renderer.
+        // The UI-understanding engine exists only to draw the developer debug overlay; the agent does
+        // not read from it. It parses the screen solely to render that overlay, so it is built only in
+        // debug-overlay builds and never in production. The agent's only vision source is the on-demand
+        // `vision.capture` tool inside a live run.
         #if DONKEY_DEBUG_OVERLAY
         let uiUnderstandingCoordinator = UIUnderstandingCoordinator(
             overlayController: DebugUIInspectionOverlayController(),
             rendersOverlay: true
         )
-        #else
-        let uiUnderstandingCoordinator = UIUnderstandingCoordinator(
-            rendersOverlay: false
-        )
-        #endif
         self.uiUnderstandingCoordinator = uiUnderstandingCoordinator
+        #endif
 
-        // Keep ParsedVisionStore warm: watch the frontmost window and re-parse on big changes, so a
-        // typed vision command reuses a fresh parse instead of paying for one inline. No-ops when the
-        // vision backend isn't configured.
-        let frontmostVisionWarmCache = FrontmostVisionWarmCache.fromEnvironment()
-        self.frontmostVisionWarmCache = frontmostVisionWarmCache
-
-        // Start the always-on backend loops only while signed in; the phase observer above suspends and
-        // resumes them as the session changes (an expired session must not keep them issuing 401s).
+        // Start the debug overlay engine (if any) only while signed in; the phase observer above stops
+        // and restarts it as the session changes (its parse pass would otherwise 401 while signed out).
         applySessionState(isSignedIn: authCoordinator?.isAuthenticated == true, model: model)
     }
 
-    /// Drive the process-wide session gate and the always-on backend loops from the auth phase. Signed
-    /// out: close the gate (every backend call short-circuits to `.authenticationRequired` with no
-    /// network round trip) and fully suspend the warm cache, UI-understanding engine, and Live session,
-    /// so a logged-out app stops issuing guaranteed-401 requests. Signed in: reopen the gate and restart
-    /// them. Idempotent — `start()`/`stop()` on each loop are safe to call repeatedly.
+    /// Drive the process-wide session gate, the debug overlay engine, and the Live session from the auth
+    /// phase. Signed out: close the gate (every backend call short-circuits to `.authenticationRequired`
+    /// with no network round trip) and suspend the overlay engine and Live session, so a logged-out app
+    /// stops issuing guaranteed-401 requests. Signed in: reopen the gate and restart them. Idempotent —
+    /// `start()`/`stop()` are safe to call repeatedly, and the coordinator is nil outside debug-overlay
+    /// builds.
     private func applySessionState(isSignedIn: Bool, model: UserQueryOverlayModel?) {
         BackendSessionGate.shared.update(isAuthenticated: isSignedIn)
         if isSignedIn {
             uiUnderstandingCoordinator?.start()
-            frontmostVisionWarmCache?.start()
             model?.resumeLiveSession()
         } else {
             uiUnderstandingCoordinator?.stop()
-            frontmostVisionWarmCache?.stop()
             model?.suspendLiveSession()
         }
     }
@@ -271,8 +258,6 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     /// `startAuthenticatedAppSurfaces()` guards on these being nil, so they must be reset here.
     private func teardownAuthenticatedSurfaces() {
         authStateCancellable = nil
-        frontmostVisionWarmCache?.stop()
-        frontmostVisionWarmCache = nil
         uiUnderstandingCoordinator?.stop()
         uiUnderstandingCoordinator = nil
         overlayController?.stop()

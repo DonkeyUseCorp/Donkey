@@ -211,9 +211,6 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         _ command: String,
         context: UserQueryCommandContext?
     ) async -> UserQueryCommandHandlingResult {
-        // A submitted command is a direct Donkey interaction: open the engagement window so the vision
-        // warm caches start (and stay) warm around this turn instead of only firing while idle.
-        DonkeyEngagement.shared.noteInteraction()
         let traceID = "user-query-\(UUID().uuidString)"
         let conversationID = context?.conversation.id ?? traceID
         logSubmittedCommand(command, traceID: traceID, conversationID: conversationID, context: context)
@@ -504,8 +501,13 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // it returns nil — or when the call outlives its deadline — so a backend hiccup never
         // dead-ends or silently stalls the run.
         let understandingBoundary = HostedHarnessRequestUnderstanding(backend: backend, trace: trace)
+        let skillSelectionCatalog = BuiltInLocalAppSkillPacks.skillSelectionCatalog()
         let understanding = await AIDeadline.race(seconds: Self.understandingTimeoutSeconds) {
-            await understandingBoundary.understand(command: command, frontmostAppName: frontmostAppName)
+            await understandingBoundary.understand(
+                command: command,
+                frontmostAppName: frontmostAppName,
+                skillCatalog: skillSelectionCatalog
+            )
         }
 
         // TWO-TIER SPLIT. A turn the understanding boundary typed `.converse` (a greeting, a thanks, a
@@ -588,6 +590,21 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             forApp: appName,
             bundleIdentifier: bundleIdentifier
         )
+
+        // Preload the full guides for the capability skills the understanding boundary picked for this task
+        // (`relevantSkillIDs`) — the same "preload the right playbook" treatment app skills get via
+        // appGuidance, generalized so a media/pdf/data task arrives with its skill in hand instead of
+        // depending on the planner to discover and load it. Skip the drive-target app's own skill (already
+        // in appGuidance) and cap the count so the prompt stays bounded; anything else stays loadable from
+        // the catalog via skill.load.
+        let appSkillID = BuiltInLocalAppSkillPacks.appSkillDescriptor(
+            forApp: appName,
+            bundleIdentifier: bundleIdentifier
+        )?.id.lowercased()
+        let preloadedSkillGuides: [String] = (understanding?.relevantSkillIDs ?? [])
+            .filter { $0.lowercased() != appSkillID }
+            .prefix(2)
+            .compactMap { BuiltInLocalAppSkillPacks.skillGuidance(forID: $0) }
 
         // Drive the frontmost app through the GENERIC HARNESS LOOP: the harness re-plans after every
         // observation, consulting `HostedHarnessStepPlanner` (the model boundary) to pick the next
@@ -712,6 +729,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             appGuidance: appGuidance,
             understanding: understanding,
             skillCatalog: Self.installedSkillCatalog(),
+            preloadedSkillGuides: preloadedSkillGuides,
             recalledLessons: recalledLessons,
             trace: trace,
             openWindows: {
@@ -740,12 +758,6 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             "start traceID=\(traceID) app=\(appName) goal=\"\(command)\""
         )
         let e2eStartMS = Self.uptimeMilliseconds()
-        // Suspend the warm-cache monitor for the whole drive so it never races us writing the same
-        // app's parse. The run between these calls has no early exit, so resume always pairs with it.
-        VisionWarmCacheActivity.shared.suspend()
-        // Keep Donkey "engaged" for the whole run so the understanding warm pass stays alive however
-        // long the task takes; pairs with `endRun` below (this stretch has no early exit).
-        DonkeyEngagement.shared.beginRun()
         // Realtime per-step feedback: narrate every step through the spawn cursor's label (the
         // planner's one-line reason, falling back to the tool's own summary), and after each step that
         // physically moved the pointer (a click), animate the overlay cursor traveling to that exact
@@ -845,10 +857,6 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         if holdsForegroundFocus {
             await foregroundFocusGate.release()
         }
-        VisionWarmCacheActivity.shared.resume()
-        // Run finished: drop the active-run hold and stamp an interaction so warming lingers briefly
-        // for a follow-up command before idling out.
-        DonkeyEngagement.shared.endRun()
 
         let finalTask = await genericHarnessLifecycle.coordinator.agent(id: agentID)
         let finalStatus = finalTask?.status
@@ -1475,7 +1483,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 : " · skill_run: " + skill.scripts.map { script in
                     script.purpose.isEmpty ? script.id : "\(script.id) (\(script.purpose))"
                 }.joined(separator: ", ")
-            return "  - \(skill.id) — \(skill.description)\(apps)\(scripts)"
+            return "  - \(skill.id) — \(skill.summary)\(apps)\(scripts)"
         }
         return lines.joined(separator: "\n")
     }

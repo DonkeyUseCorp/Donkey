@@ -20,14 +20,15 @@ private enum RemoteAIEngine {
     case screenshotParse
 }
 
-/// Always-on engine that turns the user's windows into structured UI understanding (accessibility +
-/// vision elements) for the agent to reason over. It runs in every build; only the visual overlay is
-/// a debug concern, injected through `DebugUIInspectionOverlayRendering`.
+/// Debug-overlay engine that turns the user's windows into structured UI understanding (accessibility +
+/// vision elements) purely to draw the developer overlay. It is decoupled from the agent: it never feeds
+/// the agent's vision path and the agent never reads from it. It parses only while the overlay is active,
+/// and exists only in debug-overlay builds — the agent's own vision is the on-demand `vision.capture`
+/// tool, run-scoped and separate from this.
 @MainActor
 final class UIUnderstandingCoordinator {
-    // The real overlay renderer: AppKit in debug builds, a no-op in production. Drawing is routed
-    // through the gated `overlayController` accessor below so the engine keeps parsing and caching
-    // for the agent even while the overlay is off.
+    // The real overlay renderer, injected in debug-overlay builds. Drawing is routed through the gated
+    // `overlayController` accessor below; when the overlay is off the engine idles entirely.
     private let realOverlayController: any DebugUIInspectionOverlayRendering
     private let noopOverlayController: any DebugUIInspectionOverlayRendering =
         NoopDebugUIInspectionOverlayRenderer()
@@ -51,8 +52,6 @@ final class UIUnderstandingCoordinator {
     private var visionBackoff: [UInt32: VisionBackoff] = [:]
     private var lastActiveWindowIDs: [UInt32: Set<UInt32>] = [:]
     private var windowElementCache: [UInt32: [DebugUIElement]] = [:]
-    private var isWarmingBackground = false
-    private var lastBackgroundWarmCount: Int?
     private let remoteAIEngine: RemoteAIEngine = .vision
 
     private struct VisionBackoff {
@@ -64,12 +63,10 @@ final class UIUnderstandingCoordinator {
     private var notificationObservers: [NSObjectProtocol] = []
     private var movementEventMonitors: [Any] = []
     private var currentConfig: DebugUIOverlayConfiguration = .disabled
-    // The understanding engine always parses and publishes — the agent reads the shared store
-    // regardless of any overlay. Only the visible overlay is gated: it draws when this instance
-    // renders one (debug builds) and the dev-overlay config turns it on.
+    // The engine parses only while the overlay is active: this instance can render one (debug-overlay
+    // builds) and the dev-overlay config turns it on. Off → the refresh pass idles and nothing is parsed.
     private var overlayActive: Bool { rendersOverlay && currentConfig.enabled }
-    // Routes every render/close to the real renderer only while the overlay is active; otherwise a
-    // no-op renderer, so engine bookkeeping (caching for the agent) runs without drawing anything.
+    // Routes every render/close to the real renderer while the overlay is active; otherwise a no-op.
     private var overlayController: any DebugUIInspectionOverlayRendering {
         overlayActive ? realOverlayController : noopOverlayController
     }
@@ -77,11 +74,9 @@ final class UIUnderstandingCoordinator {
     private var isRefreshingActiveAccessibility = false
 
     /// - Parameters:
-    ///   - overlayController: where parsed frames are painted while the overlay is active. Production
-    ///     injects a no-op renderer; the engine parses and caches regardless of what is drawn.
-    ///   - rendersOverlay: whether this instance can drive a visible overlay. Render-only smoothing
-    ///     work (the high-frequency active-window accessibility pass) is skipped when false, and the
-    ///     overlay never draws. The engine still runs in every build.
+    ///   - overlayController: where parsed frames are painted while the overlay is active.
+    ///   - rendersOverlay: whether this instance can drive a visible overlay. When false the engine
+    ///     never parses or draws (it has nothing to render); only debug-overlay builds pass true.
     init(
         configURL: URL? = nil,
         overlayController: any DebugUIInspectionOverlayRendering = NoopDebugUIInspectionOverlayRenderer(),
@@ -127,7 +122,6 @@ final class UIUnderstandingCoordinator {
         lastActiveWindowIDs.removeAll()
         windowElementCache.removeAll()
         isAnalyzing = false
-        isWarmingBackground = false
         isRefreshingActiveAccessibility = false
         currentConfig = .disabled
     }
@@ -238,17 +232,13 @@ final class UIUnderstandingCoordinator {
 
     private func refresh(force: Bool = false) {
         reloadConfigAndReschedule()
-        // The engine runs in every build, gated only by sign-in: the AI parse pass hits the hosted
-        // backend, which would just 401 while signed out, so it idles until sign-in restores it (the
-        // app delegate also stops this coordinator on sign-out). The overlay is gated separately.
+        // The hosted parse would 401 while signed out, so idle until sign-in restores it (the app
+        // delegate also stops this coordinator on sign-out).
         guard BackendSessionGate.shared.isAuthenticated else { return }
-        // Only keep understanding warm around real Donkey use. With no task running and no recent
-        // interaction, nothing reads the store, so skip the whole capture/parse pass (active-window
-        // vision and background warming both) instead of draining the backend while the app idles.
-        // The next command stamps engagement before its first capture, which re-parses inline. The
-        // dev overlay is an explicit opt-in the developer is actively watching, so it keeps rendering
-        // live; production never renders an overlay and so always idles when Donkey isn't in use.
-        guard overlayActive || DonkeyEngagement.shared.isEngaged() else { return }
+        // This engine exists only to draw the developer debug overlay. It parses solely while that
+        // overlay is active — it never warms anything for the agent, whose only vision source is the
+        // on-demand `vision.capture` tool inside a live run.
+        guard overlayActive else { return }
         guard !isAnalyzing else {
             UIUnderstandingLog.overlay.debug("debug inspection skipped refresh because analysis is already running")
             return
@@ -270,10 +260,6 @@ final class UIUnderstandingCoordinator {
                 }
             }
         }
-
-        // Warm background windows' overlays off the critical path so switching to any window is
-        // instant. This runs on its own single-flight task and does not block active rendering.
-        scheduleBackgroundWarm()
     }
 
     private func analyzeVisibleScreens(force: Bool) async throws {
@@ -810,7 +796,6 @@ final class UIUnderstandingCoordinator {
                         lastVisionElementCounts[windowID] = parsedElements.count
                         visionBackoff[windowID] = nil
                         renderRemoteAIFrame(stage: "vision", updatesFingerprint: false)
-                        publishUnderstanding(for: capture.target, signature: signature)
                     } catch {
                         let backoff = Self.nextVisionBackoff(after: visionBackoff[windowID])
                         visionBackoff[windowID] = backoff
@@ -890,201 +875,6 @@ final class UIUnderstandingCoordinator {
             }
 
             renderRemoteAIFrame(stage: "ai-fused", updatesFingerprint: true)
-        }
-    }
-
-    /// Kick a single-flight background pass that pre-extracts and caches understanding for windows
-    /// the user is not currently looking at, so switching to any of them (or the agent acting on one)
-    /// is instant. Runs whenever the engine does; only meaningful while the active window is handled
-    /// live, otherwise every window is already analyzed.
-    private func scheduleBackgroundWarm() {
-        guard currentConfig.activeWindowOnly,
-              remoteAIEngine == .vision,
-              !isWarmingBackground
-        else {
-            return
-        }
-        isWarmingBackground = true
-        Task { @MainActor in
-            defer { self.isWarmingBackground = false }
-            guard let screens = try? self.screenSurfaces(scope: self.currentConfig.screenScope) else {
-                return
-            }
-            let activeWindowIDs = Set(self.visibleOverlayTargets(on: screens).map(\.windowID))
-            let backgroundWarmCount = self.backgroundWarmTargets(
-                on: screens,
-                excluding: activeWindowIDs
-            ).count
-            // Only log when the count changes so the ~1Hz warm pass doesn't spam an identical line.
-            if self.lastBackgroundWarmCount != backgroundWarmCount {
-                self.lastBackgroundWarmCount = backgroundWarmCount
-                UIUnderstandingLog.overlay.info(
-                    "debug inspection background warm windows=\(backgroundWarmCount, privacy: .public)"
-                )
-            }
-            // Warm background windows that have no cached accessibility yet — the scan runs off the
-            // main actor since a cold first-launch walk is slow; vision is a slow network parse, so
-            // warm just one window per pass.
-            await self.warmBackgroundAccessibility(screens: screens, excluding: activeWindowIDs)
-            await self.warmNextBackgroundVisionWindow(screens: screens, excluding: activeWindowIDs)
-        }
-    }
-
-    /// Cap how many background windows we ever warm, so a desktop full of windows does not trigger a
-    /// flood of captures and vision parses. The frontmost background windows (the ones most likely to
-    /// be switched to) are warmed first.
-    private static let backgroundWarmWindowCap = 5
-
-    /// Candidate windows eligible for background warming: every visible, allowed window except the
-    /// active one(s) the live path already handles, capped to `backgroundWarmWindowCap`. Unlike
-    /// `visibleOverlayTargets` this ignores the frontmost/focused requirement so background windows
-    /// are included.
-    private func backgroundWarmTargets(
-        on screens: [DebugUIScreenSurface],
-        excluding excludedWindowIDs: Set<UInt32>
-    ) -> [MacWindowTargetCandidate] {
-        let bundleFilters = Set(currentConfig.targetBundleIdentifiers.map(Self.normalizedTargetFilter))
-        let appNameFilters = Set(currentConfig.targetAppNames.map(Self.normalizedTargetFilter))
-        let eligible = windowResolver.enumerateCandidates().filter { target in
-            target.isVisible
-                && target.isOnScreen
-                && !excludedWindowIDs.contains(target.windowID)
-                && target.safetyAssessment.status == .allowed
-                && !target.isIPhoneMirroring
-                && target.processID != ProcessInfo.processInfo.processIdentifier
-                && Self.matchesTargetFilter(
-                    target,
-                    bundleFilters: bundleFilters,
-                    appNameFilters: appNameFilters
-                )
-                && screens.contains { Self.intersects(target.bounds, $0.captureFrame) }
-        }
-        return Array(eligible.prefix(Self.backgroundWarmWindowCap))
-    }
-
-    private func hasCachedAccessibility(forWindow windowID: UInt32) -> Bool {
-        windowElementCache[windowID]?.contains(where: Self.isAccessibilityEvidence) ?? false
-    }
-
-    /// Run one all-windows accessibility scan and cache the accessibility boxes for background
-    /// windows that have none yet. Skips entirely once every background window is covered so we are
-    /// not walking every app's accessibility tree on a loop.
-    private func warmBackgroundAccessibility(
-        screens: [DebugUIScreenSurface],
-        excluding activeWindowIDs: Set<UInt32>
-    ) async {
-        let pending = backgroundWarmTargets(on: screens, excluding: activeWindowIDs)
-            .filter { !hasCachedAccessibility(forWindow: $0.windowID) }
-        guard !pending.isEmpty else { return }
-        let pendingWindowIDs = Set(pending.map(\.windowID))
-
-        // The accessibility tree walk is slow cross-process IPC — a cold first-launch scan can run
-        // long enough to beachball if it happens on the main actor. Snapshot the Sendable inputs and
-        // run `inspect` off the main actor, then resume here to merge (AX reads are thread-safe and
-        // the service and its results are Sendable). The `isWarmingBackground` guard around this pass
-        // stays held across the await, so scans never overlap.
-        let service = accessibilityInspectionService
-        let scope = currentConfig.screenScope
-        let minConfidence = currentConfig.minConfidence
-        let targetBundleIdentifiers = currentConfig.targetBundleIdentifiers
-        let targetAppNames = currentConfig.targetAppNames
-
-        let results: [DebugUIAccessibilityInspectionResult]
-        do {
-            results = try await Task.detached(priority: .utility) {
-                try service.inspect(
-                    scope: scope,
-                    minConfidence: minConfidence,
-                    frontmostOnly: false,
-                    focusedOnly: false,
-                    targetBundleIdentifiers: targetBundleIdentifiers,
-                    targetAppNames: targetAppNames
-                )
-            }.value
-        } catch {
-            UIUnderstandingLog.overlay.debug(
-                "debug inspection background accessibility warm skipped error=\(String(describing: error), privacy: .public)"
-            )
-            return
-        }
-
-        var accessibilityByWindow: [UInt32: [DebugUIElement]] = [:]
-        for result in results {
-            let frame = Self.frameInScreenPointSpace(result.frame, snapshot: result.snapshot)
-            for element in frame.elements {
-                guard let windowID = Self.windowID(for: element),
-                      pendingWindowIDs.contains(windowID)
-                else {
-                    continue
-                }
-                accessibilityByWindow[windowID, default: []].append(element)
-            }
-        }
-        guard !accessibilityByWindow.isEmpty else { return }
-        for (windowID, accessibilityElements) in accessibilityByWindow {
-            let existingAI = (windowElementCache[windowID] ?? []).filter { !Self.isAccessibilityEvidence($0) }
-            windowElementCache[windowID] = accessibilityElements + existingAI
-        }
-        UIUnderstandingLog.overlay.info(
-            "debug inspection warmed background accessibility windows=\(accessibilityByWindow.count, privacy: .public)"
-        )
-    }
-
-    /// Vision-parse one not-yet-parsed background window and cache its boxes. One per pass keeps the
-    /// parser from being hammered; the per-window signature marks it done so we do not re-parse it.
-    private func warmNextBackgroundVisionWindow(
-        screens: [DebugUIScreenSurface],
-        excluding activeWindowIDs: Set<UInt32>
-    ) async {
-        let candidate = backgroundWarmTargets(on: screens, excluding: activeWindowIDs)
-            .first { target in
-                lastVisionSignatures[target.windowID] == nil
-                    && (visionBackoff[target.windowID].map { Date() >= $0.nextAttempt } ?? true)
-            }
-        guard let target = candidate,
-              let screen = screens.first(where: { Self.intersects(target.bounds, $0.captureFrame) })
-        else {
-            return
-        }
-        let client: DonkeyBackendInferenceClient
-        do {
-            client = try backendInferenceClient()
-        } catch {
-            return
-        }
-
-        let windowID = target.windowID
-        do {
-            let screenshot = try await windowScreenshotCapturer.capture(target: target)
-            let signature = ScreenshotSignature.make(fromImageData: screenshot.pngData)
-            let compressed = Self.compressedRemoteAIImage(from: screenshot)
-            let requestStart = Date()
-            let response = try await client.parseScreenshotVision(imageData: compressed.data)
-            let elapsedMs = Int(Date().timeIntervalSince(requestStart) * 1000)
-            let parsedElements = VisionParseDebugUIOverlayMapper.frame(
-                from: response,
-                target: target,
-                screenFrame: screen.captureFrame,
-                minConfidence: currentConfig.minConfidence
-            ).elements
-            // Keep whatever accessibility we already cached for this window and replace its vision.
-            let existingAccessibility = (windowElementCache[windowID] ?? []).filter(Self.isAccessibilityEvidence)
-            windowElementCache[windowID] = existingAccessibility + parsedElements
-            if let signature {
-                lastVisionSignatures[windowID] = signature
-            }
-            lastVisionElementCounts[windowID] = parsedElements.count
-            visionBackoff[windowID] = nil
-            publishUnderstanding(for: target, signature: signature)
-            UIUnderstandingLog.overlay.info(
-                "debug inspection warmed background vision windowID=\(windowID, privacy: .public) elapsedMs=\(elapsedMs, privacy: .public) mappedElements=\(parsedElements.count, privacy: .public)"
-            )
-        } catch {
-            let backoff = Self.nextVisionBackoff(after: visionBackoff[windowID])
-            visionBackoff[windowID] = backoff
-            UIUnderstandingLog.overlay.error(
-                "debug inspection background vision warm failed windowID=\(windowID, privacy: .public) failureStreak=\(backoff.failureStreak, privacy: .public) error=\(String(describing: error), privacy: .public)"
-            )
         }
     }
 
@@ -1760,46 +1550,6 @@ final class UIUnderstandingCoordinator {
                 windowElementCache[windowID] = windowElements
             }
         }
-    }
-
-    /// Publish this window's fused accessibility + vision understanding to the shared store that the
-    /// agent reads when it decides what to act on. Elements are stored in window-local point space,
-    /// with the window's point size as the image size — exactly the geometry the agent's tools map
-    /// back to a screen point, so a warmed background window is instantly actionable without a parse.
-    private func publishUnderstanding(for target: MacWindowTargetCandidate, signature: ScreenshotSignature?) {
-        guard let signature else { return }
-        let imageWidth = Int(target.bounds.width.rounded())
-        let imageHeight = Int(target.bounds.height.rounded())
-        guard imageWidth > 0, imageHeight > 0 else { return }
-
-        let elements = (windowElementCache[target.windowID] ?? []).compactMap { element -> DebugUIElement? in
-            guard let local = Self.localBounds(for: element) else { return nil }
-            return DebugUIElement(
-                id: element.id,
-                type: element.type,
-                label: element.label,
-                description: element.description,
-                bbox: DebugUIBoundingBox(x: local.x, y: local.y, width: local.width, height: local.height),
-                confidence: element.confidence,
-                visualStyle: element.visualStyle,
-                metadata: element.metadata
-            )
-        }
-        guard !elements.isEmpty else { return }
-
-        let appKey = (target.bundleIdentifier?.isEmpty == false ? target.bundleIdentifier : nil)
-            ?? target.appName
-            ?? ""
-        WindowUIUnderstandingStore.shared.store(
-            appKey: appKey,
-            entry: WindowUIUnderstandingStore.Entry(
-                signature: signature,
-                elements: elements,
-                imagePixelWidth: imageWidth,
-                imagePixelHeight: imageHeight,
-                capturedAtUptimeMS: ProcessInfo.processInfo.systemUptime * 1_000
-            )
-        )
     }
 
     /// Pull cached elements for the given windows, reprojected onto the window's current on-screen
