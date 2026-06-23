@@ -545,6 +545,25 @@ public enum BuiltInHarnessToolCatalog {
                 metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
             ),
             descriptor(
+                "files.write",
+                pluginID: "core.files",
+                summary: "Write text to a file: pass an absolute `path` and the full `content`, and it is saved (creating any missing parent folders). This is how you persist anything you composed when the content is multi-line or too long to inline in a shell command — a subtitle (.srt) file, a script, a config, a note, a document body. Use it instead of a `cat`/`echo` heredoc in shell_exec. Overwrites by default; pass mode=append to add to the end. Pair it with llm.generate (which returns text) to write generated content exactly where you need it, then act on the file (e.g. `ffmpeg -vf subtitles=…`).",
+                input: [
+                    "path": "Absolute destination path, e.g. /Users/you/Downloads/ko.srt (a leading ~ is expanded).",
+                    "content": "The full text to write.",
+                    "mode": "\"overwrite\" (default) replaces the file; \"append\" adds to the end."
+                ],
+                output: [
+                    "path": "The absolute path written.",
+                    "bytes": "How many bytes were written."
+                ],
+                optionalInputKeys: ["mode"],
+                permissions: [],
+                safety: .reversible,
+                verification: ["the file exists at the returned path with the intended content"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            descriptor(
                 "image.edit",
                 pluginID: "core.image",
                 summary: "Edit an existing image with a generative image model: describe the change in `prompt` and pass the source `inputPath`. Use it for semantic edits that sips/magick cannot do — remove or replace a background, add or remove an object, restyle, relight, or change a scene. To match a reference photo's look, pass the reference(s) as `referencePaths` and ask to match them. Writes a NEW image file and returns its path; it never overwrites the source. Costs image-generation credits per image, so for a batch confirm with the user first, then call once per file.",

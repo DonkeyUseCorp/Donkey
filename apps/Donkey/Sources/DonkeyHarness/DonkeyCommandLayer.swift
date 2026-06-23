@@ -31,9 +31,9 @@ public enum DonkeyCommandLayer {
             HarnessToolDescriptor(
                 name: Command.shellExec.rawValue,
                 pluginID: pluginID,
-                summary: "Run a single-line shell command on the user's Mac and return its output. This is your primary, expert tool: prefer it for finding files (`mdfind`, `ls -t`, `find`), launching or quitting apps (`open -a \"App Name\"`, `osascript -e 'quit app \"App Name\"'`), reading state (`date`, `pmset -g batt`, `system_profiler`), and changing settings (`defaults write`, `networksetup -set…`). Read-only commands run immediately; anything that changes state asks the user for one-time or always-allow consent first, so you may freely propose it. Destructive or privileged commands (`sudo`, `rm`, `dd`, piping into a shell) ask every time.",
+                summary: "Run a shell command on the user's Mac and return its output. This is your primary, expert tool: prefer it for finding files (`mdfind`, `ls -t`, `find`), launching or quitting apps (`open -a \"App Name\"`, `osascript -e 'quit app \"App Name\"'`), reading state (`date`, `pmset -g batt`, `system_profiler`), and changing settings (`defaults write`, `networksetup -set…`). Multi-line commands are fine; it runs from the user's home directory, so use ABSOLUTE paths when reading or writing files. To write file content (a subtitle file, a script, a note), prefer files.write over a `cat`/`echo` heredoc. Read-only commands run immediately; anything that changes state asks the user for one-time or always-allow consent first, so you may freely propose it. Destructive or privileged commands (`sudo`, `rm`, `dd`, piping into a shell) ask every time.",
                 inputSchema: [
-                    "command": "A safe, single-line shell command, e.g. `open -a \"App Name\"`, `osascript -e '…'`, or `date`.",
+                    "command": "A shell command, e.g. `open -a \"App Name\"`, `osascript -e '…'`, or `date`. May span multiple lines.",
                     "timeoutSeconds": "Time budget for known-slow commands (default 12, max 120)."
                 ],
                 optionalInputKeys: ["timeoutSeconds"],

@@ -5,11 +5,14 @@ import Foundation
 /// operation from general primitives — `llm.generate` to decide names/labels/tags from the
 /// understanding, `shell_exec` (`mv`, `sips`, `ffmpeg`) to apply it, `state.verify` to confirm.
 ///
-/// There is deliberately NO per-operation file tool. Understanding is a real primitive because reading
-/// content across modalities is hard; the operation ("rename these", "resize those") is just the model
-/// reasoning over that understanding, the same way it reasons about any other goal. A `files.rename`
-/// or `files.suggest_names` tool would hardcode one ask into the registry — exactly what the planner's
-/// general reasoning is supposed to replace.
+/// The two file primitives are deliberately general, not per-operation. `files.describe` is the read
+/// side (understanding content across modalities is hard); `files.write` is the write side (persisting
+/// composed text to a path the planner controls). Both are hard primitives the planner composes from —
+/// the inverse of each other. What stays OUT of the registry is the per-operation tool: a `files.rename`
+/// or `files.suggest_names` would hardcode one ask, which is exactly the reasoning `files.describe` +
+/// `llm.generate` + `shell_exec` already cover. "Write this text here" is not such an ask: there is no
+/// other primitive for it, and without it the planner cannot persist multi-line content (a subtitle
+/// file, a script, a note) at all.
 public enum FileToolSupport {
     static let defaultMaxFiles = 50
     static let hardMaxFiles = 200
@@ -119,6 +122,83 @@ extension BuiltInHarnessToolExecutors {
                 "understanding": json,
                 "count": String(understandings.count),
                 "truncated": String(truncated)
+            ]
+        )
+    }
+
+    /// `files.write`: write text `content` to `path` (overwrite by default, or append), creating any
+    /// missing parent directories. The write side of the file primitives — how the planner persists
+    /// anything it composed when the content is multi-line or too long to inline in a shell command.
+    static func filesWrite(
+        _ context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices
+    ) async -> HarnessToolResult {
+        func reject(_ message: String) -> HarnessToolResult {
+            HarnessToolResult(
+                callID: context.call.id,
+                toolName: context.call.name,
+                status: .invalidInput,
+                summary: message,
+                metadata: ["executor": "builtInGeneric", "reason": "invalidInput"]
+            )
+        }
+
+        guard
+            let rawPath = context.call.input["path"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !rawPath.isEmpty
+        else {
+            return reject("files.write requires a `path`.")
+        }
+        guard let content = context.call.input["content"] else {
+            return reject("files.write requires `content` (an empty string is allowed).")
+        }
+        let mode = context.call.input["mode"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "overwrite"
+        guard mode == "overwrite" || mode == "append" else {
+            return reject("files.write `mode` must be \"overwrite\" or \"append\".")
+        }
+        let append = mode == "append"
+
+        let url = URL(fileURLWithPath: (rawPath as NSString).expandingTildeInPath).standardizedFileURL
+        let fileManager = FileManager.default
+        do {
+            try fileManager.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let newData = Data(content.utf8)
+            if append, let existing = try? Data(contentsOf: url) {
+                try (existing + newData).write(to: url, options: .atomic)
+            } else {
+                try newData.write(to: url, options: .atomic)
+            }
+        } catch {
+            return HarnessToolResult(
+                callID: context.call.id,
+                toolName: context.call.name,
+                status: .failed,
+                summary: "files.write failed: \(error.localizedDescription)",
+                metadata: ["executor": "builtInGeneric", "reason": "writeFailed", "path": url.path]
+            )
+        }
+
+        let bytes = content.utf8.count
+        return HarnessToolResult(
+            callID: context.call.id,
+            toolName: context.call.name,
+            status: .succeeded,
+            summary: "\(append ? "Appended" : "Wrote") \(bytes) byte(s) to \(url.path).",
+            observations: HarnessObservationDelta(
+                facts: [
+                    "files.write.path": url.path,
+                    "lastAcceptedTool": context.call.name
+                ]
+            ),
+            metadata: [
+                "executor": "builtInGeneric",
+                "path": url.path,
+                "bytes": String(bytes),
+                "mode": mode
             ]
         )
     }

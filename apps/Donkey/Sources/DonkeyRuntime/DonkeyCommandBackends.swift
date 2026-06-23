@@ -510,17 +510,14 @@ public enum DonkeyCommandBackends {
 
     private static func shellExec(_ context: HarnessToolExecutionContext) async -> HarnessToolResult {
         guard let command = trimmed(context.call.input["command"]) ?? trimmed(context.call.input["cmd"]) else {
-            return invalidInput(context, "shell_exec requires a one-line `command`.")
-        }
-        guard !command.contains("\n"), !command.contains("\r") else {
-            return invalidInput(context, "shell_exec only runs a single-line command.")
+            return invalidInput(context, "shell_exec requires a `command`.")
         }
         guard command.count <= shellCommandMaxLength else {
             return invalidInput(
                 context,
                 "shell_exec command is \(command.count) chars; the limit is \(shellCommandMaxLength). "
-                    + "Don't inline large content — generate it to a file with llm.generate (toFile=true), "
-                    + "then run a short command that reads from that file."
+                    + "Don't inline large content into a command — write it straight to a file with "
+                    + "files.write (path + content), then run a short command that reads from that file."
             )
         }
 

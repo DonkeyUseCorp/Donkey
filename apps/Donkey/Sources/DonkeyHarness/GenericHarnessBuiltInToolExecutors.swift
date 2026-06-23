@@ -478,6 +478,8 @@ public enum BuiltInHarnessToolExecutors {
             return await webAutomate(context, services: services)
         case "files.describe":
             return await filesDescribe(context, services: services)
+        case "files.write":
+            return await filesWrite(context, services: services)
         case "image.edit":
             return await imageGenerate(context, services: services, requiresInput: true)
         case "image.generate":
