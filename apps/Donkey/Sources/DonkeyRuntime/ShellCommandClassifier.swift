@@ -276,12 +276,60 @@ public enum ShellCommandClassifier {
         return segments
     }
 
-    /// Split a segment into whitespace-separated tokens. Leading environment
-    /// assignments (e.g. `FOO=bar cmd`) are dropped so the executable is found.
+    /// Split a segment into tokens on unquoted whitespace, honoring single/double
+    /// quotes and backslash escapes the same way `splitSegments` does. A quoted span
+    /// containing a space stays one token — a plain whitespace split would break a
+    /// bundled tool invoked by its real path (`"~/Library/Application Support/Donkey/
+    /// donkey-tools/yt-dlp"`) on the space inside "Application Support", mis-parsing
+    /// its executable as `application` and gating a first-party tool that must run
+    /// silently. Leading environment assignments (`FOO=bar cmd`) are dropped so the
+    /// executable is found.
     private static func tokenize(_ segment: String) -> [String] {
-        var tokens = segment
-            .split(whereSeparator: { $0 == " " || $0 == "\t" })
-            .map(String.init)
+        var tokens: [String] = []
+        var current = ""
+        var hasToken = false
+        var inSingle = false
+        var inDouble = false
+        var escaped = false
+        for character in segment {
+            if escaped {
+                current.append(character)
+                hasToken = true
+                escaped = false
+                continue
+            }
+            if character == "\\", !inSingle {
+                current.append(character)
+                hasToken = true
+                escaped = true
+                continue
+            }
+            if character == "'", !inDouble {
+                inSingle.toggle()
+                current.append(character)
+                hasToken = true
+                continue
+            }
+            if character == "\"", !inSingle {
+                inDouble.toggle()
+                current.append(character)
+                hasToken = true
+                continue
+            }
+            if (character == " " || character == "\t"), !inSingle, !inDouble {
+                if hasToken {
+                    tokens.append(current)
+                    current = ""
+                    hasToken = false
+                }
+                continue
+            }
+            current.append(character)
+            hasToken = true
+        }
+        if hasToken {
+            tokens.append(current)
+        }
         while let first = tokens.first, first.contains("="), !first.hasPrefix("-"), isLeadingAssignment(first) {
             tokens.removeFirst()
         }

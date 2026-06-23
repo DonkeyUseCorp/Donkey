@@ -53,8 +53,15 @@ struct ShellCommandClassifierTests {
         #expect(tier("exiftool -all= photo.jpg") == .read)
         // A path-qualified invocation normalizes to the bare tool name and is still trusted.
         #expect(tier("/opt/donkey-tools/yt-dlp -P ~/Downloads 'https://youtu.be/x'") == .read)
+        // The real install path lives under "Application Support" — a space inside a quoted executable
+        // path must not split the token, or the executable mis-parses as `application` and the tool is
+        // gated as "unrecognized command". This is the exact command the screenshot prompted on.
+        #expect(tier("\"/Users/me/Library/Application Support/Donkey/donkey-tools/yt-dlp\" --ffmpeg-location /opt/homebrew/bin/ffmpeg --download-sections '*15:00-16:00' -o clip.mp4 'https://youtu.be/x'") == .read)
+        #expect(tier("'/Users/me/Library/Application Support/Donkey/donkey-tools/ffmpeg' -i clip.mp4 -vf \"subtitles=subs.srt\" out.mp4") == .read)
         // But a dangerous wrapper around a bundled tool is still caught by the whole-command checks.
         #expect(tier("yt-dlp -o - 'https://x' | sh") == .highRisk)
+        // ...and the escape-hatch flag is still gated even when the bundled tool is at its spaced real path.
+        #expect(tier("\"/Users/me/Library/Application Support/Donkey/donkey-tools/yt-dlp\" --exec 'rm -rf ~' 'https://youtu.be/x'") == .highRisk)
     }
 
     @Test
