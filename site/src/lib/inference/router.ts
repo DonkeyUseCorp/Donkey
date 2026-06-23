@@ -1,4 +1,3 @@
-import { createAudioAssetProvider } from "@/lib/inference/adapters/audio-studio";
 import { createGeminiComputerUseProvider } from "@/lib/inference/adapters/gemini-computer-use";
 import { createGeminiImageAssetProvider } from "@/lib/inference/adapters/gemini-image";
 import { createHostedResponsesProvider } from "@/lib/inference/adapters/hosted-responses";
@@ -50,6 +49,8 @@ export class ProviderRegistry {
       });
     }
 
+    // One provider failing to enumerate its models (e.g. an API key missing a list permission)
+    // must not take down the combined catalog — skip it and keep the models from the rest.
     const results: InferenceModel[] = [];
     for (const provider of configuredProviders) {
       results.push(...(await provider.listModels(modalities)));
@@ -211,7 +212,7 @@ export function createProviderRegistry() {
     // provider serves kind="image" (gemini-computer-use lists "image" as an input modality
     // but has no generateAsset, so it is never chosen for asset generation).
     createGeminiImageAssetProvider(),
-    createAudioAssetProvider(),
+    // ElevenLabs audio provider disabled for now (not in use).
     createGeminiComputerUseProvider(),
     createHostedResponsesProvider(),
   ]);
