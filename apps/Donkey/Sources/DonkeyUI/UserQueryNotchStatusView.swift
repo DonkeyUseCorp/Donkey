@@ -22,18 +22,18 @@ public struct UserQueryNotchStatusView: View {
     /// content animates. The collapsed chrome belongs to the closed window, so it tracks this.
     private let isHostExpanded: Bool
     private let isExpanded: Bool
-    private let isCurrentTaskPaused: Bool
+    private let isCurrentConversationPaused: Bool
     @Binding private var commandText: String
     private let commandInputTextHeight: CGFloat
     private let isCommandInputExpanded: Bool
-    private let tasks: [UserQueryConversation]
-    private let surfacedTasks: [UserQueryConversation]
-    /// While the user is replying to a specific task (tapped Reply), this is that task; the expanded
+    private let conversations: [UserQueryConversation]
+    private let surfacedConversations: [UserQueryConversation]
+    /// While the user is replying to a specific conversation (tapped Reply), this is that conversation; the expanded
     /// panel dims every other row so it's clear the next message continues this one thread.
-    private let replyTargetTaskID: String?
+    private let replyTargetConversationID: String?
     /// The row the keyboard arrows currently highlight (distinct from the reply target). It renders a
     /// brighter fill and a ring so the selection reads while the composer keeps text focus.
-    private let selectedTaskID: String?
+    private let selectedConversationID: String?
     private let accentIndex: Int
     private let spawnState: UserQuerySpawnState?
     private let commandSubmitted: @MainActor (String) -> Void
@@ -43,9 +43,9 @@ public struct UserQueryNotchStatusView: View {
     private let pauseRequested: @MainActor (String) -> Void
     private let resumeRequested: @MainActor (String) -> Void
     private let dismissRequested: @MainActor (String) -> Void
-    private let taskSelected: @MainActor (String) -> Void
-    /// A task waiting on the user (a clarification or review) offers Reply; tapping it pins the composer
-    /// to that task and focuses the input so the user's next message answers it.
+    private let conversationSelected: @MainActor (String) -> Void
+    /// A conversation waiting on the user (a clarification or review) offers Reply; tapping it pins the composer
+    /// to that conversation and focuses the input so the user's next message answers it.
     private let replyRequested: @MainActor (String) -> Void
     /// Tapping the notch chrome outside a row, control, or the composer while replying leaves reply mode.
     private let replyModeExited: @MainActor () -> Void
@@ -54,11 +54,11 @@ public struct UserQueryNotchStatusView: View {
     private let approvePermissionRequested: @MainActor (String, Bool) -> Void
     private let denyPermissionRequested: @MainActor (String) -> Void
     private let updateRequested: @MainActor () -> Void
-    /// Logged out: the notch renders a login call-to-action instead of the task surface, and the
+    /// Logged out: the notch renders a login call-to-action instead of the conversation surface, and the
     /// Login button fires this to start the real sign-in (handled by the model/controller).
     private let needsLogin: Bool
     private let loginRequested: @MainActor () -> Void
-    /// A task that failed for lack of credits shows a "Reload credits" CTA in its banner; tapping it
+    /// A conversation that failed for lack of credits shows a "Reload credits" CTA in its banner; tapping it
     /// fires this so the app can open the billing page (reuses the permission-banner button styling).
     private let reloadCreditsRequested: @MainActor (String) -> Void
 
@@ -70,14 +70,14 @@ public struct UserQueryNotchStatusView: View {
         surfaceHeight: CGFloat,
         isHostExpanded: Bool,
         isExpanded: Bool,
-        isCurrentTaskPaused: Bool,
+        isCurrentConversationPaused: Bool,
         commandText: Binding<String>,
         commandInputTextHeight: CGFloat,
         isCommandInputExpanded: Bool,
-        tasks: [UserQueryConversation] = [],
-        surfacedTasks: [UserQueryConversation] = [],
-        replyTargetTaskID: String? = nil,
-        selectedTaskID: String? = nil,
+        conversations: [UserQueryConversation] = [],
+        surfacedConversations: [UserQueryConversation] = [],
+        replyTargetConversationID: String? = nil,
+        selectedConversationID: String? = nil,
         accentIndex: Int,
         spawnState: UserQuerySpawnState? = nil,
         commandSubmitted: @escaping @MainActor (String) -> Void,
@@ -87,7 +87,7 @@ public struct UserQueryNotchStatusView: View {
         pauseRequested: @escaping @MainActor (String) -> Void,
         resumeRequested: @escaping @MainActor (String) -> Void,
         dismissRequested: @escaping @MainActor (String) -> Void,
-        taskSelected: @escaping @MainActor (String) -> Void,
+        conversationSelected: @escaping @MainActor (String) -> Void,
         replyRequested: @escaping @MainActor (String) -> Void = { _ in },
         replyModeExited: @escaping @MainActor () -> Void = {},
         approvePermissionRequested: @escaping @MainActor (String, Bool) -> Void,
@@ -104,14 +104,14 @@ public struct UserQueryNotchStatusView: View {
         self.surfaceHeight = surfaceHeight
         self.isHostExpanded = isHostExpanded
         self.isExpanded = isExpanded
-        self.isCurrentTaskPaused = isCurrentTaskPaused
+        self.isCurrentConversationPaused = isCurrentConversationPaused
         _commandText = commandText
         self.commandInputTextHeight = commandInputTextHeight
         self.isCommandInputExpanded = isCommandInputExpanded
-        self.tasks = tasks
-        self.surfacedTasks = surfacedTasks
-        self.replyTargetTaskID = replyTargetTaskID
-        self.selectedTaskID = selectedTaskID
+        self.conversations = conversations
+        self.surfacedConversations = surfacedConversations
+        self.replyTargetConversationID = replyTargetConversationID
+        self.selectedConversationID = selectedConversationID
         self.accentIndex = accentIndex
         self.spawnState = spawnState
         self.commandSubmitted = commandSubmitted
@@ -121,7 +121,7 @@ public struct UserQueryNotchStatusView: View {
         self.pauseRequested = pauseRequested
         self.resumeRequested = resumeRequested
         self.dismissRequested = dismissRequested
-        self.taskSelected = taskSelected
+        self.conversationSelected = conversationSelected
         self.replyRequested = replyRequested
         self.replyModeExited = replyModeExited
         self.approvePermissionRequested = approvePermissionRequested
@@ -168,7 +168,7 @@ public struct UserQueryNotchStatusView: View {
             // While replying, a tap on bare chrome (not a row, control, or the composer — those sit above
             // this layer and take their own taps first) leaves reply mode. Only present while targeted, so
             // it never interferes with normal taps.
-            if replyTargetTaskID != nil {
+            if replyTargetConversationID != nil {
                 Rectangle()
                     .fill(Color.white.opacity(0.001))
                     .contentShape(Rectangle())
@@ -189,7 +189,7 @@ public struct UserQueryNotchStatusView: View {
                     value: surfaceIsOpen
                 )
 
-            if !hasTaskDisplayText && !needsLogin {
+            if !hasConversationDisplayText && !needsLogin {
                 expandedNotchArrow
                     .opacity(surfaceIsOpen ? 1 : 0)
                     .animation(
@@ -301,28 +301,36 @@ public struct UserQueryNotchStatusView: View {
             .frame(width: collapsedSurfaceWidth, height: collapsedSurfaceHeight, alignment: .leading)
     }
 
-    /// The leading-lane pointer(s). A single surfaced task shows one colored pointer; several surfaced
-    /// tasks (running plus undismissed completions) overlap as a cascading stack, newest on top, capped
-    /// so the lane never crowds. With nothing surfaced it falls back to the idle silhouette.
+    /// The leading-lane pointer(s). One pointer per surfaced conversation (running plus undismissed
+    /// completions), overlapping as a cascading stack, newest on top, capped so the lane never crowds.
+    /// Only the pointer for the conversation currently narrating the chin (`speaker`) takes its accent
+    /// color; every other pointer renders as a gray silhouette, so the lit arrow always matches the line
+    /// on screen. With nothing surfaced it falls back to the idle silhouette.
     @ViewBuilder
-    private func pointerCluster(size: CGFloat) -> some View {
-        // A failed task is a real task, so it keeps its own accent-colored pointer here (alongside the
-        // right-rail warning glyph and held chin); the lane only ever shows one pointer per surfaced task.
-        let cluster = Array(surfacedTasks.prefix(Self.maxClusterPointers))
+    private func pointerCluster(size: CGFloat, speaker: UserQueryConversation?) -> some View {
+        let cluster = Array(surfacedConversations.prefix(Self.maxClusterPointers))
         if cluster.isEmpty {
             DonkeyCursorMark(color: accentColor, silhouette: true)
                 .frame(width: size, height: size)
         } else {
+            // Color the pointer for the speaking conversation; if it isn't in the visible cluster, fall
+            // back to the newest pointer so the lane is never all-gray while a conversation is narrating.
+            let litID = cluster.first(where: { $0.id == speaker?.id })?.id ?? cluster.first?.id
             let count = cluster.count
             let width = size + Self.clusterStepX * CGFloat(count - 1)
             let height = size + Self.clusterStepY * CGFloat(count - 1)
             ZStack(alignment: .topLeading) {
                 // Oldest first so the newest pointer lands on top, furthest along the cascade.
-                ForEach(Array(cluster.reversed().enumerated()), id: \.element.id) { index, task in
-                    DonkeyCursorMark(color: accentColor(for: task.accentIndex))
+                ForEach(Array(cluster.reversed().enumerated()), id: \.element.id) { index, conversation in
+                    DonkeyCursorMark(
+                        color: accentColor(for: conversation.accentIndex),
+                        silhouette: conversation.id != litID
+                    )
                         .frame(width: size, height: size)
                         .offset(x: Self.clusterStepX * CGFloat(index), y: Self.clusterStepY * CGFloat(index))
-                        .zIndex(Double(index))
+                        // The lit pointer rides above the gray silhouettes so the colored arrow always
+                        // reads clearly, whichever cascade position the speaking conversation sits in.
+                        .zIndex(conversation.id == litID ? Double(count) : Double(index))
                 }
             }
             .frame(width: width, height: height)
@@ -385,10 +393,10 @@ public struct UserQueryNotchStatusView: View {
         // budget; the pill grows by a line (see the controller's `statusCollapsedTopRowExtraHeight`)
         // when that line wraps.
         TimelineView(.periodic(from: Self.chinRotationAnchor, by: Self.chinRotationInterval)) { context in
-            let speaker = rotatingChinTask(at: context.date)
+            let speaker = rotatingChinConversation(at: context.date)
             HStack(spacing: 7) {
-                pointerCluster(size: 14)
-                    // While a task waits on the user, its pointer stays lit and pulses for attention — the
+                pointerCluster(size: 14, speaker: speaker)
+                    // While a conversation waits on the user, its pointer stays lit and pulses for attention — the
                     // same cue the expanded row gives — so the blocked thread reads at a glance.
                     .modifier(AttentionPulse(active: isPrimaryWaitingOnUser))
 
@@ -400,7 +408,7 @@ public struct UserQueryNotchStatusView: View {
 
                 Spacer(minLength: 0)
 
-                // The gutter carries the live elapsed clock while a task runs, then the waiting-on-user "!"
+                // The gutter carries the live elapsed clock while a conversation runs, then the waiting-on-user "!"
                 // glyph (or the update cloud) — the same indicators a void-aware host raises.
                 collapsedRightSlot
             }
@@ -413,7 +421,7 @@ public struct UserQueryNotchStatusView: View {
         }
     }
 
-    /// The line the no-notch collapsed row shows: the rotating surfaced task's latest line, identical to
+    /// The line the no-notch collapsed row shows: the rotating surfaced conversation's latest line, identical to
     /// the chin band. Only when nothing is surfaced does it fall back to the headline (e.g. "Thinking",
     /// or a freshly typed prompt that has no conversation line yet).
     private func collapsedTopRowText(speaker: UserQueryConversation?) -> String {
@@ -424,12 +432,12 @@ public struct UserQueryNotchStatusView: View {
     }
 
     private var voidAwareCollapsedContent: some View {
-        // The chin narrates running tasks one at a time, advancing every couple of seconds;
-        // the left arrow takes the color of whichever task is currently speaking.
+        // The chin narrates running conversations one at a time, advancing every couple of seconds;
+        // the left arrow takes the color of whichever conversation is currently speaking.
         TimelineView(.periodic(from: Self.chinRotationAnchor, by: Self.chinRotationInterval)) { context in
-            let speaker = rotatingChinTask(at: context.date)
+            let speaker = rotatingChinConversation(at: context.date)
             ZStack {
-                pointerCluster(size: 14)
+                pointerCluster(size: 14, speaker: speaker)
                     .modifier(AttentionPulse(active: isPrimaryWaitingOnUser))
                     .position(x: collapsedLeadingLaneCenterX, y: layout.collapsedVisibleHeight / 2)
 
@@ -454,46 +462,63 @@ public struct UserQueryNotchStatusView: View {
         }
     }
 
-    /// The chin line for a surfaced task. While the task runs it echoes what the user asked, so the
+    /// The chin line for a surfaced conversation. While the conversation runs it echoes what the user asked, so the
     /// notch reads back the prompt rather than the planner's per-step narration. Once the agent answers,
-    /// the task's `detail` carries the reply (set to `result.summary` on completion), so the chin shows
+    /// the conversation's `detail` carries the reply (set to `result.summary` on completion), so the chin shows
     /// the response. A failure is flagged by the red warning icon in the right rail (see
     /// `collapsedRightSlot`), not inline here.
-    private func chinLine(for task: UserQueryConversation) -> some View {
-        Text(chinText(for: task))
+    private func chinLine(for conversation: UserQueryConversation) -> some View {
+        Text(chinText(for: conversation))
             .font(.system(size: Self.chinFontSize, weight: .regular))
             .foregroundStyle(Color.white.opacity(0.72))
             .lineLimit(2)
             .truncationMode(.tail)
     }
 
-    private func chinText(for task: UserQueryConversation) -> String {
-        task.chinDisplayText
+    private func chinText(for conversation: UserQueryConversation) -> String {
+        conversation.chinDisplayText
     }
 
-    /// The task currently surfaced in the chin. An unacknowledged failure outranks everything and holds
-    /// the chin until the user expands. Otherwise running tasks (newest first) rotate round-robin — the
-    /// clock is anchored to the newest task's start, so a freshly added task shows first (the view
-    /// re-renders on the task change) and then yields to the others. When nothing is running, the most
-    /// recent undismissed result — a finished action or a conversational reply — keeps narrating instead
-    /// of leaving the chin empty.
-    private func rotatingChinTask(at date: Date) -> UserQueryConversation? {
-        if let errored = surfacedTasks.first(where: { $0.status == .failed }) {
+    private func rotatingChinConversation(at date: Date) -> UserQueryConversation? {
+        Self.collapsedChinConversation(
+            conversations: conversations,
+            surfaced: surfacedConversations,
+            at: date,
+            rotationInterval: Self.chinRotationInterval
+        )
+    }
+
+    /// The one rule for which conversation the collapsed notch narrates. Every collapsed surface — the
+    /// chin band, the no-notch top row, and the headline fallback — selects through here, so they can
+    /// never disagree, and the priority is locked by `UserQueryCollapsedChinSelectionTests`.
+    ///
+    /// The invariant this enforces: **while any conversation exists, the notch shows one of them, and it
+    /// is always that conversation's live line** (`chinDisplayText`) — never nil-then-fall-back-to-the-
+    /// prompt, which was the "still says hi" bug. Priority, highest first:
+    ///   1. an unacknowledged failure — holds the chin until the user expands to see it;
+    ///   2. a conversation blocked on the user — its `chinDisplayText` is the agent's question, not the prompt;
+    ///   3. the running conversations, rotating round-robin anchored to the newest so each narrates in turn;
+    ///   4. otherwise the most recent conversation, whatever its state — read from *every* conversation, not just
+    ///      the unacknowledged ones, so a finished or already-seen reply keeps showing rather than
+    ///      reverting to the opening prompt. `conversations` is newest-first and deduped, so `.first` is current.
+    public static func collapsedChinConversation(
+        conversations: [UserQueryConversation],
+        surfaced: [UserQueryConversation],
+        at date: Date,
+        rotationInterval: TimeInterval
+    ) -> UserQueryConversation? {
+        if let errored = surfaced.first(where: { $0.status == .failed }) {
             return errored
         }
-        // A task blocked on the user is attention-worthy: hold the chin on it so its `chinDisplayText`
-        // (which is the agent's question once stopped, not the prompt) reads back what the agent is asking.
-        if let waiting = surfacedTasks.first(where: { isWaitingOnUser($0) }) {
+        if let waiting = surfaced.first(where: { isWaitingOnUser($0) }) {
             return waiting
         }
-        let running = surfacedTasks.filter { $0.status == .running }
+        let running = surfaced.filter { $0.status == .running }
         guard !running.isEmpty else {
-            // With nothing running, hold the chin on the most recent result so it keeps narrating —
-            // a finished action's outcome or a conversational reply (`.chatting`), whichever is newest.
-            return surfacedTasks.first { $0.status == .completed || $0.status == .chatting }
+            return conversations.first
         }
         let anchor = running.map(\.createdAt).max() ?? date
-        let slot = Int(max(0, date.timeIntervalSince(anchor)) / Self.chinRotationInterval)
+        let slot = Int(max(0, date.timeIntervalSince(anchor)) / rotationInterval)
         let index = ((slot % running.count) + running.count) % running.count
         return running[index]
     }
@@ -502,8 +527,8 @@ public struct UserQueryNotchStatusView: View {
         Group {
             if needsLogin {
                 loginExpandedContent
-            } else if hasTaskDisplayText {
-                expandedTaskContent
+            } else if hasConversationDisplayText {
+                expandedConversationContent
             } else {
                 expandedCommandOnlyContent
             }
@@ -520,7 +545,7 @@ public struct UserQueryNotchStatusView: View {
     }
 
     /// Logged out, expanded: a wide, short bar — the headline on the left, the Login pill on the right
-    /// (no task list, no command input). Mirrors the prototype's expanded login bar.
+    /// (no conversation list, no command input). Mirrors the prototype's expanded login bar.
     private var loginExpandedContent: some View {
         HStack(spacing: 12) {
             Text(Self.loginHeadline)
@@ -535,27 +560,27 @@ public struct UserQueryNotchStatusView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 
-    private var expandedTaskContent: some View {
+    private var expandedConversationContent: some View {
         VStack(spacing: 0) {
             if updateState.headerButtonTitle != nil {
                 expandedUpdateHeader
             }
 
-            VStack(spacing: Self.taskListCommandSpacing) {
+            VStack(spacing: Self.conversationListCommandSpacing) {
                 ScrollViewReader { proxy in
                     ScrollView(.vertical, showsIndicators: false) {
                         VStack(spacing: 8) {
-                            if tasks.isEmpty {
-                                currentTaskRow
+                            if conversations.isEmpty {
+                                currentConversationRow
                             } else {
-                                ForEach(tasks) { task in
-                                    // While replying to one task, the others dim back (handled inside the
+                                ForEach(conversations) { conversation in
+                                    // While replying to one conversation, the others dim back (handled inside the
                                     // row so an attention pointer can stay lit) — it's clear which thread
                                     // the next message continues. The dim is instant, not eased: an eased
                                     // reply-dim made an arrowed-to row brighten ~0.16s after it scrolled
                                     // in, reading as "scroll, then select."
-                                    taskRow(task)
-                                        .id(task.id)
+                                    conversationRow(conversation)
+                                        .id(conversation.id)
                                 }
                             }
                         }
@@ -567,9 +592,9 @@ public struct UserQueryNotchStatusView: View {
                     // animation every frame and stall ("stuck", confirmed by profiling). The scroll
                     // shares the selection's transaction (no defer), so an off-screen row scrolls in
                     // already highlighted instead of lighting up a frame after it arrives.
-                    .onChange(of: selectedTaskID) {
-                        guard let selectedTaskID else { return }
-                        proxy.scrollTo(selectedTaskID)
+                    .onChange(of: selectedConversationID) {
+                        guard let selectedConversationID else { return }
+                        proxy.scrollTo(selectedConversationID)
                     }
                 }
 
@@ -724,14 +749,14 @@ public struct UserQueryNotchStatusView: View {
         collapsedSurfaceWidth - collapsedSideLaneWidth / 2
     }
 
-    private var currentTaskRow: some View {
+    private var currentConversationRow: some View {
         HStack(alignment: .top, spacing: 12) {
             DonkeyCursorMark(color: accentColor)
                 .frame(width: 14, height: 14)
                 .padding(.top, 1)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(taskTitle)
+                Text(conversationTitle)
                     .font(.system(size: 13, weight: .regular))
                     .foregroundStyle(Color.white.opacity(0.9))
                     .fixedSize(horizontal: false, vertical: true)
@@ -744,7 +769,7 @@ public struct UserQueryNotchStatusView: View {
 
             Spacer(minLength: 0)
 
-            if isWorking, let started = primaryTask?.createdAt {
+            if isWorking, let started = primaryConversation?.createdAt {
                 elapsedTimer(since: started)
             }
         }
@@ -755,13 +780,13 @@ public struct UserQueryNotchStatusView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .onTapGesture {
-            if let conversationID = primaryTask?.id {
-                taskSelected(conversationID)
+            if let conversationID = primaryConversation?.id {
+                conversationSelected(conversationID)
             }
         }
     }
 
-    /// A count-up elapsed-time label for a running task — the timeline ticks every second on its
+    /// A count-up elapsed-time label for a running conversation — the timeline ticks every second on its
     /// own, so a long-running query visibly advances instead of looking stuck.
     private func elapsedTimer(since start: Date) -> some View {
         TimelineView(.periodic(from: start, by: 1)) { context in
@@ -789,81 +814,81 @@ public struct UserQueryNotchStatusView: View {
 
     /// Trailing room a row's text leaves for the pinned top-right controls, by control set: a lone Close
     /// (or Stop) button, or a Resume + Close pair. Permission rows carry their own banner controls.
-    private func controlsReserve(for task: UserQueryConversation) -> CGFloat {
-        if task.status == .waitingForPermission { return 0 }
-        return rowShowsControlPair(task) ? 74 : 44
+    private func controlsReserve(for conversation: UserQueryConversation) -> CGFloat {
+        if conversation.status == .waitingForPermission { return 0 }
+        return rowShowsControlPair(conversation) ? 74 : 44
     }
 
     /// Whether a row shows a two-button pair (Resume + Close, or Reply + Close) vs a single Close/Stop —
     /// mirrors `stateControls`, so the title/subtext reserve the right trailing room for the controls.
-    private func rowShowsControlPair(_ task: UserQueryConversation) -> Bool {
-        switch task.status {
+    private func rowShowsControlPair(_ conversation: UserQueryConversation) -> Bool {
+        switch conversation.status {
         case .paused, .interrupted, .timedOut, .waitingForClarification, .waitingForReview:
             return true
         case .needsAttention:
-            return !task.commandText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return !conversation.commandText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         default:
             return false
         }
     }
 
     /// Trailing room the subtext leaves for the bottom-pinned elapsed time at its widest (e.g. "59m 59s").
-    private static let taskTimeColumnReserve: CGFloat = 52
+    private static let conversationTimeColumnReserve: CGFloat = 52
 
     /// Full opacity normally; while a reply is targeted, every row except the targeted one dims back so
     /// the user sees which thread their next message answers.
-    private func rowReplyDimOpacity(for task: UserQueryConversation) -> Double {
-        guard let replyTargetTaskID else { return 1 }
-        return task.id == replyTargetTaskID ? 1 : 0.5
+    private func rowReplyDimOpacity(for conversation: UserQueryConversation) -> Double {
+        guard let replyTargetConversationID else { return 1 }
+        return conversation.id == replyTargetConversationID ? 1 : 0.5
     }
 
-    /// A task blocked on the user — the attention state. Its pointer stays lit and pulses even when the
+    /// A conversation blocked on the user — the attention state. Its pointer stays lit and pulses even when the
     /// row dims for a reply, so every thread still waiting on the user reads at a glance. Broader than
     /// `isAwaitingUserResponse` (which gates the Reply button): a permission request also waits on the
     /// user and pulses for attention, but is answered with Approve / Deny rather than Reply.
-    private func isWaitingOnUser(_ task: UserQueryConversation) -> Bool {
-        Self.isWaitingOnUser(task)
+    private func isWaitingOnUser(_ conversation: UserQueryConversation) -> Bool {
+        Self.isWaitingOnUser(conversation)
     }
 
-    static func isWaitingOnUser(_ task: UserQueryConversation) -> Bool {
-        task.status.isAwaitingUserResponse || task.status == .waitingForPermission
+    static func isWaitingOnUser(_ conversation: UserQueryConversation) -> Bool {
+        conversation.status.isAwaitingUserResponse || conversation.status == .waitingForPermission
     }
 
-    private func taskRow(_ task: UserQueryConversation) -> some View {
-        let isPermission = task.status == .waitingForPermission
-        // The reply dim is applied per-element rather than to the whole row so the pointer of a task that
+    private func conversationRow(_ conversation: UserQueryConversation) -> some View {
+        let isPermission = conversation.status == .waitingForPermission
+        // The reply dim is applied per-element rather than to the whole row so the pointer of a conversation that
         // itself needs the user can stay lit while everything else recedes.
-        let contentDim = rowReplyDimOpacity(for: task)
-        let isReplyTarget = replyTargetTaskID == task.id
-        let isSelected = selectedTaskID == task.id
-        let pointerDim = (isWaitingOnUser(task) || isSelected) ? 1 : contentDim
+        let contentDim = rowReplyDimOpacity(for: conversation)
+        let isReplyTarget = replyTargetConversationID == conversation.id
+        let isSelected = selectedConversationID == conversation.id
+        let pointerDim = (isWaitingOnUser(conversation) || isSelected) ? 1 : contentDim
         return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 12) {
                 // Colored pointer while actively running; silhouette once stopped or finished — but the
                 // reply target and the keyboard-highlighted row always show their live accent color, so
                 // even a finished thread reads as active again while it is the focus.
                 DonkeyCursorMark(
-                    color: accentColor(for: task.accentIndex),
-                    silhouette: !isReplyTarget && !isSelected && task.status != .running
+                    color: accentColor(for: conversation.accentIndex),
+                    silhouette: !isReplyTarget && !isSelected && conversation.status != .running
                 )
                     .frame(width: 14, height: 14)
                     .padding(.top, 1)
                     .opacity(pointerDim)
-                    // A task waiting on the user gently pulses its pointer to call attention.
-                    .modifier(AttentionPulse(active: isWaitingOnUser(task)))
+                    // A conversation waiting on the user gently pulses its pointer to call attention.
+                    .modifier(AttentionPulse(active: isWaitingOnUser(conversation)))
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(task.title)
+                    Text(conversation.title)
                         .font(.system(size: 13, weight: .regular))
                         .foregroundStyle(Color.white.opacity(0.9))
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         // First line runs all the way to just left of the pinned top-right controls.
-                        .padding(.trailing, controlsReserve(for: task))
+                        .padding(.trailing, controlsReserve(for: conversation))
 
                     if !isPermission {
-                        Text(taskStatusDescription(task))
+                        Text(conversationStatusDescription(conversation))
                             .font(.system(size: 12, weight: .regular))
                             .foregroundStyle(Color.white.opacity(0.42))
                             .lineLimit(5)
@@ -871,7 +896,7 @@ public struct UserQueryNotchStatusView: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             // Subtext runs to just left of the controls, or the bottom-pinned elapsed time.
-                            .padding(.trailing, max(controlsReserve(for: task), Self.taskTimeColumnReserve))
+                            .padding(.trailing, max(controlsReserve(for: conversation), Self.conversationTimeColumnReserve))
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -879,10 +904,10 @@ public struct UserQueryNotchStatusView: View {
             }
 
             if isPermission {
-                permissionBanner(for: task)
+                permissionBanner(for: conversation)
                     .opacity(contentDim)
-            } else if showsReloadCreditsBanner(task) {
-                reloadCreditsBanner(for: task)
+            } else if showsReloadCreditsBanner(conversation) {
+                reloadCreditsBanner(for: conversation)
                     .opacity(contentDim)
             }
         }
@@ -915,14 +940,14 @@ public struct UserQueryNotchStatusView: View {
             if isReplyTarget {
                 replyModeExited()
             } else {
-                replyRequested(task.id)
+                replyRequested(conversation.id)
             }
         }
         // Pinned to the full cell, matching the prototype insets: controls at top-8/right-12, elapsed
         // time at bottom-2.5/right-12, so the time stays near the cell bottom as the subtext grows.
         .overlay(alignment: .topTrailing) {
             if !isPermission {
-                topRightControls(task)
+                topRightControls(conversation)
                     .padding(.top, 8)
                     .padding(.trailing, 12)
                     .opacity(contentDim)
@@ -930,7 +955,7 @@ public struct UserQueryNotchStatusView: View {
         }
         .overlay(alignment: .bottomTrailing) {
             if !isPermission {
-                taskElapsedLabel(task)
+                conversationElapsedLabel(conversation)
                     .padding(.bottom, 10)
                     .padding(.trailing, 12)
                     .opacity(contentDim)
@@ -938,96 +963,96 @@ public struct UserQueryNotchStatusView: View {
         }
     }
 
-    /// Controls pinned to the row's top-right. Like the prototype, every task carries a real control:
-    /// running → stop; paused → resume + close; everything else → close, so any task can be deleted.
+    /// Controls pinned to the row's top-right. Like the prototype, every conversation carries a real control:
+    /// running → stop; paused → resume + close; everything else → close, so any conversation can be deleted.
     @ViewBuilder
-    private func topRightControls(_ task: UserQueryConversation) -> some View {
-        switch task.status {
+    private func topRightControls(_ conversation: UserQueryConversation) -> some View {
+        switch conversation.status {
         case .waitingForPermission:
             // The permission banner carries its own Approve / Deny; the row needs no extra control.
             EmptyView()
         default:
-            stateControls(for: task)
+            stateControls(for: conversation)
         }
     }
 
     @ViewBuilder
-    private func stateControls(for task: UserQueryConversation) -> some View {
-        switch task.status {
+    private func stateControls(for conversation: UserQueryConversation) -> some View {
+        switch conversation.status {
         case .running:
-            // Stop = pause (same affordance the prototype uses for a running task).
+            // Stop = pause (same affordance the prototype uses for a running conversation).
             NotchControlButton(systemName: "stop.fill", label: "Stop", isEnabled: true) {
-                pauseRequested(task.id)
+                pauseRequested(conversation.id)
             }
         case .waitingForClarification, .waitingForReview:
             // The agent is blocked waiting on the user (the white attention glyph). Offer Reply so the
             // user can answer the question (or respond to the review) right from the row, plus Close.
-            replyAndCloseControls(for: task)
+            replyAndCloseControls(for: conversation)
         case .paused, .interrupted, .timedOut:
             // Paused (user), interrupted (changed course), and timed out (hit the step ceiling) all carry a
             // goal and real progress, so they are retryable: offer Resume + Close.
-            resumeAndCloseControls(for: task)
+            resumeAndCloseControls(for: conversation)
         case .needsAttention:
             // A run cut short by a relaunch is retryable; but an info-only needsAttention row (e.g. an
             // asset drop) has no goal to resume, so it only gets Close — Resume there would dead-end.
-            if task.commandText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                closeControl(for: task)
+            if conversation.commandText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                closeControl(for: conversation)
             } else {
-                resumeAndCloseControls(for: task)
+                resumeAndCloseControls(for: conversation)
             }
         default:
             // Completed, failed, and chatting only carry Close. A completed thread is still repliable,
-            // but by tapping the row (which activates it) rather than a button — see `taskRow`'s tap.
-            closeControl(for: task)
+            // but by tapping the row (which activates it) rather than a button — see `conversationRow`'s tap.
+            closeControl(for: conversation)
         }
     }
 
     @ViewBuilder
-    private func resumeAndCloseControls(for task: UserQueryConversation) -> some View {
+    private func resumeAndCloseControls(for conversation: UserQueryConversation) -> some View {
         HStack(spacing: 6) {
             NotchControlButton(systemName: "play.fill", label: "Resume", isEnabled: true) {
-                resumeRequested(task.id)
+                resumeRequested(conversation.id)
             }
             NotchControlButton(systemName: "xmark", label: "Close", isEnabled: true) {
-                dismissRequested(task.id)
+                dismissRequested(conversation.id)
             }
         }
     }
 
-    /// A task waiting on the user gets Reply (answer the clarification / respond to the review) + Close.
-    /// Reply pins the composer to this task and focuses the input; the user's next message answers it.
+    /// A conversation waiting on the user gets Reply (answer the clarification / respond to the review) + Close.
+    /// Reply pins the composer to this conversation and focuses the input; the user's next message answers it.
     @ViewBuilder
-    private func replyAndCloseControls(for task: UserQueryConversation) -> some View {
+    private func replyAndCloseControls(for conversation: UserQueryConversation) -> some View {
         HStack(spacing: 6) {
             NotchTextButton(label: "Reply", isEnabled: true) {
-                replyRequested(task.id)
+                replyRequested(conversation.id)
             }
             NotchControlButton(systemName: "xmark", label: "Close", isEnabled: true) {
-                dismissRequested(task.id)
+                dismissRequested(conversation.id)
             }
         }
     }
 
-    private func closeControl(for task: UserQueryConversation) -> some View {
+    private func closeControl(for conversation: UserQueryConversation) -> some View {
         NotchControlButton(systemName: "xmark", label: "Close", isEnabled: true) {
-            dismissRequested(task.id)
+            dismissRequested(conversation.id)
         }
     }
 
-    /// Live ticking time while running; a frozen total once the task has stopped or finished. Both use
+    /// Live ticking time while running; a frozen total once the conversation has stopped or finished. Both use
     /// the prototype's row time style (10px, 55% white) so every row's time matches regardless of status.
     @ViewBuilder
-    private func taskElapsedLabel(_ task: UserQueryConversation) -> some View {
-        if task.status == .running {
-            TimelineView(.periodic(from: task.createdAt, by: 1)) { context in
-                taskElapsedText(Self.elapsedDescription(from: task.createdAt, to: context.date))
+    private func conversationElapsedLabel(_ conversation: UserQueryConversation) -> some View {
+        if conversation.status == .running {
+            TimelineView(.periodic(from: conversation.createdAt, by: 1)) { context in
+                conversationElapsedText(Self.elapsedDescription(from: conversation.createdAt, to: context.date))
             }
         } else {
-            taskElapsedText(Self.elapsedDescription(from: task.createdAt, to: task.updatedAt))
+            conversationElapsedText(Self.elapsedDescription(from: conversation.createdAt, to: conversation.updatedAt))
         }
     }
 
-    private func taskElapsedText(_ text: String) -> some View {
+    private func conversationElapsedText(_ text: String) -> some View {
         Text(text)
             .font(.system(size: 10, weight: .regular).monospacedDigit())
             .foregroundStyle(Color.white.opacity(0.55))
@@ -1035,12 +1060,12 @@ public struct UserQueryNotchStatusView: View {
             .fixedSize()
     }
 
-    /// A permission request banner below the task text: the request reads on the left, Approve / Deny
+    /// A permission request banner below the conversation text: the request reads on the left, Approve / Deny
     /// on the right. The system permission is only requested once the user taps Approve; Deny stops
-    /// the task — the harness never reaches the system without the user's go-ahead.
-    private func permissionBanner(for task: UserQueryConversation) -> some View {
+    /// the conversation — the harness never reaches the system without the user's go-ahead.
+    private func permissionBanner(for conversation: UserQueryConversation) -> some View {
         HStack(spacing: 8) {
-            Text(permissionRequestText(task))
+            Text(permissionRequestText(conversation))
                 .font(.system(size: 12, weight: .regular))
                 .foregroundStyle(Color.white.opacity(0.7))
                 .lineLimit(2)
@@ -1049,27 +1074,27 @@ public struct UserQueryNotchStatusView: View {
             Spacer(minLength: 8)
 
             permissionButton(label: "Approve", prominent: true) {
-                approvePermissionRequested(task.id, false)
+                approvePermissionRequested(conversation.id, false)
             }
             permissionButton(label: "Deny", prominent: false) {
-                denyPermissionRequested(task.id)
+                denyPermissionRequested(conversation.id)
             }
         }
-        // Aligns the prompt under the task title (pointer width 14 + the row's 12 spacing) so it reads
+        // Aligns the prompt under the conversation title (pointer width 14 + the row's 12 spacing) so it reads
         // as part of the row rather than a nested card.
         .padding(.leading, 26)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Whether this task failed for lack of credits and should show the reload CTA. Read from the typed
+    /// Whether this conversation failed for lack of credits and should show the reload CTA. Read from the typed
     /// metadata flag the harness sets — never inferred from the narration text.
-    private func showsReloadCreditsBanner(_ task: UserQueryConversation) -> Bool {
-        task.metadata[UserQueryConversationMetadataKey.creditReloadRequired] == "true"
+    private func showsReloadCreditsBanner(_ conversation: UserQueryConversation) -> Bool {
+        conversation.metadata[UserQueryConversationMetadataKey.creditReloadRequired] == "true"
     }
 
-    /// A reload CTA on a credit-exhausted task. Reuses the permission banner's button styling; tapping
-    /// it opens the billing page so the user can top up, then re-run the task (Close is still on the row).
-    private func reloadCreditsBanner(for task: UserQueryConversation) -> some View {
+    /// A reload CTA on a credit-exhausted conversation. Reuses the permission banner's button styling; tapping
+    /// it opens the billing page so the user can top up, then re-run the conversation (Close is still on the row).
+    private func reloadCreditsBanner(for conversation: UserQueryConversation) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "creditcard")
                 .font(.system(size: 12, weight: .regular))
@@ -1084,7 +1109,7 @@ public struct UserQueryNotchStatusView: View {
             Spacer(minLength: 8)
 
             permissionButton(label: "Reload", prominent: true) {
-                reloadCreditsRequested(task.id)
+                reloadCreditsRequested(conversation.id)
             }
         }
         .padding(.horizontal, 10)
@@ -1097,13 +1122,13 @@ public struct UserQueryNotchStatusView: View {
     /// What the user is actually approving — named by the concrete action, never the word "tools".
     /// Prefers the shell command being requested, falls back to the gate's own reason, and never
     /// surfaces the runtime's internal "stopped" placeholder.
-    private func permissionRequestText(_ task: UserQueryConversation) -> String {
-        if let command = task.metadata["genericHarness.shellConsent.command"]?
+    private func permissionRequestText(_ conversation: UserQueryConversation) -> String {
+        if let command = conversation.metadata["genericHarness.shellConsent.command"]?
             .trimmingCharacters(in: .whitespacesAndNewlines), !command.isEmpty {
             return "Allow Donkey to run \(command)"
         }
 
-        let detail = task.detail.trimmingCharacters(in: .whitespacesAndNewlines)
+        let detail = conversation.detail.trimmingCharacters(in: .whitespacesAndNewlines)
         if detail.isEmpty || detail == Self.internalNotExecutablePlaceholder {
             return "Donkey needs your permission to continue"
         }
@@ -1129,23 +1154,23 @@ public struct UserQueryNotchStatusView: View {
         .accessibilityLabel("\(label) permission")
     }
 
-    /// While replying, the composer is outlined in the targeted task's accent color so the input visibly
+    /// While replying, the composer is outlined in the targeted conversation's accent color so the input visibly
     /// belongs to that thread (matching the row's lit pointer).
     private var replyTargetAccentColor: Color? {
-        guard let replyTargetTaskID,
-              let task = tasks.first(where: { $0.id == replyTargetTaskID }) else {
+        guard let replyTargetConversationID,
+              let conversation = conversations.first(where: { $0.id == replyTargetConversationID }) else {
             return nil
         }
-        return accentColor(for: task.accentIndex)
+        return accentColor(for: conversation.accentIndex)
     }
 
     /// The composer's outline color. The keyboard-highlighted row takes precedence — its accent rides on
     /// the input so the selection reads as the next thread the user will reply to — and falls back to the
     /// reply target's accent while one is pinned.
     private var composerAccentColor: Color? {
-        if let selectedTaskID,
-           let task = tasks.first(where: { $0.id == selectedTaskID }) {
-            return accentColor(for: task.accentIndex)
+        if let selectedConversationID,
+           let conversation = conversations.first(where: { $0.id == selectedConversationID }) {
+            return accentColor(for: conversation.accentIndex)
         }
         return replyTargetAccentColor
     }
@@ -1218,18 +1243,18 @@ public struct UserQueryNotchStatusView: View {
         )
     }
 
-    private var taskTitle: String {
-        Self.taskTitle(tasks: tasks, state: state)
+    private var conversationTitle: String {
+        Self.conversationTitle(conversations: conversations, state: state)
     }
 
     /// The notch's headline text. Factored to a static so the controller can measure the exact string the
     /// pill renders when sizing the no-notch collapsed row for a wrapped second line.
-    static func taskTitle(tasks: [UserQueryConversation], state: UserQueryState) -> String {
-        if let primary = tasks.first {
+    static func conversationTitle(conversations: [UserQueryConversation], state: UserQueryState) -> String {
+        if let primary = conversations.first {
             return primary.title
         }
 
-        if let display = taskDisplayText(state: state) {
+        if let display = conversationDisplayText(state: state) {
             return display
         }
 
@@ -1241,61 +1266,65 @@ public struct UserQueryNotchStatusView: View {
         }
     }
 
-    /// The collapsed headline. Normally the prompt (`taskTitle`); but while the primary task waits on the
+    /// The collapsed headline. Normally the prompt (`conversationTitle`); but while the primary conversation waits on the
     /// user, the notch reads back the agent's question (carried in `detail`) instead, so the pill shows
     /// what the agent is asking rather than echoing what the user originally typed.
     private var collapsedHeadline: String {
-        Self.collapsedHeadline(tasks: tasks, state: state)
+        Self.collapsedHeadline(conversations: conversations, state: state)
     }
 
-    public static func collapsedHeadline(tasks: [UserQueryConversation], state: UserQueryState) -> String {
-        if let primary = tasks.first, isWaitingOnUser(primary) {
-            let question = primary.detail.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !question.isEmpty { return question }
+    public static func collapsedHeadline(conversations: [UserQueryConversation], state: UserQueryState) -> String {
+        // The collapsed notch narrates the conversation's latest line — the same `chinDisplayText` the
+        // chin band shows — so once the agent has replied it never reverts to echoing the original prompt
+        // title (the "still says hi" bug). `chinDisplayText` already carries the right line in every
+        // state: the agent's question while it waits, its reply once done, the prompt only before any
+        // line exists. With no conversation at all, fall back to the typed prompt / idle headline.
+        if let primary = conversations.first {
+            return primary.chinDisplayText
         }
-        return taskTitle(tasks: tasks, state: state)
+        return conversationTitle(conversations: conversations, state: state)
     }
 
-    /// Whether the surfaced task is blocked on the user — drives the collapsed pointer's attention pulse.
+    /// Whether the surfaced conversation is blocked on the user — drives the collapsed pointer's attention pulse.
     private var isPrimaryWaitingOnUser: Bool {
-        guard let primaryTask else { return false }
-        return isWaitingOnUser(primaryTask)
+        guard let primaryConversation else { return false }
+        return isWaitingOnUser(primaryConversation)
     }
 
     private var statusDescription: String {
-        if let primaryTask {
-            return taskStatusDescription(primaryTask)
+        if let primaryConversation {
+            return conversationStatusDescription(primaryConversation)
         }
 
-        if isCurrentTaskPaused {
+        if isCurrentConversationPaused {
             return "Paused"
         }
 
         switch state.leadingSignalLevel {
         case .idle, .ready:
-            return hasTaskDisplayText ? "Needs attention" : "Idle"
+            return hasConversationDisplayText ? "Needs attention" : "Idle"
         case .thinking:
             return "Thinking"
         }
     }
 
     /// The collapsed right gutter follows the prototype exactly: it only ever carries an icon or the
-    /// live clock — and the icon shows ONLY when a task is actively blocked on the user (a question to
-    /// answer, a review to give, or a permission to approve), the run time while a task runs, or an
-    /// update cloud, otherwise nothing. A finished task is never labelled here; it keeps surfacing as a
-    /// colored pointer + chin line instead. Crucially, a benign `needsAttention` task (an interrupted
+    /// live clock — and the icon shows ONLY when a conversation is actively blocked on the user (a question to
+    /// answer, a review to give, or a permission to approve), the run time while a conversation runs, or an
+    /// update cloud, otherwise nothing. A finished conversation is never labelled here; it keeps surfacing as a
+    /// colored pointer + chin line instead. Crucially, a benign `needsAttention` conversation (an interrupted
     /// run restored across launches, an upload, a failed resume) does NOT raise the attention glyph —
     /// it is not waiting on the user, so it stays out of the gutter and surfaces only in the list. The
-    /// time only rides alongside the chin (a running task always narrates), so the gutter never shows a
+    /// time only rides alongside the chin (a running conversation always narrates), so the gutter never shows a
     /// lonely clock; every state's full elapsed total lives in the expanded row.
     @ViewBuilder
     private var collapsedRightSlot: some View {
-        if surfacedErrorTask != nil {
+        if surfacedErrorConversation != nil {
             // A surfaced failure (e.g. an auth error) raises the red warning glyph here while its message
             // holds the chin, until the user expands to acknowledge it.
             attentionGlyph(color: Self.chinErrorColor)
-        } else if let task = primaryTask {
-            switch task.status {
+        } else if let conversation = primaryConversation {
+            switch conversation.status {
             case .waitingForClarification, .waitingForReview:
                 // Attention: the agent is blocked waiting for the user to answer or review something.
                 attentionGlyph()
@@ -1303,10 +1332,10 @@ public struct UserQueryNotchStatusView: View {
                 // Waiting on the user, same as a clarification or review — show the attention glyph.
                 attentionGlyph()
             case .running:
-                compactLiveTime(since: task.createdAt)
+                compactLiveTime(since: conversation.createdAt)
             case .completed, .paused, .interrupted, .failed, .chatting, .needsAttention, .timedOut:
                 // The gutter only ever carries the waiting-on-user icons or the live clock — a completed
-                // task keeps surfacing as a colored pointer + chin line, and the rest (including a benign
+                // conversation keeps surfacing as a colored pointer + chin line, and the rest (including a benign
                 // needsAttention or a retryable timed-out run) surface in the list without nagging the
                 // collapsed gutter.
                 EmptyView()
@@ -1320,8 +1349,8 @@ public struct UserQueryNotchStatusView: View {
     }
 
     /// The surfaced failure currently holding the chin, if any — drives the right-rail warning glyph.
-    private var surfacedErrorTask: UserQueryConversation? {
-        surfacedTasks.first { $0.status == .failed }
+    private var surfacedErrorConversation: UserQueryConversation? {
+        surfacedConversations.first { $0.status == .failed }
     }
 
     private func slotIcon(_ systemName: String, color: Color = Color.white.opacity(0.85)) -> some View {
@@ -1370,18 +1399,18 @@ public struct UserQueryNotchStatusView: View {
     }
 
     private var isWorking: Bool {
-        primaryTask?.status == .running || state.leadingSignalLevel == .thinking
+        primaryConversation?.status == .running || state.leadingSignalLevel == .thinking
     }
 
-    private var hasTaskDisplayText: Bool {
-        !tasks.isEmpty || taskDisplayText != nil
+    private var hasConversationDisplayText: Bool {
+        !conversations.isEmpty || conversationDisplayText != nil
     }
 
-    private var taskDisplayText: String? {
-        Self.taskDisplayText(state: state)
+    private var conversationDisplayText: String? {
+        Self.conversationDisplayText(state: state)
     }
 
-    static func taskDisplayText(state: UserQueryState) -> String? {
+    static func conversationDisplayText(state: UserQueryState) -> String? {
         let text = UserQueryCopy.normalizedDisplayText(state.promptText)
         guard UserQueryCopy.isTaskDisplayText(text) else {
             return nil
@@ -1391,22 +1420,22 @@ public struct UserQueryNotchStatusView: View {
     }
 
     private var isResting: Bool {
-        (state.leadingSignalLevel == .idle || state.leadingSignalLevel == .ready) && !hasTaskDisplayText
+        (state.leadingSignalLevel == .idle || state.leadingSignalLevel == .ready) && !hasConversationDisplayText
     }
 
     private var accentColor: Color {
-        accentColor(for: primaryTask?.accentIndex ?? accentIndex)
+        accentColor(for: primaryConversation?.accentIndex ?? accentIndex)
     }
 
-    private var primaryTask: UserQueryConversation? {
-        tasks.first
+    private var primaryConversation: UserQueryConversation? {
+        conversations.first
     }
 
 
-    /// The task's status line, resolved through the centralized activity vocabulary so the notch and
+    /// The conversation's status line, resolved through the centralized activity vocabulary so the notch and
     /// the future conversation view speak the same language.
-    private func taskStatusDescription(_ task: UserQueryConversation) -> String {
-        UserQueryActivity.current(for: task).displayText
+    private func conversationStatusDescription(_ conversation: UserQueryConversation) -> String {
+        UserQueryActivity.current(for: conversation).displayText
     }
 
     private func accentColor(for index: Int) -> Color {
@@ -1446,8 +1475,8 @@ public struct UserQueryNotchStatusView: View {
     private static let expandedContentAnimation = Animation.easeOut(duration: 0.3).delay(0.15)
     private static let expandedContentDismissAnimation = Animation.easeOut(duration: 0.1)
     private static let contentInset: CGFloat = 14
-    private static let taskListCommandSpacing: CGFloat = 8
-    /// The collapsed leading lane shows at most this many overlapping pointers; extra surfaced tasks
+    private static let conversationListCommandSpacing: CGFloat = 8
+    /// The collapsed leading lane shows at most this many overlapping pointers; extra surfaced conversations
     /// are still listed when the notch is expanded.
     private static let maxClusterPointers = 3
     private static let clusterStepX: CGFloat = 8
@@ -1459,9 +1488,9 @@ public struct UserQueryNotchStatusView: View {
     private static let chinBottomMargin: CGFloat = 8
     /// The failed-chin warning red. Mirrors the prototype's `ERROR_RED` (rgb(255, 69, 58)) exactly — it
     /// is the one place this hue is needed in the app, so it stays a literal rather than a shared token,
-    /// kept in sync with tasks.ts by value.
+    /// kept in sync with conversations.ts by value.
     private static let chinErrorColor = Color(red: 1.0, green: 69.0 / 255.0, blue: 58.0 / 255.0)
-    /// The chin advances to the next running task every 2.6s, on a clock shared by all tasks.
+    /// The chin advances to the next running conversation every 2.6s, on a clock shared by all conversations.
     private static let chinRotationInterval: TimeInterval = 2.6
     private static let chinRotationAnchor = Date(timeIntervalSinceReferenceDate: 0)
 }
@@ -1602,7 +1631,7 @@ private struct NotchTextButton: View {
     }
 }
 
-/// A gentle, slow pulse (scale + fade) used to call attention to a task that is waiting on the user,
+/// A gentle, slow pulse (scale + fade) used to call attention to a conversation that is waiting on the user,
 /// without the urgency of the running-pointer pulse. Inert until `active`, so non-waiting rows are still.
 private struct AttentionPulse: ViewModifier {
     let active: Bool

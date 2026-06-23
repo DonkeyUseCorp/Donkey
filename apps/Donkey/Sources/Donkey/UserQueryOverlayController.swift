@@ -656,7 +656,7 @@ final class UserQueryOverlayController {
             surfaceHeight: metrics.surfaceSize.height,
             isHostExpanded: isStatusHostExpanded,
             isExpanded: isStatusExpanded,
-            isCurrentTaskPaused: model.isCurrentTaskPaused,
+            isCurrentConversationPaused: model.isCurrentTaskPaused,
             commandText: Binding(
                 get: { [weak self] in
                     self?.model.notchCommandText ?? ""
@@ -667,10 +667,10 @@ final class UserQueryOverlayController {
             ),
             commandInputTextHeight: model.notchCommandInputTextHeight,
             isCommandInputExpanded: model.isNotchCommandInputExpanded,
-            tasks: model.notchTasks,
-            surfacedTasks: model.notchSurfacedTasks,
-            replyTargetTaskID: model.replyTargetTaskID,
-            selectedTaskID: model.selectedTaskID,
+            conversations: model.notchTasks,
+            surfacedConversations: model.notchSurfacedTasks,
+            replyTargetConversationID: model.replyTargetTaskID,
+            selectedConversationID: model.selectedTaskID,
             accentIndex: model.notchAccentIndex,
             spawnState: spawnCue,
             commandSubmitted: { [weak self] text in
@@ -694,7 +694,7 @@ final class UserQueryOverlayController {
             dismissRequested: { [weak self] conversationID in
                 self?.model.dismissTask(id: conversationID)
             },
-            taskSelected: { [weak self] conversationID in
+            conversationSelected: { [weak self] conversationID in
                 self?.restoreSpawnPointer(forTaskID: conversationID)
             },
             replyRequested: { [weak self] conversationID in
@@ -1043,7 +1043,7 @@ final class UserQueryOverlayController {
         guard !hasNotch else { return 0 }
         let textWidth = collapsedWidth - Self.statusCollapsedTopRowHorizontalReserve
         let headline = UserQueryNotchStatusView.collapsedHeadline(
-            tasks: model.notchTasks,
+            conversations: model.notchTasks,
             state: model.promptState
         )
         let lines = model.notchSurfacedTasks.reduce(
