@@ -25,6 +25,9 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     /// so the planner can route to an authoritative playbook even when no GUI app is the drive target —
     /// e.g. playing music or saving a note by script. nil when no skills are installed.
     private let skillCatalog: String?
+    /// Full guides for the skills the understanding boundary preselected for this task, rendered into every
+    /// step's prompt as authoritative playbooks (the capability-skill analogue of `appGuidance`).
+    private let preloadedSkillGuides: [String]
     /// Durable operating lessons recalled from past runs whose goal resembled this one, pre-formatted as a
     /// bounded bullet block and rendered into every step's prompt. Computed once at run start (the goal
     /// doesn't change mid-run), so it's a constant here. nil when nothing relevant was learned before.
@@ -81,6 +84,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         appGuidance: String?,
         understanding: HarnessRequestUnderstanding? = nil,
         skillCatalog: String? = nil,
+        preloadedSkillGuides: [String] = [],
         recalledLessons: String? = nil,
         trace: (any HarnessTurnTracing)? = nil,
         openWindows: @escaping @Sendable () -> [MacWindowTargetCandidate] = { [] },
@@ -93,6 +97,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         self.appGuidance = appGuidance
         self.understanding = understanding
         self.skillCatalog = skillCatalog
+        self.preloadedSkillGuides = preloadedSkillGuides
         self.recalledLessons = recalledLessons
         self.trace = trace
         self.openWindows = openWindows
@@ -385,6 +390,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
             appGuidance: appGuidance,
             understanding: understanding,
             skillCatalog: skillCatalog,
+            preloadedSkillGuides: preloadedSkillGuides,
             lessons: recalledLessons,
             rollingContext: rollingContext,
             retryNote: retryNote,

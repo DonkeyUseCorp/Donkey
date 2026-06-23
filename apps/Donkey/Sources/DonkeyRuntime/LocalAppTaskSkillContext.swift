@@ -156,6 +156,35 @@ public enum BuiltInLocalAppSkillPacks {
         }
     }
 
+    /// A compact, one-line-per-skill catalog of every available skill (built-in + installed + learned) for
+    /// the understanding boundary to choose from: `id`, the one-line description, and the trigger keywords.
+    /// The model returns the ids of the skills a task should follow (`relevantSkillIDs`) and the harness
+    /// preloads those guides — so no intent is matched in Swift; the model routes against this list.
+    public static func skillSelectionCatalog() -> String? {
+        let skills = descriptors().sorted { $0.id < $1.id }
+        guard !skills.isEmpty else { return nil }
+        let lines = skills.map { skill -> String in
+            let keywords = (skill.metadata["keywords"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let keywordsText = keywords.isEmpty ? "" : " [keywords: \(keywords)]"
+            return "  - \(skill.id): \(skill.summary)\(keywordsText)"
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// The full operating guide for a skill selected by id (built-in, installed, or learned) — a labeled
+    /// header plus the SKILL.md body with frontmatter stripped, bounded for the prompt. This is the
+    /// capability-skill analogue of `appOperatingGuidance(forApp:)`: the understanding boundary names the
+    /// `relevantSkillIDs` a task needs and the harness preloads each one's guide into the planner, so a task
+    /// in a skill's domain gets that skill's playbook from step one without the model having to find it.
+    public static func skillGuidance(forID id: String, maxCharacters: Int = 3_500) -> String? {
+        let wanted = id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !wanted.isEmpty,
+              let match = descriptors().first(where: { $0.id.lowercased() == wanted })
+        else { return nil }
+        let snippet = instructionSnippet(for: match, maxCharacters: maxCharacters)
+        return snippet.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : snippet
+    }
+
     public static func scriptSource(
         skillID: String,
         relativePath: String

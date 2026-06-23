@@ -35,6 +35,12 @@ public struct HarnessRequestUnderstanding: Sendable, Equatable {
     /// cursor or raising the app) or in the foreground (the user is meant to watch). Set by this
     /// boundary from the request's intent — never matched from raw text. Defaults to background.
     public var executionPreference: ExecutionPreference
+    /// Ids the model picked from the skill catalog whose playbook this task should follow (0, 1, or a
+    /// few). The harness preloads each one's full guide into the planner — the capability-skill analogue
+    /// of `targetAppName` driving the app skill's preload — so a task in a skill's domain gets that
+    /// skill's instructions from step one. Empty when no skill applies. Selected by the model against a
+    /// typed catalog, never matched from raw text.
+    public var relevantSkillIDs: [String]
 
     public init(
         turnKind: HarnessTurnKind = .act,
@@ -44,7 +50,8 @@ public struct HarnessRequestUnderstanding: Sendable, Equatable {
         successCriteria: String? = nil,
         needsClarification: Bool = false,
         clarifyingQuestion: String? = nil,
-        executionPreference: ExecutionPreference = .background
+        executionPreference: ExecutionPreference = .background,
+        relevantSkillIDs: [String] = []
     ) {
         self.turnKind = turnKind
         self.restatedGoal = restatedGoal
@@ -54,6 +61,7 @@ public struct HarnessRequestUnderstanding: Sendable, Equatable {
         self.needsClarification = needsClarification
         self.clarifyingQuestion = clarifyingQuestion
         self.executionPreference = executionPreference
+        self.relevantSkillIDs = relevantSkillIDs
     }
 }
 
@@ -75,11 +83,21 @@ public final class HostedHarnessRequestUnderstanding {
 
     /// Returns the parsed understanding, or `nil` on any provider/decode failure so the caller can
     /// degrade to driving the raw command directly rather than dead-ending.
-    public func understand(command: String, frontmostAppName: String) async -> HarnessRequestUnderstanding? {
-        let prompt = DonkeyPrompts.requestUnderstanding(command: command, frontmostAppName: frontmostAppName)
+    public func understand(
+        command: String,
+        frontmostAppName: String,
+        skillCatalog: String? = nil
+    ) async -> HarnessRequestUnderstanding? {
+        let prompt = DonkeyPrompts.requestUnderstanding(
+            command: command,
+            frontmostAppName: frontmostAppName,
+            skillCatalog: skillCatalog
+        )
         let startedAt = RunTraceTimestamp.now()
         do {
-            let response = try await backend.createResponse(responseRequest(command: command, frontmostAppName: frontmostAppName))
+            let response = try await backend.createResponse(
+                responseRequest(command: command, frontmostAppName: frontmostAppName, skillCatalog: skillCatalog)
+            )
             let endedAt = RunTraceTimestamp.now()
             guard let text = RemoteInferenceResponseHelpers.outputText(from: response), !text.isEmpty else {
                 recordCall(prompt: prompt, response: "<no output text>",
@@ -103,7 +121,10 @@ public final class HostedHarnessRequestUnderstanding {
                 needsClarification: wire.needsClarification ?? false,
                 clarifyingQuestion: wire.clarifyingQuestion.flatMap { $0.isEmpty ? nil : $0 },
                 executionPreference: wire.executionPreference
-                    .flatMap { ExecutionPreference(rawValue: $0) } ?? .background
+                    .flatMap { ExecutionPreference(rawValue: $0) } ?? .background,
+                relevantSkillIDs: (wire.relevantSkillIDs ?? [])
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
             )
         } catch {
             recordCall(prompt: prompt, response: String(String(describing: error).prefix(500)),
@@ -142,10 +163,11 @@ public final class HostedHarnessRequestUnderstanding {
         var needsClarification: Bool?
         var clarifyingQuestion: String?
         var executionPreference: String?
+        var relevantSkillIDs: [String]?
 
         private enum CodingKeys: String, CodingKey {
             case turnKind, restatedGoal, targetAppName, parameters, successCriteria, needsClarification, clarifyingQuestion
-            case executionPreference
+            case executionPreference, relevantSkillIDs
         }
 
         init(from decoder: Decoder) throws {
@@ -157,6 +179,7 @@ public final class HostedHarnessRequestUnderstanding {
             clarifyingQuestion = try container.decodeIfPresent(String.self, forKey: .clarifyingQuestion)
             needsClarification = try container.decodeIfPresent(Bool.self, forKey: .needsClarification)
             executionPreference = try container.decodeIfPresent(String.self, forKey: .executionPreference)
+            relevantSkillIDs = try container.decodeIfPresent([String].self, forKey: .relevantSkillIDs)
             // The schema is non-strict, so a parameter value may arrive as a number or boolean. Coerce
             // scalars to strings instead of failing the whole decode.
             parameters = try container.decodeIfPresent([String: ScalarString].self, forKey: .parameters)?
@@ -189,7 +212,11 @@ public final class HostedHarnessRequestUnderstanding {
         }
     }
 
-    private func responseRequest(command: String, frontmostAppName: String) -> RemoteInferenceResponseCreateRequest {
+    private func responseRequest(
+        command: String,
+        frontmostAppName: String,
+        skillCatalog: String?
+    ) -> RemoteInferenceResponseCreateRequest {
         RemoteInferenceResponseCreateRequest(
             input: .array([
                 .object([
@@ -199,7 +226,8 @@ public final class HostedHarnessRequestUnderstanding {
                             "type": .string("input_text"),
                             "text": .string(DonkeyPrompts.requestUnderstanding(
                                 command: command,
-                                frontmostAppName: frontmostAppName
+                                frontmostAppName: frontmostAppName,
+                                skillCatalog: skillCatalog
                             ))
                         ])
                     ])
@@ -214,7 +242,7 @@ public final class HostedHarnessRequestUnderstanding {
                     "schema": .object([
                         "type": .string("object"),
                         "additionalProperties": .bool(false),
-                        "required": .array([.string("turnKind"), .string("restatedGoal"), .string("needsClarification")]),
+                        "required": .array([.string("turnKind"), .string("restatedGoal"), .string("needsClarification"), .string("relevantSkillIDs")]),
                         "properties": .object([
                             "turnKind": .object([
                                 "type": .string("string"),
@@ -232,6 +260,10 @@ public final class HostedHarnessRequestUnderstanding {
                             "executionPreference": .object([
                                 "type": .string("string"),
                                 "enum": .array([.string("foreground"), .string("background")])
+                            ]),
+                            "relevantSkillIDs": .object([
+                                "type": .string("array"),
+                                "items": .object(["type": .string("string")])
                             ])
                         ])
                     ])

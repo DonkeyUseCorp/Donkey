@@ -93,8 +93,17 @@ public enum DonkeyPrompts {
 
     // MARK: - Request understanding (once per turn, before the loop)
 
-    public static func requestUnderstanding(command: String, frontmostAppName: String) -> String {
-        """
+    public static func requestUnderstanding(
+        command: String,
+        frontmostAppName: String,
+        skillCatalog: String? = nil
+    ) -> String {
+        let trimmedCatalog = skillCatalog?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let skillsBlock = trimmedCatalog.isEmpty
+            ? ""
+            : "\nSKILLS (each is an authoritative playbook for its domain; the one(s) you name in "
+                + "relevantSkillIDs get loaded for the planner):\n\(trimmedCatalog)\n"
+        return """
         You are the first step of a macOS agent. Read the user's request and return a precise, structured
         understanding of EXACTLY what they want. You do not act or choose tools here — a separate planner
         does that. Be broad in what you accept and specific in what you capture.
@@ -102,7 +111,7 @@ public enum DonkeyPrompts {
         The app currently in front of the user is "\(frontmostAppName)".
 
         USER REQUEST: \(command)
-
+        \(skillsBlock)
         Fill the fields:
         - turnKind: what this turn fundamentally is. Decide this FIRST and let it govern everything else:
           - "converse": a greeting ("hi", "hey", "yo"), thanks, acknowledgement, small talk, or a
@@ -143,6 +152,10 @@ public enum DonkeyPrompts {
           "show me…", "open … so I can see it", "walk me through…", "how do I…", or any turn whose
           value is the user looking at the app. Choose "background" for everything else: the user wants
           the work done, not to watch it happen. When unsure, prefer "background".
+        - relevantSkillIDs: from the SKILLS list above, the ids of any skill whose playbook this task falls
+          under (0, 1, or a few — match on each skill's description and keywords). Its full guide is loaded
+          for the planner, so the right pick makes the work reliable and a wrong one wastes attention. Empty
+          for conversation, a task no skill covers, or when no SKILLS list is shown.
 
         Return JSON only.
         """
@@ -235,6 +248,7 @@ public enum DonkeyPrompts {
         appGuidance: String?,
         understanding: HarnessRequestUnderstanding?,
         skillCatalog: String? = nil,
+        preloadedSkillGuides: [String] = [],
         lessons: String? = nil,
         rollingContext: String? = nil,
         retryNote: String? = nil,
@@ -290,12 +304,25 @@ public enum DonkeyPrompts {
             guidanceBlock = ""
         }
 
-        // The full installed-skill catalog, so the planner can route to an authoritative playbook even
-        // when the task has no GUI target app (e.g. playing music or saving a note by script): those
-        // skills are not preloaded above because no specific app window is being driven.
+        // The full guides for the skills the understanding boundary judged relevant to THIS task, preloaded
+        // so the planner has the authoritative playbook from step one — the capability-skill analogue of the
+        // app guide above. These are the skills to FOLLOW; do not improvise their domain by hand.
+        let preloadedGuides = preloadedSkillGuides
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let preloadedSkillsBlock = preloadedGuides.isEmpty
+            ? ""
+            : "\nRELEVANT SKILL GUIDES for this task (authoritative — follow these step by step instead of "
+                + "improvising; they are the reason the task is reliable):\n"
+                + preloadedGuides.joined(separator: "\n\n") + "\n"
+
+        // The compact catalog of every other available skill, so the planner can reach one whose relevance
+        // only becomes clear after it starts working (the task had no GUI target and was not preselected
+        // above). Load a capability skill's full guide with skill.load (or app_skill for an app skill), and
+        // run a validated workflow with skill_run, instead of improvising raw commands.
         let skillCatalogBlock: String
         if let skillCatalog, !skillCatalog.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            skillCatalogBlock = "\nINSTALLED APP SKILLS (authoritative playbooks for these apps/domains — when the task maps to one, get its full guide with app_skill and run its validated scripts with skill_run instead of improvising raw commands):\n\(skillCatalog)\n"
+            skillCatalogBlock = "\nOTHER AVAILABLE SKILLS (authoritative playbooks; if the task maps to one that is NOT already preloaded above, load its full guide with skill.load before improvising):\n\(skillCatalog)\n"
         } else {
             skillCatalogBlock = ""
         }
@@ -329,7 +356,7 @@ public enum DonkeyPrompts {
         GOAL: \(goalText)
         \(followUpBlock)\(understandingBlock)\(lessonsBlock)\(rollingContextBlock)
         \(historyBlock)
-        \(factsBlock)\(guidanceBlock)\(skillCatalogBlock)\(windowsBlock)
+        \(factsBlock)\(guidanceBlock)\(preloadedSkillsBlock)\(skillCatalogBlock)\(windowsBlock)
         \(elementsBlock)
 
         AVAILABLE TOOLS:
