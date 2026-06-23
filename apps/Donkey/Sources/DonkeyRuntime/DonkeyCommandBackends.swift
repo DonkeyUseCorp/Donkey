@@ -633,6 +633,12 @@ public enum DonkeyCommandBackends {
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-c", command]
         process.environment = shellEnvironment()
+        // Run from the user's home, not the GUI app's inherited cwd (`/`). A user who
+        // says "fill out f1120.pdf" means a file under their home — Desktop, Downloads,
+        // a project — never the filesystem root. Anchored at `/`, a relative `find .`
+        // walks the whole disk, stalls on SIP-protected dirs, and times out without ever
+        // reaching the file; anchored at home it lands in the right neighborhood.
+        process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
         let outPipe = Pipe()
         let errPipe = Pipe()
         process.standardOutput = outPipe
