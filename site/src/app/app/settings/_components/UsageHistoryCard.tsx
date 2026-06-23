@@ -59,24 +59,15 @@ function formatCallCost(call: RecentCall): string {
   return formatCostValue(Number.parseFloat(call.costCredits));
 }
 
-// Calls with no conversation (the always-on UI-understanding parses) are bucketed
-// under one sentinel so they stay contiguous, but they render as plain rows with
-// no group header. The sentinel can't collide with a real conversation id.
-const NO_CONVERSATION = "__none__";
-
-function conversationKey(call: RecentCall): string {
-  return call.conversationId ?? NO_CONVERSATION;
-}
-
-function conversationLabel(key: string): string {
+function conversationLabel(conversationId: string): string {
   // Conversation ids are long opaque strings; a short prefix is enough to tell
   // groups apart without dominating the row.
-  return `Conversation ${key.slice(0, 8)}`;
+  return `Conversation ${conversationId.slice(0, 8)}`;
 }
 
-// A group's combined cost for its header. All-included groups (the Vision API
-// tab) have no credit cost, so label them "Included" rather than "$0.00".
-function groupCostSummary(calls: RecentCall[]): string {
+// A conversation block's combined cost for its header. An all-included block has
+// no credit cost, so label it "Included" rather than "$0.00".
+function blockCostSummary(calls: RecentCall[]): string {
   if (calls.every((call) => call.billingStatus === "included")) {
     return "Included";
   }
@@ -87,40 +78,44 @@ function groupCostSummary(calls: RecentCall[]): string {
   return formatCostValue(total);
 }
 
-type GroupedRow = { call: RecentCall; groupKey: string };
+// Per-row annotation for the interleaved timeline. Rows keep the server's
+// chronological (newest-first) order: background (no-conversation) calls are
+// NEVER pulled together — each stays wherever it happened, between the groups. A
+// maximal run of consecutive same-conversation calls is one "block"; every row
+// in it shares a blockKey (the run's start index; -1 for background) plus the
+// run's total count and cost, so a header can render at the run's start and again
+// at a page top when a run carries across the page boundary.
+type RowAnnotation = { blockKey: number; blockCount: number; blockSummary: string };
 
-// Bucket tab rows by conversation, preserving the server's newest-first order so
-// each group sits at the position of its most recent call, then flatten back to a
-// row list that is now contiguous per conversation.
-function groupRowsByConversation(rows: RecentCall[]): {
-  ordered: GroupedRow[];
-  counts: Map<string, number>;
-  summaries: Map<string, string>;
-} {
-  const order: string[] = [];
-  const byKey = new Map<string, RecentCall[]>();
-  for (const call of rows) {
-    const key = conversationKey(call);
-    const existing = byKey.get(key);
-    if (existing) {
-      existing.push(call);
-    } else {
-      byKey.set(key, [call]);
-      order.push(key);
+function annotateRows(rows: RecentCall[]): RowAnnotation[] {
+  const annotations: RowAnnotation[] = rows.map(() => ({
+    blockKey: -1,
+    blockCount: 0,
+    blockSummary: "",
+  }));
+  let index = 0;
+  while (index < rows.length) {
+    const conversationId = rows[index].conversationId;
+    if (conversationId === null) {
+      index += 1;
+      continue;
     }
-  }
-  const ordered: GroupedRow[] = [];
-  const counts = new Map<string, number>();
-  const summaries = new Map<string, string>();
-  for (const key of order) {
-    const calls = byKey.get(key) ?? [];
-    counts.set(key, calls.length);
-    summaries.set(key, groupCostSummary(calls));
-    for (const call of calls) {
-      ordered.push({ call, groupKey: key });
+    let end = index;
+    while (end < rows.length && rows[end].conversationId === conversationId) {
+      end += 1;
     }
+    const block = rows.slice(index, end);
+    const summary = blockCostSummary(block);
+    for (let i = index; i < end; i += 1) {
+      annotations[i] = {
+        blockKey: index,
+        blockCount: block.length,
+        blockSummary: summary,
+      };
+    }
+    index = end;
   }
-  return { ordered, counts, summaries };
+  return annotations;
 }
 
 function formatTokens(value: number): string {
@@ -231,19 +226,18 @@ export function UsageHistoryCard() {
 
   const recent = usage.data?.recent ?? [];
   const tabRows = recent.filter((call) => call.product === tab);
-  // Group by conversation, then page over the flattened (conversation-contiguous)
-  // list so a conversation reads as one block. A group that spans a page boundary
-  // re-shows its header on the next page.
-  const { ordered, counts, summaries } = groupRowsByConversation(tabRows);
+  // Annotate in the server's chronological order so conversations group in place
+  // and individual (no-conversation) calls stay interleaved between them.
+  const annotations = annotateRows(tabRows);
 
   const totalPages = Math.min(
     MAX_PAGES,
-    Math.max(1, Math.ceil(ordered.length / ROWS_PER_PAGE)),
+    Math.max(1, Math.ceil(tabRows.length / ROWS_PER_PAGE)),
   );
-  // Clamp in case rows shrank (refetch / tab switch) below the current page.
+  // Clamp in case rows shrank (refetch / tab change) below the current page.
   const currentPage = Math.min(page, totalPages);
   const pageStart = (currentPage - 1) * ROWS_PER_PAGE;
-  const pageRows = ordered.slice(pageStart, pageStart + ROWS_PER_PAGE);
+  const pageRows = tabRows.slice(pageStart, pageStart + ROWS_PER_PAGE);
 
   const selectTab = (next: TabKey) => {
     setTab(next);
@@ -257,11 +251,11 @@ export function UsageHistoryCard() {
   };
 
   const focusRow = (index: number) => {
-    const row = pageRows[index];
-    if (!row) {
+    const call = pageRows[index];
+    if (!call) {
       return;
     }
-    setExpanded(callKey(row.call));
+    setExpanded(callKey(call));
     rowRefs.current[index]?.focus();
   };
 
@@ -274,7 +268,7 @@ export function UsageHistoryCard() {
       focusRow(Math.max(index - 1, 0));
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      const key = callKey(pageRows[index].call);
+      const key = callKey(pageRows[index]);
       setExpanded(expanded === key ? null : key);
     } else if (event.key === "Escape") {
       setExpanded(null);
@@ -305,7 +299,11 @@ export function UsageHistoryCard() {
           ))}
         </div>
 
-        {tabRows.length > 0 ? (
+        {tabRows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No {tab === "app" ? "app" : "Vision API"} calls yet.
+          </p>
+        ) : (
           <Table>
             <TableHeader>
               <TableRow>
@@ -317,32 +315,37 @@ export function UsageHistoryCard() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {pageRows.map((row, index) => {
-                const call = row.call;
+              {pageRows.map((call, index) => {
+                const globalIndex = pageStart + index;
+                const annotation = annotations[globalIndex];
+                const conversationId = call.conversationId;
+                const inConversation = annotation.blockKey !== -1;
                 const key = callKey(call);
                 const isOpen = expanded === key;
                 // Header before the first row of each conversation block (and at
-                // the page top, since a group can carry over from the prior page).
-                // No-conversation calls render as plain rows with no header.
-                const startsGroup =
-                  row.groupKey !== NO_CONVERSATION &&
+                // the page top, since a block can carry over from the prior page).
+                // Background rows render flat, in place, with no header.
+                const prevAnnotation =
+                  index === 0 ? null : annotations[globalIndex - 1];
+                const startsBlock =
+                  inConversation &&
                   (index === 0 ||
-                    pageRows[index - 1].groupKey !== row.groupKey);
-                const groupCount = counts.get(row.groupKey) ?? 1;
+                    prevAnnotation?.blockKey !== annotation.blockKey);
                 return (
-                  <Fragment key={`${key}-${pageStart + index}`}>
-                    {startsGroup ? (
+                  <Fragment key={`${key}-${globalIndex}`}>
+                    {startsBlock && conversationId !== null ? (
                       <TableRow className="hover:bg-transparent">
                         <TableCell
                           className="bg-muted/40 py-2 text-xs font-medium text-muted-foreground"
                           colSpan={5}
                         >
                           <div className="flex items-center justify-between gap-2">
-                            <span>{conversationLabel(row.groupKey)}</span>
+                            <span>{conversationLabel(conversationId)}</span>
                             <span className="tabular-nums">
-                              {groupCount} {groupCount === 1 ? "call" : "calls"}
+                              {annotation.blockCount}{" "}
+                              {annotation.blockCount === 1 ? "call" : "calls"}
                               {" · "}
-                              {summaries.get(row.groupKey)}
+                              {annotation.blockSummary}
                             </span>
                           </div>
                         </TableCell>
@@ -361,7 +364,9 @@ export function UsageHistoryCard() {
                       onKeyDown={(event) => onRowKeyDown(event, index)}
                       tabIndex={0}
                     >
-                      <TableCell>
+                      {/* Indent a conversation's calls so they read as nested
+                          under their header; background calls stay flush. */}
+                      <TableCell className={cn(inConversation && "pl-8")}>
                         {new Date(call.createdAt).toLocaleString()}
                       </TableCell>
                       <TableCell>{call.requestKind}</TableCell>
@@ -393,10 +398,6 @@ export function UsageHistoryCard() {
               })}
             </TableBody>
           </Table>
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            No {tab === "app" ? "app" : "Vision API"} calls yet.
-          </p>
         )}
 
         {totalPages > 1 ? (
