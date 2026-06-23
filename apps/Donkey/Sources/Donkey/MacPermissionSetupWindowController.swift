@@ -140,11 +140,9 @@ final class MacPermissionSetupModel: ObservableObject {
         completed?()
     }
 
-    #if DEBUG
     func skipForNow() {
         completed?()
     }
-    #endif
 
     private func rememberRequested(_ kind: MacPermissionKind) {
         requestedKinds.insert(kind)
@@ -266,24 +264,13 @@ private struct MacPermissionSetupView: View {
                 }
             }
 
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "lock.shield")
-                    .foregroundStyle(.secondary)
-                Text("Donkey uses these permissions only for user-requested tasks and guarded local-app workflows.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
             Spacer(minLength: 0)
 
             HStack(spacing: 12) {
-                #if DEBUG
                 Button("Skip for now") {
                     model.skipForNow()
                 }
                 .controlSize(.large)
-                #endif
 
                 Spacer()
 
@@ -390,9 +377,9 @@ private struct MacPermissionRowView: View {
         case .granted:
             return "Ready"
         case .notDetermined:
-            return "Needed"
+            return row.kind.isRequired ? "Needed" : "Optional"
         case .denied:
-            return "Needs Settings"
+            return row.kind.isRequired ? "Needs Settings" : "Optional"
         }
     }
 
@@ -401,9 +388,9 @@ private struct MacPermissionRowView: View {
         case .granted:
             return .green
         case .notDetermined:
-            return .orange
+            return row.kind.isRequired ? .orange : .secondary
         case .denied:
-            return .red
+            return row.kind.isRequired ? .red : .secondary
         }
     }
 

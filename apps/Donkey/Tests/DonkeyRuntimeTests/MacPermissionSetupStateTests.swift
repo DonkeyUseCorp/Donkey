@@ -46,4 +46,18 @@ struct MacPermissionSetupStateTests {
             .microphone: .granted
         ]))
     }
+
+    @Test
+    func microphoneIsOptionalAndDoesNotBlockContinue() {
+        let resolver = MacPermissionSetupStateResolver()
+
+        #expect(!MacPermissionKind.microphone.isRequired)
+        #expect(!MacPermissionKind.requiredSetup.contains(.microphone))
+        // Required permissions granted, microphone denied — the user can still continue.
+        #expect(resolver.allRequiredPermissionsGranted(statuses: [
+            .accessibility: .granted,
+            .screenRecording: .granted,
+            .microphone: .denied
+        ]))
+    }
 }

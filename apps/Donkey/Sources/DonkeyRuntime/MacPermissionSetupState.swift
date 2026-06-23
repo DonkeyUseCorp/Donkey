@@ -9,11 +9,26 @@ public enum MacPermissionKind: String, CaseIterable, Codable, Equatable, Hashabl
         rawValue
     }
 
+    /// Every permission shown in the setup window.
     public static let coreSetup: [MacPermissionKind] = [
         .accessibility,
         .screenRecording,
         .microphone
     ]
+
+    /// The subset that must be granted before the user can continue. Microphone backs only the
+    /// optional voice input, so it never blocks setup — and macOS keeps reporting it `.denied` to a
+    /// running process until relaunch, which would otherwise wall the user in here forever.
+    public static let requiredSetup: [MacPermissionKind] = coreSetup.filter(\.isRequired)
+
+    public var isRequired: Bool {
+        switch self {
+        case .accessibility, .screenRecording:
+            return true
+        case .microphone:
+            return false
+        }
+    }
 
     public var title: String {
         switch self {
@@ -123,7 +138,7 @@ public struct MacPermissionSetupStateResolver: Sendable {
 
     public func allRequiredPermissionsGranted(
         statuses: [MacPermissionKind: MacPermissionAuthorizationStatus],
-        requiredKinds: [MacPermissionKind] = MacPermissionKind.coreSetup
+        requiredKinds: [MacPermissionKind] = MacPermissionKind.requiredSetup
     ) -> Bool {
         requiredKinds.allSatisfy { statuses[$0] == .granted }
     }
