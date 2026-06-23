@@ -964,11 +964,12 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             ?? (completed ? "Done." : "I tried operating \(appName) but couldn't confirm the goal was finished.")
 
         // Stream the assistant's final reply token-by-token into the notch (the chin and the open task
-        // row) when the turn produced a real text answer. It is re-composed from the harness's drafted
+        // row) whenever the turn produced a real text answer. It is re-composed from the harness's drafted
         // answer so it stays grounded; the streamed text becomes the authoritative reply, and a failed
         // or empty stream falls back to the draft already computed above. Only conversational answers
-        // stream — an action that merely finished ("Done.") has no message worth typing out.
-        if completed, let conversationMessage, let answerStream {
+        // stream — an action that merely finished ("Done.") has no message worth typing out. A respond-only
+        // turn (e.g. a plain "hi") never reaches `completed`, so gate on the answer itself, not completion.
+        if let conversationMessage, let answerStream {
             let prompt = Self.finalAnswerPrompt(goal: command, draftAnswer: conversationMessage)
             if let streamed = await textGenerator.generateStreaming(prompt, onDelta: answerStream),
                !streamed.isEmpty {
@@ -989,7 +990,16 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             agentID: agentID,
             reason: "User query harness run returned without a terminal status"
         )
-        let threadStatus = Self.userQueryStatus(forHarness: finalStatus)
+        // A turn whose terminal step was talking to the user (conversation.respond) is a conversational
+        // back-and-forth, not an app action — surface it as `.chatting` so the reply lands in the chin and
+        // reads as a message. We key off the typed tool name, never the user's words. This matters because
+        // a respond-only turn (a plain "hi") leaves the agent runnable; the defensive `timeOutIfRunnable`
+        // above flips it to `.timedOut`, which the chin doesn't surface — so the reply would otherwise be
+        // dropped. When the run actually finished an action, keep the runtime's terminal status.
+        let answeredConversationally = conversationMessage != nil
+        let threadStatus: UserQueryConversationStatus = (answeredConversationally && !completed)
+            ? .chatting
+            : Self.userQueryStatus(forHarness: finalStatus)
         // A run that failed safe for lack of credits carries a typed flag the notch reads to show the
         // reload CTA banner (instead of inferring the credit state from the narration text).
         var responseMetadata = [
@@ -999,7 +1009,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             responseMetadata[UserQueryConversationMetadataKey.creditReloadRequired] = "true"
         }
         let result = UserQueryCommandHandlingResult(
-            status: completed ? .completed : .failedSafe,
+            status: (completed || answeredConversationally) ? .completed : .failedSafe,
             threadStatus: threadStatus,
             decision: decision,
             summary: response,

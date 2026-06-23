@@ -461,7 +461,8 @@ public struct UserQueryNotchStatusView: View {
     /// the chin until the user expands. Otherwise running tasks (newest first) rotate round-robin — the
     /// clock is anchored to the newest task's start, so a freshly added task shows first (the view
     /// re-renders on the task change) and then yields to the others. When nothing is running, the most
-    /// recent undismissed completion keeps narrating its result instead of leaving the chin empty.
+    /// recent undismissed result — a finished action or a conversational reply — keeps narrating instead
+    /// of leaving the chin empty.
     private func rotatingChinTask(at date: Date) -> UserQueryConversation? {
         if let errored = surfacedTasks.first(where: { $0.status == .failed }) {
             return errored
@@ -473,7 +474,9 @@ public struct UserQueryNotchStatusView: View {
         }
         let running = surfacedTasks.filter { $0.status == .running }
         guard !running.isEmpty else {
-            return surfacedTasks.first { $0.status == .completed }
+            // With nothing running, hold the chin on the most recent result so it keeps narrating —
+            // a finished action's outcome or a conversational reply (`.chatting`), whichever is newest.
+            return surfacedTasks.first { $0.status == .completed || $0.status == .chatting }
         }
         let anchor = running.map(\.createdAt).max() ?? date
         let slot = Int(max(0, date.timeIntervalSince(anchor)) / Self.chinRotationInterval)

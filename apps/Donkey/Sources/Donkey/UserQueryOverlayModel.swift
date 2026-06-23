@@ -861,8 +861,9 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     }
 
     /// The tasks the collapsed notch keeps surfaced as floating pointers: anything running, anything
-    /// blocked on the user (a clarification, a review, or a permission), plus terminal tasks (completed
-    /// or failed) the user hasn't dismissed yet by expanding the notch. A failure — like an auth error —
+    /// blocked on the user (a clarification, a review, or a permission), plus terminal tasks (a finished
+    /// action, a conversational reply, or a failure) the user hasn't dismissed yet by expanding the notch.
+    /// A failure — like an auth error —
     /// holds the chin until acknowledged just as a completion does; a waiting task keeps its pointer lit
     /// and pulsing (and its question in the chin) until the user answers.
     var notchSurfacedTasks: [UserQueryConversation] {
@@ -879,7 +880,8 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         status.isAwaitingUserResponse || status == .waitingForPermission
     }
 
-    /// Marks every currently-terminal task (completed or failed) as seen so it stops surfacing in the
+    /// Marks every currently-terminal task (a finished action, a conversational reply, or a failure) as
+    /// seen so it stops surfacing in the
     /// collapsed notch. Called when the notch expands — the user is now looking at the full list. The
     /// flag is written to the task store, so the dismissal sticks across relaunches.
     func acknowledgeSurfacedTasks() {
@@ -892,7 +894,9 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     }
 
     private static func isSurfacedTerminalStatus(_ status: UserQueryConversationStatus) -> Bool {
-        status == .completed || status == .failed
+        // A conversational reply (`.chatting`) surfaces like a completion: the back-and-forth has to land
+        // in the chin until the user acknowledges it by expanding, the same as a finished action.
+        status == .completed || status == .chatting || status == .failed
     }
 
     private static func isSeen(_ task: UserQueryConversation) -> Bool {
