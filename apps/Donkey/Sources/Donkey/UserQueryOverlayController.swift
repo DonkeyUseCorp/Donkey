@@ -1013,7 +1013,8 @@ final class UserQueryOverlayController {
             chinHeight: 0,
             needsLogin: model.needsLogin
         )
-        let chinTextWidth = widthProbe.layout.collapsedSurfaceFrame.width - Self.statusChinHorizontalInset
+        let collapsedWidth = widthProbe.layout.collapsedSurfaceFrame.width
+        let chinTextWidth = collapsedWidth - Self.statusChinHorizontalInset
 
         return NotchMetrics(
             voidWidth: voidWidth,
@@ -1023,8 +1024,34 @@ final class UserQueryOverlayController {
             isHostExpanded: isStatusHostExpanded,
             screenWidth: screen.frame.width,
             chinHeight: statusChinHeight(textWidth: chinTextWidth),
+            collapsedTopRowExtraHeight: statusCollapsedTopRowExtraHeight(
+                collapsedWidth: collapsedWidth,
+                hasNotch: hasNotch
+            ),
             needsLogin: model.needsLogin
         )
+    }
+
+    /// On a no-notch display the collapsed line renders inline in the top row (a real notch routes it into
+    /// the chin band instead). It shows the same rotating surfaced-task line the chin does, so size the
+    /// pill to the tallest line that can rotate through — the max wrapped-line count across the surfaced
+    /// tasks, or the headline fallback when nothing is surfaced — and grow by one line-height when that is
+    /// two lines. The text width subtracts the pill's pointer lane and gutter, measured narrow so the
+    /// prediction never under-counts and clips. A real notch returns 0 — its second line lives in
+    /// `statusChinHeight`.
+    private func statusCollapsedTopRowExtraHeight(collapsedWidth: CGFloat, hasNotch: Bool) -> CGFloat {
+        guard !hasNotch else { return 0 }
+        let textWidth = collapsedWidth - Self.statusCollapsedTopRowHorizontalReserve
+        let headline = UserQueryNotchStatusView.collapsedHeadline(
+            tasks: model.notchTasks,
+            state: model.promptState
+        )
+        let lines = model.notchSurfacedTasks.reduce(
+            Self.chinLineCount(for: headline, width: textWidth)
+        ) { partial, task in
+            max(partial, Self.chinLineCount(for: task.chinDisplayText, width: textWidth))
+        }
+        return lines >= 2 ? Self.statusChinLineHeight : 0
     }
 
     /// The collapsed chin hangs below the notch whenever a task is surfaced — running, a completion, or
@@ -1073,6 +1100,11 @@ final class UserQueryOverlayController {
     private static let statusChinLineHeight: CGFloat = 15
     private static let statusChinBottomMargin: CGFloat = 8
     private static let statusChinHorizontalInset: CGFloat = 24
+    /// Horizontal chrome the no-notch collapsed top row spends before its text: the 14pt side paddings
+    /// (28), the three 7pt HStack gaps (21), the 14pt pointer, and the widest gutter slot — the running
+    /// clock (~46). Subtracting all of it leaves the narrowest width the text ever gets, so a wrap
+    /// predicted here always holds when the gutter is smaller, never clipping the grown second line.
+    private static let statusCollapsedTopRowHorizontalReserve: CGFloat = 109
 
     private var statusExpandedContentHeight: CGFloat {
         // Logged out: the expanded login is a short wide bar (label + Login button), not the full panel.

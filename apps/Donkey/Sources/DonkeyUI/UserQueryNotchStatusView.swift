@@ -379,30 +379,48 @@ public struct UserQueryNotchStatusView: View {
     }
 
     private var fullWidthCollapsedContent: some View {
-        HStack(spacing: 7) {
-            pointerCluster(size: 14)
-                // While a task waits on the user, its pointer stays lit and pulses for attention — the
-                // same cue the expanded row gives — so the blocked thread reads at a glance.
-                .modifier(AttentionPulse(active: isPrimaryWaitingOnUser))
+        // A no-notch display has no camera void to route around, so the line lives inline here rather
+        // than in a chin band — but it reads the very same rotating line the chin does (the surfaced
+        // conversation's latest line), so both layouts narrate identically. It gets the same two-line
+        // budget; the pill grows by a line (see the controller's `statusCollapsedTopRowExtraHeight`)
+        // when that line wraps.
+        TimelineView(.periodic(from: Self.chinRotationAnchor, by: Self.chinRotationInterval)) { context in
+            let speaker = rotatingChinTask(at: context.date)
+            HStack(spacing: 7) {
+                pointerCluster(size: 14)
+                    // While a task waits on the user, its pointer stays lit and pulses for attention — the
+                    // same cue the expanded row gives — so the blocked thread reads at a glance.
+                    .modifier(AttentionPulse(active: isPrimaryWaitingOnUser))
 
-            Text(collapsedHeadline)
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(Color.white.opacity(0.92))
-                .lineLimit(1)
-                .truncationMode(.tail)
+                Text(collapsedTopRowText(speaker: speaker))
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(Color.white.opacity(0.92))
+                    .lineLimit(2)
+                    .truncationMode(.tail)
 
-            Spacer(minLength: 0)
+                Spacer(minLength: 0)
 
-            // The gutter carries the live elapsed clock while a task runs, then the waiting-on-user "!"
-            // glyph (or the update cloud) — the same indicators a void-aware host raises.
-            collapsedRightSlot
+                // The gutter carries the live elapsed clock while a task runs, then the waiting-on-user "!"
+                // glyph (or the update cloud) — the same indicators a void-aware host raises.
+                collapsedRightSlot
+            }
+            .padding(.horizontal, max(10, layout.contentHorizontalInset))
+            .frame(
+                width: collapsedSurfaceWidth,
+                height: collapsedSurfaceHeight,
+                alignment: .center
+            )
         }
-        .padding(.horizontal, max(10, layout.contentHorizontalInset))
-        .frame(
-            width: collapsedSurfaceWidth,
-            height: collapsedSurfaceHeight,
-            alignment: .center
-        )
+    }
+
+    /// The line the no-notch collapsed row shows: the rotating surfaced task's latest line, identical to
+    /// the chin band. Only when nothing is surfaced does it fall back to the headline (e.g. "Thinking",
+    /// or a freshly typed prompt that has no conversation line yet).
+    private func collapsedTopRowText(speaker: UserQueryConversation?) -> String {
+        if let speaker {
+            return chinText(for: speaker)
+        }
+        return collapsedHeadline
     }
 
     private var voidAwareCollapsedContent: some View {
@@ -804,6 +822,10 @@ public struct UserQueryNotchStatusView: View {
     /// `isAwaitingUserResponse` (which gates the Reply button): a permission request also waits on the
     /// user and pulses for attention, but is answered with Approve / Deny rather than Reply.
     private func isWaitingOnUser(_ task: UserQueryConversation) -> Bool {
+        Self.isWaitingOnUser(task)
+    }
+
+    static func isWaitingOnUser(_ task: UserQueryConversation) -> Bool {
         task.status.isAwaitingUserResponse || task.status == .waitingForPermission
     }
 
@@ -1197,19 +1219,23 @@ public struct UserQueryNotchStatusView: View {
     }
 
     private var taskTitle: String {
-        if let primaryTask {
-            return primaryTask.title
+        Self.taskTitle(tasks: tasks, state: state)
+    }
+
+    /// The notch's headline text. Factored to a static so the controller can measure the exact string the
+    /// pill renders when sizing the no-notch collapsed row for a wrapped second line.
+    static func taskTitle(tasks: [UserQueryConversation], state: UserQueryState) -> String {
+        if let primary = tasks.first {
+            return primary.title
         }
 
-        if let taskDisplayText {
-            return taskDisplayText
+        if let display = taskDisplayText(state: state) {
+            return display
         }
 
         switch state.leadingSignalLevel {
-        case .idle:
+        case .idle, .ready:
             return "Idle"
-        case .ready:
-            return "Ready"
         case .thinking:
             return "Thinking"
         }
@@ -1219,11 +1245,15 @@ public struct UserQueryNotchStatusView: View {
     /// user, the notch reads back the agent's question (carried in `detail`) instead, so the pill shows
     /// what the agent is asking rather than echoing what the user originally typed.
     private var collapsedHeadline: String {
-        if let primaryTask, isWaitingOnUser(primaryTask) {
-            let question = primaryTask.detail.trimmingCharacters(in: .whitespacesAndNewlines)
+        Self.collapsedHeadline(tasks: tasks, state: state)
+    }
+
+    public static func collapsedHeadline(tasks: [UserQueryConversation], state: UserQueryState) -> String {
+        if let primary = tasks.first, isWaitingOnUser(primary) {
+            let question = primary.detail.trimmingCharacters(in: .whitespacesAndNewlines)
             if !question.isEmpty { return question }
         }
-        return taskTitle
+        return taskTitle(tasks: tasks, state: state)
     }
 
     /// Whether the surfaced task is blocked on the user — drives the collapsed pointer's attention pulse.
@@ -1242,10 +1272,8 @@ public struct UserQueryNotchStatusView: View {
         }
 
         switch state.leadingSignalLevel {
-        case .idle:
+        case .idle, .ready:
             return hasTaskDisplayText ? "Needs attention" : "Idle"
-        case .ready:
-            return "Ready"
         case .thinking:
             return "Thinking"
         }
@@ -1350,6 +1378,10 @@ public struct UserQueryNotchStatusView: View {
     }
 
     private var taskDisplayText: String? {
+        Self.taskDisplayText(state: state)
+    }
+
+    static func taskDisplayText(state: UserQueryState) -> String? {
         let text = UserQueryCopy.normalizedDisplayText(state.promptText)
         guard UserQueryCopy.isTaskDisplayText(text) else {
             return nil
@@ -1359,7 +1391,7 @@ public struct UserQueryNotchStatusView: View {
     }
 
     private var isResting: Bool {
-        state.leadingSignalLevel == .idle && !hasTaskDisplayText
+        (state.leadingSignalLevel == .idle || state.leadingSignalLevel == .ready) && !hasTaskDisplayText
     }
 
     private var accentColor: Color {

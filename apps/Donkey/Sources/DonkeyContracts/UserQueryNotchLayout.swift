@@ -85,6 +85,10 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
     public var screenWidth: CGFloat
     /// Chin band below the collapsed notch row while a task streams (0 otherwise).
     public var chinHeight: CGFloat
+    /// Extra height for a wrapped second line of the no-notch collapsed headline. A real notch routes the
+    /// line into a chin band (`chinHeight`); a no-notch display renders it inline in the top row, so when
+    /// it wraps the pill grows by this instead. 0 on a real notch, and 0 when the line fits one row.
+    public var collapsedTopRowExtraHeight: CGFloat
     /// Logged out: render the login call-to-action instead of the task surface. Collapsed shows just
     /// the "Login to use Donkey" line; expanding reveals a wide, short bar with the Login button.
     public var needsLogin: Bool
@@ -105,6 +109,7 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
         isHostExpanded: Bool,
         screenWidth: CGFloat,
         chinHeight: CGFloat = 0,
+        collapsedTopRowExtraHeight: CGFloat = 0,
         needsLogin: Bool = false
     ) {
         self.voidWidth = voidWidth
@@ -114,6 +119,7 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
         self.isHostExpanded = isHostExpanded
         self.screenWidth = screenWidth
         self.chinHeight = chinHeight
+        self.collapsedTopRowExtraHeight = collapsedTopRowExtraHeight
         self.needsLogin = needsLogin
     }
 
@@ -199,9 +205,12 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
     }
 
     /// The band below the collapsed notch row: the login call-to-action when logged out (real notch
-    /// only — no-notch displays render it inline), otherwise the streaming chin.
+    /// only — no-notch displays render it inline), the streaming chin on a real notch, or — on a no-notch
+    /// display — the room for a wrapped second line of the inline headline.
     private var collapsedExtraHeight: CGFloat {
-        guard needsLogin else { return effectiveChinHeight }
+        guard needsLogin else {
+            return canRenderTextInTopRow ? collapsedTopRowExtraHeight : effectiveChinHeight
+        }
         return canRenderTextInTopRow ? 0 : Self.loginCollapsedBandHeight
     }
 

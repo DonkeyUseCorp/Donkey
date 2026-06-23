@@ -57,4 +57,41 @@ struct UserQueryNotchMetricsTests {
                 UserQueryNotchMetrics.fallbackVoidHeight
         )
     }
+
+    @Test
+    func noVoidCollapsedRowGrowsForWrappedSecondLine() {
+        func collapsedHeight(extra: CGFloat) -> CGFloat {
+            UserQueryNotchMetrics(
+                voidWidth: 0,
+                voidHeight: 0,
+                expandedContentHeight: UserQueryNotchMetrics.expandedTaskContentHeight,
+                isExpanded: false,
+                isHostExpanded: false,
+                screenWidth: UserQueryNotchMetrics.defaultScreenWidth,
+                collapsedTopRowExtraHeight: extra
+            ).layout.collapsedSurfaceFrame.height
+        }
+
+        // The inline headline's second line adds exactly its line-height to the collapsed pill.
+        #expect(collapsedHeight(extra: 15) == collapsedHeight(extra: 0) + 15)
+    }
+
+    @Test
+    func physicalVoidCollapsedRowIgnoresTopRowExtraHeight() {
+        // A real notch routes the second line into the chin band, so the inline top-row growth never
+        // applies — the collapsed pill stays the single-row height regardless of the value passed.
+        func collapsedHeight(extra: CGFloat) -> CGFloat {
+            UserQueryNotchMetrics(
+                voidWidth: UserQueryNotchMetrics.fallbackVoidWidth,
+                voidHeight: UserQueryNotchMetrics.fallbackVoidHeight,
+                expandedContentHeight: UserQueryNotchMetrics.expandedTaskContentHeight,
+                isExpanded: false,
+                isHostExpanded: false,
+                screenWidth: UserQueryNotchMetrics.defaultScreenWidth,
+                collapsedTopRowExtraHeight: extra
+            ).layout.collapsedSurfaceFrame.height
+        }
+
+        #expect(collapsedHeight(extra: 15) == collapsedHeight(extra: 0))
+    }
 }
