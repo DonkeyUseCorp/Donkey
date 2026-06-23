@@ -59,8 +59,9 @@ function formatCallCost(call: RecentCall): string {
   return formatCostValue(Number.parseFloat(call.costCredits));
 }
 
-// Rows with no conversation (background warming, pre-grouping rows) collect under
-// one bucket. The sentinel can't collide with a real conversation id.
+// Calls with no conversation (the always-on UI-understanding parses) are bucketed
+// under one sentinel so they stay contiguous, but they render as plain rows with
+// no group header. The sentinel can't collide with a real conversation id.
 const NO_CONVERSATION = "__none__";
 
 function conversationKey(call: RecentCall): string {
@@ -68,9 +69,6 @@ function conversationKey(call: RecentCall): string {
 }
 
 function conversationLabel(key: string): string {
-  if (key === NO_CONVERSATION) {
-    return "Background / no conversation";
-  }
   // Conversation ids are long opaque strings; a short prefix is enough to tell
   // groups apart without dominating the row.
   return `Conversation ${key.slice(0, 8)}`;
@@ -325,9 +323,11 @@ export function UsageHistoryCard() {
                 const isOpen = expanded === key;
                 // Header before the first row of each conversation block (and at
                 // the page top, since a group can carry over from the prior page).
+                // No-conversation calls render as plain rows with no header.
                 const startsGroup =
-                  index === 0 ||
-                  pageRows[index - 1].groupKey !== row.groupKey;
+                  row.groupKey !== NO_CONVERSATION &&
+                  (index === 0 ||
+                    pageRows[index - 1].groupKey !== row.groupKey);
                 const groupCount = counts.get(row.groupKey) ?? 1;
                 return (
                   <Fragment key={`${key}-${pageStart + index}`}>
