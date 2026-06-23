@@ -123,7 +123,15 @@ struct HarnessEvalFixture: Sendable, CustomStringConvertible {
             at: root,
             includingPropertiesForKeys: [.isDirectoryKey]
         )) ?? []
-        return dirs.compactMap(load).sorted { $0.name < $1.name }
+        var fixtures = dirs.compactMap(load).sorted { $0.name < $1.name }
+        // Optional single-fixture focus: `DONKEY_EVAL_ONLY=korean-clip-overlay` runs just the fixtures whose
+        // name contains that substring, so one scenario can be exercised without the whole suite hitting the
+        // real model. Empty/unset runs everything.
+        if let only = ProcessInfo.processInfo.environment["DONKEY_EVAL_ONLY"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !only.isEmpty {
+            fixtures = fixtures.filter { $0.name.localizedCaseInsensitiveContains(only) }
+        }
+        return fixtures
     }
 
     private static func load(_ dir: URL) -> HarnessEvalFixture? {
