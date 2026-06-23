@@ -59,20 +59,17 @@ public struct UserQueryConversation: Codable, Equatable, Identifiable, Sendable 
 }
 
 public extension UserQueryConversation {
-    /// Metadata flag set while the assistant's final reply is streaming in token-by-token, so the chin
-    /// switches from echoing the prompt to showing the growing answer even though the task is still
-    /// running. Cleared implicitly once the task reaches a terminal status (which shows `detail` anyway).
-    static let streamingAnswerMetadataKey = "notch.streamingAnswer"
-
     /// The single line the collapsed chin shows for this task: the user's prompt while it runs, the
     /// assistant's reply as it streams in (and once answered, its `detail`). The chin renderer and the
     /// chin-band height measurement both read this, so the band is always sized to the exact line it
     /// renders — a running task can't show a wrapped prompt inside a band measured for a shorter seed.
     var chinDisplayText: String {
         if status == .running {
-            // Once the reply starts streaming, show the growing answer instead of the prompt.
-            if metadata[Self.streamingAnswerMetadataKey] == "true",
-               !detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // While the agent works, the chin narrates its latest step — each planner narration and the
+            // streaming final answer land in `detail`. Show that the moment it advances past the initial
+            // "Thinking" seed; the user's prompt is only the first frame, before any narration arrives.
+            let detailText = detail.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !detailText.isEmpty, detailText != UserQueryActivity.Kind.working.label {
                 return detail
             }
             let prompt = commandText.trimmingCharacters(in: .whitespacesAndNewlines)

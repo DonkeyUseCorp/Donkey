@@ -75,15 +75,19 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     /// so an acknowledged failure stays dismissed across relaunches instead of re-surfacing every launch.
     private static let seenMetadataKey = "notch.seen"
 
-    /// Clear the per-run metadata flags a task carries into a fresh running run: the "seen" dismissal (so
-    /// its next terminal state re-surfaces in the collapsed notch) and the streaming-answer flag (so a
-    /// streamed reply on the new run replaces the previous answer instead of appending to it). Applied at
-    /// every stopped→running transition — both the in-place resume (`updateTask`) and the matched-resume
-    /// seed (`taskForSubmittedCommand`), which bypasses `updateTask`.
+    /// Clear the "seen" dismissal a task carries into a fresh running run, so its next terminal state
+    /// re-surfaces in the collapsed notch. Applied at every stopped→running transition — both the in-place
+    /// resume (`updateTask`) and the matched-resume seed (`taskForSubmittedCommand`), which bypasses
+    /// `updateTask`. The same transitions also reset `conversationsStreamingAnswer`.
     private static func clearRunMetadata(_ metadata: inout [String: String]) {
         metadata[seenMetadataKey] = nil
-        metadata[UserQueryConversation.streamingAnswerMetadataKey] = nil
     }
+
+    /// Conversation IDs whose final answer is mid-stream. Tracks first-vs-subsequent answer chunk so the
+    /// first chunk replaces the last step narration and the rest accumulate onto it. In-memory only —
+    /// streaming is a live-render concern, not durable conversation state — and reset alongside
+    /// `clearRunMetadata` at every stopped→running transition so a new run's reply replaces the old one.
+    private var conversationsStreamingAnswer: Set<String> = []
 
     private var lastActiveTaskID: String?
     /// The task/spawn the in-flight Gemini Live turn reports into, so the user
@@ -1275,6 +1279,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             // thread keeps its stale "seen" (its next terminal state never re-surfaces) and "streaming
             // answer" flag (the new streamed reply appends onto the old answer).
             Self.clearRunMetadata(&task.metadata)
+            conversationsStreamingAnswer.remove(task.id)
             notchAccentIndex = UserQueryAccentPalette.normalizedIndex(task.accentIndex)
             prependTask(task)
             return task
@@ -1395,11 +1400,10 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     /// left the running state (a late chunk after completion must not reopen the row's status line).
     private func appendStreamedAnswer(conversationID: String, delta: String, spawnID: String?) {
         guard let task = task(withID: conversationID), task.status == .running else { return }
-        let isStreaming = task.metadata[UserQueryConversation.streamingAnswerMetadataKey] == "true"
+        let isStreaming = conversationsStreamingAnswer.contains(conversationID)
         let newDetail = isStreaming ? task.detail + delta : delta
-        var metadata = task.metadata
-        metadata[UserQueryConversation.streamingAnswerMetadataKey] = "true"
-        updateTask(id: conversationID, detail: newDetail, metadata: metadata)
+        conversationsStreamingAnswer.insert(conversationID)
+        updateTask(id: conversationID, detail: newDetail)
         if let spawnID {
             updateSpawn(id: spawnID, label: newDetail)
         }
@@ -1516,6 +1520,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         // which re-pass the streaming flag) don't keep resetting it mid-run.
         if status == .running, !wasRunning {
             Self.clearRunMetadata(&task.metadata)
+            conversationsStreamingAnswer.remove(id)
             task.createdAt = Date()
         }
         task.updatedAt = Date()
