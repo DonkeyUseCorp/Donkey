@@ -176,16 +176,24 @@ public struct AppHarnessGenericLifecycle: Sendable {
             return await coordinator.resume(agentID: agentID, reason: reason)
         }
 
-        // System (TCC) permission gate: the user approved in the notch, so NOW trigger the macOS
-        // permission request. Only on a successful grant do we resume the loop to re-run the tool.
+        // System (TCC) permission gate raised by an executor that named the permission directly (e.g.
+        // Automation for a target app): the user approved in the notch, so NOW trigger the macOS
+        // request. Only once it's granted do we resume the loop to re-run the tool.
         if continuation.metadata["gate"] == "systemPermission" {
             guard let permission = Self.systemPermission(from: continuation.metadata) else { return nil }
-            let granted = await SystemPermissionCoordinator.request(permission)
-            guard granted else { return nil }
+            guard await HarnessSystemPermissionBridge.grantBlocking(permission) else { return nil }
             return await coordinator.resume(agentID: agentID, reason: reason)
         }
 
         guard !continuation.missingPermissions.isEmpty else { return nil }
+        // Capability gate raised by the registry because a tool needs a capability whose macOS
+        // permission isn't held. The user approved, so request each backing system permission now;
+        // only mark the capability granted (and resume) once macOS actually grants it, so the re-run
+        // succeeds instead of hitting the same denial at the syscall.
+        for permission in continuation.missingPermissions {
+            guard let system = HarnessSystemPermissionBridge.systemPermission(for: permission) else { continue }
+            guard await HarnessSystemPermissionBridge.grantBlocking(system) else { return nil }
+        }
         return await coordinator.grantPermissions(
             agentID: agentID,
             permissions: Set(continuation.missingPermissions),

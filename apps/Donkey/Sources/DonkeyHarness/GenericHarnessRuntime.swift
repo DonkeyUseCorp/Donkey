@@ -375,7 +375,8 @@ public struct GenericHarnessRuntime: Sendable {
             guard let stoppedTask = await coordinator.waitForPermission(
                 agentID: agentID,
                 missingPermissions: result.missingPermissions,
-                pendingToolCall: call
+                pendingToolCall: call,
+                reason: HarnessPermission.permissionRequestSummary(for: result.missingPermissions)
             ) else {
                 return nil
             }

@@ -139,7 +139,7 @@ public actor HarnessToolRegistry {
                 callID: call.id,
                 toolName: call.name,
                 status: .permissionDenied,
-                summary: "Tool requires permission before it can run.",
+                summary: HarnessPermission.permissionRequestSummary(for: missingPermissions),
                 missingPermissions: missingPermissions,
                 metadata: [
                     "reason": "missingPermission",

@@ -4,6 +4,8 @@ Every macOS permission Donkey needs while a task is running is asked for in the 
 
 **The one rule:** Donkey never asks macOS for a permission it doesn't already hold until the user has approved it in the notch. A task that needs one stops and shows an Approve / Deny banner; only on Approve does the system dialog appear. The microphone is the lone exception — clicking the mic button is itself the approval, and macOS's dialog follows from there.
 
+First-run setup is a convenience, not a prerequisite: every permission is optional there and can be skipped. Whatever wasn't granted is asked for in the conversation, through this same gate, the first time a tool actually needs it.
+
 ## How It Works
 
 Two decisions stack. First the user decides whether Donkey may ask macOS at all; only then does macOS decide the actual grant.
@@ -55,8 +57,8 @@ Each permission Donkey can need while working, and how it is kept behind the gat
 | --- | --- | --- |
 | Controlling another app | running an app-automation step | Stops at the notch gate; the system is asked only after Approve |
 | Window housekeeping | un-minimizing a window before a screenshot | Done only if already granted, otherwise skipped — never asked (the app is already in front) |
-| Screen recording | capturing the screen to see it | Checked but never asked mid-task; granted during first-run setup |
-| Accessibility | reading or driving an app's controls | Checked but never asked mid-task; granted during first-run setup |
+| Screen recording | capturing the screen to see it | Stops at the notch gate when not held; the system is asked only after Approve |
+| Accessibility | reading or driving an app's controls | Stops at the notch gate when not held; the system is asked only after Approve |
 | Microphone | turning on voice from the notch | The mic button is the approval; macOS's dialog follows |
 
 ## Invariants
