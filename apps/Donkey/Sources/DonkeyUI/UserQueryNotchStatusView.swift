@@ -393,13 +393,9 @@ public struct UserQueryNotchStatusView: View {
 
             Spacer(minLength: 0)
 
-            if isWorking {
-                activityBars(color: accentColor, height: 12)
-            } else {
-                // With no work bars to show, the gutter carries the waiting-on-user "!" glyph (or the
-                // update cloud) so a notched host raises the same attention indicator as a void-aware one.
-                collapsedRightSlot
-            }
+            // The gutter carries the live elapsed clock while a task runs, then the waiting-on-user "!"
+            // glyph (or the update cloud) — the same indicators a void-aware host raises.
+            collapsedRightSlot
         }
         .padding(.horizontal, max(10, layout.contentHorizontalInset))
         .frame(
@@ -730,13 +726,8 @@ public struct UserQueryNotchStatusView: View {
 
             Spacer(minLength: 0)
 
-            if isWorking {
-                HStack(spacing: 8) {
-                    if let started = primaryTask?.createdAt {
-                        elapsedTimer(since: started)
-                    }
-                    activityBars(color: accentColor)
-                }
+            if isWorking, let started = primaryTask?.createdAt {
+                elapsedTimer(since: started)
             }
         }
         .padding(.horizontal, 12)
@@ -1205,10 +1196,6 @@ public struct UserQueryNotchStatusView: View {
         )
     }
 
-    private func activityBars(color: Color, height: CGFloat = 18) -> some View {
-        ActivityBars(color: color, height: height)
-    }
-
     private var taskTitle: String {
         if let primaryTask {
             return primaryTask.title
@@ -1580,39 +1567,6 @@ private struct NotchTextButton: View {
     private var backgroundOpacity: Double {
         guard isEnabled else { return 0.055 }
         return isHovering ? 0.2 : 0.12
-    }
-}
-
-/// The working indicator: three capsules that rise and fall out of phase like an audio level meter, so a
-/// running task reads as actively in motion rather than a static glyph. Driven off a frame-stepped
-/// timeline (only ever on screen while a task is working), each bar offset on the sine so they ripple
-/// instead of pumping in unison.
-private struct ActivityBars: View {
-    let color: Color
-    var height: CGFloat = 18
-
-    // Per-bar phase offsets (radians) so the three bars crest at different moments.
-    private static let phases: [Double] = [0, 1.1, 2.2]
-    private static let speed = 5.5
-
-    var body: some View {
-        TimelineView(.animation) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
-            HStack(spacing: 3) {
-                ForEach(Array(Self.phases.enumerated()), id: \.offset) { _, phase in
-                    Capsule(style: .continuous)
-                        .fill(color)
-                        .frame(width: 3, height: barHeight(at: t, phase: phase))
-                }
-            }
-            .frame(width: 18, height: height, alignment: .center)
-        }
-    }
-
-    /// Oscillates each bar between ~0.3 and 1.0 of the full height.
-    private func barHeight(at t: Double, phase: Double) -> CGFloat {
-        let unit = (sin(t * Self.speed + phase) + 1) / 2  // 0...1
-        return height * (0.3 + 0.7 * unit)
     }
 }
 
