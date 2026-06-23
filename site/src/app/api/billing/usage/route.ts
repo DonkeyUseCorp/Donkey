@@ -20,6 +20,7 @@ const recentPerProduct = 125;
 
 const recentSelect = {
   billingStatus: true,
+  conversationId: true,
   createdAt: true,
   creditCostMicros: true,
   errorCode: true,
@@ -36,6 +37,9 @@ type RecentEvent = Prisma.InferenceUsageEventGetPayload<{
 function toRecentCall(event: RecentEvent, product: "app" | "vision") {
   return {
     billingStatus: event.billingStatus,
+    // The app conversation this call belongs to; null for background work and
+    // pre-grouping rows. The usage UI groups rows by this.
+    conversationId: event.conversationId,
     // Credits are dollar-denominated (1 credit = $1), so this string is USD.
     costCredits: creditMicrosToString(event.creditCostMicros),
     createdAt: event.createdAt.toISOString(),

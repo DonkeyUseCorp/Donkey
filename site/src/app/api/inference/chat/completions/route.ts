@@ -68,6 +68,7 @@ export const POST = withDonkeyAuth(async (request) => {
       if (!result) {
         await recordFailedInferenceUsage({
           clientId: client.clientId,
+          conversationId: request.donkey.conversationId,
           errorCode: "streaming_unavailable",
           model: requestedModel,
           provider: failedUsageProvider,
@@ -86,6 +87,7 @@ export const POST = withDonkeyAuth(async (request) => {
 
       const recordedUsage = await recordInferenceUsage({
         clientId: client.clientId,
+        conversationId: request.donkey.conversationId,
         model: result.model,
         provider: result.provider,
         requestKind: "chat_completions",
@@ -112,6 +114,7 @@ export const POST = withDonkeyAuth(async (request) => {
     if (!result) {
       await recordFailedInferenceUsage({
         clientId: client.clientId,
+        conversationId: request.donkey.conversationId,
         errorCode: "completion_unavailable",
         model: requestedModel,
         provider: failedUsageProvider,
@@ -130,6 +133,7 @@ export const POST = withDonkeyAuth(async (request) => {
 
     const recordedUsage = await recordInferenceUsage({
       clientId: client.clientId,
+      conversationId: request.donkey.conversationId,
       model: result.model,
       provider: result.provider,
       requestKind: "chat_completions",
@@ -149,6 +153,7 @@ export const POST = withDonkeyAuth(async (request) => {
   } catch (error) {
     await recordFailedInferenceUsage({
       clientId: client.clientId,
+      conversationId: request.donkey.conversationId,
       errorCode: inferenceErrorCode(error),
       model: requestedModel,
       provider: failedUsageProvider,

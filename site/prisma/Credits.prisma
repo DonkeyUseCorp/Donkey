@@ -78,6 +78,7 @@ model InferenceUsageEvent {
   userId                String
   user                  User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
   clientId              String?
+  conversationId        String?
   route                 String
   requestKind           String
   provider              String

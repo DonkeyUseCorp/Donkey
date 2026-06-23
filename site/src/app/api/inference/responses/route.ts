@@ -79,6 +79,7 @@ export const POST = withDonkeyAuth(async (request) => {
       if (!bypassCredits) {
         await recordFailedInferenceUsage({
           clientId: client.clientId,
+          conversationId: request.donkey.conversationId,
           errorCode: "responses_unavailable",
           model: requestedModel,
           provider: failedUsageProvider,
@@ -102,6 +103,7 @@ export const POST = withDonkeyAuth(async (request) => {
     } else {
       const recordedUsage = await recordInferenceUsage({
         clientId: client.clientId,
+        conversationId: request.donkey.conversationId,
         model: result.model,
         provider: result.provider,
         requestKind: "responses",
@@ -139,6 +141,7 @@ export const POST = withDonkeyAuth(async (request) => {
     if (!bypassCredits) {
       await recordFailedInferenceUsage({
         clientId: client.clientId,
+        conversationId: request.donkey.conversationId,
         errorCode: inferenceErrorCode(error),
         model: requestedModel,
         provider: failedUsageProvider,

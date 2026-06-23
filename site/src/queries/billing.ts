@@ -51,6 +51,9 @@ export type VisionUsage = {
   // Recent inference calls across products (app + Vision API), newest first.
   recent: {
     createdAt: string;
+    // The app conversation this call belongs to; null for background/warm calls
+    // and rows recorded before grouping existed. Drives the grouped rendering.
+    conversationId: string | null;
     // "app" = Pro/credit-billed app inference; "vision" = Vision API call.
     product: "app" | "vision";
     requestKind: string;

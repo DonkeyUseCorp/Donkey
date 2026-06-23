@@ -8,6 +8,9 @@ export type DonkeyAuthContext = {
   app: "donkey";
   method: "session-cookie" | "dev-bypass" | "api-key";
   clientId: string | null;
+  // The app's active conversation for this request, from x-donkey-conversation-id.
+  // Null for background work (vision warming) and non-app callers (Vision API keys).
+  conversationId: string | null;
   userId: string;
   apiKeyId: string | null;
 };
@@ -52,8 +55,14 @@ export type DonkeyAuthHandler<
 > = (request: TReq, ...args: TArgs) => Promise<Response> | Response;
 
 const clientIdHeader = "x-donkey-client-id";
+const conversationIdHeader = "x-donkey-conversation-id";
 const devAuthBypassHeader = "x-donkey-dev-auth-bypass";
 const devAuthBypassUserID = "donkey-dev-auth-bypass";
+
+function conversationIdFromHeaders(headers: Headers): string | null {
+  const value = headers.get(conversationIdHeader)?.trim();
+  return value ? value : null;
+}
 
 export async function getDonkeyAuthContext(
   headers: Headers,
@@ -82,6 +91,7 @@ export async function getDonkeyAuthContext(
     app: "donkey",
     method: "session-cookie",
     clientId: clientId ? clientId : null,
+    conversationId: conversationIdFromHeaders(headers),
     userId: session.user.id,
     apiKeyId: null,
   };
@@ -120,6 +130,8 @@ async function apiKeyAuthContext(
     // The Vision API does not require x-donkey-client-id; default it to the key
     // id so downstream usage records and rate-limit buckets stay per-key.
     clientId: clientId ? clientId : verified.key.id,
+    // Vision API keys have no app conversation; honor the header if sent, else null.
+    conversationId: conversationIdFromHeaders(headers),
     userId: verified.key.referenceId,
     apiKeyId: verified.key.id,
   };
@@ -146,6 +158,7 @@ function devAuthBypassContext(headers: Headers): DonkeyAuthContext | null {
     app: "donkey",
     method: "dev-bypass",
     clientId: clientId ? clientId : null,
+    conversationId: conversationIdFromHeaders(headers),
     userId: devAuthBypassUserID,
     apiKeyId: null,
   };

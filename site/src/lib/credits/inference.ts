@@ -63,6 +63,9 @@ type InferenceUsageStatus = "failed" | "succeeded";
 type InferenceUsageInput = {
   userId: string;
   clientId: string | null;
+  // The app conversation this call belongs to, for grouping usage history. Null
+  // for background work and non-app (Vision API) callers.
+  conversationId?: string | null;
   route: string;
   requestKind: string;
   provider: string;
@@ -357,6 +360,7 @@ export async function recordInferenceUsage(input: InferenceUsageInput) {
           accountId: account.id,
           billingStatus,
           clientId: input.clientId,
+          conversationId: input.conversationId ?? null,
           creditCostMicros,
           errorCode: input.errorCode,
           metadata: prismaJson(input.metadata),
@@ -452,6 +456,7 @@ export async function recordInferenceUsage(input: InferenceUsageInput) {
 export async function recordFailedInferenceUsage(input: {
   userId: string;
   clientId: string | null;
+  conversationId?: string | null;
   route: string;
   requestKind: string;
   provider: string;

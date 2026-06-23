@@ -85,6 +85,7 @@ export const POST = withDonkeyAuth(async (request) => {
   if (parsed.data.stream) {
     return streamScreenshotParseResponse({
       clientId: client.clientId,
+      conversationId: request.donkey.conversationId,
       model,
       parserProvider,
       request: parsed.data,
@@ -96,6 +97,7 @@ export const POST = withDonkeyAuth(async (request) => {
     const result = await parseScreenshot(parsed.data, parserProvider);
     const recordedUsage = await recordInferenceUsage({
       clientId: client.clientId,
+      conversationId: request.donkey.conversationId,
       metadata: {
         parserProvider: parserProvider.id,
       },
@@ -118,6 +120,7 @@ export const POST = withDonkeyAuth(async (request) => {
   } catch (error) {
     await recordFailedInferenceUsage({
       clientId: client.clientId,
+      conversationId: request.donkey.conversationId,
       errorCode: inferenceErrorCode(error),
       metadata: {
         parserProvider: parserProvider.id,
@@ -142,6 +145,7 @@ export const POST = withDonkeyAuth(async (request) => {
 
 function streamScreenshotParseResponse(input: {
   clientId: string;
+  conversationId: string | null;
   model: string;
   parserProvider: ReturnType<typeof createScreenshotParserProvider>;
   request: ScreenshotParseRequest;
@@ -159,6 +163,7 @@ function streamScreenshotParseResponse(input: {
 
           const recordedUsage = await recordInferenceUsage({
             clientId: input.clientId,
+            conversationId: input.conversationId,
             metadata: {
               parserProvider: input.parserProvider.id,
               streaming: true,
@@ -186,6 +191,7 @@ function streamScreenshotParseResponse(input: {
       } catch (error) {
         await recordFailedInferenceUsage({
           clientId: input.clientId,
+          conversationId: input.conversationId,
           errorCode: inferenceErrorCode(error),
           metadata: {
             parserProvider: input.parserProvider.id,

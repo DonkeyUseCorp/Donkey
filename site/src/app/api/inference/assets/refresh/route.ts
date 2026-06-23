@@ -47,6 +47,7 @@ export const POST = withDonkeyAuth(async (request) => {
     const result = await registry.refresh(parsed.data);
     const recordedUsage = await recordInferenceUsage({
       clientId: client.clientId,
+      conversationId: request.donkey.conversationId,
       metadata: {
         assetKind: parsed.data.kind,
       },
@@ -71,6 +72,7 @@ export const POST = withDonkeyAuth(async (request) => {
   } catch (error) {
     await recordFailedInferenceUsage({
       clientId: client.clientId,
+      conversationId: request.donkey.conversationId,
       errorCode: inferenceErrorCode(error),
       metadata: {
         assetKind: parsed.data.kind,

@@ -72,6 +72,7 @@ export const POST = withDonkeyAuth(async (request) => {
     await recordFailedInferenceUsage({
       userId: request.donkey.userId,
       clientId: client.clientId,
+      conversationId: request.donkey.conversationId,
       route: inferenceUsageRoutes.browserRun,
       requestKind: "browser_automation",
       provider: browserUseProvider,
@@ -95,6 +96,7 @@ export const POST = withDonkeyAuth(async (request) => {
   const recorded = await recordInferenceUsage({
     userId: request.donkey.userId,
     clientId: client.clientId,
+    conversationId: request.donkey.conversationId,
     route: inferenceUsageRoutes.browserRun,
     requestKind: "browser_automation",
     provider: browserUseProvider,

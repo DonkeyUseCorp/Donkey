@@ -188,6 +188,7 @@ async function visionParseHandler(request: DonkeyAuthenticatedRequest) {
       const recordedUsage = await recordInferenceUsage({
         billingMode: isApiKey ? "included" : "credits",
         clientId: client.clientId,
+        conversationId: request.donkey.conversationId,
         metadata: { grounded: String(instruction !== undefined) },
         model: billedModel,
         provider: inferenceProvider,
@@ -222,6 +223,7 @@ async function visionParseHandler(request: DonkeyAuthenticatedRequest) {
       await recordFailedInferenceUsage({
         billingMode: isApiKey ? "included" : "credits",
         clientId: client.clientId,
+        conversationId: request.donkey.conversationId,
         errorCode: inferenceErrorCode(error),
         metadata: { grounded: String(instruction !== undefined) },
         model: billedModel,

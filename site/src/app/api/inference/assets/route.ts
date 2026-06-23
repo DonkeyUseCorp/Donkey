@@ -78,6 +78,7 @@ export const POST = withDonkeyAuth(async (request) => {
     if (!result) {
       await recordFailedInferenceUsage({
         clientId: client.clientId,
+        conversationId: request.donkey.conversationId,
         errorCode: "asset_generation_unavailable",
         metadata: {
           assetKind: parsed.data.kind,
@@ -99,6 +100,7 @@ export const POST = withDonkeyAuth(async (request) => {
 
     const recordedUsage = await recordInferenceUsage({
       clientId: client.clientId,
+      conversationId: request.donkey.conversationId,
       metadata: {
         assetKind: parsed.data.kind,
       },
@@ -118,6 +120,7 @@ export const POST = withDonkeyAuth(async (request) => {
   } catch (error) {
     await recordFailedInferenceUsage({
       clientId: client.clientId,
+      conversationId: request.donkey.conversationId,
       errorCode: inferenceErrorCode(error),
       metadata: {
         assetKind: parsed.data.kind,
