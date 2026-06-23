@@ -293,4 +293,36 @@ struct TaskFollowUpInjectionTests {
         // The persisted updatedAt is preserved so elapsed-time stays the real run duration.
         #expect(result.tasks.first { $0.id == "stale" }?.updatedAt == staleRunning.updatedAt)
     }
+
+    @MainActor
+    @Test
+    func activeFollowUpCandidatesDropStaleConversations() {
+        let now = Date()
+        func task(_ id: String, _ status: UserQueryConversationStatus, ageMinutes: Double) -> UserQueryConversation {
+            UserQueryConversation(
+                id: id,
+                title: id,
+                detail: "d",
+                status: status,
+                accentIndex: 0,
+                updatedAt: now.addingTimeInterval(-ageMinutes * 60)
+            )
+        }
+
+        let recentRunning = task("recent-running", .running, ageMinutes: 10)
+        let recentCompleted = task("recent-done", .completed, ageMinutes: 10)
+        let staleRunning = task("stale-running", .running, ageMinutes: 16 * 60)
+        let staleCompleted = task("stale-done", .completed, ageMinutes: 16 * 60)
+
+        let eligible = UserQueryOverlayModel.activeFollowUpCandidates(
+            from: [recentRunning, recentCompleted, staleRunning, staleCompleted],
+            now: now
+        ).map(\.id)
+
+        // Recent conversations stay eligible regardless of terminal state — a just-finished task is a
+        // natural follow-up target. Anything idle past the window is treated as closed and dropped, so an
+        // unrelated later turn starts a fresh conversation instead of folding into stale work (the
+        // day-old never-terminated clip task that swallowed a bare "hi").
+        #expect(eligible == ["recent-running", "recent-done"])
+    }
 }

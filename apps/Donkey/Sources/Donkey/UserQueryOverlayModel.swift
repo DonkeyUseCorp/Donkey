@@ -1419,8 +1419,8 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     }
 
     private func followUpCandidates() -> [UserQueryFollowUpCandidate] {
-        taskStore
-            .loadRecentTasks(limit: Self.followUpCandidateLimit)
+        let recent = taskStore.loadRecentTasks(limit: Self.followUpCandidateLimit)
+        return Self.activeFollowUpCandidates(from: recent, now: Date())
             .map { task in
                 let recentEvents = taskStore
                     .loadEvents(conversationID: task.id)
@@ -1533,6 +1533,24 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     /// window the work was clearly in progress and should pick back up; outside it, resuming unattended
     /// work the user likely moved on from (and spending credits while they're away) is the wrong default.
     private static let autoResumeStalenessWindow: TimeInterval = 30 * 60
+
+    /// How recently a conversation must have been active to stay eligible as a follow-up target. Implicit
+    /// follow-up routing runs through the typed resolver, but only over conversations touched within this
+    /// window: one left idle longer is treated as closed, so an unrelated later turn starts a fresh
+    /// conversation instead of folding into stale work (observed live: "hi" folding into a day-old
+    /// video-clip task that had never reached a terminal state). This gates eligibility, not selection —
+    /// among eligible candidates the resolver still decides by content, never by recency. An explicit
+    /// Reply or spawn selection bypasses this entirely; the user can always continue an old thread on purpose.
+    private static let followUpStalenessWindow: TimeInterval = 30 * 60
+
+    /// Conversations recent enough to continue with a new turn. Sorted-by-recency input is filtered to the
+    /// staleness window; everything older is considered closed and dropped from the follow-up pool.
+    static func activeFollowUpCandidates(
+        from tasks: [UserQueryConversation],
+        now: Date
+    ) -> [UserQueryConversation] {
+        tasks.filter { now.timeIntervalSince($0.updatedAt) <= followUpStalenessWindow }
+    }
 
     /// Maps persisted tasks into their post-relaunch state and collects the IDs to auto-resume. A relaunch
     /// tears down every live loop, so an in-flight task can't simply keep running — but one that was

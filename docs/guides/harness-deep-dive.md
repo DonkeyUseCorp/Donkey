@@ -25,7 +25,9 @@ agent keeps going with one more instruction, the way a queued message works in a
 chat. This is deliberately the opposite of changing course, which would replace
 the goal and re-plan; a follow-up only ever reaches a stopped task that way.
 Whether a request is a follow-up to a specific task is decided by the typed
-follow-up boundary, never by matching the text itself.
+follow-up boundary, never by matching the text itself. Only recently active
+conversations are eligible: one left idle long enough counts as closed, so an
+unrelated later turn opens a fresh task instead of folding into stale work.
 
 **Concurrency.** Each task runs its own loop, and a loop releases control on every
 await it makes for the model or a tool, so several tasks advance together. Two
