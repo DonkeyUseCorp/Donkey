@@ -454,37 +454,16 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         progress: (@MainActor @Sendable (String) -> Void)? = nil,
         answerStream: (@MainActor @Sendable (String) -> Void)? = nil
     ) async -> UserQueryCommandHandlingResult {
-        guard permissionPolicy.allowedCapabilities.contains(.input) else {
-            return await failHarnessRun(
-                command: command,
-                response: "Vision navigation needs input permission, which isn't granted.",
-                reason: "inputNotPermitted",
-                appName: "",
-                traceID: traceID,
-                conversationID: conversationID,
-                agentID: agentID,
-                preparedTurnMetadata: preparedTurnMetadata
-            )
-        }
         // A resume pins the task's original target, so it can drive that app even when it (or nothing) is
-        // frontmost — which is the common case right after a relaunch. A fresh turn with no frontmost app
-        // and no pinned target still has nothing to drive, so it fails cleanly.
+        // frontmost — which is the common case right after a relaunch. Resolve the frontmost app up front
+        // (no guard yet): its name feeds the understanding prompt, and a conversational turn needs no app
+        // at all — only the action path below requires one.
         let frontmost = MacWindowResolver().frontmostUserAppTarget()
-        guard forcedDriveTarget != nil || frontmost != nil else {
-            return await failHarnessRun(
-                command: command,
-                response: "I couldn't find a frontmost app window to navigate. Focus the app you want, then type your request.",
-                reason: "noFrontmostApp",
-                appName: "",
-                traceID: traceID,
-                conversationID: conversationID,
-                agentID: agentID,
-                preparedTurnMetadata: preparedTurnMetadata
-            )
-        }
         let frontmostAppName = frontmost?.appName ?? forcedDriveTarget?.appName ?? "the frontmost app"
         let frontmostBundleIdentifier = frontmost?.bundleIdentifier ?? forcedDriveTarget?.bundleIdentifier
 
+        // The backend is needed by BOTH paths — the conversational responder and the action loop — so it
+        // is built before the turn is classified.
         guard var configuration = try? DonkeyBackendInferenceConfiguration.fromEnvironment() else {
             return await failHarnessRun(
                 command: command,
@@ -527,6 +506,57 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         let understandingBoundary = HostedHarnessRequestUnderstanding(backend: backend, trace: trace)
         let understanding = await AIDeadline.race(seconds: Self.understandingTimeoutSeconds) {
             await understandingBoundary.understand(command: command, frontmostAppName: frontmostAppName)
+        }
+
+        // TWO-TIER SPLIT. A turn the understanding boundary typed `.converse` (a greeting, a thanks, a
+        // question answerable in words) never touches the action machinery: it is answered by a responder
+        // that holds no tools, so a misread greeting can't run a command. Gated on the typed enum, never
+        // the user's words. Everything below — the input/frontmost guards and the whole guarded loop —
+        // runs only for an actionable turn. (A nil understanding means the classifier was unavailable;
+        // it degrades to the action path against the raw command, the conservative existing behavior.)
+        if understanding?.turnKind == .converse {
+            return await runConversationalReply(
+                command: command,
+                frontmostAppName: frontmostAppName,
+                backend: backend,
+                transcript: transcript,
+                trace: trace,
+                traceID: traceID,
+                conversationID: conversationID,
+                agentID: agentID,
+                preparedTurnMetadata: preparedTurnMetadata,
+                answerStream: answerStream
+            )
+        }
+
+        // ACTION PATH from here down. These guards are action-only — a conversational turn already
+        // returned above, so it never needs input permission or a frontmost app window to drive.
+        guard permissionPolicy.allowedCapabilities.contains(.input) else {
+            return await failHarnessRun(
+                command: command,
+                response: "Vision navigation needs input permission, which isn't granted.",
+                reason: "inputNotPermitted",
+                appName: frontmostAppName,
+                traceID: traceID,
+                conversationID: conversationID,
+                agentID: agentID,
+                preparedTurnMetadata: preparedTurnMetadata,
+                transcript: transcript
+            )
+        }
+        // A fresh turn with no frontmost app and no pinned target has nothing to drive, so it fails cleanly.
+        guard forcedDriveTarget != nil || frontmost != nil else {
+            return await failHarnessRun(
+                command: command,
+                response: "I couldn't find a frontmost app window to navigate. Focus the app you want, then type your request.",
+                reason: "noFrontmostApp",
+                appName: frontmostAppName,
+                traceID: traceID,
+                conversationID: conversationID,
+                agentID: agentID,
+                preparedTurnMetadata: preparedTurnMetadata,
+                transcript: transcript
+            )
         }
         if let restated = understanding?.restatedGoal, !restated.isEmpty {
             progress?(restated)
@@ -1025,6 +1055,80 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         return result
     }
 
+    /// The conversational arm of the two-tier split: a turn typed `.converse` is answered here, with no
+    /// action loop, no tools, no world model, and no permission gate. The reply streams into the notch
+    /// chin token-by-token and the turn completes as a chat message. Because this path is reached only on
+    /// a typed `.converse` classification and the responder holds no tools, a misread greeting can never
+    /// produce a command — the safety is structural, not a matter of planner discipline.
+    @MainActor
+    private func runConversationalReply(
+        command: String,
+        frontmostAppName: String,
+        backend: DonkeyBackendInferenceClient,
+        transcript: ConversationTranscript,
+        trace: HarnessTurnTrace,
+        traceID: String,
+        conversationID: String,
+        agentID: String,
+        preparedTurnMetadata: [String: String],
+        answerStream: (@MainActor @Sendable (String) -> Void)?
+    ) async -> UserQueryCommandHandlingResult {
+        transcript.systemEvent("Conversational turn — responding without driving the Mac.")
+        VisionGroundingLog.emit("conversation traceID=\(traceID) kind=converse")
+
+        // Carry the same bounded rolling conversation context the planner would get, so multi-turn chat
+        // keeps continuity ("what did I just ask?") without ever entering the action loop.
+        let textGenerator = HostedTextGenerator(backend: backend)
+        let compactionDriver = ConversationCompactionDriver(
+            conversationStore: genericHarnessLifecycle.conversationStore,
+            coordinator: genericHarnessLifecycle.coordinator,
+            compactor: genericHarnessLifecycle.compactor,
+            generate: { await textGenerator.generate($0) }
+        )
+        let conversationContext = await compactionDriver.rollingContext(agentID: agentID)
+
+        let responder = HostedHarnessConversationalResponder(backend: backend, trace: trace)
+        let streamed = await responder.respond(
+            command: command,
+            frontmostAppName: frontmostAppName,
+            conversationContext: conversationContext,
+            onDelta: answerStream ?? { _ in }
+        )
+        let reply = (streamed?.isEmpty == false) ? streamed! : "Hey! What can I help you with?"
+        transcript.response(reply)
+        transcript.writeSummary(Self.deterministicThreadSummary(
+            command: command, app: frontmostAppName, outcome: "ok", steps: [], finalDetail: reply
+        ))
+
+        let decision = AppHarnessDecision(
+            kind: .respond,
+            message: reply,
+            traceID: traceID,
+            metadata: ["structuredDecision": "true", "router": "conversation"]
+        )
+        // A conversational turn is genuinely finished — there is no pending work to resume — so the agent
+        // completes. The row still surfaces as `.chatting` so the reply lands in the chin as a message
+        // (the same completed + chatting pairing the empty turn uses).
+        _ = await genericHarnessLifecycle.coordinator.complete(
+            agentID: agentID,
+            reason: "Conversational turn"
+        )
+        let result = UserQueryCommandHandlingResult(
+            status: .completed,
+            threadStatus: .chatting,
+            decision: decision,
+            summary: reply,
+            traceID: traceID,
+            metadata: preparedTurnMetadata.merging([
+                "appHarness.decision": AppHarnessDecisionKind.respond.rawValue,
+                "appHarness.router": "conversation"
+            ]) { _, new in new }
+        )
+        await coordinatorRegistry.finish(conversationID: conversationID)
+        logHandlingResult(result, stage: "conversation", hint: reply)
+        return result
+    }
+
     /// Fail-safe exit for the vision-navigation route when it can't even start (no frontmost app,
     /// backend unconfigured, input not permitted). Mirrors the other non-local routes' lifecycle.
     /// Even an aborted start gets a thread file: the thread is the session's complete record, and a
@@ -1037,12 +1141,21 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         traceID: String,
         conversationID: String,
         agentID: String,
-        preparedTurnMetadata: [String: String]
+        preparedTurnMetadata: [String: String],
+        transcript existingTranscript: ConversationTranscript? = nil
     ) async -> UserQueryCommandHandlingResult {
         VisionGroundingLog.emit("aborted traceID=\(traceID) reason=\(reason) app=\(appName)")
-        let transcript = ConversationTranscript(id: conversationID)
-        transcript.begin(id: conversationID, app: appName)
-        transcript.userMessage(command)
+        // Reuse the turn's open transcript when the abort happens after it was started (the action-only
+        // guards run after the user message is already recorded); otherwise open a fresh one, since even
+        // a turn that never got past its first guard must still leave a thread file on disk.
+        let transcript: ConversationTranscript
+        if let existingTranscript {
+            transcript = existingTranscript
+        } else {
+            transcript = ConversationTranscript(id: conversationID)
+            transcript.begin(id: conversationID, app: appName)
+            transcript.userMessage(command)
+        }
         transcript.error("Run could not start (\(reason)).")
         transcript.response(response)
         let decision = AppHarnessDecision(
@@ -1211,7 +1324,11 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
     }
 
     private static var userQueryGrantedPermissions: Set<HarnessPermission> {
-        [
+        // Internal capabilities are always available; the macOS-backed ones (screen capture,
+        // accessibility, input) are kept only when the system grants them right now. A missing one
+        // drops out so the first tool that needs it stops at the notch gate and is requested in the
+        // conversation — onboarding is optional, not a prerequisite.
+        HarnessSystemPermissionBridge.granting([
             .conversation,
             .userPrompt,
             .verification,
@@ -1222,7 +1339,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             .screenCapture,
             .accessibility,
             .input
-        ]
+        ])
     }
 
     /// Picks the app the harness drive operates. The understood target app wins whenever it names a

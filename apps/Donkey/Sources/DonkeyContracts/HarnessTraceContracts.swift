@@ -8,6 +8,8 @@ public enum TraceModelCallKind: String, Codable, Equatable, Sendable {
     case understanding
     /// A per-step planning call (the first sample or a feedback-driven retry).
     case plannerStep
+    /// The single responder call for a conversational turn (turnKind == .converse). No tools, no loop.
+    case conversationalReply
     /// The background call that rewrites the compacted thread summary.
     case conversationSummary
 }

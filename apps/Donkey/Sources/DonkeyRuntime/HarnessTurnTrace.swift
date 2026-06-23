@@ -126,6 +126,7 @@ public final class HarnessTurnTrace: HarnessTurnTracing, @unchecked Sendable {
         switch kind {
         case .understanding: return "understanding"
         case .plannerStep: return "planner step"
+        case .conversationalReply: return "conversational reply"
         case .conversationSummary: return "thread summary"
         }
     }

@@ -9,7 +9,13 @@ import Foundation
 /// this only sharpens what "the goal" means and which app to drive, so the planner stops re-deriving
 /// intent from a raw string on every step.
 public struct HarnessRequestUnderstanding: Sendable, Equatable {
-    /// The user's request restated as one concrete imperative goal.
+    /// What this turn fundamentally is: a conversation, an action on the Mac, or a clarifying question.
+    /// Decided here, before any action machinery exists, and the single fact the caller routes on —
+    /// only `.act` ever reaches the action planner. A `.converse` turn is answered by a responder that
+    /// holds no action tools, so a misclassified greeting can never run a command.
+    public var turnKind: HarnessTurnKind
+    /// The user's request restated. For `.act`/`.clarify` it is one concrete imperative goal; for
+    /// `.converse` it is a short restatement of what the user said, never an invented task.
     public var restatedGoal: String
     /// The macOS app the request needs to operate through its GUI. Left nil/empty for pure
     /// conversation, for whatever app is already frontmost, and for tasks an expert would do with
@@ -31,6 +37,7 @@ public struct HarnessRequestUnderstanding: Sendable, Equatable {
     public var executionPreference: ExecutionPreference
 
     public init(
+        turnKind: HarnessTurnKind = .act,
         restatedGoal: String,
         targetAppName: String? = nil,
         parameters: [String: String] = [:],
@@ -39,6 +46,7 @@ public struct HarnessRequestUnderstanding: Sendable, Equatable {
         clarifyingQuestion: String? = nil,
         executionPreference: ExecutionPreference = .background
     ) {
+        self.turnKind = turnKind
         self.restatedGoal = restatedGoal
         self.targetAppName = targetAppName
         self.parameters = parameters
@@ -87,6 +95,7 @@ public final class HostedHarnessRequestUnderstanding {
             let restated = wire.restatedGoal?.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let restated, !restated.isEmpty else { return nil }
             return HarnessRequestUnderstanding(
+                turnKind: wire.turnKind.flatMap { HarnessTurnKind(rawValue: $0) } ?? .act,
                 restatedGoal: restated,
                 targetAppName: wire.targetAppName.flatMap { $0.isEmpty ? nil : $0 },
                 parameters: wire.parameters ?? [:],
@@ -125,6 +134,7 @@ public final class HostedHarnessRequestUnderstanding {
     // MARK: - Wire
 
     private struct UnderstandingWire: Decodable {
+        var turnKind: String?
         var restatedGoal: String?
         var targetAppName: String?
         var parameters: [String: String]?
@@ -134,12 +144,13 @@ public final class HostedHarnessRequestUnderstanding {
         var executionPreference: String?
 
         private enum CodingKeys: String, CodingKey {
-            case restatedGoal, targetAppName, parameters, successCriteria, needsClarification, clarifyingQuestion
+            case turnKind, restatedGoal, targetAppName, parameters, successCriteria, needsClarification, clarifyingQuestion
             case executionPreference
         }
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
+            turnKind = try container.decodeIfPresent(String.self, forKey: .turnKind)
             restatedGoal = try container.decodeIfPresent(String.self, forKey: .restatedGoal)
             targetAppName = try container.decodeIfPresent(String.self, forKey: .targetAppName)
             successCriteria = try container.decodeIfPresent(String.self, forKey: .successCriteria)
@@ -203,8 +214,12 @@ public final class HostedHarnessRequestUnderstanding {
                     "schema": .object([
                         "type": .string("object"),
                         "additionalProperties": .bool(false),
-                        "required": .array([.string("restatedGoal"), .string("needsClarification")]),
+                        "required": .array([.string("turnKind"), .string("restatedGoal"), .string("needsClarification")]),
                         "properties": .object([
+                            "turnKind": .object([
+                                "type": .string("string"),
+                                "enum": .array([.string("converse"), .string("act"), .string("clarify")])
+                            ]),
                             "restatedGoal": .object(["type": .string("string")]),
                             "targetAppName": .object(["type": .string("string")]),
                             "parameters": .object([
