@@ -409,8 +409,10 @@ public struct UserQueryNotchStatusView: View {
                 Spacer(minLength: 0)
 
                 // The gutter carries the live elapsed clock while a conversation runs, then the waiting-on-user "!"
-                // glyph (or the update cloud) — the same indicators a void-aware host raises.
-                collapsedRightSlot
+                // glyph (or the update cloud) — the same indicators a void-aware host raises. With no camera void
+                // to route around, the right gutter can stretch, so it shows the full elapsed time (hours,
+                // minutes, and seconds) rather than the single largest unit.
+                collapsedRightSlot(compactTime: false)
             }
             .padding(.horizontal, max(10, layout.contentHorizontalInset))
             .frame(
@@ -441,7 +443,7 @@ public struct UserQueryNotchStatusView: View {
                     .modifier(AttentionPulse(active: isPrimaryWaitingOnUser))
                     .position(x: collapsedLeadingLaneCenterX, y: layout.collapsedVisibleHeight / 2)
 
-                collapsedRightSlot
+                collapsedRightSlot(compactTime: true)
                     .frame(width: collapsedSideLaneWidth, height: layout.collapsedVisibleHeight)
                     .position(x: collapsedTrailingLaneCenterX, y: layout.collapsedVisibleHeight / 2)
 
@@ -905,7 +907,7 @@ public struct UserQueryNotchStatusView: View {
                         Text(conversationStatusDescription(conversation))
                             .font(.system(size: 12, weight: .regular))
                             .foregroundStyle(Color.white.opacity(0.42))
-                            .lineLimit(5)
+                            .lineLimit(Self.conversationSubtextLineLimit)
                             .truncationMode(.tail)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1340,7 +1342,7 @@ public struct UserQueryNotchStatusView: View {
     /// time only rides alongside the chin (a running conversation always narrates), so the gutter never shows a
     /// lonely clock; every state's full elapsed total lives in the expanded row.
     @ViewBuilder
-    private var collapsedRightSlot: some View {
+    private func collapsedRightSlot(compactTime: Bool) -> some View {
         if surfacedErrorConversation != nil {
             // A surfaced failure (e.g. an auth error) raises the red warning glyph here while its message
             // holds the chin, until the user expands to acknowledge it.
@@ -1354,7 +1356,11 @@ public struct UserQueryNotchStatusView: View {
                 // Waiting on the user, same as a clarification or review — show the attention glyph.
                 attentionGlyph()
             case .running:
-                compactLiveTime(since: conversation.createdAt)
+                if compactTime {
+                    compactLiveTime(since: conversation.createdAt)
+                } else {
+                    fullLiveTime(since: conversation.createdAt)
+                }
             case .completed, .paused, .interrupted, .failed, .chatting, .needsAttention, .timedOut:
                 // The gutter only ever carries the waiting-on-user icons or the live clock — a completed
                 // conversation keeps surfacing as a colored pointer + chin line, and the rest (including a benign
@@ -1404,6 +1410,15 @@ public struct UserQueryNotchStatusView: View {
     private func compactLiveTime(since start: Date) -> some View {
         TimelineView(.periodic(from: start, by: 1)) { context in
             slotText(Self.compactElapsed(from: start, to: context.date))
+        }
+    }
+
+    /// Full elapsed time (hours, minutes, and seconds) for the stretchable right gutter on a no-notch
+    /// host. Unlike `compactLiveTime`, which squeezes a single unit into the narrow lane beside the camera,
+    /// this spells out the whole running total since the gutter has room to grow.
+    private func fullLiveTime(since start: Date) -> some View {
+        TimelineView(.periodic(from: start, by: 1)) { context in
+            slotText(Self.elapsedDescription(from: start, to: context.date))
         }
     }
 
@@ -1498,6 +1513,9 @@ public struct UserQueryNotchStatusView: View {
     private static let expandedContentDismissAnimation = Animation.easeOut(duration: 0.1)
     private static let contentInset: CGFloat = 14
     private static let conversationListCommandSpacing: CGFloat = 8
+    /// Expanded row subtext is a generous preview, not a data cap: the full line is kept in state and
+    /// the row tail-truncates only after five rendered lines.
+    private static let conversationSubtextLineLimit = 5
     /// The collapsed leading lane shows at most this many overlapping pointers; extra surfaced conversations
     /// are still listed when the notch is expanded.
     private static let maxClusterPointers = 3
