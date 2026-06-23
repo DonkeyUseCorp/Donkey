@@ -90,7 +90,16 @@ or another typed boundary first. After that, deterministic code may match
 Accessibility roles — but never the raw string.
 
 **2. Understand once, then loop.** Before the per-step loop starts, an
-understanding boundary restates the goal, names the target app (or leaves it
+understanding boundary classifies the turn and restates it. Its first output is
+a typed `turnKind` — `converse`, `act`, or `clarify` — and that one fact routes
+everything after it. A `converse` turn (a greeting, a thanks, a question
+answerable in words) is handed to a responder that holds no tools and never
+touches the action loop, so a misread greeting can produce a slightly-off reply
+but never a command. Only an `act` turn reaches the planner and the Mac. This is
+the structural form of "conversations first": action is unreachable until the
+turn is typed actionable, not merely discouraged by a prompt.
+
+For an actionable turn the same boundary also names the target app (or leaves it
 empty for system-tool tasks), extracts parameters and success criteria, flags
 whether clarification is needed, and chooses whether the work runs in the
 background (the agent acts without taking over the cursor or raising the app)

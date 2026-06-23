@@ -16,35 +16,49 @@ boundaries below, and deterministic code matches only their typed output.
 
 ## How a Turn Is Decided
 
-Two hosted model boundaries make every semantic decision. Both call the
-authenticated Donkey backend with `store=false`; the backend owns provider and
-concrete model selection.
+The first thing understanding decides is *what kind of turn this is* — and that
+single typed fact routes everything after it. A conversation is answered without
+the action machinery ever existing; only an actionable turn reaches the planner
+and the Mac. This is the structural form of "conversations first": a misread
+greeting can produce a slightly-off reply, never a command.
 
 ```text
 user turn
   |
   v
 1. Request understanding (once per turn)
-   HostedHarnessRequestUnderstanding -> restated goal, target app (or none),
-   parameters, success criteria, needsClarification + clarifying question
+   HostedHarnessRequestUnderstanding -> turnKind (converse | act | clarify),
+   restated goal, target app (or none), parameters, success criteria,
+   needsClarification + clarifying question
   |
-  v
-2. Per-step planning (loop)
-   HostedHarnessStepPlanner -> one tool call per step: { tool, input, reason }
-   Responding conversationally, asking for clarification, and requesting a
-   permission are tools the planner picks like any other.
+  +--- turnKind == converse ---> Conversational responder
+  |                              HostedHarnessConversationalResponder: one reply,
+  |                              NO tools, no world model, no permission gate.
+  |                              The reply streams into the notch; the turn ends.
+  |
+  +--- turnKind == act/clarify -> 2. Per-step planning (loop)
+                                  HostedHarnessStepPlanner -> one tool call per
+                                  step: { tool, input, reason }. Asking to clarify
+                                  and requesting a permission are tools too.
 ```
 
-The model decides *what* the turn means and which tool comes next; Swift
-decides *whether and how* the call runs. If understanding fails or times out,
-the loop degrades to planning against the raw goal — it never blocks the turn.
+Two facts make this safe by construction. First, `turnKind` is a typed enum the
+model sets — deterministic code branches on it, never on the user's words.
+Second, the conversational responder is handed no tool registry and no executor,
+so it *cannot* drive the Mac even if the classification was wrong. The action
+planner is only ever reached once a turn is typed `.act`.
+
+The model decides *what* the turn means and which tool comes next; Swift decides
+*whether and how* the call runs. If understanding fails or times out, the turn
+degrades to the action path against the raw goal — the conservative default, and
+it never blocks the turn.
 
 ## Outcomes
 
 | Turn | Outcome |
 |---|---|
 | Empty or whitespace input | no-op decision; the prepared task completes immediately, no action runs |
-| Question, greeting, chat | planner picks the respond tool; conversational answer, no action state |
+| Question, greeting, chat (`turnKind == converse`) | conversational responder streams one reply; no action loop, no tools, no permission gate |
 | Actionable with a clear target | guarded harness loop runs to completion with evidence |
 | Actionable but missing a required detail | clarify tool → task `waitingForUser` with one specific question |
 | Action needs an ungranted permission | permission request → task `waitingForPermission` |
@@ -78,7 +92,8 @@ waypoint is grounded.
 
 | Module | Owns |
 |---|---|
-| `apps/Donkey/Sources/Donkey/UserQueryCommandHandler.swift` | turn entry, outcome handling, visualization |
-| `apps/Donkey/Sources/DonkeyAI/HostedHarnessRequestUnderstanding.swift` | one-shot request understanding |
-| `apps/Donkey/Sources/DonkeyAI/HostedHarnessStepPlanner.swift` | per-step tool decisions |
+| `apps/Donkey/Sources/Donkey/UserQueryCommandHandler.swift` | turn entry, `turnKind` routing, outcome handling, visualization |
+| `apps/Donkey/Sources/DonkeyAI/HostedHarnessRequestUnderstanding.swift` | one-shot request understanding, including the `turnKind` classification |
+| `apps/Donkey/Sources/DonkeyAI/HostedHarnessConversationalResponder.swift` | the no-tools responder for a `.converse` turn |
+| `apps/Donkey/Sources/DonkeyAI/HostedHarnessStepPlanner.swift` | per-step tool decisions on the action path |
 | `apps/Donkey/Sources/DonkeyRuntime/AppHarnessGenericLifecycle.swift` | thread/task lifecycle and context compaction |
