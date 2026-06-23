@@ -7,6 +7,7 @@
 <p align="center"><i>An open-source desktop agent for macOS that sees your screen and runs your apps for you.</i></p>
 
 <p align="center">
+  <a href="https://github.com/DonkeyUseCorp/Donkey/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/DonkeyUseCorp/Donkey?label=release&color=EC7868" /></a>
   <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" /></a>
   <img alt="Platform: macOS" src="https://img.shields.io/badge/Platform-macOS-black.svg" />
   <a href="https://donkeyuse.com/donkeyvision"><img alt="Vision API" src="https://img.shields.io/badge/Vision-API-EC7868.svg" /></a>
