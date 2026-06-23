@@ -25,6 +25,10 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     /// so the planner can route to an authoritative playbook even when no GUI app is the drive target —
     /// e.g. playing music or saving a note by script. nil when no skills are installed.
     private let skillCatalog: String?
+    /// Durable operating lessons recalled from past runs whose goal resembled this one, pre-formatted as a
+    /// bounded bullet block and rendered into every step's prompt. Computed once at run start (the goal
+    /// doesn't change mid-run), so it's a constant here. nil when nothing relevant was learned before.
+    private let recalledLessons: String?
     private let uptimeMS: @Sendable () -> Double
     /// Optional turn-trace sink. Every planning call — the first sample, each retry, and the failure
     /// shapes (empty reply, content filter, transport error) — is recorded here with its clipped prompt,
@@ -77,6 +81,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         appGuidance: String?,
         understanding: HarnessRequestUnderstanding? = nil,
         skillCatalog: String? = nil,
+        recalledLessons: String? = nil,
         trace: (any HarnessTurnTracing)? = nil,
         openWindows: @escaping @Sendable () -> [MacWindowTargetCandidate] = { [] },
         captureScreenshot: @escaping @Sendable () async -> String? = { nil },
@@ -88,6 +93,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         self.appGuidance = appGuidance
         self.understanding = understanding
         self.skillCatalog = skillCatalog
+        self.recalledLessons = recalledLessons
         self.trace = trace
         self.openWindows = openWindows
         self.captureScreenshot = captureScreenshot
@@ -379,6 +385,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
             appGuidance: appGuidance,
             understanding: understanding,
             skillCatalog: skillCatalog,
+            lessons: recalledLessons,
             rollingContext: rollingContext,
             retryNote: retryNote,
             openWindows: openWindows()

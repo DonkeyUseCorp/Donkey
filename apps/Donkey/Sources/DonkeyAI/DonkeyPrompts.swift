@@ -1,5 +1,6 @@
 import DonkeyContracts
 import DonkeyHarness
+import DonkeyRuntime
 import Foundation
 
 /// The single home for the prompts that define how Donkey behaves — edit agent
@@ -27,7 +28,7 @@ import Foundation
 /// - Narrow task adapters keep their specialized prompts next to their parsing:
 ///   `VisionActionPlanner`, `GeminiVertexVisionBoxPlanner`,
 ///   `DebugUIInspectionHostedAdapter`, `HostedAppleScriptGenerationAdapter`,
-///   `HostedTaskFollowUpResolver`, and `HostedLocalAppCatalogProfileGenerator`.
+///   `HostedConversationFollowUpResolver`, and `HostedLocalAppCatalogProfileGenerator`.
 public enum DonkeyPrompts {
     // MARK: - Realtime command session
 
@@ -195,6 +196,38 @@ public enum DonkeyPrompts {
     /// condensed to "tool → status" so the model never loses sight of its own earlier trajectory.
     public static let harnessStepMaxDetailedHistorySteps = 12
 
+    /// Distills a finished run into at most one durable, general operating lesson for the agent's future
+    /// self. Fed the run's goal, terminal outcome, and full thread trace; returns strict JSON. The model
+    /// is told to stay general (an operating rule, never task-specific facts or anything about this
+    /// user's data) and to return an empty lesson when there is nothing worth carrying forward — most
+    /// clean runs teach nothing new, so an empty result is the expected common case.
+    public static func runLessonDistillation(goal: String, outcome: String, thread: String) -> String {
+        """
+        You are reviewing a finished run of a macOS agent to capture what it should LEARN for next time.
+        Read the run and decide whether there is ONE durable, general operating lesson worth remembering —
+        a rule about HOW to work (which tool to reach for, a trap to avoid, a faster path) that would help
+        on FUTURE, different tasks.
+
+        GOAL: \(goal)
+        OUTCOME: \(outcome)
+
+        A good lesson is:
+        - General craft, reusable across tasks — NOT a fact about this specific task, file, app, or person.
+        - Actionable and imperative, addressed to your future self ("When X, do Y, because Z").
+        - Earned by what actually happened here: a mistake that cost time, or a move that clearly worked.
+
+        Do NOT save: anything specific to this user, their files, their data, or this one request; secrets
+        or personal data; a restatement of the goal; or generic advice this run did not actually teach. If
+        the run went smoothly and taught nothing new, return an empty lesson — that is the common case.
+
+        Return STRICT JSON and nothing else:
+        {"lesson": "<one imperative sentence, or empty string if nothing is worth saving>", "cue": "<short phrase naming the kind of task this applies to>", "confidence": <0.0-1.0>}
+
+        THREAD:
+        \(thread)
+        """
+    }
+
     public static func harnessStep(
         task: HarnessAgentState,
         descriptors: [HarnessToolDescriptor],
@@ -202,6 +235,7 @@ public enum DonkeyPrompts {
         appGuidance: String?,
         understanding: HarnessRequestUnderstanding?,
         skillCatalog: String? = nil,
+        lessons: String? = nil,
         rollingContext: String? = nil,
         retryNote: String? = nil,
         openWindows: [MacWindowTargetCandidate] = []
@@ -266,11 +300,26 @@ public enum DonkeyPrompts {
             skillCatalogBlock = ""
         }
 
+        // The command-line tools Donkey bundles and signs, sorted for a stable prompt. Sourced from the
+        // single Swift list so it never drifts. Stated to the planner as guaranteed-present standalone
+        // binaries so it invokes them by bare name instead of probing for them or reaching for a Python /
+        // pip path — both of which trip the consent gate and never run the tool we actually ship.
+        let bundledToolsList = BundledTools.executableNames.sorted().joined(separator: ", ")
+
         // Prefer the restated goal parsed once up front; fall back to the raw task goal when no
         // understanding was produced.
         let restatedGoal = understanding?.restatedGoal
         let goalText = (restatedGoal?.isEmpty == false ? restatedGoal : nil) ?? task.goal
         let understandingBlock = self.understandingBlock(understanding)
+
+        // Durable operating lessons recalled from earlier runs with a related goal. Placed high, right
+        // under the goal, so a known trap (e.g. a search that times out) steers the very first step
+        // instead of being re-discovered the hard way. Empty when nothing relevant was learned before.
+        let trimmedLessons = lessons?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let lessonsBlock = trimmedLessons.isEmpty
+            ? ""
+            : "\nLESSONS FROM PAST RUNS (hard-won operating knowledge from earlier tasks — apply when "
+                + "relevant; they reflect what worked or failed before):\n\(trimmedLessons)\n"
 
         return """
         You are an expert macOS power user. Choose ONE tool to run next, then you will see the result
@@ -278,7 +327,7 @@ public enum DonkeyPrompts {
         entirely with system tools and have no on-screen UI target; reach for the GUI only when the task
         truly needs it.
         GOAL: \(goalText)
-        \(followUpBlock)\(understandingBlock)\(rollingContextBlock)
+        \(followUpBlock)\(understandingBlock)\(lessonsBlock)\(rollingContextBlock)
         \(historyBlock)
         \(factsBlock)\(guidanceBlock)\(skillCatalogBlock)\(windowsBlock)
         \(elementsBlock)
@@ -292,7 +341,12 @@ public enum DonkeyPrompts {
           pmset -g batt, system_profiler, defaults read), and change settings (defaults write,
           networksetup). Read-only commands run instantly; state-changing ones ask the user for
           one-time or always-allow consent, so propose them freely rather than avoiding them.
-        - Discover what's available by DOING, not by guessing or pre-checking. Run the command you
+        - Donkey ships these command-line tools and guarantees them on PATH as standalone binaries —
+          run the one you need by its BARE NAME and nothing else: \(bundledToolsList). They are not
+          Python packages and not optional: never invoke one through `python3 -m …` or `pip`, never
+          run `which`/`--version`/any check to confirm it exists, and never probe first — just use it
+          directly (e.g. `yt-dlp -P ~/Downloads 'URL'`, then `ffmpeg -i in.mp4 …`). Single-quote any URL.
+        - Discover what ELSE is available by DOING, not by guessing or pre-checking. Run the command you
           need by bare name; don't probe whether a tool exists first. If it fails with `command not
           found`, adapt: reach for another tool that does the job, or — if the task genuinely needs
           that one — report what's missing. Never install software or use a package manager (pip,

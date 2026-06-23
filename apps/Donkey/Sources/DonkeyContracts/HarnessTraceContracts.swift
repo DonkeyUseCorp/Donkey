@@ -12,6 +12,8 @@ public enum TraceModelCallKind: String, Codable, Equatable, Sendable {
     case conversationalReply
     /// The background call that rewrites the compacted thread summary.
     case conversationSummary
+    /// The background call that distills a finished run into a durable operating lesson for next time.
+    case lessonDistillation
 }
 
 /// What came back from a model call. Distinguishes the failure shapes the planner already separates

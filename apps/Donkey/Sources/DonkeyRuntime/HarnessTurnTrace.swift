@@ -128,6 +128,7 @@ public final class HarnessTurnTrace: HarnessTurnTracing, @unchecked Sendable {
         case .plannerStep: return "planner step"
         case .conversationalReply: return "conversational reply"
         case .conversationSummary: return "thread summary"
+        case .lessonDistillation: return "lesson distillation"
         }
     }
 
