@@ -13,6 +13,9 @@ final class UserQueryOverlayController {
     private let microphoneWaveformMeter = MicrophoneWaveformMeter()
     private let agentVisualizationCursorController = PointerCoachCursorOverlayController()
     private let spawnOverlayController = UserQuerySpawnOverlayController()
+    /// The conversation whose playback the standalone pointer is currently showing, so dismissing that row
+    /// can close it. Nil when the pointer is idle or its playback is riding a spawn cursor instead.
+    private var agentVisualizationConversationID: String?
 
     private var statusPanel: NSPanel?
     private var statusHostingView: UserQueryHostingView<UserQueryNotchStatusView>?
@@ -54,11 +57,15 @@ final class UserQueryOverlayController {
     ) {
         self.model = model
         self.activationShortcut = activationShortcut
-        model.agentVisualizationPresenter = { [weak self] request, preferredSpawnID in
+        model.agentVisualizationPresenter = { [weak self] request, conversationID, preferredSpawnID in
             self?.presentAgentVisualization(
                 request: request,
+                conversationID: conversationID,
                 preferredSpawnID: preferredSpawnID
             )
+        }
+        model.agentVisualizationDismisser = { [weak self] conversationID in
+            self?.dismissAgentVisualization(conversationID: conversationID)
         }
         spawnOverlayController.followUpSubmitted = { [weak self] spawnID, conversationID, text in
             self?.model.submitSpawnFollowUp(spawnID: spawnID, conversationID: conversationID, text: text)
@@ -761,6 +768,7 @@ final class UserQueryOverlayController {
 
     private func presentAgentVisualization(
         request: PointerCoachCursorGuideRequest,
+        conversationID: String,
         preferredSpawnID: String?
     ) {
         if spawnOverlayController.playGuide(
@@ -768,11 +776,23 @@ final class UserQueryOverlayController {
             on: preferredSpawnID,
             screen: activeScreen()
         ) {
+            // Playback rode a spawn cursor (removed with its row), so the standalone pointer is idle.
             agentVisualizationCursorController.close()
+            agentVisualizationConversationID = nil
             return
         }
 
         agentVisualizationCursorController.show(request: request)
+        agentVisualizationConversationID = conversationID
+    }
+
+    /// Close the standalone pointer if it is still showing the dismissed row's playback. A newer row's
+    /// playback reuses the same panel and re-keys `agentVisualizationConversationID`, so this only clears the
+    /// pointer when it actually belongs to the row being deleted.
+    private func dismissAgentVisualization(conversationID: String) {
+        guard agentVisualizationConversationID == conversationID else { return }
+        agentVisualizationCursorController.close()
+        agentVisualizationConversationID = nil
     }
 
     private func updateSpawnOverlay() {

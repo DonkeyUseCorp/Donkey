@@ -41,6 +41,12 @@ public struct HarnessRequestUnderstanding: Sendable, Equatable {
     /// skill's instructions from step one. Empty when no skill applies. Selected by the model against a
     /// typed catalog, never matched from raw text.
     public var relevantSkillIDs: [String]
+    /// For a `.converse` turn, the actual reply to show the user — produced in this same boundary so a
+    /// greeting or simple question is answered in one round trip instead of a second responder call. It is
+    /// context-free (this boundary sees only the current turn), so the caller uses it directly only on a
+    /// fresh turn and still routes a multi-turn follow-up through the context-aware responder. Empty/nil for
+    /// `.act` and `.clarify`.
+    public var conversationReply: String?
 
     public init(
         turnKind: HarnessTurnKind = .act,
@@ -51,7 +57,8 @@ public struct HarnessRequestUnderstanding: Sendable, Equatable {
         needsClarification: Bool = false,
         clarifyingQuestion: String? = nil,
         executionPreference: ExecutionPreference = .background,
-        relevantSkillIDs: [String] = []
+        relevantSkillIDs: [String] = [],
+        conversationReply: String? = nil
     ) {
         self.turnKind = turnKind
         self.restatedGoal = restatedGoal
@@ -62,6 +69,7 @@ public struct HarnessRequestUnderstanding: Sendable, Equatable {
         self.clarifyingQuestion = clarifyingQuestion
         self.executionPreference = executionPreference
         self.relevantSkillIDs = relevantSkillIDs
+        self.conversationReply = conversationReply
     }
 }
 
@@ -108,29 +116,93 @@ public final class HostedHarnessRequestUnderstanding {
             recordCall(prompt: prompt, response: text,
                        finishReason: RemoteInferenceResponseHelpers.providerFinishReason(from: response),
                        status: .ok, startedAt: startedAt, endedAt: endedAt)
-            let json = DebugUIInspectionResponseDecoder.jsonObjectSubstring(text)
-            let wire = try JSONDecoder().decode(UnderstandingWire.self, from: Data(json.utf8))
-            let restated = wire.restatedGoal?.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let restated, !restated.isEmpty else { return nil }
-            return HarnessRequestUnderstanding(
-                turnKind: wire.turnKind.flatMap { HarnessTurnKind(rawValue: $0) } ?? .act,
-                restatedGoal: restated,
-                targetAppName: wire.targetAppName.flatMap { $0.isEmpty ? nil : $0 },
-                parameters: wire.parameters ?? [:],
-                successCriteria: wire.successCriteria.flatMap { $0.isEmpty ? nil : $0 },
-                needsClarification: wire.needsClarification ?? false,
-                clarifyingQuestion: wire.clarifyingQuestion.flatMap { $0.isEmpty ? nil : $0 },
-                executionPreference: wire.executionPreference
-                    .flatMap { ExecutionPreference(rawValue: $0) } ?? .background,
-                relevantSkillIDs: (wire.relevantSkillIDs ?? [])
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty }
-            )
+            return Self.decodeUnderstanding(from: text)
         } catch {
             recordCall(prompt: prompt, response: String(String(describing: error).prefix(500)),
                        finishReason: nil, status: .failed, startedAt: startedAt, endedAt: .now())
             return nil
         }
+    }
+
+    /// Streaming counterpart of `understand`: the SAME typed understanding, but produced by a streaming call
+    /// so a `.converse` turn's `conversationReply` types into the UI live — and in ONE round trip. Each delta
+    /// is fed to a field extractor that forwards only the decoded `conversationReply` characters to
+    /// `onReplyDelta`; the rest of the JSON (the typed decision) streams past untouched and is parsed once the
+    /// stream completes. For an `.act`/`.clarify` turn nothing is forwarded (the field stays empty), so this
+    /// is safe to use for any fresh turn. Returns nil on any failure, exactly like `understand`.
+    public func understandStreaming(
+        command: String,
+        frontmostAppName: String,
+        skillCatalog: String? = nil,
+        onReplyDelta: @escaping @MainActor @Sendable (String) -> Void
+    ) async -> HarnessRequestUnderstanding? {
+        let prompt = DonkeyPrompts.requestUnderstanding(
+            command: command,
+            frontmostAppName: frontmostAppName,
+            skillCatalog: skillCatalog
+        )
+        let startedAt = RunTraceTimestamp.now()
+        let streamer = ReplyFieldStreamer()
+        let request = RemoteInferenceChatCompletionRequest(
+            messages: [RemoteInferenceChatMessage(role: "user", content: .string(prompt))],
+            stream: true,
+            metadata: ["source": "hosted-harness-request-understanding", "prompt_version": "harness-request-understanding-v1-stream"],
+            parameters: [
+                "temperature": .number(0),
+                "max_output_tokens": .number(2_500),
+                "thinking_level": .string("medium"),
+                "response_format": .object(["type": .string("json_object")])
+            ]
+        )
+        let backend = self.backend
+        do {
+            let text = try await backend.streamChat(request) { delta in
+                let reply = streamer.ingest(delta)
+                if !reply.isEmpty { onReplyDelta(reply) }
+            }
+            let endedAt = RunTraceTimestamp.now()
+            guard !text.isEmpty else {
+                recordCall(prompt: prompt, response: "<no output text>", finishReason: nil,
+                           status: .empty, startedAt: startedAt, endedAt: endedAt)
+                return nil
+            }
+            recordCall(prompt: prompt, response: text, finishReason: nil,
+                       status: .ok, startedAt: startedAt, endedAt: endedAt)
+            return Self.decodeUnderstanding(from: text)
+        } catch {
+            recordCall(prompt: prompt, response: String(String(describing: error).prefix(500)),
+                       finishReason: nil, status: .failed, startedAt: startedAt, endedAt: .now())
+            return nil
+        }
+    }
+
+    /// Decode the model's text (tolerant of surrounding prose via `jsonObjectSubstring`) into the typed
+    /// understanding. Shared by the structured and streaming paths so both yield the same shape. Returns nil
+    /// when the JSON is unparseable or carries no restated goal.
+    private static func decodeUnderstanding(from text: String) -> HarnessRequestUnderstanding? {
+        let json = DebugUIInspectionResponseDecoder.jsonObjectSubstring(text)
+        guard let wire = try? JSONDecoder().decode(UnderstandingWire.self, from: Data(json.utf8)) else {
+            return nil
+        }
+        let restated = wire.restatedGoal?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let restated, !restated.isEmpty else { return nil }
+        return HarnessRequestUnderstanding(
+            turnKind: wire.turnKind.flatMap { HarnessTurnKind(rawValue: $0) } ?? .act,
+            restatedGoal: restated,
+            targetAppName: wire.targetAppName.flatMap { $0.isEmpty ? nil : $0 },
+            parameters: wire.parameters ?? [:],
+            successCriteria: wire.successCriteria.flatMap { $0.isEmpty ? nil : $0 },
+            needsClarification: wire.needsClarification ?? false,
+            clarifyingQuestion: wire.clarifyingQuestion.flatMap { $0.isEmpty ? nil : $0 },
+            executionPreference: wire.executionPreference
+                .flatMap { ExecutionPreference(rawValue: $0) } ?? .background,
+            relevantSkillIDs: (wire.relevantSkillIDs ?? [])
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty },
+            conversationReply: wire.conversationReply
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .flatMap { $0.isEmpty ? nil : $0 }
+        )
     }
 
     private func recordCall(
@@ -164,10 +236,11 @@ public final class HostedHarnessRequestUnderstanding {
         var clarifyingQuestion: String?
         var executionPreference: String?
         var relevantSkillIDs: [String]?
+        var conversationReply: String?
 
         private enum CodingKeys: String, CodingKey {
             case turnKind, restatedGoal, targetAppName, parameters, successCriteria, needsClarification, clarifyingQuestion
-            case executionPreference, relevantSkillIDs
+            case executionPreference, relevantSkillIDs, conversationReply
         }
 
         init(from decoder: Decoder) throws {
@@ -180,6 +253,7 @@ public final class HostedHarnessRequestUnderstanding {
             needsClarification = try container.decodeIfPresent(Bool.self, forKey: .needsClarification)
             executionPreference = try container.decodeIfPresent(String.self, forKey: .executionPreference)
             relevantSkillIDs = try container.decodeIfPresent([String].self, forKey: .relevantSkillIDs)
+            conversationReply = try container.decodeIfPresent(String.self, forKey: .conversationReply)
             // The schema is non-strict, so a parameter value may arrive as a number or boolean. Coerce
             // scalars to strings instead of failing the whole decode.
             parameters = try container.decodeIfPresent([String: ScalarString].self, forKey: .parameters)?
@@ -264,7 +338,8 @@ public final class HostedHarnessRequestUnderstanding {
                             "relevantSkillIDs": .object([
                                 "type": .string("array"),
                                 "items": .object(["type": .string("string")])
-                            ])
+                            ]),
+                            "conversationReply": .object(["type": .string("string")])
                         ])
                     ])
                 ])
@@ -280,4 +355,18 @@ public final class HostedHarnessRequestUnderstanding {
         )
     }
 
+}
+
+/// Accumulates streamed deltas and extracts the `conversationReply` field live. A reference type so the
+/// `@MainActor @Sendable` stream callback can mutate it; only ever touched on the main actor, hence
+/// `@unchecked Sendable`.
+private final class ReplyFieldStreamer: @unchecked Sendable {
+    private var buffer = ""
+    private var field = StreamingJSONStringField(key: "conversationReply")
+
+    /// Append a delta and return the newly-decoded reply characters (empty until the field appears).
+    func ingest(_ delta: String) -> String {
+        buffer += delta
+        return field.consume(buffer)
+    }
 }

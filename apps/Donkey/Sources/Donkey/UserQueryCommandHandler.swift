@@ -502,8 +502,24 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // dead-ends or silently stalls the run.
         let understandingBoundary = HostedHarnessRequestUnderstanding(backend: backend, trace: trace)
         let skillSelectionCatalog = BuiltInLocalAppSkillPacks.skillSelectionCatalog()
+
+        // A fresh turn — no assistant reply yet in this conversation — lets a `.converse` reply stream
+        // straight out of the understanding boundary in ONE round trip: the same call that types the turn
+        // also generates the reply, and the field extractor streams it to the chin live. A follow-up may
+        // lean on earlier context the understanding boundary never sees, so it uses the non-streaming
+        // understanding and routes any converse reply through the context-aware responder below.
+        let priorEvents = await genericHarnessLifecycle.conversationStore.events(conversationID: conversationID)
+        let isFreshTurn = !priorEvents.contains { $0.role == .assistant }
         let understanding = await AIDeadline.race(seconds: Self.understandingTimeoutSeconds) {
-            await understandingBoundary.understand(
+            if isFreshTurn {
+                return await understandingBoundary.understandStreaming(
+                    command: command,
+                    frontmostAppName: frontmostAppName,
+                    skillCatalog: skillSelectionCatalog,
+                    onReplyDelta: answerStream ?? { _ in }
+                )
+            }
+            return await understandingBoundary.understand(
                 command: command,
                 frontmostAppName: frontmostAppName,
                 skillCatalog: skillSelectionCatalog
@@ -527,6 +543,8 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 conversationID: conversationID,
                 agentID: agentID,
                 preparedTurnMetadata: preparedTurnMetadata,
+                inlineReply: understanding?.conversationReply,
+                inlineReplyAlreadyStreamed: isFreshTurn,
                 answerStream: answerStream
             )
         }
@@ -1161,30 +1179,40 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         conversationID: String,
         agentID: String,
         preparedTurnMetadata: [String: String],
+        inlineReply: String?,
+        inlineReplyAlreadyStreamed: Bool,
         answerStream: (@MainActor @Sendable (String) -> Void)?
     ) async -> UserQueryCommandHandlingResult {
         transcript.systemEvent("Conversational turn — responding without driving the Mac.")
         VisionGroundingLog.emit("conversation traceID=\(traceID) kind=converse")
 
-        // Carry the same bounded rolling conversation context the planner would get, so multi-turn chat
-        // keeps continuity ("what did I just ask?") without ever entering the action loop.
-        let textGenerator = HostedTextGenerator(backend: backend)
-        let compactionDriver = ConversationCompactionDriver(
-            conversationStore: genericHarnessLifecycle.conversationStore,
-            coordinator: genericHarnessLifecycle.coordinator,
-            compactor: genericHarnessLifecycle.compactor,
-            generate: { await textGenerator.generate($0) }
-        )
-        let conversationContext = await compactionDriver.rollingContext(agentID: agentID)
+        // On a fresh turn the understanding boundary already generated AND streamed this reply live (one
+        // round trip), so adopt it as-is — re-emitting would double it on screen. A follow-up turn falls to
+        // the context-aware responder, which streams a reply that can see the earlier conversation.
+        let reply: String
+        if let inlineReply, !inlineReply.isEmpty, inlineReplyAlreadyStreamed {
+            reply = inlineReply
+        } else {
+            // Carry the same bounded rolling conversation context the planner would get, so multi-turn chat
+            // keeps continuity ("what did I just ask?") without ever entering the action loop.
+            let textGenerator = HostedTextGenerator(backend: backend)
+            let compactionDriver = ConversationCompactionDriver(
+                conversationStore: genericHarnessLifecycle.conversationStore,
+                coordinator: genericHarnessLifecycle.coordinator,
+                compactor: genericHarnessLifecycle.compactor,
+                generate: { await textGenerator.generate($0) }
+            )
+            let conversationContext = await compactionDriver.rollingContext(agentID: agentID)
 
-        let responder = HostedHarnessConversationalResponder(backend: backend, trace: trace)
-        let streamed = await responder.respond(
-            command: command,
-            frontmostAppName: frontmostAppName,
-            conversationContext: conversationContext,
-            onDelta: answerStream ?? { _ in }
-        )
-        let reply = (streamed?.isEmpty == false) ? streamed! : "Hey! What can I help you with?"
+            let responder = HostedHarnessConversationalResponder(backend: backend, trace: trace)
+            let streamed = await responder.respond(
+                command: command,
+                frontmostAppName: frontmostAppName,
+                conversationContext: conversationContext,
+                onDelta: answerStream ?? { _ in }
+            )
+            reply = (streamed?.isEmpty == false) ? streamed! : "Hey! What can I help you with?"
+        }
         transcript.response(reply)
         transcript.writeSummary(Self.deterministicThreadSummary(
             command: command, app: frontmostAppName, outcome: "ok", steps: [], finalDetail: reply

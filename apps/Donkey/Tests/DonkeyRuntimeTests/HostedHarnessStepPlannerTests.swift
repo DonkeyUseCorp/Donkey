@@ -300,7 +300,7 @@ struct HostedHarnessStepPlannerTests {
         )
 
         _ = await planner.planNextStep(for: task(goal: "create a subtitled clip", toolHistory: []))
-        let narration = UserQueryCommandHandler.stepNarration(for: step, planner: planner)
+        let narration = LocalAppUserQueryCommandHandler.stepNarration(for: step, planner: planner)
 
         #expect(narration == longNarration)
     }

@@ -37,7 +37,13 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     /// delegate pushes this from the auth coordinator's session state (true while signed out after a
     /// prior sign-in, i.e. an expired session) and clears it once sign-in completes.
     @Published private(set) var needsLogin = false
-    var agentVisualizationPresenter: ((PointerCoachCursorGuideRequest, String?) -> Void)?
+    /// Presents the agent's pointer playback for a conversation. The conversation ID binds the pointer's
+    /// lifetime to its row: the controller remembers which conversation a standalone pointer belongs to so
+    /// `agentVisualizationDismisser` can tear it down when that row is deleted.
+    var agentVisualizationPresenter: ((PointerCoachCursorGuideRequest, _ conversationID: String, _ preferredSpawnID: String?) -> Void)?
+    /// Clears any pointer playback still on screen for a conversation. Fired when a row is dismissed so a
+    /// standalone pointer never outlives the row it was narrating.
+    var agentVisualizationDismisser: ((_ conversationID: String) -> Void)?
     /// Fired when the notch Login button is tapped, so the app delegate can start the real sign-in
     /// (the Google browser flow). The model never opens browsers or windows itself.
     var loginActionRequested: (() -> Void)?
@@ -859,7 +865,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         refreshPromptStateAfterRunResult(conversationID: conversationID, result: result)
         let cursorOverlayRequest = result.cursorOverlayRequest
         if let cursorOverlayRequest {
-            agentVisualizationPresenter?(cursorOverlayRequest, spawnID)
+            agentVisualizationPresenter?(cursorOverlayRequest, conversationID, spawnID)
         }
         finishSpawn(
             id: spawnID,
@@ -1061,6 +1067,10 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         if let spawnID = spawnStates.first(where: { $0.conversationID == conversationID })?.id {
             removeSpawn(id: spawnID)
         }
+        // Tear down any pointer playback still narrating this row. Spawn cursors are removed above; this
+        // covers the standalone pointer overlay, which is keyed by conversation rather than spawn and would
+        // otherwise linger after the row is gone.
+        agentVisualizationDismisser?(conversationID)
         // Drop the persisted row (and its events/assets) too, so the conversation does not
         // reappear when the notch reloads recent conversations on the next launch.
         conversationStore.deleteConversation(id: conversationID)
@@ -1521,7 +1531,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             isFollowUp: isFollowUp,
             turnSource: source,
             spawnProgressChanged: runProgressHandler(conversationID: conversationID, spawnID: spawnID),
-            agentVisualizationChanged: agentVisualizationHandler(for: spawnID)
+            agentVisualizationChanged: agentVisualizationHandler(conversationID: conversationID, spawnID: spawnID)
         )
     }
 
@@ -1576,11 +1586,12 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     }
 
     private func agentVisualizationHandler(
-        for spawnID: String?
+        conversationID: String,
+        spawnID: String?
     ) -> (@MainActor @Sendable (AgentVisualizationPlan) -> Void)? {
         { [weak self] plan in
             guard let request = plan.cursorOverlayRequest() else { return }
-            self?.agentVisualizationPresenter?(request, spawnID)
+            self?.agentVisualizationPresenter?(request, conversationID, spawnID)
         }
     }
 

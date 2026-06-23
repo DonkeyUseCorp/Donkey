@@ -165,6 +165,11 @@ public enum DonkeyPrompts {
           under (0, 1, or a few — match on each skill's description and keywords). Its full guide is loaded
           for the planner, so the right pick makes the work reliable and a wrong one wastes attention. Empty
           for conversation, a task no skill covers, or when no SKILLS list is shown.
+        - conversationReply: ONLY when turnKind is "converse", write the actual reply to send the user here —
+          the friendly, helpful thing you would say (a greeting back, the answer to their question, etc.),
+          in a sentence or three. This is what they will read, so make it complete on its own. When the turn
+          is "converse", output this field FIRST in the JSON so it can stream to the user immediately. Leave
+          it empty for "act" and "clarify" — those are handled elsewhere.
 
         Return JSON only.
         """
