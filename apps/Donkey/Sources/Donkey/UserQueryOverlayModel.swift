@@ -1465,6 +1465,15 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
                 sequence: sequence
             )
         )
+        // The collapsed chin echoes the latest turn while the agent works, reading it from the task's
+        // `commandText`. Every user turn — fresh, follow-up, resumed, or one folded into a still-running
+        // task via the inject path — passes through here, but the inject path updates no task field on its
+        // own, so a follow-up would leave the chin reading back the original prompt for the whole run.
+        // Refresh it here, the one chokepoint every user message crosses, so the chin always shows the
+        // message the user just sent rather than a stale earlier one.
+        if role == .user {
+            updateTask(id: conversationID, commandText: trimmedText)
+        }
         return eventID
     }
 
@@ -1498,6 +1507,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     private func updateTask(
         id: String,
         title: String? = nil,
+        commandText: String? = nil,
         detail: String? = nil,
         status: UserQueryConversationStatus? = nil,
         metadata: [String: String]? = nil
@@ -1508,6 +1518,9 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         let wasRunning = task.status == .running
         if let title {
             task.title = title
+        }
+        if let commandText {
+            task.commandText = commandText
         }
         if let detail {
             task.detail = detail
