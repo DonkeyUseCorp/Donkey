@@ -389,9 +389,9 @@ public struct UserQueryNotchStatusView: View {
     private var fullWidthCollapsedContent: some View {
         // A no-notch display has no camera void to route around, so the line lives inline here rather
         // than in a chin band — but it reads the very same rotating line the chin does (the surfaced
-        // conversation's latest line), so both layouts narrate identically. It gets the same two-line
-        // budget; the pill grows by a line (see the controller's `statusCollapsedTopRowExtraHeight`)
-        // when that line wraps.
+        // conversation's latest line), so both layouts narrate identically. It gets the same one-line
+        // budget at rest, growing to a second line (see the controller's `statusCollapsedTopRowExtraHeight`)
+        // only while the line it shows is a surfaced one — active or unacknowledged.
         TimelineView(.periodic(from: Self.chinRotationAnchor, by: Self.chinRotationInterval)) { context in
             let speaker = rotatingChinConversation(at: context.date)
             HStack(spacing: 7) {
@@ -403,7 +403,7 @@ public struct UserQueryNotchStatusView: View {
                 Text(collapsedTopRowText(speaker: speaker))
                     .font(.system(size: 12, weight: .regular))
                     .foregroundStyle(Color.white.opacity(0.92))
-                    .lineLimit(2)
+                    .lineLimit(chinLineLimit(speaker: speaker))
                     .truncationMode(.tail)
 
                 Spacer(minLength: 0)
@@ -471,12 +471,23 @@ public struct UserQueryNotchStatusView: View {
         Text(chinText(for: conversation))
             .font(.system(size: Self.chinFontSize, weight: .regular))
             .foregroundStyle(Color.white.opacity(0.72))
-            .lineLimit(2)
+            .lineLimit(chinLineLimit(speaker: conversation))
             .truncationMode(.tail)
     }
 
     private func chinText(for conversation: UserQueryConversation) -> String {
         conversation.chinDisplayText
+    }
+
+    /// How many lines the collapsed chin gives the line it is currently narrating. A surfaced conversation
+    /// — one that is active or unacknowledged (running, waiting on the user, or a terminal line not yet
+    /// dismissed) — gets a second line. An idle line (the most-recent settled conversation shown as the
+    /// fallback, or no speaker at all) reads on one, so the resting notch stays a single line. Matches the
+    /// two-line budget the controller reserves (`statusChinHeight` / `statusCollapsedTopRowExtraHeight`),
+    /// so the band height and the rendered line agree.
+    private func chinLineLimit(speaker: UserQueryConversation?) -> Int {
+        guard let speaker, surfacedConversations.contains(where: { $0.id == speaker.id }) else { return 1 }
+        return 2
     }
 
     private func rotatingChinConversation(at date: Date) -> UserQueryConversation? {

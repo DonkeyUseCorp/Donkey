@@ -15,7 +15,7 @@ COLLAPSED (real notch — reference frame 253 × 32, 14px bottom corners)
    ┌─ left ──┐┌──── notch void ─────┐┌─ right ──┐
    │  ◤      ││   (hardware notch)   ││  12m 3s  │   ← notch row, 32px
    └─────────┘└──────────────────────┘└──────────┘
-   │ Comparing the top options…                  │   ← chin, ~20px, only while streaming
+   │ Comparing the top options…                  │   ← chin, one line idle, two while a task is live
 
 EXPANDED (reference frame 604 × 312, 14px corners)
    ┌──────────────────────────── notch window ───────────────┐
@@ -41,11 +41,13 @@ The collapsed notch is three zones across one row. The middle is the **void** �
 | Void | The hardware notch. Always empty. | Empty. |
 | Right gutter | One status only: the running clock, or a single notification icon. | One app-level action button (see Notifications). |
 
-A display with no hardware notch uses a free-floating pill: no void, square top corners, rounded bottom, and the streaming message inline (two lines) instead of a separate chin.
+A display with no hardware notch uses a free-floating pill: no void, square top corners, rounded bottom, and the current line inline instead of a separate chin, growing its row by a line under the same one-or-two-line rule below.
 
 ## Chin
 
-The chin is the strip that drops below the real notch while a task is streaming. It shows a single line of the current update in small text, with an ellipsis if it overflows. It exists only while something is streaming and only while collapsed; expanding hides it.
+The chin is the strip that drops below the real notch to carry a task's latest line in small text, with an ellipsis if it overflows. It exists only while collapsed; expanding hides it.
+
+**One line at rest, two while a task is live.** The chin shows a single line whenever the notch is idle — the line it carries is then a settled task the user has already acknowledged. It grows to a second line only while the line it is showing belongs to a *surfaced* task: one that is active or unacknowledged — running, waiting on the user, or finished-but-not-yet-dismissed. When the user expands the notch to acknowledge a finished task, it leaves the surfaced set and the chin drops back to one line. The second line is a budget, not a guarantee: it appears only when the text is long enough to wrap.
 
 ## Streaming and the Queue
 

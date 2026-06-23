@@ -1034,21 +1034,18 @@ final class UserQueryOverlayController {
 
     /// On a no-notch display the collapsed line renders inline in the top row (a real notch routes it into
     /// the chin band instead). It shows the same rotating surfaced-conversation line the chin does, so size the
-    /// pill to the tallest line that can rotate through — the max wrapped-line count across the surfaced
-    /// conversations, or the headline fallback when nothing is surfaced — and grow by one line-height when that is
-    /// two lines. The text width subtracts the pill's pointer lane and gutter, measured narrow so the
+    /// pill to the tallest surfaced line that can rotate through — the max wrapped-line count across the
+    /// surfaced (active or unacknowledged) conversations — and grow by one line-height when that is two lines.
+    /// The idle headline, shown when nothing is surfaced, always reads on one row, so the resting pill never
+    /// grows. The text width subtracts the pill's pointer lane and gutter, measured narrow so the
     /// prediction never under-counts and clips. A real notch returns 0 — its second line lives in
     /// `statusChinHeight`.
     private func statusCollapsedTopRowExtraHeight(collapsedWidth: CGFloat, hasNotch: Bool) -> CGFloat {
         guard !hasNotch else { return 0 }
         let textWidth = collapsedWidth - Self.statusCollapsedTopRowHorizontalReserve
-        let headline = UserQueryNotchStatusView.collapsedHeadline(
-            conversations: model.notchConversations,
-            state: model.promptState
-        )
-        let lines = model.notchSurfacedConversations.reduce(
-            Self.chinLineCount(for: headline, width: textWidth)
-        ) { partial, conversation in
+        // A surfaced conversation — active or unacknowledged — can grow the row to a second line; the idle
+        // headline (shown when nothing is surfaced) always reads on one, so the resting pill stays a single row.
+        let lines = model.notchSurfacedConversations.reduce(1) { partial, conversation in
             max(partial, Self.chinLineCount(for: conversation.chinDisplayText, width: textWidth))
         }
         return lines >= 2 ? Self.statusChinLineHeight : 0
@@ -1060,6 +1057,9 @@ final class UserQueryOverlayController {
     /// there), keeping the bottom margin constant. Real notch only.
     private func statusChinHeight(textWidth: CGFloat) -> CGFloat {
         let surfaced = model.notchSurfacedConversations
+        // A surfaced conversation is active or unacknowledged (running, waiting, or a terminal line the
+        // user hasn't dismissed); those get up to two lines. An idle notch has nothing surfaced, so the
+        // chin collapses to no line at all.
         guard !surfaced.isEmpty else { return 0 }
         // Cache by the surfaced chin text + width: `notchMetrics()` runs every frame, but the wrapped-line
         // Core Text measurement only needs to rerun when the text or available width actually changes.
