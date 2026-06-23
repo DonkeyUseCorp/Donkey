@@ -9,7 +9,7 @@ import Foundation
 public enum BundledTools {
     /// Bare executable names of the tools shipped in the bundle — the mandatory media set from
     /// scripts/publish-bundled-tools.sh plus the document tools fetched in fetch-bundled-tools.sh. Donkey
-    /// resolves these from `installDirectory`, which `shellEnvironment()` puts first on PATH, so capability
+    /// resolves these from `installDirectory`, which `shellEnvironment()` puts on PATH, so capability
     /// skills run them by bare name. This is the single Swift home for the list; keep it in step with the
     /// fetch/publish scripts when the bundle gains or drops a tool.
     public static let executableNames: Set<String> = [

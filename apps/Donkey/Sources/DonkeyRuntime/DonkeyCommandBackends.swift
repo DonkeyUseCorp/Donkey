@@ -700,18 +700,79 @@ public enum DonkeyCommandBackends {
         return nil
     }
 
-    /// The environment for a `shell_exec` child: the app's environment with the bundled
-    /// tools directory appended to PATH. Appended, not prepended, so a tool the user has
-    /// installed (e.g. a newer Homebrew `yt-dlp`) still wins, while the bundled copy is the
-    /// guaranteed fallback that keeps a capability working with nothing installed. Returns
-    /// `nil` when there is no bundled tools directory, so `Process` inherits the environment
-    /// exactly as before.
-    static func shellEnvironment() -> [String: String]? {
-        guard let toolsDirectory = bundledToolsDirectory else { return nil }
+    /// The environment for a `shell_exec` child: the app's environment, but with PATH rebuilt
+    /// from the user's *login-shell* PATH plus the bundled tools directory.
+    ///
+    /// A GUI-launched app (Finder/Dock) inherits only launchd's minimal PATH —
+    /// `/usr/bin:/bin:/usr/sbin:/sbin` — which omits `/opt/homebrew/bin` and everything else the
+    /// user's profile adds. Building the child's PATH from that minimal value made every
+    /// Homebrew-installed tool (`brew`, `ffmpeg`, `yt-dlp`, …) read as `command not found`, even
+    /// though the user clearly had them in Terminal. That mismatch is what sent the planner into a
+    /// loop: it was told a tool was available, the shell disagreed, and it never reconciled the two.
+    /// Anchoring on the login-shell PATH instead means the agent sees exactly what the user sees.
+    ///
+    /// The bundled tools directory is appended (not prepended), so a tool the user installed (e.g. a
+    /// newer Homebrew `yt-dlp`) still wins, while the bundled copy is the guaranteed fallback that
+    /// keeps a capability working with nothing installed.
+    static func shellEnvironment() -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
-        let existing = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
-        environment["PATH"] = existing + ":" + toolsDirectory.path
+        var path = loginShellPath
+        if let toolsDirectory = bundledToolsDirectory {
+            path += ":" + toolsDirectory.path
+        }
+        environment["PATH"] = path
         return environment
+    }
+
+    /// The PATH the user's interactive shell would have, resolved once. Asking the login shell
+    /// (`$SHELL -lc …`) runs their `.zprofile`/`.zshrc`, so the result includes `/opt/homebrew/bin`,
+    /// `~/.local/bin`, language version managers, and anything else they rely on — the same PATH they
+    /// get in Terminal. Resolved lazily and cached: it is stable for the process lifetime and spawning
+    /// a login shell is not free.
+    private static let loginShellPath: String = resolveLoginShellPath()
+
+    /// A PATH that already covers both Homebrew prefixes, used when the login shell can't be queried so
+    /// the agent still degrades to a useful PATH rather than launchd's bare minimum.
+    private static let fallbackShellPath =
+        "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+    private static func resolveLoginShellPath() -> String {
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        // Markers fence the value so output printed by the user's rc files (version-manager banners,
+        // etc.) can't contaminate the PATH we extract.
+        let start = "__DONKEY_PATH_START__"
+        let end = "__DONKEY_PATH_END__"
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: shell)
+        process.arguments = ["-lc", "printf '%s%s%s' '\(start)' \"$PATH\" '\(end)'"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+
+        let finished = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in finished.signal() }
+        do {
+            try process.run()
+        } catch {
+            return fallbackShellPath
+        }
+        // Bound it: a login shell normally exits in well under a second, but a pathological profile
+        // must not hang the first shell_exec forever.
+        if finished.wait(timeout: .now() + 5.0) == .timedOut {
+            process.terminate()
+            return fallbackShellPath
+        }
+
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard
+            let output = String(data: data, encoding: .utf8),
+            let lower = output.range(of: start),
+            let upper = output.range(of: end)
+        else {
+            return fallbackShellPath
+        }
+        let resolved = String(output[lower.upperBound..<upper.lowerBound])
+        return resolved.isEmpty ? fallbackShellPath : resolved
     }
 
     // MARK: - Result helpers

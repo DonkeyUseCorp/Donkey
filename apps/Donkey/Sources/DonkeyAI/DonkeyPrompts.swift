@@ -373,6 +373,8 @@ public enum DonkeyPrompts {
           Python packages and not optional: never invoke one through `python3 -m …` or `pip`, never
           run `which`/`--version`/any check to confirm it exists, and never probe first — just use it
           directly (e.g. `yt-dlp -P ~/Downloads 'URL'`, then `ffmpeg -i in.mp4 …`). Single-quote any URL.
+          A download, transcode, or network call can run far past the default timeout, so pass a generous
+          `timeoutSeconds` (up to 120) on the shell_exec call or it is killed mid-run.
         - Discover what ELSE is available by DOING, not by guessing or pre-checking. Run the command you
           need by bare name; don't probe whether a tool exists first. If it fails with `command not
           found`, adapt: reach for another tool that does the job, or — if the task genuinely needs
