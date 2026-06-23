@@ -239,13 +239,12 @@ public struct GenericHarnessRuntime: Sendable {
     }
 
     /// The slice of tool history belonging to the current run: everything after the last succeeded
-    /// terminal lifecycle call (run.complete / run.failSafe / run.cancel). A task resumed for a new
+    /// terminal call (see `BuiltInHarnessToolCatalog.terminalToolNames`). A task resumed for a new
     /// user turn keeps its full history for context, but guards that reason about "this run" —
     /// duplicate actions, repeated failures — must not match records from a run that already ended.
     private static func currentRunHistory(_ history: [HarnessToolCallRecord]) -> ArraySlice<HarnessToolCallRecord> {
-        let terminalNames: Set<String> = ["run.complete", "run.failSafe", "run.cancel"]
         guard let lastTerminal = history.lastIndex(where: {
-            terminalNames.contains($0.call.name) && $0.resultStatus == .succeeded
+            BuiltInHarnessToolCatalog.terminalToolNames.contains($0.call.name) && $0.resultStatus == .succeeded
         }) else { return history[...] }
         return history[history.index(after: lastTerminal)...]
     }
@@ -576,6 +575,14 @@ public struct GenericHarnessRuntime: Sendable {
             return await coordinator.complete(
                 agentID: agentID,
                 reason: call.input["reason"] ?? "Task completed by lifecycle tool"
+            )
+        case "conversation.respond":
+            // A chat reply ends its turn: complete the run so the planner can't loop re-issuing the same
+            // answer until the stall guard fails it safe. Conversation-only turns have no state-changing
+            // step, so this bypasses the completion-evidence gate the same way a pure-read task does.
+            return await coordinator.complete(
+                agentID: agentID,
+                reason: "Task completed by conversation response"
             )
         case "run.failSafe":
             return await coordinator.failSafe(

@@ -161,6 +161,15 @@ public actor HarnessToolRegistry {
 }
 
 public enum BuiltInHarnessToolCatalog {
+    /// Tool calls whose success ends the current run, used both to map a call to task completion and to
+    /// slice "this run" out of a resumed task's history. The `run.*` lifecycle terminals, plus
+    /// `conversation.respond`: a chat reply is the terminal action of a conversational turn — the answer
+    /// is the result, with nothing left to act on or verify — so it completes the run rather than leaving
+    /// the planner to loop re-issuing the same reply until the stall guard fails it safe.
+    public static let terminalToolNames: Set<String> = [
+        "run.complete", "run.failSafe", "run.cancel", "conversation.respond"
+    ]
+
     public static var descriptors: [HarnessToolDescriptor] {
         [
             descriptor(

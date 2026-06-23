@@ -305,10 +305,9 @@ public actor HarnessAgentCoordinator {
             // spiraled on the (truthful) empty read. The tool history keeps the full record for
             // context; the facts re-derive from the fresh reads the completion gate already
             // requires. Gate resumes (clarify/permission) continue the SAME run — their history
-            // does not end in a terminal lifecycle call — and keep their facts.
-            let terminalNames: Set<String> = ["run.complete", "run.failSafe", "run.cancel"]
+            // does not end in a terminal call — and keep their facts.
             if let last = task.toolHistory.last,
-               terminalNames.contains(last.call.name), last.resultStatus == .succeeded {
+               BuiltInHarnessToolCatalog.terminalToolNames.contains(last.call.name), last.resultStatus == .succeeded {
                 task.worldModel.facts = [:]
             }
         }

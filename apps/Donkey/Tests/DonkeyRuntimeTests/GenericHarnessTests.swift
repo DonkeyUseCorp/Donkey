@@ -212,6 +212,35 @@ struct GenericHarnessTests {
     }
 
     @Test
+    func aConversationResponseCompletesTheRunInsteadOfLooping() async {
+        // A chat reply is the terminal action of a conversational turn. A planner that only ever responds
+        // (never emits run.complete) must still complete cleanly after one response — not loop the
+        // identical reply until the stall guard fails it safe. Regression for a bare "hi" spiraling into
+        // three repeated "Hello!" steps and ending failedSafe.
+        struct AlwaysRespondsPlanner: HarnessNextStepPlanning {
+            func planNextStep(for task: HarnessAgentState, rollingContext: String?) async -> HarnessToolCall? {
+                HarnessToolCall(name: "conversation.respond", input: ["response": "Hello! How can I assist you today?"])
+            }
+        }
+
+        let coordinator = HarnessAgentCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createAgent(
+            id: "task-respond",
+            conversationID: "thread-respond",
+            goal: "respond to a greeting",
+            grantedPermissions: [.conversation, .lifecycle]
+        )
+
+        let steps = await runtime.run(agentID: task.id, planner: AlwaysRespondsPlanner(), maxSteps: 5)
+
+        #expect(steps.map { $0.toolResult?.toolName } == ["conversation.respond"])
+        let finalTask = await coordinator.agent(id: task.id)
+        #expect(finalTask?.status == .completed)
+    }
+
+    @Test
     func compactorRollingContextReachesThePlanner() async {
         // The runtime must hand each step's planner the rolling context the compactor produced — the
         // wiring that lets a long conversation stay coherent without resending its whole history.
