@@ -78,7 +78,10 @@ Storage keeps decisions inspectable:
 - **Task snapshots** store execution state.
 
 One turn-trace manager is the single sink every model call and the step loop
-report to — the substrate a later self-correcting pass would learn from.
+report to — the substrate the self-correcting pass learns from. When a run ends,
+a background pass distills its trace into at most one durable operating lesson and
+later runs with a related goal recall it, so the harness improves across runs (see
+"Learning From Finished Runs" in the deep dive).
 
 ## Turn Understanding
 
@@ -180,6 +183,11 @@ Donkey works like an expert terminal user. The planner's first choice is
 - launching/quitting apps: `open`, `osascript`
 - reading state: `pmset -g`, `system_profiler`, `defaults read`
 - changing settings: `defaults write`, `networksetup`
+
+Commands run from the user's home directory, not the filesystem root: a file the
+user names ("fill out f1120.pdf") lives somewhere under home, so a relative search
+lands in the right neighborhood instead of walking the whole disk and stalling on
+protected system folders.
 
 Driving a GUI is the fallback, used only when the task truly needs it (canvas,
 Electron, or proprietary interfaces with no command-line equivalent). This

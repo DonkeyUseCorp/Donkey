@@ -11,18 +11,22 @@ by bare name. They are first-party capability tools: downloading from the user's
 URL and writing the output file run immediately, with no consent prompt — just
 issue the command, and never fall back to a browser to download.
 
-Never probe for or install Homebrew (or any package manager), and never check
-whether these tools exist first — just run them by bare name. The app installs
-them itself on first launch; if one is briefly missing the command fails with
-`command not found`, in which case say the media tools are still installing and
-stop. Do not try to install anything.
+These are standalone signed binaries, not Python packages: run `yt-dlp` directly,
+never through `python3 -m yt_dlp`, `pip`, or `which`. Never probe for or install
+Homebrew (or any package manager), and never check whether these tools exist
+first — just run them by bare name. The app installs them itself on first launch;
+if one is briefly missing the command fails with `command not found`, in which
+case say the media tools are still installing and stop. Do not try to install anything.
 
 ## Download from a URL (yt-dlp)
+- **These calls are slow — always pass `timeoutSeconds`.** Extracting a YouTube page (it solves a JS challenge first) can take ~15s *before any bytes download*, so the default short timeout kills it mid-extract. Pass `timeoutSeconds: 120` on the shell_exec call for every yt-dlp download.
 - Always single-quote the URL — `?` and `&` are shell metacharacters: `yt-dlp -P ~/Downloads 'URL'`.
 - Default the destination to `~/Downloads`; honor a different folder only if the user names one. yt-dlp already picks the best quality.
+- A specific time range (a clip) downloads just that span: `yt-dlp --download-sections '*15:00-16:00' -P ~/Downloads 'URL'`.
 - Audio only: `yt-dlp -x --audio-format mp3 -P ~/Downloads 'URL'`.
 - A specific resolution if asked: `yt-dlp -f 'bestvideo[height<=1080]+bestaudio' -P ~/Downloads 'URL'`.
-- `Unable to extract` / `HTTP 403` usually means the bundled yt-dlp is older than the site's latest change, not a bad URL — report that plainly; do not retry blindly.
+- **Issue ONE download command and let yt-dlp do its own retries — never fire several attempts in a row.** A burst of repeated calls from the same IP is what *triggers* YouTube's rate-limiting. Add `--retries 5 --extractor-retries 3` so one command rides out a transient hiccup.
+- `HTTP 403 Forbidden` on the video stream is almost always that transient rate-limiting, not a dead URL — it usually clears on its own. If a download 403s, wait and retry the SAME command at most once, then report it; do not keep firing variations. `Unable to extract` instead means the bundled yt-dlp is older than the site's latest change — report that plainly, don't retry blindly.
 
 ## Edit a local file (ffmpeg)
 - Transcode by changing the extension: `ffmpeg -i in.mov out.mp4`.

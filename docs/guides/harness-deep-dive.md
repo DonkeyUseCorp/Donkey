@@ -47,6 +47,34 @@ it. On relaunch, a task that was actively running moments earlier resumes on its
 own in the background; one interrupted longer ago, or one that was waiting on the
 user, comes back as a row the user resumes with a tap.
 
+## Learning From Finished Runs
+
+The harness improves itself across runs: a mistake it pays for once should steer
+it the next time, without anyone editing a prompt.
+
+When a run reaches a terminal state, a background pass reads the whole run — its
+goal, its outcome, and the step-by-step trace — and asks the model for at most
+one durable *operating lesson*: a general rule about how to work, like which tool
+to reach for or which trap to avoid. The lesson must be reusable craft, not a
+fact about this one task, file, or person; most clean runs teach nothing, and the
+pass is expected to return nothing for them. A lesson worth keeping is stored as a
+durable memory, deduplicated by its wording so re-learning the same rule refreshes
+one entry instead of piling up copies.
+
+At the start of a later run, the planner recalls the lessons whose subject
+resembles the new goal and reads them near the top of its prompt, before it takes
+the first step. So the agent that once spent a whole run on a search that timed
+out begins the next, similar run already knowing the faster path.
+
+This reuses the agent-memory machinery rather than adding a parallel store: the
+same approval gate (which refuses anything unlinked or sensitive), the same
+durable storage, and the same ranked retrieval that surfaces app and file
+memories. Lessons are just one more kind of memory in it. Two boundaries keep the
+loop honest: distillation only runs on a run that plausibly taught something — a
+failure, or a run long enough to have taken a wrong turn — so a quick success
+spends no model call; and the lesson is general craft only, never this user's
+data.
+
 ## Working With Files
 
 File work splits into two parts. Understanding a file — figuring out what is
