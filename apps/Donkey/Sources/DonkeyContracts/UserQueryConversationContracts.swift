@@ -59,23 +59,15 @@ public struct UserQueryConversation: Codable, Equatable, Identifiable, Sendable 
 }
 
 public extension UserQueryConversation {
-    /// The single line the collapsed chin shows for this task: the user's prompt while it runs, the
-    /// assistant's reply as it streams in (and once answered, its `detail`). The chin renderer and the
-    /// chin-band height measurement both read this, so the band is always sized to the exact line it
-    /// renders — a running task can't show a wrapped prompt inside a band measured for a shorter seed.
+    /// The single line the collapsed chin shows for this task — always the latest line of the
+    /// conversation. `detail` is the one field that carries it: the user's message the instant they send
+    /// it, the agent's live step narration while it works, then the agent's reply. Each of those writes
+    /// `detail` at its own source (see `UserQueryOverlayModel`), so the chin never reconstructs "what's
+    /// newest" from the prompt, title, and status — it just renders this. `title` (the first prompt) is
+    /// only a fallback for a task that has no line yet. The chin renderer and the chin-band height
+    /// measurement both read this, so the band is always sized to the exact line it renders.
     var chinDisplayText: String {
-        if status == .running {
-            // While the agent works, the chin narrates its latest step — each planner narration and the
-            // streaming final answer land in `detail`. Show that the moment it advances past the initial
-            // "Thinking" seed; the user's prompt is only the first frame, before any narration arrives.
-            let detailText = detail.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !detailText.isEmpty, detailText != UserQueryActivity.Kind.working.label {
-                return detail
-            }
-            let prompt = commandText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !prompt.isEmpty { return prompt }
-        }
-        return detail.isEmpty ? title : detail
+        detail.isEmpty ? title : detail
     }
 }
 

@@ -1268,11 +1268,12 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             // reaches here). A matched task that reaches this point has a stopped loop, so a new turn
             // resumes it: seed it back to running rather than restarting it under a replaced goal.
             //
-            // The chin echoes `commandText` while a task runs, so the resumed turn must adopt the new
-            // follow-up text — otherwise the chin keeps reading back the original prompt for the whole
-            // run instead of what the user just asked.
+            // The chin shows the conversation's latest line (`detail`), so seed both the command and that
+            // line with what the user just sent; the agent's narration and reply overwrite `detail` from
+            // there. (`appendAgentEvent` also writes these for the resume path, but the inject path seeds
+            // straight here, so set them at the source too.)
             task.commandText = text
-            task.detail = Self.runningSeedDetail
+            task.detail = text
             task.status = .running
             task.updatedAt = Date()
             // Restamp the run-start: a resumed run's elapsed time should measure this run, not the idle
@@ -1296,7 +1297,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         let task = UserQueryConversation(
             id: UUID().uuidString,
             title: taskLabel,
-            detail: Self.runningSeedDetail,
+            detail: text,
             commandText: text,
             status: .running,
             accentIndex: nextAccentIndex
@@ -1465,14 +1466,15 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
                 sequence: sequence
             )
         )
-        // The collapsed chin echoes the latest turn while the agent works, reading it from the task's
-        // `commandText`. Every user turn — fresh, follow-up, resumed, or one folded into a still-running
-        // task via the inject path — passes through here, but the inject path updates no task field on its
-        // own, so a follow-up would leave the chin reading back the original prompt for the whole run.
-        // Refresh it here, the one chokepoint every user message crosses, so the chin always shows the
-        // message the user just sent rather than a stale earlier one.
+        // The chin shows the latest line of the conversation, and `detail` holds it. A user message is the
+        // newest line the instant it is sent, so write it here — the one chokepoint every user turn crosses
+        // (fresh, follow-up, resumed, or folded into a still-running task via the inject path) — rather than
+        // at each call site, where a path that forgets leaves the chin reading back an older line. Clear any
+        // in-flight streamed answer so the agent's next reply replaces this message instead of appending to
+        // it; keep `commandText` in sync for the other surfaces (prompt pill, follow-up matching).
         if role == .user {
-            updateTask(id: conversationID, commandText: trimmedText)
+            conversationsStreamingAnswer.remove(conversationID)
+            updateTask(id: conversationID, commandText: trimmedText, detail: trimmedText)
         }
         return eventID
     }
@@ -1684,11 +1686,6 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
 
         return UserQueryAccentPalette.index(after: mostRecentAccentIndex)
     }
-
-    /// The status line a freshly-started task shows before the agent's first narration lands. Uses the
-    /// centralized activity vocabulary ("Thinking") rather than a bare "Running", and is replaced step
-    /// by step as `runProgressHandler` streams the planner's narration in.
-    private static let runningSeedDetail = UserQueryActivity.Kind.working.label
 
     /// The task's title is the user's prompt, whitespace-collapsed. It is NOT hard-truncated here: every
     /// place that shows it (the collapsed bar, the prompt pill, each expanded row) renders it on a single
