@@ -319,7 +319,8 @@ export function UsageHistoryCard() {
                 const globalIndex = pageStart + index;
                 const annotation = annotations[globalIndex];
                 const conversationId = call.conversationId;
-                const inConversation = annotation.blockKey !== -1;
+                const inConversation =
+                  annotation.blockKey !== -1 && annotation.blockCount > 1;
                 const key = callKey(call);
                 const isOpen = expanded === key;
                 // Header before the first row of each conversation block (and at
@@ -336,7 +337,7 @@ export function UsageHistoryCard() {
                     {startsBlock && conversationId !== null ? (
                       <TableRow className="hover:bg-transparent">
                         <TableCell
-                          className="bg-muted/40 py-2 text-xs font-medium text-muted-foreground"
+                          className="font-bold text-muted-foreground"
                           colSpan={5}
                         >
                           <div className="flex items-center justify-between gap-2">
