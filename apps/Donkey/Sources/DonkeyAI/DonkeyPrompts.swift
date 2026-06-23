@@ -16,19 +16,28 @@ import Foundation
 /// - `harnessStep` — the per-observation planning step of the harness loop
 ///   (`HostedHarnessStepPlanner`).
 ///
-/// What the models read but does NOT live here, by design:
+/// BEFORE ADDING ANYTHING HERE, PLACE IT BY SCOPE. Most model-facing text is NOT
+/// cross-tool doctrine and belongs elsewhere — the planner still reads it, just from a
+/// better home. The recurring mistake is dropping a single-tool fact into the prompt
+/// because the prompt is the obvious place: it bloats every turn and drifts away from the
+/// tool it describes.
 ///
-/// - Tool descriptors (name, summary, schemas) stay with their tools:
-///   `DonkeyCommandLayer` (fast command tools), `BuiltInHarnessToolCatalog`
-///   (harness tools), and the Live escalation descriptors in
-///   `GeminiLiveVoiceController`. A descriptor states only that tool's own
-///   factual contract — cross-tool doctrine belongs here.
-/// - App-specific operating knowledge lives in discoverable skill packs
-///   (`Resources/BuiltInSkills/<app>/SKILL.md`), never in prompts.
-/// - Narrow task adapters keep their specialized prompts next to their parsing:
-///   `VisionActionPlanner`, `GeminiVertexVisionBoxPlanner`,
-///   `DebugUIInspectionHostedAdapter`, `HostedAppleScriptGenerationAdapter`,
-///   `HostedConversationFollowUpResolver`, and `HostedLocalAppCatalogProfileGenerator`.
+/// - A fact about ONE tool — where it runs, when to prefer it, a parameter caveat, a
+///   safety note → that tool's DESCRIPTOR (`DonkeyCommandLayer` for the fast command
+///   tools, `BuiltInHarnessToolCatalog` for harness tools, the Live escalation
+///   descriptors in `GeminiLiveVoiceController`). The planner reads descriptors in the
+///   `AVAILABLE TOOLS` block, so the fact reaches the model co-located with its tool and
+///   only when that tool is offered.
+/// - A workflow for ONE app or domain — how to subtitle a video, fill a PDF form, drive
+///   a specific app → its discoverable SKILL pack (`Resources/BuiltInSkills/<id>/SKILL.md`),
+///   never a prompt.
+/// - Only doctrine that holds across tools AND tasks — retry discipline, see-before-act,
+///   shell-first — belongs in the prompt text here.
+///
+/// Narrow task adapters keep their own specialized prompts next to their parsing, not here:
+/// `VisionActionPlanner`, `GeminiVertexVisionBoxPlanner`, `DebugUIInspectionHostedAdapter`,
+/// `HostedAppleScriptGenerationAdapter`, `HostedConversationFollowUpResolver`, and
+/// `HostedLocalAppCatalogProfileGenerator`.
 public enum DonkeyPrompts {
     // MARK: - Realtime command session
 

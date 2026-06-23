@@ -157,6 +157,22 @@ plugin id, schemas, required permissions, safety class, required context,
 verification hints, and metadata. The planner sees descriptors and schemas,
 never Swift implementations.
 
+**Three homes for model-facing text, split by scope.** Everything the model reads
+is placed by how widely it applies, and the split is deliberate:
+
+- a **tool descriptor** carries one tool's own contract — what it does, its
+  parameters, where it runs, its safety. It travels with the tool and reaches the
+  model only when that tool is offered.
+- a **skill pack** carries one app's or domain's workflow — how to subtitle a video,
+  fill a form — and is surfaced when the task matches it.
+- the **planner prompt** carries only doctrine that holds no matter which tool or task
+  is in play: retry discipline, see-before-act, shell-first.
+
+When a new fact for the model is needed, place it by scope: one tool → its descriptor;
+one domain → its skill; true everywhere → the prompt. A single-tool fact in the prompt
+is the easy mistake — it bloats every turn and drifts from the tool it describes, so the
+two fall out of sync.
+
 Tool results come back as structured observations that update the world model.
 Four situations are hard stops, not things to push through:
 
