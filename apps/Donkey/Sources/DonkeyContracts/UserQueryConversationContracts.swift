@@ -38,7 +38,20 @@ public enum UserQueryConversationOrigin: String, Codable, Equatable, Sendable {
 public struct UserQueryConversation: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var title: String
-    public var detail: String
+    /// The conversation's latest line — the one thing the collapsed chin renders (see `chinDisplayText`).
+    /// It is MONOTONIC by construction: once it holds a real line, any write that would blank it
+    /// self-reverts, so the chin can never regress to the `title` fallback (the original prompt) after the
+    /// conversation has moved on. This is the structural guarantee behind "always show the latest text" —
+    /// enforced here, in the data model, so no call site (a stray empty `liveDetail`, a cleared stream,
+    /// a future writer) can reintroduce the stale-prompt bug. Empty survives ONLY as the value set in
+    /// `init` — the genuine "no line yet" bootstrap, where `title` IS the latest line.
+    public var detail: String {
+        didSet {
+            if detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                detail = oldValue
+            }
+        }
+    }
     public var commandText: String
     public var status: UserQueryConversationStatus
     public var accentIndex: Int
@@ -84,9 +97,11 @@ public extension UserQueryConversation {
     /// conversation. `detail` is the one field that carries it: the user's message the instant they send
     /// it, the agent's live step narration while it works, then the agent's reply. Each of those writes
     /// `detail` at its own source (see `UserQueryOverlayModel`), so the chin never reconstructs "what's
-    /// newest" from the prompt, title, and status — it just renders this. `title` (the first prompt) is
-    /// only a fallback for a task that has no line yet. The chin renderer and the chin-band height
-    /// measurement both read this, so the band is always sized to the exact line it renders.
+    /// newest" from the prompt, title, and status — it just renders this. Because `detail` is monotonic
+    /// (it never blanks once set — see its declaration), this only reads `title` for a task that has no
+    /// line yet, where `title` IS the latest line; it can never resurface the original prompt after the
+    /// conversation has moved on. The chin renderer and the chin-band height measurement both read this,
+    /// so the band is always sized to the exact line it renders.
     var chinDisplayText: String {
         detail.isEmpty ? title : detail
     }

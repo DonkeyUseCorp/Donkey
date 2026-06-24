@@ -48,4 +48,36 @@ struct UserQueryChinDisplayTests {
     func chinFallsBackToTitleOnlyWhenThereIsNoLineYet() {
         #expect(task(title: "hi", detail: "", status: .running).chinDisplayText == "hi")
     }
+
+    @Test
+    func detailIsMonotonicSoTheChinCanNeverRevertToTheOriginalPrompt() {
+        // The structural guarantee the user asked never to revisit: once `detail` holds a real line, ANY
+        // write that would blank it is refused by the model itself — so no call site (a stray empty
+        // `liveDetail`, a cleared stream, a future writer) can drop the chin back to the title (the
+        // original prompt). This makes the stale-prompt bug impossible, not merely unlikely.
+        var conversation = task(title: "original prompt", detail: "agent's latest line", status: .running)
+        conversation.detail = ""                               // a stray blank write…
+        #expect(conversation.detail == "agent's latest line")  // …is refused, the latest line stands
+        conversation.detail = "   \n  "                        // whitespace counts as blank…
+        #expect(conversation.detail == "agent's latest line")
+        #expect(conversation.chinDisplayText == "agent's latest line")
+        #expect(conversation.chinDisplayText != "original prompt")
+        // A real newer line still moves it forward — monotonic means forward-only, not frozen.
+        conversation.detail = "newer line"
+        #expect(conversation.chinDisplayText == "newer line")
+    }
+
+    @Test
+    func resumeLineIsNeverEmptySoTheChinDoesNotRevertToTheStalePrompt() {
+        // A resume (gate approval / tap-Resume) announces `.resumed` with no per-call detail, so the chin
+        // shows that line until the first step narrates. The line must be non-empty: an empty `detail`
+        // makes `chinDisplayText` fall back to `title` — the original prompt the user already sent. The
+        // exact bug this guards: after approving a permission gate the chin "reappeared" the opening
+        // request instead of live progress.
+        let resumeLine = UserQueryActivity(kind: .resumed).displayText
+        #expect(!resumeLine.isEmpty)
+        let resumed = task(title: "original prompt", detail: resumeLine, status: .running)
+        #expect(resumed.chinDisplayText == resumeLine)
+        #expect(resumed.chinDisplayText != "original prompt")
+    }
 }

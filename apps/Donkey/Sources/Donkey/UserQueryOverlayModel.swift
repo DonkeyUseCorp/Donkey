@@ -973,8 +973,9 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
 
         activeAgentIDs.insert(conversationID)
         lastActiveConversationID = conversationID
-        // The live line falls back to the running activity ("Thinking"); the record logs "Resuming".
-        announceLifecycle(conversationID: conversationID, UserQueryActivity(kind: .resumed), status: .running, liveDetail: "")
+        // Show the live "Resuming" line until the first step narrates; an empty detail would let the chin
+        // fall back to the title (the original prompt), which is the stale line a resume must not resurface.
+        announceLifecycle(conversationID: conversationID, UserQueryActivity(kind: .resumed), status: .running)
         updateSpawn(id: spawnStates.first { $0.conversationID == conversationID }?.id, resumesWork: true)
         promptState.leadingSignalLevel = .thinking
         promptState.promptText = conversation.title
@@ -1112,7 +1113,6 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
                 conversationID: conversationID,
                 UserQueryActivity(kind: .resumed),
                 status: .running,
-                liveDetail: "",
                 metadata: [:]
             )
             if let turn = liveTurn, turn.conversationID == conversationID {
@@ -1128,9 +1128,10 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
 
         activeAgentIDs.insert(conversationID)
         lastActiveConversationID = conversationID
-        // After approval the conversation simply resumes; the live line falls back to the running activity
-        // ("Thinking") rather than narrating an internal "approving permission" step.
-        announceLifecycle(conversationID: conversationID, UserQueryActivity(kind: .resumed), status: .running, liveDetail: "")
+        // After approval the conversation resumes on the live "Resuming" line until the first step narrates;
+        // an empty detail would let the chin fall back to the title (the original prompt), the stale line the
+        // user sees "reappear" after granting a gate.
+        announceLifecycle(conversationID: conversationID, UserQueryActivity(kind: .resumed), status: .running)
         promptState.leadingSignalLevel = .thinking
         promptState.promptText = conversation.title
         syncPrimaryConversationPausedFlag()
