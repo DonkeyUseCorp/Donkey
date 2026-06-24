@@ -7,7 +7,6 @@ import { Footer } from "@/app/_components/landing/Footer";
 import {
   Headline,
   PillButton,
-  SectionLabel,
   TapedCard,
 } from "@/app/_components/landing/LandingPrimitives";
 import { TopNav } from "@/app/_components/landing/TopNav";
@@ -90,8 +89,8 @@ export default function UseCasesPage() {
           </h1>
           <p className="mt-8 max-w-[650px] text-[18px] leading-[1.55] text-[#454545] md:text-[20px]">
             A growing library of tasks Donkey can run across your files, apps,
-            and browser. Each page starts from a harness eval, then gives the
-            workflow a permanent home for examples, demos, and artifacts.
+            and browser. Each one shows the exact prompt, the steps Donkey takes,
+            and the result.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <PillButton href="/install" variant="dark">
@@ -147,19 +146,12 @@ export default function UseCasesPage() {
       </section>
 
       <section className="mx-auto w-full max-w-[1400px] px-6 pb-20 md:px-12 md:pb-28">
-        <SectionLabel number={1}>Use case library</SectionLabel>
         <div className="flex flex-col gap-14">
           {useCaseCategories.map((category, categoryIndex) => {
-            const categoryUseCases = getUseCasesByCategory(category);
-
             return (
               <div key={category}>
-                <div className="mb-6 flex flex-col justify-between gap-3 md:flex-row md:items-end">
+                <div className="mb-6">
                   <Headline size="lg">{category}</Headline>
-                  <p className="max-w-[420px] text-[15px] leading-[1.55] text-[#454545]">
-                    {categoryUseCases.length} static examples pulled from the
-                    current harness eval coverage.
-                  </p>
                 </div>
                 <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
                   {categoryUseCases.map((useCase, index) => {
@@ -179,13 +171,10 @@ export default function UseCasesPage() {
                           tapeColor="cream"
                         >
                           <article className="flex h-full min-h-[334px] flex-col p-7">
-                            <div className="mb-6 flex items-center justify-between gap-4">
+                            <div className="mb-6 flex items-center">
                               <div className="flex h-12 w-12 items-center justify-center rounded-lg border-2 border-ink bg-white">
                                 <Icon size={22} />
                               </div>
-                              <span className="rounded-md border-2 border-ink bg-white px-3 py-1 text-[11px] font-semibold tracking-[0.08em] uppercase">
-                                Eval-backed
-                              </span>
                             </div>
                             <h2 className="text-[28px] leading-[1.03] font-semibold">
                               {useCase.title}
@@ -215,14 +204,9 @@ export default function UseCasesPage() {
           <div className="relative grid gap-8 rounded-3xl border-2 border-ink bg-ink px-7 py-9 text-white md:grid-cols-[1fr_auto] md:px-12 md:py-14">
             <div>
               <div className="mb-[18px] text-xs font-semibold tracking-[0.12em] text-white/55 uppercase">
-                More examples coming
+                Get started
               </div>
-              <Headline size="lg">Every useful eval deserves a page.</Headline>
-              <p className="mt-[18px] max-w-[620px] text-[15px] leading-[1.55] text-white/72 md:text-[17px]">
-                This library is built to grow as Donkey learns more repeatable
-                work: demos, downloadable outputs, and search-friendly detail
-                pages can be added without changing the page system.
-              </p>
+              <Headline size="lg">Try Donkey today.</Headline>
             </div>
             <div className="flex flex-wrap items-center gap-3 self-center">
               <PillButton href="/install" variant="primary">

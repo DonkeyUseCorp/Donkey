@@ -27,7 +27,6 @@ export type UseCase = {
   artifacts?: UseCaseArtifact[];
   category: UseCaseCategory;
   description: string;
-  evalFixture: string;
   icon: LucideIcon;
   keywords: string[];
   outcome: string;
@@ -50,7 +49,6 @@ export const useCases: UseCase[] = [
     category: "PDF and document work",
     description:
       "Merge separate invoice PDFs into one file, then stamp footer page numbers so the packet is ready to send or archive.",
-    evalFixture: "HarnessEval/merge-pdfs-add-page-numbers",
     icon: FileDown,
     keywords: ["merge PDFs", "add page numbers", "invoice packet"],
     outcome: "A single six-page PDF with consistent page numbers.",
@@ -68,7 +66,6 @@ export const useCases: UseCase[] = [
     category: "PDF and document work",
     description:
       "Find sensitive identifiers in a contract PDF, cover each match, and flatten the output so the redactions are baked into the file.",
-    evalFixture: "HarnessEval/redact-and-flatten-contract",
     icon: LockKeyhole,
     keywords: ["redact PDF", "flatten PDF", "contract redaction"],
     outcome: "A flattened contract PDF with every SSN covered.",
@@ -84,7 +81,7 @@ export const useCases: UseCase[] = [
   {
     artifacts: [
       {
-        description: "Fixture text representing the source PDF table.",
+        description: "The source table this task reads from.",
         href: "/use-cases/artifacts/q3-figures.txt",
         label: "q3-figures.txt",
       },
@@ -92,7 +89,6 @@ export const useCases: UseCase[] = [
     category: "PDF and document work",
     description:
       "Extract a structured table from a PDF and save it as a clean CSV that can move into a spreadsheet or reporting workflow.",
-    evalFixture: "HarnessEval/extract-table-from-pdf-to-csv",
     icon: FileSearch,
     keywords: ["PDF table extraction", "PDF to CSV", "financial table"],
     outcome: "A four-column CSV with region, revenue, growth, and churn.",
@@ -108,7 +104,7 @@ export const useCases: UseCase[] = [
   {
     artifacts: [
       {
-        description: "Starting CSV used by the eval fixture.",
+        description: "The starting expense ledger.",
         href: "/use-cases/artifacts/expenses.csv",
         label: "expenses.csv",
       },
@@ -116,7 +112,6 @@ export const useCases: UseCase[] = [
     category: "Data and reporting",
     description:
       "Read a receipt image, pull out the merchant, date, category, and total, then append the expense to an existing CSV ledger.",
-    evalFixture: "HarnessEval/ocr-receipt-to-expenses",
     icon: ReceiptText,
     keywords: ["receipt OCR", "expense CSV", "expense tracking"],
     outcome: "A new expenses.csv row for Tartine Bakery totaling $42.18.",
@@ -132,7 +127,7 @@ export const useCases: UseCase[] = [
   {
     artifacts: [
       {
-        description: "Sample source data from the eval fixture.",
+        description: "The raw sales data this task reads.",
         href: "/use-cases/artifacts/sales.csv",
         label: "sales.csv",
       },
@@ -140,7 +135,6 @@ export const useCases: UseCase[] = [
     category: "Data and reporting",
     description:
       "Take raw sales rows, group revenue by month, and generate a chart image suitable for a weekly update or deck.",
-    evalFixture: "HarnessEval/sales-csv-monthly-chart",
     icon: BarChart3,
     keywords: ["CSV analysis", "monthly revenue chart", "bar chart"],
     outcome: "A monthly revenue bar chart saved as monthly.png.",
@@ -158,7 +152,6 @@ export const useCases: UseCase[] = [
     category: "Media and images",
     description:
       "Extract audio from a meeting recording, transcribe it, and pull out action items so the follow-up is ready to share.",
-    evalFixture: "HarnessEval/transcribe-meeting-audio",
     icon: FileAudio,
     keywords: ["meeting transcription", "extract audio", "action items"],
     outcome: "An MP3 file plus a transcript with five action items.",
@@ -176,7 +169,6 @@ export const useCases: UseCase[] = [
     category: "Media and images",
     description:
       "Batch resize travel photos, strip location metadata, and make a contact sheet for fast review or sharing.",
-    evalFixture: "HarnessEval/resize-trip-photos",
     icon: ImageIcon,
     keywords: ["batch resize photos", "remove GPS metadata", "contact sheet"],
     outcome: "Twelve resized images with GPS removed and a 3x3 contact sheet.",
@@ -193,7 +185,7 @@ export const useCases: UseCase[] = [
   {
     artifacts: [
       {
-        description: "Markdown output captured by the eval fixture.",
+        description: "The Markdown Donkey produced.",
         href: "/use-cases/artifacts/donkeyuse.md",
         label: "donkeyuse.md",
       },
@@ -201,7 +193,6 @@ export const useCases: UseCase[] = [
     category: "Web and app automation",
     description:
       "Capture a web page and convert the readable page content into Markdown for notes, documentation, or archival.",
-    evalFixture: "HarnessEval/markdown-of-donkeyuse",
     icon: FileText,
     keywords: ["website to Markdown", "web capture", "page archive"],
     outcome: "A Markdown document with the page title, sections, and feature list.",
@@ -218,7 +209,6 @@ export const useCases: UseCase[] = [
     category: "Web and app automation",
     description:
       "Research a ranked song list, then drive Music to build a playlist from the results without making the user assemble it manually.",
-    evalFixture: "HarnessEval/top-songs-2021-playlist",
     icon: ListMusic,
     keywords: ["Music playlist", "web research", "desktop automation"],
     outcome: "A Music playlist with the top ten songs from 2021.",

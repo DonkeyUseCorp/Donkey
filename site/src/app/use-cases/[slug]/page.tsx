@@ -8,7 +8,6 @@ import { Footer } from "@/app/_components/landing/Footer";
 import {
   Headline,
   PillButton,
-  SectionLabel,
   TapedCard,
 } from "@/app/_components/landing/LandingPrimitives";
 import { TopNav } from "@/app/_components/landing/TopNav";
@@ -138,12 +137,6 @@ export default async function UseCasePage({ params }: PageProps) {
                 />
               </div>
               <div className="text-[12px] font-semibold tracking-[0.12em] uppercase">
-                Eval fixture
-              </div>
-              <div className="mt-2 font-code text-[14px] leading-[1.5] break-words">
-                {useCase.evalFixture}
-              </div>
-              <div className="mt-6 text-[12px] font-semibold tracking-[0.12em] uppercase">
                 Outcome
               </div>
               <p className="mt-2 text-[16px] leading-[1.5] text-[#222]">
@@ -156,7 +149,6 @@ export default async function UseCasePage({ params }: PageProps) {
 
       <section className="mx-auto grid w-full max-w-[1400px] grid-cols-1 gap-8 px-6 pb-20 md:grid-cols-[minmax(0,1fr)_420px] md:px-12 md:pb-28">
         <div className="min-w-0">
-          <SectionLabel number={1}>Workflow</SectionLabel>
           <TapedCard color="blue" tapeColor="cream">
             <div className="p-7 md:p-9">
               <div className="mb-7 rounded-xl border-2 border-ink bg-white p-5">
@@ -187,7 +179,6 @@ export default async function UseCasePage({ params }: PageProps) {
         </div>
 
         <div className="min-w-0">
-          <SectionLabel number={2}>Demo and artifacts</SectionLabel>
           <div className="flex flex-col gap-6">
             <TapedCard color="pink" tapeColor="cream">
               <div className="p-5">
