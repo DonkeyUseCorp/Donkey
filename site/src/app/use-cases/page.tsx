@@ -158,14 +158,14 @@ export default function UseCasesPage() {
       <section className="mx-auto w-full max-w-[1400px] px-6 pb-20 md:px-12 md:pb-28">
         <div className="relative">
           <div className="absolute inset-0 translate-x-2 translate-y-2 rounded-3xl bg-coral" />
-          <div className="relative grid gap-8 rounded-3xl border-2 border-ink bg-ink px-7 py-9 text-white md:px-12 md:py-14">
+          <div className="relative grid justify-items-center gap-8 rounded-3xl border-2 border-ink bg-ink px-7 py-9 text-center text-white md:px-12 md:py-14">
             <div>
               <div className="mb-[18px] text-xs font-semibold tracking-[0.12em] text-white/55 uppercase">
                 Get started
               </div>
               <Headline size="lg">Try Donkey today.</Headline>
             </div>
-            <div className="flex flex-wrap items-center gap-3 self-start">
+            <div className="flex flex-wrap items-center justify-center gap-3">
               <PillButton href="/install" variant="primary">
                 Install Donkey
               </PillButton>
