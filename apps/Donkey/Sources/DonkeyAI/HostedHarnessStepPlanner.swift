@@ -111,16 +111,23 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     }
 
     public func planNextStep(for task: HarnessAgentState, rollingContext: String?) async -> HarnessToolCall? {
-        // When the upfront understanding flagged the request as ambiguous, ask before doing anything.
-        // Gated on a typed field (not raw text) and only on the first step, so a user answer resumes
-        // into the normal planning loop. Reuses the harness's existing user.clarify waiting gate.
+        // When the upfront understanding typed the turn as a clarification (or flagged it ambiguous), ask
+        // before doing anything — a clarify turn is not actionable, so it must never fall through to the
+        // model and let it start executing (observed: a `.clarify` turn whose question the model left empty
+        // ran shell_exec to inspect the selection instead of asking). Gated on typed fields (not raw text)
+        // and only on the first step, so a user answer resumes into the normal planning loop. The question
+        // falls back to a generic ask when the boundary classified the turn as clarify but omitted the
+        // question, so "clarify ⇒ ask" holds by construction rather than depending on that field. Reuses
+        // the harness's existing user.clarify waiting gate.
         if task.toolHistory.isEmpty,
            let understanding,
-           understanding.needsClarification,
-           let question = understanding.clarifyingQuestion,
-           !question.isEmpty,
+           understanding.needsClarification || understanding.turnKind == .clarify,
            descriptors.contains(where: { $0.name == "user.clarify" }) {
-            return HarnessToolCall(name: "user.clarify", input: ["question": question])
+            let question = understanding.clarifyingQuestion?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolved = (question?.isEmpty == false)
+                ? question!
+                : "Could you give me a bit more detail so I can do this correctly?"
+            return HarnessToolCall(name: "user.clarify", input: ["question": resolved])
         }
         // One bad model sample must not kill the run. Following the Hermes agent's recovery model, a
         // malformed, empty, or under-specified decision is fed back to the model and re-asked up to
@@ -161,6 +168,27 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
                 }
                 retryNote = "Your previous reply named no tool. Pick exactly one tool from AVAILABLE TOOLS; "
                     + "choose run.complete only when the goal is already confirmed by observed evidence."
+                continue
+            }
+            // The understanding boundary owns the clarify decision. If it judged the turn actionable
+            // (needsClarification == false), the planner must not bail to user.clarify — the values it
+            // thinks are missing (a URL, path, or name) are already in the request, and asking instead of
+            // acting is exactly the over-cautious stall we forbid by construction. (The model evades a
+            // first-step-only guard by running a throwaway `ls` first, so this fires on ANY step.) Re-ask it
+            // to take a concrete action; only after the retry budget is spent do we let the clarify through,
+            // since the model insisting across every attempt may signal a real gap.
+            if toolName == "user.clarify",
+               let understanding, !understanding.needsClarification,
+               attempt < lastAttempt {
+                lastPlanningErrors.append(
+                    "planning attempt \(attempt + 1)/\(Self.maxPlanAttempts): chose user.clarify though the "
+                        + "turn was classified actionable — overriding to act."
+                )
+                retryNote = "Do NOT ask for clarification, and do not stall on read-only commands. This "
+                    + "request was already determined to be actionable with the details provided — read the "
+                    + "user's request again; the value you think is missing (a URL, a file path, a name) is "
+                    + "in it. Take the first concrete action that does the task (e.g. the download/convert/"
+                    + "edit command), not another look-around."
                 continue
             }
             // Catch a malformed decision that names a tool but supplies none of its required input.
