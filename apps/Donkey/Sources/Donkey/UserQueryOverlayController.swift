@@ -575,7 +575,11 @@ final class UserQueryOverlayController {
         // extra Y offset animate the donkey up and off-screen, then back down when it closes.
         let hideOffset = (metrics.surfaceSize.height + Self.missionControlHideClearance) * missionControlHideProgress
         let frame = CGRect(
-            x: screen.frame.midX - metrics.surfaceSize.width / 2,
+            // Position by the void's center, not the surface's: the collapsed notch seats its void
+            // off-center (a wider trailing lane gives the live clock room) and must still land on the
+            // physical camera. Expanded and no-notch surfaces report a centered void, so this is a no-op
+            // for them.
+            x: screen.frame.midX - metrics.surfaceVoidCenterX,
             y: screen.frame.maxY - metrics.surfaceSize.height + hideOffset,
             width: metrics.surfaceSize.width,
             height: metrics.surfaceSize.height

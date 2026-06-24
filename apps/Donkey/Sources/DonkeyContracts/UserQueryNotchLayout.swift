@@ -16,6 +16,10 @@ public struct UserQueryNotchLayout: Equatable, Sendable {
     public var collapsedCornerRadius: CGFloat
     public var expandedCornerRadius: CGFloat
     public var canRenderTextInTopRow: Bool
+    /// Distance from the collapsed surface's left edge to the void's left edge — the leading lane width.
+    /// The trailing lane (the remainder past the void) is wider so the live clock fits beside the camera,
+    /// which seats the void off-center; the host is positioned to keep it on the physical camera anyway.
+    public var collapsedVoidLeadingInset: CGFloat
     /// Height of the chin band that hangs below the collapsed notch row while a task streams
     /// (0 when there is nothing to stream). The notch row itself stays `collapsedVisibleHeight`.
     public var chinHeight: CGFloat
@@ -35,6 +39,7 @@ public struct UserQueryNotchLayout: Equatable, Sendable {
         collapsedCornerRadius: CGFloat,
         expandedCornerRadius: CGFloat,
         canRenderTextInTopRow: Bool,
+        collapsedVoidLeadingInset: CGFloat = 0,
         chinHeight: CGFloat = 0,
         needsLogin: Bool = false
     ) {
@@ -50,6 +55,7 @@ public struct UserQueryNotchLayout: Equatable, Sendable {
         self.collapsedCornerRadius = collapsedCornerRadius
         self.expandedCornerRadius = expandedCornerRadius
         self.canRenderTextInTopRow = canRenderTextInTopRow
+        self.collapsedVoidLeadingInset = collapsedVoidLeadingInset
         self.chinHeight = chinHeight
         self.needsLogin = needsLogin
     }
@@ -154,9 +160,28 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
             collapsedCornerRadius: Self.collapsedCornerRadius,
             expandedCornerRadius: Self.expandedCornerRadius,
             canRenderTextInTopRow: canRenderTextInTopRow,
+            collapsedVoidLeadingInset: collapsedVoidLeadingInset,
             chinHeight: effectiveChinHeight,
             needsLogin: needsLogin
         )
+    }
+
+    /// X of the void's center within the surface currently being positioned. The collapsed real-notch
+    /// surface seats the void off-center (a wider trailing lane gives the live clock room), so the host
+    /// window is placed by this — not the surface center — to keep the void pinned to the physical
+    /// camera. The expanded panel and the no-notch pill stay centered, where the void already sits
+    /// mid-surface (or there is none).
+    public var surfaceVoidCenterX: CGFloat {
+        guard !isHostExpanded, voidWidth > 0 else { return surfaceSize.width / 2 }
+        return collapsedVoidLeadingInset + voidWidth / 2
+    }
+
+    /// Distance from the collapsed surface's left edge to the void's left edge (the leading lane width).
+    /// Derived from the actual collapsed width so any min/max clamp is split between the lanes in the
+    /// nominal ratio, keeping the void's seat stable.
+    private var collapsedVoidLeadingInset: CGFloat {
+        let laneTotal = max(0, collapsedSurfaceWidth - voidWidth)
+        return laneTotal * (Self.collapsedLeadingLaneWidth / Self.collapsedSideLaneTotal)
     }
 
     /// Only the real notch (with a void) grows a chin; no-notch displays show the
@@ -230,7 +255,7 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
             max(
                 Self.minimumCollapsedSurfaceFrame.width,
                 Self.commonCollapsedSurfaceFrame.width,
-                voidWidth + Self.collapsedSideLaneWidth * 2
+                voidWidth + Self.collapsedSideLaneTotal
             )
         )
     }
@@ -271,7 +296,7 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
     private static let commonCollapsedSurfaceFrame = CGRect(
         x: 0,
         y: 0,
-        width: Self.fallbackVoidWidth + Self.collapsedSideLaneWidth * 2,
+        width: Self.fallbackVoidWidth + Self.collapsedSideLaneTotal,
         height: Self.fallbackVoidHeight
     )
     private static let expandedContentDesignFrame = CGRect(
@@ -280,7 +305,13 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
         width: UserQueryLayout.composerInputSurfaceWidth + Self.inputHorizontalMargin * 2,
         height: 280
     )
-    private static let collapsedSideLaneWidth: CGFloat = 34
+    /// The collapsed surface's side lanes flank the void. The trailing (right) lane is wider than the
+    /// leading (left) one so the live elapsed clock — up to "Nh Nm Ns" — fits beside the camera; the
+    /// leading lane only carries the pointer. The void seats off-center between them (see
+    /// `surfaceVoidCenterX`), which the host positioning compensates for.
+    private static let collapsedLeadingLaneWidth: CGFloat = 34
+    private static let collapsedTrailingLaneWidth: CGFloat = 64
+    private static var collapsedSideLaneTotal: CGFloat { collapsedLeadingLaneWidth + collapsedTrailingLaneWidth }
     private static let collapsedCornerRadius: CGFloat = 14
     // Prototype spec: the expanded notch window and its input box both use a 14px radius.
     private static let expandedCornerRadius: CGFloat = 14

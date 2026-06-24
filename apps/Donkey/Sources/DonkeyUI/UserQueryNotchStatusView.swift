@@ -177,6 +177,9 @@ public struct UserQueryNotchStatusView: View {
             }
 
             collapsedContentLayer
+                // Keep the off-center void pinned to the camera once the host opens into its wider,
+                // centered canvas (jumps in step with the instant host reframe, never slides).
+                .offset(x: collapsedChromeVoidShift)
                 // The collapsed chrome fades out as the notch grows open and fades back in as it
                 // collapses, so it cross-dissolves with the expanded content rather than popping.
                 .opacity(surfaceIsOpen ? 0 : 1)
@@ -377,6 +380,9 @@ public struct UserQueryNotchStatusView: View {
     }
 
     private var collapsedContent: some View {
+        // INVARIANT: every notch change must land on BOTH display kinds. `canRenderTextInTopRow` is the
+        // no-notch (no camera void) display — it renders inline here; the `else` is the physical-notch
+        // (void-aware) layout. A change that touches only one branch is a bug, not a layout choice.
         Group {
             if layout.canRenderTextInTopRow {
                 fullWidthCollapsedContent
@@ -409,10 +415,9 @@ public struct UserQueryNotchStatusView: View {
                 Spacer(minLength: 0)
 
                 // The gutter carries the live elapsed clock while a conversation runs, then the waiting-on-user "!"
-                // glyph (or the update cloud) — the same indicators a void-aware host raises. With no camera void
-                // to route around, the right gutter can stretch, so it shows the full elapsed time (hours,
-                // minutes, and seconds) rather than the single largest unit.
-                collapsedRightSlot(compactTime: false)
+                // glyph (or the update cloud) — the same indicators a void-aware host raises. The slot shows the
+                // full elapsed time (hours, minutes, and seconds), same as the notched layout's widened gutter.
+                collapsedRightSlot
             }
             .padding(.horizontal, max(10, layout.contentHorizontalInset))
             .frame(
@@ -443,8 +448,8 @@ public struct UserQueryNotchStatusView: View {
                     .modifier(AttentionPulse(active: isPrimaryWaitingOnUser))
                     .position(x: collapsedLeadingLaneCenterX, y: layout.collapsedVisibleHeight / 2)
 
-                collapsedRightSlot(compactTime: true)
-                    .frame(width: collapsedSideLaneWidth, height: layout.collapsedVisibleHeight)
+                collapsedRightSlot
+                    .frame(width: collapsedTrailingLaneWidth, height: layout.collapsedVisibleHeight)
                     .position(x: collapsedTrailingLaneCenterX, y: layout.collapsedVisibleHeight / 2)
 
                 if layout.chinHeight > 0, let speaker {
@@ -750,16 +755,37 @@ public struct UserQueryNotchStatusView: View {
         layout.expandedCommandOnlyTopPadding
     }
 
-    private var collapsedSideLaneWidth: CGFloat {
-        max(0, (collapsedSurfaceWidth - layout.voidWidth) / 2)
+    /// The leading lane only holds the pointer; the trailing lane is wider so the live clock fits beside
+    /// the camera. The void seats off-center between them.
+    private var collapsedVoidLeadingInset: CGFloat {
+        layout.collapsedVoidLeadingInset
+    }
+
+    private var collapsedTrailingLaneWidth: CGFloat {
+        max(0, collapsedSurfaceWidth - collapsedVoidLeadingInset - layout.voidWidth)
+    }
+
+    private var collapsedVoidCenterX: CGFloat {
+        collapsedVoidLeadingInset + layout.voidWidth / 2
     }
 
     private var collapsedLeadingLaneCenterX: CGFloat {
-        collapsedSideLaneWidth / 2
+        collapsedVoidLeadingInset / 2
     }
 
     private var collapsedTrailingLaneCenterX: CGFloat {
-        collapsedSurfaceWidth - collapsedSideLaneWidth / 2
+        collapsedSurfaceWidth - collapsedTrailingLaneWidth / 2
+    }
+
+    /// While the host is open it sits centered, but the collapsed chrome is still cross-dissolving out of
+    /// that wider canvas. Because the collapsed surface seats the void off-center, a re-centered chrome
+    /// would slide the void off the camera mid-animation. Shift the chrome by the void's offset from the
+    /// surface center while the host is open so the void stays pinned to the camera. The host opens
+    /// instantly (no animation) and `isHostExpanded` tracks it, so the shift jumps in step rather than
+    /// sliding.
+    private var collapsedChromeVoidShift: CGFloat {
+        guard isHostExpanded, layout.voidWidth > 0 else { return 0 }
+        return collapsedSurfaceWidth / 2 - collapsedVoidCenterX
     }
 
     private var currentConversationRow: some View {
@@ -1342,7 +1368,7 @@ public struct UserQueryNotchStatusView: View {
     /// time only rides alongside the chin (a running conversation always narrates), so the gutter never shows a
     /// lonely clock; every state's full elapsed total lives in the expanded row.
     @ViewBuilder
-    private func collapsedRightSlot(compactTime: Bool) -> some View {
+    private var collapsedRightSlot: some View {
         if surfacedErrorConversation != nil {
             // A surfaced failure (e.g. an auth error) raises the red warning glyph here while its message
             // holds the chin, until the user expands to acknowledge it.
@@ -1356,11 +1382,7 @@ public struct UserQueryNotchStatusView: View {
                 // Waiting on the user, same as a clarification or review — show the attention glyph.
                 attentionGlyph()
             case .running:
-                if compactTime {
-                    compactLiveTime(since: conversation.createdAt)
-                } else {
-                    fullLiveTime(since: conversation.createdAt)
-                }
+                fullLiveTime(since: conversation.createdAt)
             case .completed, .paused, .interrupted, .failed, .chatting, .needsAttention, .timedOut:
                 // The gutter only ever carries the waiting-on-user icons or the live clock — a completed
                 // conversation keeps surfacing as a colored pointer + chin line, and the rest (including a benign
@@ -1407,32 +1429,13 @@ public struct UserQueryNotchStatusView: View {
             .fixedSize()
     }
 
-    private func compactLiveTime(since start: Date) -> some View {
-        TimelineView(.periodic(from: start, by: 1)) { context in
-            slotText(Self.compactElapsed(from: start, to: context.date))
-        }
-    }
-
-    /// Full elapsed time (hours, minutes, and seconds) for the stretchable right gutter on a no-notch
-    /// host. Unlike `compactLiveTime`, which squeezes a single unit into the narrow lane beside the camera,
-    /// this spells out the whole running total since the gutter has room to grow.
+    /// Full elapsed time (hours, minutes, and seconds) for the collapsed right gutter. The gutter's
+    /// trailing lane is sized to fit the whole running total beside the camera, so the clock never
+    /// collapses to a single unit.
     private func fullLiveTime(since start: Date) -> some View {
         TimelineView(.periodic(from: start, by: 1)) { context in
             slotText(Self.elapsedDescription(from: start, to: context.date))
         }
-    }
-
-    /// Compact elapsed time for the ~34px right slot: a single unit — the largest non-zero value
-    /// (hours, else minutes, else seconds) — so it stays legible instead of being shrunk to fit.
-    static func compactElapsed(from start: Date, to now: Date) -> String {
-        let totalSeconds = max(0, Int(now.timeIntervalSince(start)))
-        let hours = totalSeconds / 3600
-        let minutes = (totalSeconds % 3600) / 60
-        let seconds = totalSeconds % 60
-
-        if hours > 0 { return "\(hours)h" }
-        if minutes > 0 { return "\(minutes)m" }
-        return "\(seconds)s"
     }
 
     private var isWorking: Bool {

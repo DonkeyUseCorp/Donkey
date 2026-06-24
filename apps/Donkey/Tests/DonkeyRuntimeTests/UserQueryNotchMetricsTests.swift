@@ -77,6 +77,52 @@ struct UserQueryNotchMetricsTests {
     }
 
     @Test
+    func collapsedRealNotchSeatsVoidOffCenterForTheClock() {
+        let metrics = UserQueryNotchMetrics(
+            voidWidth: UserQueryNotchMetrics.fallbackVoidWidth,
+            voidHeight: UserQueryNotchMetrics.fallbackVoidHeight,
+            expandedContentHeight: UserQueryNotchMetrics.expandedConversationContentHeight,
+            isExpanded: false,
+            isHostExpanded: false,
+            screenWidth: UserQueryNotchMetrics.defaultScreenWidth
+        )
+        let layout = metrics.layout
+        let leading = layout.collapsedVoidLeadingInset
+        let trailing = layout.collapsedSurfaceFrame.width - leading - metrics.voidWidth
+
+        // The trailing lane (the live clock's room) is the wider of the two, so the void seats left of
+        // the surface center — and the window positions by the void center, not the surface center.
+        #expect(trailing > leading)
+        #expect(metrics.surfaceVoidCenterX == leading + metrics.voidWidth / 2)
+        #expect(metrics.surfaceVoidCenterX < metrics.surfaceSize.width / 2)
+    }
+
+    @Test
+    func expandedAndNoVoidSurfacesPositionByTheirCenter() {
+        // Expanded host: the void sits mid-surface, so it positions by the surface center (no offset).
+        let expanded = UserQueryNotchMetrics(
+            voidWidth: UserQueryNotchMetrics.fallbackVoidWidth,
+            voidHeight: UserQueryNotchMetrics.fallbackVoidHeight,
+            expandedContentHeight: UserQueryNotchMetrics.expandedConversationContentHeight,
+            isExpanded: true,
+            isHostExpanded: true,
+            screenWidth: UserQueryNotchMetrics.defaultScreenWidth
+        )
+        #expect(expanded.surfaceVoidCenterX == expanded.surfaceSize.width / 2)
+
+        // No-notch collapsed pill: nothing to seat, so it stays centered too.
+        let noVoid = UserQueryNotchMetrics(
+            voidWidth: 0,
+            voidHeight: 0,
+            expandedContentHeight: UserQueryNotchMetrics.expandedConversationContentHeight,
+            isExpanded: false,
+            isHostExpanded: false,
+            screenWidth: UserQueryNotchMetrics.defaultScreenWidth
+        )
+        #expect(noVoid.surfaceVoidCenterX == noVoid.surfaceSize.width / 2)
+    }
+
+    @Test
     func physicalVoidCollapsedRowIgnoresTopRowExtraHeight() {
         // A real notch routes the second line into the chin band, so the inline top-row growth never
         // applies — the collapsed pill stays the single-row height regardless of the value passed.
