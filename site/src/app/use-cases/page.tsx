@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Image from "next/image";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 
@@ -82,67 +81,23 @@ export default function UseCasesPage() {
       />
       <TopNav />
 
-      <section className="mx-auto grid w-full max-w-[1400px] grid-cols-1 gap-10 px-6 pt-12 pb-16 md:grid-cols-[minmax(0,1fr)_420px] md:px-12 md:pt-20 md:pb-24">
-        <div>
-          <h1 className="max-w-[860px] text-[52px] leading-[0.9] font-semibold tracking-normal break-words md:text-[108px]">
-            Use cases for real Mac work.
-          </h1>
-          <p className="mt-8 max-w-[650px] text-[18px] leading-[1.55] text-[#454545] md:text-[20px]">
-            A growing library of tasks Donkey can run across your files, apps,
-            and browser. Each one shows the exact prompt, the steps Donkey takes,
-            and the result.
-          </p>
-          <div className="mt-8 flex flex-wrap gap-3">
-            <PillButton href="/install" variant="dark">
-              Try Donkey
-              <ArrowRight size={16} />
-            </PillButton>
-            <PillButton href="/pricing" variant="secondary">
-              View pricing
-            </PillButton>
-          </div>
+      <section className="mx-auto w-full max-w-[1400px] px-6 pt-12 pb-16 md:px-12 md:pt-20 md:pb-24">
+        <h1 className="max-w-[860px] text-[52px] leading-[0.9] font-semibold tracking-normal break-words md:text-[108px]">
+          Use cases for real Mac work.
+        </h1>
+        <p className="mt-8 max-w-[650px] text-[18px] leading-[1.55] text-[#454545] md:text-[20px]">
+          A growing library of tasks Donkey can run across your files, apps, and
+          browser.
+        </p>
+        <div className="mt-8 flex flex-wrap gap-3">
+          <PillButton href="/install" variant="dark">
+            Try Donkey
+            <ArrowRight size={16} />
+          </PillButton>
+          <PillButton href="/pricing" variant="secondary">
+            View pricing
+          </PillButton>
         </div>
-
-        <TapedCard color="coral" tapeColor="cream">
-          <div className="p-7 md:p-8">
-            <div className="mb-5 flex items-center gap-4">
-              <div className="flex h-[74px] w-[74px] shrink-0 items-center justify-center overflow-hidden rounded-[14px] border-2 border-ink bg-white">
-                <Image
-                  alt=""
-                  className="h-full w-full object-cover"
-                  height={74}
-                  priority
-                  sizes="74px"
-                  src="/donkey-site-mark.webp"
-                  width={74}
-                />
-              </div>
-              <div>
-                <div className="text-[13px] font-semibold tracking-[0.12em] uppercase">
-                  Library
-                </div>
-                <div className="mt-1 text-[34px] leading-none font-semibold">
-                  {useCases.length} tasks
-                </div>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              {useCaseCategories.map((category) => (
-                <div
-                  key={category}
-                  className="rounded-lg border-2 border-ink bg-white px-4 py-3"
-                >
-                  <div className="text-[28px] leading-none font-semibold">
-                    {getUseCasesByCategory(category).length}
-                  </div>
-                  <div className="mt-1 text-[13px] leading-[1.25] font-semibold text-[#454545]">
-                    {category}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </TapedCard>
       </section>
 
       <section className="mx-auto w-full max-w-[1400px] px-6 pb-20 md:px-12 md:pb-28">
@@ -184,7 +139,7 @@ export default function UseCasesPage() {
                             <p className="mt-4 text-[15px] leading-[1.55] text-[#222]">
                               {useCase.description}
                             </p>
-                            <div className="mt-auto flex items-center justify-between gap-4 pt-8 text-[14px] font-semibold">
+                            <div className="mt-auto flex items-center justify-end gap-2 pt-8 text-[14px] font-semibold">
                               <span>Open use case</span>
                               <ArrowRight size={17} />
                             </div>
@@ -203,14 +158,14 @@ export default function UseCasesPage() {
       <section className="mx-auto w-full max-w-[1400px] px-6 pb-20 md:px-12 md:pb-28">
         <div className="relative">
           <div className="absolute inset-0 translate-x-2 translate-y-2 rounded-3xl bg-coral" />
-          <div className="relative grid gap-8 rounded-3xl border-2 border-ink bg-ink px-7 py-9 text-white md:grid-cols-[1fr_auto] md:px-12 md:py-14">
+          <div className="relative grid gap-8 rounded-3xl border-2 border-ink bg-ink px-7 py-9 text-white md:px-12 md:py-14">
             <div>
               <div className="mb-[18px] text-xs font-semibold tracking-[0.12em] text-white/55 uppercase">
                 Get started
               </div>
               <Headline size="lg">Try Donkey today.</Headline>
             </div>
-            <div className="flex flex-wrap items-center gap-3 self-center">
+            <div className="flex flex-wrap items-center gap-3 self-start">
               <PillButton href="/install" variant="primary">
                 Install Donkey
               </PillButton>

@@ -250,7 +250,7 @@ export default async function UseCasePage({ params }: PageProps) {
       <section className="mx-auto w-full max-w-[1400px] px-6 pb-20 md:px-12 md:pb-28">
         <div className="relative">
           <div className="absolute inset-0 translate-x-2 translate-y-2 rounded-3xl bg-coral" />
-          <div className="relative grid gap-8 rounded-3xl border-2 border-ink bg-ink px-7 py-9 text-white md:grid-cols-[1fr_auto] md:px-12 md:py-14">
+          <div className="relative grid gap-8 rounded-3xl border-2 border-ink bg-ink px-7 py-9 text-white md:px-12 md:py-14">
             <div>
               <div className="mb-[18px] text-xs font-semibold tracking-[0.12em] text-white/55 uppercase">
                 Try another task
@@ -261,7 +261,7 @@ export default async function UseCasePage({ params }: PageProps) {
                 apps, and data tasks that usually take too many manual steps.
               </p>
             </div>
-            <div className="flex flex-wrap items-center gap-3 self-center">
+            <div className="flex flex-wrap items-center gap-3 self-start">
               <PillButton href="/use-cases" variant="primary">
                 All use cases
               </PillButton>
