@@ -179,6 +179,22 @@ build_pdf_fill() {
   ok "pdf-fill"
 }
 
+# Build the `epub-pack` CLI from the in-repo Swift source (tools/epub-pack/main.swift).
+# Like pdf-fill it links only Foundation (a self-contained store-only ZIP writer), so the
+# result is a single self-contained binary — no dylib bundling. MANDATORY: it is the book
+# skill's EPUB packaging path (image_render writes the PDF; this writes the .epub).
+build_epub_pack() {
+  if [ -x "$VENDOR_DIR/epub-pack" ]; then ok "epub-pack (cached)"; return 0; fi
+  command -v swiftc >/dev/null 2>&1 || { echo "FATAL: swiftc unavailable for epub-pack build" >&2; exit 1; }
+  if ! swiftc -O "$ROOT_DIR/tools/epub-pack/main.swift" -o "$VENDOR_DIR/epub-pack" 2>/tmp/epub-pack-build.log; then
+    echo "FATAL: epub-pack build failed; tail of /tmp/epub-pack-build.log:" >&2
+    tail -25 /tmp/epub-pack-build.log >&2
+    exit 1
+  fi
+  chmod +x "$VENDOR_DIR/epub-pack"
+  ok "epub-pack"
+}
+
 log "Ensuring dylibbundler"
 command -v dylibbundler >/dev/null 2>&1 || brew install dylibbundler >/dev/null 2>&1
 
@@ -190,6 +206,9 @@ build_liteparse
 
 # --- pdf-fill: mandatory, built from in-repo Swift source (native PDFKit, no deps) ---
 build_pdf_fill
+
+# --- epub-pack: mandatory, built from in-repo Swift source (native Foundation, no deps) ---
+build_epub_pack
 
 # --- qpdf (Homebrew) ---
 if [ -x "$VENDOR_DIR/qpdf" ]; then

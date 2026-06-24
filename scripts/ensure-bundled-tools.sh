@@ -17,9 +17,9 @@ VENDOR_DIR="${DONKEY_TOOLS_DIR:-$ROOT_DIR/vendor/donkey-tools}"
 MANIFEST="$ROOT_DIR/apps/Donkey/Sources/DonkeyRuntime/Resources/bundled-tools.json"
 
 # Tools without which a build is not shippable: ffmpeg/ffprobe (media), yt-dlp (the
-# YouTube/download path), lit + pdf-fill (the pdf skill). Keep in sync with
-# fetch-bundled-tools.sh and BundledTools.swift.
-MANDATORY_TOOLS=(ffmpeg ffprobe yt-dlp lit pdf-fill)
+# YouTube/download path), lit + pdf-fill (the pdf skill), epub-pack (the book skill).
+# Keep in sync with fetch-bundled-tools.sh and BundledTools.swift.
+MANDATORY_TOOLS=(ffmpeg ffprobe yt-dlp lit pdf-fill epub-pack)
 OPTIONAL_TOOLS=(qpdf exiftool)
 
 missing_of() {
@@ -87,7 +87,15 @@ if ! download_prebuilt; then
   "$SCRIPT_DIR/fetch-bundled-tools.sh" || true
 fi
 
+# A published prebuilt bundle can predate a newly added mandatory tool (e.g. a first-party CLI
+# added to the scripts before the next republish). Rather than hard-fail, build just the missing
+# ones from source — fetch-bundled-tools.sh skips anything already present in VENDOR_DIR.
 still_mandatory=$(missing_of "${MANDATORY_TOOLS[@]}" | grep -v '^$' || true)
+if [ -n "$still_mandatory" ]; then
+  echo "Prebuilt bundle missing: $(echo "$still_mandatory" | tr '\n' ' ')— building those from source..."
+  "$SCRIPT_DIR/fetch-bundled-tools.sh" || true
+  still_mandatory=$(missing_of "${MANDATORY_TOOLS[@]}" | grep -v '^$' || true)
+fi
 if [ -n "$still_mandatory" ]; then
   echo "ERROR: bundled tools still missing after install: $(echo "$still_mandatory" | tr '\n' ' ')" >&2
   echo "       Source build needs Homebrew + network; fix that and re-run." >&2

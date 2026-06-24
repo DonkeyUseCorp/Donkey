@@ -13,7 +13,7 @@ public enum BundledTools {
     /// skills run them by bare name. This is the single Swift home for the list; keep it in step with the
     /// fetch/publish scripts when the bundle gains or drops a tool.
     public static let executableNames: Set<String> = [
-        "ffmpeg", "ffprobe", "yt-dlp", "lit", "pdf-fill", "qpdf", "exiftool"
+        "ffmpeg", "ffprobe", "yt-dlp", "lit", "pdf-fill", "epub-pack", "qpdf", "exiftool"
     ]
 
     /// Tools that unpack a private interpreter/runtime to a temp dir at launch and `dlopen()` it — a
