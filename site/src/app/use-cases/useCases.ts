@@ -38,10 +38,10 @@ export type UseCase = {
 };
 
 export const useCaseCategories: UseCaseCategory[] = [
-  "PDF and document work",
-  "Data and reporting",
   "Media and images",
   "Web and app automation",
+  "PDF and document work",
+  "Data and reporting",
 ];
 
 export const useCases: UseCase[] = [
