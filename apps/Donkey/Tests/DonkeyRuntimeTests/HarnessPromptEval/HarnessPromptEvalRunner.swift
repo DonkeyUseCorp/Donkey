@@ -237,9 +237,20 @@ enum HarnessEvalRunner {
             return .ok(listing)
         default:
             // A read-only discovery/verify command (find, ls, stat, ffprobe…) is the model confirming an
-            // output it just produced. Report the files prior steps created so it can move on, instead of
-            // a blank "ran" that sends it re-searching until the duplicate-call guard fails the run.
+            // output it just produced. The system is stubbed, so every prior write SUCCEEDED: when the
+            // probe names concrete output path(s), confirm those EXACT paths — whatever the model chose to
+            // call them — and record them present, so a verify of the file it just made resolves on the
+            // first try instead of being handed a fixture's hardcoded name and re-checking until the
+            // duplicate-call guard fails the run. A path-less probe (bare `ls`, `pwd`) or a discovery over
+            // a directory/glob still reports the files prior steps created.
             if let command = call.input["command"], isFileProbe(command) {
+                let probed = probedPaths(in: command)
+                if !probed.isEmpty {
+                    return .ok(
+                        probed.joined(separator: "\n"),
+                        facts: Dictionary(probed.map { ($0, "exists") }, uniquingKeysWith: { current, _ in current })
+                    )
+                }
                 return .ok(knownFiles.isEmpty ? "(no matching files)" : knownFiles.joined(separator: "\n"))
             }
             return .ok("\(call.name) ran.", facts: ["lastStub": call.name])
@@ -252,6 +263,22 @@ enum HarnessEvalRunner {
         let lowered = command.lowercased()
         let probes = ["find ", "ls ", "ls\n", "stat ", "test ", "file ", "ffprobe", "du ", "wc ", "realpath", "pwd"]
         return lowered == "ls" || probes.contains { lowered.contains($0) }
+    }
+
+    /// The concrete file paths a probe command names — a token with a path separator and a filename
+    /// extension, not a flag and not a glob. Those are the outputs the model is verifying; in a stubbed
+    /// world they all exist, so the probe confirms exactly the paths asked about, regardless of the name
+    /// the model picked. A directory or glob (`~/Downloads`, `*.mp4`) yields nothing, so a discovery
+    /// listing falls through to the known-files reply.
+    private static func probedPaths(in command: String) -> [String] {
+        command
+            .split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" })
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "'\"`")) }
+            .filter { token in
+                guard token.contains("/"), !token.hasPrefix("-") else { return false }
+                guard !token.contains(where: { "*?[]".contains($0) }) else { return false }
+                return (token as NSString).lastPathComponent.contains(".")
+            }
     }
 
     /// Best-effort load of a built-in `SKILL.md` from the DonkeyRuntime resource bundle by a loose id

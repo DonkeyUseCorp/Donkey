@@ -12,7 +12,8 @@
   "expect": {
     "turnKind": "act",
     "skills": ["media"],
-    "shellAll": [["yt-dlp", "download-sections"], ["ffmpeg", "subtitles"]],
+    "shellAll": [["yt-dlp"], ["ffmpeg", "subtitles"]],
+    "used": ["llm.generate"],
     "completed": true
   }
 }
