@@ -42,6 +42,11 @@ export function providerCreditPricing(
   if (normalizedProvider === "gemini") {
     return geminiCreditPricing(normalizedModel);
   }
+  // The video model id is configuration (GEMINI_VIDEO_MODEL), not a hardcoded constant, so the Veo
+  // provider is priced per clip at the provider level rather than keyed to a specific model id.
+  if (normalizedProvider === "veo") {
+    return veoCreditPricing();
+  }
   if (normalizedProvider === "elevenlabs") {
     return elevenLabsCreditPricing(normalizedModel);
   }
@@ -278,6 +283,14 @@ const geminiModelPricing: Record<GeminiModel, ProviderCreditPricing> = {
   // ~1290 output tokens at $30/1M ≈ $0.039 each.
   [geminiModels.flashImage]: { generationCostMicros: usdWithMargin("0.039") },
 };
+
+// Generative text/image-to-video (Veo). The model id is configuration (GEMINI_VIDEO_MODEL), so this
+// is a provider-level flat price per clip, not a per-model rate. Veo bills per second of output; an
+// ~8s clip with audio at ~$0.40/s ≈ $3.20, charged at submit time (assets/refresh is free). Adjust
+// the rate (or move to durationSecondCostMicros) if the real Veo rate or default clip length differs.
+function veoCreditPricing(): ProviderCreditPricing {
+  return { generationCostMicros: usdWithMargin("3.20") };
+}
 
 function geminiCreditPricing(model: string): ProviderCreditPricing | undefined {
   // Exact match wins, so a specific id is never shadowed by a broader prefix entry (e.g. an image

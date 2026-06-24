@@ -1,5 +1,6 @@
 import { createGeminiComputerUseProvider } from "@/lib/inference/adapters/gemini-computer-use";
 import { createGeminiImageAssetProvider } from "@/lib/inference/adapters/gemini-image";
+import { createGeminiVideoAssetProvider } from "@/lib/inference/adapters/gemini-video";
 import { createHostedResponsesProvider } from "@/lib/inference/adapters/hosted-responses";
 import {
   InferenceProviderError,
@@ -212,6 +213,9 @@ export function createProviderRegistry() {
     // provider serves kind="image" (gemini-computer-use lists "image" as an input modality
     // but has no generateAsset, so it is never chosen for asset generation).
     createGeminiImageAssetProvider(),
+    // Veo serves kind="video"; its distinct provider id keeps async refresh routing from
+    // colliding with the synchronous image adapter.
+    createGeminiVideoAssetProvider(),
     // ElevenLabs audio provider disabled for now (not in use).
     createGeminiComputerUseProvider(),
     createHostedResponsesProvider(),
