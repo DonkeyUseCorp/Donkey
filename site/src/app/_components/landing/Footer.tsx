@@ -27,6 +27,7 @@ export function Footer() {
       title: "Product",
       links: [
         { href: "/install", label: "Donkey for Mac" },
+        { href: "/use-cases", label: "Use cases" },
         { href: "/donkeyvision", label: "Donkey Vision API" },
         { href: GITHUB_REPO_URL, label: "GitHub" },
       ],
