@@ -16,7 +16,10 @@ import {
   validationErrorResponse,
 } from "@/lib/inference/responses";
 import { chatCompletionRequestSchema } from "@/lib/inference/schemas";
-import { withDonkeyAuth } from "@/lib/donkey-api-auth";
+import {
+  shouldBypassDonkeyInferenceCredits,
+  withDonkeyAuth,
+} from "@/lib/donkey-api-auth";
 import { InferenceProviderError } from "@/lib/inference/providers";
 
 export const dynamic = "force-dynamic";
@@ -47,13 +50,16 @@ export const POST = withDonkeyAuth(async (request) => {
 
   const requestedModel =
     parsed.data.model?.trim() || parsed.data.models?.[0]?.trim() || "unknown";
-  const credits = await requireInferenceCredits({
-    model: requestedModel,
-    route: inferenceUsageRoutes.chatCompletions,
-    userId: request.donkey.userId,
-  });
-  if (!credits.ok) {
-    return credits.response;
+  const bypassCredits = shouldBypassDonkeyInferenceCredits(request.donkey);
+  if (!bypassCredits) {
+    const credits = await requireInferenceCredits({
+      model: requestedModel,
+      route: inferenceUsageRoutes.chatCompletions,
+      userId: request.donkey.userId,
+    });
+    if (!credits.ok) {
+      return credits.response;
+    }
   }
 
   let failedUsageProvider = "default";
@@ -66,16 +72,18 @@ export const POST = withDonkeyAuth(async (request) => {
     if (parsed.data.stream) {
       const result = await provider.streamCompletion?.(parsed.data);
       if (!result) {
-        await recordFailedInferenceUsage({
-          clientId: client.clientId,
-          conversationId: request.donkey.conversationId,
-          errorCode: "streaming_unavailable",
-          model: requestedModel,
-          provider: failedUsageProvider,
-          requestKind: "chat_completions",
-          route: inferenceUsageRoutes.chatCompletions,
-          userId: request.donkey.userId,
-        });
+        if (!bypassCredits) {
+          await recordFailedInferenceUsage({
+            clientId: client.clientId,
+            conversationId: request.donkey.conversationId,
+            errorCode: "streaming_unavailable",
+            model: requestedModel,
+            provider: failedUsageProvider,
+            requestKind: "chat_completions",
+            route: inferenceUsageRoutes.chatCompletions,
+            userId: request.donkey.userId,
+          });
+        }
 
         return NextResponse.json(
           {
@@ -85,16 +93,22 @@ export const POST = withDonkeyAuth(async (request) => {
         );
       }
 
-      const recordedUsage = await recordInferenceUsage({
-        clientId: client.clientId,
-        conversationId: request.donkey.conversationId,
-        model: result.model,
-        provider: result.provider,
-        requestKind: "chat_completions",
-        route: inferenceUsageRoutes.chatCompletions,
-        status: "succeeded",
-        userId: request.donkey.userId,
-      });
+      let streamUsageHeaders: Record<string, string> = {};
+      if (bypassCredits) {
+        streamUsageHeaders["X-Donkey-Dev-Auth-Bypass"] = "true";
+      } else {
+        const recordedUsage = await recordInferenceUsage({
+          clientId: client.clientId,
+          conversationId: request.donkey.conversationId,
+          model: result.model,
+          provider: result.provider,
+          requestKind: "chat_completions",
+          route: inferenceUsageRoutes.chatCompletions,
+          status: "succeeded",
+          userId: request.donkey.userId,
+        });
+        streamUsageHeaders = creditUsageHeaders(recordedUsage);
+      }
 
       return new Response(result.response.body, {
         status: result.response.status,
@@ -105,23 +119,25 @@ export const POST = withDonkeyAuth(async (request) => {
           Connection: "keep-alive",
           "X-Donkey-Inference-Provider": result.provider,
           "X-Donkey-Inference-Model": result.model,
-          ...creditUsageHeaders(recordedUsage),
+          ...streamUsageHeaders,
         },
       });
     }
 
     const result = await provider.completeText?.(parsed.data);
     if (!result) {
-      await recordFailedInferenceUsage({
-        clientId: client.clientId,
-        conversationId: request.donkey.conversationId,
-        errorCode: "completion_unavailable",
-        model: requestedModel,
-        provider: failedUsageProvider,
-        requestKind: "chat_completions",
-        route: inferenceUsageRoutes.chatCompletions,
-        userId: request.donkey.userId,
-      });
+      if (!bypassCredits) {
+        await recordFailedInferenceUsage({
+          clientId: client.clientId,
+          conversationId: request.donkey.conversationId,
+          errorCode: "completion_unavailable",
+          model: requestedModel,
+          provider: failedUsageProvider,
+          requestKind: "chat_completions",
+          route: inferenceUsageRoutes.chatCompletions,
+          userId: request.donkey.userId,
+        });
+      }
 
       return NextResponse.json(
         {
@@ -131,36 +147,44 @@ export const POST = withDonkeyAuth(async (request) => {
       );
     }
 
-    const recordedUsage = await recordInferenceUsage({
-      clientId: client.clientId,
-      conversationId: request.donkey.conversationId,
-      model: result.model,
-      provider: result.provider,
-      requestKind: "chat_completions",
-      route: inferenceUsageRoutes.chatCompletions,
-      status: "succeeded",
-      usage: result.usage,
-      userId: request.donkey.userId,
-    });
+    let usageHeaders: Record<string, string> = {};
+    if (bypassCredits) {
+      usageHeaders["X-Donkey-Dev-Auth-Bypass"] = "true";
+    } else {
+      const recordedUsage = await recordInferenceUsage({
+        clientId: client.clientId,
+        conversationId: request.donkey.conversationId,
+        model: result.model,
+        provider: result.provider,
+        requestKind: "chat_completions",
+        route: inferenceUsageRoutes.chatCompletions,
+        status: "succeeded",
+        usage: result.usage,
+        userId: request.donkey.userId,
+      });
+      usageHeaders = creditUsageHeaders(recordedUsage);
+    }
 
     return NextResponse.json(result.body, {
       headers: {
         "X-Donkey-Inference-Provider": result.provider,
         "X-Donkey-Inference-Model": result.model,
-        ...creditUsageHeaders(recordedUsage),
+        ...usageHeaders,
       },
     });
   } catch (error) {
-    await recordFailedInferenceUsage({
-      clientId: client.clientId,
-      conversationId: request.donkey.conversationId,
-      errorCode: inferenceErrorCode(error),
-      model: requestedModel,
-      provider: failedUsageProvider,
-      requestKind: "chat_completions",
-      route: inferenceUsageRoutes.chatCompletions,
-      userId: request.donkey.userId,
-    });
+    if (!bypassCredits) {
+      await recordFailedInferenceUsage({
+        clientId: client.clientId,
+        conversationId: request.donkey.conversationId,
+        errorCode: inferenceErrorCode(error),
+        model: requestedModel,
+        provider: failedUsageProvider,
+        requestKind: "chat_completions",
+        route: inferenceUsageRoutes.chatCompletions,
+        userId: request.donkey.userId,
+      });
+    }
     const creditResponse = creditErrorResponse(error);
     if (creditResponse) {
       return creditResponse;
