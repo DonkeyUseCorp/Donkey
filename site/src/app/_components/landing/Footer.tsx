@@ -28,6 +28,7 @@ export function Footer() {
       links: [
         { href: "/install", label: "Donkey for Mac" },
         { href: "/use-cases", label: "Use cases" },
+        { href: "/pricing", label: "Pricing" },
         { href: "/donkeyvision", label: "Donkey Vision API" },
         { href: GITHUB_REPO_URL, label: "GitHub" },
       ],
@@ -35,7 +36,6 @@ export function Footer() {
     {
       title: "Account",
       links: [
-        { href: "/pricing", label: "Pricing" },
         { href: "/sign-in", label: "Log in" },
         { href: "/sign-up", label: "Sign up" },
       ],
