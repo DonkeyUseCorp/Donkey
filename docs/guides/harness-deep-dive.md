@@ -138,10 +138,43 @@ acts:
   using the description only to fill in details like the current size or the
   original format.
 
+### Keeping output together
+
+When a turn produces files, they belong together rather than scattered across
+Downloads and temp folders. A conversation carries a small, durable record of
+what it has produced and where — every file a tool reports writing is captured
+into it (from the result's own path field, never by reading the user's words),
+and that record is shown back to the model on every step, so it survives the
+context trimming that would otherwise make the model forget what it made two
+turns ago.
+
+The same record holds the turn's *inputs*. Files the user attaches are captured
+alongside the agent's outputs — the input mirror of a deliverable — and surfaced
+to the model every step with their on-disk paths, so "turn this photo into a
+headshot" or "summarize these" resolves against real files the model reads or
+edits with its ordinary tools (describe, image edit, the data and PDF skills).
+The understanding step is also told the attachments exist, so an attached file
+reads the turn as action on that file rather than a misclassified request. Any
+number of files can ride along; nothing here is image-specific.
+
+The split is deliberate: the runtime *remembers*, the model *decides*. The
+record never names or moves anything. The model chooses where the first file
+goes, and when a second related file appears it makes a clearly-named folder,
+moves the earlier one in (a visible step the user sees), and keeps adding there;
+an obviously multi-file task — an app, a site — gets its project folder up front.
+A relative path the model writes lands inside the current folder automatically;
+a path the user spelled out is always used exactly. The filesystem stays the
+source of truth — the remembered record is a memory aid the model reconciles by
+listing the folder when unsure.
+
 ### What stays fixed
 
 A few boundaries hold this together:
 
+- **The workspace is remembered, not decided.** The runtime tracks produced
+  files from typed tool results and resolves relative paths; naming, structure,
+  and when to group are the model's per-step judgments, composed from ordinary
+  write and shell actions — there is no "make a workspace" feature to freeze.
 - **Understanding is reusable; operations are not.** A new file request is just
   the model combining the describe step with its general actions. Building a
   one-off "rename" feature would freeze a single request into the system, which
