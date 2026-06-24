@@ -47,6 +47,13 @@ it. On relaunch, a task that was actively running moments earlier resumes on its
 own in the background; one interrupted longer ago, or one that was waiting on the
 user, comes back as a row the user resumes with a tap.
 
+**Concluding a done-but-spinning run.** Sometimes a run finishes the real task —
+it made a file or changed an app — but then gets stuck re-checking its own work,
+or the planner runs out of moves; rather than waste the rest of its steps or end
+as a failure, the runtime marks it done, as long as there's clear evidence the
+goal was met. A run that only ever read things, or that stopped because the user
+is signed out or out of credits, is left alone so the user can retry or fix it.
+
 ## Learning From Finished Runs
 
 The harness improves itself across runs: a mistake it pays for once should steer

@@ -85,6 +85,17 @@ public struct GenericHarnessRuntime: Sendable {
         var identicalNoProgressStreak = 0
         var lastCallSignature: String?
         var iterations = 0
+        // Whether the run did real work — a step that BOTH changed the world model AND came from a
+        // non-read-only tool (a produced file, a changed app state), not a read/verify — and how many steps
+        // in a row left the world unchanged. Together they decide a spinning run's outcome: a run that did
+        // real work and is now only re-reading/re-verifying (or whose planner gave up) should CONCLUDE as
+        // completed, not time out or fail safe. Requiring BOTH conditions is deliberate: a read that merely
+        // reports observations (re-listing, re-verifying) is not real work, so a stuck explorer that never
+        // produced anything still fails safe — the stall guard's guarantee is preserved.
+        var hadRealWork = false
+        var stepsSinceWorldChange = 0
+        // Names of read-only tools, so only a world-changing NON-read-only success counts as real work.
+        let readOnlyToolNames = Set((await registry.descriptors()).filter { $0.safetyClass == .readOnly }.map(\.name))
 
         // Mark this task as having a live loop. While marked, an enqueued follow-up is guaranteed delivery:
         // it is drained at the top of each iteration, and the only stop that actually ends the run is one
@@ -102,10 +113,22 @@ public struct GenericHarnessRuntime: Sendable {
                 await coordinator.reopenForFollowUp(agentID: agentID)
             }
 
-            // Runaway backstop: a still-runnable task that exhausts the iteration budget timed out (the
-            // goal stands, so it stays retryable) — distinct from a stall (failSafe) or a clean stop.
+            // Step-budget reached. Borrowed from a computer-use loop's "do the work, verify, then stop":
+            // if the run did real work and is now only SPINNING (several steps with no world change — i.e.
+            // re-verifying) and completion is evidence-backed, the goal is met, so COMPLETE rather than
+            // report a timeout. A run still changing the world each step (genuinely advancing) times out and
+            // stays retryable; so does one that changed nothing at all (stuck exploring).
             if iterations >= maxSteps {
-                await coordinator.timeOutIfRunnable(agentID: agentID, reason: "maxStepsReached")
+                if hadRealWork,
+                   stepsSinceWorldChange >= Self.spinStepsBeforeConclude,
+                   await completionWouldBeAccepted(agentID: agentID) {
+                    _ = await coordinator.complete(
+                        agentID: agentID,
+                        reason: "Reached the step budget with the goal already produced and verified."
+                    )
+                } else {
+                    await coordinator.timeOutIfRunnable(agentID: agentID, reason: "maxStepsReached")
+                }
                 await coordinator.markLoopEnded(agentID: agentID)
                 break loop
             }
@@ -117,10 +140,25 @@ public struct GenericHarnessRuntime: Sendable {
             // Compact before planning: fold older turns into a rolling summary when the conversation has
             // grown past the threshold, and hand the planner the bounded recent-events-plus-summary view.
             let rollingContext = await compactor?.rollingContext(agentID: agentID)
-            guard let call = await planner.planNextStep(for: task, rollingContext: rollingContext) else {
+            guard let plannedCall = await planner.planNextStep(for: task, rollingContext: rollingContext) else {
                 // The planner stopped without a lifecycle call: an abnormal stop, not a timeout.
                 await coordinator.failSafeIfRunnable(agentID: agentID, reason: "plannerStopped")
                 if await coordinator.endRunUnlessPending(agentID: agentID) { break loop } else { continue loop }
+            }
+            // A planner that gives up (run.failSafe) AFTER the goal is already produced and verified should
+            // COMPLETE, not fail — the work exists; only the next decision didn't render (e.g. a transient
+            // run of empty model replies). The same "do the work, verify, then conclude" rule as the
+            // step-budget path. Unrecoverable give-ups (signed out, out of credits) still surface so the
+            // user can act on them; a give-up with no real work done still fails.
+            var call = plannedCall
+            if call.name == "run.failSafe",
+               !Self.isUnrecoverableFailSafe(call.input["reason"]),
+               hadRealWork,
+               await completionWouldBeAccepted(agentID: agentID) {
+                call = HarnessToolCall(
+                    name: "run.complete",
+                    input: ["reason": "Goal produced and verified; finalizing despite a transient planning failure."]
+                )
             }
             let signature = call.name + "\u{1}" + Self.canonicalInput(call.input)
 
@@ -130,6 +168,17 @@ public struct GenericHarnessRuntime: Sendable {
             }
             results.append(step)
             await onStep?(step)
+            let stepChangedWorld = Self.worldChanged(from: task, to: step.task)
+            if stepChangedWorld {
+                stepsSinceWorldChange = 0
+                if step.toolResult?.status == .succeeded,
+                   !call.name.hasPrefix("run."),
+                   !readOnlyToolNames.contains(call.name) {
+                    hadRealWork = true
+                }
+            } else {
+                stepsSinceWorldChange += 1
+            }
             if step.stoppedForGate || !step.task.status.canExecuteTools {
                 if await coordinator.endRunUnlessPending(agentID: agentID) { break loop } else { continue loop }
             }
@@ -169,21 +218,47 @@ public struct GenericHarnessRuntime: Sendable {
                     identicalNoProgressStreak = 0
                 }
                 if noProgressStreak >= maxNoProgressSteps {
-                    await failSafeStall(agentID: agentID, reason: "noProgress")
+                    await failSafeStall(agentID: agentID, reason: "noProgress", hadRealWork: hadRealWork)
                     if await coordinator.endRunUnlessPending(agentID: agentID) { break loop } else { continue loop }
                 }
                 if identicalNoProgressStreak + 1 >= maxIdenticalRepeats {
-                    await failSafeStall(agentID: agentID, reason: "stuckRepeatingCall")
+                    await failSafeStall(agentID: agentID, reason: "stuckRepeatingCall", hadRealWork: hadRealWork)
                     if await coordinator.endRunUnlessPending(agentID: agentID) { break loop } else { continue loop }
                 }
                 if let reason = Self.repeatedFailureStallReason(after: step, threshold: maxRepeatedFailures) {
-                    await failSafeStall(agentID: agentID, reason: reason)
+                    await failSafeStall(agentID: agentID, reason: reason, hadRealWork: hadRealWork)
                     if await coordinator.endRunUnlessPending(agentID: agentID) { break loop } else { continue loop }
                 }
             }
             lastCallSignature = signature
         }
         return results
+    }
+
+    /// Whether a `run.failSafe` reason is one the user must see rather than have silently turned into a
+    /// completion — an expired session or a spent balance. Matched on the harness-generated reason CODE
+    /// (a typed technical field set by the planner's fail-safe path), never on user text. Any other
+    /// give-up reason is recoverable-into-completion when the goal is already done + evidenced.
+    private static func isUnrecoverableFailSafe(_ reason: String?) -> Bool {
+        guard let reason else { return false }
+        return reason == "sessionSignedOut" || reason == "insufficientCredits"
+    }
+
+    /// Whether the world model the planner reasons over changed across a step — new/changed elements,
+    /// facts, or visible text. This is "did something actually happen" independent of any tool's
+    /// self-reported observations, so it stays true real work occurred even when later steps only re-read.
+    private static func worldChanged(from before: HarnessAgentState, to after: HarnessAgentState) -> Bool {
+        before.worldModel.elements != after.worldModel.elements
+            || before.worldModel.facts != after.worldModel.facts
+            || before.worldModel.visibleText != after.worldModel.visibleText
+    }
+
+    /// Whether a `run.complete` issued right now would pass the completion-evidence gate — i.e. the goal is
+    /// already evidence-backed. Used by the step-budget path to decide complete-vs-timeout.
+    private func completionWouldBeAccepted(agentID: String) async -> Bool {
+        guard let task = await coordinator.agent(id: agentID) else { return false }
+        let synthetic = HarnessToolCall(name: "run.complete", input: [:])
+        return await completionEvidenceRejection(call: synthetic, task: task) == nil
     }
 
     /// A step advanced the task if it changed the observed world (elements, facts, or visible text)
@@ -257,10 +332,23 @@ public struct GenericHarnessRuntime: Sendable {
             .joined(separator: "\u{1f}")
     }
 
-    /// Moves the task to a failed-safe stall state with a typed reason, so a stuck run ends cleanly
-    /// instead of burning the whole runaway ceiling.
-    private func failSafeStall(agentID: String, reason: String) async {
-        _ = await coordinator.failSafe(agentID: agentID, reason: "Run stopped: \(reason).")
+    /// How many consecutive no-world-change steps mark a run as "spinning" rather than advancing — used
+    /// by the step-budget path to tell re-verification (conclude) from genuine progress (time out).
+    private static let spinStepsBeforeConclude = 3
+
+    /// Ends a stalled run. The stall guard firing already means the planner is spinning — so if it did
+    /// real work and the goal is evidence-backed, that spin is just re-verification of a finished task:
+    /// COMPLETE instead of failing safe. Otherwise (nothing produced, or no evidence the goal holds) it
+    /// is a genuine stuck run and ends failed-safe, staying retryable.
+    private func failSafeStall(agentID: String, reason: String, hadRealWork: Bool) async {
+        if hadRealWork, await completionWouldBeAccepted(agentID: agentID) {
+            _ = await coordinator.complete(
+                agentID: agentID,
+                reason: "Goal produced and verified; finalizing after the planner kept re-verifying (\(reason))."
+            )
+        } else {
+            _ = await coordinator.failSafe(agentID: agentID, reason: "Run stopped: \(reason).")
+        }
     }
 
     public func executeToolCall(
@@ -288,13 +376,6 @@ public struct GenericHarnessRuntime: Sendable {
 
         if call.name == "user.clarify" {
             let question = call.input["question"] ?? "What detail should I use?"
-            guard let stoppedTask = await coordinator.waitForUser(
-                agentID: agentID,
-                question: question,
-                pendingToolCall: call
-            ) else {
-                return nil
-            }
             let result = HarnessToolResult(
                 callID: call.id,
                 toolName: call.name,
@@ -303,6 +384,17 @@ public struct GenericHarnessRuntime: Sendable {
                 question: question,
                 metadata: ["gate": "clarification"]
             )
+            // Record the ask in tool history before entering the gate, so the run's history shows the
+            // planner chose to clarify (decisions stay inspectable) and a resume sees a non-empty history —
+            // which keeps the planner's first-step clarify guard from re-firing after the user answers.
+            _ = await coordinator.recordToolResult(agentID: agentID, call: call, result: result)
+            guard let stoppedTask = await coordinator.waitForUser(
+                agentID: agentID,
+                question: question,
+                pendingToolCall: call
+            ) else {
+                return nil
+            }
             return HarnessStepExecutionResult(
                 task: stoppedTask,
                 toolResult: result,
