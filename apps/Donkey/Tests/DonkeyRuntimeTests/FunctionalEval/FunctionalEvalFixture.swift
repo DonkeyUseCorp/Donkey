@@ -54,7 +54,15 @@ struct FunctionalEvalFixture: Sendable, CustomStringConvertible {
             at: root,
             includingPropertiesForKeys: [.isDirectoryKey]
         )) ?? []
-        return dirs.compactMap(load).sorted { $0.name < $1.name }
+        var fixtures = dirs.compactMap(load).sorted { $0.name < $1.name }
+        // Optional single-fixture focus: `DONKEY_EVAL_ONLY=comic-book-epub` runs just the fixtures whose name
+        // contains that substring — the same knob the prompt eval honors, so one expensive real-execution
+        // scenario can be run alone. Empty/unset runs everything.
+        if let only = ProcessInfo.processInfo.environment["DONKEY_EVAL_ONLY"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !only.isEmpty {
+            fixtures = fixtures.filter { $0.name.localizedCaseInsensitiveContains(only) }
+        }
+        return fixtures
     }
 
     static func load(_ dir: URL) -> FunctionalEvalFixture? {

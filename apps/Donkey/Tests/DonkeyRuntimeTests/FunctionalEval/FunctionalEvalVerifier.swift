@@ -24,6 +24,8 @@ enum FunctionalEvalVerifier {
             return jsonMinRecords(check.minRecords, producedFiles: producedFiles, sandbox: sandbox)
         case "fileExists":
             return fileExists(extension: check.ext, producedFiles: producedFiles)
+        case "epubValid":
+            return epubValid(producedFiles: producedFiles, sandbox: sandbox)
         default:
             return Outcome(ok: false, detail: "unknown check kind '\(check.kind)'")
         }
@@ -81,6 +83,18 @@ enum FunctionalEvalVerifier {
         }
         let ok = counts.contains { $0 >= minRecords }
         return Outcome(ok: ok, detail: "expected a produced JSON with ≥\(minRecords) records; produced json lengths: \(counts)")
+    }
+
+    /// A produced `.epub` must exist and pass `epub-pack validate` (mimetype first/stored, container + OPF
+    /// present) — the real structural check the same bundled tool the agent used can run.
+    private static func epubValid(producedFiles: [URL], sandbox: URL) -> Outcome {
+        let epubs = producedFiles.filter { $0.pathExtension.lowercased() == "epub" }
+        if epubs.isEmpty {
+            return Outcome(ok: false, detail: "expected a produced .epub; produced: \(producedFiles.map(\.lastPathComponent))")
+        }
+        let results = epubs.map { ShellHelper.run("epub-pack validate \(quoted($0))", in: sandbox) }
+        let ok = results.contains { $0.contains("\"valid\" : true") || $0.contains("\"valid\":true") }
+        return Outcome(ok: ok, detail: "expected a produced .epub that passes `epub-pack validate`; results: \(results)")
     }
 
     private static func fileExists(extension ext: String?, producedFiles: [URL]) -> Outcome {

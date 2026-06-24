@@ -51,6 +51,10 @@ struct ShellCommandClassifierTests {
         #expect(tier("ffprobe -v error -show_entries format=duration -of csv=p=0 out.mp4") == .read)
         #expect(tier("qpdf --decrypt in.pdf out.pdf") == .read)
         #expect(tier("exiftool -all= photo.jpg") == .read)
+        // epub-pack writes the .epub for the book skill — bundled and first-party, so building one
+        // must not raise an Approve/Deny gate.
+        #expect(tier("epub-pack build ./pages --meta book.json -o book.epub") == .read)
+        #expect(tier("epub-pack validate book.epub") == .read)
         // A path-qualified invocation normalizes to the bare tool name and is still trusted.
         #expect(tier("/opt/donkey-tools/yt-dlp -P ~/Downloads 'https://youtu.be/x'") == .read)
         // The real install path lives under "Application Support" — a space inside a quoted executable

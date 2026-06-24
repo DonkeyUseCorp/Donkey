@@ -1,0 +1,8 @@
+{
+  "frontmostApp": "Finder",
+  "maxSteps": 40,
+  "expectProduced": [
+    { "kind": "fileExists", "extension": "pdf" },
+    { "kind": "epubValid" }
+  ]
+}
