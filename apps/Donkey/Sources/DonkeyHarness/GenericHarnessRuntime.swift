@@ -336,12 +336,15 @@ public struct GenericHarnessRuntime: Sendable {
     /// by the step-budget path to tell re-verification (conclude) from genuine progress (time out).
     private static let spinStepsBeforeConclude = 3
 
-    /// Ends a stalled run. The stall guard firing already means the planner is spinning — so if it did
-    /// real work and the goal is evidence-backed, that spin is just re-verification of a finished task:
-    /// COMPLETE instead of failing safe. Otherwise (nothing produced, or no evidence the goal holds) it
-    /// is a genuine stuck run and ends failed-safe, staying retryable.
+    /// Ends a stalled run. A QUIET stall — the planner stopped advancing but isn't thrashing
+    /// (`noProgress`) — can be a finished task that is merely re-verifying itself, so if it did real work
+    /// and the goal is evidence-backed, conclude as COMPLETE rather than fail. Every OTHER stall is the
+    /// planner visibly thrashing — hammering the same call, repeating a failure, or emitting invalid
+    /// calls — and concluding "done" from thrashing is a false success (observed live: a clip-subtitle
+    /// run that only downloaded the clip, then repeated `ffprobe`, was reported completed though nothing
+    /// was ever subtitled). Thrashing stalls always fail safe — honest and retryable.
     private func failSafeStall(agentID: String, reason: String, hadRealWork: Bool) async {
-        if hadRealWork, await completionWouldBeAccepted(agentID: agentID) {
+        if reason == "noProgress", hadRealWork, await completionWouldBeAccepted(agentID: agentID) {
             _ = await coordinator.complete(
                 agentID: agentID,
                 reason: "Goal produced and verified; finalizing after the planner kept re-verifying (\(reason))."
@@ -627,17 +630,27 @@ public struct GenericHarnessRuntime: Sendable {
             return nil
         }
         let signature = Self.canonicalInput(call.input)
-        let alreadySucceeded = Self.currentRunHistory(task.toolHistory).contains { record in
+        let priorRecord = Self.currentRunHistory(task.toolHistory).last { record in
             record.resultStatus == .succeeded
                 && record.call.name == call.name
                 && Self.canonicalInput(record.call.input) == signature
         }
-        guard alreadySucceeded else { return nil }
+        guard let priorRecord else { return nil }
+        // Hand the earlier RESULT back, not just "don't repeat". The planner usually re-runs a call
+        // because its result fell out of the compacted context — so withholding it leaves the planner
+        // blind and it loops on the same call until the stall guard kills the run (observed live: a
+        // clip-subtitle run re-ran `ffprobe` three times and was then wrongly concluded done). Surfacing
+        // the prior output gives the planner what it was after so it can move on. Bounded so a large
+        // listing can't bloat the next prompt.
+        let priorOutput = priorRecord.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resultBlock = priorOutput.isEmpty
+            ? ""
+            : " It already returned:\n\(String(priorOutput.prefix(500)))\n"
         return HarnessToolResult(
             callID: call.id,
             toolName: call.name,
             status: .failed,
-            summary: "Already done: `\(call.name)` ran with this exact input and succeeded earlier in this run. Repeating it duplicates the effect. Verify the result (a read/observe or state.verify), then run.complete — do not run this again.",
+            summary: "Already done: `\(call.name)` ran with this exact input and succeeded earlier in this run.\(resultBlock)You already have this result — do not run it again. Take the next action toward the goal; only run.complete once the goal itself is met and verified.",
             metadata: ["reason": "duplicateAction"]
         )
     }

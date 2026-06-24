@@ -11,7 +11,7 @@ struct GenericHarnessTests {
         let descriptors = BuiltInHarnessToolCatalog.descriptors
         let names = Set(descriptors.map(\.name))
 
-        #expect(names.contains("app.search"))
+        #expect(names.contains("apps_list"))
         #expect(names.contains("elements.get"))
         #expect(names.contains("element.perform"))
         #expect(names.contains("skill.search"))
@@ -552,6 +552,79 @@ struct GenericHarnessTests {
         let realRuns = steps.filter { $0.toolResult?.toolName == "test.act" && $0.toolResult?.status == .succeeded }
         #expect(realRuns.count == 1)
         #expect(steps.contains { $0.toolResult?.metadata["reason"] == "duplicateAction" })
+    }
+
+    @Test
+    func duplicateGuardHandsBackThePriorResultInsteadOfLeavingThePlannerBlind() async {
+        // A planner re-runs a call whose result fell out of its compacted context. The guard blocks the
+        // re-run but must HAND BACK the earlier output, so the planner gets the data it was after rather
+        // than looping until the stall guard kills the run — the ffprobe loop that sank the clip task.
+        struct StubRepeatPlanner: HarnessNextStepPlanning {
+            func planNextStep(for task: HarnessAgentState, rollingContext: String?) async -> HarnessToolCall? {
+                HarnessToolCall(name: "test.probe", input: ["q": "duration"])
+            }
+        }
+        let coordinator = HarnessAgentCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(
+            HarnessTool(
+                descriptor: HarnessToolDescriptor(name: "test.probe", pluginID: "test", summary: "probe", safetyClass: .guardedInput)
+            ) { context in
+                HarnessToolResult(callID: context.call.id, toolName: context.call.name, status: .succeeded, summary: "DURATION_69_98")
+            }
+        )
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createAgent(id: "task-probe", conversationID: "t", goal: "probe", grantedPermissions: [.lifecycle])
+
+        let steps = await runtime.run(agentID: task.id, planner: StubRepeatPlanner(), maxSteps: 30)
+
+        let blocked = steps.first { $0.toolResult?.metadata["reason"] == "duplicateAction" }
+        #expect(blocked != nil)
+        #expect(blocked?.toolResult?.summary.contains("DURATION_69_98") == true)
+    }
+
+    @Test
+    func aThrashingStallAfterRealWorkFailsSafeInsteadOfFalselyCompleting() async {
+        // The clip-subtitle false success in miniature: a run does real work (one state-changing step),
+        // then stalls by hammering the SAME read. A thrashing stall must fail safe — never be upgraded to
+        // completed just because a read happened after the action — because the goal may be only part done.
+        struct StubActThenHammerPlanner: HarnessNextStepPlanning {
+            func planNextStep(for task: HarnessAgentState, rollingContext: String?) async -> HarnessToolCall? {
+                if !task.toolHistory.contains(where: { $0.call.name == "test.act" }) {
+                    return HarnessToolCall(name: "test.act", input: ["command": "produce"])
+                }
+                return HarnessToolCall(name: "test.observe")
+            }
+        }
+        let coordinator = HarnessAgentCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(
+            HarnessTool(
+                descriptor: HarnessToolDescriptor(name: "test.act", pluginID: "test", summary: "act", safetyClass: .guardedInput)
+            ) { context in
+                HarnessToolResult(
+                    callID: context.call.id, toolName: context.call.name, status: .succeeded,
+                    summary: "produced output.mp4",
+                    observations: HarnessObservationDelta(facts: ["produced": "output.mp4"])
+                )
+            }
+        )
+        await registry.register(
+            HarnessTool(
+                descriptor: HarnessToolDescriptor(name: "test.observe", pluginID: "test", summary: "observe", safetyClass: .readOnly)
+            ) { context in
+                HarnessToolResult(callID: context.call.id, toolName: context.call.name, status: .succeeded, summary: "still there")
+            }
+        )
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createAgent(id: "task-hammer", conversationID: "t", goal: "hammer", grantedPermissions: [.lifecycle])
+
+        _ = await runtime.run(agentID: task.id, planner: StubActThenHammerPlanner(), maxSteps: 30)
+
+        // Real work happened and a read followed it (the weak evidence gate would pass), yet a run that
+        // ends by hammering one call is stuck, not done.
+        let finalTask = await coordinator.agent(id: task.id)
+        #expect(finalTask?.status == .failedSafe)
     }
 
     @Test
@@ -1373,13 +1446,16 @@ struct GenericHarnessTests {
         #expect(highRisk.metadata["shell.tier"] == "highRisk")
         #expect(highRisk.metadata["shell.allowAlways"] == "false")
 
+        // A multiline command is classified per line and the most restrictive line wins, so a benign
+        // first line can never smuggle a dangerous second line past the gate.
         let multiline = await registry.execute(
-            HarnessToolCall(id: "sh-3", name: "shell_exec", input: ["command": "echo a\necho b"]),
+            HarnessToolCall(id: "sh-3", name: "shell_exec", input: ["command": "echo a\nsudo rm -rf /tmp/x"]),
             agentID: "task-sh-multiline",
             worldModel: HarnessWorldModel(),
             grantedPermissions: permissions
         )
-        #expect(multiline.status == .invalidInput)
+        #expect(multiline.status == .waitingForPermission)
+        #expect(multiline.metadata["shell.tier"] == "highRisk")
 
         // A bare `rm` (no flags) is still high-risk.
         let bareRm = await registry.execute(
@@ -1967,18 +2043,21 @@ struct GenericHarnessTests {
         let task = await coordinator.createAgent(
             id: "task-resume-permission",
             conversationID: "thread-1",
-            goal: "click a button"
+            goal: "inspect the screen"
         )
+        // A permission-gated read tool: it stops for the `.accessibility` gate the task lacks, and once
+        // granted it runs to completion headlessly — so the checkpoint→grant→resume→execute path is what
+        // the test exercises, not the tool's own UI side effect.
         let call = HarnessToolCall(
-            id: "call-click",
-            name: "element.perform",
-            input: ["elementID": "button-1", "action": "press"]
+            id: "call-observe",
+            name: "elements.get",
+            input: ["scope": "window"]
         )
 
         _ = await runtime.executeToolCall(agentID: task.id, call: call)
         let resumed = await coordinator.grantPermissions(
             agentID: task.id,
-            permissions: [.accessibility, .input]
+            permissions: [.accessibility]
         )
         let executed = await runtime.executeToolCall(agentID: task.id, call: call)
 
@@ -1986,7 +2065,7 @@ struct GenericHarnessTests {
         #expect(resumed?.pendingContinuation == nil)
         #expect(executed?.stoppedForGate == false)
         #expect(executed?.toolResult?.status == .succeeded)
-        #expect(executed?.task.worldModel.facts["lastAcceptedTool"] == "element.perform")
+        #expect(executed?.task.worldModel.facts["lastAcceptedTool"] == "elements.get")
         #expect(executed?.task.toolHistory.count == 1)
     }
 
@@ -2033,8 +2112,8 @@ struct GenericHarnessTests {
         let first = await coordinator.createAgent(
             id: "task-a",
             conversationID: "thread-a",
-            goal: "search apps",
-            grantedPermissions: [.appLookup]
+            goal: "inspect elements",
+            grantedPermissions: [.accessibility]
         )
         let second = await coordinator.createAgent(
             id: "task-b",
@@ -2045,7 +2124,7 @@ struct GenericHarnessTests {
 
         _ = await runtime.executeToolCall(
             agentID: first.id,
-            call: HarnessToolCall(id: "call-a", name: "app.search", input: ["query": "Calendar"])
+            call: HarnessToolCall(id: "call-a", name: "elements.get", input: ["scope": "window"])
         )
         _ = await runtime.executeToolCall(
             agentID: second.id,
@@ -2058,7 +2137,7 @@ struct GenericHarnessTests {
 
         #expect(active.map(\.id).contains("task-a"))
         #expect(active.map(\.id).contains("task-b"))
-        #expect(updatedFirst?.worldModel.facts["lastAcceptedTool"] == "app.search")
+        #expect(updatedFirst?.worldModel.facts["lastAcceptedTool"] == "elements.get")
         #expect(updatedSecond?.worldModel.facts["lastAcceptedTool"] == "screen.observe")
         #expect(updatedFirst?.toolHistory.first?.call.id == "call-a")
         #expect(updatedSecond?.toolHistory.first?.call.id == "call-b")
