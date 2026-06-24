@@ -48,7 +48,7 @@ struct ShellExecCommandTests {
     }
 
     /// A genuinely oversized inline command is still rejected — but now with an actionable message
-    /// that names the limit and points at the llm.generate(toFile) + read-from-file pattern.
+    /// that names the limit and points at the files.write + read-from-file pattern.
     @Test
     @MainActor
     func oversizedCommandIsRejectedWithActionableMessage() async {
@@ -56,6 +56,23 @@ struct ShellExecCommandTests {
         let result = await shellExec(command)
         #expect(result?.status == .invalidInput)
         #expect(result?.summary.contains("the limit is 1500") == true)
-        #expect(result?.summary.contains("llm.generate") == true)
+        #expect(result?.summary.contains("files.write") == true)
+    }
+
+    /// A failed command surfaces the TAIL of its output, where the real error lives. ffmpeg (and many
+    /// tools) print a long banner first and the diagnostic line last; keeping the HEAD fed the planner the
+    /// banner and hid the error, so it retried the same broken command blind — the exact loop the korean
+    /// subtitle run hit. The summary must carry the end of stderr, not its beginning.
+    @Test
+    @MainActor
+    func failedCommandSurfacesTheErrorTailNotTheBanner() async {
+        // 2000 chars of banner noise on stderr, then the real error LAST, then a non-zero exit. All tokens
+        // are read-tier (printf/false), so no consent gate stands between us and the failure path.
+        let command = "printf 'BANNER_%.0s' $(seq 1 250) 1>&2; printf 'REAL_ERROR_AT_TAIL' 1>&2; false"
+        let result = await shellExec(command)
+        #expect(result?.status == .failed)
+        #expect(result?.summary.contains("REAL_ERROR_AT_TAIL") == true)
+        // The head got truncated away — proof we kept the tail, not a prefix that would bury the error.
+        #expect(result?.summary.contains("earlier output truncated") == true)
     }
 }

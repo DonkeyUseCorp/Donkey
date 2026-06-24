@@ -500,12 +500,25 @@ public enum DonkeyCommandBackends {
     private static let shellTimeoutMax: TimeInterval = 120
     /// Max stdout characters returned to the model.
     private static let shellOutputMaxLength = 4_000
+    /// Max characters of a FAILED command's output surfaced for diagnosis. Generous because this is the
+    /// one thing the planner needs to recover, and the actual error is usually only a few lines.
+    private static let shellFailureDiagnosticMaxLength = 1_000
 
     /// Truncates output to the model-facing cap, announcing the cut instead of trimming silently —
     /// the model must know it saw a prefix, not the whole output.
     private static func boundedOutput(_ output: String) -> (text: String, truncated: Bool) {
         guard output.count > shellOutputMaxLength else { return (output, false) }
         return (String(output.prefix(shellOutputMaxLength)) + "\n… [output truncated]", true)
+    }
+
+    /// The diagnostic TAIL of a failed command's output. A tool prints its banner/help first and the
+    /// real error LAST — ffmpeg's version-and-config block precedes its `No such filter` / filtergraph
+    /// error, a compiler's summary follows its warnings, a downloader's failure line is the final one.
+    /// Keeping the HEAD (the old behavior) fed the planner the version banner and hid the error, so it
+    /// retried the same broken command blind. Keeping the tail surfaces the line that explains why.
+    private static func diagnosticTail(_ output: String) -> String {
+        guard output.count > shellFailureDiagnosticMaxLength else { return output }
+        return "… [earlier output truncated]\n" + String(output.suffix(shellFailureDiagnosticMaxLength))
     }
 
     private static func shellExec(_ context: HarnessToolExecutionContext) async -> HarnessToolResult {
@@ -539,19 +552,22 @@ public enum DonkeyCommandBackends {
 
         let stdout = boundedOutput(result.stdout)
         guard result.exitCode == 0 else {
-            let stderr = boundedOutput(result.stderr)
             // The summary is what the model reads next step; a bare exit code hides WHY the command
-            // failed (e.g. an osascript error naming the real problem) and leaves the planner
-            // guessing, so carry the error text in it.
+            // failed and leaves the planner guessing, so carry the error text in it. Surface the TAIL,
+            // not the head: the diagnostic line lives at the END of a tool's output (ffmpeg's banner
+            // precedes its real error), and feeding the head made the planner loop on an invisible
+            // failure (e.g. retrying the same `subtitles=` filter without seeing `No such filter`).
+            let stderrTail = diagnosticTail(result.stderr)
+            let stdoutTail = diagnosticTail(result.stdout)
             var failureLines = [
                 result.timedOut
                     ? "Command timed out after \(Int(timeout))s and was terminated. Pass timeoutSeconds (max \(Int(shellTimeoutMax))) for known-slow commands."
                     : "Command exited with code \(result.exitCode)."
             ]
-            if !stderr.text.isEmpty {
-                failureLines.append("stderr: " + String(stderr.text.prefix(500)))
-            } else if !stdout.text.isEmpty {
-                failureLines.append("stdout: " + String(stdout.text.prefix(500)))
+            if !stderrTail.isEmpty {
+                failureLines.append("stderr: " + stderrTail)
+            } else if !stdoutTail.isEmpty {
+                failureLines.append("stdout: " + stdoutTail)
             }
             return HarnessToolResult(
                 callID: context.call.id,
@@ -562,9 +578,8 @@ public enum DonkeyCommandBackends {
                     "executor": "donkeyCommandLayer",
                     "reason": result.timedOut ? "timedOut" : "nonZeroExit",
                     "exitCode": String(result.exitCode),
-                    "stdout": stdout.text,
-                    "stderr": stderr.text,
-                    "stdoutTruncated": String(stdout.truncated),
+                    "stdout": stdoutTail,
+                    "stderr": stderrTail,
                     "timeoutSeconds": String(Int(timeout))
                 ]
             )
@@ -697,28 +712,80 @@ public enum DonkeyCommandBackends {
         return nil
     }
 
-    /// The environment for a `shell_exec` child: the app's environment, but with PATH rebuilt
-    /// from the user's *login-shell* PATH plus the bundled tools directory.
+    /// Bundled tools where the USER's copy keeps priority over Donkey's. yt-dlp only: its bundled build
+    /// can lag YouTube changes, so a newer Homebrew/pipx copy on the user's PATH wins (the bundled copy is
+    /// still the appended fallback when the user has none). Every other bundled tool is a curated,
+    /// known-good capability build — e.g. an ffmpeg compiled with libass so burning subtitles works — that
+    /// should win over whatever arbitrary copy the user happens to have, so it is NOT listed here.
+    static let userPreferredExecutableNames: Set<String> = ["yt-dlp"]
+
+    /// Bundled tools that should win over a user-installed copy: everything Donkey bundles except the
+    /// user-preferred set above.
+    private static var bundledFirstExecutableNames: Set<String> {
+        BundledTools.executableNames.subtracting(userPreferredExecutableNames)
+    }
+
+    /// The environment for a `shell_exec` child: the app's environment, but with PATH rebuilt as
+    /// `<preferred-bundled-overlay> : <login-shell PATH> : <full bundled dir>`.
     ///
     /// A GUI-launched app (Finder/Dock) inherits only launchd's minimal PATH —
     /// `/usr/bin:/bin:/usr/sbin:/sbin` — which omits `/opt/homebrew/bin` and everything else the
     /// user's profile adds. Building the child's PATH from that minimal value made every
     /// Homebrew-installed tool (`brew`, `ffmpeg`, `yt-dlp`, …) read as `command not found`, even
-    /// though the user clearly had them in Terminal. That mismatch is what sent the planner into a
-    /// loop: it was told a tool was available, the shell disagreed, and it never reconciled the two.
-    /// Anchoring on the login-shell PATH instead means the agent sees exactly what the user sees.
+    /// though the user clearly had them in Terminal. Anchoring on the login-shell PATH means the agent
+    /// sees exactly what the user sees.
     ///
-    /// The bundled tools directory is appended (not prepended), so a tool the user installed (e.g. a
-    /// newer Homebrew `yt-dlp`) still wins, while the bundled copy is the guaranteed fallback that
-    /// keeps a capability working with nothing installed.
+    /// The two bundled segments split by intent. The PREPENDED overlay holds only the curated capability
+    /// tools (ffmpeg/ffprobe/…) that a skill's feature depends on, so Donkey's libass ffmpeg wins over a
+    /// user's stripped Homebrew build and "burn the subtitles in" actually works. yt-dlp is absent from
+    /// the overlay, so the user's newer copy still wins for it. The full bundled dir is APPENDED last as
+    /// the install-nothing fallback: any tool the user lacks still resolves to the signed bundled copy.
     static func shellEnvironment() -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
-        var path = loginShellPath
-        if let toolsDirectory = bundledToolsDirectory {
-            path += ":" + toolsDirectory.path
+        var segments: [String] = []
+        if let overlay = preferredBundledToolsOverlay() {
+            segments.append(overlay.path)
         }
-        environment["PATH"] = path
+        segments.append(loginShellPath)
+        if let toolsDirectory = bundledToolsDirectory {
+            segments.append(toolsDirectory.path)
+        }
+        environment["PATH"] = segments.joined(separator: ":")
         return environment
+    }
+
+    /// A directory of symlinks to the bundled capability tools that should win over the user's copies,
+    /// kept in a writable app-managed location and refreshed to match the live bundled dir. Prepending
+    /// THIS (rather than the whole bundled dir) lets ffmpeg/ffprobe/… take priority while yt-dlp still
+    /// resolves from the user's PATH. A bundled binary loads its dylibs via `@loader_path`, which dyld
+    /// resolves against the symlink's real target, so a symlinked ffmpeg still finds its libass. Returns
+    /// nil when no bundle is installed, so PATH degrades to login-shell + appended fallback unchanged.
+    private static func preferredBundledToolsOverlay() -> URL? {
+        guard let toolsDirectory = bundledToolsDirectory else { return nil }
+        let fileManager = FileManager.default
+        let overlay = BundledTools.installDirectory
+            .deletingLastPathComponent()
+            .appendingPathComponent("donkey-tools-preferred", isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: overlay, withIntermediateDirectories: true)
+        } catch {
+            return nil
+        }
+        var linkedAny = false
+        for name in bundledFirstExecutableNames {
+            let target = toolsDirectory.appendingPathComponent(name)
+            guard fileManager.isExecutableFile(atPath: target.path) else { continue }
+            let link = overlay.appendingPathComponent(name)
+            // Recreate only when missing or pointing at a stale target — the bundled dir can move from the
+            // baked app copy to the downloaded install dir between launches, but an in-place version bump
+            // keeps the same path so the symlink stays valid and this is a no-op.
+            if (try? fileManager.destinationOfSymbolicLink(atPath: link.path)) != target.path {
+                try? fileManager.removeItem(at: link)
+                try? fileManager.createSymbolicLink(at: link, withDestinationURL: target)
+            }
+            if fileManager.fileExists(atPath: link.path) { linkedAny = true }
+        }
+        return linkedAny ? overlay : nil
     }
 
     /// The PATH the user's interactive shell would have, resolved once. Asking the login shell
