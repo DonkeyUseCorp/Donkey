@@ -456,6 +456,45 @@ struct HostedHarnessStepPlannerTests {
         #expect(body.contains("Summary of step 15."))
     }
 
+    @Test
+    func threadsStaticDoctrineAsInstructionsAndHistoryAsConversationTurns() async throws {
+        // The frontier shape: the static doctrine, goal, and tool list go in the cached `instructions`
+        // slot (sent once, not re-sent each step), and the run's history becomes a forward-moving message
+        // thread — the model's prior decision as an assistant turn, the tool's result as a user turn —
+        // capped by the current state as the final user turn. This is how the planner "behaves like Claude":
+        // a conversation that advances, not one monolithic prompt rebuilt every step.
+        let httpClient = FixtureHTTPClient(data: cannedDecision(tool: "ax.observe"), statusCode: 200)
+        let planner = makePlanner(httpClient: httpClient, understanding: nil)
+        let prior = HarnessToolCallRecord(
+            call: HarnessToolCall(name: "shell_exec", input: ["command": "ls ~/Downloads"]),
+            resultStatus: .succeeded,
+            summary: "listed three files"
+        )
+
+        let call = await planner.planNextStep(for: task(goal: "tidy my downloads", toolHistory: [prior]))
+        #expect(call?.name == "ax.observe")
+
+        let body = try #require(
+            try JSONSerialization.jsonObject(with: Data(requestBodyString(httpClient).utf8)) as? [String: Any]
+        )
+        // Static doctrine lives in the cached system slot, not a user message.
+        let instructions = try #require(body["instructions"] as? String)
+        #expect(instructions.contains("AVAILABLE TOOLS"))
+        #expect(instructions.contains("GOAL: tidy my downloads"))
+        // `input` is a forward-moving thread: the prior decision as an assistant turn, its result as a
+        // user turn, and the current state as the final user turn.
+        let input = try #require(body["input"] as? [[String: Any]])
+        let roles = input.map { $0["role"] as? String }
+        #expect(roles.contains("assistant"))
+        #expect(roles.last == "user")
+        // The prior step's decision and result both ride in the conversation, not in the instructions.
+        let conversationText = String(describing: input)
+        #expect(conversationText.contains("shell_exec"))
+        #expect(conversationText.contains("listed three files"))
+        // The goal is NOT duplicated into a user turn — it lives in the instructions.
+        #expect(!conversationText.contains("GOAL: tidy my downloads"))
+    }
+
     // MARK: - Helpers
 
     private func makePlanner(

@@ -144,6 +144,17 @@ public enum DonkeyPrompts {
           editing in a design app). LEAVE IT EMPTY when an expert would use system tools instead — finding files,
           opening or quitting apps, reading or changing settings or state — and for pure conversation.
           If it clearly concerns the current app's UI, use "\(frontmostAppName)".
+        - actionSurface: does this turn operate an app's interface, or produce a result with no app at all?
+          - "guiApp": the work happens inside a macOS app's GUI — a named app, or the one in front
+            ("\(frontmostAppName)"). Use this whenever the user is operating, editing, or controlling an app.
+          - "appless": the deliverable is an artifact or a system change the agent produces with system,
+            web, and generative tools — making an image, a chart, a PDF, or a file; fetching or
+            researching something; reading or changing a setting. There is no app to drive; the result is
+            the file, the answer, or the changed state. Choose this whenever the request is about the
+            OUTCOME, not about working in some app — even if an app happens to be in front. When in doubt
+            for an "act" turn whose point is a produced result rather than operating an app, prefer
+            "appless". Always "appless" for an empty targetAppName that is a system-tool task; always
+            "guiApp" when targetAppName is set. Irrelevant for "converse"/"clarify" — leave "guiApp".
         - parameters: the concrete details needed to do it (e.g. title, recipient, query, value), as
           string key/values. Omit what is not specified.
         - successCriteria: what would be visible on screen once the goal is done.
@@ -223,6 +234,12 @@ public enum DonkeyPrompts {
     /// condensed to "tool → status" so the model never loses sight of its own earlier trajectory.
     public static let harnessStepMaxDetailedHistorySteps = 12
 
+    /// Per-step cap on a rendered summary in the history block. One huge output (a full `ls` of a busy
+    /// folder, a long file read) must not dominate the trail and bury the small, relevant results around
+    /// it — that buried a clip's `ffprobe` duration under a Downloads listing and the planner re-ran it
+    /// until the run stalled. The planner can always re-read specifics; this only bounds the recap.
+    public static let harnessStepSummaryMaxLength = 600
+
     /// Distills a finished run into at most one durable, general operating lesson for the agent's future
     /// self. Fed the run's goal, terminal outcome, and full thread trace; returns strict JSON. The model
     /// is told to stay general (an operating rule, never task-specific facts or anything about this
@@ -255,7 +272,13 @@ public enum DonkeyPrompts {
         """
     }
 
-    public static func harnessStep(
+    /// The STATIC half of the planning prompt — the system instructions sent once and cacheable. Doctrine,
+    /// the goal, the parsed understanding, recalled lessons, the app/skill guides, the tool list, and the
+    /// reply shape: none of it changes step to step within a turn. The per-step state (facts, windows,
+    /// observed elements, follow-ups, the retry note) moves forward separately in `harnessTurnState`, and
+    /// the run's history threads as real turns, so the request reads as a conversation that advances rather
+    /// than one monolithic prompt re-sent every step.
+    public static func harnessSystemInstructions(
         task: HarnessAgentState,
         descriptors: [HarnessToolDescriptor],
         appName: String,
@@ -263,42 +286,8 @@ public enum DonkeyPrompts {
         understanding: HarnessRequestUnderstanding?,
         skillCatalog: String? = nil,
         preloadedSkillGuides: [String] = [],
-        lessons: String? = nil,
-        rollingContext: String? = nil,
-        retryNote: String? = nil,
-        openWindows: [MacWindowTargetCandidate] = []
+        lessons: String? = nil
     ) -> String {
-        let elementsBlock = harnessStepElementsBlock(task.worldModel.elements)
-        let windowsBlock = harnessStepWindowsBlock(openWindows)
-
-        // Follow-up instructions the user added after the task started are surfaced in their own block
-        // below (right under the goal), so they are excluded from the generic facts dump here.
-        let displayFacts = task.worldModel.facts
-            .filter { $0.key != HarnessAgentCoordinator.additionalInstructionsFactKey }
-        let factsBlock = displayFacts.isEmpty
-            ? ""
-            : "\nKnown state:\n" + displayFacts.sorted { $0.key < $1.key }
-                .map { "  \($0.key) = \($0.value)" }.joined(separator: "\n") + "\n"
-
-        let followUpInstructions = task.worldModel.facts[HarnessAgentCoordinator.additionalInstructionsFactKey]?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let followUpBlock = followUpInstructions.isEmpty
-            ? ""
-            : "\nADDITIONAL INSTRUCTIONS FROM THE USER (sent after the task started — fold them into your "
-                + "current work; do NOT restart from scratch or redo completed steps):\n"
-                + String(followUpInstructions.prefix(800)) + "\n"
-
-        let historyBlock = harnessStepHistoryBlock(task.toolHistory)
-
-        // Cross-turn conversation memory: recent conversation events plus a rolling summary of older
-        // turns. Distinct from the tool-history block above — that is what THIS run did; this is what the
-        // whole conversation is about, including compacted earlier turns. The full record is on disk.
-        let trimmedRollingContext = rollingContext?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let rollingContextBlock = trimmedRollingContext.isEmpty
-            ? ""
-            : "\nCONVERSATION SO FAR (rolling summary of older turns + recent events; the full record is "
-                + "on disk):\n\(trimmedRollingContext)\n"
-
         let toolsBlock = descriptors
             .sorted { $0.name < $1.name }
             .map { descriptor -> String in
@@ -368,10 +357,7 @@ public enum DonkeyPrompts {
         entirely with system tools and have no on-screen UI target; reach for the GUI only when the task
         truly needs it.
         GOAL: \(goalText)
-        \(followUpBlock)\(understandingBlock)\(lessonsBlock)\(rollingContextBlock)
-        \(historyBlock)
-        \(factsBlock)\(guidanceBlock)\(preloadedSkillsBlock)\(skillCatalogBlock)\(windowsBlock)
-        \(elementsBlock)
+        \(understandingBlock)\(lessonsBlock)\(guidanceBlock)\(preloadedSkillsBlock)\(skillCatalogBlock)
 
         AVAILABLE TOOLS:
         \(toolsBlock)
@@ -466,8 +452,91 @@ public enum DonkeyPrompts {
         now I'll make the edit."). Say what you're doing this step and why in one breath. This narrates the \
         process; it is NOT the result. Reporting what is now true for the user is done only in conversation.respond \
         and run.complete, which still report the result, not the steps. Keep narration to one sentence; do not \
-        restate the whole plan or repeat the previous step.\(retryNote.map { "\nIMPORTANT: \($0)" } ?? "")
+        restate the whole plan or repeat the previous step.
         """
+    }
+
+    /// The DYNAMIC half of the planning prompt — the FINAL user turn in the threaded request. Everything
+    /// here can change between steps: follow-up instructions the user added mid-run, the rolling
+    /// conversation summary, the known facts, the windows on screen, the freshly observed elements, and the
+    /// per-attempt retry note. The static doctrine/goal/tools live in `harnessSystemInstructions`; only this
+    /// turn-state advances each step, alongside the run's history threaded as real turns.
+    public static func harnessTurnState(
+        task: HarnessAgentState,
+        openWindows: [MacWindowTargetCandidate] = [],
+        rollingContext: String? = nil,
+        retryNote: String? = nil
+    ) -> String {
+        let elementsBlock = harnessStepElementsBlock(task.worldModel.elements)
+        let windowsBlock = harnessStepWindowsBlock(openWindows)
+
+        // Follow-up instructions the user added after the task started get their own block so they are
+        // excluded from the generic facts dump.
+        let displayFacts = task.worldModel.facts
+            .filter { $0.key != HarnessAgentCoordinator.additionalInstructionsFactKey }
+        let factsBlock = displayFacts.isEmpty
+            ? ""
+            : "\nKnown state:\n" + displayFacts.sorted { $0.key < $1.key }
+                .map { "  \($0.key) = \($0.value)" }.joined(separator: "\n") + "\n"
+
+        let followUpInstructions = task.worldModel.facts[HarnessAgentCoordinator.additionalInstructionsFactKey]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let followUpBlock = followUpInstructions.isEmpty
+            ? ""
+            : "\nADDITIONAL INSTRUCTIONS FROM THE USER (sent after the task started — fold them into your "
+                + "current work; do NOT restart from scratch or redo completed steps):\n"
+                + String(followUpInstructions.prefix(800)) + "\n"
+
+        // Cross-turn conversation memory: recent events plus a rolling summary of older turns. Distinct
+        // from the step turns — that is what THIS run did; this is what the whole conversation is about,
+        // including compacted earlier turns. The full record is on disk.
+        let trimmedRollingContext = rollingContext?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let rollingContextBlock = trimmedRollingContext.isEmpty
+            ? ""
+            : "\nCONVERSATION SO FAR (rolling summary of older turns + recent events; the full record is "
+                + "on disk):\n\(trimmedRollingContext)\n"
+
+        return """
+        \(followUpBlock)\(rollingContextBlock)\(factsBlock)\(windowsBlock)
+        \(elementsBlock)
+
+        Choose the single next tool now, given the state above and the steps already taken. Reply with \
+        exactly one JSON object in the shape specified.\(retryNote.map { "\nIMPORTANT: \($0)" } ?? "")
+        """
+    }
+
+    /// One-document rendering of the whole planning prompt — system instructions, the history trail, and
+    /// the current turn state, concatenated. The planner sends the SPLIT form (cached instructions + a
+    /// threaded conversation); this single-string wrapper backs the prompt-contains tests and any caller
+    /// that wants the entire prompt as one value.
+    public static func harnessStep(
+        task: HarnessAgentState,
+        descriptors: [HarnessToolDescriptor],
+        appName: String,
+        appGuidance: String?,
+        understanding: HarnessRequestUnderstanding?,
+        skillCatalog: String? = nil,
+        preloadedSkillGuides: [String] = [],
+        lessons: String? = nil,
+        rollingContext: String? = nil,
+        retryNote: String? = nil,
+        openWindows: [MacWindowTargetCandidate] = []
+    ) -> String {
+        harnessSystemInstructions(
+            task: task, descriptors: descriptors, appName: appName, appGuidance: appGuidance,
+            understanding: understanding, skillCatalog: skillCatalog,
+            preloadedSkillGuides: preloadedSkillGuides, lessons: lessons
+        )
+        + "\n\n" + harnessStepHistoryBlock(task.toolHistory) + "\n"
+        + harnessTurnState(task: task, openWindows: openWindows, rollingContext: rollingContext, retryNote: retryNote)
+    }
+
+    /// The condensed "tool → status" trail for steps older than the detailed window, as one line. Threaded
+    /// into the planning conversation as a single preamble turn so a long run keeps sight of where it has
+    /// been even though only the most recent steps are sent as full turns.
+    public static func harnessStepCondensedHistoryLine(_ evicted: [HarnessToolCallRecord]) -> String {
+        let condensed = evicted.map { "\($0.call.name) → \($0.resultStatus.rawValue)" }.joined(separator: "; ")
+        return "Earlier steps 1-\(evicted.count) (condensed): \(condensed)"
     }
 
     /// Renders the other windows currently on screen — across every app and display — so the planner
@@ -579,7 +648,12 @@ public enum DonkeyPrompts {
                 .joined(separator: "; ")
             lines.append("  Earlier steps 1-\(evicted.count) (condensed): \(condensed)")
         }
-        lines += recent.map { "  \($0.call.name): \($0.summary)" }
+        lines += recent.map { record in
+            let summary = record.summary.count > harnessStepSummaryMaxLength
+                ? String(record.summary.prefix(harnessStepSummaryMaxLength)) + " …[truncated]"
+                : record.summary
+            return "  \(record.call.name): \(summary)"
+        }
         return "Steps already taken (most recent last):\n" + lines.joined(separator: "\n")
     }
 

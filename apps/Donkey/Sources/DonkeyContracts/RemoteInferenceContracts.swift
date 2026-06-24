@@ -168,6 +168,11 @@ public struct RemoteInferenceResponseCreateRequest: Codable, Equatable, Sendable
     public var donkeyProvider: String?
     public var model: String?
     public var input: RemoteInferenceJSONValue
+    /// System instruction sent once per request (the provider maps it to its own system slot and can cache
+    /// it). The planner puts its static doctrine, tool list, goal, and skills here, so only the dynamic
+    /// conversation turns live in `input` — the request reads as a thread that moves forward, not a
+    /// monolithic prompt re-sent every step.
+    public var instructions: String?
     public var store: Bool
     public var text: RemoteInferenceJSONObject?
     public var tools: [RemoteInferenceJSONObject]
@@ -179,6 +184,7 @@ public struct RemoteInferenceResponseCreateRequest: Codable, Equatable, Sendable
         donkeyProvider: String? = nil,
         model: String? = nil,
         input: RemoteInferenceJSONValue,
+        instructions: String? = nil,
         store: Bool = false,
         text: RemoteInferenceJSONObject? = nil,
         tools: [RemoteInferenceJSONObject] = [],
@@ -189,6 +195,7 @@ public struct RemoteInferenceResponseCreateRequest: Codable, Equatable, Sendable
         self.donkeyProvider = donkeyProvider
         self.model = model
         self.input = input
+        self.instructions = instructions
         self.store = store
         self.text = text
         self.tools = tools
@@ -202,6 +209,7 @@ public struct RemoteInferenceResponseCreateRequest: Codable, Equatable, Sendable
         try container.encodeIfPresent(donkeyProvider, forKey: DynamicCodingKey("donkeyProvider"))
         try container.encodeIfPresent(model, forKey: DynamicCodingKey("model"))
         try container.encode(input, forKey: DynamicCodingKey("input"))
+        try container.encodeIfPresent(instructions, forKey: DynamicCodingKey("instructions"))
         try container.encode(store, forKey: DynamicCodingKey("store"))
         try container.encode(false, forKey: DynamicCodingKey("stream"))
         try container.encodeIfPresent(text, forKey: DynamicCodingKey("text"))

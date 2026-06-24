@@ -411,7 +411,10 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     private static let maxOutputTokensCap = 8_000
 
     private func decide(task: HarnessAgentState, rollingContext: String?, retryNote: String?, attempt: Int) async throws -> Decision {
-        let prompt = DonkeyPrompts.harnessStep(
+        // Static doctrine, goal, tools, and skills go in the cached system slot; only the dynamic turn
+        // state and the run's history move forward in `input`, so the request reads as a thread that
+        // advances rather than one monolithic prompt re-sent every step.
+        let instructions = DonkeyPrompts.harnessSystemInstructions(
             task: task,
             descriptors: descriptors,
             appName: appName,
@@ -419,13 +422,21 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
             understanding: understanding,
             skillCatalog: skillCatalog,
             preloadedSkillGuides: preloadedSkillGuides,
-            lessons: recalledLessons,
-            rollingContext: rollingContext,
-            retryNote: retryNote,
-            openWindows: openWindows()
+            lessons: recalledLessons
         )
+        let turnState = DonkeyPrompts.harnessTurnState(
+            task: task,
+            openWindows: openWindows(),
+            rollingContext: rollingContext,
+            retryNote: retryNote
+        )
+        let conversation = Self.conversationTurns(toolHistory: task.toolHistory, currentState: turnState)
         let imageDataURL = await captureScreenshot()
-        let request = responseRequest(prompt: prompt, attempt: attempt, imageDataURL: imageDataURL)
+        let request = responseRequest(instructions: instructions, conversation: conversation, attempt: attempt, imageDataURL: imageDataURL)
+        // The trace records exactly what was sent — the cached instructions followed by the conversation
+        // turns — so the thread shows the model's true context even though the wire form is now a moving
+        // thread rather than one prompt.
+        let tracePrompt = Self.tracePrompt(instructions: instructions, conversation: conversation)
         let backend = self.backend
         let startedAt = RunTraceTimestamp.now()
         let response: RemoteInferenceJSONValue
@@ -435,7 +446,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
             }
         } catch {
             recordPlannerCall(
-                prompt: prompt,
+                prompt: tracePrompt,
                 response: String(String(describing: error).prefix(500)),
                 finishReason: nil,
                 attempt: attempt,
@@ -451,19 +462,19 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
             let finishReason = RemoteInferenceResponseHelpers.providerFinishReason(from: response)
             if let finishReason, Self.contentFilterFinishReasons.contains(finishReason) {
                 recordPlannerCall(
-                    prompt: prompt, response: String(raw.prefix(500)), finishReason: finishReason,
+                    prompt: tracePrompt, response: String(raw.prefix(500)), finishReason: finishReason,
                     attempt: attempt, status: .filtered, startedAt: startedAt, endedAt: endedAt
                 )
                 throw PlanningError.blockedByContentFilter(finishReason: finishReason, raw: String(raw.prefix(500)))
             }
             recordPlannerCall(
-                prompt: prompt, response: String(raw.prefix(2_000)), finishReason: finishReason,
+                prompt: tracePrompt, response: String(raw.prefix(2_000)), finishReason: finishReason,
                 attempt: attempt, status: .empty, startedAt: startedAt, endedAt: endedAt
             )
             throw PlanningError.missingOutputText(finishReason: finishReason, raw: String(raw.prefix(2_000)))
         }
         recordPlannerCall(
-            prompt: prompt,
+            prompt: tracePrompt,
             response: text,
             finishReason: RemoteInferenceResponseHelpers.providerFinishReason(from: response),
             attempt: attempt,
@@ -505,29 +516,41 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         ))
     }
 
-    private func responseRequest(prompt: String, attempt: Int, imageDataURL: String? = nil) -> RemoteInferenceResponseCreateRequest {
+    private func responseRequest(
+        instructions: String,
+        conversation: [Turn],
+        attempt: Int,
+        imageDataURL: String? = nil
+    ) -> RemoteInferenceResponseCreateRequest {
         let maxOutputTokens = min(Self.baseMaxOutputTokens * (attempt + 1), Self.maxOutputTokensCap)
-        // Text part always; the compressed screenshot is appended as an image part when available so a
-        // multimodal model sees the screen. Both server adapters accept `input_image` + `image_url`.
-        var content: [RemoteInferenceJSONValue] = [
-            .object([
-                "type": .string("input_text"),
-                "text": .string(prompt)
+        // The conversation threads as real messages: a user request/result is role "user", the model's own
+        // prior decisions are role "assistant" (the server maps that to the provider's model role). The
+        // compressed screenshot rides on the FINAL turn (the current state) so a multimodal model sees the
+        // screen exactly where the latest observation is. Both server adapters accept `input_image`.
+        let lastIndex = conversation.indices.last
+        let messages: [RemoteInferenceJSONValue] = conversation.enumerated().map { index, turn in
+            var content: [RemoteInferenceJSONValue] = [
+                .object([
+                    "type": .string("input_text"),
+                    "text": .string(turn.text)
+                ])
+            ]
+            if index == lastIndex, let imageDataURL, !imageDataURL.isEmpty {
+                content.append(.object([
+                    "type": .string("input_image"),
+                    "image_url": .string(imageDataURL)
+                ]))
+            }
+            return .object([
+                "role": .string(turn.role),
+                "content": .array(content)
             ])
-        ]
-        if let imageDataURL, !imageDataURL.isEmpty {
-            content.append(.object([
-                "type": .string("input_image"),
-                "image_url": .string(imageDataURL)
-            ]))
         }
         return RemoteInferenceResponseCreateRequest(
-            input: .array([
-                .object([
-                    "role": .string("user"),
-                    "content": .array(content)
-                ])
-            ]),
+            input: .array(messages),
+            // Static doctrine, tools, goal, and skills are sent once in the cached system slot; only the
+            // moving conversation lives in `input`.
+            instructions: instructions,
             store: false,
             // Plain JSON mode, deliberately WITHOUT a response schema. Constrained decoding broke
             // the decision's `input` object two ways live: with `input` described only by
@@ -542,13 +565,70 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
                     "type": .string("json_object")
                 ])
             ],
-            metadata: ["source": "hosted-harness-step-planner", "prompt_version": "harness-step-v1"],
+            metadata: ["source": "hosted-harness-step-planner", "prompt_version": "harness-step-v2-threaded"],
             parameters: [
                 "temperature": .number(0),
                 "max_output_tokens": .number(Double(maxOutputTokens)),
                 "thinking_level": .string(Self.plannerThinkingLevel)
             ]
         )
+    }
+
+    // MARK: - Threaded conversation
+
+    /// One message in the threaded planning request: a role ("user" or "assistant") and its text. The
+    /// conversation is the run's history turned into a forward-moving thread — each past step becomes the
+    /// assistant decision it made and the user-visible result it produced — capped by the current turn
+    /// state as the final user message. The computer-use request shape, not one prompt re-sent each step.
+    private struct Turn: Sendable {
+        var role: String
+        var text: String
+    }
+
+    /// Build the planning conversation from the run's history plus the current state. Steps older than the
+    /// detailed window collapse into one condensed preamble turn (so a long run never forgets its earlier
+    /// trajectory without resending every step); the recent steps become assistant/user turn pairs; the
+    /// current turn state is the final user message the model answers.
+    private static func conversationTurns(toolHistory: [HarnessToolCallRecord], currentState: String) -> [Turn] {
+        var turns: [Turn] = []
+        let recent = Array(toolHistory.suffix(DonkeyPrompts.harnessStepMaxDetailedHistorySteps))
+        let evicted = Array(toolHistory.dropLast(recent.count))
+        if !evicted.isEmpty {
+            turns.append(Turn(role: "user", text: DonkeyPrompts.harnessStepCondensedHistoryLine(evicted)))
+        }
+        for record in recent {
+            turns.append(Turn(role: "assistant", text: renderDecision(record.call)))
+            turns.append(Turn(role: "user", text: renderResult(record)))
+        }
+        turns.append(Turn(role: "user", text: currentState))
+        return turns
+    }
+
+    /// The assistant turn for a past step: the decision JSON it produced, reconstructed from the recorded
+    /// call so the thread reads as the model's own prior choices — the same shape it must keep emitting.
+    private static func renderDecision(_ call: HarnessToolCall) -> String {
+        let object: [String: Any] = ["tool": call.name, "input": call.input]
+        if let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+           let string = String(data: data, encoding: .utf8) {
+            return string
+        }
+        return "{\"tool\":\"\(call.name)\"}"
+    }
+
+    /// The user turn for a past step: the observed result the tool produced, capped the same way the
+    /// history block caps a single summary so one huge output can't dominate the thread.
+    private static func renderResult(_ record: HarnessToolCallRecord) -> String {
+        let summary = record.summary.count > DonkeyPrompts.harnessStepSummaryMaxLength
+            ? String(record.summary.prefix(DonkeyPrompts.harnessStepSummaryMaxLength)) + " …[truncated]"
+            : record.summary
+        return "Result of \(record.call.name) [\(record.resultStatus.rawValue)]: \(summary)"
+    }
+
+    /// The trace's faithful rendering of the request: the cached system instructions, then each
+    /// conversation turn labeled by role — so the thread shows exactly what the model saw.
+    private static func tracePrompt(instructions: String, conversation: [Turn]) -> String {
+        let turns = conversation.map { "[\($0.role)]\n\($0.text)" }.joined(separator: "\n\n")
+        return instructions + "\n\n──────── conversation ────────\n\n" + turns
     }
 
 }

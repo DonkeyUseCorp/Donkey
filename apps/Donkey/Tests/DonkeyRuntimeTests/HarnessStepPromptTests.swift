@@ -24,7 +24,9 @@ struct HarnessStepPromptTests {
             understanding: nil,
             skillCatalog: catalog
         )
-        #expect(prompt.contains("authoritative playbooks for these apps/domains"))
+        #expect(prompt.contains("OTHER AVAILABLE SKILLS"))
+        #expect(prompt.contains("authoritative playbooks"))
+        #expect(prompt.contains("skill.load"))
         #expect(prompt.contains("scripts-save-note"))
         #expect(prompt.contains("skill_run"))
     }
@@ -40,7 +42,7 @@ struct HarnessStepPromptTests {
             understanding: nil,
             skillCatalog: nil
         )
-        #expect(!prompt.contains("authoritative playbooks for these apps/domains"))
+        #expect(!prompt.contains("OTHER AVAILABLE SKILLS"))
     }
 
     private func window(app: String, title: String, frontmost: Bool) -> MacWindowTargetCandidate {
