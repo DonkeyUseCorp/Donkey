@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ArrowRight } from "lucide-react";
 
@@ -43,6 +44,11 @@ export function TopNav({
   const { data: session } = authClient.useSession();
   const isSignedIn = Boolean(session);
 
+  // Don't show the "Use cases" link when the visitor is already in that section.
+  const pathname = usePathname();
+  const onUseCases =
+    pathname === "/use-cases" || Boolean(pathname?.startsWith("/use-cases/"));
+
   // The header is sticky and transparent over the hero; once the page scrolls a
   // little it fades in a translucent backdrop and a hairline divider so the nav
   // stays legible over the content scrolling underneath.
@@ -81,7 +87,7 @@ export function TopNav({
           <span className="text-2xl font-semibold">{wordmark}</span>
         </Link>
         <div className="flex items-center gap-[10px] md:gap-4">
-          {showNav ? (
+          {showNav && !onUseCases ? (
             <Link
               href="/use-cases"
               className="hidden whitespace-nowrap text-sm font-semibold text-ink no-underline md:inline-flex"
