@@ -19,6 +19,9 @@ export const modelsQuerySchema = z.object({
   output_modalities: z.string().optional(),
 });
 
+// Model is optional, exactly like `responseCreateRequestSchema`: a model-neutral caller (the notch reply
+// stream, the request-understanding stream) omits it and the provider resolves its default. Keeping the two
+// schemas symmetric is what lets the same caller stay provider-neutral whether it streams or not.
 export const chatCompletionRequestSchema = z
   .object({
     messages: z.array(jsonObjectSchema).min(1),
@@ -29,16 +32,7 @@ export const chatCompletionRequestSchema = z
     provider: jsonObjectSchema.optional(),
     metadata: metadataSchema.optional(),
   })
-  .passthrough()
-  .superRefine((value, context) => {
-    if (!value.model && !value.models?.length) {
-      context.addIssue({
-        code: "custom",
-        message: "Either model or models is required.",
-        path: ["model"],
-      });
-    }
-  });
+  .passthrough();
 
 export const responsesProviderSelectionSchema = z.enum(["openai", "gemini"]);
 
