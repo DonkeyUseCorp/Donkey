@@ -40,11 +40,8 @@ final class DonkeyLoginWindowController: NSWindowController {
 
 private struct DonkeyLoginView: View {
     @ObservedObject var authCoordinator: DonkeyAuthCoordinator
-    @State private var screen: DonkeyLoginScreen
-
     init(authCoordinator: DonkeyAuthCoordinator) {
         self.authCoordinator = authCoordinator
-        _screen = State(initialValue: Self.initialScreen(for: authCoordinator.phase))
     }
 
     var body: some View {
@@ -52,31 +49,13 @@ private struct DonkeyLoginView: View {
             Color(red: 0.13, green: 0.13, blue: 0.12)
                 .ignoresSafeArea()
 
-            switch screen {
-            case .welcome:
-                DonkeyWelcomeScreen {
-                    withAnimation(.easeInOut(duration: 0.22)) {
-                        screen = .googleSignIn
-                    }
-                }
-            case .googleSignIn:
-                DonkeyGoogleSignInScreen(
-                    authCoordinator: authCoordinator,
-                    buttonIsDisabled: buttonIsDisabled,
-                    statusColor: statusColor,
-                    statusText: { statusText }
-                )
-            }
+            DonkeyGoogleSignInScreen(
+                authCoordinator: authCoordinator,
+                buttonIsDisabled: buttonIsDisabled,
+                statusColor: statusColor,
+                statusText: { statusText }
+            )
         }
-        .onChange(of: authCoordinator.phase) { _, phase in
-            if phase.requiresGoogleSignInScreen {
-                screen = .googleSignIn
-            }
-        }
-    }
-
-    private static func initialScreen(for phase: DonkeyAuthPhase) -> DonkeyLoginScreen {
-        phase.requiresGoogleSignInScreen ? .googleSignIn : .welcome
     }
 
     private var buttonIsDisabled: Bool {
@@ -108,64 +87,6 @@ private struct DonkeyLoginView: View {
         }
 
         return .white.opacity(0.54)
-    }
-}
-
-private enum DonkeyLoginScreen {
-    case welcome
-    case googleSignIn
-}
-
-private extension DonkeyAuthPhase {
-    var requiresGoogleSignInScreen: Bool {
-        switch self {
-        case .openingBrowser, .waitingForCallback, .exchangingSession, .failed:
-            return true
-        case .signedOut, .signedIn:
-            return false
-        }
-    }
-}
-
-private struct DonkeyWelcomeScreen: View {
-    var getStarted: () -> Void
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Spacer(minLength: 118)
-
-            DonkeyAppIconMark()
-                .frame(width: 88, height: 88)
-                .padding(.bottom, 28)
-
-            Text("Donkey")
-                .font(.system(size: 34, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(.bottom, 10)
-
-            Text("Get Donkey set up on this Mac.")
-                .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(.white.opacity(0.5))
-
-            Spacer().frame(height: 132)
-
-            Button(action: getStarted) {
-                Text("Get started")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.black.opacity(0.84))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 42)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Color.white.opacity(0.96))
-                    )
-            }
-            .buttonStyle(.plain)
-            .frame(width: 294)
-            .accessibilityLabel("Get started")
-            .padding(.bottom, 56)
-        }
-        .padding(.horizontal, 52)
     }
 }
 
@@ -207,26 +128,6 @@ private struct DonkeyGoogleSignInScreen<StatusText: View>: View {
         }
         .padding(.horizontal, 52)
     }
-}
-
-private struct DonkeyAppIconMark: View {
-    var body: some View {
-        Image(nsImage: Self.image)
-            .resizable()
-            .interpolation(.high)
-            .scaledToFit()
-            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .shadow(color: .black.opacity(0.24), radius: 24, y: 16)
-    }
-
-    private static let image: NSImage = {
-        if let url = DonkeyResourceBundle.app?.url(forResource: "donkey-app-icon", withExtension: "png"),
-           let image = NSImage(contentsOf: url) {
-            return image
-        }
-
-        return NSApp.applicationIconImage
-    }()
 }
 
 private struct GoogleContinueAsset: View {

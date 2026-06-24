@@ -10,6 +10,7 @@ import Foundation
 @MainActor
 final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     private var authCoordinator: DonkeyAuthCoordinator?
+    private var onboardingWindowController: OnboardingWindowController?
     private var loginWindowController: DonkeyLoginWindowController?
     private var permissionSetupController: MacPermissionSetupWindowController?
     private var manualPermissionSetupController: MacPermissionSetupWindowController?
@@ -43,13 +44,13 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         registerAuthCallbackHandler()
         installMainMenu()
 
-        // First install (never signed in) opens the welcome/sign-in window. A returning user whose
-        // session has expired skips the window: the notch comes up in login mode (driven by the auth
-        // phase observer) and carries them back through sign-in inline.
+        // First install (never signed in) runs the onboarding walkthrough, which finishes into the
+        // sign-in window. A returning user whose session has expired skips both: the notch comes up
+        // in login mode (driven by the auth phase observer) and carries them back through sign-in inline.
         if authCoordinator.isAuthenticated || authCoordinator.hasEverSignedIn {
             startAuthenticatedAppSurfaces()
         } else {
-            showLoginWindow()
+            showOnboarding()
         }
     }
 
@@ -84,6 +85,30 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         )
         overlayController?.stop()
         uiUnderstandingCoordinator?.stop()
+    }
+
+    /// First-run onboarding: a borderless, draggable card window that walks through what Donkey does.
+    /// Whether the user steps through to the final slide or dismisses early, it finishes into sign-in.
+    private func showOnboarding() {
+        NSApp.setActivationPolicy(.regular)
+        let controller = OnboardingWindowController()
+        onboardingWindowController = controller
+        controller.present(
+            pages: OnboardingTour.pages,
+            continueButtonTitle: "Continue",
+            finishButtonTitle: "Get Started",
+            onFinish: { [weak self] in
+                self?.finishOnboarding()
+            },
+            onClose: { [weak self] in
+                self?.finishOnboarding()
+            }
+        )
+    }
+
+    private func finishOnboarding() {
+        onboardingWindowController = nil
+        showLoginWindow()
     }
 
     private func showLoginWindow() {
