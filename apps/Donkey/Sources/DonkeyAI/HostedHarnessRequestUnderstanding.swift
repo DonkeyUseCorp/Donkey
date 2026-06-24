@@ -91,6 +91,12 @@ public final class HostedHarnessRequestUnderstanding {
 
     /// Returns the parsed understanding, or `nil` on any provider/decode failure so the caller can
     /// degrade to driving the raw command directly rather than dead-ending.
+    ///
+    /// A transient empty/truncated/undecodable reply is re-asked up to `maxAttempts` times — this is the
+    /// turn's single routing decision, and a one-off empty reply must not silently downgrade it to the
+    /// raw-command fallback (observed: the same prompt returning nil on one run and a clean classification
+    /// on the next). A signed-out session or spent balance is terminal — retrying re-issues the same doomed
+    /// call — so those stop immediately.
     public func understand(
         command: String,
         frontmostAppName: String,
@@ -101,26 +107,46 @@ public final class HostedHarnessRequestUnderstanding {
             frontmostAppName: frontmostAppName,
             skillCatalog: skillCatalog
         )
-        let startedAt = RunTraceTimestamp.now()
-        do {
-            let response = try await backend.createResponse(
-                responseRequest(command: command, frontmostAppName: frontmostAppName, skillCatalog: skillCatalog)
-            )
-            let endedAt = RunTraceTimestamp.now()
-            guard let text = RemoteInferenceResponseHelpers.outputText(from: response), !text.isEmpty else {
-                recordCall(prompt: prompt, response: "<no output text>",
-                           finishReason: RemoteInferenceResponseHelpers.providerFinishReason(from: response),
-                           status: .empty, startedAt: startedAt, endedAt: endedAt)
-                return nil
+        for _ in 0..<Self.maxAttempts {
+            let startedAt = RunTraceTimestamp.now()
+            do {
+                let response = try await backend.createResponse(
+                    responseRequest(command: command, frontmostAppName: frontmostAppName, skillCatalog: skillCatalog)
+                )
+                let endedAt = RunTraceTimestamp.now()
+                let finishReason = RemoteInferenceResponseHelpers.providerFinishReason(from: response)
+                guard let text = RemoteInferenceResponseHelpers.outputText(from: response), !text.isEmpty else {
+                    recordCall(prompt: prompt, response: "<no output text>",
+                               finishReason: finishReason, status: .empty, startedAt: startedAt, endedAt: endedAt)
+                    continue
+                }
+                recordCall(prompt: prompt, response: text,
+                           finishReason: finishReason, status: .ok, startedAt: startedAt, endedAt: endedAt)
+                if let parsed = Self.decodeUnderstanding(from: text) {
+                    return parsed
+                }
+                // Decoded to nothing usable (unparseable JSON / empty goal): re-ask rather than dead-end.
+            } catch {
+                recordCall(prompt: prompt, response: String(String(describing: error).prefix(500)),
+                           finishReason: nil, status: .failed, startedAt: startedAt, endedAt: .now())
+                if Self.isTerminalFailure(error) { break }
             }
-            recordCall(prompt: prompt, response: text,
-                       finishReason: RemoteInferenceResponseHelpers.providerFinishReason(from: response),
-                       status: .ok, startedAt: startedAt, endedAt: endedAt)
-            return Self.decodeUnderstanding(from: text)
-        } catch {
-            recordCall(prompt: prompt, response: String(String(describing: error).prefix(500)),
-                       finishReason: nil, status: .failed, startedAt: startedAt, endedAt: .now())
-            return nil
+        }
+        return nil
+    }
+
+    /// Max understanding samples before giving up and letting the caller degrade to the raw command. The
+    /// first is the normal call; the rest cover a transient empty/undecodable reply.
+    private static let maxAttempts = 3
+
+    /// Whether a failure can never recover by retrying (expired session, spent balance) — the same doomed
+    /// call would just repeat. Matched on the typed client error, never on text.
+    private static func isTerminalFailure(_ error: Error) -> Bool {
+        switch error {
+        case DonkeyBackendInferenceClientError.authenticationRequired:
+            return true
+        default:
+            return DonkeyCreditExhaustion.isExhausted(error)
         }
     }
 
