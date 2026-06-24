@@ -50,6 +50,28 @@ struct HostedHarnessRequestUnderstandingTests {
         """#)
         #expect(result?.turnKind == .act)
     }
+
+    @Test
+    func decodesAnApplessActionSurface() async {
+        // "show the fifa standings in a nice image": an artifact task the planner produces with
+        // generative/web tools. The decoded `.appless` surface is what lets the caller run it without an
+        // app and without demanding a frontmost window.
+        let result = await understanding(forResponseJSON: #"""
+        {"turnKind":"act","restatedGoal":"Generate an image of the FIFA standings.","targetAppName":"","actionSurface":"appless","needsClarification":false}
+        """#)
+        #expect(result?.turnKind == .act)
+        #expect(result?.actionSurface == .appless)
+    }
+
+    @Test
+    func aMissingActionSurfaceDefaultsToGuiApp() async {
+        // An older model or partial output omits the field; the conservative default is the GUI path, so a
+        // turn that really does drive an app is never accidentally treated as app-less.
+        let result = await understanding(forResponseJSON: #"""
+        {"turnKind":"act","restatedGoal":"Make every slide title bold.","targetAppName":"Keynote","needsClarification":false}
+        """#)
+        #expect(result?.actionSurface == .guiApp)
+    }
 }
 
 private final class SingleResponseHTTPClient: AIHTTPClient, @unchecked Sendable {

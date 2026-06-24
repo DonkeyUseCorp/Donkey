@@ -102,15 +102,21 @@ but never a command. Only an `act` turn reaches the planner and the Mac. This is
 the structural form of "conversations first": action is unreachable until the
 turn is typed actionable, not merely discouraged by a prompt.
 
-For an actionable turn the same boundary also names the target app (or leaves it
-empty for system-tool tasks), extracts parameters and success criteria, flags
-whether clarification is needed, and chooses whether the work runs in the
-background (the agent acts without taking over the cursor or raising the app)
-or the foreground (the user is meant to watch — pulling something up, a
-walkthrough). Background is the default; foreground is the typed exception, and
-like every other field it is decided here, never matched from raw text. Every
-later step plans against this stable, typed goal instead of re-reading the
-user's words.
+For an actionable turn the same boundary also names the target app — or marks
+the turn *app-less*, a typed surface for work produced through system, web, and
+generative tools (find a file, change a setting, generate an image, research a
+question) that drives no app at all. That mark is the fact an empty target app
+used to leave ambiguous — "operate the front app" versus "no app is involved" —
+and it routes the run past the GUI machinery: an actionable turn is never
+blocked on a missing frontmost window, because only a GUI turn needs one, and an
+artifact task is never pinned to whatever app happened to be in front. The
+boundary also extracts parameters and success criteria, flags whether
+clarification is needed, and chooses whether the work runs in the background
+(the agent acts without taking over the cursor or raising the app) or the
+foreground (the user is meant to watch — pulling something up, a walkthrough).
+Background is the default; foreground is the typed exception, and like every
+other field it is decided here, never matched from raw text. Every later step
+plans against this stable, typed goal instead of re-reading the user's words.
 
 Context sent to the model is always bounded. Compaction keeps the current
 turn, relevant task state, recent useful evidence, summaries, memory snippets,
@@ -208,8 +214,8 @@ protected system folders.
 Driving a GUI is the fallback, used only when the task truly needs it (canvas,
 Electron, or proprietary interfaces with no command-line equivalent). This
 preference lives in the planner doctrine and a built-in `system-tools` skill.
-For system-tool tasks the understanding boundary leaves the target app empty,
-so they're never pinned to a GUI app.
+For system-tool tasks the understanding boundary marks the turn app-less, so
+they're never pinned to a GUI app and never blocked on one being in front.
 
 Shell safety is consent-based, not denylist-based. Each command is classified
 by its argv tokens (typed fields, never natural language) into a risk tier:
@@ -253,6 +259,16 @@ point at pixels AX and the vision parse miss. Vision is on-demand and tied to th
 run: nothing parses the screen in the background to stay warm — the planner pays
 for a parse only when it chooses to look, and a re-look at an unchanged screen
 within the same run reuses that parse instead of paying again.
+
+A run is not bound to one app. The see-tools take an `app` argument: naming an
+app on an observe/capture step switches the run's *active target* to it, and
+because every act, scroll, and keystroke resolves against that current target,
+the planner operates whatever it just looked at — observe Mail, act on Mail;
+observe Preview, act on Preview. The target is one small piece of shared state
+the providers read per step, seeded from the understood app and mutable
+thereafter; an app-less run starts with no target and acquires its first app the
+moment the planner observes one by name. This is the computer-use shape: the
+model routes per step instead of the run pre-committing to a single app.
 
 Three things keep the planner aware of the whole screen, not just the front
 window. Capture widens in scopes, smallest first — `scope=window` (default),

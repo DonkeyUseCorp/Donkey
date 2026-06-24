@@ -453,11 +453,10 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
     ) async -> UserQueryCommandHandlingResult {
         // A resume pins the task's original target, so it can drive that app even when it (or nothing) is
         // frontmost — which is the common case right after a relaunch. Resolve the frontmost app up front
-        // (no guard yet): its name feeds the understanding prompt, and a conversational turn needs no app
-        // at all — only the action path below requires one.
+        // (no guard yet): its name feeds the understanding prompt, and neither a conversational turn nor an
+        // app-less action turn needs an app at all — only a GUI-driving turn below does.
         let frontmost = MacWindowResolver().frontmostUserAppTarget()
         let frontmostAppName = frontmost?.appName ?? forcedDriveTarget?.appName ?? "the frontmost app"
-        let frontmostBundleIdentifier = frontmost?.bundleIdentifier ?? forcedDriveTarget?.bundleIdentifier
 
         // The backend is needed by BOTH paths — the conversational responder and the action loop — so it
         // is built before the turn is classified.
@@ -549,9 +548,30 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             )
         }
 
-        // ACTION PATH from here down. These guards are action-only — a conversational turn already
-        // returned above, so it never needs input permission or a frontmost app window to drive.
-        guard permissionPolicy.allowedCapabilities.contains(.input) else {
+        // ACTION PATH from here down — a conversational turn already returned above. Resolve which app, if
+        // any, this turn drives: a resume pins its original target; otherwise the understanding boundary's
+        // typed surface decides. An `.appless` turn (artifact/system work — make an image, fetch the web,
+        // change a setting) and a turn with nothing in front both resolve to nil and run APP-LESS: the
+        // planner works through shell/web/file/generative tools with no app to focus and no pointer to move,
+        // so the run is never blocked on a missing frontmost window the way a GUI task would be.
+        let driveTarget: (appName: String, bundleIdentifier: String?)?
+        if let forcedDriveTarget {
+            driveTarget = forcedDriveTarget
+        } else {
+            // A frontmost candidate with no resolvable name is no drive target — same as nothing in front.
+            let frontmostTarget: (appName: String, bundleIdentifier: String?)? = frontmost.flatMap { candidate in
+                candidate.appName.map { (appName: $0, bundleIdentifier: candidate.bundleIdentifier) }
+            }
+            driveTarget = Self.resolveDriveTarget(
+                understanding: understanding,
+                frontmost: frontmostTarget
+            )
+        }
+
+        // Input permission gates a GUI-driving run only: that path clicks and types. An app-less run moves
+        // no pointer and presses no keys, so it proceeds without the grant. Gated on the typed surface
+        // (driveTarget == nil), never the user's words.
+        if driveTarget != nil, !permissionPolicy.allowedCapabilities.contains(.input) {
             return await failHarnessRun(
                 command: command,
                 response: "Vision navigation needs input permission, which isn't granted.",
@@ -564,50 +584,28 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 transcript: transcript
             )
         }
-        // A fresh turn with no frontmost app and no pinned target has nothing to drive, so it fails cleanly.
-        guard forcedDriveTarget != nil || frontmost != nil else {
-            return await failHarnessRun(
-                command: command,
-                response: "I couldn't find a frontmost app window to navigate. Focus the app you want, then type your request.",
-                reason: "noFrontmostApp",
-                appName: frontmostAppName,
-                traceID: traceID,
-                conversationID: conversationID,
-                agentID: agentID,
-                preparedTurnMetadata: preparedTurnMetadata,
-                transcript: transcript
-            )
-        }
         if let restated = understanding?.restatedGoal, !restated.isEmpty {
             progress?(restated)
         }
 
-        // Drive the understood target app whenever it names a running or installed app; else the
-        // frontmost app. An installed-but-not-running target stays pinned by name — the see/act tools
-        // re-resolve its window each call, so it works as soon as the planner launches it. A resume pins
-        // the task's original target so the work continues against the right app, not whatever is in front.
-        let driveTarget: (appName: String, bundleIdentifier: String?)
-        if let forcedDriveTarget {
-            driveTarget = (forcedDriveTarget.appName, forcedDriveTarget.bundleIdentifier)
-        } else {
-            driveTarget = Self.resolveDriveTarget(
-                understanding: understanding,
-                frontmostAppName: frontmostAppName,
-                frontmostBundleIdentifier: frontmostBundleIdentifier
-            )
-        }
-        let appName = driveTarget.appName
-        let bundleIdentifier = driveTarget.bundleIdentifier
+        // An app-less run carries an empty app name and no bundle id; the see/act providers below resolve
+        // no window and the planner reaches for app-less tools instead.
+        let appName = driveTarget?.appName ?? ""
+        let bundleIdentifier = driveTarget?.bundleIdentifier
         // Pin the resolved target on the task so a later resume drives the same app (see forcedDriveTarget).
+        // An app-less run records an empty name, so a resume re-derives the surface and stays app-less.
         await genericHarnessLifecycle.coordinator.recordMetadata(agentID: agentID, [
             Self.driveTargetAppMetadataKey: appName,
             Self.driveTargetBundleMetadataKey: bundleIdentifier ?? ""
         ])
 
-        let appGuidance = BuiltInLocalAppSkillPacks.appOperatingGuidance(
-            forApp: appName,
-            bundleIdentifier: bundleIdentifier
-        )
+        // App guidance is the drive app's own playbook; an app-less run has no app, so it loads none.
+        let appGuidance = driveTarget != nil
+            ? BuiltInLocalAppSkillPacks.appOperatingGuidance(
+                forApp: appName,
+                bundleIdentifier: bundleIdentifier
+            )
+            : nil
 
         // Preload the full guides for the capability skills the understanding boundary picked for this task
         // (`relevantSkillIDs`) — the same "preload the right playbook" treatment app skills get via
@@ -615,10 +613,12 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // depending on the planner to discover and load it. Skip the drive-target app's own skill (already
         // in appGuidance) and cap the count so the prompt stays bounded; anything else stays loadable from
         // the catalog via skill.load.
-        let appSkillID = BuiltInLocalAppSkillPacks.appSkillDescriptor(
-            forApp: appName,
-            bundleIdentifier: bundleIdentifier
-        )?.id.lowercased()
+        let appSkillID = driveTarget != nil
+            ? BuiltInLocalAppSkillPacks.appSkillDescriptor(
+                forApp: appName,
+                bundleIdentifier: bundleIdentifier
+            )?.id.lowercased()
+            : nil
         let preloadedSkillGuides: [String] = (understanding?.relevantSkillIDs ?? [])
             .filter { $0.lowercased() != appSkillID }
             .prefix(2)
@@ -631,7 +631,6 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // vision is just one tool among many. The always-on warm-cache monitor is suspended for the
         // duration so it never races us on a parse.
         let analyzer = HostedDebugUIInspectionAnalyzer(backend: backend)
-        let appKey = (bundleIdentifier?.isEmpty == false ? bundleIdentifier! : appName)
 
         // Built-in action/lifecycle/skill tools, minus the placeholder see/act tools that the real AX +
         // vision tools below replace, and restricted to what this turn is permitted to run.
@@ -697,21 +696,22 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // An unattended auto-resume forces background so it never raises an app or moves the cursor while
         // the user is away; an interactive turn lets the understanding boundary decide.
         let executionPreference = forcedExecutionPreference ?? understanding?.executionPreference ?? .background
+        // One shared, mutable target the three see/act providers read per call: an observe/capture step
+        // that names an `app:` retargets it, and every later act/scroll/keystroke follows to that app.
+        // Seeded with the run's resolved app — empty on an app-less run, which acquires its first app the
+        // moment the planner observes one by name. This is what unbinds the run from a single pinned app.
+        let targetContext = HarnessTargetContext(appName: appName, bundleIdentifier: bundleIdentifier)
         let axProvider = AXComputerUseToolProvider(
-            appName: appName,
-            bundleIdentifier: bundleIdentifier,
+            target: targetContext,
             executionPreference: executionPreference
         )
         let visionProvider = VisionComputerUseToolProvider(
-            appName: appName,
-            appKey: appKey,
-            bundleIdentifier: bundleIdentifier,
+            target: targetContext,
             executionPreference: executionPreference,
             analyzer: analyzer
         )
         let pointerProvider = PointerComputerUseToolProvider(
-            appName: appName,
-            bundleIdentifier: bundleIdentifier,
+            target: targetContext,
             executionPreference: executionPreference
         )
         // Native music playback (MusicKit): search/play/transport/status with no Music-app GUI or
@@ -1457,18 +1457,20 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         ])
     }
 
-    /// Picks the app the harness drive operates. The understood target app wins whenever it names a
-    /// real app: a running window resolves to its exact name and bundle id, and an installed-but-not-
-    /// running app is still pinned by name — the see/act providers re-resolve the target window on
-    /// every call, so the target starts working the moment the planner launches it. Pinning to the
-    /// frontmost app instead aims every observe/click (and the focus guard's recovery activation) at
-    /// an unrelated window for the whole run, and preloads the wrong app's guidance. Only a name that
-    /// matches nothing running and nothing installed falls back to the frontmost app.
+    /// Picks the app the harness drive operates, or nil for an app-less run. An `.appless` turn (the
+    /// understanding boundary's typed signal for artifact/system work — make an image, fetch the web,
+    /// change a setting) drives no app at all and returns nil, so it is never pinned to a window and never
+    /// blocked on one. Otherwise the understood target app wins whenever it names a real app: a running
+    /// window resolves to its exact name and bundle id, and an installed-but-not-running app is still
+    /// pinned by name — the see/act providers re-resolve the target window on every call, so the target
+    /// starts working the moment the planner launches it. Pinning to the frontmost app instead aims every
+    /// observe/click (and the focus guard's recovery activation) at an unrelated window for the whole run,
+    /// and preloads the wrong app's guidance. A name that matches nothing running and nothing installed
+    /// falls back to the frontmost app, and with no frontmost app the run is app-less rather than failed.
     @MainActor
     static func resolveDriveTarget(
         understanding: HarnessRequestUnderstanding?,
-        frontmostAppName: String,
-        frontmostBundleIdentifier: String?,
+        frontmost: (appName: String, bundleIdentifier: String?)?,
         resolveRunningWindow: (String) -> (appName: String?, bundleIdentifier: String?)? = { requested in
             AccessibilityObserver.resolveTarget(appName: requested, bundleIdentifier: nil)
                 .map { ($0.appName, $0.bundleIdentifier) }
@@ -1476,12 +1478,15 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         resolveInstalledBundle: (String) -> URL? = { requested in
             MacAppScriptabilityProbe().bundleURL(bundleIdentifier: nil, appName: requested)
         }
-    ) -> (appName: String, bundleIdentifier: String?) {
+    ) -> (appName: String, bundleIdentifier: String?)? {
+        // An app-less turn drives nothing — the planner produces the result with system/web/generative tools.
+        if understanding?.actionSurface == .appless { return nil }
         guard let requested = understanding?.targetAppName,
               !requested.isEmpty,
-              requested.caseInsensitiveCompare(frontmostAppName) != .orderedSame
+              requested.caseInsensitiveCompare(frontmost?.appName ?? "") != .orderedSame
         else {
-            return (frontmostAppName, frontmostBundleIdentifier)
+            // No named target (or it IS the front app): drive the front app, or run app-less when none.
+            return frontmost
         }
         if let resolved = resolveRunningWindow(requested) {
             return (resolved.appName ?? requested, resolved.bundleIdentifier)
@@ -1489,7 +1494,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         if let bundleURL = resolveInstalledBundle(requested) {
             return (requested, Bundle(url: bundleURL)?.bundleIdentifier)
         }
-        return (frontmostAppName, frontmostBundleIdentifier)
+        return frontmost
     }
 
     /// A compact, one-line-per-skill catalog of every installed app skill — id, description, the apps it

@@ -22,6 +22,11 @@ public struct HarnessRequestUnderstanding: Sendable, Equatable {
     /// system tools (finding files, launching/quitting apps, reading or changing settings/state) —
     /// those have no GUI target and the planner drives them with shell_exec.
     public var targetAppName: String?
+    /// Whether this turn drives a GUI app or is produced app-less through system/web/generative tools.
+    /// Disambiguates an empty `targetAppName` — "operate the front app" vs "no app at all" — so the caller
+    /// can run an artifact/system task (generate an image, fetch the web, change a setting) without pinning
+    /// it to a window or demanding one be frontmost. Set by the model; defaults to `.guiApp`.
+    public var actionSurface: HarnessActionSurface
     /// Structured parameters extracted from the request (e.g. title, recipient, query).
     public var parameters: [String: String]
     /// What, observable on screen, would mean the goal is done.
@@ -52,6 +57,7 @@ public struct HarnessRequestUnderstanding: Sendable, Equatable {
         turnKind: HarnessTurnKind = .act,
         restatedGoal: String,
         targetAppName: String? = nil,
+        actionSurface: HarnessActionSurface = .guiApp,
         parameters: [String: String] = [:],
         successCriteria: String? = nil,
         needsClarification: Bool = false,
@@ -63,6 +69,7 @@ public struct HarnessRequestUnderstanding: Sendable, Equatable {
         self.turnKind = turnKind
         self.restatedGoal = restatedGoal
         self.targetAppName = targetAppName
+        self.actionSurface = actionSurface
         self.parameters = parameters
         self.successCriteria = successCriteria
         self.needsClarification = needsClarification
@@ -216,6 +223,7 @@ public final class HostedHarnessRequestUnderstanding {
             turnKind: wire.turnKind.flatMap { HarnessTurnKind(rawValue: $0) } ?? .act,
             restatedGoal: restated,
             targetAppName: wire.targetAppName.flatMap { $0.isEmpty ? nil : $0 },
+            actionSurface: wire.actionSurface.flatMap { HarnessActionSurface(rawValue: $0) } ?? .guiApp,
             parameters: wire.parameters ?? [:],
             successCriteria: wire.successCriteria.flatMap { $0.isEmpty ? nil : $0 },
             needsClarification: wire.needsClarification ?? false,
@@ -256,6 +264,7 @@ public final class HostedHarnessRequestUnderstanding {
         var turnKind: String?
         var restatedGoal: String?
         var targetAppName: String?
+        var actionSurface: String?
         var parameters: [String: String]?
         var successCriteria: String?
         var needsClarification: Bool?
@@ -265,7 +274,7 @@ public final class HostedHarnessRequestUnderstanding {
         var conversationReply: String?
 
         private enum CodingKeys: String, CodingKey {
-            case turnKind, restatedGoal, targetAppName, parameters, successCriteria, needsClarification, clarifyingQuestion
+            case turnKind, restatedGoal, targetAppName, actionSurface, parameters, successCriteria, needsClarification, clarifyingQuestion
             case executionPreference, relevantSkillIDs, conversationReply
         }
 
@@ -274,6 +283,7 @@ public final class HostedHarnessRequestUnderstanding {
             turnKind = try container.decodeIfPresent(String.self, forKey: .turnKind)
             restatedGoal = try container.decodeIfPresent(String.self, forKey: .restatedGoal)
             targetAppName = try container.decodeIfPresent(String.self, forKey: .targetAppName)
+            actionSurface = try container.decodeIfPresent(String.self, forKey: .actionSurface)
             successCriteria = try container.decodeIfPresent(String.self, forKey: .successCriteria)
             clarifyingQuestion = try container.decodeIfPresent(String.self, forKey: .clarifyingQuestion)
             needsClarification = try container.decodeIfPresent(Bool.self, forKey: .needsClarification)
@@ -350,6 +360,10 @@ public final class HostedHarnessRequestUnderstanding {
                             ]),
                             "restatedGoal": .object(["type": .string("string")]),
                             "targetAppName": .object(["type": .string("string")]),
+                            "actionSurface": .object([
+                                "type": .string("string"),
+                                "enum": .array([.string("guiApp"), .string("appless")])
+                            ]),
                             "parameters": .object([
                                 "type": .string("object"),
                                 "additionalProperties": .object(["type": .string("string")])

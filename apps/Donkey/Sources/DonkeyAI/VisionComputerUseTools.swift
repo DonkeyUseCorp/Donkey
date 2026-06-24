@@ -36,9 +36,13 @@ public final class VisionComputerUseToolProvider {
         public var elementCount: Int
     }
 
-    let appName: String
-    let appKey: String
-    let bundleIdentifier: String?
+    /// The app this run is currently driving — shared with the AX/pointer providers and mutable when an
+    /// observe step retargets it. Read per call (via the computed accessors) so capture/click/keystroke
+    /// always resolve against the app the planner last looked at, not one pinned for the whole run.
+    let target: HarnessTargetContext
+    var appName: String { target.appName }
+    var appKey: String { target.appKey }
+    var bundleIdentifier: String? { target.bundleIdentifier }
     let executionPreference: ExecutionPreference
     let analyzer: any DebugUIInspectionAnalyzing
     let store: ParsedVisionStore
@@ -61,9 +65,7 @@ public final class VisionComputerUseToolProvider {
     public private(set) var lastCaptureMetrics: CaptureMetrics?
 
     public init(
-        appName: String,
-        appKey: String,
-        bundleIdentifier: String?,
+        target: HarnessTargetContext,
         executionPreference: ExecutionPreference = .foreground,
         analyzer: any DebugUIInspectionAnalyzing,
         store: ParsedVisionStore = .shared,
@@ -74,9 +76,7 @@ public final class VisionComputerUseToolProvider {
         desktopCapture: @escaping DesktopCapture = { try await ScreenCaptureKitWindowScreenshotCapturer().captureDesktop() },
         uptimeMS: @escaping @Sendable () -> Double = { ProcessInfo.processInfo.systemUptime * 1_000 }
     ) {
-        self.appName = appName
-        self.appKey = appKey
-        self.bundleIdentifier = bundleIdentifier
+        self.target = target
         self.executionPreference = executionPreference
         self.analyzer = analyzer
         self.store = store
@@ -93,9 +93,12 @@ public final class VisionComputerUseToolProvider {
             HarnessToolDescriptor(
                 name: ToolName.captureAndAnalyze,
                 pluginID: "core.computer-use.vision",
-                summary: "Screenshot and detect UI elements with vision. Three scopes, smallest first: scope=window (default) captures the frontmost window; scope=screen captures the WHOLE display the window is on — use it for things drawn outside the window like a modal confirmation dialog/sheet or a system prompt; scope=desktop captures the ENTIRE desktop across all displays — the fallback when what you need isn't on the active display (another monitor, a background app's window). Widen only as far as you must. vision.click works the same on elements from any scope.",
-                inputSchema: ["scope": "\"window\" (default), \"screen\" (whole display) for modals/dialogs, or \"desktop\" (all displays) when the target is off the active screen."],
-                optionalInputKeys: ["scope"],
+                summary: "Screenshot and detect UI elements with vision. Three scopes, smallest first: scope=window (default) captures the target window; scope=screen captures the WHOLE display the window is on — use it for things drawn outside the window like a modal confirmation dialog/sheet or a system prompt; scope=desktop captures the ENTIRE desktop across all displays — the fallback when what you need isn't on the active display (another monitor, a background app's window). Widen only as far as you must. Pass app=\"<App Name>\" to capture a specific app and make it the active target for the actions that follow; omit it to capture the current target. vision.click works the same on elements from any scope.",
+                inputSchema: [
+                    "scope": "\"window\" (default), \"screen\" (whole display) for modals/dialogs, or \"desktop\" (all displays) when the target is off the active screen.",
+                    "app": "Optional app name to capture and switch the run's active target to; omit to use the current target."
+                ],
+                optionalInputKeys: ["scope", "app"],
                 outputSchema: ["elements": "Detected element IDs, labels, roles, and click eligibility."],
                 requiredPermissions: [.screenCapture],
                 safetyClass: .readOnly,
@@ -163,6 +166,14 @@ public final class VisionComputerUseToolProvider {
     // MARK: - Capture + analyze
 
     private func captureAndAnalyze(_ context: HarnessToolExecutionContext) async -> HarnessToolResult {
+        // The planner can name an app to look at; that becomes the active target for the actions that
+        // follow, so a run can capture and drive any app (or acquire its first one on an app-less run).
+        if let requested = trimmed(context.call.input["app"]) {
+            retarget(to: requested)
+        }
+        guard !self.target.isEmpty else {
+            return result(context, status: .failed, summary: "No active app to capture. Pass app=\"<App Name>\" to target one, or open the app first.", reason: "noActiveTarget")
+        }
         guard let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier) else {
             return result(context, status: .failed, summary: "No window for \(appName).", reason: "noWindowForApp")
         }
@@ -604,6 +615,16 @@ public final class VisionComputerUseToolProvider {
             summary: "\(appName) is not frontmost; \(TargetFocusRecovery.frontmostAppName()) is in front and refocusing failed.",
             reason: "targetNotFrontmost"
         )
+    }
+
+    /// Switch the run's active target to `requestedApp`. Resolves it to a running window's exact identity
+    /// when open; otherwise pins it by name so a re-capture after the planner launches it resolves cleanly.
+    private func retarget(to requestedApp: String) {
+        if let resolved = AccessibilityObserver.resolveTarget(appName: requestedApp, bundleIdentifier: nil) {
+            target.retarget(appName: resolved.appName ?? requestedApp, bundleIdentifier: resolved.bundleIdentifier)
+        } else {
+            target.retarget(appName: requestedApp, bundleIdentifier: nil)
+        }
     }
 
     private func trimmed(_ value: String?) -> String? {

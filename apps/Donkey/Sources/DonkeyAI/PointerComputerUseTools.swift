@@ -20,17 +20,19 @@ public final class PointerComputerUseToolProvider {
         public static let drag = "mouse.drag"
     }
 
-    private let appName: String
-    private let bundleIdentifier: String?
+    /// The app this run is currently driving — shared with the AX/vision providers and mutable when an
+    /// observe step retargets it. Read per call so a scroll/drag follows to the app the planner last
+    /// observed; the pointer tools never retarget themselves (they act on whatever was just observed).
+    private let target: HarnessTargetContext
+    private var appName: String { target.appName }
+    private var bundleIdentifier: String? { target.bundleIdentifier }
     private let executionPreference: ExecutionPreference
 
     public init(
-        appName: String,
-        bundleIdentifier: String?,
+        target: HarnessTargetContext,
         executionPreference: ExecutionPreference = .foreground
     ) {
-        self.appName = appName
-        self.bundleIdentifier = bundleIdentifier
+        self.target = target
         self.executionPreference = executionPreference
     }
 

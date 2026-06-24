@@ -19,19 +19,21 @@ public final class AXComputerUseToolProvider {
         public static let selectAndPress = "ax.select_and_press"
     }
 
-    private let appName: String
-    private let bundleIdentifier: String?
+    /// The app this run is currently driving — shared with the vision/pointer providers and mutable when
+    /// an observe step retargets it. Read per call (via the computed accessors below) so action always
+    /// resolves against the app the planner last looked at, not one app pinned for the whole run.
+    private let target: HarnessTargetContext
+    private var appName: String { target.appName }
+    private var bundleIdentifier: String? { target.bundleIdentifier }
     private let executionPreference: ExecutionPreference
     private let actionBackend: ActionEngineInputBackend
 
     public init(
-        appName: String,
-        bundleIdentifier: String?,
+        target: HarnessTargetContext,
         executionPreference: ExecutionPreference = .foreground,
         actionBackend: ActionEngineInputBackend = MacAccessibilityActionEngineInputBackend()
     ) {
-        self.appName = appName
-        self.bundleIdentifier = bundleIdentifier
+        self.target = target
         self.executionPreference = executionPreference
         self.actionBackend = actionBackend
     }
@@ -58,7 +60,9 @@ public final class AXComputerUseToolProvider {
             HarnessToolDescriptor(
                 name: ToolName.observe,
                 pluginID: "core.computer-use.ax",
-                summary: "Read the frontmost app's Accessibility tree and return its actionable controls. Fast and structured; prefer this for native apps.",
+                summary: "Read the target app's Accessibility tree and return its actionable controls. Fast and structured; prefer this for native apps. Pass app=\"<App Name>\" to observe a specific app and make it the active target for the actions that follow; omit it to observe the current target.",
+                inputSchema: ["app": "Optional app name to observe and switch the run's active target to; omit to use the current target."],
+                optionalInputKeys: ["app"],
                 outputSchema: ["elements": "Accessibility control IDs, labels, roles, and click eligibility."],
                 requiredPermissions: [.accessibility],
                 safetyClass: .readOnly,
@@ -117,6 +121,14 @@ public final class AXComputerUseToolProvider {
     }
 
     private func observe(_ context: HarnessToolExecutionContext) -> HarnessToolResult {
+        // The planner can name an app to look at; that becomes the active target for the actions that
+        // follow. This is what unbinds the run from one app — observe X, act on X; observe Y, act on Y.
+        if let requested = trimmed(context.call.input["app"]) {
+            retarget(to: requested)
+        }
+        guard !target.isEmpty else {
+            return result(context, status: .failed, summary: "No active app to observe. Pass app=\"<App Name>\" to target one, or open the app first.", reason: "noActiveTarget")
+        }
         guard let observation = AccessibilityObserver.observe(appName: appName, bundleIdentifier: bundleIdentifier) else {
             return result(context, status: .failed, summary: "Accessibility is unavailable for \(appName).", reason: "axUnavailable")
         }
@@ -375,6 +387,17 @@ public final class AXComputerUseToolProvider {
     }
 
     // MARK: - Helpers
+
+    /// Switch the run's active target to `requestedApp`. Resolves it to a running window's exact identity
+    /// when it's already open; otherwise pins it by name so a re-observe after the planner launches it
+    /// resolves cleanly (this observe then reports "no window" rather than acting on the wrong app).
+    private func retarget(to requestedApp: String) {
+        if let resolved = AccessibilityObserver.resolveTarget(appName: requestedApp, bundleIdentifier: nil) {
+            target.retarget(appName: resolved.appName ?? requestedApp, bundleIdentifier: resolved.bundleIdentifier)
+        } else {
+            target.retarget(appName: requestedApp, bundleIdentifier: nil)
+        }
+    }
 
     private func trimmed(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
