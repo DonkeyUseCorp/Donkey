@@ -17,6 +17,9 @@ type Props = {
   // Wordmark next to the logo. Donkey Vision is its own B2B product, so that
   // page overrides the default "donkey" with "donkey vision".
   wordmark?: string;
+  // Product nav links (e.g. Use cases). Auth screens keep a minimal header and
+  // opt out.
+  showNav?: boolean;
   // Log in + Sign up cluster. Hidden when an authToggle is supplied.
   showAuthLinks?: boolean;
   // The Download pill belongs to the main landing page only.
@@ -28,6 +31,7 @@ type Props = {
 export function TopNav({
   homeHref = "/",
   wordmark = "donkey",
+  showNav = true,
   showAuthLinks = true,
   showDownload = false,
   authToggle,
@@ -77,6 +81,14 @@ export function TopNav({
           <span className="text-2xl font-semibold">{wordmark}</span>
         </Link>
         <div className="flex items-center gap-[10px] md:gap-4">
+          {showNav ? (
+            <Link
+              href="/use-cases"
+              className="hidden whitespace-nowrap text-sm font-semibold text-ink no-underline md:inline-flex"
+            >
+              Use cases
+            </Link>
+          ) : null}
           {isSignedIn ? (
             <PillButton href="/app" variant="secondary" size="sm">
               Dashboard
