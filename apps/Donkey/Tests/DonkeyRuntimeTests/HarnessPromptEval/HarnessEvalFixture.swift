@@ -85,6 +85,10 @@ struct HarnessEvalResponseRule: Decodable, Sendable {
 struct HarnessEvalExpect: Decodable, Sendable {
     /// "act" | "converse" | "clarify".
     var turnKind: String?
+    /// "guiApp" | "appless" — whether the turn drives an app or is produced app-less. Locks that an
+    /// artifact/system task (make an image, change a setting) is typed `appless`, so it is never pinned to
+    /// a window or blocked on a missing frontmost app.
+    var actionSurface: String?
     /// Skill IDs that must all be surfaced.
     var skills: [String]?
     /// Skill IDs of which at least one must be surfaced.
@@ -93,9 +97,20 @@ struct HarnessEvalExpect: Decodable, Sendable {
     var shellAll: [[String]]?
     /// At least one inner group must be satisfied by some shell command.
     var shellAny: [[String]]?
+    /// Grounding: some call to `tool` must carry an input value containing all of `contains` — the GUI
+    /// analogue of `shellAll`. A vision/AX action's target lives in the call input (the `elementID` a
+    /// `vision.click` aims at), not in a shell string, so this asserts the click LANDED on the intended
+    /// element (e.g. the red note among several), not merely that the tool ran.
+    var toolInput: [HarnessEvalToolInput]?
     var used: [String]?
     var notUsed: [String]?
     var completed: Bool?
+}
+
+/// One grounding assertion: a tool name and the substrings that some call to it must carry in its input.
+struct HarnessEvalToolInput: Decodable, Sendable {
+    var tool: String
+    var contains: [String]
 }
 
 /// The decoded `scenario.json`. Every field is optional with a sensible default so a folder needs nothing
@@ -181,7 +196,7 @@ struct HarnessEvalFixture: Sendable, CustomStringConvertible {
             prompt: prompt,
             frontmostApp: spec.frontmostApp ?? "Finder",
             maxSteps: spec.maxSteps ?? 16
-        ) { call in
+        ) { call, knownFiles in
             if let rule = targetedRules.first(where: { $0.matches(call) }) {
                 return rule.stub(in: dir)
             }
@@ -200,7 +215,11 @@ struct HarnessEvalFixture: Sendable, CustomStringConvertible {
                 }
                 if !disk.isEmpty,
                    lower.range(of: "(^| )(find|mdfind|ls|stat)( |$)", options: .regularExpression) != nil {
-                    let listing = Self.discoveryListing(command: command, disk: disk)
+                    // Discover over the LIVE filesystem: the declared disk plus whatever earlier steps
+                    // produced (tracked as `exists` facts in `knownFiles`). Without the produced files an
+                    // `ls output.mp3` of a file the run just made comes back empty, and the planner loops
+                    // probing for an output it can't see — a false stall the real app never hits.
+                    let listing = Self.discoveryListing(command: command, disk: Self.liveFilesystem(disk: disk, knownFiles: knownFiles))
                     return .ok(listing.text, facts: listing.facts)
                 }
             }
@@ -209,6 +228,18 @@ struct HarnessEvalFixture: Sendable, CustomStringConvertible {
             }
             return nil
         }
+    }
+
+    /// The disk a discovery command sees: the declared inputs plus a synthetic entry for every file an
+    /// earlier step produced (`knownFiles` are the world model's `exists` facts). A produced path already
+    /// covered by a declared entry is not duplicated. This is what lets a verify of a just-created output
+    /// resolve, so the plan proceeds to the next real action instead of re-probing for a hidden file.
+    private static func liveFilesystem(disk: [HarnessEvalDiskEntry], knownFiles: [String]) -> [HarnessEvalDiskEntry] {
+        let declared = Set(disk.map(\.path))
+        let produced = knownFiles
+            .filter { !declared.contains($0) }
+            .map { HarnessEvalDiskEntry(path: $0, describe: nil, contentFile: nil, content: nil) }
+        return disk + produced
     }
 
     /// What a discovery command (`find`/`mdfind`/`ls`/`stat`) returns for this disk, plus the existence

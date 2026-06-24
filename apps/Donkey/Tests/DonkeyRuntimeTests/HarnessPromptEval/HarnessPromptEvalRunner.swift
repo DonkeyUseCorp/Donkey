@@ -15,10 +15,11 @@ import Foundation
 /// gate). What is stubbed: the executors. No command runs, no file is touched, no app is driven — each
 /// tool hands the planner a scripted observation instead, so the loop keeps moving and we record the plan.
 ///
-/// These tests hit the network and cost model tokens, so they are opt-in exactly like the live smoke
-/// tests. Run with:
+/// These tests hit the network and cost model tokens, so they are opt-in via `DONKEY_PROMPT_EVAL=1` (a
+/// plain `swift test` skips them). The backend defaults to `http://localhost:3000`; set
+/// `DONKEY_WEB_BASE_URL` only to point elsewhere. Run with:
 ///
-///     env DONKEY_PROMPT_EVAL=1 DONKEY_WEB_BASE_URL=http://localhost:3000 DONKEY_DEV_AUTH_BYPASS=1 \
+///     env DONKEY_PROMPT_EVAL=1 DONKEY_DEV_AUTH_BYPASS=1 \
 ///       DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 ///       swift test --filter PromptEval
 ///
@@ -58,14 +59,17 @@ struct HarnessEvalScenario: Sendable {
     /// Runaway backstop. Each step is a real model call, so keep it modest; the loop normally ends when
     /// the planner calls `run.complete`.
     var maxSteps: Int
-    var respond: @Sendable (HarnessToolCall) -> HarnessEvalStub?
+    /// Scripted reply for a tool call. The second argument is the files the agent already knows exist —
+    /// the static disk plus everything earlier steps produced — so a discovery/probe stub can surface an
+    /// output a prior step created, not just the fixture's declared inputs.
+    var respond: @Sendable (HarnessToolCall, [String]) -> HarnessEvalStub?
 
     init(
         name: String,
         prompt: String,
         frontmostApp: String = "Finder",
         maxSteps: Int = 16,
-        respond: @escaping @Sendable (HarnessToolCall) -> HarnessEvalStub? = { _ in nil }
+        respond: @escaping @Sendable (HarnessToolCall, [String]) -> HarnessEvalStub? = { _, _ in nil }
     ) {
         self.name = name
         self.prompt = prompt
@@ -88,6 +92,12 @@ struct HarnessEvalRun {
     var completed: Bool { finalStatus == .completed }
 
     func used(_ tool: String) -> Bool { toolNames.contains(tool) }
+
+    /// The inputs of every call to a given tool — so a GUI/vision scenario can assert WHERE an action
+    /// landed (e.g. the `elementID` a `vision.click` targeted), not merely that the tool was used.
+    func inputs(for tool: String) -> [[String: String]] {
+        calls.filter { $0.name == tool }.map(\.input)
+    }
 
     /// True if some `shell_exec` command contains all of the given substrings (case-insensitive) — the
     /// usual shape of a plan assertion (e.g. a yt-dlp call that also passes `--download-sections`).
@@ -119,18 +129,24 @@ enum HarnessEvalRunner {
         var devAuthBypass: Bool
     }
 
+    /// The dev backend the eval drives when nothing else is configured — the same value the dev build's
+    /// Info.plist and `run-donkey-dev.sh` use, so a developer with the local site up can run the eval
+    /// without exporting `DONKEY_WEB_BASE_URL`.
+    static let defaultBaseURL = URL(string: "http://localhost:3000")!
+
     /// Returns the live config, or nil when the eval is not opted into. A nil result means the caller
-    /// should return early (skip) — these tests reach the real model and must never run by accident in a
-    /// plain `swift test`.
+    /// should return early (skip): the single opt-in is `DONKEY_PROMPT_EVAL=1`, because these tests reach
+    /// the real model and must never run by accident in a plain `swift test`. The backend URL is resolved
+    /// the way the app does — env `DONKEY_WEB_BASE_URL`, then the baked Info.plist `DonkeyWebBaseURL` — and
+    /// falls back to the dev default, so it no longer has to be passed by hand.
     static func configFromEnvironment(
         _ environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> Config? {
         guard environment["DONKEY_PROMPT_EVAL"] == "1" else { return nil }
-        guard let raw = environment["DONKEY_WEB_BASE_URL"], !raw.isEmpty, let url = URL(string: raw) else {
-            return nil
-        }
+        let baseURL = (try? DonkeyBackendInferenceConfiguration.fromEnvironment(environment))?.baseURL
+            ?? defaultBaseURL
         return Config(
-            baseURL: url,
+            baseURL: baseURL,
             clientID: environment["DONKEY_CLIENT_ID"] ?? "prompt-eval",
             devAuthBypass: environment["DONKEY_DEV_AUTH_BYPASS"] == "1"
         )
@@ -167,18 +183,21 @@ enum HarnessEvalRunner {
             .compactMap { BuiltInLocalAppSkillPacks.skillGuidance(forID: $0) }
 
         // Real tool surface; stub executors so the planner sees the true descriptors but nothing executes.
-        let descriptors = BuiltInHarnessToolCatalog.descriptors
+        let descriptors = plannerToolDescriptors()
         let respond = scenario.respond
         let tools = descriptors.map { descriptor in
             HarnessTool(descriptor: descriptor) { context in
                 let knownFiles = context.worldModel.facts.compactMap { $0.value == "exists" ? $0.key : nil }.sorted()
-                let reply = respond(context.call) ?? defaultReply(for: context.call, knownFiles: knownFiles)
+                let reply = respond(context.call, knownFiles) ?? defaultReply(for: context.call, knownFiles: knownFiles)
                 return HarnessToolResult(
                     callID: context.call.id,
                     toolName: context.call.name,
                     status: reply.status,
                     summary: reply.summary,
-                    observations: HarnessObservationDelta(visibleText: reply.visibleText, facts: reply.facts),
+                    observations: HarnessObservationDelta(
+                        visibleText: reply.visibleText,
+                        facts: shellStampedFacts(reply, call: context.call)
+                    ),
                     metadata: ["evalStub": "true"]
                 )
             }
@@ -211,6 +230,27 @@ enum HarnessEvalRunner {
             records: final?.toolHistory ?? [],
             finalStatus: final?.status ?? .failedSafe
         )
+    }
+
+    /// The tool surface the planner SEES, assembled the way production does in `UserQueryCommandHandler`:
+    /// the built-in catalog with the placeholder see/act tools removed, plus the real AX, vision, and
+    /// pointer see/act DESCRIPTORS (and the native music tools). Execution is stubbed either way, but the
+    /// planner must read the SAME tool NAMES the app gives it — `ax.observe` / `ax.click` / `vision.capture`
+    /// / `vision.click` — or a GUI/vision scenario would exercise a screen surface the model never gets and
+    /// every grounding assertion would be meaningless. Deduped by name (first wins, so a non-replaced
+    /// built-in keeps its place) in case two providers ever advertise the same tool.
+    @MainActor
+    static func plannerToolDescriptors() -> [HarnessToolDescriptor] {
+        // The placeholders the providers below supersede — same set production strips before registering
+        // the real see/act tools, so the planner is never offered both a placeholder and its replacement.
+        let replaced: Set<String> = ["screen.observe", "elements.get", "element.perform", "text.enter", "keyboard.press"]
+        let base = BuiltInHarnessToolCatalog.descriptors.filter { !replaced.contains($0.name) }
+        let seeAct = AXComputerUseToolProvider.descriptors
+            + VisionComputerUseToolProvider.descriptors
+            + PointerComputerUseToolProvider.descriptors
+            + MusicPlaybackToolProvider.descriptors
+        var seen = Set<String>()
+        return (base + seeAct).filter { seen.insert($0.name).inserted }
     }
 
     /// Default stubbed reply when a scenario does not script the call. Skill lookups get the REAL built-in
@@ -255,6 +295,19 @@ enum HarnessEvalRunner {
             }
             return .ok("\(call.name) ran.", facts: ["lastStub": call.name])
         }
+    }
+
+    /// The observation facts a stubbed reply carries, with the same `lastShellExitCode` the REAL shell
+    /// executor stamps on every successful `shell_exec` (DonkeyCommandBackends). Production attaches it
+    /// unconditionally, which is what makes a read-only shell command (a `lit parse`, a `cat`) count as
+    /// progress in the runtime's stall accounting; a stub that returned content with no fact scored as
+    /// no-progress and tripped the stall guard mid-task — a false failure the real app never hits. Mirror
+    /// production so the eval measures the plan, not a missing fact.
+    private static func shellStampedFacts(_ reply: HarnessEvalStub, call: HarnessToolCall) -> [String: String] {
+        guard call.name == "shell_exec", reply.status == .succeeded else { return reply.facts }
+        var facts = reply.facts
+        facts["lastShellExitCode"] = facts["lastShellExitCode"] ?? "0"
+        return facts
     }
 
     /// True for a read-only command whose job is to look at the filesystem — so the stub answers with the

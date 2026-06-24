@@ -2,7 +2,7 @@
   "frontmostApp": "Finder",
   "maxSteps": 16,
   "disk": [
-    { "path": "report.pdf", "describe": "PDF, 42 pages, selectable text — a quarterly reliability review.", "contentFile": "report.txt" }
+    { "path": "report.pdf", "describe": "PDF, selectable text — a quarterly reliability review with three sections and an action-item list.", "contentFile": "report.txt" }
   ],
   "responses": [
     { "tool": "llm.generate", "summary": "Wrote a one-page brief of report.pdf.", "produces": ["report-brief.md"] },

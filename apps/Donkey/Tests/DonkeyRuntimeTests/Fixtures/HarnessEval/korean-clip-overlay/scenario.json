@@ -2,12 +2,11 @@
   "frontmostApp": "Safari",
   "maxSteps": 16,
   "responses": [
-    { "tool": "shell_exec", "contains": ["yt-dlp"], "summary": "[download] 100% of 12.50MiB\n~/Downloads/clip.mp4", "produces": ["~/Downloads/clip.mp4"] },
-    { "tool": "shell_exec", "contains": ["ffprobe"], "summary": "duration=60.000000\nformat_name=mov,mp4,m4a,3gp,3g2,mj2" },
+    { "tool": "shell_exec", "contains": ["yt-dlp"], "summary": "[download] 100% of 12.50MiB\n~/Downloads/clip.webm", "produces": ["~/Downloads/clip.webm"] },
+    { "tool": "shell_exec", "contains": ["ffprobe"], "summary": "duration=60.000000\nformat_name=matroska,webm" },
     { "tool": "llm.generate", "summary": "Transcribed and translated to Korean → ~/Downloads/subs.srt", "produces": ["~/Downloads/subs.srt"] },
     { "tool": "files.write", "summary": "Wrote ~/Downloads/subs.srt", "produces": ["~/Downloads/subs.srt"] },
-    { "tool": "shell_exec", "contains": ["ffmpeg", "subtitles"], "summary": "Burned Korean subtitles → ~/Downloads/out.mp4", "produces": ["~/Downloads/out.mp4"] },
-    { "tool": "shell_exec", "contains": ["ffmpeg"], "summary": "ffmpeg: wrote output." }
+    { "tool": "shell_exec", "contains": ["ffmpeg", "subtitles"], "summary": "Burned Korean subtitles → ~/Downloads/out.mp4", "produces": ["~/Downloads/out.mp4"] }
   ],
   "expect": {
     "turnKind": "act",

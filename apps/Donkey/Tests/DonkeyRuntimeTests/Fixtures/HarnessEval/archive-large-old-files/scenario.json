@@ -7,6 +7,7 @@
   ],
   "expect": {
     "turnKind": "act",
+    "actionSurface": "appless",
     "skillsAny": ["finder", "system-tools"],
     "shellAny": [["mdfind"], ["find "]]
   }

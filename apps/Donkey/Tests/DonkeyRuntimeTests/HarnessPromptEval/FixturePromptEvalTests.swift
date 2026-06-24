@@ -8,9 +8,10 @@ import Testing
 /// a `prompt.txt`, a `scenario.json`, and any realistic input data the task operates on (CSVs, form data, a
 /// captured web page). The runner is the same as the hand-written category suites; only the scenario source
 /// differs. Real model, stubbed system + UI; opt-in exactly like the others — a plain `swift test` returns
-/// early. Run with:
+/// early. The only required flag is `DONKEY_PROMPT_EVAL=1`; the backend defaults to `http://localhost:3000`
+/// (set `DONKEY_WEB_BASE_URL` only to point elsewhere). Run with:
 ///
-///     env DONKEY_PROMPT_EVAL=1 DONKEY_WEB_BASE_URL=http://localhost:3000 DONKEY_DEV_AUTH_BYPASS=1 \
+///     env DONKEY_PROMPT_EVAL=1 DONKEY_DEV_AUTH_BYPASS=1 \
 ///       DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 ///       swift test --filter PromptEval
 ///
@@ -50,6 +51,12 @@ struct FixturePromptEvalTests {
                 "[\(name)] turnKind expected \(turnKind), got \(String(describing: run.understanding?.turnKind))"
             )
         }
+        if let surface = expect.actionSurface {
+            #expect(
+                run.understanding?.actionSurface.rawValue == surface,
+                "[\(name)] actionSurface expected \(surface), got \(String(describing: run.understanding?.actionSurface))"
+            )
+        }
         for id in expect.skills ?? [] {
             #expect(skills.contains(id), "[\(name)] expected skill \(id); got \(skills)")
         }
@@ -62,6 +69,12 @@ struct FixturePromptEvalTests {
         if let groups = expect.shellAny, !groups.isEmpty {
             #expect(groups.contains { shellMatches(run, $0) }, "[\(name)] expected a shell command matching any of \(groups); shells: \(run.shellCommands)")
         }
+        for group in expect.toolInput ?? [] {
+            #expect(
+                toolInputMatches(run, tool: group.tool, needles: group.contains),
+                "[\(name)] expected a \(group.tool) call whose input contains all of \(group.contains); \(group.tool) inputs: \(run.inputs(for: group.tool))"
+            )
+        }
         for tool in expect.used ?? [] {
             #expect(run.used(tool), "[\(name)] expected tool \(tool) used; tools: \(run.toolNames)")
         }
@@ -70,6 +83,16 @@ struct FixturePromptEvalTests {
         }
         if let completed = expect.completed {
             #expect(run.completed == completed, "[\(name)] expected completed=\(completed), got \(run.completed)")
+        }
+    }
+
+    /// True if some call to `tool` carried an input value containing every substring in `needles`
+    /// (case-insensitive) — the grounding check, matched over the call's input the way `shellMatches`
+    /// matches a shell command, so a vision/AX action can be asserted to have hit the intended target.
+    private func toolInputMatches(_ run: HarnessEvalRun, tool: String, needles: [String]) -> Bool {
+        run.inputs(for: tool).contains { input in
+            let haystack = input.values.joined(separator: " ")
+            return needles.allSatisfy { haystack.range(of: $0, options: .caseInsensitive) != nil }
         }
     }
 
