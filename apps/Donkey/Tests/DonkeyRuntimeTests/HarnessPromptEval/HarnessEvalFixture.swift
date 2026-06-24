@@ -61,10 +61,17 @@ struct HarnessEvalResponseRule: Decodable, Sendable {
     }
 
     func stub(in dir: URL) -> HarnessEvalStub {
-        let body = summaryFile
-            .flatMap { try? String(contentsOf: dir.appendingPathComponent($0), encoding: .utf8) }
-            ?? summary
-            ?? "ran."
+        let body: String
+        if let summaryFile,
+           let contents = try? String(contentsOf: dir.appendingPathComponent(summaryFile), encoding: .utf8) {
+            body = contents
+        } else {
+            // A summary often stands in for a command's OUTPUT (e.g. an `osascript` POSIX path, an `mdfind`
+            // result). Those are absolute in reality, so expand the home-relative `~/` the fixture stores
+            // (kept tilde so no real username is committed) to the live home — a tilde where a tool would
+            // print a full path reads as wrong and makes the planner re-query instead of proceeding.
+            body = (summary ?? "ran.").replacingOccurrences(of: "~/", with: NSHomeDirectory() + "/")
+        }
         if status == "failed" { return .failed(body) }
         var resolved = facts ?? [:]
         for file in produces ?? [] { resolved[file] = "exists" }
@@ -153,37 +160,102 @@ struct HarnessEvalFixture: Sendable, CustomStringConvertible {
         )
     }
 
-    /// Build the runnable scenario. The stub serves, in order: a matching scripted response, the disk for
-    /// `files.describe`, real file content for a read command, and the disk paths for a discovery command —
-    /// then falls back to the runner's generic default.
+    /// Build the runnable scenario. The stub serves in priority order: a TARGETED response rule (one that
+    /// names command substrings — it models a specific command's result), then the filesystem simulation
+    /// (`files.describe`, a file read, a discovery listing), then a CATCH-ALL response rule (one with no
+    /// `contains` — it models the scenario's work command), then the runner's generic default.
+    ///
+    /// The filesystem sim deliberately sits BEFORE the catch-all: a catch-all rule answers "the work is
+    /// done" for any command, so if it ran ahead of discovery a mere `find`/`ls` would be told the job
+    /// already finished, and the planner would loop trying to verify output that was never produced (the
+    /// loop several of these scenarios used to hit). Targeted rules still win first, so a scripted
+    /// `pdfinfo`/failed-download response keeps its authority.
     func scenario() -> HarnessEvalScenario {
         let dir = self.dir
         let disk = spec.disk ?? []
         let responses = spec.responses ?? []
+        let targetedRules = responses.filter { $0.contains?.isEmpty == false }
+        let catchAllRules = responses.filter { $0.contains?.isEmpty ?? true }
         return HarnessEvalScenario(
             name: name,
             prompt: prompt,
             frontmostApp: spec.frontmostApp ?? "Finder",
             maxSteps: spec.maxSteps ?? 16
         ) { call in
-            if let rule = responses.first(where: { $0.matches(call) }) {
+            if let rule = targetedRules.first(where: { $0.matches(call) }) {
                 return rule.stub(in: dir)
             }
             if call.name == "files.describe", !disk.isEmpty {
-                return .ok(disk.map { "\($0.path) — \($0.describe ?? "file")" }.joined(separator: "; "))
+                return .ok(
+                    disk.map { "\($0.path) — \($0.describe ?? "file")" }.joined(separator: "; "),
+                    facts: Self.existenceFacts(for: disk)
+                )
             }
-            guard call.name == "shell_exec", let command = call.input["command"] else { return nil }
-            let lower = command.lowercased()
-            if lower.range(of: "(^| )(cat|head|tail|less|open|lit|pdftotext)( |$)", options: .regularExpression) != nil {
-                for entry in disk where command.contains(entry.path) || command.contains((entry.path as NSString).lastPathComponent) {
-                    if let content = entry.resolvedContent(in: dir) { return .ok(content) }
+            if call.name == "shell_exec", let command = call.input["command"] {
+                let lower = command.lowercased()
+                if lower.range(of: "(^| )(cat|head|tail|less|open|lit|pdftotext)( |$)", options: .regularExpression) != nil {
+                    for entry in disk where command.contains(entry.path) || command.contains((entry.path as NSString).lastPathComponent) {
+                        if let content = entry.resolvedContent(in: dir) { return .ok(content) }
+                    }
+                }
+                if !disk.isEmpty,
+                   lower.range(of: "(^| )(find|mdfind|ls|stat)( |$)", options: .regularExpression) != nil {
+                    let listing = Self.discoveryListing(command: command, disk: disk)
+                    return .ok(listing.text, facts: listing.facts)
                 }
             }
-            if !disk.isEmpty,
-               lower.range(of: "(^| )(find|mdfind|ls|stat)( |$)", options: .regularExpression) != nil {
-                return .ok(disk.map(\.path).joined(separator: "\n"))
+            if let rule = catchAllRules.first(where: { $0.matches(call) }) {
+                return rule.stub(in: dir)
             }
             return nil
         }
+    }
+
+    /// What a discovery command (`find`/`mdfind`/`ls`/`stat`) returns for this disk, plus the existence
+    /// facts to record. An `ls`/`stat` naming a declared directory lists that directory's CONTENTS — the
+    /// entries declared beneath it — so the planner sees the files it must operate on instead of the folder
+    /// path echoed back at it. Anything else returns every declared path. Either way each returned path is
+    /// marked `exists`: without that fact a successful discovery changes nothing in the world model, so the
+    /// runtime scores it as no progress and the planner re-searches the same paths until the duplicate/stall
+    /// guard fails the run — the loop these evals kept hitting. The fact carries the located file forward so
+    /// the planner moves on to the real work tool.
+    private static func discoveryListing(
+        command: String,
+        disk: [HarnessEvalDiskEntry]
+    ) -> (text: String, facts: [String: String]) {
+        // Match whether the command names the declared path as written (`~/Desktop/x`) or already expanded
+        // (`/Users/<home>/Desktop/x`) — discovery output from an earlier step comes back expanded.
+        for entry in disk where command.contains(entry.path) || command.contains(displayPath(entry.path)) {
+            let children = disk.filter { $0.path != entry.path && $0.path.hasPrefix(entry.path + "/") }
+            if !children.isEmpty {
+                return (listingText(for: children), existenceFacts(for: children))
+            }
+        }
+        return (listingText(for: disk), existenceFacts(for: disk))
+    }
+
+    /// The text a discovery command prints: one ABSOLUTE path per line. A real `find`/`mdfind` prints full
+    /// paths, so echoing back the bare declared name (often identical to the query) reads to the planner as
+    /// "not actually located" and it keeps trying search variants. `displayPath` gives the planner the
+    /// concrete path it needs to move on to the real work.
+    private static func listingText(for entries: [HarnessEvalDiskEntry]) -> String {
+        entries.map { displayPath($0.path) }.joined(separator: "\n")
+    }
+
+    /// The absolute path a discovery command prints for a declared entry. Fixture paths are stored
+    /// home-relative (`~/…`, or a bare name) so no real username is committed; this expands `~`/roots a
+    /// bare name at the live home directory ONLY at runtime, so the output is a real absolute path with no
+    /// hard-coded user in the fixture files.
+    private static func displayPath(_ path: String) -> String {
+        if path.hasPrefix("/") { return path }
+        if path == "~" { return NSHomeDirectory() }
+        if path.hasPrefix("~/") { return NSHomeDirectory() + String(path.dropFirst(1)) }
+        return NSHomeDirectory() + "/" + path
+    }
+
+    /// `path -> "exists"` for each entry, the shape the runner's world model and default file-probe reply
+    /// already use to mean "this file is present."
+    private static func existenceFacts(for disk: [HarnessEvalDiskEntry]) -> [String: String] {
+        Dictionary(disk.map { ($0.path, "exists") }, uniquingKeysWith: { current, _ in current })
     }
 }

@@ -2,7 +2,7 @@
   "frontmostApp": "Finder",
   "maxSteps": 16,
   "responses": [
-    { "tool": "shell_exec", "contains": ["mdfind"], "summary": "/Users/davidle/Movies/raw-shoot.mov\n/Users/davidle/Downloads/ubuntu.iso\n/Users/davidle/Desktop/backup.dmg" },
+    { "tool": "shell_exec", "contains": ["mdfind"], "summary": "~/Movies/raw-shoot.mov\n~/Downloads/ubuntu.iso\n~/Desktop/backup.dmg" },
     { "tool": "shell_exec", "contains": ["mv "], "summary": "Moved 3 files into ~/Archive." }
   ],
   "expect": {

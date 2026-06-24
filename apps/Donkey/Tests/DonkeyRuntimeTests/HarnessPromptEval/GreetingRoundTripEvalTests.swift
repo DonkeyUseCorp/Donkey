@@ -18,7 +18,9 @@ import Testing
 /// Opt-in like the other prompt evals (see `HarnessEvalRunner.configFromEnvironment`); a plain `swift test`
 /// returns early. Per-call latency is printed (not asserted — it is network-dependent) so a "slow today"
 /// report can be read as "too many round trips" vs "each call is slow".
-@Suite
+/// `.serialized` for the same reason as the fixture suite: this drives the real understanding backend, so it
+/// must not contend with the parameterized scenarios for it.
+@Suite(.serialized)
 @MainActor
 struct GreetingRoundTripEvalTests {
     @Test

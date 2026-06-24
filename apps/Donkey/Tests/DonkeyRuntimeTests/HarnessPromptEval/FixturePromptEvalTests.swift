@@ -16,7 +16,12 @@ import Testing
 ///
 /// Add a scenario by dropping a new folder under `Fixtures/HarnessEval/` — it is discovered automatically;
 /// no Swift change needed.
-@Suite
+///
+/// `.serialized`: every scenario is a real multi-step model run against ONE backend. Run in parallel they
+/// saturate it — calls fast-fail to nil understanding, steps crawl, and runs trip the stall guard before
+/// they finish — so the result reads as failures that are really contention. Serialized, each scenario gets
+/// the backend to itself and the signal is the plan, not the load.
+@Suite(.serialized)
 @MainActor
 struct FixturePromptEvalTests {
     @Test(arguments: HarnessEvalFixture.all())
