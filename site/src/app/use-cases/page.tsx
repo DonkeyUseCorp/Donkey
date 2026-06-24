@@ -148,6 +148,8 @@ export default function UseCasesPage() {
       <section className="mx-auto w-full max-w-[1400px] px-6 pb-20 md:px-12 md:pb-28">
         <div className="flex flex-col gap-14">
           {useCaseCategories.map((category, categoryIndex) => {
+            const categoryUseCases = getUseCasesByCategory(category);
+
             return (
               <div key={category}>
                 <div className="mb-6">
