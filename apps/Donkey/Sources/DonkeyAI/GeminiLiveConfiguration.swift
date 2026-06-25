@@ -27,13 +27,10 @@ public struct GeminiLiveConfiguration: Equatable, Sendable {
     /// path ignores this (its model comes from the backend mint response).
     public var model: String
     /// Model used for the per-turn vision driver (`GEMINI_VISION_MODEL`). This is a
-    /// turn-based `generateContent` model (not Live/bidi) — a stronger model for
-    /// the screenshot-grounding task than the fast realtime command model.
+    /// turn-based `generateContent` model (not Live/bidi) running the built-in
+    /// `computer_use` tool — a stronger model for screenshot grounding than the fast
+    /// realtime command model.
     public var visionModel: String
-    /// Opt into the box-based vision driver (`GEMINI_VISION_BOX`): the planner
-    /// returns a 2D bounding box and the driver clicks the box center plus nearby
-    /// points in one turn. Off by default, leaving the single-point driver in place.
-    public var visionBoxEnabled: Bool
     /// Whether the Developer-API Live session requests AUDIO response modality
     /// (`GEMINI_LIVE_AUDIO_OUTPUT`). The default Dev-API model is audio-output only,
     /// so this defaults true; set falsey when pointing `GEMINI_LIVE_MODEL` at a
@@ -55,7 +52,6 @@ public struct GeminiLiveConfiguration: Equatable, Sendable {
         apiKey: String? = nil,
         model: String = GeminiLiveConfiguration.defaultModel,
         visionModel: String = GeminiLiveConfiguration.defaultVisionModel,
-        visionBoxEnabled: Bool = false,
         liveAudioOutput: Bool = true
     ) {
         self.enabled = enabled
@@ -63,7 +59,6 @@ public struct GeminiLiveConfiguration: Equatable, Sendable {
         self.apiKey = apiKey
         self.model = model
         self.visionModel = visionModel
-        self.visionBoxEnabled = visionBoxEnabled
         self.liveAudioOutput = liveAudioOutput
     }
 
@@ -84,7 +79,6 @@ public struct GeminiLiveConfiguration: Equatable, Sendable {
             apiKey: trimmed(environment["GEMINI_API_KEY"]),
             model: trimmed(environment["GEMINI_LIVE_MODEL"]) ?? defaultModel,
             visionModel: trimmed(environment["GEMINI_VISION_MODEL"]) ?? defaultVisionModel,
-            visionBoxEnabled: boolValue(environment["GEMINI_VISION_BOX"]),
             liveAudioOutput: boolValue(environment["GEMINI_LIVE_AUDIO_OUTPUT"], default: true)
         )
     }

@@ -40,7 +40,7 @@ struct SpotifyVisionAgentLiveSmokeTests {
                 // Dump exactly what the model saw (compressed) so we can inspect it.
                 let dump = ScreenshotCompression.compressedForModel(info.screenshot)
                 try? dump.data.write(to: URL(fileURLWithPath: "/tmp/spotify-agent-turn\(info.turn).jpg"))
-                log.append("turn \(info.turn): \(info.action.action) x=\(info.action.x.map { String(Int($0)) } ?? "-") y=\(info.action.y.map { String(Int($0)) } ?? "-") text=\(info.action.text ?? "") :: \(info.action.reason ?? "")")
+                log.append("turn \(info.turn): \(info.action.summary)")
             }
         )
         log.append("driver outcome: completed=\(outcome.completed) turns=\(outcome.turns) reason=\(outcome.reason)")

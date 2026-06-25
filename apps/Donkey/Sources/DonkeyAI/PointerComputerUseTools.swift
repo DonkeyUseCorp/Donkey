@@ -109,13 +109,10 @@ public final class PointerComputerUseToolProvider {
             )
         }
         let amount = max(1, min(context.call.input["amount"].flatMap(Int.init) ?? 5, 50))
-        let (deltaX, deltaY): (Int, Int)
-        switch direction {
-        case "up": (deltaX, deltaY) = (0, amount)
-        case "down": (deltaX, deltaY) = (0, -amount)
-        case "left": (deltaX, deltaY) = (amount, 0)
-        default: (deltaX, deltaY) = (-amount, 0)
-        }
+        // Unknown direction falls back to "right", preserving the prior default branch. The sign
+        // convention itself lives once in VisionComputerActionExecutor so the two scroll paths agree.
+        let scrollDirection = VisionComputerAction.ScrollDirection(rawValue: direction) ?? .right
+        let (deltaX, deltaY) = VisionComputerActionExecutor.scrollLineDeltas(direction: scrollDirection, lines: amount)
         MacPointerInput.scroll(at: point, deltaX: deltaX, deltaY: deltaY, target: routing.inputTarget)
         return HarnessToolResult(
             callID: context.call.id,
@@ -175,10 +172,13 @@ public final class PointerComputerUseToolProvider {
             imageWidth: geometry.imageWidth,
             imageHeight: geometry.imageHeight
         )
-        let plan = VisionActionPlanner.PlannedAction(
-            action: "click", x: normalized.x, y: normalized.y, text: nil, reason: nil, screenPoint: nil
+        // A screen/desktop-scope element carries the display rect it was detected in; map through that,
+        // matching vision.click. Falling back to the window rect would misplace a click/scroll/drag on
+        // anything detected outside the front window (a modal, a menu, another monitor).
+        return VisionComputerActionExecutor.screenPoint(
+            VisionComputerAction.Point(x: normalized.x, y: normalized.y),
+            window: geometry.region ?? window
         )
-        return VisionActionPlanner.screenPoint(action: plan, window: window)
     }
 
     // MARK: - Helpers

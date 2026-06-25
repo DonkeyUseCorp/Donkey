@@ -68,12 +68,11 @@ struct VisionComputerUseToolsTests {
             let normalized = VisionComputerUseToolProvider.normalizedCenter(
                 bbox: geo.bbox, imageWidth: geo.imageWidth, imageHeight: geo.imageHeight
             )
-            let plan = VisionActionPlanner.PlannedAction(
-                action: "click", x: normalized.x, y: normalized.y, text: nil, reason: nil, screenPoint: nil
+            let point = VisionComputerActionExecutor.screenPoint(
+                VisionComputerAction.Point(x: normalized.x, y: normalized.y), window: region
             )
-            let point = VisionActionPlanner.screenPoint(action: plan, window: region)
-            #expect(abs((point?.x ?? 0) - 2880) < 0.5)
-            #expect(abs((point?.y ?? 0) - 540) < 0.5)
+            #expect(abs(point.x - 2880) < 0.5)
+            #expect(abs(point.y - 540) < 0.5)
         } else {
             Issue.record("expected screen-scope geometry with a region")
         }

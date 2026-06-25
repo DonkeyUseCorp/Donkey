@@ -376,7 +376,6 @@ final class GeminiLiveVoiceController {
         let app = (call.arguments["app"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let goal = (call.arguments["goal"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let model = configuration.visionModel
-        let useBox = configuration.visionBoxEnabled
         let callID = call.id
         let toolName = call.name
         let provider = visionAuthProvider
@@ -402,23 +401,11 @@ final class GeminiLiveVoiceController {
             let summary: String
             do {
                 let auth = try await provider()
-                // Box and single-point drivers are independent (separate Outcome
-                // types), so read the two fields we need from each branch locally.
-                let completed: Bool
-                let turns: Int
-                if useBox {
-                    let outcome = await VertexVisionBoxDriver.drive(
-                        appName: app, bundleIdentifier: nil, goal: goal, auth: auth, model: model
-                    )
-                    completed = outcome.completed
-                    turns = outcome.turns
-                } else {
-                    let outcome = await VertexVisionDriver.drive(
-                        appName: app, bundleIdentifier: nil, goal: goal, auth: auth, model: model
-                    )
-                    completed = outcome.completed
-                    turns = outcome.turns
-                }
+                let outcome = await VertexVisionDriver.drive(
+                    appName: app, bundleIdentifier: nil, goal: goal, auth: auth, model: model
+                )
+                let completed = outcome.completed
+                let turns = outcome.turns
                 status = completed ? "succeeded" : "incomplete"
                 summary = "vision \(completed ? "completed" : "did not complete") \"\(goal)\" in \(app) over \(turns) turns"
             } catch {

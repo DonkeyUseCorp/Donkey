@@ -23,18 +23,23 @@ public enum GeminiGenerateContent {
 
     /// Serialize a `generateContent` request body: a single user turn whose `parts`
     /// are supplied by the caller (text / inlineData), plus the caller's
-    /// `generationConfig` (temperature, response schema, thinking level, …).
+    /// `generationConfig` (temperature, response schema, thinking level, …) and, when
+    /// present, a `tools` array (e.g. the built-in `computerUse` tool).
     public static func requestBody(
         parts: [[String: Any]],
-        generationConfig: [String: Any]
+        generationConfig: [String: Any],
+        tools: [[String: Any]]? = nil
     ) throws -> Data {
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "contents": [[
                 "role": "user",
                 "parts": parts
             ]],
             "generationConfig": generationConfig
         ]
+        if let tools, !tools.isEmpty {
+            body["tools"] = tools
+        }
         return try JSONSerialization.data(withJSONObject: body)
     }
 

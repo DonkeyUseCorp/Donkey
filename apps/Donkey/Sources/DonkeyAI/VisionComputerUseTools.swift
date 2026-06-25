@@ -400,20 +400,19 @@ public final class VisionComputerUseToolProvider {
             imageWidth: geometry.imageWidth,
             imageHeight: geometry.imageHeight
         )
-        let plan = VisionActionPlanner.PlannedAction(
-            action: "click", x: normalized.x, y: normalized.y, text: nil, reason: nil, screenPoint: nil
-        )
         // A screen-scope element carries the display rect it was detected in; map through that. A
         // window-scope element has no region, so map through the window's CURRENT bounds (re-resolved
         // above) to stay correct if the window moved between the capture and this click.
         let mappingRegion = geometry.region ?? target.bounds
-        guard let point = VisionActionPlanner.screenPoint(action: plan, window: mappingRegion) else {
-            return result(context, status: .failed, summary: "Could not map element \(elementID) to a screen point.", reason: "unmappablePoint")
-        }
+        let point = VisionComputerActionExecutor.screenPoint(
+            VisionComputerAction.Point(x: normalized.x, y: normalized.y),
+            window: mappingRegion
+        )
         let button: MacPointerInput.Button = context.call.input["button"] == "right" ? .right : .left
         let clicks = context.call.input["clicks"].flatMap(Int.init) ?? 1
         MacPointerInput.moveAndClick(at: point, button: button, clickCount: clicks, target: inputTarget)
-        let clickWord = button == .right ? "Right-clicked" : (clicks >= 3 ? "Triple-clicked" : (clicks == 2 ? "Double-clicked" : "Clicked"))
+        let verb = VisionComputerActionExecutor.clickVerb(button: button, count: clicks)
+        let clickWord = "\(verb.prefix(1).uppercased())\(verb.dropFirst())ed"
         return HarnessToolResult(
             callID: context.call.id,
             toolName: context.call.name,
@@ -561,8 +560,8 @@ public final class VisionComputerUseToolProvider {
     public static let reuseChangedFractionThreshold = 0.02
 
     /// The element box center expressed in Gemini's 0–1000 normalized image space, so the shared
-    /// `VisionActionPlanner.screenPoint` maps it into the window exactly as it does for raw-coordinate
-    /// planning. Pure mapping, extracted so it is unit-testable without any capture or network.
+    /// `VisionComputerActionExecutor.screenPoint` maps it into the window exactly as it does for the
+    /// computer-use loops. Pure mapping, extracted so it is unit-testable without any capture or network.
     nonisolated static func normalizedCenter(
         bbox: DebugUIBoundingBox,
         imageWidth: Int,
@@ -573,8 +572,8 @@ public final class VisionComputerUseToolProvider {
         let centerX = bbox.x + bbox.width / 2
         let centerY = bbox.y + bbox.height / 2
         return (
-            x: centerX / width * VisionActionPlanner.normalizedCoordinateScale,
-            y: centerY / height * VisionActionPlanner.normalizedCoordinateScale
+            x: centerX / width * VisionComputerActionExecutor.normalizedScale,
+            y: centerY / height * VisionComputerActionExecutor.normalizedScale
         )
     }
 

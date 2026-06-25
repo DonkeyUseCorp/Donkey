@@ -3,12 +3,12 @@ import DonkeyContracts
 import DonkeyRuntime
 import Foundation
 
-/// Per-turn vision planner backed by a strong turn-based Vertex model
-/// (default `gemini-3.5-flash`), separate from the realtime Live command model
-/// (`gemini-live-2.5-flash`). Given the current window screenshot + goal it returns
-/// the single next UI action (click / type / key / done) with click coordinates in
-/// Gemini's 0–1000 normalized space, mapped to the window via
-/// `VisionActionPlanner.screenPoint`.
+/// Per-turn vision planner backed by `gemini-3.5-flash`'s built-in `computer_use`
+/// tool in the `ENVIRONMENT_DESKTOP` environment, separate from the realtime Live
+/// command model. Given the current window screenshot + goal it returns the single
+/// next UI action as a typed `VisionComputerAction` parsed from the model's native
+/// function call (coordinates in Gemini's 0–1000 normalized space; the executor maps
+/// them onto the window). No function call means the model considers the goal done.
 ///
 /// It calls Vertex `generateContent` directly with a Bearer token minted by the
 /// backend (`DonkeyBackendInferenceClient.mintLiveConnection` returns the token +
@@ -29,12 +29,10 @@ public enum GeminiVertexVisionPlanner {
     public enum PlannerError: Error, CustomStringConvertible {
         case missingProjectOrLocation
         case requestFailed(status: Int, body: String)
-        case noOutputText(body: String)
         public var description: String {
             switch self {
             case .missingProjectOrLocation: return "mint response lacked project/location"
             case let .requestFailed(status, body): return "vertex generateContent \(status): \(body.prefix(200))"
-            case let .noOutputText(body): return "no output text: \(body.prefix(200))"
             }
         }
     }
@@ -58,58 +56,28 @@ public enum GeminiVertexVisionPlanner {
         compressed: CompressedScreenshot,
         window: WindowTargetBounds,
         urlSession: URLSession = .shared
-    ) async throws -> VisionActionPlanner.PlannedAction {
+    ) async throws -> VisionComputerAction {
         let width = Int(compressed.pixelSize.width.rounded())
         let height = Int(compressed.pixelSize.height.rounded())
-        let prompt = VisionActionPlanner.visionPrompt(
+        let prompt = VisionComputerUsePrompt.instructions(
             goal: goal, app: appName, width: width, height: height, history: history, appGuidance: appGuidance
         )
+        // No responseSchema/responseMimeType: with the built-in computer-use tool the model answers
+        // via function calls, not structured JSON. gemini-3.5-flash takes thinking_level (uppercase
+        // proto enum on Vertex); the integer thinkingBudget is ignored on 3.x.
         let generationConfig: [String: Any] = [
             "temperature": 0,
-            "responseMimeType": "application/json",
-            // gemini-3.5-flash takes thinking_level (the integer thinkingBudget is ignored on 3.x).
-            // No maxOutputTokens is set, so the large default leaves ample room for medium thinking
-            // plus the small action JSON. Vertex takes the proto enum name (uppercase).
-            "thinkingConfig": ["thinkingLevel": "MEDIUM"],
-            "responseSchema": [
-                "type": "object",
-                "properties": [
-                    "action": ["type": "string", "enum": ["click", "type", "key", "done"]],
-                    "x": ["type": "number"],
-                    "y": ["type": "number"],
-                    "text": ["type": "string"],
-                    "reason": ["type": "string"]
-                ],
-                "required": ["action", "x", "y", "reason"]
-            ]
+            "thinkingConfig": ["thinkingLevel": "MEDIUM"]
+        ]
+        let tools: [[String: Any]] = [
+            ["computerUse": [
+                "environment": "ENVIRONMENT_DESKTOP",
+                // Exclude the browser-navigation functions the desktop never uses, matching the
+                // backend hosted path so the two transports offer the model the same action set.
+                "excludedPredefinedFunctions": VisionComputerDesktopTool.excludedPredefinedFunctions
+            ]]
         ]
 
-        var action = try await generateAction(
-            auth: auth,
-            model: model,
-            prompt: prompt,
-            compressed: compressed,
-            generationConfig: generationConfig,
-            urlSession: urlSession,
-            decode: VisionActionPlanner.PlannedAction.self
-        )
-        action.screenPoint = VisionActionPlanner.screenPoint(action: action, window: window)
-        return action
-    }
-
-    /// Shared Vertex vision turn: resolve the endpoint, post the prompt + screenshot
-    /// with the caller's `generationConfig` (response schema, thinking level), guard
-    /// status/candidate-text, then decode the JSON substring into `Output`. The two
-    /// planners differ only in their schema and decoded shape, which are passed in.
-    static func generateAction<Output: Decodable>(
-        auth: VertexAuth,
-        model: String,
-        prompt: String,
-        compressed: CompressedScreenshot,
-        generationConfig: [String: Any],
-        urlSession: URLSession,
-        decode: Output.Type
-    ) async throws -> Output {
         guard let url = GeminiGenerateContent.vertexURL(
             project: auth.project,
             location: auth.location,
@@ -124,7 +92,8 @@ public enum GeminiVertexVisionPlanner {
                     base64: compressed.data.base64EncodedString()
                 )
             ],
-            generationConfig: generationConfig
+            generationConfig: generationConfig,
+            tools: tools
         )
         let request = GeminiGenerateContent.vertexRequest(url: url, bearerToken: auth.token, body: body)
 
@@ -133,11 +102,8 @@ public enum GeminiVertexVisionPlanner {
         guard status == 200 else {
             throw PlannerError.requestFailed(status: status, body: String(data: data, encoding: .utf8) ?? "")
         }
-        guard let text = GeminiGenerateContent.candidateText(data), !text.isEmpty else {
-            throw PlannerError.noOutputText(body: String(data: data, encoding: .utf8) ?? "")
-        }
-        let json = DebugUIInspectionResponseDecoder.jsonObjectSubstring(text)
-        return try JSONDecoder().decode(Output.self, from: Data(json.utf8))
-    }
 
+        let value = (try? JSONDecoder().decode(RemoteInferenceJSONValue.self, from: data)) ?? .null
+        return try VisionComputerResponse.firstAction(in: value)
+    }
 }

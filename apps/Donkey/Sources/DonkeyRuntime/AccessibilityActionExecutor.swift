@@ -145,6 +145,20 @@ public enum MacPointerInput {
     public enum Button: String, Sendable {
         case left
         case right
+        case center
+    }
+
+    /// Moves the pointer to a screen point without clicking (foreground: warps the real cursor;
+    /// background: a pid-routed move that never warps the user's cursor). Mirrors the leading move the
+    /// click/scroll/drag helpers perform, exposed on its own for a hover/move action.
+    @discardableResult
+    public static func move(to point: CGPoint, target: InputTarget? = nil) -> Bool {
+        guard let source = CGEventSource(stateID: .hidSystemState) else { return false }
+        guard let event = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else {
+            return false
+        }
+        post(event, screenPoint: point, to: target)
+        return true
     }
 
     @discardableResult
@@ -156,9 +170,17 @@ public enum MacPointerInput {
             CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)?
                 .post(tap: .cghidEventTap)
         }
-        let mouseButton: CGMouseButton = button == .right ? .right : .left
-        let downType: CGEventType = button == .right ? .rightMouseDown : .leftMouseDown
-        let upType: CGEventType = button == .right ? .rightMouseUp : .leftMouseUp
+        let mouseButton: CGMouseButton
+        let downType: CGEventType
+        let upType: CGEventType
+        switch button {
+        case .left:
+            mouseButton = .left; downType = .leftMouseDown; upType = .leftMouseUp
+        case .right:
+            mouseButton = .right; downType = .rightMouseDown; upType = .rightMouseUp
+        case .center:
+            mouseButton = .center; downType = .otherMouseDown; upType = .otherMouseUp
+        }
         let clicks = min(max(clickCount, 1), 3)
         // Double/triple clicks are one down/up pair per click with an increasing click state, not
         // independent single clicks — apps key multi-click behavior off the event's click state.

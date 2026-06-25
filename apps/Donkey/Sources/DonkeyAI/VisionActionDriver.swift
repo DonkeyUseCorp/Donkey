@@ -5,10 +5,10 @@ import DonkeyRuntime
 import Foundation
 
 /// Drives a non-scriptable app by vision: a bounded per-turn loop that screenshots the app window,
-/// asks `VisionActionPlanner` for the next click/type/key, and executes it with the real
-/// pointer/keyboard until the model reports `done`. Shared by the production command router
-/// (`UserQueryCommandHandler.handleVisionAction`) and the Spotify live smoke test, so both exercise
-/// the exact same loop, guards, and action handling.
+/// asks a computer-use planner for the next action, and runs it through
+/// `VisionComputerActionExecutor` until the model stops calling the tool (goal done). Shared by the
+/// Live → vision escalation and the Spotify live smoke test, so both exercise the exact same loop,
+/// guards, and action handling.
 ///
 /// Safety: every real-input action is gated behind a frontmost check — the target window must be the
 /// frontmost app at the instant of the click/keystroke, so input never lands on a window the user
@@ -28,16 +28,16 @@ public enum VisionActionDriver {
         _ window: WindowTargetBounds,
         _ history: [String],
         _ appGuidance: String?
-    ) async throws -> VisionActionPlanner.PlannedAction
+    ) async throws -> VisionComputerAction
 
-    /// Repeated identical clicks mean the model is stuck (clicking a target that
-    /// never responds); abort rather than burn the whole turn budget on it.
-    private static let stuckClickRepeatLimit = 4
+    /// Repeating the same action with no effect means the model is stuck; abort rather than burn the
+    /// whole turn budget on it. Applies to any action except scroll/wait, where repeating is normal.
+    private static let stuckRepeatLimit = 4
 
     public struct Outcome: Sendable {
         public var completed: Bool
         public var turns: Int
-        /// "ok" | "noWindowForApp" | "screenshotFailed" | "visionPlanFailed" | "targetNotFrontmost" | "stuckRepeatingClick" | "maxTurnsReached"
+        /// "ok" | "noWindowForApp" | "screenshotFailed" | "visionPlanFailed" | "targetNotFrontmost" | "stuckRepeatingAction" | "maxTurnsReached"
         public var reason: String
         public var lastNarration: String?
         public var history: [String]
@@ -47,7 +47,7 @@ public enum VisionActionDriver {
     public struct TurnInfo: Sendable {
         public var turn: Int
         public var screenshot: CapturedWindowScreenshot
-        public var action: VisionActionPlanner.PlannedAction
+        public var action: VisionComputerAction
     }
 
     /// Convenience: drive via the backend `createResponse` planner
@@ -102,8 +102,8 @@ public enum VisionActionDriver {
         var history: [String] = []
         var lastNarration: String?
         var turnsTaken = 0
-        var lastClickKey = ""
-        var clickRepeatCount = 0
+        var lastActionSignature = ""
+        var repeatCount = 0
 
         // Resolve the target window once and reuse it; only re-resolve when a capture fails (the
         // window moving/closing is the only thing that invalidates the cached bounds).
@@ -136,14 +136,14 @@ public enum VisionActionDriver {
                 return finish(false, turnsTaken, "screenshotFailed", lastNarration, history)
             }
 
-            let action: VisionActionPlanner.PlannedAction
+            let action: VisionComputerAction
             do {
                 action = try await planner(goal, appName, shot, target.bounds, history, appGuidance)
             } catch {
                 return finish(false, turnsTaken, "visionPlanFailed", lastNarration, history)
             }
             turnsTaken += 1
-            lastNarration = action.reason.flatMap { $0.isEmpty ? nil : $0 } ?? lastNarration
+            lastNarration = action.intent.isEmpty ? lastNarration : action.intent
             onTurn?(TurnInfo(turn: turnsTaken - 1, screenshot: shot, action: action))
 
             // Focus can change during the model round-trip; re-check before any real input so we never
@@ -152,48 +152,36 @@ public enum VisionActionDriver {
                 return finish(false, turnsTaken, "targetNotFrontmost", lastNarration, history)
             }
 
-            // A "click" that carries text but no resolvable point is really a "type".
-            var effective = action.action
-            if effective == "click", action.screenPoint == nil, let text = action.text, !text.isEmpty {
-                effective = "type"
-            }
-
-            switch effective {
-            case "done":
-                // Verify-don't-trust when an independent signal is available: the model
-                // claiming done while verify() is false means its last action missed.
+            // The computer-use model signals completion by replying in words instead of calling the
+            // tool. Verify-don't-trust when an independent signal is available: a "done" while
+            // verify() is false means the last action missed.
+            if case let .done(text) = action.kind {
+                let summary = text.isEmpty ? lastNarration : text
                 if let verify {
-                    if verify() { return finish(true, turnsTaken, "ok", lastNarration, history) }
-                    history.append("claimed done but the goal isn't satisfied yet — your last action missed; click the exact target")
+                    if verify() { return finish(true, turnsTaken, "ok", summary, history) }
+                    history.append("claimed done but the goal isn't satisfied yet — your last action missed; act on the exact target")
                 } else {
-                    return finish(true, turnsTaken, "ok", lastNarration, history)
+                    return finish(true, turnsTaken, "ok", summary, history)
                 }
-            case "click":
-                if let point = action.screenPoint {
-                    let key = "\(Int(point.x)),\(Int(point.y))"
-                    clickRepeatCount = (key == lastClickKey) ? clickRepeatCount + 1 : 0
-                    lastClickKey = key
-                    if clickRepeatCount >= stuckClickRepeatLimit {
-                        history.append("aborting: stuck repeating click \(key)")
-                        return finish(false, turnsTaken, "stuckRepeatingClick", lastNarration, history)
+            } else {
+                // Stop a stuck loop that keeps repeating the same no-op action (a missed click, a
+                // browser action the desktop can't run, …). Scroll/wait are exempt — repeating them is
+                // a normal pattern (paging a long list, waiting for load), so their signature is nil.
+                if let signature = actionSignature(action, window: target.bounds) {
+                    repeatCount = (signature == lastActionSignature) ? repeatCount + 1 : 0
+                    lastActionSignature = signature
+                    if repeatCount >= stuckRepeatLimit {
+                        history.append("aborting: stuck repeating \(signature)")
+                        return finish(false, turnsTaken, "stuckRepeatingAction", lastNarration, history)
                     }
-                    _ = MacPointerInput.moveAndClick(at: point)
-                    history.append(clickRepeatCount >= 2
-                        ? "clicked (\(key)) AGAIN — not working; pick a DIFFERENT target/exact center: \(action.reason ?? "")"
-                        : "clicked at (\(key)): \(action.reason ?? "")")
                 } else {
-                    history.append("skipped click with no resolvable point")
+                    repeatCount = 0
+                    lastActionSignature = ""
                 }
-            case "type":
-                let text = action.text ?? ""
-                MacKeyboardInput.type(text)
-                history.append("typed \"\(text)\"")
-            case "key":
-                let key = action.text ?? "return"
-                MacKeyboardInput.pressKey(key)
-                history.append("pressed key \(key)")
-            default:
-                history.append("ignored unknown action \(action.action)")
+                let line = await VisionComputerActionExecutor.execute(action, window: target.bounds)
+                history.append(repeatCount >= 2
+                    ? "\(line) — repeated; if nothing changed pick a DIFFERENT target/exact center"
+                    : line)
             }
 
             try? await Task.sleep(nanoseconds: settleNanoseconds)
@@ -214,6 +202,29 @@ public enum VisionActionDriver {
         _ history: [String]
     ) -> Outcome {
         Outcome(completed: completed, turns: turns, reason: reason, lastNarration: lastNarration, history: history)
+    }
+
+    /// A stable signature for stuck-repeat detection, or nil for kinds where consecutive repeats are a
+    /// legitimate pattern (scrolling a long list, waiting for load) and must not trip the guard.
+    private static func actionSignature(_ action: VisionComputerAction, window: WindowTargetBounds) -> String? {
+        switch action.kind {
+        case .scroll, .wait, .done:
+            return nil
+        case let .click(button, count, point):
+            let screen = VisionComputerActionExecutor.screenPoint(point, window: window)
+            return "click:\(button.rawValue):\(count):\(Int(screen.x)),\(Int(screen.y))"
+        case let .move(point):
+            let screen = VisionComputerActionExecutor.screenPoint(point, window: window)
+            return "move:\(Int(screen.x)),\(Int(screen.y))"
+        case let .drag(from, to):
+            return "drag:\(Int(from.x)),\(Int(from.y))->\(Int(to.x)),\(Int(to.y))"
+        case let .type(text, _, _, _):
+            return "type:\(text)"
+        case let .keys(keys):
+            return "keys:\(keys.joined(separator: "+"))"
+        case let .unsupported(name):
+            return "unsupported:\(name)"
+        }
     }
 
     private static func captureWithRetry(
