@@ -788,6 +788,32 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // PDFs, Foundation content for text files. Cached per file so the describe pass and any later
         // operation reuse one understanding.
         harnessServices.fileUnderstanding = { url in await FileUnderstandingProvider.understand(url) }
+        // PDF form filling behind pdf.fill: read the form, map every value in ONE bounded inference, then
+        // apply and verify — so a fillable form is filled in a single call instead of a read→map→set loop
+        // the planner tends to abandon before writing. The mapping is the only model call; apply/verify is
+        // deterministic.
+        let hostedFormMapper = HostedFormMapper(backend: backend)
+        let formOrchestrator = FormFillOrchestrator(mapper: { form, data in await hostedFormMapper.map(formText: form, dataText: data) })
+        harnessServices.formFiller = { request in await formOrchestrator.fill(request) }
+        // Short-form video behind shorts.make: transcribe on-device, make ONE bounded inference to pick the
+        // moments, then cut/reframe/caption each clip in fixed code — so the whole download→clip→caption
+        // recipe is a single tool call instead of a ~37-step planner loop billed at every tool. Moment
+        // selection is the only model call; it reuses the on-device transcriber wired above.
+        let hostedMomentSelector = HostedMomentSelector(backend: backend)
+        let shortsOrchestrator = ShortsOrchestrator(
+            selectMoments: { transcript, count in await hostedMomentSelector.select(transcript: transcript, desiredCount: count) },
+            transcribe: harnessServices.transcriber ?? { _ in nil }
+        )
+        harnessServices.shortsMaker = { request in await shortsOrchestrator.make(request) }
+        // Captioning/translation behind media.caption: transcribe on-device, optionally translate in ONE
+        // model call, build the SRT in code, and burn it with a known-good encoder — so subtitling a video is
+        // a single tool call instead of the SRT-cleanup and encoder-debugging loop the planner falls into.
+        let hostedSubtitleTranslator = HostedSubtitleTranslator(backend: backend)
+        let captionOrchestrator = CaptionOrchestrator(
+            translateCues: { lines, language in await hostedSubtitleTranslator.translate(lines: lines, to: language) },
+            transcribe: harnessServices.transcriber ?? { _ in nil }
+        )
+        harnessServices.captioner = { request in await captionOrchestrator.caption(request) }
         let granted = Self.userQueryGrantedPermissions
         let replacedBuiltIns: Set<String> = ["screen.observe", "elements.get", "element.perform", "text.enter", "keyboard.press"]
         let builtInDescriptors = BuiltInHarnessToolCatalog.descriptors.filter { descriptor in
@@ -839,7 +865,14 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             coordinator: genericHarnessLifecycle.coordinator,
             registry: registry
         )
-        let plannerDescriptors = await registry.descriptors()
+        // Trim the catalog the planner is OFFERED to what this turn can use, driven by the structured
+        // understanding (not the raw text): an app-less turn drops the GUI-driving clusters it can never
+        // reach for. The full catalog is re-rendered into the cacheable prompt slot every step, so this is
+        // the cheapest per-call input-token cut. SEE/act tools stay, so a step that needs the screen can look.
+        let plannerDescriptors = PlannerToolScope.scoped(
+            await registry.descriptors(),
+            actionSurface: understanding?.actionSurface
+        )
         // Every step, surface the other windows on screen (all apps/displays) to the planner so a
         // request that lives in a window the user isn't looking at can be found and switched to. Donkey's
         // own windows are filtered out by bundle id so the agent never targets its own overlay.
@@ -869,7 +902,14 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             // Attach a compressed screenshot of the user's frontmost window to every step so a multimodal
             // planner always sees the screen, not just AX/vision text. Best-effort: a capture failure
             // returns nil and the step proceeds text-only, never breaking the planner.
+            //
+            // Skip it entirely on an app-less turn (the deliverable is a file, answer, or system change):
+            // there is no relevant app window to see, so the ambient shot would capture whatever unrelated
+            // window happens to be frontmost, cost image tokens on every step, and never cache (the image
+            // changes each step). If such a step unexpectedly needs the GUI, the explicit see tools
+            // (ax.observe / vision.capture) still capture on demand.
             captureScreenshot: {
+                if understanding?.actionSurface == .appless { return nil }
                 guard let target = MacWindowResolver().frontmostUserAppTarget(),
                       let shot = try? await ScreenCaptureKitWindowScreenshotCapturer().capture(target: target) else {
                     return nil
@@ -1020,6 +1060,23 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // thread summary. A deterministic summary lands immediately; an LLM-written one replaces it in
         // the background so the result isn't delayed by the summary call.
         let finalDetail = runSteps.last?.toolResult?.summary ?? finalTask?.goal ?? command
+        // When the run stopped at a permission gate, document the request in full in the record: the exact
+        // command, its risk tier, and why consent is needed. The record is the complete account of a
+        // session, so a maintainer (or the user) reading it later sees precisely what was asked, not just a
+        // terse "needs approval".
+        if awaitingPermission, let gate = finalTask?.pendingContinuation?.metadata {
+            let requestedCommand = gate["shell.command"] ?? ""
+            if !requestedCommand.isEmpty {
+                var lines = ["🔒 Permission requested before running a shell command — waiting for your approval.",
+                             "Command: `\(requestedCommand)`"]
+                if let tier = gate["shell.tier"], !tier.isEmpty { lines.append("Risk tier: \(tier)") }
+                if let reason = gate["shell.reason"], !reason.isEmpty { lines.append("Why it's gated: \(reason)") }
+                lines.append(gate["shell.allowAlways"] == "true"
+                    ? "Can be approved once or always-allowed for this command."
+                    : "Must be approved each time — not eligible for always-allow.")
+                transcript.systemEvent(lines.joined(separator: "\n"))
+            }
+        }
         transcript.systemEvent("Run finished: \(outcomeReason) after \(turns) step(s).")
         transcript.response(finalDetail)
         transcript.writeSummary(Self.deterministicThreadSummary(

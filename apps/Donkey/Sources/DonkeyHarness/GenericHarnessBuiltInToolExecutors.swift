@@ -459,6 +459,109 @@ public struct HarnessWebAutomateOutcome: Sendable {
     }
 }
 
+/// The typed request for the `pdf.fill` tool: the form file, the data (a file path OR the data itself
+/// as text), an optional output path, and the conversation's working directory (so the orchestrator
+/// runs the bundled `pdf-fill` and writes the result inside the agent's own folder). Declared in
+/// DonkeyHarness so the executor passes it across the closure boundary without importing the runtime.
+public struct HarnessFormFillRequest: Sendable {
+    public var form: String
+    public var data: String
+    public var out: String?
+    public var workingDirectory: String?
+
+    public init(form: String, data: String, out: String? = nil, workingDirectory: String? = nil) {
+        self.form = form
+        self.data = data
+        self.out = out
+        self.workingDirectory = workingDirectory
+    }
+}
+
+/// The result of a `pdf.fill` run: a text summary of what was filled, whether it genuinely produced a
+/// filled PDF, and the output path. The executor reports `.failed` (keeping `text`) whenever `succeeded`
+/// is false, so a run that mapped nothing is never surfaced to the agent as a success.
+public struct HarnessFormFillOutcome: Sendable {
+    public var text: String
+    public var succeeded: Bool
+    public var outPath: String?
+
+    public init(text: String, succeeded: Bool, outPath: String? = nil) {
+        self.text = text
+        self.succeeded = succeeded
+        self.outPath = outPath
+    }
+}
+
+/// The typed request for the `shorts.make` tool: the source (a local video path OR a URL to download), an
+/// optional clip count, an optional aspect ratio for the vertical crop, and the conversation's working
+/// directory (so the pipeline writes its clips inside the agent's own folder). Declared in DonkeyHarness so
+/// the executor passes it across the closure boundary without importing the runtime.
+public struct HarnessShortsRequest: Sendable {
+    public var source: String
+    public var desiredCount: Int?
+    public var aspect: String?
+    public var workingDirectory: String?
+
+    public init(source: String, desiredCount: Int? = nil, aspect: String? = nil, workingDirectory: String? = nil) {
+        self.source = source
+        self.desiredCount = desiredCount
+        self.aspect = aspect
+        self.workingDirectory = workingDirectory
+    }
+}
+
+/// The result of a `shorts.make` run: a text summary, whether it genuinely produced at least one clip, and
+/// the finished clip files. The executor reports `.failed` (keeping `text`) whenever `succeeded` is false,
+/// so a run that rendered nothing is never surfaced to the agent as a success.
+public struct HarnessShortsOutcome: Sendable {
+    public var text: String
+    public var succeeded: Bool
+    public var producedFiles: [String]
+
+    public init(text: String, succeeded: Bool, producedFiles: [String] = []) {
+        self.text = text
+        self.succeeded = succeeded
+        self.producedFiles = producedFiles
+    }
+}
+
+/// The typed request for the `media.caption` tool: a video (a local path OR a URL), an optional target
+/// language to translate the captions into, an optional clip span to caption just part of it, and the
+/// conversation's working directory. Declared in DonkeyHarness so the executor passes it across the closure
+/// boundary without importing the runtime.
+public struct HarnessCaptionRequest: Sendable {
+    public var source: String
+    public var translateTo: String?
+    public var clipStart: String?
+    public var clipDuration: String?
+    public var workingDirectory: String?
+
+    public init(
+        source: String, translateTo: String? = nil, clipStart: String? = nil,
+        clipDuration: String? = nil, workingDirectory: String? = nil
+    ) {
+        self.source = source
+        self.translateTo = translateTo
+        self.clipStart = clipStart
+        self.clipDuration = clipDuration
+        self.workingDirectory = workingDirectory
+    }
+}
+
+/// The result of a `media.caption` run: a text summary, whether it produced a captioned file, and the
+/// output path(s). The executor reports `.failed` (keeping `text`) whenever `succeeded` is false.
+public struct HarnessCaptionOutcome: Sendable {
+    public var text: String
+    public var succeeded: Bool
+    public var producedFiles: [String]
+
+    public init(text: String, succeeded: Bool, producedFiles: [String] = []) {
+        self.text = text
+        self.succeeded = succeeded
+        self.producedFiles = producedFiles
+    }
+}
+
 /// Outcome of the multimodal arm of `llm.generate` — a model call over a local audio/video file.
 /// Distinguishes the cases a caller can act on (re-chunk a truncated transcript, fix an unreadable,
 /// oversized, or non-media file) instead of collapsing every failure to a bare nil.
@@ -545,6 +648,24 @@ public struct HarnessBuiltInToolServices: Sendable {
     /// nil when no backend is wired). The runtime supplies an engine that runs the bundled ffmpeg; the cut
     /// math is fixed code, not composed by the model.
     public var mediaCutter: (@Sendable (HarnessMediaCutRequest) async -> HarnessMediaCutResult?)?
+    /// End-to-end PDF form filling behind `pdf.fill`: a form + data in, a filled PDF out. The runtime
+    /// supplies an orchestrator that reads the form, makes ONE bounded mapping inference, applies the
+    /// values with the bundled `pdf-fill`, and verifies — so the planner fills a form in a single call
+    /// instead of a read→map→set loop it tends to abandon before writing. nil ⇒ the tool reports
+    /// unavailable.
+    public var formFiller: (@Sendable (HarnessFormFillRequest) async -> HarnessFormFillOutcome)?
+    /// End-to-end short-form video behind `shorts.make`: a source + clip count in, captioned vertical clips
+    /// out. The runtime supplies a deterministic orchestrator that transcribes on-device, makes ONE bounded
+    /// inference to pick the moments, then cuts/reframes/captions each clip in fixed code — so the planner
+    /// makes a whole shorts run in a single call instead of a ~37-step loop it pays for at every tool. nil ⇒
+    /// the tool reports unavailable.
+    public var shortsMaker: (@Sendable (HarnessShortsRequest) async -> HarnessShortsOutcome)?
+    /// End-to-end subtitling/translation behind `media.caption`: a video in, a captioned video out. The
+    /// runtime supplies a deterministic orchestrator that transcribes on-device, optionally translates with
+    /// ONE model call, builds the SRT in code, and burns it with a known-good encoder — so the planner
+    /// captions a video in a single call instead of hand-building and debugging the ffmpeg/SRT plumbing.
+    /// nil ⇒ the tool reports unavailable.
+    public var captioner: (@Sendable (HarnessCaptionRequest) async -> HarnessCaptionOutcome)?
 
     public init(
         memoryEntries: [HarnessMemoryEntry] = [],
@@ -568,7 +689,10 @@ public struct HarnessBuiltInToolServices: Sendable {
         imageGenerator: (@Sendable (HarnessImageGenerationRequest) async -> HarnessImageGenerationResult?)? = nil,
         videoGenerator: (@Sendable (HarnessVideoGenerationRequest) async -> HarnessVideoGenerationResult?)? = nil,
         transcriber: (@Sendable (HarnessTranscriptionRequest) async -> HarnessTranscriptionResult?)? = nil,
-        mediaCutter: (@Sendable (HarnessMediaCutRequest) async -> HarnessMediaCutResult?)? = nil
+        mediaCutter: (@Sendable (HarnessMediaCutRequest) async -> HarnessMediaCutResult?)? = nil,
+        formFiller: (@Sendable (HarnessFormFillRequest) async -> HarnessFormFillOutcome)? = nil,
+        shortsMaker: (@Sendable (HarnessShortsRequest) async -> HarnessShortsOutcome)? = nil,
+        captioner: (@Sendable (HarnessCaptionRequest) async -> HarnessCaptionOutcome)? = nil
     ) {
         self.memoryEntries = memoryEntries
         self.skillRegistry = skillRegistry
@@ -592,6 +716,9 @@ public struct HarnessBuiltInToolServices: Sendable {
         self.videoGenerator = videoGenerator
         self.transcriber = transcriber
         self.mediaCutter = mediaCutter
+        self.formFiller = formFiller
+        self.shortsMaker = shortsMaker
+        self.captioner = captioner
     }
 }
 
@@ -672,6 +799,12 @@ public enum BuiltInHarnessToolExecutors {
             return await webFetch(context, services: services)
         case "web.automate":
             return await webAutomate(context, services: services)
+        case "pdf.fill":
+            return await formFill(context, services: services)
+        case "shorts.make":
+            return await shortsMake(context, services: services)
+        case "media.caption":
+            return await captionVideo(context, services: services)
         case "files.describe":
             return await filesDescribe(context, services: services)
         case "files.write":
@@ -2352,6 +2485,125 @@ public enum BuiltInHarnessToolExecutors {
             summary: result.count > 600 ? String(result.prefix(600)) + "…" : result,
             facts: ["lastAcceptedTool": context.call.name],
             metadata: ["text": result]
+        )
+    }
+
+    /// `pdf.fill` — fill a fillable PDF form end to end. The planner gives the form and the data; the
+    /// injected orchestrator reads the form, maps every value in ONE bounded inference, writes the filled
+    /// PDF with the bundled `pdf-fill`, and verifies. This exists because the read→map→set loop, left to
+    /// the planner, reliably stalls before the write — here the write is not the planner's decision.
+    private static func formFill(
+        _ context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices
+    ) async -> HarnessToolResult {
+        guard let filler = services.formFiller else {
+            return failed(context, "PDF form filling is not configured.", reason: "formFillUnavailable")
+        }
+        guard let form = trimmed(context.call.input["form"]) else {
+            return invalidInput(context, "pdf.fill requires a `form` — the path to the fillable PDF.")
+        }
+        guard let data = trimmed(context.call.input["data"]) else {
+            return invalidInput(context, "pdf.fill requires `data` — a path to the data file, or the data itself as text.")
+        }
+        let workingDirectory = context.worldModel.facts[ConversationWorkspace.baseDirFactKey]
+        let request = HarnessFormFillRequest(
+            form: form,
+            data: data,
+            out: trimmed(context.call.input["out"]),
+            workingDirectory: (workingDirectory?.isEmpty == false) ? workingDirectory : nil
+        )
+        let outcome = await filler(request)
+        guard outcome.succeeded else {
+            let message = outcome.text.isEmpty ? "The form could not be filled." : outcome.text
+            return failed(context, message, reason: "formFillFailed", metadata: ["text": message])
+        }
+        var metadata = ["text": outcome.text]
+        if let outPath = outcome.outPath { metadata["filePath"] = outPath }
+        return success(
+            context,
+            summary: outcome.text,
+            facts: ["lastAcceptedTool": context.call.name],
+            metadata: metadata
+        )
+    }
+
+    /// `shorts.make` — turn a long video into captioned vertical clips end to end. The planner gives the
+    /// source and an optional clip count; the injected orchestrator transcribes on-device, makes ONE bounded
+    /// inference to pick the moments, then cuts/reframes/captions each clip in fixed code and returns the
+    /// finished files. This exists because the download→transcribe→cut→reframe→caption recipe, left to the
+    /// planner, costs a model round-trip at every step and clip — here the whole run is one tool call.
+    private static func shortsMake(
+        _ context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices
+    ) async -> HarnessToolResult {
+        guard let maker = services.shortsMaker else {
+            return failed(context, "Short-form video is not configured.", reason: "shortsUnavailable")
+        }
+        guard let source = trimmed(context.call.input["source"]) else {
+            return invalidInput(context, "shorts.make requires a `source` — a local video path or a URL.")
+        }
+        let count = trimmed(context.call.input["count"]).flatMap { Int($0) }
+        let workingDirectory = context.worldModel.facts[ConversationWorkspace.baseDirFactKey]
+        let request = HarnessShortsRequest(
+            source: source,
+            desiredCount: count,
+            aspect: trimmed(context.call.input["aspect"]),
+            workingDirectory: (workingDirectory?.isEmpty == false) ? workingDirectory : nil
+        )
+        let outcome = await maker(request)
+        guard outcome.succeeded else {
+            let message = outcome.text.isEmpty ? "No clips could be produced." : outcome.text
+            return failed(context, message, reason: "shortsFailed", metadata: ["text": message])
+        }
+        var metadata = ["text": outcome.text]
+        if !outcome.producedFiles.isEmpty {
+            metadata["paths"] = outcome.producedFiles.joined(separator: "\n")
+        }
+        return success(
+            context,
+            summary: outcome.text,
+            facts: ["lastAcceptedTool": context.call.name],
+            metadata: metadata
+        )
+    }
+
+    /// `media.caption` — subtitle or translate a video end to end. The planner gives the video (and a target
+    /// language to translate into); the injected orchestrator transcribes on-device, optionally translates in
+    /// ONE call, builds the SRT in code, and burns it with a known-good encoder. This exists because the
+    /// transcribe→SRT→burn recipe, left to the planner, reliably explodes into a model-authored-SRT cleanup
+    /// loop and encoder/duration debugging — dozens of round-trips for a five-step job.
+    private static func captionVideo(
+        _ context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices
+    ) async -> HarnessToolResult {
+        guard let captioner = services.captioner else {
+            return failed(context, "Video captioning is not configured.", reason: "captionUnavailable")
+        }
+        guard let source = trimmed(context.call.input["source"]) else {
+            return invalidInput(context, "media.caption requires a `source` — a local video path or a URL.")
+        }
+        let workingDirectory = context.worldModel.facts[ConversationWorkspace.baseDirFactKey]
+        let request = HarnessCaptionRequest(
+            source: source,
+            translateTo: trimmed(context.call.input["translateTo"]),
+            clipStart: trimmed(context.call.input["clipStart"]),
+            clipDuration: trimmed(context.call.input["clipDuration"]),
+            workingDirectory: (workingDirectory?.isEmpty == false) ? workingDirectory : nil
+        )
+        let outcome = await captioner(request)
+        guard outcome.succeeded else {
+            let message = outcome.text.isEmpty ? "The video could not be captioned." : outcome.text
+            return failed(context, message, reason: "captionFailed", metadata: ["text": message])
+        }
+        var metadata = ["text": outcome.text]
+        if !outcome.producedFiles.isEmpty {
+            metadata["paths"] = outcome.producedFiles.joined(separator: "\n")
+        }
+        return success(
+            context,
+            summary: outcome.text,
+            facts: ["lastAcceptedTool": context.call.name],
+            metadata: metadata
         )
     }
 

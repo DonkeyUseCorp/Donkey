@@ -56,8 +56,22 @@ public struct UserQueryConversation: Codable, Equatable, Identifiable, Sendable 
     public var status: UserQueryConversationStatus
     public var accentIndex: Int
     public var origin: UserQueryConversationOrigin
+    /// When the conversation was first created. A stable timestamp — never restamped — used for ordering and
+    /// age. It is NOT the elapsed-time anchor; that is `runningSince`. Keeping the two separate is what makes
+    /// the cumulative timer impossible to corrupt (see `activeSeconds`).
     public var createdAt: Date
     public var updatedAt: Date
+    /// The two fields that, together, define elapsed time — and the reason the clock can't regress. Active
+    /// time is `accumulatedActiveSeconds` (every stretch already closed) plus the open stretch since
+    /// `runningSince` while running. Both are `private(set)`: the ONLY ways to change them are
+    /// `openRunningStretch` / `closeRunningStretch`, which are individually safe and order-independent. No
+    /// call site can restamp the clock or drop a stretch, so the "timer resets mid-run" bug is structurally
+    /// impossible — the same doctrine `detail` uses for the chin. Both decode tolerantly so conversations
+    /// persisted before they existed still load.
+    ///
+    /// `runningSince` is non-nil exactly when a stretch is open (normally while `status == .running`).
+    public private(set) var accumulatedActiveSeconds: Double
+    public private(set) var runningSince: Date?
     public var metadata: [String: String]
 
     public init(
@@ -70,6 +84,8 @@ public struct UserQueryConversation: Codable, Equatable, Identifiable, Sendable 
         origin: UserQueryConversationOrigin = .user,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
+        accumulatedActiveSeconds: Double = 0,
+        runningSince: Date? = nil,
         metadata: [String: String] = [:]
     ) {
         self.id = id
@@ -81,7 +97,62 @@ public struct UserQueryConversation: Codable, Equatable, Identifiable, Sendable 
         self.origin = origin
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.accumulatedActiveSeconds = accumulatedActiveSeconds
+        // A conversation born running has an open stretch from creation, unless a caller (decode, store
+        // load) supplies the persisted anchor explicitly. This keeps "create a running conversation" a
+        // single step — no caller has to remember to open the stretch.
+        self.runningSince = runningSince ?? (status == .running ? createdAt : nil)
         self.metadata = metadata
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, detail, commandText, status, accentIndex, origin
+        case createdAt, updatedAt, accumulatedActiveSeconds, runningSince, metadata
+    }
+
+    // Custom decode so a conversation persisted before the elapsed-time fields existed still loads (its JSON
+    // has no such keys) instead of failing and dropping the row. Every pre-existing field is decoded exactly
+    // as the synthesized initializer did; the elapsed-time fields default tolerantly.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        detail = try c.decode(String.self, forKey: .detail)
+        commandText = try c.decode(String.self, forKey: .commandText)
+        status = try c.decode(UserQueryConversationStatus.self, forKey: .status)
+        accentIndex = try c.decode(Int.self, forKey: .accentIndex)
+        origin = try c.decode(UserQueryConversationOrigin.self, forKey: .origin)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+        accumulatedActiveSeconds = try c.decodeIfPresent(Double.self, forKey: .accumulatedActiveSeconds) ?? 0
+        runningSince = try c.decodeIfPresent(Date.self, forKey: .runningSince) ?? (status == .running ? createdAt : nil)
+        metadata = try c.decode([String: String].self, forKey: .metadata)
+    }
+}
+
+public extension UserQueryConversation {
+    /// Total active time as of `now`: every stretch already banked, plus the open stretch while one is
+    /// running. The single source of "elapsed" for the UI — idle gaps between stretches are never counted
+    /// because the clock only advances while `runningSince` is set.
+    func activeSeconds(asOf now: Date) -> Double {
+        accumulatedActiveSeconds + (runningSince.map { max(0, now.timeIntervalSince($0)) } ?? 0)
+    }
+
+    /// Begin counting a running stretch as of `now`. A NO-OP if a stretch is already open, so re-entering
+    /// `.running` — a per-step narration update, an approved gate, a resumed loop — can never restart the
+    /// clock or drop the stretch in flight. The clock only ever resumes from where it left off.
+    mutating func openRunningStretch(asOf now: Date) {
+        guard runningSince == nil else { return }
+        runningSince = now
+    }
+
+    /// Stop the open stretch as of `endedAt`, banking its real duration into the cumulative total. A NO-OP
+    /// if no stretch is open, so closing twice can't double-count. `endedAt` is normally now; a relaunch
+    /// passes the last time the loop actually advanced so the app-closed gap is never banked.
+    mutating func closeRunningStretch(asOf endedAt: Date) {
+        guard let start = runningSince else { return }
+        accumulatedActiveSeconds += max(0, endedAt.timeIntervalSince(start))
+        runningSince = nil
     }
 }
 

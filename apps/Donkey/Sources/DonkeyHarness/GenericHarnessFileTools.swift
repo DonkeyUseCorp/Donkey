@@ -206,26 +206,32 @@ extension BuiltInHarnessToolExecutors {
         )
     }
 
-    /// Resolve where `files.write` should write. An absolute or `~`-prefixed path is honored exactly, so
-    /// a path the user named always wins. A RELATIVE path resolves against the conversation workspace's
-    /// current directory (the `workspace.baseDir` fact the runtime maintains) when one exists — this is
-    /// how the planner keeps a task's files together by writing `report/chart.svg` instead of recomputing
-    /// the absolute base each step. With no workspace yet, a relative path falls back to the user's home,
-    /// matching where shell commands run.
+    /// Resolve where `files.write` should write. A RELATIVE path resolves against the conversation
+    /// workspace's current directory (the `workspace.baseDir` fact the runtime maintains) when one exists,
+    /// which is how the planner keeps a task's files together by writing `report/chart.svg`. An absolute or
+    /// `~`-prefixed path is normally honored exactly (a path the user named always wins) — with ONE
+    /// exception: a write aimed directly at a SCATTER ROOT (the bare home root or the top of the user's
+    /// Downloads/Desktop/Documents) is re-rooted into the workspace. The model reflexively drops an
+    /// intermediate or output next to where it found an input (`~/fields.json`, `~/Downloads/out.pdf`), and
+    /// none of those bare roots is where a careful user wants loose files, so this keeps the task's files in
+    /// the one folder it owns. A genuinely user-named subfolder (`~/Documents/Taxes/2024`, a project dir) is
+    /// left untouched. See `ConversationWorkspace.isScatterRoot`.
     static func resolveWritePath(_ rawPath: String, in worldModel: HarnessWorldModel) -> URL {
         let expanded = (rawPath as NSString).expandingTildeInPath
+        let workspace = (worldModel.facts[ConversationWorkspace.baseDirFactKey]).flatMap {
+            $0.isEmpty ? nil : URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath, isDirectory: true)
+        }
         if expanded.hasPrefix("/") {
-            return URL(fileURLWithPath: expanded).standardizedFileURL
+            let url = URL(fileURLWithPath: expanded).standardizedFileURL
+            if let workspace, ConversationWorkspace.isScatterRoot(url.deletingLastPathComponent()) {
+                return workspace.appendingPathComponent(url.lastPathComponent).standardizedFileURL
+            }
+            return url
         }
         // A relative path stays inside its base — the workspace folder when one exists, else home. Keep
         // only the non-traversal components so a stray `../../x` can't climb out of the workspace; subfolders
         // (`report/chart.svg`) still resolve normally.
-        let base: URL
-        if let workspace = worldModel.facts[ConversationWorkspace.baseDirFactKey], !workspace.isEmpty {
-            base = URL(fileURLWithPath: (workspace as NSString).expandingTildeInPath, isDirectory: true)
-        } else {
-            base = FileManager.default.homeDirectoryForCurrentUser
-        }
+        let base = workspace ?? FileManager.default.homeDirectoryForCurrentUser
         let safeComponents = expanded
             .split(separator: "/", omittingEmptySubsequences: true)
             .filter { $0 != ".." && $0 != "." }

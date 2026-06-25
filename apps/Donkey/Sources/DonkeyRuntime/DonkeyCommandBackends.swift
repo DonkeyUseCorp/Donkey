@@ -719,8 +719,11 @@ public enum DonkeyCommandBackends {
 
         let timeout = context.call.input["timeoutSeconds"].flatMap(Double.init)
             .map { min(max($0, 1), shellTimeoutMax) } ?? shellTimeout
+        // Run from the conversation's working directory when one exists, so relative reads/writes land in
+        // the agent's own folder instead of the home root; falls back to home for a run without a workspace.
+        let workingDirectory = workspaceBaseDir(context)
         let result = await Task.detached(priority: .userInitiated) {
-            runShellSync(command, timeout: timeout)
+            runShellSync(command, timeout: timeout, workingDirectory: workingDirectory)
         }.value
 
         let stdout = boundedOutput(result.stdout)
@@ -769,13 +772,77 @@ public enum DonkeyCommandBackends {
                 ]
             )
         }
+        var metadata = ["stdout": stdout.text, "exitCode": "0", "stdoutTruncated": String(stdout.truncated)]
+        // Stamp whether this command READ or changed state, so the runtime can tell a scouting step (a
+        // listing, a page dump to read) from a real action (`open -a Music`, `osascript`, a write) even
+        // though both ride the one `shell_exec` tool. A read must not count as the run's produced result.
+        metadata["shell.effect"] = classification.tier == .read ? "read" : "write"
+        // Surface an explicit output file (`-o`/`--out`/`--output <path>`) the command just wrote, so the
+        // workspace records it as a real DELIVERABLE. The `-o` flag is the intentional-output signal that a
+        // `>`-redirect (scratch: a field dump, a page view to read) is not — that distinction is what lets the
+        // runtime tell "produced the result" from "only scouted" and refuse to call a scout-only run done.
+        if let output = explicitOutputFile(command: command, workingDirectory: workingDirectory) {
+            metadata["filePath"] = output
+        }
         return success(
             context,
             summary: stdout.text.isEmpty ? "Command ran (no output)." : stdout.text,
             facts: ["lastShellExitCode": "0"],
-            metadata: ["stdout": stdout.text, "exitCode": "0", "stdoutTruncated": String(stdout.truncated)]
+            metadata: metadata
         )
     }
+
+    /// The absolute path of a file a command wrote via an explicit output flag (`-o`/`--out`/`--output`),
+    /// when that file now exists. Mechanical flag parsing on technical tokens — NOT natural-language intent
+    /// matching: it reads the value after (or attached to) a known flag, resolves it against the working
+    /// directory, and confirms the file is on disk. Returns nil when there is no such flag or the file isn't
+    /// there, so a scratch `>`-redirect (no `-o`) never registers as a deliverable.
+    ///
+    /// Robust to the forms a real command takes: a quoted/spaced path (`-o 'tax return.pdf'`) is one token,
+    /// the equals-attached forms (`-o=out.pdf`, `--output=out.pdf`) are split on `=`, and tools where `-o`
+    /// is NOT an output path (grep's only-matching, ssh's `-o Option=val`) are excluded so a non-output `-o`
+    /// whose neighbor happens to name an existing file is not mis-recorded as a deliverable.
+    static func explicitOutputFile(command: String, workingDirectory: String?) -> String? {
+        let tokens = ShellCommandClassifier.argvTokens(command)
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "\\\"'")) }
+        guard let first = tokens.first else { return nil }
+        // Don't read `-o` as an output path for tools that overload it for something else.
+        if outputFlagIsNotAFile.contains(ShellCommandClassifier.executableName(first)) { return nil }
+        let flags: Set<String> = ["-o", "--out", "--output", "-output"]
+        var value: String?
+        var index = 0
+        while index < tokens.count {
+            let token = tokens[index]
+            if let equals = token.firstIndex(of: "="), flags.contains(String(token[..<equals])) {
+                value = String(token[token.index(after: equals)...])
+                break
+            }
+            if flags.contains(token), index + 1 < tokens.count {
+                value = tokens[index + 1]
+                break
+            }
+            index += 1
+        }
+        guard let path = value, !path.isEmpty, !path.hasPrefix("-") else { return nil }
+        let resolved: String
+        if (path as NSString).isAbsolutePath {
+            resolved = path
+        } else if path.hasPrefix("~") {
+            resolved = (path as NSString).expandingTildeInPath
+        } else {
+            let base = workingDirectory.flatMap { $0.isEmpty ? nil : $0 }
+                ?? FileManager.default.homeDirectoryForCurrentUser.path
+            resolved = (base as NSString).appendingPathComponent(path)
+        }
+        return FileManager.default.fileExists(atPath: resolved) ? resolved : nil
+    }
+
+    /// Executables that overload `-o`/`-output` for something other than an output file, so the token after
+    /// it is not a produced deliverable: grep family (`-o` = only-matching, takes no value), ssh/scp/sftp
+    /// (`-o Key=Value` config), and sort (`-o` writes in place over an existing file, not a fresh result).
+    private static let outputFlagIsNotAFile: Set<String> = [
+        "grep", "egrep", "fgrep", "rg", "ssh", "scp", "sftp", "sort"
+    ]
 
     /// Returns nil when the command is already allowed (run it), or a
     /// `waitingForPermission` gate result the runtime turns into an allow-once /
@@ -787,6 +854,20 @@ public enum DonkeyCommandBackends {
     ) async -> HarnessToolResult? {
         let store = ShellPermissionPolicyStore.shared
         let signature = classification.signature
+
+        // The agent doesn't ask permission to read or change files in the dedicated folder it owns. A
+        // reversible-write file command (cp, mkdir, mv, tee, …) runs unprompted when the conversation has a
+        // working directory AND the command is provably confined to it: every segment is a bounded file
+        // mutator (no interpreter can ride along — `cp a b && python3 evil.py` fails the bounded check), and
+        // every path it names resolves inside the workspace (no absolute, `~`, or `..` escape). High-risk
+        // still gates regardless. Anything touching a file Donkey didn't make, or running opaque code, falls
+        // through to the normal consent prompt.
+        if classification.tier == .reversibleWrite,
+           let workspace = workspaceBaseDir(context),
+           ShellCommandClassifier.isBoundedWorkspaceCommand(command),
+           ShellCommandClassifier.commandStaysWithin(command, workspace: workspace) {
+            return nil
+        }
 
         var allowed = false
         if classification.tier != .highRisk {
@@ -823,75 +904,187 @@ public enum DonkeyCommandBackends {
         var timedOut: Bool
     }
 
-    /// Run a one-line command via `/bin/zsh -c`, bounded by `timeout`. Blocking;
-    /// always called off the main actor via `Task.detached`.
-    private static func runShellSync(_ command: String, timeout: TimeInterval) -> ShellResult {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-c", command]
-        process.environment = shellEnvironment()
-        // Run from the user's home, not the GUI app's inherited cwd (`/`). A user who
-        // says "fill out f1120.pdf" means a file under their home — Desktop, Downloads,
-        // a project — never the filesystem root. Anchored at `/`, a relative `find .`
-        // walks the whole disk, stalls on SIP-protected dirs, and times out without ever
-        // reaching the file; anchored at home it lands in the right neighborhood.
-        process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+    /// The directory a bundled tool or shell command should run in: the conversation's own working
+    /// directory when it exists, else the user's home. Never the GUI app's inherited cwd (`/`), where a
+    /// relative `find .` walks the whole disk, stalls on SIP-protected dirs, and times out. Shared by
+    /// `runShellSync`, `runBundledTool`, and the media/form orchestrators so the rule lives in one place.
+    public static func resolvedWorkingDirectory(_ workingDirectory: String?) -> URL {
+        let fileManager = FileManager.default
+        if let workingDirectory, !workingDirectory.isEmpty, fileManager.fileExists(atPath: workingDirectory) {
+            return URL(fileURLWithPath: workingDirectory, isDirectory: true)
+        }
+        return fileManager.homeDirectoryForCurrentUser
+    }
+
+    /// String form of `resolvedWorkingDirectory`, for callers that thread the working directory as a path.
+    public static func resolvedWorkingDirectoryPath(_ workingDirectory: String?) -> String {
+        resolvedWorkingDirectory(workingDirectory).path
+    }
+
+    private struct ProcessOutput: Sendable {
+        var exitCode: Int32
+        var stdout: Data
+        var stderr: Data
+        var timedOut: Bool
+    }
+
+    /// Run an already-configured process to completion, bounded by `timeout`, draining stdout and stderr
+    /// CONCURRENTLY on their own queues. The concurrent drain is the safety property: a tool that writes
+    /// more than the ~64KB pipe buffer to either stream (a verbose `lit` OCR dump, a Rust panic with a full
+    /// backtrace on stderr) keeps flowing instead of blocking on a full pipe while the parent waits on the
+    /// other stream — the two-pipe deadlock. SIGTERM on timeout, SIGKILL if it ignores that, so the bound is
+    /// real. Blocking; callers run it off the main actor.
+    private static func runProcess(_ process: Process, timeout: TimeInterval) -> ProcessOutput {
         let outPipe = Pipe()
         let errPipe = Pipe()
         process.standardOutput = outPipe
         process.standardError = errPipe
 
-        // Signalled by the OS when the process actually exits — the only
-        // reliable completion signal (reading the pipes first can deadlock if the
-        // child fills the 64KB buffer and blocks on write).
+        // Signalled by the OS when the process actually exits.
         let finished = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in finished.signal() }
 
         do {
             try process.run()
         } catch {
-            return ShellResult(exitCode: 127, stdout: "", stderr: error.localizedDescription, timedOut: false)
+            return ProcessOutput(exitCode: 127, stdout: Data(), stderr: Data(error.localizedDescription.utf8), timedOut: false)
         }
+
+        // Drain both streams in parallel so neither can fill its pipe and block the child before it exits.
+        // Each reader stores into a locked box; the DispatchGroup join below is the happens-before barrier.
+        let outBox = DataBox()
+        let errBox = DataBox()
+        let readers = DispatchGroup()
+        let outQueue = DispatchQueue(label: "donkey.process.stdout")
+        let errQueue = DispatchQueue(label: "donkey.process.stderr")
+        readers.enter()
+        outQueue.async { outBox.set(outPipe.fileHandleForReading.readDataToEndOfFile()); readers.leave() }
+        readers.enter()
+        errQueue.async { errBox.set(errPipe.fileHandleForReading.readDataToEndOfFile()); readers.leave() }
 
         var timedOut = false
         if finished.wait(timeout: .now() + timeout) == .timedOut {
             timedOut = true
             process.terminate() // SIGTERM
-            // Escalate to SIGKILL if it ignores SIGTERM, so the bound is real.
             if finished.wait(timeout: .now() + 1.0) == .timedOut {
                 kill(process.processIdentifier, SIGKILL)
                 finished.wait()
             }
         }
+        // The process has exited (or been killed), so the pipe write ends close, the readers hit EOF and
+        // return, and this join completes promptly.
+        readers.wait()
+        return ProcessOutput(exitCode: process.terminationStatus, stdout: outBox.get(), stderr: errBox.get(), timedOut: timedOut)
+    }
 
-        // The process has exited, so the pipe write ends are closed and these
-        // reads return promptly without deadlocking.
-        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+    /// A lock-guarded `Data` cell so the two stream-reader queues in `runProcess` can hand their result back
+    /// without the compiler flagging a captured-var data race; the `DispatchGroup` join is what orders the
+    /// write before the read.
+    private final class DataBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var data = Data()
+        func set(_ value: Data) { lock.lock(); data = value; lock.unlock() }
+        func get() -> Data { lock.lock(); defer { lock.unlock() }; return data }
+    }
 
+    /// Run a one-line command via `/bin/zsh -c`, bounded by `timeout`. Blocking;
+    /// always called off the main actor via `Task.detached`.
+    private static func runShellSync(
+        _ command: String,
+        timeout: TimeInterval,
+        workingDirectory: String? = nil
+    ) -> ShellResult {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-c", command]
+        process.environment = shellEnvironment()
+        process.currentDirectoryURL = resolvedWorkingDirectory(workingDirectory)
+        let output = runProcess(process, timeout: timeout)
         return ShellResult(
-            exitCode: process.terminationStatus,
-            stdout: String(data: outData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
-            stderr: String(data: errData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
-            timedOut: timedOut
+            exitCode: output.exitCode,
+            stdout: String(data: output.stdout, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            stderr: String(data: output.stderr, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            timedOut: output.timedOut
         )
     }
+
+    /// Run a bundled command-line tool (`pdf-fill`, `lit`, …) DIRECTLY by resolving its path in the
+    /// bundled-tools dir, bypassing the shell so arguments with spaces or `⟦…⟧` need no quoting. Falls
+    /// back to the bare name through the login-shell PATH when the bundled dir can't be resolved. Uses
+    /// `shellEnvironment()` so PDFIUM_LIB_PATH and the bundled PATH are set, and runs in `workingDirectory`
+    /// (else home). Blocking — callers run it off the main actor. Used by `FormFillOrchestrator` so the
+    /// `pdf.fill` pipeline drives `pdf-fill` without going through the model-facing `shell_exec` gate.
+    public static func runBundledTool(
+        _ name: String,
+        _ arguments: [String],
+        workingDirectory: String?
+    ) -> (exitCode: Int32, stdout: String, stderr: String) {
+        let process = Process()
+        if let directory = bundledToolsDirectory {
+            let binary = directory.appendingPathComponent(name)
+            if FileManager.default.isExecutableFile(atPath: binary.path) {
+                process.executableURL = binary
+                process.arguments = arguments
+            }
+        }
+        if process.executableURL == nil {
+            // No bundled copy — run the bare name through the shell so PATH resolves it.
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            let quoted = ([name] + arguments)
+                .map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+                .joined(separator: " ")
+            process.arguments = ["-c", quoted]
+        }
+        process.environment = shellEnvironment()
+        process.currentDirectoryURL = resolvedWorkingDirectory(workingDirectory)
+        // Concurrent drain via runProcess: the large `--full` dump on stdout and a verbose error on stderr
+        // both flow without either pipe filling and deadlocking the child. Bounded by a generous timeout so a
+        // runaway tool can't hang the pipeline forever (a normal parse/fill finishes in well under this).
+        let output = runProcess(process, timeout: bundledToolTimeoutSeconds)
+        return (
+            output.exitCode,
+            String(data: output.stdout, encoding: .utf8) ?? "",
+            String(data: output.stderr, encoding: .utf8) ?? ""
+        )
+    }
+
+    /// Upper bound for a single bundled-tool run. Generous — a long OCR pass over a big scanned PDF is fine
+    /// — but finite, so a wedged child is eventually killed instead of hanging the form/media pipeline.
+    private static let bundledToolTimeoutSeconds: TimeInterval = 900
 
     /// The directory holding the bundled command-line tools (`ffmpeg`/`yt-dlp`/...), which skills invoke
     /// by bare name and rely on being on the shell PATH. Resolved fresh each call (not cached) so tools
     /// that `BundledToolsInstaller` downloads after launch are picked up without a relaunch.
     ///
-    /// Preference order: the first-run download in Application Support, then a copy baked into the app
-    /// bundle (the offline override, or a dev symlink). `nil` when neither exists, so the child process
-    /// inherits the environment unchanged and skills fall back to whatever the user has installed.
+    /// Preference order: an explicit `DONKEY_TOOLS_DIR` override, then the first-run download in
+    /// Application Support, then a copy baked into the app bundle (the offline override, or a dev symlink).
+    /// `nil` when none exists, so the child process inherits the environment unchanged and skills fall back
+    /// to whatever the user has installed.
+    ///
+    /// The `DONKEY_TOOLS_DIR` override is what lets a test or eval process — where `Bundle.main` is the
+    /// test runner, not the app, so the baked path never resolves — point at the repo's `vendor/donkey-tools`
+    /// and run the SAME bundled `lit`/`pdf-fill`/`ffmpeg` (and pdfium) as production. It mirrors the
+    /// build-time `DONKEY_TOOLS_DIR` convention in `ensure-bundled-tools.sh`.
     static var bundledToolsDirectory: URL? {
+        let fileManager = FileManager.default
+        // Read live via getenv: `ProcessInfo.processInfo.environment` is a process-start snapshot, so a test
+        // or eval that `setenv`s this after launch would otherwise not be seen.
+        if let raw = getenv("DONKEY_TOOLS_DIR") {
+            let override = String(cString: raw)
+            if !override.isEmpty {
+                let dir = URL(fileURLWithPath: (override as NSString).expandingTildeInPath, isDirectory: true)
+                if fileManager.fileExists(atPath: dir.path) {
+                    return dir
+                }
+            }
+        }
         let installed = BundledTools.installDirectory
         if BundledTools.isInstalled(at: installed) {
             return installed
         }
         if let baked = Bundle.main.resourceURL?
             .appendingPathComponent("donkey-tools", isDirectory: true),
-            FileManager.default.fileExists(atPath: baked.path) {
+            fileManager.fileExists(atPath: baked.path) {
             return baked
         }
         return nil
@@ -934,6 +1127,12 @@ public enum DonkeyCommandBackends {
         segments.append(loginShellPath)
         if let toolsDirectory = bundledToolsDirectory {
             segments.append(toolsDirectory.path)
+            // `lit` (liteparse) loads pdfium as a shared library at runtime via dlopen, and pdfium-rs
+            // reads PDFIUM_LIB_PATH for the directory holding `libpdfium.dylib`. We ship that dylib in the
+            // bundled-tools dir next to `lit`, so point the agent's shell at it — otherwise every PDF
+            // parse (`lit parse …`, the pdf skill's label recovery) panics with "could not find pdfium
+            // shared library". Only the agent's child sees this; the app process is untouched.
+            environment["PDFIUM_LIB_PATH"] = toolsDirectory.path
         }
         environment["PATH"] = segments.joined(separator: ":")
         return environment

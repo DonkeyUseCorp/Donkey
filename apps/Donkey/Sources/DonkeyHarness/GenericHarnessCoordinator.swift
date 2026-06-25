@@ -139,6 +139,15 @@ public actor HarnessAgentCoordinator {
 
     private var tasksByID: [String: HarnessAgentState] = [:]
     private var eventsByTaskID: [String: [HarnessAgentEvent]] = [:]
+    /// Agents whose workspace-root creation has already been attempted this session. When the directory
+    /// can't be created (read-only home, no permission, disk full) the baseDir fact never gets set, so the
+    /// fast path can't short-circuit; this guard stops `ensureWorkspaceRoot` from re-reading the
+    /// conversation and re-issuing the failing `createDirectory` syscall on every planning step.
+    private var workspaceRootAttempted: Set<String> = []
+    /// Cache of small working-directory text files already read for the `workspace.files` fact, keyed by
+    /// absolute path. Invalidated when the file's modification time changes, so a step that rewrites a file
+    /// re-reads it but an unchanged file is not re-read every planning step.
+    private var fileContentCache: [String: (mtime: Date, content: String)] = [:]
     /// Ephemeral, in-memory only: follow-up instructions queued against a running loop, drained at the
     /// top of the next loop iteration. Deliberately not part of the persisted `HarnessAgentState` — a
     /// queued message only matters to a live loop, and the drained text is folded into the persisted
@@ -576,6 +585,22 @@ public actor HarnessAgentCoordinator {
         return ConversationWorkspace.decode(convo.metadata[ConversationWorkspace.metadataKey])
     }
 
+    /// Whether this conversation has recorded at least one produced deliverable — a real output file a tool
+    /// wrote (an image, a `files.write`, a shell command's `-o` output), not the agent's scratch reads. The
+    /// runtime uses this to refuse to upgrade a planner give-up into "complete" on a run that only scouted:
+    /// reading the form and dumping pages to files is not producing the filled PDF.
+    public func producedAnyDeliverable(agentID: String) async -> Bool {
+        let conversationID: String?
+        if let cached = tasksByID[agentID] {
+            conversationID = cached.conversationID
+        } else {
+            conversationID = await conversationStore?.agentSnapshot(id: agentID)?.conversationID
+        }
+        guard let conversationID,
+              let workspace = await conversationWorkspace(conversationID: conversationID) else { return false }
+        return !workspace.deliverables.isEmpty
+    }
+
     /// Record produced deliverables onto the conversation workspace, creating the conversation record if
     /// this is the first one. Loads → updates → persists the canonical copy in conversation metadata.
     public func recordWorkspaceDeliverables(
@@ -625,6 +650,53 @@ public actor HarnessAgentCoordinator {
         await store.upsertConversation(convo)
     }
 
+    /// Ensure the conversation has a dedicated working directory on disk before the planner takes its first
+    /// action. Created once per conversation as `<output-location>/<goal-slug>-<short-id>/` (Downloads by
+    /// default; user-configurable) and stored as the workspace `root`, it becomes the shell's working
+    /// directory and the base relative paths resolve
+    /// against — so a task's intermediate and output files (a `fields.json` dump, a filled PDF) land in one
+    /// owned folder instead of loose in the user's home root. Idempotent and cheap: once the working
+    /// directory is seeded its path is the `workspace.baseDir` fact, so later iterations return immediately.
+    public func ensureWorkspaceRoot(agentID: String) async {
+        // Fast path: once seeded, the working directory's path is the baseDir fact — skip all store I/O.
+        if let cached = tasksByID[agentID],
+           let base = cached.worldModel.facts[ConversationWorkspace.baseDirFactKey], !base.isEmpty {
+            return
+        }
+        // Already tried (and failed) to create the directory this session — don't re-read the store and
+        // re-issue the failing syscall every step; the run falls back to home for its lifetime.
+        if workspaceRootAttempted.contains(agentID) { return }
+        guard let store = conversationStore else { return }
+        let existing: HarnessAgentState?
+        if let cached = tasksByID[agentID] {
+            existing = cached
+        } else {
+            existing = await store.agentSnapshot(id: agentID)
+        }
+        guard let task = existing else { return }
+        let conversationID = task.conversationID
+        var convo = await store.conversation(id: conversationID)
+            ?? HarnessConversation(id: conversationID, title: "")
+        var workspace = ConversationWorkspace.decode(convo.metadata[ConversationWorkspace.metadataKey])
+            ?? ConversationWorkspace()
+        if let root = workspace.root, !root.isEmpty, FileManager.default.fileExists(atPath: root) {
+            return
+        }
+        let path = ConversationWorkspace.defaultRootPath(goal: task.goal, conversationID: conversationID)
+        // Mark attempted before the syscall so a failure isn't retried every step (see the guard above).
+        workspaceRootAttempted.insert(agentID)
+        do {
+            try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        } catch {
+            // Could not create the working directory; leave root unset so callers fall back to home.
+            return
+        }
+        workspace.root = path
+        convo.metadata[ConversationWorkspace.metadataKey] = workspace.encodedJSON()
+        convo.updatedAt = Date()
+        await store.upsertConversation(convo)
+    }
+
     /// Project the conversation workspace into the agent's world model facts so the planner sees, every
     /// step, what it has produced and where (and executors get the machine-readable resolve directory).
     /// Quiet: persists the snapshot without a lifecycle event, since this is per-step bookkeeping, not a
@@ -650,6 +722,98 @@ public actor HarnessAgentCoordinator {
         task.updatedAt = Date()
         tasksByID[agentID] = task
         await conversationStore?.upsertAgentSnapshot(task)
+    }
+
+    /// Inline the contents of the small text files in the working directory into the `workspace.files` fact
+    /// the planner reads every step. This is the context-retention fix for the re-read loop: a small input
+    /// (a data file the agent copied in, a map it wrote) kept falling out of the rolling window, so the
+    /// planner re-`cat`/`python`-read it again and again — varying the command each time, which slipped past
+    /// the identical-repeat guard — and burned its whole budget without ever producing output. Holding the
+    /// content as a fact means it is always in front of the model, so re-reading is pointless.
+    ///
+    /// Bounded by construction: only regular UTF-8 text files (binaries like PDFs/images are skipped by a
+    /// NUL-byte sniff, never an extension list), only the few most-recently-changed, each clipped, and a
+    /// small total cap — so a large dump (`fields.json`) or a binary never bloats the prompt. mtime-cached,
+    /// so an unchanged file is not re-read each step.
+    public func refreshFileContentsFact(agentID: String) async {
+        let existing: HarnessAgentState?
+        if let cached = tasksByID[agentID] {
+            existing = cached
+        } else {
+            existing = await conversationStore?.agentSnapshot(id: agentID)
+        }
+        guard var task = existing else { return }
+        let base = task.worldModel.facts[ConversationWorkspace.baseDirFactKey].flatMap { $0.isEmpty ? nil : $0 }
+        let block = base.flatMap { Self.knownFileContentsBlock(workingDirectory: $0, cache: &fileContentCache) }
+        let key = ConversationWorkspace.fileContentsFactKey
+        guard task.worldModel.facts[key] != block else { return }
+        if let block {
+            task.worldModel.facts[key] = block
+        } else {
+            task.worldModel.facts.removeValue(forKey: key)
+        }
+        task.updatedAt = Date()
+        tasksByID[agentID] = task
+        await conversationStore?.upsertAgentSnapshot(task)
+    }
+
+    /// Build the `workspace.files` value: a few of the working directory's small text files, each labeled
+    /// and clipped. Returns nil when there is nothing worth showing. mtime-cached via the passed cache.
+    /// Static and cache-as-parameter so it is unit-testable against a temp directory without the actor.
+    static func knownFileContentsBlock(
+        workingDirectory: String,
+        cache: inout [String: (mtime: Date, content: String)]
+    ) -> String? {
+        let maxRawBytes = 16_384      // skip anything bigger than this on disk (a field dump, a parsed layout)
+        let perFileCap = 2_000        // chars per file in the fact
+        let totalCap = 4_000          // chars across all files in the fact
+        let maxFiles = 6
+        let dir = URL(fileURLWithPath: (workingDirectory as NSString).expandingTildeInPath, isDirectory: true)
+        let keys: [URLResourceKey] = [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: keys
+        ) else { return nil }
+
+        let candidates: [(url: URL, mtime: Date, size: Int)] = entries.compactMap { url in
+            guard let values = try? url.resourceValues(forKeys: Set(keys)),
+                  values.isRegularFile == true,
+                  let mtime = values.contentModificationDate,
+                  let size = values.fileSize, size > 0, size <= maxRawBytes else { return nil }
+            return (url, mtime, size)
+        }
+        // Smallest first, not newest first. The point of this fact is to stop the planner re-reading its
+        // small INPUTS (a data file copied in, a map it wrote). Those are small; the big files in the
+        // directory are the agent's own scratch dumps (a form view, a field-list JSON) it can re-derive on
+        // demand. Newest-first let a fresh 3 KB dump evict the 1 KB data file and the planner re-read the
+        // data every step — exactly the loop this fact exists to kill.
+        .sorted { $0.size < $1.size }
+
+        var parts: [String] = []
+        var total = 0
+        for candidate in candidates {
+            if parts.count >= maxFiles || total >= totalCap { break }
+            let path = candidate.url.path
+            let content: String
+            if let cached = cache[path], cached.mtime == candidate.mtime {
+                content = cached.content
+            } else if let data = try? Data(contentsOf: candidate.url), let text = FileUnderstandingEngine.decodeText(data) {
+                content = text
+                cache[path] = (candidate.mtime, text)
+            } else {
+                continue  // binary or unreadable — skip
+            }
+            // Clip to the smaller of the per-file cap and the budget LEFT in the total cap, so appending this
+            // file can't push the fact past totalCap (the loop-top check only gates entry, not the add).
+            let budget = min(perFileCap, totalCap - total)
+            let clipped = content.count > budget
+                ? String(content.prefix(budget)) + "\n… [clipped]"
+                : content
+            parts.append("• \(candidate.url.lastPathComponent) (\(candidate.size) bytes):\n\(clipped)")
+            total += clipped.count
+        }
+        guard !parts.isEmpty else { return nil }
+        return "Contents of the small files in your working directory — READ THEM HERE, do not re-open them "
+            + "with cat/python/lit:\n" + parts.joined(separator: "\n\n")
     }
 
     /// Appends a note to the most recent tool record's summary. The runtime uses this to warn the

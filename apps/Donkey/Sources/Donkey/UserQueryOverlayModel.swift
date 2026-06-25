@@ -1495,9 +1495,11 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             conversation.detail = text
             conversation.status = .running
             conversation.updatedAt = Date()
-            // Restamp the run-start: a resumed run's elapsed time should measure this run, not the idle
-            // gap since the conversation was first created (e.g. a conversation that failed, sat for hours, then resumed).
-            conversation.createdAt = Date()
+            // Resume the clock. If the conversation already stopped (the normal case) this opens a fresh
+            // stretch as of now, so the idle gap since it stopped isn't counted; if it somehow reaches here
+            // still running (the queue-path race) the open is a no-op and the live stretch keeps counting.
+            // Either way cumulative time is preserved — opening can't drop or restart it.
+            conversation.openRunningStretch(asOf: Date())
             // This branch seeds the conversation straight to running without going through `updateConversation`, so it
             // must apply the same fresh-run metadata reset (see `clearRunMetadata`): otherwise a replied-to
             // thread keeps its stale "seen" (its next terminal state never re-surfaces) and "streaming
@@ -1759,16 +1761,25 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         if let metadata {
             conversation.metadata = metadata
         }
-        // A stopped conversation re-entering running begins a fresh run: clear the per-run metadata flags and
-        // restamp the run-start so elapsed measures this run, not the idle gap before it. Gated on the
-        // prior status so the planner's per-step "still running" updates (and streamed-answer deltas,
-        // which re-pass the streaming flag) don't keep resetting it mid-run.
-        if status == .running, !wasRunning {
-            Self.clearRunMetadata(&conversation.metadata)
-            conversationsStreamingAnswer.remove(id)
-            conversation.createdAt = Date()
+        // Drive the elapsed clock off the status change. Opening/closing a stretch is the ONLY way to move
+        // the timer, and both are no-ops in the wrong state (open while already running, close while already
+        // stopped), so a per-step "still running" update or a repeated terminal write can neither restart the
+        // clock nor double-count. The clock is monotonic across gates and resumes by construction.
+        let now = Date()
+        if let status {
+            if status == .running {
+                // A genuine (re)entry from stopped starts a fresh run: clear per-run metadata flags too. A
+                // per-step update where it was already running skips this (and the open is a no-op).
+                if !wasRunning {
+                    Self.clearRunMetadata(&conversation.metadata)
+                    conversationsStreamingAnswer.remove(id)
+                }
+                conversation.openRunningStretch(asOf: now)
+            } else {
+                conversation.closeRunningStretch(asOf: now)
+            }
         }
-        conversation.updatedAt = Date()
+        conversation.updatedAt = now
         notchConversations[index] = conversation
         conversationStore.upsertConversation(conversation)
         syncPrimaryConversationPausedFlag()
@@ -1814,16 +1825,23 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             guard conversation.isUserControllable else { return conversation }
             switch conversation.status {
             case .running:
+                // Running when the app quit, so the stretch never closed. Close it at `updatedAt` — the last
+                // time the loop actually advanced — so its REAL duration is banked and the app-closed gap is
+                // never counted.
+                var restored = conversation
+                restored.closeRunningStretch(asOf: conversation.updatedAt)
                 // Actively running when the app quit. Resume on its own only if that was recent;
                 // otherwise it becomes a retryable row instead of running stale work unattended.
                 if now.timeIntervalSince(conversation.updatedAt) <= autoResumeStalenessWindow {
-                    autoResumeIDs.append(conversation.id)
-                    return conversation
+                    // Reopen the stretch at relaunch so the live timer continues on top of the banked total
+                    // rather than restarting at zero.
+                    restored.openRunningStretch(asOf: now)
+                    autoResumeIDs.append(restored.id)
+                    return restored
                 }
-                var timedOut = conversation
-                timedOut.status = .timedOut
-                timedOut.detail = "Timed out — resume"
-                return timedOut
+                restored.status = .timedOut
+                restored.detail = "Timed out — resume"
+                return restored
             case .waitingForClarification, .waitingForReview, .waitingForPermission:
                 // The loop that was blocked on the user is gone, but the gate still stands — the question or
                 // the pending approval is persisted in the conversation's continuation (and shown in its `detail`).

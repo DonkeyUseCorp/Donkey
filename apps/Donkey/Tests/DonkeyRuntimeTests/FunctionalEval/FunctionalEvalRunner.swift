@@ -48,7 +48,14 @@ struct FunctionalEvalRun {
                 .map { key, value in "\(key)=\(value.count > 160 ? String(value.prefix(160)) + "…" : value)" }
                 .joined(separator: " ")
             let suffix = input.isEmpty ? "" : "  { \(input) }"
-            return "  \(index + 1). \(record.call.name) → \(String(describing: record.resultStatus))\(suffix)"
+            var line = "  \(index + 1). \(record.call.name) → \(String(describing: record.resultStatus))\(suffix)"
+            // Surface the result summary for anything that did not plainly succeed: that text carries WHY a
+            // tool failed (e.g. the orchestrator's "could not map" / "no form file"), invisible otherwise.
+            if record.resultStatus != .succeeded, !record.summary.isEmpty {
+                let reason = record.summary.count > 240 ? String(record.summary.prefix(240)) + "…" : record.summary
+                line += "\n       ↳ \(reason)"
+            }
+            return line
         }.joined(separator: "\n")
     }
 }
@@ -115,10 +122,24 @@ enum FunctionalEvalRunner {
                 return await realCommandExecutor(context)
             }
         }
+        // Wire pdf.fill exactly as production does, using the eval's backend, so the forced-apply form
+        // pipeline runs headlessly. Without this, services.formFiller is nil and pdf.fill reports unavailable.
+        let formMapper = HostedFormMapper(backend: backend)
+        let formOrchestrator = FormFillOrchestrator(mapper: { form, data in await formMapper.map(formText: form, dataText: data) })
+        services.formFiller = { request in await formOrchestrator.fill(request) }
         let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors(services: services)
         let descriptors = BuiltInHarnessToolCatalog.descriptors
 
-        let coordinator = HarnessAgentCoordinator()
+        // Wire a hermetic conversation store, as the app does (it passes a FileHarnessConversationStore). The
+        // coordinator no-ops its whole workspace subsystem without one — `ensureWorkspaceRoot` seeds the
+        // per-conversation working directory only when a store is present, deliverables are tracked through
+        // the store, and the small-file context fact reads off the resulting baseDir. A store-less eval
+        // therefore never exercises any of that and the agent falls back to writing in $HOME, which is NOT
+        // how production runs. The store file lives inside the sandbox so it is cleaned up with it.
+        let storeURL = sandbox
+            .appendingPathComponent(".harness-store", isDirectory: true)
+            .appendingPathComponent("conversations.json")
+        let coordinator = HarnessAgentCoordinator(conversationStore: FileHarnessConversationStore(storeURL: storeURL))
         let goal = (understanding?.restatedGoal).flatMap { $0.isEmpty ? nil : $0 } ?? prompt
         let agent = await coordinator.createAgent(
             conversationID: conversationID,

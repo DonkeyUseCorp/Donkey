@@ -93,6 +93,11 @@ public struct GenericHarnessRuntime: Sendable {
         // reports observations (re-listing, re-verifying) is not real work, so a stuck explorer that never
         // produced anything still fails safe — the stall guard's guarantee is preserved.
         var hadRealWork = false
+        // Whether the run performed a real, non-read ACTION — a GUI action, a write, a capability tool — as
+        // opposed to only reading/scouting. Combined with a recorded deliverable, this is "the run produced
+        // its result"; on its own it is what lets a FILE-LESS task (play music, answer a question, drive an
+        // app) conclude even though it writes no output file.
+        var performedAction = false
         var stepsSinceWorldChange = 0
         // Whether the deliverable-progress gate has already nudged this run (one-shot, so a long
         // legitimate acquisition isn't repeatedly scolded).
@@ -143,9 +148,15 @@ public struct GenericHarnessRuntime: Sendable {
             }
             iterations += 1
 
-            // Project the conversation's workspace memory (files produced, chosen base, promoted folder)
-            // into the world model before planning so it survives compaction and reaches every step.
+            // Make sure the conversation has its dedicated working directory before anything runs, then
+            // project the workspace memory (working dir, files produced, promoted folder) into the world
+            // model before planning so the shell's cwd and relative paths resolve there and it survives
+            // compaction.
+            await coordinator.ensureWorkspaceRoot(agentID: agentID)
             await coordinator.refreshWorkspaceFact(agentID: agentID)
+            // Inline the small working-directory files into a fact so the planner always has them and never
+            // re-reads its own inputs (the re-read loop that burned whole runs without producing anything).
+            await coordinator.refreshFileContentsFact(agentID: agentID)
             guard let task = await coordinator.agent(id: agentID), task.status.canExecuteTools else {
                 if await coordinator.endRunUnlessPending(agentID: agentID) { break loop } else { continue loop }
             }
@@ -160,12 +171,21 @@ public struct GenericHarnessRuntime: Sendable {
             // A planner that gives up (run.failSafe) AFTER the goal is already produced and verified should
             // COMPLETE, not fail — the work exists; only the next decision didn't render (e.g. a transient
             // run of empty model replies). The same "do the work, verify, then conclude" rule as the
-            // step-budget path. Unrecoverable give-ups (signed out, out of credits) still surface so the
-            // user can act on them; a give-up with no real work done still fails.
+            // step-budget path. Unrecoverable give-ups (signed out, out of credits) still surface so the user
+            // can act on them. The upgrade requires that the run actually PRODUCED ITS RESULT — a recorded
+            // deliverable file OR a real non-read action (a GUI task, an answer, playing music, none of which
+            // leave a file). A pure scout — reads and page dumps, no action, no file — still fails honestly,
+            // which is what catches "read the form for a dozen steps then quit without filling it".
             var call = plannedCall
+            let producedResult: Bool
+            if performedAction {
+                producedResult = true
+            } else {
+                producedResult = await coordinator.producedAnyDeliverable(agentID: agentID)
+            }
             if call.name == "run.failSafe",
                !Self.isUnrecoverableFailSafe(call.input["reason"]),
-               hadRealWork,
+               producedResult,
                await completionWouldBeAccepted(agentID: agentID) {
                 call = HarnessToolCall(
                     name: "run.complete",
@@ -187,6 +207,12 @@ public struct GenericHarnessRuntime: Sendable {
                    !call.name.hasPrefix("run."),
                    !nonProducingToolNames.contains(call.name) {
                     hadRealWork = true
+                    // A shell READ (a listing, a page dump) flips hadRealWork but is still only scouting, so
+                    // it must not count as a real action. Everything else here — a GUI action, a write, a
+                    // capability tool — is genuine action a file-less task can conclude on.
+                    if !Self.wasShellRead(call: call, result: step.toolResult) {
+                        performedAction = true
+                    }
                 }
             } else {
                 stepsSinceWorldChange += 1
@@ -195,18 +221,24 @@ public struct GenericHarnessRuntime: Sendable {
                 if await coordinator.endRunUnlessPending(agentID: agentID) { break loop } else { continue loop }
             }
 
-            // Deliverable-progress done-gate. Once enough steps have passed with no PRODUCING action yet
-            // (hadRealWork still false — only reads/observations), nudge once: produce the result now or
-            // report the specific blocker. A one-shot annotation, not a hard stop, so a legitimately long
+            // Reconnaissance done-gate. Once enough steps have passed with the run still only scouting —
+            // `producedResult` is false, so no deliverable file AND no real non-read action, just reads,
+            // listings, and scratch dumps — nudge once: produce the result now or report the specific
+            // blocker. Keying on `producedResult` rather than `hadRealWork` is deliberate: a shell read flips
+            // `hadRealWork`, so the old gate never fired for the runs that need it (scout the input for a
+            // dozen steps and quit), while keying on a real action keeps it from scolding a legitimately long
+            // GUI/answer task that has actually been acting. One-shot annotation, not a hard stop, so a long
             // acquisition isn't killed; the stall guards below still backstop a true loop.
-            if !hadRealWork, !reconNudged, iterations >= Self.maxReconStepsBeforeNudge {
+            if !reconNudged, iterations >= Self.maxReconStepsBeforeNudge, !producedResult {
                 reconNudged = true
                 _ = await coordinator.annotateLastToolRecord(
                     agentID: agentID,
-                    note: "NOTE: \(iterations) steps in and nothing has been produced toward the deliverable "
-                        + "yet — only reconnaissance (locating, reading, listing). Stop scouting: take the "
-                        + "action that creates the result now, or if you are blocked, report the specific "
-                        + "blocker honestly. Do not re-read or re-list what you already have."
+                    note: "NOTE: \(iterations) steps in and you have produced NOTHING yet — only "
+                        + "reconnaissance (reading, listing, dumping to scratch files). Stop scouting and "
+                        + "PRODUCE THE RESULT now from what you already have: if the task creates or fills a "
+                        + "file, write it (the step with an explicit `-o`/`--output`); if it asks a question, "
+                        + "give the answer. Reading or listing more is not progress. If you are genuinely "
+                        + "blocked, report the specific blocker honestly instead of continuing to scout."
                 )
             }
 
@@ -369,6 +401,14 @@ public struct GenericHarnessRuntime: Sendable {
     /// never trips it (observed: 16 steps of recon, zero fields filled). This gate watches a different
     /// thing — whether any *producing* action has happened yet — so pure scouting can't run forever.
     private static let maxReconStepsBeforeNudge = 8
+
+    /// A `shell_exec` step that only READ — the executor stamps `shell.effect=read` for a listing, a page
+    /// dump, a probe. It changes the world model and so flips `hadRealWork`, but it is reconnaissance, not a
+    /// produced result, so it must not count as a real action for the done-gates. A shell command that wrote
+    /// a file or had a side effect (`open`, `osascript`) is stamped `write` and does count.
+    private static func wasShellRead(call: HarnessToolCall, result: HarnessToolResult?) -> Bool {
+        call.name == "shell_exec" && result?.metadata["shell.effect"] == "read"
+    }
 
     /// Ends a stalled run. A QUIET stall — the planner stopped advancing but isn't thrashing
     /// (`noProgress`) — can be a finished task that is merely re-verifying itself, so if it did real work

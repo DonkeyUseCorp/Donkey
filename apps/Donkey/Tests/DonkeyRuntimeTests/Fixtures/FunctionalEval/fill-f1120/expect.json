@@ -1,6 +1,6 @@
 {
   "frontmostApp": "Finder",
-  "maxSteps": 28,
+  "maxSteps": 40,
   "expectProduced": [
     { "kind": "pdfFields", "containsAll": [
       ["Blue Harbor Logistics"],

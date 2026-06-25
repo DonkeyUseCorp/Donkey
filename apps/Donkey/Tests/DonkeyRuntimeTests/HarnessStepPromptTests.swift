@@ -31,6 +31,20 @@ struct HarnessStepPromptTests {
         #expect(prompt.contains("skill_run"))
     }
 
+    /// A short tool-input value replayed in the history passes through untouched; an oversized one (a big
+    /// `files.write content`, a long prompt) is clipped so it isn't re-sent in full on every windowed step.
+    @Test
+    func clipsOversizedDecisionInputValues() {
+        let short = "out.pdf"
+        #expect(DonkeyPrompts.clippedDecisionInputValue(short) == short)
+
+        let long = String(repeating: "x", count: DonkeyPrompts.harnessDecisionValueMaxLength + 5_000)
+        let clipped = DonkeyPrompts.clippedDecisionInputValue(long)
+        #expect(clipped.count < long.count)
+        #expect(clipped.hasSuffix("…[clipped]"))
+        #expect(clipped.hasPrefix(String(repeating: "x", count: DonkeyPrompts.harnessDecisionValueMaxLength)))
+    }
+
     /// With no catalog the block is omitted entirely (no empty header dangling in the prompt).
     @Test
     func omitsSkillCatalogWhenNil() {

@@ -830,8 +830,8 @@ public struct UserQueryNotchStatusView: View {
 
             Spacer(minLength: 0)
 
-            if isWorking, let started = primaryConversation?.createdAt {
-                elapsedTimer(since: started)
+            if isWorking, let conversation = primaryConversation {
+                elapsedTimer(for: conversation)
             }
         }
         .padding(.horizontal, 12)
@@ -848,10 +848,11 @@ public struct UserQueryNotchStatusView: View {
     }
 
     /// A count-up elapsed-time label for a running conversation — the timeline ticks every second on its
-    /// own, so a long-running query visibly advances instead of looking stuck.
-    private func elapsedTimer(since start: Date) -> some View {
-        TimelineView(.periodic(from: start, by: 1)) { context in
-            Text(Self.elapsedDescription(from: start, to: context.date))
+    /// own, so a long-running query visibly advances instead of looking stuck. Counts the conversation's
+    /// whole active time (banked stretches plus the current one), so a resume continues rather than resets.
+    private func elapsedTimer(for conversation: UserQueryConversation) -> some View {
+        TimelineView(.periodic(from: conversation.createdAt, by: 1)) { context in
+            Text(Self.elapsedDescription(seconds: Self.conversationElapsedSeconds(conversation, asOf: context.date)))
                 .font(.system(size: 11, weight: .regular).monospacedDigit())
                 .foregroundStyle(Color.white.opacity(0.5))
                 .lineLimit(1)
@@ -859,12 +860,24 @@ public struct UserQueryNotchStatusView: View {
         }
     }
 
+    /// A conversation's total active time. Thin pass-through to `UserQueryConversation.activeSeconds`, the
+    /// single source of "elapsed" — banked stretches plus the open one — so a resumed conversation keeps
+    /// counting up instead of resetting and idle gaps are never counted.
+    static func conversationElapsedSeconds(_ conversation: UserQueryConversation, asOf now: Date) -> Double {
+        conversation.activeSeconds(asOf: now)
+    }
+
     /// Formats elapsed time as "45m 13s" (or "1h 45m 13s"), dropping any leading zero units.
     static func elapsedDescription(from start: Date, to now: Date) -> String {
-        let totalSeconds = max(0, Int(now.timeIntervalSince(start)))
-        let hours = totalSeconds / 3600
-        let minutes = (totalSeconds % 3600) / 60
-        let seconds = totalSeconds % 60
+        elapsedDescription(seconds: now.timeIntervalSince(start))
+    }
+
+    /// Formats a total elapsed-seconds value as "45m 13s" (or "1h 45m 13s"), dropping any leading zero units.
+    static func elapsedDescription(seconds totalSeconds: Double) -> String {
+        let clamped = max(0, Int(totalSeconds))
+        let hours = clamped / 3600
+        let minutes = (clamped % 3600) / 60
+        let seconds = clamped % 60
 
         var parts: [String] = []
         if hours > 0 { parts.append("\(hours)h") }
@@ -1134,10 +1147,10 @@ public struct UserQueryNotchStatusView: View {
     private func conversationElapsedLabel(_ conversation: UserQueryConversation) -> some View {
         if conversation.status == .running {
             TimelineView(.periodic(from: conversation.createdAt, by: 1)) { context in
-                conversationElapsedText(Self.elapsedDescription(from: conversation.createdAt, to: context.date))
+                conversationElapsedText(Self.elapsedDescription(seconds: Self.conversationElapsedSeconds(conversation, asOf: context.date)))
             }
         } else {
-            conversationElapsedText(Self.elapsedDescription(from: conversation.createdAt, to: conversation.updatedAt))
+            conversationElapsedText(Self.elapsedDescription(seconds: conversation.accumulatedActiveSeconds))
         }
     }
 
@@ -1415,7 +1428,7 @@ public struct UserQueryNotchStatusView: View {
                 // Waiting on the user, same as a clarification or review — show the attention glyph.
                 attentionGlyph()
             case .running:
-                fullLiveTime(since: conversation.createdAt)
+                fullLiveTime(for: conversation)
             case .completed, .paused, .interrupted, .failed, .chatting, .needsAttention, .timedOut:
                 // The gutter only ever carries the waiting-on-user icons or the live clock — a completed
                 // conversation keeps surfacing as a colored pointer + chin line, and the rest (including a benign
@@ -1465,9 +1478,9 @@ public struct UserQueryNotchStatusView: View {
     /// Full elapsed time (hours, minutes, and seconds) for the collapsed right gutter. The gutter's
     /// trailing lane is sized to fit the whole running total beside the camera, so the clock never
     /// collapses to a single unit.
-    private func fullLiveTime(since start: Date) -> some View {
-        TimelineView(.periodic(from: start, by: 1)) { context in
-            slotText(Self.elapsedDescription(from: start, to: context.date))
+    private func fullLiveTime(for conversation: UserQueryConversation) -> some View {
+        TimelineView(.periodic(from: conversation.createdAt, by: 1)) { context in
+            slotText(Self.elapsedDescription(seconds: Self.conversationElapsedSeconds(conversation, asOf: context.date)))
         }
     }
 

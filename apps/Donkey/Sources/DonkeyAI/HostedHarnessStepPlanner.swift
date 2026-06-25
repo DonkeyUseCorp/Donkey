@@ -639,7 +639,11 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     /// The assistant turn for a past step: the decision JSON it produced, reconstructed from the recorded
     /// call so the thread reads as the model's own prior choices — the same shape it must keep emitting.
     private static func renderDecision(_ call: HarnessToolCall) -> String {
-        let object: [String: Any] = ["tool": call.name, "input": call.input]
+        // Clip oversized input values so a past `files.write content` / long `llm.generate` prompt isn't
+        // replayed in full on every step it stays in the window. The result was already acted on; the thread
+        // only needs to recall what the call was.
+        let cappedInput = call.input.mapValues(DonkeyPrompts.clippedDecisionInputValue)
+        let object: [String: Any] = ["tool": call.name, "input": cappedInput]
         if let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
            let string = String(data: data, encoding: .utf8) {
             return string

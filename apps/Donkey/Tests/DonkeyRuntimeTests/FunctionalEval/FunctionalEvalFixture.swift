@@ -113,11 +113,26 @@ struct FunctionalEvalFixture: Sendable, CustomStringConvertible {
         prompt.replacingOccurrences(of: "{DIR}", with: sandbox.path)
     }
 
-    /// The file names directly in `directory` — used to snapshot the sandbox after setup so the verifier can
-    /// tell which files the agent produced.
+    /// Every file under `directory`, as paths relative to it — used to snapshot the sandbox before and after
+    /// the run so the verifier can tell which files the agent produced. Recursive because the agent works in
+    /// its own working directory (a subfolder of the sandbox in an eval), so its output lands one level down,
+    /// not loose at the sandbox root.
     static func fileNames(in directory: URL) -> Set<String> {
-        let entries = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
-        return Set(entries)
+        guard let enumerator = FileManager.default.enumerator(
+            at: directory, includingPropertiesForKeys: [.isRegularFileKey]
+        ) else { return [] }
+        var names: Set<String> = []
+        let prefix = directory.standardizedFileURL.path + "/"
+        for case let url as URL in enumerator {
+            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
+            let path = url.standardizedFileURL.path
+            let relative = path.hasPrefix(prefix) ? String(path.dropFirst(prefix.count)) : url.lastPathComponent
+            // The eval's own hermetic conversation store lives under `.harness-store/` inside the sandbox; it
+            // is test bookkeeping, not something the agent produced, so keep it out of the produced snapshot.
+            if relative.hasPrefix(".harness-store/") { continue }
+            names.insert(relative)
+        }
+        return names
     }
 }
 
@@ -132,8 +147,13 @@ enum ShellHelper {
         process.arguments = ["-lc", command]
         process.currentDirectoryURL = directory
         var environment = ProcessInfo.processInfo.environment
-        let toolsPath = BundledTools.installDirectory.path
+        // Resolve the bundled tools the same way the agent does — an explicit DONKEY_TOOLS_DIR (the repo's
+        // vendor dir, set by the eval toolchain) wins over the Application Support install — and point
+        // pdfium at that dir so `lit` can parse PDFs, matching production.
+        let toolsPath = environment["DONKEY_TOOLS_DIR"].flatMap { $0.isEmpty ? nil : $0 }
+            ?? BundledTools.installDirectory.path
         environment["PATH"] = (environment["PATH"] ?? "/usr/bin:/bin:/opt/homebrew/bin") + ":" + toolsPath
+        environment["PDFIUM_LIB_PATH"] = toolsPath
         process.environment = environment
         let outPipe = Pipe()
         process.standardOutput = outPipe

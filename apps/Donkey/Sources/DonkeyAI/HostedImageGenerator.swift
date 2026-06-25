@@ -118,12 +118,13 @@ public struct HostedImageGenerator: Sendable {
         return outcome
     }
 
-    /// Resolves where outputs are written. An absolute `outDir` is used as-is; a relative one resolves
-    /// against the source image's folder (so "edited" lands next to the source) or, with no source, against
-    /// the base. With no `outDir`, an edit writes next to its source and a generation writes to the base.
-    /// The base is the conversation workspace folder when one exists, else Downloads — so generated images
-    /// and clips collect with the turn's other deliverables instead of scattering into Downloads. Outputs
-    /// are written FLAT into this directory (no per-generation nesting).
+    /// Resolves where outputs are written. An absolute `outDir` is honored, UNLESS it is a bare scatter
+    /// root (the top of Downloads/Desktop/Documents/home), which is grouped into the base instead of
+    /// littered there; a relative one resolves against the source image's folder (so "edited" lands next to
+    /// the source) or, with no source, against the base. With no `outDir`, an edit writes next to its source
+    /// and a generation writes to the base. The base is the conversation workspace folder when one exists,
+    /// else Downloads — so generated images and clips collect with the turn's other deliverables instead of
+    /// scattering. Outputs are written FLAT into this directory (no per-generation nesting).
     static func resolvedOutputDirectory(
         _ outDir: String?,
         inputImagePaths: [String],
@@ -143,7 +144,10 @@ public struct HostedImageGenerator: Sendable {
         }
         let expanded = (outDir as NSString).expandingTildeInPath
         if expanded.hasPrefix("/") {
-            return URL(fileURLWithPath: expanded, isDirectory: true)
+            let dir = URL(fileURLWithPath: expanded, isDirectory: true)
+            // A bare Downloads/Desktop/Documents/home target is grouped into the task folder, not littered
+            // there; a genuinely user-named subfolder is honored as given.
+            return ConversationWorkspace.isScatterRoot(dir) ? base : dir
         }
         return (sourceDir ?? base).appendingPathComponent(expanded, isDirectory: true)
     }

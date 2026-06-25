@@ -94,6 +94,8 @@ final class CoreDataUserQueryConversationStore: UserQueryConversationStoring {
         managedConversation.setValue(conversation.origin.rawValue, forKey: Self.originKey)
         managedConversation.setValue(conversation.createdAt, forKey: Self.createdAtKey)
         managedConversation.setValue(conversation.updatedAt, forKey: Self.updatedAtKey)
+        managedConversation.setValue(conversation.accumulatedActiveSeconds, forKey: Self.accumulatedActiveSecondsKey)
+        managedConversation.setValue(conversation.runningSince, forKey: Self.runningSinceKey)
         managedConversation.setValue(Self.metadataJSONString(conversation.metadata), forKey: Self.metadataJSONKey)
 
         try? context.save()
@@ -232,6 +234,12 @@ final class CoreDataUserQueryConversationStore: UserQueryConversationStoring {
             attribute(originKey, type: .stringAttributeType, isOptional: true),
             attribute(createdAtKey, type: .dateAttributeType, isOptional: false),
             attribute(updatedAtKey, type: .dateAttributeType, isOptional: false),
+            // Optional so lightweight migration can add them to stores written before cumulative time
+            // existed; a null on an old row reads back as 0 / nil below.
+            attribute(accumulatedActiveSecondsKey, type: .doubleAttributeType, isOptional: true),
+            // The open-stretch anchor. Non-nil persists "was running when we last saved" across a relaunch,
+            // so the in-flight stretch can be banked at `updatedAt` and the clock continue rather than reset.
+            attribute(runningSinceKey, type: .dateAttributeType, isOptional: true),
             attribute(metadataJSONKey, type: .stringAttributeType, isOptional: true)
         ]
         conversationEntity.uniquenessConstraints = [[idKey]]
@@ -368,6 +376,8 @@ final class CoreDataUserQueryConversationStore: UserQueryConversationStoring {
             origin: origin,
             createdAt: createdAt,
             updatedAt: updatedAt,
+            accumulatedActiveSeconds: (managedConversation.value(forKey: accumulatedActiveSecondsKey) as? NSNumber)?.doubleValue ?? 0,
+            runningSince: managedConversation.value(forKey: runningSinceKey) as? Date,
             metadata: metadata(fromJSONString: managedConversation.value(forKey: metadataJSONKey) as? String)
         )
     }
@@ -449,6 +459,8 @@ final class CoreDataUserQueryConversationStore: UserQueryConversationStoring {
     private static let originKey = "origin"
     private static let createdAtKey = "createdAt"
     private static let updatedAtKey = "updatedAt"
+    private static let accumulatedActiveSecondsKey = "accumulatedActiveSeconds"
+    private static let runningSinceKey = "runningSince"
     private static let metadataJSONKey = "metadataJSON"
     private static let eventIDKey = "id"
     private static let eventConversationIDKey = "conversationID"

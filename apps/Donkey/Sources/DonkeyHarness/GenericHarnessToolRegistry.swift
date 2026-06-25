@@ -575,9 +575,9 @@ public enum BuiltInHarnessToolCatalog {
             descriptor(
                 "files.write",
                 pluginID: "core.files",
-                summary: "Write text to a file: pass a `path` and the full `content`, and it is saved (creating any missing parent folders). This is how you persist anything you composed when the content is multi-line or too long to inline in a shell command — a subtitle (.srt) file, a script, a config, a note, a document body. Use it instead of a `cat`/`echo` heredoc in shell_exec. A relative `path` (e.g. `notes.md` or `Sources/App.swift`) lands inside the conversation's workspace folder; an absolute or ~ path is written exactly as given. Overwrites by default; pass mode=append to add to the end. Pair it with llm.generate (which returns text) to write generated content exactly where you need it, then act on the file (e.g. `ffmpeg -vf subtitles=…`).",
+                summary: "Write text to a file: pass a `path` and the full `content`, and it is saved (creating any missing parent folders). This is how you persist anything you composed when the content is multi-line or too long to inline in a shell command — a subtitle (.srt) file, a script, a config, a note, a document body. Use it instead of a `cat`/`echo` heredoc in shell_exec. Prefer a relative `path` (e.g. `notes.md` or `Sources/App.swift`): it lands inside the conversation's task folder, which is where your output belongs. An absolute or ~ path is honored, except a bare Downloads/Desktop/Documents/home target is grouped into the task folder so a task's files never scatter loose. Overwrites by default; pass mode=append to add to the end. Pair it with llm.generate (which returns text) to write generated content exactly where you need it, then act on the file (e.g. `ffmpeg -vf subtitles=…`).",
                 input: [
-                    "path": "Destination path. Relative (e.g. report/chart.svg) resolves inside the conversation workspace; absolute (e.g. /Users/you/Downloads/ko.srt, leading ~ expanded) is used exactly.",
+                    "path": "Destination path. Prefer a relative one (e.g. report/chart.svg): it resolves inside the conversation's task folder. An absolute or ~ path is honored, except a bare Downloads/Desktop/Documents/home target is grouped into the task folder.",
                     "content": "The full text to write.",
                     "mode": "\"overwrite\" (default) replaces the file; \"append\" adds to the end."
                 ],
@@ -619,7 +619,7 @@ public enum BuiltInHarnessToolCatalog {
                 input: [
                     "prompt": "Description of the image to create.",
                     "model": "Optional model id override; omit to use the default image model.",
-                    "outDir": "Optional output directory for the result; omit to save to Downloads."
+                    "outDir": "Optional output directory; omit to save into the conversation's task folder (the right default)."
                 ],
                 output: [
                     "paths": "Newline-separated paths to the saved image file(s).",
@@ -634,7 +634,7 @@ public enum BuiltInHarnessToolCatalog {
             descriptor(
                 "video.generate",
                 pluginID: "core.video",
-                summary: "Generate a short video clip from a text `prompt` with a generative video model — use when the user asks for a video, clip, animation, or moving footage of a scene. Optionally pass `inputPath` to animate a still image (image-to-video). Generation takes up to a few minutes; this call waits for the result, then writes one .mp4 to Downloads and returns its path. Costs video-generation credits per clip (much more than an image), so confirm before generating several. Not for editing or trimming an existing video file — use the `media` skill (ffmpeg) for that, and not for slideshows of stills.",
+                summary: "Generate a short video clip from a text `prompt` with a generative video model — use when the user asks for a video, clip, animation, or moving footage of a scene. Optionally pass `inputPath` to animate a still image (image-to-video). Generation takes up to a few minutes; this call waits for the result, then writes one .mp4 into the conversation's task folder and returns its path. Costs video-generation credits per clip (much more than an image), so confirm before generating several. Not for editing or trimming an existing video file — use the `media` skill (ffmpeg) for that, and not for slideshows of stills.",
                 input: [
                     "prompt": "Description of the video to create — the scene, action, camera, and mood.",
                     "inputPath": "Optional path to a still image to animate as the first frame (image-to-video).",
@@ -644,7 +644,7 @@ public enum BuiltInHarnessToolCatalog {
                     "aspectRatio": "Optional aspect ratio, e.g. \"16:9\" (landscape) or \"9:16\" (portrait).",
                     "durationSeconds": "Optional clip length in seconds; omit for the model default.",
                     "negativePrompt": "Optional description of what to keep out of the video.",
-                    "outDir": "Optional output directory for the result; omit to save to Downloads."
+                    "outDir": "Optional output directory; omit to save into the conversation's task folder (the right default)."
                 ],
                 output: [
                     "paths": "Newline-separated paths to the saved video file(s).",
@@ -744,6 +744,64 @@ public enum BuiltInHarnessToolCatalog {
                 permissions: [],
                 safety: .sensitive,
                 verification: ["the task's reported result satisfies the goal"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            descriptor(
+                "pdf.fill",
+                pluginID: "core.pdf",
+                summary: "Fill a fillable PDF form end-to-end. Give it the form file and the data source (a data file, or the values as text); it reads the whole form, maps every value it can — entity name, address, ID numbers, every money line, and the totals it must COMPUTE (net receipts, total income/deductions, taxable income, tax) — writes the filled PDF, and reports what it filled and what it could not. This is the one and only way to fill a fillable form: prefer it over running `pdf-fill` yourself or reading the form field-by-field. It writes a NEW PDF and never overwrites the source. (For a flat/scanned form with no fillable fields, fall back to the `pdf` skill's overlay path.)",
+                input: [
+                    "form": "Path to the fillable PDF form to fill.",
+                    "data": "Path to the data file with the values to put on the form (or the data itself as text).",
+                    "out": "Optional output path for the filled PDF; omit to write out.pdf beside the work."
+                ],
+                output: [
+                    "text": "A summary of the fill: the output path, how many fields were applied, and any that could not be placed.",
+                    "filePath": "Path to the filled PDF."
+                ],
+                optionalInputKeys: ["out"],
+                permissions: [],
+                safety: .reversible,
+                verification: ["the filled PDF exists and the data values are present in its fields"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            descriptor(
+                "shorts.make",
+                pluginID: "core.media",
+                summary: "Turn one long video or podcast into captioned vertical short-form clips, end-to-end, in a SINGLE call. Give it the `source` (a local video path or a URL) and optionally how many clips (`count`); it transcribes on-device, picks the strongest self-contained moments, cuts each one, reframes to 9:16 following whoever is speaking, and burns in captions — then returns the finished clip files. This is the one and only way to make shorts/Reels/TikToks: prefer it over driving yt-dlp/ffmpeg/transcribe/reframe yourself step by step, which costs a model call at every step. If the user did not say how many clips they want, ask with user.choose BEFORE calling. Pass aspect=\"original\" to caption a video without reframing (e.g. \"add subtitles to this clip\").",
+                input: [
+                    "source": "The video to clip: a local file path, or a URL to download.",
+                    "count": "Optional number of clips to make; omit to let the pipeline pick the strongest moments.",
+                    "aspect": "Optional aspect ratio for the vertical crop (default 9:16). Pass \"original\" to keep the source framing and only add captions."
+                ],
+                output: [
+                    "text": "A summary: how many captioned clips were made, and any that could not be finished.",
+                    "paths": "Newline-separated paths to the finished clip file(s)."
+                ],
+                optionalInputKeys: ["count", "aspect"],
+                permissions: [],
+                safety: .reversible,
+                verification: ["each returned clip file exists and is playable vertical video with burned-in captions"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            descriptor(
+                "media.caption",
+                pluginID: "core.media",
+                summary: "Add subtitles to a video — or translate them into another language — end-to-end, in a SINGLE call. Give it the `source` (a local video path or a URL), and optionally `translateTo` a language (e.g. \"Korean\", \"Spanish\") and a `clipStart`/`clipDuration` to caption just a span. It transcribes on-device, translates if asked, builds a clean SRT, and burns the captions in with a known-good encoder — then returns the captioned video. This is the one and only way to subtitle/caption/translate a video: prefer it over hand-building yt-dlp/ffmpeg/transcribe/llm.generate steps yourself, which reliably explodes into SRT-cleanup and encoder debugging. (For chopping a long video into vertical short-form clips, use `shorts.make` instead.)",
+                input: [
+                    "source": "The video to caption: a local file path, or a URL to download.",
+                    "translateTo": "Optional language to translate the captions into (e.g. \"Korean\"); omit to caption in the spoken language.",
+                    "clipStart": "Optional start of a span to caption (seconds or M:SS / H:MM:SS); omit to caption the whole video.",
+                    "clipDuration": "Optional length of that span in seconds; pair with clipStart."
+                ],
+                output: [
+                    "text": "A summary: the captioned output path and whether captions were translated.",
+                    "paths": "Path to the captioned video file."
+                ],
+                optionalInputKeys: ["translateTo", "clipStart", "clipDuration"],
+                permissions: [],
+                safety: .reversible,
+                verification: ["the returned video exists and shows the (translated) captions burned in"],
                 metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
             ),
             descriptor(
