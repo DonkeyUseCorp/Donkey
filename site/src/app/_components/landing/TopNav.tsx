@@ -64,7 +64,7 @@ export function TopNav({
     <header className="sticky top-0 z-50 w-full py-3 md:py-4">
       <div
         className={cn(
-          "mx-auto flex w-full max-w-[1400px] items-center justify-between rounded-[24px] px-6 py-2 transition-all duration-300 md:px-12 md:py-2.5",
+          "mx-auto grid w-full max-w-[1400px] grid-cols-[1fr_auto_1fr] items-center rounded-[24px] px-6 py-2 transition-all duration-300 md:px-12 md:py-2.5",
           scrolled
             ? "border border-ink/10 bg-cream/95 shadow-[0_18px_50px_rgba(15,14,13,0.10)] backdrop-blur-md"
             : "border border-transparent bg-transparent shadow-none",
@@ -72,7 +72,7 @@ export function TopNav({
       >
         <Link
           href={homeHref}
-          className="flex items-center gap-0 text-ink no-underline"
+          className="col-start-1 flex items-center gap-0 justify-self-start text-ink no-underline"
         >
           <div className="flex h-[59px] w-[59px] items-center justify-center overflow-hidden rounded-[10px]">
             <Image
@@ -86,15 +86,29 @@ export function TopNav({
           </div>
           <span className="text-2xl font-semibold">{wordmark}</span>
         </Link>
-        <div className="flex items-center gap-[10px] md:gap-4">
+        {/* Center cluster: the product nav lives here so Use cases and the
+            Download CTA read as a balanced pair in the middle of the bar. Hidden
+            below md, where the header collapses to logo + auth. */}
+        <div className="col-start-2 hidden items-center gap-6 justify-self-center md:flex">
           {showNav && !onUseCases ? (
             <Link
               href="/use-cases"
-              className="hidden whitespace-nowrap text-sm font-semibold text-ink no-underline md:inline-flex"
+              className="whitespace-nowrap text-sm font-semibold text-ink no-underline"
             >
               Use cases
             </Link>
           ) : null}
+          {showDownload && !isSignedIn && !authToggle ? (
+            <Link
+              href={DONKEY_INSTALL_URL}
+              className="inline-flex items-center gap-1 whitespace-nowrap text-sm font-semibold text-ink no-underline"
+            >
+              Download
+              <ArrowRight size={14} />
+            </Link>
+          ) : null}
+        </div>
+        <div className="col-start-3 flex items-center gap-[10px] justify-self-end md:gap-4">
           {isSignedIn ? (
             <PillButton href="/app" variant="secondary" size="sm">
               Dashboard
@@ -106,33 +120,21 @@ export function TopNav({
             >
               {authToggle.label}
             </Link>
-          ) : (
+          ) : showAuthLinks ? (
             <>
-              {showAuthLinks ? (
-                <>
-                  <Link
-                    href="/sign-in"
-                    className="whitespace-nowrap text-sm font-semibold text-ink no-underline"
-                  >
-                    Log in
-                  </Link>
-                  <span className="hidden md:inline-flex">
-                    <PillButton href="/sign-up" variant="secondary" size="sm">
-                      Sign up
-                    </PillButton>
-                  </span>
-                </>
-              ) : null}
-              {showDownload ? (
-                <span className="hidden md:inline-flex">
-                  <PillButton href={DONKEY_INSTALL_URL} variant="dark" size="sm">
-                    Download
-                    <ArrowRight size={14} />
-                  </PillButton>
-                </span>
-              ) : null}
+              <Link
+                href="/sign-in"
+                className="whitespace-nowrap text-sm font-semibold text-ink no-underline"
+              >
+                Log in
+              </Link>
+              <span className="hidden md:inline-flex">
+                <PillButton href="/sign-up" variant="secondary" size="sm">
+                  Sign up
+                </PillButton>
+              </span>
             </>
-          )}
+          ) : null}
         </div>
       </div>
     </header>
