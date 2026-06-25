@@ -21,10 +21,40 @@ function macAuthRedirectOrigins() {
     : ["donkey://"];
 }
 
+// Both donkeyuse.com and www.donkeyuse.com serve the app, but the Google OAuth
+// redirect_uri is pinned to BETTER_AUTH_URL's host. A sign-in started on one
+// host would set a host-only state cookie there while the callback lands on the
+// other, so better-auth can't find the cookie and rejects it as state_mismatch.
+// Scoping the auth cookies to the registrable host lets them ride across both.
+// Returns undefined for hosts that can't carry a Domain attribute (localhost,
+// bare IPs), so local development keeps working.
+function crossSubDomainCookieDomain() {
+  const baseURL = process.env.BETTER_AUTH_URL;
+  if (!baseURL) return undefined;
+
+  let host: string;
+  try {
+    host = new URL(baseURL).hostname;
+  } catch {
+    return undefined;
+  }
+
+  if (host === "localhost" || host.endsWith(".localhost") || /^[0-9.]+$/.test(host)) {
+    return undefined;
+  }
+
+  return host;
+}
+
+const cookieDomain = crossSubDomainCookieDomain();
+
 export const auth = betterAuth({
   baseURL: process.env.BETTER_AUTH_URL,
   secret: process.env.BETTER_AUTH_SECRET,
   trustedOrigins: macAuthRedirectOrigins(),
+  advanced: cookieDomain
+    ? { crossSubDomainCookies: { enabled: true, domain: cookieDomain } }
+    : undefined,
   database: prismaAdapter(prisma, {
     provider: "postgresql",
   }),
