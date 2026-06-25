@@ -140,18 +140,26 @@ build_lgpl_ffmpeg() {
   EXTRA_SEARCH=()
 }
 
-# Build liteparse's `lit` from source (Rust). It static-links leptonica+tesseract,
-# so the result is a single self-contained binary (system libs only — no dylib
-# bundling). MANDATORY: the pdf skill's extraction/OCR depends on it, and it
-# replaces a separate tesseract.
+# Build liteparse's `lit` from source (Rust). It static-links leptonica+tesseract (replacing a separate
+# tesseract), but it loads pdfium as a SHARED library at runtime: pdfium-rs dlopens `libpdfium.dylib` and
+# finds it via the PDFIUM_LIB_PATH directory. So `lit` is NOT self-contained — every PDF parse panics with
+# "could not find pdfium shared library" unless that dylib ships beside it. We stage both here, and the app
+# (and the evals) point PDFIUM_LIB_PATH at this dir. MANDATORY: the pdf skill's extraction/OCR depends on it.
 build_liteparse() {
-  if [ -x "$VENDOR_DIR/lit" ]; then ok "lit (cached)"; return 0; fi
+  # Require BOTH lit and its pdfium dylib before treating the build as cached — staging only `lit` (the old
+  # behavior) left PDF parsing broken at runtime.
+  if [ -x "$VENDOR_DIR/lit" ] && [ -f "$VENDOR_DIR/libpdfium.dylib" ]; then ok "lit (cached)"; return 0; fi
   local ver="2.1.1"
   command -v cargo >/dev/null 2>&1 || brew install rust >/dev/null 2>&1
   command -v cmake >/dev/null 2>&1 || brew install cmake >/dev/null 2>&1
   command -v cargo >/dev/null 2>&1 || { echo "FATAL: cargo unavailable for liteparse build" >&2; exit 1; }
   local root="/tmp/liteparse-build"
   rm -rf "$root"
+  # Wipe the pdfium-rs cache first, so this build downloads EXACTLY the pdfium that liteparse $ver links and
+  # the stage step below can't pick up a stale, ABI-incompatible dylib a previous build of a different
+  # liteparse version left behind — the root cause of `lit parse` crashing at runtime on a green build.
+  rm -rf "$HOME/Library/Caches/pdfium-rs"
+  # Building liteparse re-downloads the matching pdfium into that (now-empty) cache.
   PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig" cargo install liteparse --version "$ver" --root "$root" >"$root.log" 2>&1
   if [ ! -x "$root/bin/lit" ]; then
     echo "FATAL: liteparse (lit) build failed; tail of $root.log:" >&2
@@ -160,7 +168,34 @@ build_liteparse() {
   fi
   cp -f "$root/bin/lit" "$VENDOR_DIR/lit"
   chmod +x "$VENDOR_DIR/lit"
-  ok "lit"
+  # Stage the matching libpdfium.dylib next to `lit` so it loads at runtime via PDFIUM_LIB_PATH. Pick the
+  # NEWEST match (this build's fresh download), not an arbitrary one, in case the cache holds more than one.
+  local pdfium
+  pdfium="$(find "$HOME/Library/Caches/pdfium-rs" -name libpdfium.dylib 2>/dev/null \
+    | while read -r f; do printf '%s\t%s\n' "$(stat -f '%m' "$f" 2>/dev/null)" "$f"; done \
+    | sort -rn | head -1 | cut -f2-)"
+  if [ -z "$pdfium" ] || [ ! -f "$pdfium" ]; then
+    echo "FATAL: built lit but no libpdfium.dylib in the pdfium-rs cache; lit cannot parse PDFs without it" >&2
+    exit 1
+  fi
+  cp -f "$pdfium" "$VENDOR_DIR/libpdfium.dylib"
+  # The staged dylib must be arm64 — a wrong-arch copy would fail to load at runtime.
+  if ! lipo -archs "$VENDOR_DIR/libpdfium.dylib" 2>/dev/null | grep -qw arm64; then
+    echo "FATAL: staged libpdfium.dylib is not arm64: $(lipo -archs "$VENDOR_DIR/libpdfium.dylib" 2>/dev/null)" >&2
+    exit 1
+  fi
+  # Smoke-test the PAIR: lit must actually parse a PDF using the staged pdfium. This catches an
+  # ABI/version mismatch on THIS machine before the bundle ships, instead of every runtime `lit parse`
+  # crashing later. Uses a committed sample PDF; skipped only if that asset is absent.
+  local sample="$ROOT_DIR/apps/Donkey/Tests/DonkeyRuntimeTests/Fixtures/FunctionalEval/merge-pdfs/inputs/a.pdf"
+  if [ -f "$sample" ]; then
+    if ! PDFIUM_LIB_PATH="$VENDOR_DIR" "$VENDOR_DIR/lit" parse "$sample" --no-ocr >/dev/null 2>"$root.smoke.log"; then
+      echo "FATAL: staged lit could not parse a sample PDF with the staged libpdfium.dylib (ABI mismatch?):" >&2
+      tail -10 "$root.smoke.log" >&2
+      exit 1
+    fi
+  fi
+  ok "lit (+ libpdfium.dylib, parse-verified)"
 }
 
 # Build the `pdf-fill` CLI from the in-repo Swift source (tools/pdf-fill/main.swift).

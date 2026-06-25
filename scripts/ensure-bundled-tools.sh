@@ -31,6 +31,12 @@ missing_of() {
   printf '%s\n' "${out[@]:-}"
 }
 
+# `lit` loads pdfium at runtime via PDFIUM_LIB_PATH; without libpdfium.dylib beside it, every PDF parse
+# fails. The dylib is not an executable, so it can't live in MANDATORY_TOOLS — check it as lit's companion.
+pdfium_missing() {
+  [ -x "$VENDOR_DIR/lit" ] && [ ! -f "$VENDOR_DIR/libpdfium.dylib" ]
+}
+
 manifest_value() {
   [ -f "$MANIFEST" ] || return 1
   python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2],''))" "$MANIFEST" "$1" 2>/dev/null
@@ -72,14 +78,16 @@ download_prebuilt() {
 
 mandatory_missing=$(missing_of "${MANDATORY_TOOLS[@]}" | grep -c .)
 optional_missing=$(missing_of "${OPTIONAL_TOOLS[@]}" | grep -c .)
-if [ "$mandatory_missing" -eq 0 ] && [ "$optional_missing" -eq 0 ]; then
+if [ "$mandatory_missing" -eq 0 ] && [ "$optional_missing" -eq 0 ] && ! pdfium_missing; then
   echo "Bundled tools present in $VENDOR_DIR"
   exit 0
 fi
 
 # A custom DONKEY_TOOLS_DIR is a caller-supplied prebuilt set; validate, never build into it.
 if [ -n "${DONKEY_TOOLS_DIR:-}" ]; then
-  echo "ERROR: DONKEY_TOOLS_DIR=$VENDOR_DIR is missing required tools: $(missing_of "${MANDATORY_TOOLS[@]}" | tr '\n' ' ')" >&2
+  missing="$(missing_of "${MANDATORY_TOOLS[@]}" | tr '\n' ' ')"
+  pdfium_missing && missing="$missing libpdfium.dylib"
+  echo "ERROR: DONKEY_TOOLS_DIR=$VENDOR_DIR is missing required tools: $missing" >&2
   exit 1
 fi
 
@@ -100,6 +108,11 @@ fi
 if [ -n "$still_mandatory" ]; then
   echo "ERROR: bundled tools still missing after install: $(echo "$still_mandatory" | tr '\n' ' ')" >&2
   echo "       Source build needs Homebrew + network; fix that and re-run." >&2
+  exit 1
+fi
+if pdfium_missing; then
+  echo "ERROR: lit is present but libpdfium.dylib is missing in $VENDOR_DIR; lit cannot parse PDFs." >&2
+  echo "       Re-run scripts/fetch-bundled-tools.sh (it stages libpdfium.dylib beside lit)." >&2
   exit 1
 fi
 
