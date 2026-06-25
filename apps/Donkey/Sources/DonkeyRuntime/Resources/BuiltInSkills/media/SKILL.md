@@ -4,7 +4,7 @@ id: media
 description: Expert audio and video — download from a URL with yt-dlp, transcode/trim/extract/grab frames with ffmpeg, transcribe/subtitle/translate, cut filler words or silence with word-level timing, and reframe landscape to vertical 9:16 that tracks the active speaker.
 tags: video, audio, media, download, convert, youtube, subtitles, transcribe, edit, reframe, vertical
 keywords: video, audio, download, youtube, vimeo, mp4, mp3, convert, trim, clip, extract audio, transcode, frame, subtitle, subtitles, caption, captions, transcribe, transcript, translate, srt, vtt, filler words, remove silence, um, uh, jump cut, tighten, reframe, vertical, 9:16, portrait, tiktok, reels, shorts, crop to vertical, active speaker, follow speaker
-tools: shell_exec, transcribe, llm.generate, files.write
+tools: media.caption, shell_exec, transcribe, llm.generate, files.write
 
 `yt-dlp` and `ffmpeg`/`ffprobe` are bundled, signed, and on the PATH, so use them
 by bare name. They are first-party capability tools: downloading from the user's
@@ -40,23 +40,20 @@ case say the media tools are still installing and stop. Do not try to install an
 - **`transcribe` (on-device, word-level).** Runs Apple's local speech engine on an audio file and writes a JSON file holding the plain `text` plus `words` — every word with a `start`/`end` in seconds, accurate to a fraction of a second. Private, no credits. Use it whenever you need to know *exactly when* words are spoken: cutting filler words or silence, finding a quoted moment, chaptering. Hand it compact audio (extract it from a video first); if it reports no transcript, extract audio and retry.
 - **`llm.generate` SRT (the model).** Sentence-level cues with approximate timing — fine for subtitles, not precise enough to cut individual words. Use it for translation or when you just need readable captions.
 
-## Subtitles & transcription
-Get the subtitle text, then apply it. Prefer the cheapest source that gives correct timing.
+## Subtitles, captions, and translation
+**Use the `media.caption` tool — it does the whole job in one call.** Give it the video (a local path or a
+URL), and optionally a language to `translateTo` (e.g. "Korean") and a `clipStart`/`clipDuration` to caption
+just a span. It transcribes on-device for exact timings, translates with one model call when asked, builds a
+clean SRT in code, and burns the captions in with a known-good encoder — then returns the captioned file.
 
-1. **Reuse the video's own captions first (free — no model call).** Many videos already ship captions; pull them as a sidecar `.srt`:
-   `yt-dlp --write-subs --write-auto-subs --sub-langs 'en.*' --convert-subs srt --skip-download -P ~/Downloads 'URL'` (drop `--skip-download` to grab the video too).
-2. **Otherwise transcribe with the model.** Timing matters: **clip first, then transcribe the clip** so timestamps start at zero and line up. Extract compact mono audio, then call `llm.generate` with that file:
-   - `ffmpeg -i clip.mp4 -vn -ac 1 -c:a libmp3lame -b:a 64k clip.mp3`
-   - `llm.generate filePath=clip.mp3 prompt="Transcribe this audio to SRT with timestamps, one cue per sentence" toFile=true` → the returned file ALREADY holds your SRT text. Use that path directly (or `mv` it to `subs.srt`); never re-type its contents into a `cat`/`echo` heredoc — that re-typing is the most common way this task stalls.
-3. **Translate** by asking in the same call: `prompt="Transcribe this audio and translate the text to Spanish; output SRT, keep the timestamps"`.
-4. **Long media — chunk it.** Inline audio is size-limited (`llm.generate` rejects a file that is too large or a transcript it had to truncate — both mean "use smaller chunks"). Split, transcribe each zero-based, then shift by each segment's *real* start:
-   - `ffmpeg -i audio.mp3 -f segment -segment_time 600 -reset_timestamps 1 -c copy seg_%03d.mp3` splits into ~10-min pieces.
-   - `-c copy` cuts on frame boundaries, so a segment's real length is not exactly 600s. Read each one's true duration with `ffprobe -v error -show_entries format=duration -of csv=p=0 seg_000.mp3` and accumulate; that running sum is the next segment's start offset — do not assume `index × 600`.
-   - Transcribe each segment with a plain zero-based prompt (`"Transcribe to SRT with timestamps"`), then add the accumulated offset to every cue in that segment's SRT and concatenate in order, renumbering cue indices. Sanity-check that timestamps only increase. Persist the assembled SRT with `files.write path=~/Downloads/subs.srt content=…` (the whole multi-line file in one call) — not a shell heredoc.
-5. **Apply to the video (ffmpeg):**
-   - Burn-in (default for a shareable clip — always-visible, what social players expect): `ffmpeg -i clip.mp4 -vf "subtitles=subs.srt" -c:a copy out.mp4`. Donkey's bundled ffmpeg includes libass, so this works by default. If you ever do hit a filtergraph error — `No such filter: 'subtitles'`, `Error parsing filterchain 'subtitles=…'`, or `No option name near '…'` — that is an ffmpeg without libass, **not** a path problem: don't retry the same command or fiddle with absolute-vs-relative paths or escaping. Switch straight to the soft track below (no libass needed) and tell the user you delivered a toggleable subtitle track instead of burned-in text.
-   - Soft, toggleable track (the reliable fallback, and fine for an archive copy): `ffmpeg -i clip.mp4 -i subs.srt -c copy -c:s mov_text out.mp4`. This muxes the translation into the file as a real subtitle stream with no libass and no re-encode, so it works even when burn-in can't.
-- Model timestamps are approximate (good enough for subtitles); always extract audio before transcribing, and chunk long files.
+Do **not** hand-build the transcribe → SRT → burn pipeline with `llm.generate` and `ffmpeg`. A model-authored
+SRT comes back messy (stray prose, the wrong language, broken cues), so you end up re-cleaning it, writing a
+filter script, and debugging encoders and durations — dozens of round-trips for a one-call job. `media.caption`
+is built to avoid exactly that.
+
+Reach for raw ffmpeg only to apply a subtitle file the user already has:
+- Burn-in: `ffmpeg -i clip.mp4 -vf "subtitles=subs.srt" -c:v libx264 -pix_fmt yuv420p -c:a aac out.mp4`.
+- Soft, toggleable track (no libass, no re-encode): `ffmpeg -i clip.mp4 -i subs.srt -c copy -c:s mov_text out.mp4`.
 
 ## Cut filler words or silence
 Use the **`media.cut`** tool — a deterministic, frame-accurate editor. It does the span math and the ffmpeg render itself; you only say what to remove. Do NOT hand-build select/trim/concat ffmpeg for this.
