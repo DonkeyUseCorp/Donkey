@@ -929,6 +929,28 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         selectedConversationID = nil
     }
 
+    /// Submit a generative options form (user.choose) for a conversation waiting on the user. The picks are
+    /// encoded into the one response line the planner reads back ("Selected options: id=value, …") and
+    /// routed as that conversation's reply — the exact path a typed clarification answer takes — so the
+    /// harness resumes the task with the choices. No-op if the conversation isn't actually awaiting a form.
+    func submitChoiceForm(conversationID: String, selection: [String: String]) {
+        guard let conversation = conversation(withID: conversationID),
+              conversation.status == .waitingForClarification else {
+            return
+        }
+        let response: String
+        if let json = conversation.metadata["genericHarness.choiceForm"],
+           let form = HarnessChoiceForm.decode(fromJSON: json) {
+            response = form.encodeSelectionResponse(selection)
+        } else {
+            response = "Selected options: "
+                + selection.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ", ")
+        }
+        // Pin the answer to the waiting conversation so it resumes that thread rather than starting a new one.
+        replyTargetConversationID = conversationID
+        runLocalCommand(response)
+    }
+
     /// Take the pinned Reply target, if any, for the submission about to run. Cleared on read so it only
     /// applies to the one answer (which also un-dims the rows), and dropped if the conversation is no longer
     /// around (fall back to normal routing).

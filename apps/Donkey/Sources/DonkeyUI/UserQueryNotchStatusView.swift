@@ -61,6 +61,9 @@ public struct UserQueryNotchStatusView: View {
     /// A conversation that failed for lack of credits shows a "Reload credits" CTA in its banner; tapping it
     /// fires this so the app can open the billing page (reuses the permission-banner button styling).
     private let reloadCreditsRequested: @MainActor (String) -> Void
+    /// A conversation waiting on a generative options form (user.choose) submits the user's picks through
+    /// this — (conversationID, selection of fieldID→value). The harness resumes the task with the choices.
+    private let submitChoiceForm: @MainActor (String, [String: String]) -> Void
 
     public init(
         state: UserQueryState,
@@ -95,7 +98,8 @@ public struct UserQueryNotchStatusView: View {
         updateRequested: @escaping @MainActor () -> Void,
         needsLogin: Bool = false,
         loginRequested: @escaping @MainActor () -> Void = {},
-        reloadCreditsRequested: @escaping @MainActor (String) -> Void = { _ in }
+        reloadCreditsRequested: @escaping @MainActor (String) -> Void = { _ in },
+        submitChoiceForm: @escaping @MainActor (String, [String: String]) -> Void = { _, _ in }
     ) {
         self.state = state
         self.updateState = updateState
@@ -130,6 +134,7 @@ public struct UserQueryNotchStatusView: View {
         self.needsLogin = needsLogin
         self.loginRequested = loginRequested
         self.reloadCreditsRequested = reloadCreditsRequested
+        self.submitChoiceForm = submitChoiceForm
     }
 
     public var body: some View {
@@ -541,6 +546,18 @@ public struct UserQueryNotchStatusView: View {
         return running[index]
     }
 
+    /// The generative options form (user.choose) a conversation is awaiting, decoded from its gate
+    /// metadata, or nil. Rendered INLINE on the conversation row (like the permission banner), not as a
+    /// separate panel — only while the conversation is actually waiting on the user for it.
+    private func choiceForm(for conversation: UserQueryConversation) -> HarnessChoiceForm? {
+        guard conversation.status == .waitingForClarification,
+              let json = conversation.metadata["genericHarness.choiceForm"],
+              !json.isEmpty else {
+            return nil
+        }
+        return HarnessChoiceForm.decode(fromJSON: json)
+    }
+
     private var expandedContent: some View {
         Group {
             if needsLogin {
@@ -636,8 +653,13 @@ public struct UserQueryNotchStatusView: View {
         .padding(.bottom, Self.contentInset)
     }
 
+    /// The leading arrow over the expanded composer-only surface. It renders only while the notch holds no
+    /// conversation (`!hasConversationDisplayText`, line 195), so by construction there is nothing for it to
+    /// narrate — it is always the idle silhouette, never tinted by an accent. Drawing it filled let a
+    /// just-deleted conversation's accent linger (via the `accentColor` fallback to the stale `accentIndex`)
+    /// as a stray colored arrow floating over the empty composer.
     private var expandedNotchArrow: some View {
-        DonkeyCursorMark(color: accentColor)
+        DonkeyCursorMark(color: accentColor, silhouette: true)
             .frame(width: 15, height: 15)
             .position(x: expandedNotchArrowX, y: expandedNotchArrowY)
     }
@@ -898,6 +920,7 @@ public struct UserQueryNotchStatusView: View {
 
     private func conversationRow(_ conversation: UserQueryConversation) -> some View {
         let isPermission = conversation.status == .waitingForPermission
+        let inlineForm = choiceForm(for: conversation)
         // The reply dim is applied per-element rather than to the whole row so the pointer of a conversation that
         // itself needs the user can stay lit while everything else recedes.
         let contentDim = rowReplyDimOpacity(for: conversation)
@@ -929,7 +952,8 @@ public struct UserQueryNotchStatusView: View {
                         // First line runs all the way to just left of the pinned top-right controls.
                         .padding(.trailing, controlsReserve(for: conversation))
 
-                    if !isPermission {
+                    // The form carries its own title, so the row's status subtext is suppressed for it too.
+                    if !isPermission && inlineForm == nil {
                         Text(conversationStatusDescription(conversation))
                             .font(.system(size: 12, weight: .regular))
                             .foregroundStyle(Color.white.opacity(0.42))
@@ -948,6 +972,14 @@ public struct UserQueryNotchStatusView: View {
             if isPermission {
                 permissionBanner(for: conversation)
                     .opacity(contentDim)
+            } else if let inlineForm {
+                ChoiceFormPanel(
+                    form: inlineForm,
+                    accent: accentColor(for: conversation.accentIndex)
+                ) { selection in
+                    submitChoiceForm(conversation.id, selection)
+                }
+                .opacity(contentDim)
             } else if showsReloadCreditsBanner(conversation) {
                 reloadCreditsBanner(for: conversation)
                     .opacity(contentDim)

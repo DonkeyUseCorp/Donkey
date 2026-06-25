@@ -732,6 +732,9 @@ final class UserQueryOverlayController {
             },
             reloadCreditsRequested: { [weak self] conversationID in
                 self?.model.reloadCredits(id: conversationID)
+            },
+            submitChoiceForm: { [weak self] conversationID, selection in
+                self?.model.submitChoiceForm(conversationID: conversationID, selection: selection)
             }
         )
     }
