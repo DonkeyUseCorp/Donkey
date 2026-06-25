@@ -19,6 +19,11 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     /// Mirrors the auth coordinator's session phase into the overlay's `needsLogin`, so the notch
     /// flips to/from the login call-to-action as the session is established or expires.
     private var authStateCancellable: AnyCancellable?
+    /// Periodically reconciles the out-of-credits reload CTA against the real balance, so it clears once the
+    /// user tops up rather than lingering until relaunch. Paired with an app-reactivation observer for the
+    /// common "topped up in the browser, came back" path. Both are torn down on sign-out.
+    private var creditReloadPollTimer: Timer?
+    private var creditReloadActiveObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if ManualCaptureDebugLaunchHandler.shouldHandle(arguments: CommandLine.arguments) {
@@ -181,6 +186,10 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         // the first query's 401. Probe the backend on launch so the notch shows login right away.
         validateStoredSession(model: model)
 
+        // Keep the out-of-credits CTA honest: poll the balance while any task is credit-blocked and clear
+        // the CTA the moment a top-up lands, so it doesn't linger until the next relaunch.
+        startCreditReloadReconciler(model: model)
+
         // Warm the on-device speech model in the background so the first voice command
         // isn't blocked behind a model download.
         AppleSpeechVoiceTranscriptionRuntime.prewarm()
@@ -253,6 +262,67 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - Credit reload reconciliation
+
+    /// Once a task is flagged out-of-credits, nothing in-app retries after the user tops up, so the notch's
+    /// reload CTA would linger until relaunch. Reconcile it against the real balance: a periodic tick while any
+    /// task carries the flag (and only then — the tick is a free no-op otherwise), plus an app-reactivation
+    /// trigger so returning from the billing page in the browser clears the CTA right away.
+    private func startCreditReloadReconciler(model: UserQueryOverlayModel) {
+        creditReloadPollTimer?.invalidate()
+        creditReloadPollTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self, weak model] _ in
+            Task { @MainActor in
+                guard let self, let model else { return }
+                self.reconcileCreditReload(model: model)
+            }
+        }
+        if let creditReloadActiveObserver {
+            NotificationCenter.default.removeObserver(creditReloadActiveObserver)
+        }
+        creditReloadActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self, weak model] _ in
+            Task { @MainActor in
+                guard let self, let model else { return }
+                self.reconcileCreditReload(model: model)
+            }
+        }
+    }
+
+    private func stopCreditReloadReconciler() {
+        creditReloadPollTimer?.invalidate()
+        creditReloadPollTimer = nil
+        if let creditReloadActiveObserver {
+            NotificationCenter.default.removeObserver(creditReloadActiveObserver)
+            self.creditReloadActiveObserver = nil
+        }
+    }
+
+    /// One reconciliation pass: skip entirely unless a task is credit-blocked and the session is usable, then
+    /// fetch the balance and clear the CTA across every flagged task once it goes positive. A 401 routes
+    /// through the same session-expiry handling as every other backend call; any other error is ignored so a
+    /// transient hiccup leaves the CTA in place for the next pass.
+    private func reconcileCreditReload(model: UserQueryOverlayModel) {
+        guard model.hasPendingCreditReload,
+              BackendSessionGate.shared.isAuthenticated,
+              let configuration = try? DonkeyBackendInferenceConfiguration.fromEnvironment()
+        else { return }
+
+        let backend = DonkeyBackendInferenceClient(
+            configuration: configuration,
+            onAuthenticationRequired: { [weak model] in
+                Task { @MainActor in model?.handleSessionExpired() }
+            }
+        )
+        Task { @MainActor [weak model] in
+            guard let balanceMicros = try? await backend.fetchCreditBalanceMicros(),
+                  balanceMicros > 0 else { return }
+            model?.clearPendingCreditReload()
+        }
+    }
+
     // MARK: - Sign out
 
     @objc private func signOutMenuAction(_ sender: Any?) {
@@ -283,6 +353,7 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     /// `startAuthenticatedAppSurfaces()` guards on these being nil, so they must be reset here.
     private func teardownAuthenticatedSurfaces() {
         authStateCancellable = nil
+        stopCreditReloadReconciler()
         uiUnderstandingCoordinator?.stop()
         uiUnderstandingCoordinator = nil
         overlayController?.stop()

@@ -204,6 +204,17 @@ public struct DonkeyBackendInferenceClient: @unchecked Sendable {
         return try JSONDecoder().decode(RemoteInferenceModelList.self, from: data)
     }
 
+    /// The account's current credit balance, in micros. Used to clear a stale "out of credits" CTA once the
+    /// user has topped up: a positive balance means a credit-exhausted task can run again. Reads the typed
+    /// `balanceMicros` field the balance endpoint returns; an absent or unparseable value reads as 0 (still
+    /// empty) rather than throwing, so a malformed body never crashes the poll.
+    public func fetchCreditBalanceMicros() async throws -> Int64 {
+        let request = makeRequest(path: "/api/credits/balance/")
+        let data = try await send(request)
+        let balance = try JSONDecoder().decode(RemoteCreditBalance.self, from: data)
+        return Int64(balance.balanceMicros) ?? 0
+    }
+
     /// Mint a short-lived Gemini Live (Vertex AI) connection: an OAuth access
     /// token plus the websocket endpoint and fully-qualified model path. The
     /// long-lived service-account credential stays on the backend.
@@ -883,4 +894,11 @@ private struct RemoteScreenshotParseStreamError: Decodable {
     var error: String?
     var message: String
     var details: RemoteInferenceJSONValue?
+}
+
+/// The slice of `GET /api/credits/balance` the app reads: just the typed balance in micros (a string in the
+/// JSON body). Everything else the endpoint returns (grants, limits, recent usage) is dashboard detail the
+/// app's credit-reload reconciler doesn't need.
+private struct RemoteCreditBalance: Decodable {
+    var balanceMicros: String
 }

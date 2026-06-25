@@ -87,6 +87,9 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     /// `updateConversation`. The same transitions also reset `conversationsStreamingAnswer`.
     private static func clearRunMetadata(_ metadata: inout [String: String]) {
         metadata[seenMetadataKey] = nil
+        // A fresh run attempt drops the stale out-of-credits CTA; if the new run hits 402 again the harness
+        // re-sets the flag. (The balance poll is the other clear path — see `clearPendingCreditReload`.)
+        metadata[UserQueryConversationMetadataKey.creditReloadRequired] = nil
     }
 
     /// Conversation IDs whose final answer is mid-stream. Tracks first-vs-subsequent answer chunk so the
@@ -426,6 +429,30 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         let billingURL = DonkeyAuthConfiguration.current().webBaseURL
             .appendingPathComponent("app/settings")
         NSWorkspace.shared.open(billingURL)
+    }
+
+    /// Whether any task still carries the out-of-credits reload CTA. The app delegate's reconciler reads this
+    /// to decide whether to spend a balance poll at all — with nothing flagged, the periodic tick is a free
+    /// no-op and never touches the network.
+    var hasPendingCreditReload: Bool {
+        notchConversations.contains {
+            $0.metadata[UserQueryConversationMetadataKey.creditReloadRequired] == "true"
+        }
+    }
+
+    /// Drop the out-of-credits reload CTA from every task that carries it, in the notch and in storage. Called
+    /// once the balance poll confirms the account has credits again (see the app delegate's reconciler), so the
+    /// CTA disappears the moment a top-up lands rather than lingering until the next launch. The balance is
+    /// account-wide, so a positive balance clears every credit-blocked task at once.
+    func clearPendingCreditReload() {
+        for index in notchConversations.indices
+        where notchConversations[index].metadata[UserQueryConversationMetadataKey.creditReloadRequired] == "true" {
+            var conversation = notchConversations[index]
+            conversation.metadata[UserQueryConversationMetadataKey.creditReloadRequired] = nil
+            conversation.updatedAt = Date()
+            notchConversations[index] = conversation
+            conversationStore.upsertConversation(conversation)
+        }
     }
 
     /// A hosted request returned 401 mid-run. Surface login once — ignored if already logged out, so a
