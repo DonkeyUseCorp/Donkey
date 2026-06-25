@@ -20,23 +20,22 @@ returns a typed preference the rest of the system obeys.
 ```text
 understand the turn ──► preference: background (default) or foreground
         │
-   per action:
-        ▼
-   guard: is background safe for this target?       ┌─ no ─► foreground: raise the
-     • the turn asked for background                │        app (one recovery), act
-     • the window is a safe surface                 │        through the real cursor
-     • it is on-screen (so on the active Space)      │
-        │ yes                                        │
-        ▼                                            │
-   deliver to the target, no raise, no cursor move ◄─┘  (foreground is always available)
+        ▼  per action
+   guard: is background safe for this target?
+     • the turn asked for background
+     • the window is a safe surface
+        │
+        ├─ no ──► foreground: raise the app (one recovery), act through the cursor
+        │
+        ▼ yes
+   deliver to the target — no raise, no cursor move
      • Accessibility action — for a control that advertises one
      • event to the process — for clicks, scroll, drag, keystrokes
 ```
 
 The understanding step decides *whether* to run in the background; the guard
 decides *whether that is safe* for the resolved window; the delivery lane
-decides *how* the action reaches the app. A reader who remembers only that
-split makes correct decisions.
+decides *how* the action reaches the app.
 
 Because a target window is resolved from the on-screen window list, a resolved
 target is already on the active desktop and not minimized — so the guard needs
@@ -57,11 +56,11 @@ control regardless of where it sits on screen. The event lane covers everything
 the Accessibility lane can't express, including web-page content and text
 entry.
 
-## Delivery Falls Back, Never Flags
+## Delivery Fallback
 
 Background event delivery tries the richest path first and degrades on its own.
-There is no switch to turn it on; it is enabled by detecting whether the system
-entry points it needs are present.
+There is no switch to turn it on: it runs when the system entry points it needs
+resolve, and steps down a path when they don't.
 
 1. The SkyLight path — cursor-neutral delivery that carries the live-input
    signal and the key-authentication envelope some apps (Chromium, Electron)

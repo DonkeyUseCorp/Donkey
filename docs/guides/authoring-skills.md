@@ -42,7 +42,7 @@ three are discovered the same way. The folder name is the skill id; keep it the
 clean app or capability name (`music`), not a description
 (`play-music-in-apple-music-with-search`).
 
-## Install & distribution
+## Install & Distribution
 
 A skill does not have to ship inside the app. The same folder — `SKILL.md` plus
 an optional `scripts/` — is also the installable unit: it can be downloaded and
@@ -56,14 +56,15 @@ manifest never duplicates it, and a skill with no manifest still installs (its
 identity then comes from the `id:` frontmatter).
 
 On install the bundle is verified before it touches the live tree: the content
-checksum must match the manifest, a present signature must verify against a
-trusted key, then the skill is placed under
+checksum must match the manifest, and a signature, if present, must verify
+against a trusted key. Only then is the skill placed under
 `…/Skills/Installed/<id>/<version>/` with a `current` symlink. A failed
-verification leaves any previously installed version untouched. Discovery merges
-installed skills between built-in and learned, and a built-in always wins an id
-collision — installing a skill can never shadow a curated one. Installed scripts
-are treated as validated (they were verified at install), but still run through
-the normal per-action consent gates.
+verification leaves any previously installed version untouched.
+
+Discovery merges installed skills between built-in and learned, and a built-in
+always wins an id collision — installing a skill can never shadow a curated one.
+Installed scripts are treated as validated, since they were verified at install,
+but they still run through the normal per-action consent gates.
 
 ## Frontmatter
 
@@ -111,9 +112,11 @@ Three kinds of app-specific facts deserve explicit statements:
 ## Compactness
 
 Several skills can load in the same turn, so every line costs context. Be
-ruthless: a skill is the few things an expert knows about THIS app that aren't
-obvious, not a tutorial. Built-in packs run 11–65 lines; treat ~65 as a ceiling,
-not a target, and if you're adding to the longest skill, cut something first.
+ruthless: a skill is the few things an expert knows about *this* app that aren't
+obvious, not a tutorial. Most built-in packs stay under 65 lines; only the
+richest few run longer, and even those fight for every line. Treat 65 as a soft
+ceiling, not a target — if you're adding to one of the longest packs, cut
+something first.
 
 Prefer short rules, exact commands, known pitfalls, and script statuses; cut
 long examples (one beats five), edge-case inventories, restated tool schemas,
@@ -142,8 +145,9 @@ A skill may ship validated scripts in a `scripts/` subfolder — discovery picks
 them up automatically, with no frontmatter line. The script id is the slugged
 relative path without extension
 (`scripts/save-note.applescript` → `scripts-save-note`).
-AppleScript, shell, and JavaScript files are recognized; bundled scripts count
-as validated, learned ones start as pending validation.
+AppleScript, shell, JavaScript, Python, and Swift files are recognized. Bundled
+and installed scripts count as validated; learned ones start as pending
+validation.
 
 The agent runs scripts with `skill_run` instead of reinventing the steps, so
 the body documents each one: id, expected input, what it does, the statuses it
@@ -153,7 +157,7 @@ allowed:
 ```text
 `skill_run` with `scriptID=scripts-save-note`, input = the note body.
 `status=saved` → verified, report the note title.
-`status=error` → read `hint=`; do not rerun the same input.
+`status=error` → the script's output says why; do not rerun the same input.
 ```
 
 Scripts are bounded and deterministic: one search-and-play, one note created,
