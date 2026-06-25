@@ -278,6 +278,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             conversationID: genericPreparedTurn.conversation.id,
             agentID: genericPreparedTurn.agent.id,
             preparedTurnMetadata: Self.genericHarnessMetadata(preparedTurn: genericPreparedTurn),
+            assets: context?.assets ?? [],
             visualize: context?.agentVisualizationChanged,
             progress: Self.progressLabeler(context?.spawnProgressChanged),
             answerStream: Self.answerDeltaSink(context?.spawnProgressChanged)
@@ -338,6 +339,11 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
     /// Task metadata keys for the drive target resolved on the first run, so a resume drives the same app.
     static let driveTargetAppMetadataKey = "harness.driveTargetApp"
     static let driveTargetBundleMetadataKey = "harness.driveTargetBundleID"
+    /// Task metadata key for the turn's understanding, persisted as JSON on the run that produced it so a
+    /// pure continuation of the SAME turn (gate approval, auto-resume) reuses it instead of recomputing.
+    /// Recomputing on resume cost a model round-trip and could silently drift the goal, parameter keys, and
+    /// chosen skills mid-task (observed: a resume re-typed `pdf_path` as `pdf_form`).
+    static let understandingMetadataKey = "harness.understandingJSON"
 
     /// Shared resume path: re-run an existing task's persisted goal as a fresh loop (its stored world
     /// model and history carry the work forward), pinned to the target the task resolved on its first run.
@@ -358,12 +364,18 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             let bundle = task.metadata[Self.driveTargetBundleMetadataKey]
             forcedDriveTarget = (app, (bundle?.isEmpty == false) ? bundle : nil)
         }
+        // A resume continues the SAME turn, so reuse the understanding the first run produced rather than
+        // re-deriving it from the goal text (which drifts the goal/params/skills and costs a round-trip).
+        // Nil when none was persisted (an older task, or understanding was unavailable first time), in which
+        // case the loop recomputes as before.
+        let preresolvedUnderstanding = HarnessRequestUnderstanding.decode(task.metadata[Self.understandingMetadataKey])
         return await runHarnessLoop(
             command: task.goal,
             traceID: "\(tracePrefix)-\(UUID().uuidString)",
             conversationID: task.conversationID,
             agentID: task.id,
             preparedTurnMetadata: [:],
+            preresolvedUnderstanding: preresolvedUnderstanding,
             forcedExecutionPreference: forcedExecutionPreference,
             forcedDriveTarget: forcedDriveTarget,
             visualize: context?.agentVisualizationChanged,
@@ -445,6 +457,8 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         conversationID: String,
         agentID: String,
         preparedTurnMetadata: [String: String],
+        assets: [UserQueryConversationAsset] = [],
+        preresolvedUnderstanding: HarnessRequestUnderstanding? = nil,
         forcedExecutionPreference: ExecutionPreference? = nil,
         forcedDriveTarget: (appName: String, bundleIdentifier: String?)? = nil,
         visualize: (@MainActor @Sendable (AgentVisualizationPlan) -> Void)? = nil,
@@ -495,6 +509,30 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // traceable in the thread file. The model boundaries hold it as `any HarnessTurnTracing`.
         let trace = HarnessTurnTrace(transcript: transcript)
 
+        // User-attached files (multiple supported): register the user-uploaded ones onto the conversation
+        // workspace so the planner sees them — with their on-disk paths — every step and can read or act on
+        // them (files.describe, image.edit, the data/pdf skills), and pass their names/types to the
+        // understanding boundary so it reads the turn against them ("turn THIS into a headshot") instead of
+        // misclassifying. Gated on the typed asset source, never the user's words. The record persists in
+        // conversation metadata, so a later resume still sees them.
+        let userAttachments = assets.filter { $0.source == .userUploaded }
+        let attachmentInfos = userAttachments.map {
+            HarnessAttachmentInfo(displayName: $0.displayName, contentType: $0.contentType)
+        }
+        if !userAttachments.isEmpty {
+            let records = userAttachments.compactMap {
+                asset -> (path: String, displayName: String, contentType: String, byteCount: Int?)? in
+                guard let path = Self.localPath(forAssetURLString: asset.urlString) else { return nil }
+                return (path, asset.displayName, asset.contentType, asset.byteCount.map(Int.init))
+            }
+            await genericHarnessLifecycle.coordinator.recordWorkspaceAttachments(
+                conversationID: conversationID, attachments: records, at: Date()
+            )
+            // Project the workspace (now carrying the attachments) into the world model immediately, so the
+            // planner's first step already sees them rather than waiting for the next per-step refresh.
+            await genericHarnessLifecycle.coordinator.refreshWorkspaceFact(agentID: agentID)
+        }
+
         // Understand the request ONCE before the loop: restate the goal, identify the target app,
         // extract parameters, and decide whether to clarify. Degrades to driving the raw command when
         // it returns nil — or when the call outlives its deadline — so a backend hiccup never
@@ -509,20 +547,40 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // understanding and routes any converse reply through the context-aware responder below.
         let priorEvents = await genericHarnessLifecycle.conversationStore.events(conversationID: conversationID)
         let isFreshTurn = !priorEvents.contains { $0.role == .assistant }
-        let understanding = await AIDeadline.race(seconds: Self.understandingTimeoutSeconds) {
-            if isFreshTurn {
-                return await understandingBoundary.understandStreaming(
+        // A pure continuation of the same turn (gate approval, auto-resume) arrives with the understanding
+        // the first run produced and skips the boundary entirely — no second round-trip, and the goal,
+        // parameters, and chosen skills stay exactly what the turn started with. Only a fresh or follow-up
+        // turn (new user text) recomputes; that result is persisted below so the next resume can reuse it.
+        let understanding: HarnessRequestUnderstanding?
+        if let preresolvedUnderstanding {
+            understanding = preresolvedUnderstanding
+            transcript.systemEvent("Continuing with the original understanding (no re-derivation on resume).")
+        } else {
+            understanding = await AIDeadline.race(seconds: Self.understandingTimeoutSeconds) {
+                if isFreshTurn {
+                    return await understandingBoundary.understandStreaming(
+                        command: command,
+                        frontmostAppName: frontmostAppName,
+                        skillCatalog: skillSelectionCatalog,
+                        attachments: attachmentInfos,
+                        onReplyDelta: answerStream ?? { _ in }
+                    )
+                }
+                return await understandingBoundary.understand(
                     command: command,
                     frontmostAppName: frontmostAppName,
                     skillCatalog: skillSelectionCatalog,
-                    onReplyDelta: answerStream ?? { _ in }
+                    attachments: attachmentInfos
                 )
             }
-            return await understandingBoundary.understand(
-                command: command,
-                frontmostAppName: frontmostAppName,
-                skillCatalog: skillSelectionCatalog
-            )
+            // Persist the freshly computed understanding on the root agent so a later resume of THIS turn
+            // reuses it instead of re-deriving (which drifts goal/params/skills). Best-effort: a nil
+            // understanding (classifier unavailable) records nothing and the resume recomputes as before.
+            if let understanding, let json = understanding.encodedJSON() {
+                await genericHarnessLifecycle.coordinator.recordMetadata(
+                    agentID: agentID, [Self.understandingMetadataKey: json]
+                )
+            }
         }
 
         // TWO-TIER SPLIT. A turn the understanding boundary typed `.converse` (a greeting, a thanks, a
@@ -619,10 +677,15 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 bundleIdentifier: bundleIdentifier
             )?.id.lowercased()
             : nil
+        // Preload at most two authoritative guides, each at a budget that fits a full skill (several —
+        // media, music, pdf, system-tools — are 5–11 KB): a guide truncated mid-section is the same
+        // silent-truncation trap as a clipped file read — the planner follows half a playbook and improvises
+        // the rest. Two guides at this cap is a deliberate prompt-size trade for keeping the playbook the
+        // task depends on intact.
         let preloadedSkillGuides: [String] = (understanding?.relevantSkillIDs ?? [])
             .filter { $0.lowercased() != appSkillID }
             .prefix(2)
-            .compactMap { BuiltInLocalAppSkillPacks.skillGuidance(forID: $0) }
+            .compactMap { BuiltInLocalAppSkillPacks.skillGuidance(forID: $0, maxCharacters: 8_000) }
 
         // Drive the frontmost app through the GENERIC HARNESS LOOP: the harness re-plans after every
         // observation, consulting `HostedHarnessStepPlanner` (the model boundary) to pick the next
@@ -659,6 +722,53 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         let imageGenerator = HostedImageGenerator(backend: backend)
         harnessServices.imageGenerator = { request in
             await imageGenerator.generate(request)
+        }
+        // Generative text/image-to-video behind video.generate. Provider stays unset so the backend
+        // routes kind=video to its configured video model (Veo); this adapter encodes any input
+        // image, then submits and polls the long-running job before writing the returned clip.
+        let videoGenerator = HostedVideoGenerator(backend: backend)
+        harnessServices.videoGenerator = { request in
+            await videoGenerator.generate(request)
+        }
+        // On-device, word-level transcription behind `transcribe`: Apple's SpeechAnalyzer / SFSpeech with
+        // per-word time ranges. This is the precise timing the media skill cuts filler words and silence
+        // against — far tighter than an llm.generate SRT — and the audio never leaves the machine.
+        let speechTranscriber = AppleSpeechVoiceTranscriptionRuntime()
+        harnessServices.transcriber = { request in
+            do {
+                let transcript = try await speechTranscriber.transcribeFile(
+                    at: URL(fileURLWithPath: request.filePath),
+                    preferredLocale: request.localeIdentifier
+                        .flatMap { $0.isEmpty ? nil : Locale(identifier: $0) } ?? .current
+                )
+                return HarnessTranscriptionResult(
+                    text: transcript.text,
+                    words: transcript.words.map {
+                        HarnessTranscriptionWord(
+                            text: $0.text,
+                            startMS: $0.startMS,
+                            endMS: $0.endMS,
+                            confidence: $0.confidence
+                        )
+                    },
+                    localeIdentifier: transcript.localeIdentifier,
+                    backend: transcript.backend
+                )
+            } catch {
+                return HarnessTranscriptionResult(
+                    text: "",
+                    words: [],
+                    localeIdentifier: nil,
+                    backend: "apple",
+                    failureReason: String(describing: error)
+                )
+            }
+        }
+        // Deterministic filler-word / silence editor behind `media.cut`: the engine runs the bundled
+        // ffmpeg over fixed cut math (MediaCutPlanner), so tightening a recording is reliable rather than
+        // an ffmpeg filtergraph the planner hand-builds each time.
+        harnessServices.mediaCutter = { request in
+            await MediaCutEngine.run(request)
         }
         // Same boundary, multimodal arm: transcribe/translate/caption a local audio or video file
         // (the media skill extracts audio and reaches for this to subtitle a clip).
@@ -1039,6 +1149,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 "genericHarness.shellConsent.tier": continuation?.metadata["shell.tier"] ?? "",
                 "genericHarness.shellConsent.reason": continuation?.metadata["shell.reason"] ?? "",
                 "genericHarness.shellConsent.allowAlways": continuation?.metadata["shell.allowAlways"] ?? "",
+                "genericHarness.choiceForm": continuation?.metadata["choiceForm"] ?? "",
                 "genericHarness.missingPermissions": missingPermissions
             ]
             let result = UserQueryCommandHandlingResult(
@@ -1584,6 +1695,14 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         )).sorted()
     }
 
+    /// Resolve a stored asset's `urlString` (a `file://` URL written when the asset was copied into
+    /// Application Support, or already an absolute path) to an on-disk path; nil for anything non-local.
+    private static func localPath(forAssetURLString urlString: String) -> String? {
+        if let url = URL(string: urlString), url.isFileURL { return url.path }
+        if urlString.hasPrefix("/") { return urlString }
+        return nil
+    }
+
     private static func harnessRequest(
         command: String,
         context: UserQueryCommandContext?
@@ -1625,7 +1744,8 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             "genericHarness.shellConsent.command": runStep?.task.pendingContinuation?.metadata["shell.command"] ?? "",
             "genericHarness.shellConsent.tier": runStep?.task.pendingContinuation?.metadata["shell.tier"] ?? "",
             "genericHarness.shellConsent.reason": runStep?.task.pendingContinuation?.metadata["shell.reason"] ?? "",
-            "genericHarness.shellConsent.allowAlways": runStep?.task.pendingContinuation?.metadata["shell.allowAlways"] ?? ""
+            "genericHarness.shellConsent.allowAlways": runStep?.task.pendingContinuation?.metadata["shell.allowAlways"] ?? "",
+            "genericHarness.choiceForm": runStep?.task.pendingContinuation?.metadata["choiceForm"] ?? ""
         ]
     }
 }

@@ -94,8 +94,17 @@ public struct GenericHarnessRuntime: Sendable {
         // produced anything still fails safe — the stall guard's guarantee is preserved.
         var hadRealWork = false
         var stepsSinceWorldChange = 0
-        // Names of read-only tools, so only a world-changing NON-read-only success counts as real work.
-        let readOnlyToolNames = Set((await registry.descriptors()).filter { $0.safetyClass == .readOnly }.map(\.name))
+        // Whether the deliverable-progress gate has already nudged this run (one-shot, so a long
+        // legitimate acquisition isn't repeatedly scolded).
+        var reconNudged = false
+        // Names of NON-producing tools, so only a world-changing success that actually produces something
+        // counts as "real work". This is every read-only tool PLUS the cacheable reads (files.describe,
+        // transcribe) — those are classed `.sensitive` for permissions but are still reconnaissance, not a
+        // deliverable, so they must not flip the recon done-gate's `hadRealWork`.
+        let nonProducingToolNames = Set((await registry.descriptors()).filter {
+            $0.safetyClass == .readOnly
+                || $0.metadata[HarnessToolDescriptor.cacheableReadMetadataKey] == "true"
+        }.map(\.name))
 
         // Mark this task as having a live loop. While marked, an enqueued follow-up is guaranteed delivery:
         // it is drained at the top of each iteration, and the only stop that actually ends the run is one
@@ -134,6 +143,9 @@ public struct GenericHarnessRuntime: Sendable {
             }
             iterations += 1
 
+            // Project the conversation's workspace memory (files produced, chosen base, promoted folder)
+            // into the world model before planning so it survives compaction and reaches every step.
+            await coordinator.refreshWorkspaceFact(agentID: agentID)
             guard let task = await coordinator.agent(id: agentID), task.status.canExecuteTools else {
                 if await coordinator.endRunUnlessPending(agentID: agentID) { break loop } else { continue loop }
             }
@@ -173,7 +185,7 @@ public struct GenericHarnessRuntime: Sendable {
                 stepsSinceWorldChange = 0
                 if step.toolResult?.status == .succeeded,
                    !call.name.hasPrefix("run."),
-                   !readOnlyToolNames.contains(call.name) {
+                   !nonProducingToolNames.contains(call.name) {
                     hadRealWork = true
                 }
             } else {
@@ -181,6 +193,21 @@ public struct GenericHarnessRuntime: Sendable {
             }
             if step.stoppedForGate || !step.task.status.canExecuteTools {
                 if await coordinator.endRunUnlessPending(agentID: agentID) { break loop } else { continue loop }
+            }
+
+            // Deliverable-progress done-gate. Once enough steps have passed with no PRODUCING action yet
+            // (hadRealWork still false — only reads/observations), nudge once: produce the result now or
+            // report the specific blocker. A one-shot annotation, not a hard stop, so a legitimately long
+            // acquisition isn't killed; the stall guards below still backstop a true loop.
+            if !hadRealWork, !reconNudged, iterations >= Self.maxReconStepsBeforeNudge {
+                reconNudged = true
+                _ = await coordinator.annotateLastToolRecord(
+                    agentID: agentID,
+                    note: "NOTE: \(iterations) steps in and nothing has been produced toward the deliverable "
+                        + "yet — only reconnaissance (locating, reading, listing). Stop scouting: take the "
+                        + "action that creates the result now, or if you are blocked, report the specific "
+                        + "blocker honestly. Do not re-read or re-list what you already have."
+                )
             }
 
             // Stall detection — a step that changes the world or records a succeeded action is
@@ -336,6 +363,13 @@ public struct GenericHarnessRuntime: Sendable {
     /// by the step-budget path to tell re-verification (conclude) from genuine progress (time out).
     private static let spinStepsBeforeConclude = 3
 
+    /// How many steps a run may take while producing NOTHING toward the deliverable (only reconnaissance —
+    /// locating, reading, listing) before the loop nudges it to produce-or-report. The no-progress streak
+    /// resets on any world-model change, so a string of distinct successful reads looks like progress and
+    /// never trips it (observed: 16 steps of recon, zero fields filled). This gate watches a different
+    /// thing — whether any *producing* action has happened yet — so pure scouting can't run forever.
+    private static let maxReconStepsBeforeNudge = 8
+
     /// Ends a stalled run. A QUIET stall — the planner stopped advancing but isn't thrashing
     /// (`noProgress`) — can be a finished task that is merely re-verifying itself, so if it did real work
     /// and the goal is evidence-backed, conclude as COMPLETE rather than fail. Every OTHER stall is the
@@ -486,7 +520,8 @@ public struct GenericHarnessRuntime: Sendable {
             guard let stoppedTask = await coordinator.waitForUser(
                 agentID: agentID,
                 question: result.question ?? "What detail should I use?",
-                pendingToolCall: call
+                pendingToolCall: call,
+                metadata: result.metadata
             ) else {
                 return nil
             }
@@ -608,34 +643,50 @@ public struct GenericHarnessRuntime: Sendable {
         )
     }
 
-    /// Rejects a state-changing call whose exact (tool, input) already succeeded earlier in this run —
-    /// re-running it only duplicates the side effect. Read-only tools, a multi-action tool's declared
-    /// read actions, lifecycle calls, and records from previous runs of a resumed task are exempt.
-    /// Returns a failed result that tells the planner to verify and complete instead of repeating.
+    /// Both halves of "you already ran this exact (tool, input) and it succeeded this run":
+    ///  - a tool that OPTS IN to caching (`cacheableRead`) → serve the prior result from the run's READ
+    ///    CACHE instead of re-executing, so an identical re-read costs nothing.
+    ///  - a STATE-CHANGING tool → reject the repeat (re-running duplicates the side effect) and hand the
+    ///    prior result back so the planner isn't blind and advances instead of looping.
+    /// Caching is opt-in — and gated on the FLAG, not the safety class — because "read-only" does not imply
+    /// "pure": a counter, a clock, a directory being written all read without side effects yet return
+    /// different values each call, so a blanket read-only cache would serve stale data. Only a tool that
+    /// declares its identical-input result stable opts in. A read whose resource a later state-changing step
+    /// may have altered is re-run, not served stale. Plain read-only tools that don't opt in, a multi-action
+    /// tool's declared read actions, lifecycle calls, and records from previous runs are all exempt (re-run).
     private func duplicateActionRejection(
         call: HarnessToolCall,
         task: HarnessAgentState
     ) async -> HarnessToolResult? {
         guard !call.name.hasPrefix("run."), !call.name.hasPrefix("conversation.") else { return nil }
         let descriptors = await registry.descriptors()
-        let readOnlyNames = Set(descriptors.filter { $0.safetyClass == .readOnly }.map(\.name))
-        guard !readOnlyNames.contains(call.name) else { return nil }
+        let descriptor = descriptors.first { $0.name == call.name }
+        let isReadOnly = descriptor?.safetyClass == .readOnly
+        // Cache-eligible iff the tool explicitly asserts a stable read AND isn't a live observation. The
+        // flag — not the safety class — is the gate: a pure read (a file's contents) may be classed
+        // `.sensitive` for permissions yet still be safe to cache.
+        let isCacheableRead = descriptor?.metadata[HarnessToolDescriptor.cacheableReadMetadataKey] == "true"
+            && descriptor?.metadata[HarnessToolDescriptor.volatileResultMetadataKey] != "true"
         // A multi-action tool's read actions (list/entries style) are verification, not side
         // effects — exempt them by the descriptor's declared read-only action values, matched on
         // the typed `action` input.
         if let action = call.input["action"],
-           let declared = descriptors.first(where: { $0.name == call.name })?
-               .metadata[HarnessToolDescriptor.readOnlyActionsMetadataKey],
+           let declared = descriptor?.metadata[HarnessToolDescriptor.readOnlyActionsMetadataKey],
            declared.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespaces) }).contains(action) {
             return nil
         }
+        // A plain read-only tool that doesn't opt into caching re-runs freely (re-reading/observing is
+        // cheap and legitimately reflects fresh state).
+        if isReadOnly, !isCacheableRead { return nil }
         let signature = Self.canonicalInput(call.input)
-        let priorRecord = Self.currentRunHistory(task.toolHistory).last { record in
+        let runHistory = Self.currentRunHistory(task.toolHistory)
+        guard let priorIndex = runHistory.lastIndex(where: { record in
             record.resultStatus == .succeeded
                 && record.call.name == call.name
                 && Self.canonicalInput(record.call.input) == signature
-        }
-        guard let priorRecord else { return nil }
+        }) else { return nil }
+        let priorRecord = runHistory[priorIndex]
+
         // Hand the earlier RESULT back, not just "don't repeat". The planner usually re-runs a call
         // because its result fell out of the compacted context — so withholding it leaves the planner
         // blind and it loops on the same call until the stall guard kills the run (observed live: a
@@ -643,9 +694,41 @@ public struct GenericHarnessRuntime: Sendable {
         // the prior output gives the planner what it was after so it can move on. Bounded so a large
         // listing can't bloat the next prompt.
         let priorOutput = priorRecord.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Echo the prior result with a generous bound. When it is clipped, say WHY in the same terms the
+        // planner prompt uses for trimmed history: the full output is already captured and re-running won't
+        // lengthen this view. A bare "[truncated]" marker reads as a truncated FILE and sends the planner
+        // re-reading the same content through ever-fancier commands — the loop this echo exists to stop.
+        let dedupEchoMaxLength = 2_000
+        let echoBody = priorOutput.count > dedupEchoMaxLength
+            ? String(priorOutput.prefix(dedupEchoMaxLength))
+                + " …[view trimmed; the full \(priorOutput.count)-char output is already captured — "
+                + "re-running this read will NOT lengthen it]"
+            : priorOutput
         let resultBlock = priorOutput.isEmpty
             ? ""
-            : " It already returned:\n\(String(priorOutput.prefix(500)))\n"
+            : " It already returned:\n\(echoBody)\n"
+
+        if isCacheableRead {
+            // Read cache. Only serve the cached value when nothing the run has done since could have
+            // changed what this read sees: a succeeded state-changing step in between means the resource
+            // may differ now, so let it re-run rather than serve stale.
+            let readOnlyNames = Set(descriptors.filter { $0.safetyClass == .readOnly }.map(\.name))
+            let stateChangedSince = runHistory[runHistory.index(after: priorIndex)...].contains { record in
+                record.resultStatus == .succeeded
+                    && !record.call.name.hasPrefix("run.")
+                    && !record.call.name.hasPrefix("conversation.")
+                    && !readOnlyNames.contains(record.call.name)
+            }
+            if stateChangedSince { return nil }
+            return HarnessToolResult(
+                callID: call.id,
+                toolName: call.name,
+                status: .succeeded,
+                summary: "Served from this run's read cache: `\(call.name)` already ran with this exact input and nothing you've done since changes what it sees.\(resultBlock)Use this; don't re-read it.",
+                metadata: ["reason": "readCacheHit", "servedFromCache": "true"]
+            )
+        }
+
         return HarnessToolResult(
             callID: call.id,
             toolName: call.name,

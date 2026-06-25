@@ -116,6 +116,15 @@ struct FilesWritePathResolutionTests {
         let url = BuiltInHarnessToolExecutors.resolveWritePath("notes.txt", in: worldModel(baseDir: nil))
         #expect(url.path == NSHomeDirectory() + "/notes.txt")
     }
+
+    @Test
+    func relativeTraversalCannotEscapeWorkspaceBase() {
+        let url = BuiltInHarnessToolExecutors.resolveWritePath(
+            "../../secret/notes.md",
+            in: worldModel(baseDir: "/Users/x/Downloads/proj")
+        )
+        #expect(url.path == "/Users/x/Downloads/proj/secret/notes.md")
+    }
 }
 
 /// The runtime capture + projection: a succeeded file-producing step is recorded into the conversation
@@ -235,11 +244,20 @@ struct CommandBackendDestinationTests {
     }
 
     @Test
-    func absoluteDestinationIsHonored() {
+    func absoluteDestinationIsReRootedUnderBase() {
+        // No-consent tool: an absolute destination is confined under base, never honored as-is.
         let url = DonkeyCommandBackends.resolveOutputDestination(
             "/Users/x/Desktop/out.pdf", baseDir: "/Users/x/Downloads/report", format: "pdf", defaultName: "image"
         )
-        #expect(url.path == "/Users/x/Desktop/out.pdf")
+        #expect(url.path == "/Users/x/Downloads/report/Users/x/Desktop/out.pdf")
+    }
+
+    @Test
+    func traversalDestinationCannotEscapeBase() {
+        let url = DonkeyCommandBackends.resolveOutputDestination(
+            "../../../../etc/cron.d/evil", baseDir: "/Users/x/Downloads/report", format: "png", defaultName: "image"
+        )
+        #expect(url.path == "/Users/x/Downloads/report/etc/cron.d/evil.png")
     }
 
     @Test

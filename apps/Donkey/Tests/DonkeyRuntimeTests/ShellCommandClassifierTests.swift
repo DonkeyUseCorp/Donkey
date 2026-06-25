@@ -55,6 +55,9 @@ struct ShellCommandClassifierTests {
         // must not raise an Approve/Deny gate.
         #expect(tier("epub-pack build ./pages --meta book.json -o book.epub") == .read)
         #expect(tier("epub-pack validate book.epub") == .read)
+        // reframe writes the vertical clip for the shorts skill — bundled and first-party, so an
+        // auto-reframe must not raise an Approve/Deny gate.
+        #expect(tier("reframe --input clip.mp4 --output clip_v.mp4 --aspect 9:16") == .read)
         // A path-qualified invocation normalizes to the bare tool name and is still trusted.
         #expect(tier("/opt/donkey-tools/yt-dlp -P ~/Downloads 'https://youtu.be/x'") == .read)
         // The real install path lives under "Application Support" — a space inside a quoted executable

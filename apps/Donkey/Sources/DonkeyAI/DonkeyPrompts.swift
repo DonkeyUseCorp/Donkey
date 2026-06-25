@@ -105,13 +105,20 @@ public enum DonkeyPrompts {
     public static func requestUnderstanding(
         command: String,
         frontmostAppName: String,
-        skillCatalog: String? = nil
+        skillCatalog: String? = nil,
+        attachments: [HarnessAttachmentInfo] = []
     ) -> String {
         let trimmedCatalog = skillCatalog?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let skillsBlock = trimmedCatalog.isEmpty
             ? ""
             : "\nSKILLS (each is an authoritative playbook for its domain; the one(s) you name in "
                 + "relevantSkillIDs get loaded for the planner):\n\(trimmedCatalog)\n"
+        let attachmentsBlock = attachments.isEmpty
+            ? ""
+            : "\nATTACHED FILES — the user attached these to THIS turn; the request is almost certainly "
+                + "about them (\"this photo\", \"these\", \"it\"), so this is an \"act\" turn that operates "
+                + "on these files (the planner reads/edits them at their paths):\n"
+                + attachments.map { "- \($0.displayName) (\($0.contentType))" }.joined(separator: "\n") + "\n"
         return """
         You are the first step of a macOS agent. Read the user's request and return a precise, structured
         understanding of EXACTLY what they want. You do not act or choose tools here — a separate planner
@@ -120,7 +127,7 @@ public enum DonkeyPrompts {
         The app currently in front of the user is "\(frontmostAppName)".
 
         USER REQUEST: \(command)
-        \(skillsBlock)
+        \(attachmentsBlock)\(skillsBlock)
         Fill the fields:
         - turnKind: what this turn fundamentally is. Decide this FIRST and let it govern everything else:
           - "converse": a greeting ("hi", "hey", "yo"), thanks, acknowledgement, small talk, or a
@@ -158,6 +165,13 @@ public enum DonkeyPrompts {
         - parameters: the concrete details needed to do it (e.g. title, recipient, query, value), as
           string key/values. Omit what is not specified.
         - successCriteria: what would be visible on screen once the goal is done.
+        - plan: for an "act" turn, a SHORT ordered list (usually 3–6 items) of the real steps to the
+          deliverable — what an expert would actually do, end to end, INCLUDING the hard part. Name the
+          decisive step explicitly so the planner aims at it instead of circling acquisition: e.g. filling
+          an official form is "read the data → list the form's fields → MAP fields to the data and COMPUTE
+          the derived values (the hard step) → write the filled file → verify", not just "open the form".
+          One imperative phrase per step; mark the hard/decisive ones (a mapping, a calculation, a
+          transform). Leave empty for a trivial one-step task and for "converse"/"clarify".
         - needsClarification: set true exactly when turnKind is "clarify" — the request is genuinely
           ambiguous or missing detail that you cannot reasonably resolve, or it is destructive without a
           clear target. Always false for "converse" and for an under-specified but low-risk, reversible
@@ -240,6 +254,27 @@ public enum DonkeyPrompts {
     /// until the run stalled. The planner can always re-read specifics; this only bounds the recap.
     public static let harnessStepSummaryMaxLength = 600
 
+    /// The MOST RECENT step's result is the observation the planner acts on right now, so it is rendered
+    /// at the full capture budget instead of the 600-char recap cap. Clipping the just-produced result
+    /// below what the tool actually captured made a complete small read (e.g. a 1.2 KB text file read with
+    /// `cat`) look truncated: the planner saw "…[truncated]", concluded it hadn't seen the whole file, and
+    /// looped re-reading it (`cat | cat`, then `python3 …`) — every re-read re-clipped, so it never escaped.
+    /// Matching the shell-output capture cap means a read that fit in the capture is shown in full; older
+    /// results still collapse to `harnessStepSummaryMaxLength`.
+    public static let harnessLatestResultMaxLength = 4_000
+
+    /// The marker appended when a tool result is shortened FOR THE PROMPT (context-window trimming), with
+    /// the full size named. This is deliberately not the word "truncated": a bare "…[truncated]" reads
+    /// identically whether the harness shortened its own view or the source DATA is partial, and a real run
+    /// conflated the two — it saw the marker on a fully-captured 1.2 KB file, decided the file was partial,
+    /// and re-read it (cat → python3) into a permission gate. Naming the cause and the full byte count, and
+    /// stating that re-reading won't restore it, stops that category error. The full result stays in the
+    /// run record; only this rendered view is shortened.
+    public static func contextTrimNotice(fullCharacterCount count: Int) -> String {
+        " …[context-trimmed for prompt; full output was \(count) chars and is already captured — "
+            + "re-running the read will NOT lengthen this view]"
+    }
+
     /// Distills a finished run into at most one durable, general operating lesson for the agent's future
     /// self. Fed the run's goal, terminal outcome, and full thread trace; returns strict JSON. The model
     /// is told to stay general (an operating rule, never task-specific facts or anything about this
@@ -264,8 +299,15 @@ public enum DonkeyPrompts {
         or personal data; a restatement of the goal; or generic advice this run did not actually teach. If
         the run went smoothly and taught nothing new, return an empty lesson — that is the common case.
 
+        NEVER save a lesson about working around the harness's own guardrails. If the run hit an
+        "already done / you already have this" guard, a stall/no-progress stop, or a permission gate, the
+        lesson is NOT how to slip past it (perturbing the command, repeating to evade the check) — that is
+        backwards and harmful. The guard means the run was looping or needed consent; the lesson, if any, is
+        to advance, verify, or ask. Prefer an empty lesson; and if the only lesson you can draw would teach
+        slipping past such a guard, set "unsafe": true so it is discarded.
+
         Return STRICT JSON and nothing else:
-        {"lesson": "<one imperative sentence, or empty string if nothing is worth saving>", "cue": "<short phrase naming the kind of task this applies to>", "confidence": <0.0-1.0>}
+        {"lesson": "<one imperative sentence, or empty string if nothing is worth saving>", "cue": "<short phrase naming the kind of task this applies to>", "confidence": <0.0-1.0>, "unsafe": <true only if the lesson teaches defeating a harness guardrail, else false>}
 
         THREAD:
         \(thread)
@@ -351,6 +393,37 @@ public enum DonkeyPrompts {
             : "\nLESSONS FROM PAST RUNS (hard-won operating knowledge from earlier tasks — apply when "
                 + "relevant; they reflect what worked or failed before):\n\(trimmedLessons)\n"
 
+        // GUI-operation craft only earns its place when the turn actually drives an app's interface. The
+        // understanding boundary types that as actionSurface, so on an appless turn (the deliverable is a
+        // file, answer, or system change) the full cluster below is dead weight on every cached step.
+        // Collapse it to a one-line fallback pointer there; the elements block still names the SEE tools if
+        // a step unexpectedly needs the GUI. guiApp — and the safe default when no understanding was
+        // produced — gets the full craft.
+        let drivesGUI = understanding?.actionSurface != .appless
+        let guiOperationGuidance = drivesGUI ? """
+        - Only operate the GUI when the task genuinely needs it (canvas/Electron/proprietary UI, or no
+          system-tool equivalent). When you do: SEE before you act — prefer ax.observe (fast,
+          structured) for native apps; use vision.capture when Accessibility is missing or insufficient
+          — then act on a specific element by passing its id from the list above in "input". The see/act
+          tools focus the target app for you, so do NOT `open -a`/activate it first as a prerequisite —
+          go straight to ax.observe. Re-issuing a focus/open step instead of advancing is a loop that
+          burns the run.
+        - The action you need may not be a visible button. Figure it out like a person would, using the
+          general actions: RIGHT-CLICK an item (ax.click/vision.click button=right) to open its full
+          context menu — that is where Delete / Remove / Rename / "…from Library" usually live; or
+          select/open the item first and use its focused "⋯" / "More" / gear OVERFLOW menu; mouse.scroll
+          to bring offscreen items or controls into view; use the menu bar; or select an item and press
+          the matching key. After any of these, SEE again and read the
+          WHOLE menu before clicking — a context menu, popup, or confirmation dialog is just more
+          elements to observe, and the right entry is often a small labeled row near the bottom of a long
+          menu. Don't conclude something is impossible until you've tried these; only report it
+          unsupported if a skill says so or the paths are exhausted.
+        """ : """
+        - This turn's deliverable is a file, answer, or system change, not an app's UI — stay in system,
+          web, and generative tools. Only if a step genuinely needs the GUI, SEE first (ax.observe, or
+          vision.capture when Accessibility is thin) and act on an element by its id.
+        """
+
         return """
         You are an expert macOS power user. Choose ONE tool to run next, then you will see the result
         and choose again. Work toward the goal in small, verifiable steps. Many tasks are solved
@@ -380,23 +453,7 @@ public enum DonkeyPrompts {
           found`, adapt: reach for another tool that does the job, or — if the task genuinely needs
           that one — report what's missing. Never install software or use a package manager (pip,
           brew, npm, etc.); a missing tool is reported, not fetched.
-        - Only operate the GUI when the task genuinely needs it (canvas/Electron/proprietary UI, or no
-          system-tool equivalent). When you do: SEE before you act — prefer ax.observe (fast,
-          structured) for native apps; use vision.capture when Accessibility is missing or insufficient
-          — then act on a specific element by passing its id from the list above in "input". The see/act
-          tools focus the target app for you, so do NOT `open -a`/activate it first as a prerequisite —
-          go straight to ax.observe. Re-issuing a focus/open step instead of advancing is a loop that
-          burns the run.
-        - The action you need may not be a visible button. Figure it out like a person would, using the
-          general actions: RIGHT-CLICK an item (ax.click/vision.click button=right) to open its full
-          context menu — that is where Delete / Remove / Rename / "…from Library" usually live; or
-          select/open the item first and use its focused "⋯" / "More" / gear OVERFLOW menu; mouse.scroll
-          to bring offscreen items or controls into view; use the menu bar; or select an item and press
-          the matching key. After any of these, SEE again and read the
-          WHOLE menu before clicking — a context menu, popup, or confirmation dialog is just more
-          elements to observe, and the right entry is often a small labeled row near the bottom of a long
-          menu. Don't conclude something is impossible until you've tried these; only report it
-          unsupported if a skill says so or the paths are exhausted.
+        \(guiOperationGuidance)
         - Operating a specific app — even by script (playing music, saving a note, sending mail)? If it
           appears in INSTALLED APP SKILLS above, consult that skill FIRST (app_skill) and run its
           validated scripts (skill_run) before hand-writing osascript: the skill is the authority and
@@ -409,6 +466,12 @@ public enum DonkeyPrompts {
           thing: a better query, a different tool or layer, activating the app, a more specific
           element. Never re-run the same tool with the same input, and after one or two informed
           retries stop and report the blocker instead of trying a third variation.
+        - An "already done / you already have this result" reply is a LOOP signal, not an obstacle. It
+          means the output is already in your context — read it and take the NEXT action toward the goal.
+          Do NOT perturb the command (whitespace, a dummy comment, piping to cat, a fresh interpreter) to
+          get past the guard; that is how a finished read becomes a permission gate. Same for a context
+          marker like "[context-trimmed; full output already captured]" — the data is complete, your view
+          of it was shortened; re-reading cannot lengthen it, so proceed with what you have.
         - Need a current fact you can't be sure of (an artist's latest album, today's news, a price, an
           address)? Use web.search to find it and web.fetch to read a result in full — don't guess and
           don't drive a browser GUI for this. Never write factual or creative material (a tracklist,
@@ -417,6 +480,15 @@ public enum DonkeyPrompts {
           which kills the step. To build a long note/document, generate it with llm.generate (or fetch
           it) using toFile=true, then assemble the note from the returned file — never refuse a task
           as "too long".
+        - Keep a conversation's files together. The `workspace` line under Known state is what you've
+          already produced and where (the filesystem is truth — `ls` to reconcile); reuse it on
+          follow-ups, never re-create it. Save where the user named; otherwise pick a sensible base
+          (~/Downloads, ~/Desktop, ~/Documents). One file stays loose there; when a SECOND related file
+          appears, mkdir a clearly-named folder and mv the earlier one(s) in (a visible step) before
+          writing more. A task that is multi-file from the start (an app, a site) gets its folder up front.
+          Intermediate and produced files (a `fields.json` dump, a generated PDF, a copied input) belong in
+          the workspace folder, never loose in your home directory. And don't COPY a found input next to
+          yourself just to shorten a path — read and write it where it already lives, by absolute path.
         - If the request is a question or chit-chat rather than an action, answer with
           conversation.respond (set input.response), then run.complete.
         - If a required detail is missing and you cannot safely proceed, use user.clarify
@@ -470,10 +542,10 @@ public enum DonkeyPrompts {
         let elementsBlock = harnessStepElementsBlock(task.worldModel.elements)
         let windowsBlock = harnessStepWindowsBlock(openWindows)
 
-        // Follow-up instructions the user added after the task started get their own block so they are
-        // excluded from the generic facts dump.
-        let displayFacts = task.worldModel.facts
-            .filter { $0.key != HarnessAgentCoordinator.additionalInstructionsFactKey }
+        // Follow-up instructions the user added after the task started get their own block below, and the
+        // machine-readable workspace base dir is executor-only — both are hidden from this generic facts
+        // dump centrally via `modelFacingFacts`.
+        let displayFacts = task.worldModel.modelFacingFacts
         let factsBlock = displayFacts.isEmpty
             ? ""
             : "\nKnown state:\n" + displayFacts.sorted { $0.key < $1.key }
@@ -648,9 +720,12 @@ public enum DonkeyPrompts {
                 .joined(separator: "; ")
             lines.append("  Earlier steps 1-\(evicted.count) (condensed): \(condensed)")
         }
-        lines += recent.map { record in
-            let summary = record.summary.count > harnessStepSummaryMaxLength
-                ? String(record.summary.prefix(harnessStepSummaryMaxLength)) + " …[truncated]"
+        lines += recent.enumerated().map { index, record in
+            // The last recent record is the result the planner is acting on this step — show it in full
+            // so a complete small read never reads as truncated and sends the planner re-reading in a loop.
+            let cap = index == recent.count - 1 ? harnessLatestResultMaxLength : harnessStepSummaryMaxLength
+            let summary = record.summary.count > cap
+                ? String(record.summary.prefix(cap)) + contextTrimNotice(fullCharacterCount: record.summary.count)
                 : record.summary
             return "  \(record.call.name): \(summary)"
         }
@@ -674,6 +749,15 @@ public enum DonkeyPrompts {
         }
         if let criteria = understanding.successCriteria, !criteria.isEmpty {
             lines.append("  Success when: \(criteria)")
+        }
+        if !understanding.plan.isEmpty {
+            // The up-front plan, shown every step so the planner works toward the decisive step instead of
+            // re-deriving the task shape and circling acquisition. Advisory — the planner still picks each
+            // tool — but it is the agreed route; don't get stuck on step 1 when the point is step 3.
+            let steps = understanding.plan.enumerated()
+                .map { "    \($0.offset + 1). \($0.element)" }
+                .joined(separator: "\n")
+            lines.append("  Plan (the route to the deliverable — aim at the decisive step, don't circle the easy ones):\n\(steps)")
         }
         guard !lines.isEmpty else { return "" }
         return "WHAT THE USER WANTS:\n" + lines.joined(separator: "\n") + "\n"

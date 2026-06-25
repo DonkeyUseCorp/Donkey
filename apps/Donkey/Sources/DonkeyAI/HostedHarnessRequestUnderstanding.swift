@@ -8,7 +8,7 @@ import Foundation
 /// criteria, and a clarify gate. The per-step `HostedHarnessStepPlanner` still chooses every tool —
 /// this only sharpens what "the goal" means and which app to drive, so the planner stops re-deriving
 /// intent from a raw string on every step.
-public struct HarnessRequestUnderstanding: Sendable, Equatable {
+public struct HarnessRequestUnderstanding: Sendable, Equatable, Codable {
     /// What this turn fundamentally is: a conversation, an action on the Mac, or a clarifying question.
     /// Decided here, before any action machinery exists, and the single fact the caller routes on —
     /// only `.act` ever reaches the action planner. A `.converse` turn is answered by a responder that
@@ -31,6 +31,12 @@ public struct HarnessRequestUnderstanding: Sendable, Equatable {
     public var parameters: [String: String]
     /// What, observable on screen, would mean the goal is done.
     public var successCriteria: String?
+    /// A short ordered plan for an `.act` turn — the few real steps to the deliverable, named up front so
+    /// the planner works toward the point instead of re-deriving the shape each step and circling the easy
+    /// parts. Each step is one imperative phrase; the hard/decisive ones (a mapping, a computation) are
+    /// flagged in the text. Empty for `.converse`/`.clarify` and for trivial one-step tasks. Advisory, not
+    /// harness-tracked: the planner still chooses each tool and the done-gate enforces real progress.
+    public var plan: [String]
     /// True only when the request is genuinely ambiguous or missing critical detail and cannot be
     /// safely resolved with reasonable defaults.
     public var needsClarification: Bool
@@ -60,6 +66,7 @@ public struct HarnessRequestUnderstanding: Sendable, Equatable {
         actionSurface: HarnessActionSurface = .guiApp,
         parameters: [String: String] = [:],
         successCriteria: String? = nil,
+        plan: [String] = [],
         needsClarification: Bool = false,
         clarifyingQuestion: String? = nil,
         executionPreference: ExecutionPreference = .background,
@@ -72,11 +79,27 @@ public struct HarnessRequestUnderstanding: Sendable, Equatable {
         self.actionSurface = actionSurface
         self.parameters = parameters
         self.successCriteria = successCriteria
+        self.plan = plan
         self.needsClarification = needsClarification
         self.clarifyingQuestion = clarifyingQuestion
         self.executionPreference = executionPreference
         self.relevantSkillIDs = relevantSkillIDs
         self.conversationReply = conversationReply
+    }
+
+    /// Serialize to a compact JSON string for persistence (e.g. the root agent's metadata), so a later
+    /// continuation of the SAME turn — a permission-gate approval or an unattended auto-resume — can reuse
+    /// the original understanding instead of recomputing it. Returns nil only if encoding fails.
+    public func encodedJSON() -> String? {
+        guard let data = try? JSONEncoder().encode(self) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// Decode a persisted understanding produced by `encodedJSON()`. Returns nil for a nil/empty/garbled
+    /// value, so a missing or stale record falls back to recomputing rather than crashing.
+    public static func decode(_ json: String?) -> HarnessRequestUnderstanding? {
+        guard let json, !json.isEmpty, let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(HarnessRequestUnderstanding.self, from: data)
     }
 }
 
@@ -107,18 +130,25 @@ public final class HostedHarnessRequestUnderstanding {
     public func understand(
         command: String,
         frontmostAppName: String,
-        skillCatalog: String? = nil
+        skillCatalog: String? = nil,
+        attachments: [HarnessAttachmentInfo] = []
     ) async -> HarnessRequestUnderstanding? {
         let prompt = DonkeyPrompts.requestUnderstanding(
             command: command,
             frontmostAppName: frontmostAppName,
-            skillCatalog: skillCatalog
+            skillCatalog: skillCatalog,
+            attachments: attachments
         )
         for _ in 0..<Self.maxAttempts {
             let startedAt = RunTraceTimestamp.now()
             do {
                 let response = try await backend.createResponse(
-                    responseRequest(command: command, frontmostAppName: frontmostAppName, skillCatalog: skillCatalog)
+                    responseRequest(
+                        command: command,
+                        frontmostAppName: frontmostAppName,
+                        skillCatalog: skillCatalog,
+                        attachments: attachments
+                    )
                 )
                 let endedAt = RunTraceTimestamp.now()
                 let finishReason = RemoteInferenceResponseHelpers.providerFinishReason(from: response)
@@ -167,12 +197,14 @@ public final class HostedHarnessRequestUnderstanding {
         command: String,
         frontmostAppName: String,
         skillCatalog: String? = nil,
+        attachments: [HarnessAttachmentInfo] = [],
         onReplyDelta: @escaping @MainActor @Sendable (String) -> Void
     ) async -> HarnessRequestUnderstanding? {
         let prompt = DonkeyPrompts.requestUnderstanding(
             command: command,
             frontmostAppName: frontmostAppName,
-            skillCatalog: skillCatalog
+            skillCatalog: skillCatalog,
+            attachments: attachments
         )
         let startedAt = RunTraceTimestamp.now()
         let streamer = ReplyFieldStreamer()
@@ -226,6 +258,9 @@ public final class HostedHarnessRequestUnderstanding {
             actionSurface: wire.actionSurface.flatMap { HarnessActionSurface(rawValue: $0) } ?? .guiApp,
             parameters: wire.parameters ?? [:],
             successCriteria: wire.successCriteria.flatMap { $0.isEmpty ? nil : $0 },
+            plan: (wire.plan ?? [])
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty },
             needsClarification: wire.needsClarification ?? false,
             clarifyingQuestion: wire.clarifyingQuestion.flatMap { $0.isEmpty ? nil : $0 },
             executionPreference: wire.executionPreference
@@ -267,6 +302,7 @@ public final class HostedHarnessRequestUnderstanding {
         var actionSurface: String?
         var parameters: [String: String]?
         var successCriteria: String?
+        var plan: [String]?
         var needsClarification: Bool?
         var clarifyingQuestion: String?
         var executionPreference: String?
@@ -274,7 +310,7 @@ public final class HostedHarnessRequestUnderstanding {
         var conversationReply: String?
 
         private enum CodingKeys: String, CodingKey {
-            case turnKind, restatedGoal, targetAppName, actionSurface, parameters, successCriteria, needsClarification, clarifyingQuestion
+            case turnKind, restatedGoal, targetAppName, actionSurface, parameters, successCriteria, plan, needsClarification, clarifyingQuestion
             case executionPreference, relevantSkillIDs, conversationReply
         }
 
@@ -285,6 +321,7 @@ public final class HostedHarnessRequestUnderstanding {
             targetAppName = try container.decodeIfPresent(String.self, forKey: .targetAppName)
             actionSurface = try container.decodeIfPresent(String.self, forKey: .actionSurface)
             successCriteria = try container.decodeIfPresent(String.self, forKey: .successCriteria)
+            plan = try container.decodeIfPresent([String].self, forKey: .plan)
             clarifyingQuestion = try container.decodeIfPresent(String.self, forKey: .clarifyingQuestion)
             needsClarification = try container.decodeIfPresent(Bool.self, forKey: .needsClarification)
             executionPreference = try container.decodeIfPresent(String.self, forKey: .executionPreference)
@@ -325,7 +362,8 @@ public final class HostedHarnessRequestUnderstanding {
     private func responseRequest(
         command: String,
         frontmostAppName: String,
-        skillCatalog: String?
+        skillCatalog: String?,
+        attachments: [HarnessAttachmentInfo] = []
     ) -> RemoteInferenceResponseCreateRequest {
         RemoteInferenceResponseCreateRequest(
             input: .array([
@@ -337,7 +375,8 @@ public final class HostedHarnessRequestUnderstanding {
                             "text": .string(DonkeyPrompts.requestUnderstanding(
                                 command: command,
                                 frontmostAppName: frontmostAppName,
-                                skillCatalog: skillCatalog
+                                skillCatalog: skillCatalog,
+                                attachments: attachments
                             ))
                         ])
                     ])
@@ -369,6 +408,10 @@ public final class HostedHarnessRequestUnderstanding {
                                 "additionalProperties": .object(["type": .string("string")])
                             ]),
                             "successCriteria": .object(["type": .string("string")]),
+                            "plan": .object([
+                                "type": .string("array"),
+                                "items": .object(["type": .string("string")])
+                            ]),
                             "needsClarification": .object(["type": .string("boolean")]),
                             "clarifyingQuestion": .object(["type": .string("string")]),
                             "executionPreference": .object([

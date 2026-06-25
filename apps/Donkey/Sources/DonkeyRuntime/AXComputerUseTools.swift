@@ -66,7 +66,10 @@ public final class AXComputerUseToolProvider {
                 outputSchema: ["elements": "Accessibility control IDs, labels, roles, and click eligibility."],
                 requiredPermissions: [.accessibility],
                 safetyClass: .readOnly,
-                verificationHints: ["fresh observation reflects the current control state"]
+                verificationHints: ["fresh observation reflects the current control state"],
+                // A screen read reflects live state that changes on its own, so the run's read cache must
+                // never serve a prior observation — re-observing is the whole point of calling it again.
+                metadata: [HarnessToolDescriptor.volatileResultMetadataKey: "true"]
             ),
             HarnessToolDescriptor(
                 name: ToolName.click,

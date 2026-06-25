@@ -441,7 +441,16 @@ public enum ShellCommandClassifier {
         "say": "speaks text aloud",
         "tee": "writes output to a file",
         "screencapture": "captures the screen to a file",
-        "afplay": "plays an audio file"
+        "afplay": "plays an audio file",
+        // Scripting interpreters macOS ships (or that the data skill leans on): recognized here so they
+        // surface a clear "runs a … script" consent prompt the user can always-allow, instead of falling
+        // through to the opaque "unrecognized command" tier. Reversible (not read) because `-c`/`-e` can
+        // run arbitrary code, but never a per-call surprise the way an unknown executable was.
+        "python3": "runs a Python script",
+        "python": "runs a Python script",
+        "ruby": "runs a Ruby script",
+        "perl": "runs a Perl script",
+        "node": "runs a Node script"
     ]
 
     /// Destructive / privileged / network-egress — prompt every time, never

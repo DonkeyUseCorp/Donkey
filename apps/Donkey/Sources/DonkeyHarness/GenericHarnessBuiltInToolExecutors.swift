@@ -228,17 +228,22 @@ public struct HarnessImageGenerationRequest: Sendable {
     public var inputImagePaths: [String]
     public var model: String?
     public var outputDirectory: String?
+    /// The conversation workspace folder, when one exists. Used as the default output base so a generated
+    /// image lands beside the turn's other deliverables instead of in ~/Downloads.
+    public var workspaceBaseDir: String?
 
     public init(
         prompt: String,
         inputImagePaths: [String] = [],
         model: String? = nil,
-        outputDirectory: String? = nil
+        outputDirectory: String? = nil,
+        workspaceBaseDir: String? = nil
     ) {
         self.prompt = prompt
         self.inputImagePaths = inputImagePaths
         self.model = model
         self.outputDirectory = outputDirectory
+        self.workspaceBaseDir = workspaceBaseDir
     }
 }
 
@@ -250,6 +255,176 @@ public struct HarnessImageGenerationResult: Sendable {
 
     public init(savedPaths: [String], failureReason: String? = nil) {
         self.savedPaths = savedPaths
+        self.failureReason = failureReason
+    }
+}
+
+public struct HarnessVideoGenerationRequest: Sendable {
+    public var prompt: String
+    /// Optional first-frame image to animate (image-to-video). Empty for plain text-to-video.
+    public var inputImagePaths: [String]
+    public var model: String?
+    public var outputDirectory: String?
+    /// Optional speed/quality tier (e.g. "fast", "standard", "high") the user picked. The backend maps it
+    /// to its configured per-tier video model; nil uses the default model.
+    public var tier: String?
+    /// Whether to generate audio with the video. nil uses the backend default (on).
+    public var audio: Bool?
+    /// Veo knobs the planner may set; nil leaves the model/back-end default in place.
+    public var aspectRatio: String?
+    public var durationSeconds: Int?
+    public var negativePrompt: String?
+    /// The conversation workspace folder, when one exists. Used as the default output base so a generated
+    /// clip lands beside the turn's other deliverables instead of in ~/Downloads.
+    public var workspaceBaseDir: String?
+
+    public init(
+        prompt: String,
+        inputImagePaths: [String] = [],
+        model: String? = nil,
+        outputDirectory: String? = nil,
+        tier: String? = nil,
+        audio: Bool? = nil,
+        aspectRatio: String? = nil,
+        durationSeconds: Int? = nil,
+        negativePrompt: String? = nil,
+        workspaceBaseDir: String? = nil
+    ) {
+        self.prompt = prompt
+        self.inputImagePaths = inputImagePaths
+        self.model = model
+        self.outputDirectory = outputDirectory
+        self.tier = tier
+        self.audio = audio
+        self.aspectRatio = aspectRatio
+        self.durationSeconds = durationSeconds
+        self.negativePrompt = negativePrompt
+        self.workspaceBaseDir = workspaceBaseDir
+    }
+}
+
+public struct HarnessVideoGenerationResult: Sendable {
+    public var savedPaths: [String]
+    /// Set when no video was produced — the provider/model's reason, surfaced to the planner so it
+    /// can adjust rather than being told a flat "no video, do not retry".
+    public var failureReason: String?
+
+    public init(savedPaths: [String], failureReason: String? = nil) {
+        self.savedPaths = savedPaths
+        self.failureReason = failureReason
+    }
+}
+
+/// One spoken word with its on-device-measured time span. The precise per-word boundary the planner
+/// needs to cut filler words or silence, or to find an exact spoken moment — accurate to tens of
+/// milliseconds, far tighter than a model-authored SRT.
+public struct HarnessTranscriptionWord: Sendable {
+    public var text: String
+    public var startMS: Int
+    public var endMS: Int
+    public var confidence: Double
+
+    public init(text: String, startMS: Int, endMS: Int, confidence: Double = 1) {
+        self.text = text
+        self.startMS = startMS
+        self.endMS = endMS
+        self.confidence = confidence
+    }
+}
+
+/// Request for `transcribe`: a local audio (or directly-readable) file to transcribe on-device, with
+/// an optional BCP-47 locale override. The runtime supplies the backend; without it the tool reports
+/// unavailable.
+public struct HarnessTranscriptionRequest: Sendable {
+    public var filePath: String
+    public var localeIdentifier: String?
+
+    public init(filePath: String, localeIdentifier: String? = nil) {
+        self.filePath = filePath
+        self.localeIdentifier = localeIdentifier
+    }
+}
+
+/// Result of an on-device transcription: the plain transcript plus per-word timings. `failureReason`
+/// is set (with empty words/text) when the file could not be transcribed — surfaced so the planner
+/// can adjust (e.g. extract compact audio first) instead of being told a flat "no transcript".
+public struct HarnessTranscriptionResult: Sendable {
+    public var text: String
+    public var words: [HarnessTranscriptionWord]
+    public var localeIdentifier: String?
+    public var backend: String
+    public var failureReason: String?
+
+    public init(
+        text: String,
+        words: [HarnessTranscriptionWord],
+        localeIdentifier: String? = nil,
+        backend: String,
+        failureReason: String? = nil
+    ) {
+        self.text = text
+        self.words = words
+        self.localeIdentifier = localeIdentifier
+        self.backend = backend
+        self.failureReason = failureReason
+    }
+}
+
+/// Request for `media.cut`: a deterministic editor that removes spans from a media file and rejoins the
+/// kept parts frame-accurate (the Descript/auto-editor approach, in code, not composed by the model).
+/// Removals come from any combination of filler words (matched in the `transcribe` JSON at
+/// `transcriptPath`), detected silence, and explicit caller-judged spans.
+public struct HarnessMediaCutRequest: Sendable {
+    public var inputPath: String
+    public var outputPath: String?
+    public var removeFillers: Bool
+    public var removeSilence: Bool
+    public var transcriptPath: String?
+    /// Lexicon override for filler matching; empty uses the engine's default unambiguous set.
+    public var fillerWords: [String]
+    /// Caller-judged removal spans as `"start-end,start-end"` seconds (e.g. a discourse "like").
+    public var explicitRemovals: String?
+
+    public init(
+        inputPath: String,
+        outputPath: String? = nil,
+        removeFillers: Bool = false,
+        removeSilence: Bool = false,
+        transcriptPath: String? = nil,
+        fillerWords: [String] = [],
+        explicitRemovals: String? = nil
+    ) {
+        self.inputPath = inputPath
+        self.outputPath = outputPath
+        self.removeFillers = removeFillers
+        self.removeSilence = removeSilence
+        self.transcriptPath = transcriptPath
+        self.fillerWords = fillerWords
+        self.explicitRemovals = explicitRemovals
+    }
+}
+
+/// Result of a `media.cut`: the written file, how many spans were cut, and the before/after durations so
+/// the planner can verify the edit landed. `failureReason` is set (with no usable output) when the cut
+/// could not be produced. `removedSpanCount == 0` is a clean outcome (nothing matched), not a failure.
+public struct HarnessMediaCutResult: Sendable {
+    public var outputPath: String
+    public var removedSpanCount: Int
+    public var inputDurationSec: Double
+    public var outputDurationSec: Double
+    public var failureReason: String?
+
+    public init(
+        outputPath: String,
+        removedSpanCount: Int,
+        inputDurationSec: Double,
+        outputDurationSec: Double,
+        failureReason: String? = nil
+    ) {
+        self.outputPath = outputPath
+        self.removedSpanCount = removedSpanCount
+        self.inputDurationSec = inputDurationSec
+        self.outputDurationSec = outputDurationSec
         self.failureReason = failureReason
     }
 }
@@ -357,6 +532,19 @@ public struct HarnessBuiltInToolServices: Sendable {
     /// the saved output file paths out (or nil on failure). The runtime supplies an adapter that
     /// routes through the hosted asset API to an image model; without it the tools report unavailable.
     public var imageGenerator: (@Sendable (HarnessImageGenerationRequest) async -> HarnessImageGenerationResult?)?
+    /// Generative text/image-to-video behind `video.generate`: a request in, the saved output file
+    /// paths out (or nil on failure). The runtime supplies an adapter that routes through the hosted
+    /// asset API to a video model (Veo); without it the tool reports unavailable. Video generation is
+    /// a long-running job, so the adapter submits and polls behind this single call.
+    public var videoGenerator: (@Sendable (HarnessVideoGenerationRequest) async -> HarnessVideoGenerationResult?)?
+    /// On-device, word-level transcription behind `transcribe`: a media file in, the transcript with
+    /// per-word timings out (or nil when no backend is wired). The runtime supplies an Apple
+    /// speech-to-text adapter; audio never leaves the machine.
+    public var transcriber: (@Sendable (HarnessTranscriptionRequest) async -> HarnessTranscriptionResult?)?
+    /// Deterministic filler-word/silence editor behind `media.cut`: a request in, the written cut out (or
+    /// nil when no backend is wired). The runtime supplies an engine that runs the bundled ffmpeg; the cut
+    /// math is fixed code, not composed by the model.
+    public var mediaCutter: (@Sendable (HarnessMediaCutRequest) async -> HarnessMediaCutResult?)?
 
     public init(
         memoryEntries: [HarnessMemoryEntry] = [],
@@ -377,7 +565,10 @@ public struct HarnessBuiltInToolServices: Sendable {
         webFetcher: (@Sendable (String) async -> String?)? = nil,
         webAutomator: (@Sendable (HarnessWebAutomateRequest) async -> HarnessWebAutomateOutcome)? = nil,
         fileUnderstanding: (@Sendable (URL) async -> FileUnderstanding?)? = nil,
-        imageGenerator: (@Sendable (HarnessImageGenerationRequest) async -> HarnessImageGenerationResult?)? = nil
+        imageGenerator: (@Sendable (HarnessImageGenerationRequest) async -> HarnessImageGenerationResult?)? = nil,
+        videoGenerator: (@Sendable (HarnessVideoGenerationRequest) async -> HarnessVideoGenerationResult?)? = nil,
+        transcriber: (@Sendable (HarnessTranscriptionRequest) async -> HarnessTranscriptionResult?)? = nil,
+        mediaCutter: (@Sendable (HarnessMediaCutRequest) async -> HarnessMediaCutResult?)? = nil
     ) {
         self.memoryEntries = memoryEntries
         self.skillRegistry = skillRegistry
@@ -398,6 +589,9 @@ public struct HarnessBuiltInToolServices: Sendable {
         self.webAutomator = webAutomator
         self.fileUnderstanding = fileUnderstanding
         self.imageGenerator = imageGenerator
+        self.videoGenerator = videoGenerator
+        self.transcriber = transcriber
+        self.mediaCutter = mediaCutter
     }
 }
 
@@ -424,6 +618,8 @@ public enum BuiltInHarnessToolExecutors {
             return conversationRespond(context)
         case "user.clarify":
             return userClarify(context)
+        case "user.choose":
+            return userChoose(context)
         case "permission.request":
             return permissionRequest(context)
         case "memory.retrieve":
@@ -484,6 +680,12 @@ public enum BuiltInHarnessToolExecutors {
             return await imageGenerate(context, services: services, requiresInput: true)
         case "image.generate":
             return await imageGenerate(context, services: services, requiresInput: false)
+        case "video.generate":
+            return await videoGenerate(context, services: services)
+        case "transcribe":
+            return await transcribe(context, services: services)
+        case "media.cut":
+            return await mediaCut(context, services: services)
         case "wait":
             return await timingWait(context)
         case "run.pause", "run.resume", "run.recover", "run.cancel", "run.complete", "run.failSafe":
@@ -530,6 +732,31 @@ public enum BuiltInHarnessToolExecutors {
         )
     }
 
+    /// Surfaces a generative options form (buttons / dropdowns / toggles) and stops the task until the
+    /// user submits their choices. The form arrives as JSON in `form`; it's re-serialized into the gate
+    /// metadata so the notch can render it, and the title becomes the plain-text fallback question. On
+    /// submit the selection comes back as the user's clarification answer ("Selected options: …"), which
+    /// the planner reads to make its next call. A malformed/empty form falls back to a plain clarify.
+    private static func userChoose(_ context: HarnessToolExecutionContext) -> HarnessToolResult {
+        guard let formJSON = trimmed(context.call.input["form"]),
+              let form = HarnessChoiceForm.decode(fromJSON: formJSON),
+              let canonicalJSON = form.encodedJSON() else {
+            return invalidInput(
+                context,
+                "user.choose requires a `form` JSON object with a non-empty `fields` array."
+            )
+        }
+        let question = form.title.isEmpty ? "Choose how I should proceed." : form.title
+        return HarnessToolResult(
+            callID: context.call.id,
+            toolName: context.call.name,
+            status: .waitingForUser,
+            summary: "Task stopped for the user to choose options.",
+            question: question,
+            metadata: ["gate": "choiceForm", "choiceForm": canonicalJSON]
+        )
+    }
+
     private static func permissionRequest(_ context: HarnessToolExecutionContext) -> HarnessToolResult {
         let permissions = context.call.input["permission"]
             .map { [$0] }
@@ -566,8 +793,11 @@ public enum BuiltInHarnessToolExecutors {
             .filter { entry in matches(tokens: tokens, values: [entry.id, entry.summary, entry.value] + Array(entry.metadata.values)) }
             .prefix(8)
             .map { "\($0.id): \($0.summary)" }
-        let worldMatches = (context.worldModel.facts.map { "\($0.key): \($0.value)" }
-            + context.worldModel.visibleText.map { "\($0.key): \($0.value)" })
+        // Show only model-facing facts — the machine-only keys (workspace base dir, raw follow-up
+        // instructions) are hidden centrally so they never leak into retrieved snippets.
+        let worldFacts = context.worldModel.modelFacingFacts
+            .map { "\($0.key): \($0.value)" }
+        let worldMatches = (worldFacts + context.worldModel.visibleText.map { "\($0.key): \($0.value)" })
             .filter { matches(tokens: tokens, values: [$0]) }
             .prefix(8)
         let snippets = Array(configuredMatches + worldMatches)
@@ -1801,7 +2031,9 @@ public enum BuiltInHarnessToolExecutors {
             prompt: prompt,
             inputImagePaths: inputPaths,
             model: trimmed(context.call.input["model"]),
-            outputDirectory: trimmed(context.call.input["outDir"])
+            outputDirectory: trimmed(context.call.input["outDir"]),
+            workspaceBaseDir: context.worldModel.facts[ConversationWorkspace.baseDirFactKey]
+                .flatMap { $0.isEmpty ? nil : $0 }
         )
         guard let result = await generator(request) else {
             return failed(context, "The image model is unavailable right now.", reason: "imageGeneratorUnavailable")
@@ -1823,6 +2055,211 @@ public enum BuiltInHarnessToolExecutors {
                 "count": String(result.savedPaths.count)
             ]
         )
+    }
+
+    private static func videoGenerate(
+        _ context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices
+    ) async -> HarnessToolResult {
+        guard let generator = services.videoGenerator else {
+            return failed(context, "No video model is wired for \(context.call.name).", reason: "videoGeneratorUnavailable")
+        }
+        guard let prompt = trimmed(context.call.input["prompt"]) else {
+            return invalidInput(context, "\(context.call.name) requires a `prompt` describing the video.")
+        }
+        var inputPaths: [String] = []
+        if let inputPath = trimmed(context.call.input["inputPath"]) {
+            inputPaths.append(inputPath)
+        }
+        let audio = trimmed(context.call.input["audio"]).map { boolFlag($0) }
+        let request = HarnessVideoGenerationRequest(
+            prompt: prompt,
+            inputImagePaths: inputPaths,
+            model: trimmed(context.call.input["model"]),
+            outputDirectory: trimmed(context.call.input["outDir"]),
+            tier: trimmed(context.call.input["tier"]),
+            audio: audio,
+            aspectRatio: trimmed(context.call.input["aspectRatio"]),
+            durationSeconds: trimmed(context.call.input["durationSeconds"]).flatMap { Int($0) },
+            negativePrompt: trimmed(context.call.input["negativePrompt"]),
+            workspaceBaseDir: context.worldModel.facts[ConversationWorkspace.baseDirFactKey]
+                .flatMap { $0.isEmpty ? nil : $0 }
+        )
+        guard let result = await generator(request) else {
+            return failed(context, "The video model is unavailable right now.", reason: "videoGeneratorUnavailable")
+        }
+        guard !result.savedPaths.isEmpty else {
+            return failed(
+                context,
+                result.failureReason ?? "The video model returned no video.",
+                reason: "videoGenerationFailed"
+            )
+        }
+        let joined = result.savedPaths.joined(separator: ", ")
+        return success(
+            context,
+            summary: "Saved \(result.savedPaths.count) video(s) → \(joined)",
+            facts: ["lastAcceptedTool": context.call.name],
+            metadata: [
+                "paths": result.savedPaths.joined(separator: "\n"),
+                "count": String(result.savedPaths.count)
+            ]
+        )
+    }
+
+    /// On-device transcription with per-word timings behind `transcribe`. Writes the transcript and its
+    /// word timings as a JSON file (so a long transcript bypasses the shell command-length limit) and
+    /// returns its path, plus the plain text inline. The word timings are what the media skill reads
+    /// back to cut filler words or silence; an empty result carries the backend's reason so the planner
+    /// can extract compact audio and retry rather than give up.
+    private static func transcribe(
+        _ context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices
+    ) async -> HarnessToolResult {
+        guard let transcriber = services.transcriber else {
+            return failed(context, "No on-device transcription backend is wired for transcribe.", reason: "transcriberUnavailable")
+        }
+        guard let filePath = trimmed(context.call.input["filePath"]) else {
+            return invalidInput(context, "transcribe requires a `filePath` to a local audio or video file.")
+        }
+        let fileURL = URL(fileURLWithPath: (filePath as NSString).expandingTildeInPath)
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            return invalidInput(context, "transcribe `filePath` does not exist: \(filePath).")
+        }
+        let request = HarnessTranscriptionRequest(
+            filePath: fileURL.path,
+            localeIdentifier: trimmed(context.call.input["locale"])
+        )
+        guard let result = await transcriber(request) else {
+            return failed(context, "On-device transcription is unavailable right now.", reason: "transcriberUnavailable")
+        }
+        guard !result.words.isEmpty || !result.text.isEmpty else {
+            let hint = "extract compact audio first (e.g. ffmpeg -i in.mp4 -vn -ac 1 audio.m4a) and transcribe that"
+            let reason = result.failureReason.map { "Transcription failed: \($0). Then \(hint)." }
+                ?? "Transcription produced no words — \(hint)."
+            return failed(context, reason, reason: "transcriptionFailed")
+        }
+
+        // Persist text + per-word timings (seconds) as JSON the planner reads back to build the cut list.
+        let wordObjects: [[String: Any]] = result.words.map { word in
+            [
+                "text": word.text,
+                "start": Double(word.startMS) / 1000.0,
+                "end": Double(word.endMS) / 1000.0
+            ]
+        }
+        let payload: [String: Any] = [
+            "text": result.text,
+            "locale": result.localeIdentifier ?? "",
+            "backend": result.backend,
+            "wordCount": result.words.count,
+            "words": wordObjects
+        ]
+        // Write into the conversation workspace (not the temp dir): the per-word-timing JSON is a real
+        // deliverable the planner must hand to media.cut as `transcriptPath`, and the workspace tracker
+        // skips temp-dir paths — a transcript left in temp never enters the workspace summary, so after
+        // context compaction the planner loses the path and can't run the filler-word cut it transcribed for.
+        let url = Self.resolveWritePath("donkey-transcript-\(context.call.id).json", in: context.worldModel)
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: url, options: .atomic)
+        } catch {
+            return failed(context, "Could not write the transcript file: \(error)", reason: "fileWriteFailed")
+        }
+        let preview = result.text.count > 400 ? String(result.text.prefix(400)) + "…" : result.text
+        return success(
+            context,
+            summary: "Transcribed \(result.words.count) timed words (\(result.backend)) → \(url.path)",
+            facts: ["lastAcceptedTool": context.call.name],
+            metadata: [
+                "filePath": url.path,
+                "text": preview,
+                "wordCount": String(result.words.count)
+            ]
+        )
+    }
+
+    /// Deterministic filler-word/silence editor behind `media.cut`. The planner says WHAT to remove
+    /// (fillers via the transcript, silence, explicit spans); the wired engine does the span math, builds
+    /// the ffmpeg filtergraph, and renders the cut — none of it composed here. `removedSpanCount == 0`
+    /// (nothing matched) is reported as a clean no-op, not a failure.
+    private static func mediaCut(
+        _ context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices
+    ) async -> HarnessToolResult {
+        guard let cutter = services.mediaCutter else {
+            return failed(context, "No media-cut engine is wired for media.cut.", reason: "mediaCutterUnavailable")
+        }
+        guard let inputPath = trimmed(context.call.input["inputPath"]) else {
+            return invalidInput(context, "media.cut requires an `inputPath` to the video or audio file.")
+        }
+        let inputURL = URL(fileURLWithPath: (inputPath as NSString).expandingTildeInPath)
+        guard FileManager.default.fileExists(atPath: inputURL.path) else {
+            return invalidInput(context, "media.cut `inputPath` does not exist: \(inputPath).")
+        }
+        let removeFillers = boolFlag(context.call.input["removeFillers"])
+        let removeSilence = boolFlag(context.call.input["removeSilence"])
+        let explicit = trimmed(context.call.input["removeSpans"])
+        guard removeFillers || removeSilence || explicit != nil else {
+            return invalidInput(context, "media.cut needs at least one of removeFillers=true, removeSilence=true, or removeSpans.")
+        }
+        let transcriptPath = trimmed(context.call.input["transcriptPath"]).map { ($0 as NSString).expandingTildeInPath }
+        if removeFillers, transcriptPath == nil {
+            return invalidInput(context, "media.cut removeFillers=true requires `transcriptPath` to the transcribe JSON.")
+        }
+        // Split on commas/newlines only — NOT spaces — so a multi-word filler phrase like "you know"
+        // stays one entry instead of shattering into the common words "you" and "know".
+        let fillerWords = (trimmed(context.call.input["fillerWords"]) ?? "")
+            .split(whereSeparator: { $0 == "," || $0 == "\n" })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let request = HarnessMediaCutRequest(
+            inputPath: inputURL.path,
+            outputPath: trimmed(context.call.input["outputPath"]).map { ($0 as NSString).expandingTildeInPath },
+            removeFillers: removeFillers,
+            removeSilence: removeSilence,
+            transcriptPath: transcriptPath,
+            fillerWords: fillerWords,
+            explicitRemovals: explicit
+        )
+        guard let result = await cutter(request) else {
+            return failed(context, "The media-cut engine is unavailable right now.", reason: "mediaCutterUnavailable")
+        }
+        if let reason = result.failureReason {
+            return failed(context, "media.cut failed: \(reason)", reason: "mediaCutFailed")
+        }
+        let removedSec = max(0, result.inputDurationSec - result.outputDurationSec)
+        if result.removedSpanCount == 0 {
+            return success(
+                context,
+                summary: "media.cut found nothing to remove — left \(result.outputPath) unchanged.",
+                facts: ["lastAcceptedTool": context.call.name],
+                metadata: ["filePath": result.outputPath, "removedSpans": "0"]
+            )
+        }
+        return success(
+            context,
+            summary: String(
+                format: "Cut %d span(s), removed %.1fs — %.1fs → %.1fs → %@",
+                result.removedSpanCount, removedSec, result.inputDurationSec, result.outputDurationSec, result.outputPath
+            ),
+            facts: ["lastAcceptedTool": context.call.name],
+            metadata: [
+                "filePath": result.outputPath,
+                "removedSpans": String(result.removedSpanCount),
+                "inputDurationSec": String(format: "%.3f", result.inputDurationSec),
+                "outputDurationSec": String(format: "%.3f", result.outputDurationSec)
+            ]
+        )
+    }
+
+    /// A loose boolean flag from a tool input — "true"/"on"/"yes"/"1" (case-insensitive) is true.
+    private static func boolFlag(_ value: String?) -> Bool {
+        ["true", "on", "yes", "1"].contains((value ?? "").trimmingCharacters(in: .whitespaces).lowercased())
     }
 
     private static func webSearch(
@@ -1966,8 +2403,11 @@ public enum BuiltInHarnessToolExecutors {
                 metadata: ["verified": String(verified), "criteria.inferred": "true"]
             )
         }
+        // Keep the machine-only keys out of the evidence the planner reads (the `workspace` summary fact,
+        // which lists produced files, still counts).
         let evidence = (
-            context.worldModel.facts.map { "\($0.key): \($0.value)" }
+            context.worldModel.modelFacingFacts
+                .map { "\($0.key): \($0.value)" }
                 + context.worldModel.visibleText.map { "\($0.key): \($0.value)" }
                 + context.worldModel.attemptedToolCalls.map { "\($0.call.name): \($0.summary)" }
         ).joined(separator: "\n")

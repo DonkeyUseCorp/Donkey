@@ -167,6 +167,21 @@ public struct HarnessWorldModel: Codable, Equatable, Sendable {
         self.updatedAt = updatedAt
     }
 
+    /// Fact keys that are machine state for executors, not context for the model: the workspace resolve
+    /// directory and the raw follow-up-instructions block (which the planner prompt shows in its own block).
+    /// Every model-facing facts view hides these via `modelFacingFacts`, so an internal key added later is
+    /// hidden everywhere at once instead of in separate hand-maintained filters that drift apart.
+    public static let modelHiddenFactKeys: Set<String> = [
+        ConversationWorkspace.baseDirFactKey,
+        HarnessAgentCoordinator.additionalInstructionsFactKey
+    ]
+
+    /// `facts` with the machine-only keys removed — the view safe to surface to the model (planner prompt,
+    /// `memory.retrieve` snippets, `run.complete` evidence).
+    public var modelFacingFacts: [String: String] {
+        facts.filter { !Self.modelHiddenFactKeys.contains($0.key) }
+    }
+
     public func merging(result: HarnessToolResult) -> HarnessWorldModel {
         var model = self
         model.visibleText.merge(result.observations.visibleText) { _, new in new }

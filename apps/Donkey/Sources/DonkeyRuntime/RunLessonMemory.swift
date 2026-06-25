@@ -22,11 +22,17 @@ public enum RunLessonMemory {
         public var cue: String
         /// The model's 0–1 confidence that this is a real, general lesson.
         public var confidence: Double
+        /// The distiller's own typed judgment that this lesson would teach DEFEATING a harness guardrail
+        /// (slipping past a duplicate/stall/permission guard). A lesson flagged here is dropped at write
+        /// time. This is a structured field from the model — never inferred by string-matching the lesson
+        /// text, which over-flags benign craft ("work around the check by asking first").
+        public var defeatsGuardrail: Bool
 
-        public init(lesson: String, cue: String, confidence: Double) {
+        public init(lesson: String, cue: String, confidence: Double, defeatsGuardrail: Bool = false) {
             self.lesson = lesson
             self.cue = cue
             self.confidence = min(max(confidence, 0), 1)
+            self.defeatsGuardrail = defeatsGuardrail
         }
     }
 
@@ -58,7 +64,15 @@ public enum RunLessonMemory {
             ?? (object["confidence"] as? Int).map(Double.init)
             ?? (object["confidence"] as? String).flatMap(Double.init)
             ?? 0
-        return Distillation(lesson: lesson, cue: cue, confidence: confidence)
+        let defeatsGuardrail = (object["unsafe"] as? Bool)
+            ?? (object["unsafe"] as? String).map { ["true", "yes", "1"].contains($0.lowercased()) }
+            ?? false
+        return Distillation(
+            lesson: lesson,
+            cue: cue,
+            confidence: confidence,
+            defeatsGuardrail: defeatsGuardrail
+        )
     }
 
     /// Build a durable global lesson proposal, deduped by lesson content so re-learning the same rule
@@ -74,6 +88,11 @@ public enum RunLessonMemory {
     ) -> AgentMemoryWriteProposal? {
         let lesson = distillation.lesson.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !lesson.isEmpty, distillation.confidence >= minWriteConfidence else { return nil }
+        // Never store a lesson that teaches the agent to DEFEAT a harness guardrail — the save-time half of
+        // the governance rule. A guard firing means "you are looping" or "this needs consent"; a lesson that
+        // says to slip past it is actively harmful. The judgment is the distiller's typed `defeatsGuardrail`
+        // flag, decided where the run's full context is, not guessed by matching words in the lesson text.
+        guard !distillation.defeatsGuardrail else { return nil }
 
         let id = idPrefix + stableHash(normalized(lesson))
         var metadata = ["lesson": "true", "outcome": outcome]

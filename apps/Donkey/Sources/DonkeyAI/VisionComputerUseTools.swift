@@ -102,7 +102,10 @@ public final class VisionComputerUseToolProvider {
                 outputSchema: ["elements": "Detected element IDs, labels, roles, and click eligibility."],
                 requiredPermissions: [.screenCapture],
                 safetyClass: .readOnly,
-                verificationHints: ["fresh capture reflects the current on-screen state"]
+                verificationHints: ["fresh capture reflects the current on-screen state"],
+                // A screen capture reflects live state, so the run's read cache must never serve a prior
+                // capture — re-capturing is the point of calling it again.
+                metadata: [HarnessToolDescriptor.volatileResultMetadataKey: "true"]
             ),
             HarnessToolDescriptor(
                 name: ToolName.click,

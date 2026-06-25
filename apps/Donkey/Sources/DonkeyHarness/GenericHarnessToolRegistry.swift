@@ -14,6 +14,21 @@ public struct HarnessToolDescriptor: Codable, Equatable, Sendable {
     /// must never block the re-read its own rejection message asks for.
     public static let readOnlyActionsMetadataKey = "readOnlyActions"
 
+    /// Descriptor metadata key a tool sets to "true" when its result reflects LIVE, moment-to-moment
+    /// state that can change on its own between identical calls — a screen observation, a capture. The
+    /// run's read cache must never serve such a tool from a prior result: re-observing is the whole
+    /// point, and a cached screen would be stale.
+    public static let volatileResultMetadataKey = "volatileResult"
+
+    /// Descriptor metadata key a READ-ONLY tool sets to "true" to opt INTO the run's read cache: an
+    /// identical repeat is served from the prior result instead of re-executing. Opt-in, not the default,
+    /// because "read-only" (needs no permission) does NOT imply "pure" — a counter, a clock, `date`, a
+    /// directory another process is filling all read without side effects yet return different values each
+    /// call, and caching those would serve stale data. Only a tool whose identical-input result is stable
+    /// between calls (a file's contents, a parsed document) sets this. A state-changing step since the
+    /// cached read still invalidates it.
+    public static let cacheableReadMetadataKey = "cacheableRead"
+
     public var name: String
     public var pluginID: String
     public var summary: String
@@ -185,6 +200,14 @@ public enum BuiltInHarnessToolCatalog {
                 pluginID: "core.user",
                 summary: "Ask the user a specific missing question and stop the task until the answer arrives.",
                 input: ["question": "Specific question to ask the user."],
+                permissions: [.userPrompt],
+                safety: .readOnly
+            ),
+            descriptor(
+                "user.choose",
+                pluginID: "core.user",
+                summary: "Surface a small interactive options panel (buttons, dropdowns, toggles) and stop the task until the user submits their choices — use when a request has a few meaningful settings worth letting the user pick before you commit (e.g. video speed/quality and audio). ALWAYS guess sensible defaults from the user's words so they can submit in one tap. The `form` is a JSON object: {\"title\":\"…\",\"submitLabel\":\"Generate\",\"fields\":[…]}. Each field is {\"id\":\"<key>\",\"label\":\"…\",\"help\":\"<optional>\",\"control\":\"segmented\"|\"dropdown\"|\"toggle\", and for segmented/dropdown \"options\":[{\"id\":\"<value>\",\"label\":\"…\",\"detail\":\"<optional>\"}] with \"selected\":\"<default option id>\"; for toggle \"on\":true|false}. The answer comes back as \"Selected options: id=value, …\" — read it to make your next call. Don't use this for a free-text question (use user.clarify) or for required missing info you can't default.",
+                input: ["form": "A JSON object describing the options panel: a title, optional submitLabel, and a fields array of typed controls (segmented/dropdown/toggle) each with a guessed default."],
                 permissions: [.userPrompt],
                 safety: .readOnly
             ),
@@ -542,14 +565,19 @@ public enum BuiltInHarnessToolCatalog {
                 permissions: [],
                 safety: .sensitive,
                 verification: ["the returned understanding covers the requested files"],
-                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+                // A pure read of files' contents: an identical re-describe (same paths, no write since)
+                // returns the same understanding, so it's safe to serve from the run's read cache.
+                metadata: [
+                    HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true",
+                    HarnessToolDescriptor.cacheableReadMetadataKey: "true"
+                ]
             ),
             descriptor(
                 "files.write",
                 pluginID: "core.files",
-                summary: "Write text to a file: pass an absolute `path` and the full `content`, and it is saved (creating any missing parent folders). This is how you persist anything you composed when the content is multi-line or too long to inline in a shell command — a subtitle (.srt) file, a script, a config, a note, a document body. Use it instead of a `cat`/`echo` heredoc in shell_exec. Overwrites by default; pass mode=append to add to the end. Pair it with llm.generate (which returns text) to write generated content exactly where you need it, then act on the file (e.g. `ffmpeg -vf subtitles=…`).",
+                summary: "Write text to a file: pass a `path` and the full `content`, and it is saved (creating any missing parent folders). This is how you persist anything you composed when the content is multi-line or too long to inline in a shell command — a subtitle (.srt) file, a script, a config, a note, a document body. Use it instead of a `cat`/`echo` heredoc in shell_exec. A relative `path` (e.g. `notes.md` or `Sources/App.swift`) lands inside the conversation's workspace folder; an absolute or ~ path is written exactly as given. Overwrites by default; pass mode=append to add to the end. Pair it with llm.generate (which returns text) to write generated content exactly where you need it, then act on the file (e.g. `ffmpeg -vf subtitles=…`).",
                 input: [
-                    "path": "Absolute destination path, e.g. /Users/you/Downloads/ko.srt (a leading ~ is expanded).",
+                    "path": "Destination path. Relative (e.g. report/chart.svg) resolves inside the conversation workspace; absolute (e.g. /Users/you/Downloads/ko.srt, leading ~ expanded) is used exactly.",
                     "content": "The full text to write.",
                     "mode": "\"overwrite\" (default) replaces the file; \"append\" adds to the end."
                 ],
@@ -587,7 +615,7 @@ public enum BuiltInHarnessToolCatalog {
             descriptor(
                 "image.generate",
                 pluginID: "core.image",
-                summary: "Generate a brand-new image from a text `prompt` with a generative image model — use when there is no source image to edit. Writes a new image file and returns its path. Costs image-generation credits per image.",
+                summary: "Generate a brand-new image from a text `prompt` with a generative image model — use for photographic or artistic imagery when there is no source image to edit. NOT for charts, diagrams, infographics, posters, standings, or anything containing real text or data: a generative model garbles text and numbers. For those, write HTML/SVG and render it with `image_render` (see the `design` skill). Writes a new image file and returns its path. Costs image-generation credits per image.",
                 input: [
                     "prompt": "Description of the image to create.",
                     "model": "Optional model id override; omit to use the default image model.",
@@ -601,6 +629,75 @@ public enum BuiltInHarnessToolCatalog {
                 permissions: [],
                 safety: .reversible,
                 verification: ["the returned image file exists"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            descriptor(
+                "video.generate",
+                pluginID: "core.video",
+                summary: "Generate a short video clip from a text `prompt` with a generative video model — use when the user asks for a video, clip, animation, or moving footage of a scene. Optionally pass `inputPath` to animate a still image (image-to-video). Generation takes up to a few minutes; this call waits for the result, then writes one .mp4 to Downloads and returns its path. Costs video-generation credits per clip (much more than an image), so confirm before generating several. Not for editing or trimming an existing video file — use the `media` skill (ffmpeg) for that, and not for slideshows of stills.",
+                input: [
+                    "prompt": "Description of the video to create — the scene, action, camera, and mood.",
+                    "inputPath": "Optional path to a still image to animate as the first frame (image-to-video).",
+                    "tier": "Optional speed/quality tier the user chose (e.g. \"fast\", \"standard\", \"high\"); omit for the default.",
+                    "audio": "Optional \"true\"/\"false\" — whether to generate audio with the video. Omit for the default (on).",
+                    "model": "Optional model id override; omit to use the default video model.",
+                    "aspectRatio": "Optional aspect ratio, e.g. \"16:9\" (landscape) or \"9:16\" (portrait).",
+                    "durationSeconds": "Optional clip length in seconds; omit for the model default.",
+                    "negativePrompt": "Optional description of what to keep out of the video.",
+                    "outDir": "Optional output directory for the result; omit to save to Downloads."
+                ],
+                output: [
+                    "paths": "Newline-separated paths to the saved video file(s).",
+                    "count": "How many videos were saved."
+                ],
+                optionalInputKeys: ["inputPath", "tier", "audio", "model", "aspectRatio", "durationSeconds", "negativePrompt", "outDir"],
+                permissions: [],
+                safety: .reversible,
+                verification: ["the returned video file exists"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            descriptor(
+                "transcribe",
+                pluginID: "core.media",
+                summary: "Transcribe a local audio file ON-DEVICE into text WITH PER-WORD TIMESTAMPS — fast, private, and far more precise than an llm.generate SRT. Use it whenever you need to know exactly WHEN words are spoken: to cut filler words (um, uh) or silence, locate a quoted moment, chapter a recording, or build tight captions. Writes a JSON file ({text, words:[{text, start, end}]}, times in seconds) and returns its path, plus the plain transcript inline. Hand it compact audio (extract it first with ffmpeg if the source is a video); if it reports no transcript, extract audio and retry. For plain text without timing, llm.generate is fine.",
+                input: [
+                    "filePath": "Path to the local audio file to transcribe (extract audio from a video first).",
+                    "locale": "Optional BCP-47 locale (e.g. en-US, es-ES); defaults to the system locale, falling back to en-US."
+                ],
+                output: [
+                    "filePath": "Path to the JSON file holding the full transcript and per-word timings.",
+                    "text": "The plain transcript text (a preview when long).",
+                    "wordCount": "How many timed words were produced."
+                ],
+                optionalInputKeys: ["locale"],
+                permissions: [],
+                safety: .sensitive,
+                verification: ["the returned transcript text and per-word timings match the spoken audio"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            descriptor(
+                "media.cut",
+                pluginID: "core.media",
+                summary: "Remove filler words and/or silence from a video or audio file and rejoin the kept parts — a DETERMINISTIC, frame-accurate editor (the engine does the span math and ffmpeg render, you just say what to remove). This is the reliable way to tighten a recording; do NOT hand-build select/trim/concat ffmpeg yourself. Set removeFillers=true with `transcriptPath` (run `transcribe` first) to cut um/uh/er, and/or removeSilence=true to cut dead air. Pass `removeSpans` for caller-judged cuts (a flubbed line, a discourse \"like\"). Writes a new file (never overwrites the source) and reports how much was removed; finding nothing to cut is a clean result, not an error.",
+                input: [
+                    "inputPath": "Path to the source video or audio file to tighten.",
+                    "removeFillers": "\"true\" to cut filler words (um, uh, er, …) — requires transcriptPath.",
+                    "transcriptPath": "Path to the JSON written by `transcribe` (per-word timings); required when removeFillers=true.",
+                    "removeSilence": "\"true\" to cut silent/dead-air sections.",
+                    "removeSpans": "Optional explicit ranges to remove, seconds, as \"start-end,start-end\" (e.g. a flubbed take).",
+                    "fillerWords": "Optional comma-separated lexicon override; omit for the default um,uh,er,… set.",
+                    "outputPath": "Optional output path; omit to write <name>-tightened next to the source."
+                ],
+                output: [
+                    "filePath": "Path to the written, tightened file.",
+                    "removedSpans": "How many spans were cut (0 means nothing matched; the file is unchanged).",
+                    "inputDurationSec": "Source duration in seconds.",
+                    "outputDurationSec": "Result duration in seconds."
+                ],
+                optionalInputKeys: ["removeFillers", "transcriptPath", "removeSilence", "removeSpans", "fillerWords", "outputPath"],
+                permissions: [],
+                safety: .reversible,
+                verification: ["the output file exists and its duration equals the input minus the removed spans"],
                 metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
             ),
             descriptor(

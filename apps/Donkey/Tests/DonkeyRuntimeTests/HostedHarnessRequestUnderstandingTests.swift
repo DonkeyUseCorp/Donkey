@@ -72,6 +72,41 @@ struct HostedHarnessRequestUnderstandingTests {
         """#)
         #expect(result?.actionSurface == .guiApp)
     }
+
+    @Test
+    func understandingSurvivesAJSONRoundTripForResumeReuse() {
+        // A resume reuses the first run's understanding by decoding what it persisted, instead of
+        // re-deriving it (which drifted goal/params/skills mid-task). Every field a resume depends on must
+        // survive the round trip exactly.
+        let original = HarnessRequestUnderstanding(
+            turnKind: .act,
+            restatedGoal: "Fill out the f1120.pdf form using the data from 1120data.txt.",
+            targetAppName: "",
+            actionSurface: .appless,
+            parameters: ["pdf_path": "f1120.pdf", "data_path": "1120data.txt"],
+            successCriteria: "The PDF is filled.",
+            plan: ["read the data", "list the form's fields", "map and compute", "write", "verify"],
+            needsClarification: false,
+            executionPreference: .background,
+            relevantSkillIDs: ["pdf", "data"]
+        )
+
+        let decoded = HarnessRequestUnderstanding.decode(original.encodedJSON())
+
+        #expect(decoded == original)
+        // The exact failure the reuse prevents: a resume that recomputed re-typed `pdf_path` as `pdf_form`.
+        #expect(decoded?.parameters["pdf_path"] == "f1120.pdf")
+        #expect(decoded?.parameters["pdf_form"] == nil)
+    }
+
+    @Test
+    func decodeReturnsNilForMissingOrGarbledPersistedUnderstanding() {
+        // A task with no persisted understanding (older task, or it was unavailable first time) or a
+        // corrupt value must fall back to recomputing, never crash.
+        #expect(HarnessRequestUnderstanding.decode(nil) == nil)
+        #expect(HarnessRequestUnderstanding.decode("") == nil)
+        #expect(HarnessRequestUnderstanding.decode("{not json") == nil)
+    }
 }
 
 private final class SingleResponseHTTPClient: AIHTTPClient, @unchecked Sendable {

@@ -157,13 +157,23 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
                 retryNote = Self.retryNote(after: error)
                 continue
             }
-            lastNarration = decision.narration.flatMap { $0.isEmpty ? nil : $0 } ?? lastNarration
+            // This step's narration only — never inherit the previous step's line. A reply that omits
+            // narration used to fall back to `lastNarration`, which pinned one step's account onto later,
+            // unrelated steps (observed: "I will load the PDF skill" shown for the file-search and
+            // field-listing steps that followed it). Resolve it per step and, when the model gives none,
+            // synthesize a line from the chosen tool so the pointer still updates every step — accurately,
+            // without misattribution. Assigned to `lastNarration` only on the path that actually returns a
+            // call, so a retried attempt can't leave a stale line behind.
+            let stepNarration = decision.narration.flatMap {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0
+            }
             lastThinking = decision.thinking.flatMap { $0.isEmpty ? nil : $0 }
             guard let toolName = decision.tool.flatMap({ $0.isEmpty ? nil : $0 }) else {
                 lastPlanningErrors.append(
                     "planning attempt \(attempt + 1)/\(Self.maxPlanAttempts): reply named no tool"
                 )
                 guard attempt < lastAttempt else {
+                    lastNarration = stepNarration ?? "I couldn't settle on a next step, so I stopped."
                     return HarnessToolCall(name: "run.failSafe", input: ["reason": "plannerReturnedNoTool"])
                 }
                 retryNote = "Your previous reply named no tool. Pick exactly one tool from AVAILABLE TOOLS; "
@@ -218,9 +228,26 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
             if !readOnlyToolNames.contains(toolName), firstActionUptimeMS == nil {
                 firstActionUptimeMS = uptimeMS()
             }
+            lastNarration = stepNarration ?? Self.fallbackNarration(tool: toolName, input: providedInput)
             return HarnessToolCall(name: toolName, input: providedInput)
         }
         return failSafeCall(after: lastFailure)
+    }
+
+    /// A neutral one-line account synthesized for a step whose reply carried no narration, so the live
+    /// pointer still updates for THIS step instead of repeating the previous step's line. Derived from the
+    /// step's own tool call, never from prior narration: for `shell_exec` the command itself is the most
+    /// informative and keeps consecutive steps distinct; everything else names the tool. Kept short so it
+    /// reads cleanly in the notch.
+    static func fallbackNarration(tool: String, input: [String: String]) -> String {
+        if tool == "shell_exec",
+           let command = input["command"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !command.isEmpty {
+            let firstLine = command.split(whereSeparator: \.isNewline).first.map(String.init) ?? command
+            let clipped = firstLine.count > 80 ? String(firstLine.prefix(80)) + "…" : firstLine
+            return "Running `\(clipped)`."
+        }
+        return "Running `\(tool)`."
     }
 
     /// The corrective note fed back on the next attempt. A content-filter block gets a
@@ -596,9 +623,14 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         if !evicted.isEmpty {
             turns.append(Turn(role: "user", text: DonkeyPrompts.harnessStepCondensedHistoryLine(evicted)))
         }
-        for record in recent {
+        for (index, record) in recent.enumerated() {
             turns.append(Turn(role: "assistant", text: renderDecision(record.call)))
-            turns.append(Turn(role: "user", text: renderResult(record)))
+            // The final recent record is the observation this step plans against — render it at the full
+            // capture budget so a complete small read isn't shown as "…[truncated]" and re-read in a loop.
+            let cap = index == recent.count - 1
+                ? DonkeyPrompts.harnessLatestResultMaxLength
+                : DonkeyPrompts.harnessStepSummaryMaxLength
+            turns.append(Turn(role: "user", text: renderResult(record, maxSummaryLength: cap)))
         }
         turns.append(Turn(role: "user", text: currentState))
         return turns
@@ -617,9 +649,13 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
 
     /// The user turn for a past step: the observed result the tool produced, capped the same way the
     /// history block caps a single summary so one huge output can't dominate the thread.
-    private static func renderResult(_ record: HarnessToolCallRecord) -> String {
-        let summary = record.summary.count > DonkeyPrompts.harnessStepSummaryMaxLength
-            ? String(record.summary.prefix(DonkeyPrompts.harnessStepSummaryMaxLength)) + " …[truncated]"
+    private static func renderResult(
+        _ record: HarnessToolCallRecord,
+        maxSummaryLength: Int = DonkeyPrompts.harnessStepSummaryMaxLength
+    ) -> String {
+        let summary = record.summary.count > maxSummaryLength
+            ? String(record.summary.prefix(maxSummaryLength))
+                + DonkeyPrompts.contextTrimNotice(fullCharacterCount: record.summary.count)
             : record.summary
         return "Result of \(record.call.name) [\(record.resultStatus.rawValue)]: \(summary)"
     }

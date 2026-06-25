@@ -63,18 +63,25 @@ struct HarnessEvalScenario: Sendable {
     /// the static disk plus everything earlier steps produced — so a discovery/probe stub can surface an
     /// output a prior step created, not just the fixture's declared inputs.
     var respond: @Sendable (HarnessToolCall, [String]) -> HarnessEvalStub?
+    /// Prior conversation workspace to seed before the run, so a single-turn fixture can model a FOLLOW-UP:
+    /// "I already produced these files; now do one more." The runner writes it into the conversation store
+    /// so the real `refreshWorkspaceFact` projection surfaces the `workspace` line to the planner, exactly
+    /// as in production. Nil for a first-turn scenario (the workspace starts empty).
+    var workspaceSeed: ConversationWorkspace?
 
     init(
         name: String,
         prompt: String,
         frontmostApp: String = "Finder",
         maxSteps: Int = 16,
+        workspaceSeed: ConversationWorkspace? = nil,
         respond: @escaping @Sendable (HarnessToolCall, [String]) -> HarnessEvalStub? = { _, _ in nil }
     ) {
         self.name = name
         self.prompt = prompt
         self.frontmostApp = frontmostApp
         self.maxSteps = maxSteps
+        self.workspaceSeed = workspaceSeed
         self.respond = respond
     }
 }
@@ -204,13 +211,26 @@ enum HarnessEvalRunner {
         }
         let registry = HarnessToolRegistry(tools: tools)
 
-        let coordinator = HarnessAgentCoordinator()
+        // A real store so the conversation workspace persists and the runtime's per-step
+        // `refreshWorkspaceFact` projection surfaces the `workspace` line to the planner, as in production.
+        let store = InMemoryHarnessConversationStore()
+        let coordinator = HarnessAgentCoordinator(conversationStore: store)
         let goal = (understanding?.restatedGoal).flatMap { $0.isEmpty ? nil : $0 } ?? scenario.prompt
         let agent = await coordinator.createAgent(
             conversationID: conversationID,
             goal: goal,
             grantedPermissions: Set(HarnessPermission.allCases)
         )
+        // Seed a prior workspace so a fixture can model the second turn of a multi-file task.
+        if let seed = scenario.workspaceSeed, let encoded = seed.encodedJSON() {
+            await store.upsertConversation(
+                HarnessConversation(
+                    id: conversationID,
+                    title: scenario.prompt,
+                    metadata: [ConversationWorkspace.metadataKey: encoded]
+                )
+            )
+        }
 
         let planner = HostedHarnessStepPlanner(
             backend: backend,

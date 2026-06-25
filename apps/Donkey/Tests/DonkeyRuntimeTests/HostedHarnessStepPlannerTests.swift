@@ -306,6 +306,48 @@ struct HostedHarnessStepPlannerTests {
     }
 
     @Test
+    func omittedNarrationFallsBackToTheToolNeverThePreviousStepsLine() async {
+        // The carryover bug: a reply that omits `narration` used to keep the prior step's line
+        // (`?? lastNarration`), pinning one step's account onto a later, unrelated step — observed as
+        // "I will load the PDF skill" shown for the file-search and field-listing steps after it. The
+        // first reply narrates; the second omits narration, and its `lastNarration` must be a line
+        // synthesized from its OWN command, not the first step's narration.
+        let httpClient = SequencedHTTPClient(responses: [
+            (Data(#"{"output_text":"{\"tool\":\"shell_exec\",\"input\":{\"command\":\"echo first\"},\"narration\":\"Loading the PDF skill.\"}"}"#.utf8), 200),
+            (Data(#"{"output_text":"{\"tool\":\"shell_exec\",\"input\":{\"command\":\"ls -la\"}}"}"#.utf8), 200)
+        ])
+        let planner = HostedHarnessStepPlanner(
+            backend: DonkeyBackendInferenceClient(
+                configuration: DonkeyBackendInferenceConfiguration(
+                    baseURL: URL(string: "https://donkey.example")!,
+                    clientID: "client-1"
+                ),
+                httpClient: httpClient
+            ),
+            descriptors: [
+                HarnessToolDescriptor(
+                    name: "shell_exec",
+                    pluginID: "core",
+                    summary: "Run a single-line command.",
+                    inputSchema: ["command": "The command."],
+                    safetyClass: .guardedInput
+                )
+            ],
+            appName: "Notes",
+            appGuidance: nil,
+            understanding: nil
+        )
+
+        _ = await planner.planNextStep(for: task(goal: "fill the form", toolHistory: []))
+        #expect(planner.lastNarration == "Loading the PDF skill.")
+
+        _ = await planner.planNextStep(for: task(goal: "fill the form", toolHistory: []))
+        // Not the prior step's line, and derived from this step's own command.
+        #expect(planner.lastNarration != "Loading the PDF skill.")
+        #expect(planner.lastNarration == "Running `ls -la`.")
+    }
+
+    @Test
     func retriesOnceWhenChosenToolMissesAllRequiredInput() async {
         // The exact loop the user hit: the model chose shell_exec with NO command (its required input),
         // which only yields invalidInput and, repeated, fails the run. The planner must retry once with

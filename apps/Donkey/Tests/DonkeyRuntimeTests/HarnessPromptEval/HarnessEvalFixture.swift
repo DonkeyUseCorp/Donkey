@@ -113,6 +113,31 @@ struct HarnessEvalToolInput: Decodable, Sendable {
     var contains: [String]
 }
 
+/// A prior file the conversation already produced, used to seed the workspace so a single-turn fixture can
+/// model a FOLLOW-UP ("I already made these; now do one more"). Paths are stored home-relative (`~/…`) so
+/// no real username is committed; the workspace standardizes them to the live home at runtime.
+struct HarnessEvalWorkspaceFile: Decodable, Sendable {
+    var path: String
+    var kind: String?
+}
+
+/// Seeds the conversation workspace before the run. `files` are recorded in order, so the same
+/// promotion logic the runtime uses (anchor-base + folder detection) decides the seeded shape.
+struct HarnessEvalWorkspaceSeed: Decodable, Sendable {
+    var files: [HarnessEvalWorkspaceFile]?
+
+    func build() -> ConversationWorkspace? {
+        guard let files, !files.isEmpty else { return nil }
+        var workspace = ConversationWorkspace()
+        // A fixed timestamp keeps the seed deterministic; the value is never asserted on.
+        let seededAt = Date(timeIntervalSince1970: 1_700_000_000)
+        for file in files {
+            workspace.record(path: file.path, kind: file.kind ?? "files.write", byteCount: nil, at: seededAt)
+        }
+        return workspace
+    }
+}
+
 /// The decoded `scenario.json`. Every field is optional with a sensible default so a folder needs nothing
 /// beyond `prompt.txt` to run.
 struct HarnessEvalScenarioSpec: Decodable, Sendable {
@@ -121,6 +146,8 @@ struct HarnessEvalScenarioSpec: Decodable, Sendable {
     var disk: [HarnessEvalDiskEntry]?
     var responses: [HarnessEvalResponseRule]?
     var expect: HarnessEvalExpect?
+    /// Prior files this conversation produced, surfaced to the planner as the `workspace` line.
+    var workspace: HarnessEvalWorkspaceSeed?
 
     init() {}
 }
@@ -195,7 +222,8 @@ struct HarnessEvalFixture: Sendable, CustomStringConvertible {
             name: name,
             prompt: prompt,
             frontmostApp: spec.frontmostApp ?? "Finder",
-            maxSteps: spec.maxSteps ?? 16
+            maxSteps: spec.maxSteps ?? 16,
+            workspaceSeed: spec.workspace?.build()
         ) { call, knownFiles in
             if let rule = targetedRules.first(where: { $0.matches(call) }) {
                 return rule.stub(in: dir)

@@ -453,14 +453,16 @@ public actor HarnessAgentCoordinator {
         agentID: String,
         question: String,
         pendingToolCall: HarnessToolCall? = nil,
-        reason: String = "Task needs user clarification"
+        reason: String = "Task needs user clarification",
+        metadata: [String: String] = [:]
     ) async -> HarnessAgentState? {
         await mutate(agentID: agentID, status: .waitingForUser, summary: reason) { task in
             task.pendingContinuation = HarnessPendingContinuation(
                 stage: .clarification,
                 reason: reason,
                 question: question,
-                pendingToolCall: pendingToolCall
+                pendingToolCall: pendingToolCall,
+                metadata: metadata
             )
         }
     }
@@ -510,7 +512,7 @@ public actor HarnessAgentCoordinator {
         call: HarnessToolCall,
         result: HarnessToolResult
     ) async -> HarnessAgentState? {
-        await mutate(agentID: agentID, status: nil, summary: "Tool result recorded") { task in
+        let updated = await mutate(agentID: agentID, status: nil, summary: "Tool result recorded") { task in
             task.toolHistory.append(
                 HarnessToolCallRecord(
                     call: call,
@@ -522,6 +524,132 @@ public actor HarnessAgentCoordinator {
             task.worldModel = task.worldModel.merging(result: result)
             task.worldModel.attemptedToolCalls = task.toolHistory
         }
+        // Capture any deliverable this step produced into the conversation workspace. Keys ONLY off
+        // typed result fields (status, toolName, metadata file paths) — never user text — so the
+        // planner gains durable memory of what it has created and where, surviving compaction.
+        if result.status == .succeeded {
+            let produced = Self.producedFilePaths(from: result)
+            if !produced.isEmpty {
+                await recordWorkspaceDeliverables(
+                    conversationID: updated?.conversationID,
+                    kind: result.toolName,
+                    files: produced,
+                    at: result.completedAt
+                )
+            }
+        }
+        return updated
+    }
+
+    /// Pull the absolute on-disk path(s) a tool result reported, from its typed metadata only. Reads the
+    /// canonical `filePath`/`path` keys plus the newline-joined `paths` (image generation), drops anything
+    /// under the temporary directory (intermediate scratch from `llm.generate`/`web.fetch toFile`, which is
+    /// assembled into a real deliverable later), and de-duplicates. No natural-language matching.
+    static func producedFilePaths(from result: HarnessToolResult) -> [(path: String, byteCount: Int?)] {
+        var raws: [String] = []
+        if let single = result.metadata["filePath"] ?? result.metadata["path"], !single.isEmpty {
+            raws.append(single)
+        }
+        if let multi = result.metadata["paths"] {
+            raws.append(contentsOf: multi.split(separator: "\n").map(String.init))
+        }
+        let byteCount = result.metadata["bytes"].flatMap { Int($0) }
+        let tempPrefix = FileManager.default.temporaryDirectory.standardizedFileURL.path
+        var seen = Set<String>()
+        var out: [(String, Int?)] = []
+        for raw in raws {
+            let std = ConversationWorkspace.standardize(raw)
+            guard !std.isEmpty, !std.hasPrefix(tempPrefix), !seen.contains(std) else { continue }
+            seen.insert(std)
+            out.append((std, byteCount))
+        }
+        return out
+    }
+
+    // MARK: - Conversation workspace
+
+    /// The conversation's durable workspace record (files produced, chosen base, promoted folder), or nil
+    /// if nothing has been produced yet. Stored in `HarnessConversation.metadata` so it spans every root
+    /// agent in the conversation.
+    public func conversationWorkspace(conversationID: String) async -> ConversationWorkspace? {
+        guard let convo = await conversationStore?.conversation(id: conversationID) else { return nil }
+        return ConversationWorkspace.decode(convo.metadata[ConversationWorkspace.metadataKey])
+    }
+
+    /// Record produced deliverables onto the conversation workspace, creating the conversation record if
+    /// this is the first one. Loads → updates → persists the canonical copy in conversation metadata.
+    public func recordWorkspaceDeliverables(
+        conversationID: String?,
+        kind: String,
+        files: [(path: String, byteCount: Int?)],
+        at date: Date
+    ) async {
+        guard let conversationID, let store = conversationStore, !files.isEmpty else { return }
+        var convo = await store.conversation(id: conversationID)
+            ?? HarnessConversation(id: conversationID, title: "")
+        var workspace = ConversationWorkspace.decode(convo.metadata[ConversationWorkspace.metadataKey])
+            ?? ConversationWorkspace()
+        for file in files {
+            workspace.record(path: file.path, kind: kind, byteCount: file.byteCount, at: date)
+        }
+        convo.metadata[ConversationWorkspace.metadataKey] = workspace.encodedJSON()
+        convo.updatedAt = date
+        await store.upsertConversation(convo)
+    }
+
+    /// Record the files the user attached onto the conversation workspace, so the planner sees them — with
+    /// their paths — every step and can read or act on them. The input mirror of `recordWorkspaceDeliverables`:
+    /// same load → update → persist of the canonical copy in conversation metadata. Persists across resumes
+    /// and across root agents in the conversation.
+    public func recordWorkspaceAttachments(
+        conversationID: String?,
+        attachments: [(path: String, displayName: String, contentType: String, byteCount: Int?)],
+        at date: Date
+    ) async {
+        guard let conversationID, let store = conversationStore, !attachments.isEmpty else { return }
+        var convo = await store.conversation(id: conversationID)
+            ?? HarnessConversation(id: conversationID, title: "")
+        var workspace = ConversationWorkspace.decode(convo.metadata[ConversationWorkspace.metadataKey])
+            ?? ConversationWorkspace()
+        for attachment in attachments {
+            workspace.recordAttachment(
+                path: attachment.path,
+                displayName: attachment.displayName,
+                contentType: attachment.contentType,
+                byteCount: attachment.byteCount,
+                at: date
+            )
+        }
+        convo.metadata[ConversationWorkspace.metadataKey] = workspace.encodedJSON()
+        convo.updatedAt = date
+        await store.upsertConversation(convo)
+    }
+
+    /// Project the conversation workspace into the agent's world model facts so the planner sees, every
+    /// step, what it has produced and where (and executors get the machine-readable resolve directory).
+    /// Quiet: persists the snapshot without a lifecycle event, since this is per-step bookkeeping, not a
+    /// step. A no-op when the conversation has produced nothing yet, so converse turns stay clean.
+    public func refreshWorkspaceFact(agentID: String) async {
+        let existing: HarnessAgentState?
+        if let cached = tasksByID[agentID] {
+            existing = cached
+        } else {
+            existing = await conversationStore?.agentSnapshot(id: agentID)
+        }
+        guard var task = existing,
+              let workspace = await conversationWorkspace(conversationID: task.conversationID) else { return }
+        let newSummary = workspace.plannerSummary()
+        let newBase = workspace.currentBaseDirectory.flatMap { $0.isEmpty ? nil : $0 }
+        // Per-step bookkeeping runs every planning iteration. Persisting re-serializes the WHOLE
+        // conversation store to disk, so skip it when neither workspace fact actually changed — otherwise a
+        // long run does one redundant full-store write per step, growing with conversation size.
+        guard task.worldModel.facts[ConversationWorkspace.summaryFactKey] != newSummary
+            || task.worldModel.facts[ConversationWorkspace.baseDirFactKey] != newBase else { return }
+        task.worldModel.facts[ConversationWorkspace.summaryFactKey] = newSummary
+        task.worldModel.facts[ConversationWorkspace.baseDirFactKey] = newBase
+        task.updatedAt = Date()
+        tasksByID[agentID] = task
+        await conversationStore?.upsertAgentSnapshot(task)
     }
 
     /// Appends a note to the most recent tool record's summary. The runtime uses this to warn the

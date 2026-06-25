@@ -19,9 +19,11 @@ Use `shell_exec` as the first choice for anything an expert terminal user would 
 - Keep parentheses out of commands. The safety classifier treats `(`/`)` (subshells, `find \( \)`, glob qualifiers like `(N)`) as separate commands and will prompt for approval on an otherwise read-only command. The `ls … | grep -iE` form above is parenthesis-free and runs instantly.
 
 ## Find and inspect files
-- Spotlight search by name or content: `mdfind -name report.pdf`, `mdfind "kMDItemTextContent == '*invoice*'"`.
+- Check the obvious places FIRST: `ls -t ~/Desktop ~/Downloads ~/Documents .`. A file the user just made, downloaded, or moved is usually here, and this beats Spotlight for fresh files.
+- `mdfind` searches the Spotlight INDEX, which lags reality: a file created or moved seconds ago may not be indexed yet, so `mdfind` can return nothing — or a stale OLDER copy in a different folder. Don't trust an `mdfind` hit as "the" file when the direct `ls` above found the named file in a user folder; prefer that copy.
+- Spotlight search by name or content (after the direct checks): `mdfind -name report.pdf`, `mdfind "kMDItemTextContent == '*invoice*'"`.
 - Newest of one type / largest in a folder: `ls -t ~/Downloads/*.pdf | head -1`, `ls -S ~/Downloads | head`. For several types at once, use the `ls … | grep -iE` form from Shell safety above.
-- Walk a tree: `find ~/Documents -name '*.key' -mtime -7`.
+- Walk a tree, but always SCOPED to a folder: `find ~/Documents -name '*.key' -mtime -7`. Never run a bare `find .` or `find ~` — from home it walks the whole tree and times out before it reaches anything.
 - Read metadata or contents: `mdls file.pdf`, `stat -f '%Sm %N' file`, `cat file`, `head -50 file`.
 
 ## Open, launch, and quit

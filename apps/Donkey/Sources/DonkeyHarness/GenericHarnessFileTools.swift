@@ -159,7 +159,7 @@ extension BuiltInHarnessToolExecutors {
         }
         let append = mode == "append"
 
-        let url = URL(fileURLWithPath: (rawPath as NSString).expandingTildeInPath).standardizedFileURL
+        let url = Self.resolveWritePath(rawPath, in: context.worldModel)
         let fileManager = FileManager.default
         do {
             try fileManager.createDirectory(
@@ -196,10 +196,39 @@ extension BuiltInHarnessToolExecutors {
             ),
             metadata: [
                 "executor": "builtInGeneric",
+                // `filePath` is the canonical key the workspace tracker reads; `path` is kept for
+                // existing callers that already consume it.
+                "filePath": url.path,
                 "path": url.path,
                 "bytes": String(bytes),
                 "mode": mode
             ]
         )
+    }
+
+    /// Resolve where `files.write` should write. An absolute or `~`-prefixed path is honored exactly, so
+    /// a path the user named always wins. A RELATIVE path resolves against the conversation workspace's
+    /// current directory (the `workspace.baseDir` fact the runtime maintains) when one exists — this is
+    /// how the planner keeps a task's files together by writing `report/chart.svg` instead of recomputing
+    /// the absolute base each step. With no workspace yet, a relative path falls back to the user's home,
+    /// matching where shell commands run.
+    static func resolveWritePath(_ rawPath: String, in worldModel: HarnessWorldModel) -> URL {
+        let expanded = (rawPath as NSString).expandingTildeInPath
+        if expanded.hasPrefix("/") {
+            return URL(fileURLWithPath: expanded).standardizedFileURL
+        }
+        // A relative path stays inside its base — the workspace folder when one exists, else home. Keep
+        // only the non-traversal components so a stray `../../x` can't climb out of the workspace; subfolders
+        // (`report/chart.svg`) still resolve normally.
+        let base: URL
+        if let workspace = worldModel.facts[ConversationWorkspace.baseDirFactKey], !workspace.isEmpty {
+            base = URL(fileURLWithPath: (workspace as NSString).expandingTildeInPath, isDirectory: true)
+        } else {
+            base = FileManager.default.homeDirectoryForCurrentUser
+        }
+        let safeComponents = expanded
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .filter { $0 != ".." && $0 != "." }
+        return safeComponents.reduce(base) { $0.appendingPathComponent(String($1)) }.standardizedFileURL
     }
 }

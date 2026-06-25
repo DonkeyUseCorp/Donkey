@@ -714,6 +714,51 @@ struct GenericHarnessTests {
     }
 
     @Test
+    func readCacheServesAnOptedInPureReadButNotAPlainReadOnlyTool() async {
+        // A tool that opts into caching serves an identical repeat from cache; a plain read-only tool that
+        // does not opt in re-runs every time (it may read evolving state — a counter, a clock, a listing).
+        let coordinator = HarnessAgentCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(stubTool(
+            name: "pure.read", safetyClass: .readOnly,
+            metadata: [HarnessToolDescriptor.cacheableReadMetadataKey: "true"]
+        ))
+        await registry.register(stubTool(name: "plain.read", safetyClass: .readOnly))
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createAgent(id: "task-cache", conversationID: "t", goal: "cache", grantedPermissions: [.lifecycle])
+
+        let firstPure = await runtime.executeToolCall(agentID: task.id, call: HarnessToolCall(name: "pure.read", input: ["path": "x"]))
+        #expect(firstPure?.toolResult?.metadata["servedFromCache"] != "true")
+        let secondPure = await runtime.executeToolCall(agentID: task.id, call: HarnessToolCall(name: "pure.read", input: ["path": "x"]))
+        #expect(secondPure?.toolResult?.status == .succeeded)
+        #expect(secondPure?.toolResult?.metadata["servedFromCache"] == "true")
+
+        _ = await runtime.executeToolCall(agentID: task.id, call: HarnessToolCall(name: "plain.read", input: [:]))
+        let secondPlain = await runtime.executeToolCall(agentID: task.id, call: HarnessToolCall(name: "plain.read", input: [:]))
+        #expect(secondPlain?.toolResult?.metadata["servedFromCache"] != "true")
+    }
+
+    @Test
+    func readCacheIsInvalidatedByAStateChangingStep() async {
+        // A state-changing step between two identical reads means the resource may have changed, so the
+        // second read re-runs rather than serving a possibly-stale cached value.
+        let coordinator = HarnessAgentCoordinator()
+        let registry = BuiltInHarnessToolCatalog.registryWithBuiltInExecutors()
+        await registry.register(stubTool(
+            name: "pure.read", safetyClass: .readOnly,
+            metadata: [HarnessToolDescriptor.cacheableReadMetadataKey: "true"]
+        ))
+        await registry.register(stubTool(name: "do.write", safetyClass: .guardedInput))
+        let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
+        let task = await coordinator.createAgent(id: "task-inv", conversationID: "t", goal: "inv", grantedPermissions: [.lifecycle])
+
+        _ = await runtime.executeToolCall(agentID: task.id, call: HarnessToolCall(name: "pure.read", input: ["path": "x"]))
+        _ = await runtime.executeToolCall(agentID: task.id, call: HarnessToolCall(name: "do.write", input: ["path": "x"]))
+        let afterWrite = await runtime.executeToolCall(agentID: task.id, call: HarnessToolCall(name: "pure.read", input: ["path": "x"]))
+        #expect(afterWrite?.toolResult?.metadata["servedFromCache"] != "true")
+    }
+
+    @Test
     func runCompleteOnAResumedTaskRequiresFreshEvidence() async {
         // The live false-completion: a new turn resumed a task whose previous run had created and
         // verified everything, the user had since undone the result, and the model re-completed
