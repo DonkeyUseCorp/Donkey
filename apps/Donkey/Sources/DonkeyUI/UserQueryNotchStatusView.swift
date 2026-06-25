@@ -980,8 +980,8 @@ public struct UserQueryNotchStatusView: View {
                     submitChoiceForm(conversation.id, selection)
                 }
                 .opacity(contentDim)
-            } else if showsReloadCreditsBanner(conversation) {
-                reloadCreditsBanner(for: conversation)
+            } else if showsReloadCreditsAction(conversation) {
+                reloadCreditsAction(for: conversation)
                     .opacity(contentDim)
             }
         }
@@ -1170,17 +1170,17 @@ public struct UserQueryNotchStatusView: View {
 
     /// Whether this conversation failed for lack of credits and should show the reload CTA. Read from the typed
     /// metadata flag the harness sets — never inferred from the narration text.
-    private func showsReloadCreditsBanner(_ conversation: UserQueryConversation) -> Bool {
+    private func showsReloadCreditsAction(_ conversation: UserQueryConversation) -> Bool {
         conversation.metadata[UserQueryConversationMetadataKey.creditReloadRequired] == "true"
     }
 
-    /// A reload CTA on a credit-exhausted conversation. Reuses the permission banner's button styling; tapping
-    /// it opens the billing page so the user can top up, then re-run the conversation (Close is still on the row).
-    private func reloadCreditsBanner(for conversation: UserQueryConversation) -> some View {
+    /// The credit-exhausted call to action: a short "Add credits to continue" label followed by a Reload pill,
+    /// right-aligned in the row's right gutter (no card, no icon) so it reads as a trailing action — the same
+    /// label-then-pill shape as the update bar's "Update Available · Restart". Tapping Reload opens the billing
+    /// page so the user can top up, then re-run the conversation (Close stays in the gutter).
+    private func reloadCreditsAction(for conversation: UserQueryConversation) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: "creditcard")
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(Color.white.opacity(0.7))
+            Spacer(minLength: 8)
 
             Text("Add credits to continue")
                 .font(.system(size: 12, weight: .regular))
@@ -1188,17 +1188,11 @@ public struct UserQueryNotchStatusView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
 
-            Spacer(minLength: 8)
-
             permissionButton(label: "Reload", prominent: true) {
                 reloadCreditsRequested(conversation.id)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.05))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
     /// What the user is actually approving — named by the concrete action, never the word "tools".
