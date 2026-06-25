@@ -17,7 +17,7 @@ on:
     branches: [main]
     paths:
       - scripts/fetch-bundled-tools.sh
-      - tools/pdf-fill/main.swift
+      - tools/**
 
 permissions:
   contents: write
@@ -47,13 +47,14 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
       # Same cache key as the nightly build, so the two share a single ffmpeg/Rust build. The key busts
-      # when the recipe or the in-repo pdf-fill source changes, which is also what triggers this workflow.
+      # when the recipe or any in-repo tool source (pdf-fill, epub-pack, reframe, …) changes, which is
+      # also what triggers this workflow.
       - name: Restore bundled tools cache
         id: tools-cache
         uses: actions/cache@v4
         with:
           path: vendor/donkey-tools
-          key: donkey-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-bundled-tools.sh', 'tools/pdf-fill/main.swift') }}
+          key: donkey-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-bundled-tools.sh', 'tools/**') }}
 
       # Import the Developer ID cert into a throwaway keychain and stage the notary API key, so the tools
       # are production-signed + notarized. Absent the secrets this no-ops to ad-hoc signing (still runnable,

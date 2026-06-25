@@ -195,6 +195,27 @@ build_epub_pack() {
   ok "epub-pack"
 }
 
+# Build the `reframe` CLI from the in-repo Swift source. It links only Apple system frameworks
+# (AVFoundation/Vision/CoreImage), so the result is a single self-contained binary — no dylib
+# bundling. Its decision core, ReframePlanner.swift, is shared with the app (it lives in
+# DonkeyRuntime and is unit-tested there); the CLI compiles it in alongside main.swift so the
+# shipped algorithm is the tested one. MANDATORY: it is the shorts skill's on-device
+# active-speaker auto-reframe (landscape -> vertical 9:16 that follows whoever is talking).
+build_reframe() {
+  if [ -x "$VENDOR_DIR/reframe" ]; then ok "reframe (cached)"; return 0; fi
+  command -v swiftc >/dev/null 2>&1 || { echo "FATAL: swiftc unavailable for reframe build" >&2; exit 1; }
+  if ! swiftc -O \
+       "$ROOT_DIR/tools/reframe/main.swift" \
+       "$ROOT_DIR/apps/Donkey/Sources/DonkeyRuntime/ReframePlanner.swift" \
+       -o "$VENDOR_DIR/reframe" 2>/tmp/reframe-build.log; then
+    echo "FATAL: reframe build failed; tail of /tmp/reframe-build.log:" >&2
+    tail -25 /tmp/reframe-build.log >&2
+    exit 1
+  fi
+  chmod +x "$VENDOR_DIR/reframe"
+  ok "reframe"
+}
+
 log "Ensuring dylibbundler"
 command -v dylibbundler >/dev/null 2>&1 || brew install dylibbundler >/dev/null 2>&1
 
@@ -209,6 +230,9 @@ build_pdf_fill
 
 # --- epub-pack: mandatory, built from in-repo Swift source (native Foundation, no deps) ---
 build_epub_pack
+
+# --- reframe: mandatory, built from in-repo Swift source (native AVFoundation/Vision, no deps) ---
+build_reframe
 
 # --- qpdf (Homebrew) ---
 if [ -x "$VENDOR_DIR/qpdf" ]; then
@@ -267,6 +291,20 @@ fi
 # Ad-hoc by default; publish-bundled-tools.sh sets a Developer ID identity for releases.
 log "Signing"
 "$SCRIPT_DIR/sign-bundled-tools.sh" "$VENDOR_DIR"
+
+# Guard: the bundled ffmpeg MUST carry the libass `subtitles` filter (subtitle burn-in), in
+# every channel — dev, nightly, release all install this same vendored bundle. A future edit
+# that drops --enable-libass (or a libass build break) would silently cripple every caption
+# workflow, so verify the now-signed binary and fail the whole run loudly rather than ship it.
+if [ -x "$VENDOR_DIR/ffmpeg" ]; then
+  if "$VENDOR_DIR/ffmpeg" -hide_banner -filters 2>/dev/null | grep -qw subtitles; then
+    ok "ffmpeg libass(subtitles) verified"
+  else
+    echo "FATAL: bundled ffmpeg lacks the libass 'subtitles' filter (subtitle burn-in)." >&2
+    echo "       It must be built with --enable-libass; see build_libass/build_lgpl_ffmpeg." >&2
+    exit 1
+  fi
+fi
 
 log "Summary"
 printf '%s\n' "${STATUS[@]}"

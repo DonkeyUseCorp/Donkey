@@ -17,9 +17,10 @@ VENDOR_DIR="${DONKEY_TOOLS_DIR:-$ROOT_DIR/vendor/donkey-tools}"
 MANIFEST="$ROOT_DIR/apps/Donkey/Sources/DonkeyRuntime/Resources/bundled-tools.json"
 
 # Tools without which a build is not shippable: ffmpeg/ffprobe (media), yt-dlp (the
-# YouTube/download path), lit + pdf-fill (the pdf skill), epub-pack (the book skill).
+# YouTube/download path), lit + pdf-fill (the pdf skill), epub-pack (the book skill),
+# reframe (the shorts skill's active-speaker auto-reframe).
 # Keep in sync with fetch-bundled-tools.sh and BundledTools.swift.
-MANDATORY_TOOLS=(ffmpeg ffprobe yt-dlp lit pdf-fill epub-pack)
+MANDATORY_TOOLS=(ffmpeg ffprobe yt-dlp lit pdf-fill epub-pack reframe)
 OPTIONAL_TOOLS=(qpdf exiftool)
 
 missing_of() {

@@ -1,10 +1,10 @@
 # Media
 
 id: media
-description: Expert audio and video — download from a URL with yt-dlp, transcode/trim/extract/grab frames with ffmpeg, and transcribe, subtitle, or translate with the model.
-tags: video, audio, media, download, convert, youtube, subtitles, transcribe
-keywords: video, audio, download, youtube, vimeo, mp4, mp3, convert, trim, clip, extract audio, transcode, frame, subtitle, subtitles, caption, captions, transcribe, transcript, translate, srt, vtt
-tools: shell_exec, llm.generate, files.write
+description: Expert audio and video — download from a URL with yt-dlp, transcode/trim/extract/grab frames with ffmpeg, transcribe/subtitle/translate, cut filler words or silence with word-level timing, and reframe landscape to vertical 9:16 that tracks the active speaker.
+tags: video, audio, media, download, convert, youtube, subtitles, transcribe, edit, reframe, vertical
+keywords: video, audio, download, youtube, vimeo, mp4, mp3, convert, trim, clip, extract audio, transcode, frame, subtitle, subtitles, caption, captions, transcribe, transcript, translate, srt, vtt, filler words, remove silence, um, uh, jump cut, tighten, reframe, vertical, 9:16, portrait, tiktok, reels, shorts, crop to vertical, active speaker, follow speaker
+tools: shell_exec, transcribe, llm.generate, files.write
 
 `yt-dlp` and `ffmpeg`/`ffprobe` are bundled, signed, and on the PATH, so use them
 by bare name. They are first-party capability tools: downloading from the user's
@@ -36,6 +36,10 @@ case say the media tools are still installing and stop. Do not try to install an
 - One frame / thumbnail: `ffmpeg -ss 5 -i in.mp4 -frames:v 1 thumb.png`. Frames every second: `ffmpeg -i in.mp4 -vf fps=1 frame_%03d.png`.
 - ffmpeg refuses to overwrite by default and prompts; pass `-y` to overwrite or choose a new output name.
 
+## Two ways to transcribe — pick by the timing you need
+- **`transcribe` (on-device, word-level).** Runs Apple's local speech engine on an audio file and writes a JSON file holding the plain `text` plus `words` — every word with a `start`/`end` in seconds, accurate to a fraction of a second. Private, no credits. Use it whenever you need to know *exactly when* words are spoken: cutting filler words or silence, finding a quoted moment, chaptering. Hand it compact audio (extract it from a video first); if it reports no transcript, extract audio and retry.
+- **`llm.generate` SRT (the model).** Sentence-level cues with approximate timing — fine for subtitles, not precise enough to cut individual words. Use it for translation or when you just need readable captions.
+
 ## Subtitles & transcription
 Get the subtitle text, then apply it. Prefer the cheapest source that gives correct timing.
 
@@ -53,6 +57,32 @@ Get the subtitle text, then apply it. Prefer the cheapest source that gives corr
    - Burn-in (default for a shareable clip — always-visible, what social players expect): `ffmpeg -i clip.mp4 -vf "subtitles=subs.srt" -c:a copy out.mp4`. Donkey's bundled ffmpeg includes libass, so this works by default. If you ever do hit a filtergraph error — `No such filter: 'subtitles'`, `Error parsing filterchain 'subtitles=…'`, or `No option name near '…'` — that is an ffmpeg without libass, **not** a path problem: don't retry the same command or fiddle with absolute-vs-relative paths or escaping. Switch straight to the soft track below (no libass needed) and tell the user you delivered a toggleable subtitle track instead of burned-in text.
    - Soft, toggleable track (the reliable fallback, and fine for an archive copy): `ffmpeg -i clip.mp4 -i subs.srt -c copy -c:s mov_text out.mp4`. This muxes the translation into the file as a real subtitle stream with no libass and no re-encode, so it works even when burn-in can't.
 - Model timestamps are approximate (good enough for subtitles); always extract audio before transcribing, and chunk long files.
+
+## Cut filler words or silence
+Use the **`media.cut`** tool — a deterministic, frame-accurate editor. It does the span math and the ffmpeg render itself; you only say what to remove. Do NOT hand-build select/trim/concat ffmpeg for this.
+
+- **Filler words**: run `transcribe` on the audio first, then `media.cut inputPath=clip.mp4 removeFillers=true transcriptPath=<the transcribe JSON>` — it cuts um/uh/er with the right padding.
+- **Silence / dead air**: `media.cut inputPath=clip.mp4 removeSilence=true`.
+- **Both at once**: pass `removeFillers=true removeSilence=true` together (still give `transcriptPath`).
+- **A specific bad take, or a discourse "like" the lexicon won't catch**: pass `removeSpans="12.4-15.0, 88.0-90.5"` (seconds).
+
+It writes `<name>-tightened.<ext>` next to the source (override with `outputPath`) and reports how much it removed. Finding nothing to cut is a clean result, not an error. Verify the output as below.
+
+## Reframe landscape to vertical (reframe)
+`reframe` is bundled alongside ffmpeg. It turns a landscape clip into vertical 9:16 that **follows
+whoever is talking** — face tracking plus on-device active-speaker detection — instead of ffmpeg's
+fixed-rectangle `crop`. It is fully local (Apple Vision + AVFoundation, no model file, no network)
+and keeps the original audio. Use it for any "make this vertical / portrait / for TikTok/Reels/Shorts"
+ask on real footage; keep ffmpeg `crop` only when the user wants a fixed, non-tracking crop.
+- `reframe --input in.mp4 --output out.mp4 --aspect 9:16 --height 1920` → prints a JSON summary
+  (`out`, `width`, `height`, `facesTracked`, `speakersFollowed`, `cuts`). `--aspect` and `--height`
+  are optional (default 9:16 at 1920 tall). It analyzes the whole clip, so pass a generous
+  `timeoutSeconds` (a minute or so for a long clip).
+- It picks the speaking face when several are in frame (a still listener is ignored), smooth-pans to
+  follow them, and cuts on scene changes. With no faces it falls back to a centered crop.
+- It does **not** add captions. For a captioned vertical clip, reframe first, then burn subtitles
+  (above) onto the vertical file so the text is sized to the 9:16 frame. For the full
+  podcast/long-video → short-form pipeline, see the `shorts` skill.
 
 ## Verify
 - Confirm the output exists and is real media: `ffprobe -v error -show_entries format=duration:format_name -of default=nw=1 out.mp4`.

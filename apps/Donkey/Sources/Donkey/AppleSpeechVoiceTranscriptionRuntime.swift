@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreMedia
 import DonkeyAI
 import Foundation
 import Speech
@@ -15,6 +16,60 @@ import Speech
 /// is surfaced as a thrown error so the composing runtime can fall back to Gemini.
 public struct AppleSpeechVoiceTranscriptionRuntime: LocalVoiceTranscriptionRuntime {
     public init() {}
+
+    /// One spoken word with its measured time span (milliseconds from the start of the file). This is
+    /// the timing both Apple paths already compute per run/segment — it used to be discarded.
+    public struct TranscribedWord: Sendable {
+        public let text: String
+        public let startMS: Int
+        public let endMS: Int
+        public let confidence: Double
+    }
+
+    /// A full file transcript: the plain text plus the per-word timings the editing flow cuts against.
+    public struct FileTranscript: Sendable {
+        public let text: String
+        public let words: [TranscribedWord]
+        public let localeIdentifier: String
+        public let backend: String
+    }
+
+    /// Transcribe a local audio file on-device into text *with per-word timings*. This is the same
+    /// engine the voice path uses, but it keeps the word-level time ranges instead of flattening to a
+    /// string. The file must be one the platform audio stack can open directly (wav/m4a/mp3/caf/aiff);
+    /// for a video, extract compact audio first — a file it cannot read throws, and the caller surfaces
+    /// that so the planner extracts audio and retries. Audio never leaves the machine.
+    public func transcribeFile(
+        at fileURL: URL,
+        preferredLocale: Locale = .current
+    ) async throws -> FileTranscript {
+        if #available(macOS 26, *) {
+            let resolved = try await Self.resolvedSpeechAnalyzerLocale(preferred: preferredLocale)
+            let output = try await Self.runSpeechAnalyzer(fileURL: fileURL, locale: resolved)
+            let text = output.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { throw LocalVoiceTranscriptionRuntimeError.emptyTranscript }
+            return FileTranscript(
+                text: text,
+                words: output.words,
+                localeIdentifier: resolved.identifier,
+                backend: "apple-speechanalyzer"
+            )
+        }
+
+        let result = try await Self.runLegacyRecognizer(
+            fileURL: fileURL,
+            preferred: preferredLocale,
+            timeoutMS: 120_000
+        )
+        let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { throw LocalVoiceTranscriptionRuntimeError.emptyTranscript }
+        return FileTranscript(
+            text: text,
+            words: result.words,
+            localeIdentifier: result.language,
+            backend: "apple-sfspeech"
+        )
+    }
 
     /// Download the on-device locale model ahead of time so the first voice command
     /// doesn't pay a multi-second model install under the "Transcribing…" state.
@@ -45,9 +100,9 @@ public struct AppleSpeechVoiceTranscriptionRuntime: LocalVoiceTranscriptionRunti
 
         if #available(macOS 26, *) {
             let resolved = try await Self.resolvedSpeechAnalyzerLocale(preferred: Locale.current)
-            let text = try await Self.runSpeechAnalyzer(fileURL: fileURL, locale: resolved)
+            let output = try await Self.runSpeechAnalyzer(fileURL: fileURL, locale: resolved)
             return try Self.transcript(
-                text: text,
+                text: output.text,
                 language: resolved.identifier,
                 backend: "apple-speechanalyzer"
             )
@@ -82,12 +137,17 @@ public struct AppleSpeechVoiceTranscriptionRuntime: LocalVoiceTranscriptionRunti
     }
 
     @available(macOS 26, *)
-    private static func runSpeechAnalyzer(fileURL: URL, locale: Locale) async throws -> String {
+    private static func runSpeechAnalyzer(
+        fileURL: URL,
+        locale: Locale
+    ) async throws -> (text: String, words: [TranscribedWord]) {
+        // Ask the transcriber to attach an audio time range to every run so the result carries per-word
+        // timing, not just text. Without this option the runs come back untimed.
         let transcriber = SpeechTranscriber(
             locale: locale,
             transcriptionOptions: [],
             reportingOptions: [],
-            attributeOptions: []
+            attributeOptions: [.audioTimeRange]
         )
         try await ensureModelInstalled(transcriber, locale: locale)
 
@@ -114,7 +174,24 @@ public struct AppleSpeechVoiceTranscriptionRuntime: LocalVoiceTranscriptionRunti
         }
 
         let attributed = try await collector.value
-        return String(attributed.characters)
+        return (String(attributed.characters), words(from: attributed))
+    }
+
+    /// Walk the transcript's runs and turn each timed run into a word. Runs without an audio time range
+    /// (or that are pure whitespace) are skipped, so the result is the spoken words with their spans.
+    @available(macOS 26, *)
+    private static func words(from attributed: AttributedString) -> [TranscribedWord] {
+        var words: [TranscribedWord] = []
+        for run in attributed.runs {
+            guard let timeRange = run.audioTimeRange else { continue }
+            let piece = String(attributed[run.range].characters)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !piece.isEmpty else { continue }
+            let startMS = max(0, Int((timeRange.start.seconds * 1000).rounded()))
+            let endMS = max(startMS, Int((timeRange.end.seconds * 1000).rounded()))
+            words.append(TranscribedWord(text: piece, startMS: startMS, endMS: endMS, confidence: 1))
+        }
+        return words
     }
 
     @available(macOS 26, *)
@@ -134,7 +211,7 @@ public struct AppleSpeechVoiceTranscriptionRuntime: LocalVoiceTranscriptionRunti
         fileURL: URL,
         preferred: Locale,
         timeoutMS: Int
-    ) async throws -> (text: String, language: String) {
+    ) async throws -> (text: String, language: String, words: [TranscribedWord]) {
         try await requestLegacyAuthorization()
 
         guard let recognizer = SFSpeechRecognizer(locale: preferred)
@@ -150,7 +227,9 @@ public struct AppleSpeechVoiceTranscriptionRuntime: LocalVoiceTranscriptionRunti
         request.requiresOnDeviceRecognition = true
         request.shouldReportPartialResults = false
 
-        let text: String = try await withCheckedThrowingContinuation { continuation in
+        // Build the Sendable pieces (text + timed words) inside the recognition handler so a
+        // non-Sendable SFTranscription never crosses into the continuation (Swift 6 data-race safety).
+        let outcome: (text: String, words: [TranscribedWord]) = try await withCheckedThrowingContinuation { continuation in
             let resume = SingleResume(continuation)
             let task = recognizer.recognitionTask(with: request) { result, error in
                 if let error {
@@ -158,14 +237,28 @@ public struct AppleSpeechVoiceTranscriptionRuntime: LocalVoiceTranscriptionRunti
                     return
                 }
                 guard let result, result.isFinal else { return }
-                resume.succeed(result.bestTranscription.formattedString)
+                let transcription = result.bestTranscription
+                resume.succeed((transcription.formattedString, legacyWords(from: transcription)))
             }
             // SFSpeechRecognizer can stall without ever invoking the handler; bound it
             // so a hung recognition throws and falls through to Gemini instead of
             // leaving the UI stuck on "Transcribing…".
             resume.start(task: task, timeoutMS: timeoutMS)
         }
-        return (text, recognizer.locale.identifier)
+        return (outcome.text, recognizer.locale.identifier, outcome.words)
+    }
+
+    /// Map an SFSpeech transcription's per-segment timing into words. Called inside the recognition
+    /// handler so only Sendable values cross the continuation boundary.
+    private static func legacyWords(from transcription: SFTranscription) -> [TranscribedWord] {
+        transcription.segments.compactMap { segment -> TranscribedWord? in
+            let piece = segment.substring.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !piece.isEmpty else { return nil }
+            let startMS = max(0, Int((segment.timestamp * 1000).rounded()))
+            let endMS = max(startMS, Int(((segment.timestamp + segment.duration) * 1000).rounded()))
+            let confidence = segment.confidence > 0 ? Double(segment.confidence) : 1
+            return TranscribedWord(text: piece, startMS: startMS, endMS: endMS, confidence: confidence)
+        }
     }
 
     private static func requestLegacyAuthorization() async throws {
@@ -187,14 +280,14 @@ public struct AppleSpeechVoiceTranscriptionRuntime: LocalVoiceTranscriptionRunti
     /// Guards a checked continuation so the recognition handler — which can fire
     /// more than once, or not at all — resumes it exactly once, and enforces a
     /// timeout that cancels a stalled recognition.
-    private final class SingleResume: @unchecked Sendable {
-        private let continuation: CheckedContinuation<String, Error>
+    private final class SingleResume<Value: Sendable>: @unchecked Sendable {
+        private let continuation: CheckedContinuation<Value, Error>
         private let lock = NSLock()
         private var resumed = false
         private var task: SFSpeechRecognitionTask?
         private var timeoutTask: Task<Void, Never>?
 
-        init(_ continuation: CheckedContinuation<String, Error>) {
+        init(_ continuation: CheckedContinuation<Value, Error>) {
             self.continuation = continuation
         }
 
@@ -213,11 +306,11 @@ public struct AppleSpeechVoiceTranscriptionRuntime: LocalVoiceTranscriptionRunti
             lock.unlock()
         }
 
-        func succeed(_ value: String) { finish(.success(value)) }
+        func succeed(_ value: Value) { finish(.success(value)) }
 
         func fail(_ error: Error) { finish(.failure(error)) }
 
-        private func finish(_ result: Result<String, Error>) {
+        private func finish(_ result: Result<Value, Error>) {
             lock.lock()
             guard !resumed else {
                 lock.unlock()
