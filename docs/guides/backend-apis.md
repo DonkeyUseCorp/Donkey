@@ -81,13 +81,14 @@ only.
   Route handlers import the registry and neutral schemas, not individual
   adapters.
 - Computer-use provider tools are registered as request tools and mapped by
-  adapters. Browser interaction uses Gemini through
-  `donkey_gemini_browser_interaction`; guarded macOS desktop interaction uses
-  OpenAI through `donkey_openai_mac_desktop_interaction`, which the hosted
-  Responses adapter maps to OpenAI's `computer` tool. Developer-only read-only
-  UI inspection uses `donkey_debug_ui_inspection`; adapters route it through
-  hosted vision/computer-use-capable models but must not forward or execute UI
-  action calls.
+  adapters. Both browser and guarded macOS desktop interaction use Gemini's
+  built-in `computer_use` tool: `donkey_gemini_browser_interaction` maps to the
+  `ENVIRONMENT_BROWSER` environment and `donkey_gemini_mac_desktop_interaction`
+  to `ENVIRONMENT_DESKTOP`, and the adapter returns the model's native action
+  calls for the Mac app to execute. Developer-only read-only UI inspection uses
+  `donkey_debug_ui_inspection`; adapters route it through hosted
+  vision/computer-use-capable models but must not forward or execute UI action
+  calls.
 - Screenshot parsing is available at `POST /api/inference/screenshots/parse/`.
   It accepts scoped app/window or system-navigation screenshots only, never
   whole-desktop captures, and returns read-only UI evidence in the Mac app's
@@ -95,23 +96,23 @@ only.
   dedicated screenshot-parsing module configured with hosted Google credentials
   or `GEMINI_API_KEY`.
 - The Gemini adapter uses the official `@google/genai` Node/TypeScript SDK for
-  general non-streaming chat, structured Responses calls, and browser
-  computer-use calls. It uses Vertex AI's global endpoint only when
+  general non-streaming chat, structured Responses calls, and computer-use calls
+  (browser and macOS desktop). It uses Vertex AI's global endpoint only when
   `GOOGLE_APPLICATION_CREDENTIALS_JSON` includes a `project_id`; if the project
   is missing, the provider is unavailable. The adapter's defaults route fast
   structured task-intent and follow-up decisions to `gemini-3.1-flash-lite`,
-  keep `gemini-3.5-flash` for general chat and non-decision Responses calls,
-  and use `gemini-3-flash-preview` for browser Computer Use tool calls. Keep
-  model selection in code rather than environment overrides. Structured
+  and use `gemini-3.5-flash` for general chat, non-decision Responses calls, and
+  Computer Use tool calls — computer use is a built-in tool of the main flash
+  model, so one model serves both environments. Keep model selection in code
+  rather than environment overrides. Structured
   decision requests normalize JSON schemas for Gemini and retry without
   provider-enforced schema when Vertex rejects schema parameters; Mac-side
   runtime validation still owns whether the returned JSON is executable. Set
   `GOOGLE_APPLICATION_CREDENTIALS_JSON` as a hosted-deploy sensitive env var
   rather than storing Google provider credentials in the Mac app.
-- The OpenAI hosted Responses adapter uses `OPENAI_API_KEY` only for macOS
-  desktop computer-use and developer UI inspection. Keep that credential in the
-  hosted deployment environment; the Mac app must not carry OpenAI provider
-  credentials.
+- The OpenAI hosted Responses adapter uses `OPENAI_API_KEY` only for developer
+  read-only UI inspection. Keep that credential in the hosted deployment
+  environment; the Mac app must not carry OpenAI provider credentials.
 
 ## Hosted Model Credits
 
