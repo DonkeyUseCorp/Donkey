@@ -21,7 +21,13 @@ even when there are no active tasks.
 
 ## Current Sequence
 
-_No active tasks._
+1. **Deterministic pipeline runner** — `plans/harness-deterministic-pipeline-runner.md`.
+   Collapse fixed multi-tool recipes from one planner round-trip per tool into a
+   single routed action that runs the recipe in code and calls the model only for
+   genuine judgment. The runner (`MediaPipeline`) and its first consumer
+   (`shorts.make` → `ShortsOrchestrator`, one model call for a whole shorts run) are
+   **supported**. Remaining: migrate `pdf.fill` onto the runner (code unification,
+   not a cost fix), and capture a real before/after trace.
 
 ## Invariants
 

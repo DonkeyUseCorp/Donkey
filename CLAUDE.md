@@ -17,6 +17,8 @@ Before changing the agent harness, task-intent routing, local-model adapters, LL
 
 Never infer semantic intent by string matching raw user input. Do not add phrase lists, prefixes, suffixes, regexes, app-name checks, greeting/help classifiers, or other natural-language command-text matching to decide what the user wants. Raw user text has too many variations to handle reliably. Pass the turn through an LLM or another typed model/runtime boundary first, get structured output, then do deterministic matching only on that structured output or on non-semantic technical fields.
 
+The planner prompt is a budget: over time it shrinks, not grows. When you add a fact, tighten or replace existing wording instead of appending to it.
+
 ## Site Project
 
 Before changing `site/` UI, routes, API handlers, or data access patterns:
@@ -35,6 +37,7 @@ Before changing `site/` UI, routes, API handlers, or data access patterns:
 - Manage plans deliberately: move a plan to `plans/done/` when its work is complete, and create or keep plans only for work that remains.
 - Over time, prefer shrinking active `plans/` by completing work and moving finished plans to `plans/done/`.
 - When writing or editing any engineering doc under `docs/`, follow `docs/guides/eng-doc-style.md`.
+- Write straight up — in prompts, docs, and summaries. State what to do affirmatively and once; cut filler and negated foils (e.g. "…, which is exactly what not to do", "never re-create it").
 - Update guides in `docs/guides/` only for major features or durable supported-behavior changes. Do not update guide docs for small styling tweaks, layout adjustments, copy changes, or implementation-only refactors.
 - When work completes a master-plan slice, update the master plan's supported/current-boundary language and next steps in the same change.
 - Keep guides explanatory. They should teach what the system is, how it works, and which boundaries matter; do not turn guides into feature inventories, implementation logs, duplicated code, or long file lists.

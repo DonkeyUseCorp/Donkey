@@ -205,9 +205,11 @@ waiting, shell commands, AppleScript, file understanding, web and text calls,
 image and video creation, audio transcription, media editing, verification, and
 lifecycle control.
 
-The files a task produces are kept together. A conversation remembers what it
-has written and where, so a growing task's output lands in one named folder
-instead of being scattered.
+The files a task produces are kept together in one named folder per conversation
+— created under the user's Downloads by default, and configurable to Desktop,
+Documents, or another path. The agent owns that folder, and a write aimed loosely
+at the top of Downloads, Desktop, Documents, or the home root is pulled back into
+it, so a task's output lands in one place instead of scattering loose.
 
 ## Shell First, GUI Second
 
