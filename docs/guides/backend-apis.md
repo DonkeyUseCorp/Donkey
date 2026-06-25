@@ -1,183 +1,211 @@
 # Backend API Guide
 
-Backend APIs live in `site/src/app/api/**/route.ts`. They serve the Mac app
-(session cookie), the site's own client views, and third-party Vision API
-developers (API keys).
+Backend APIs are the Next.js route handlers under the site project. They serve
+three callers: the Mac app, signed in with a session cookie; the site's own
+client views; and third-party Vision API developers, who authenticate with an
+API key.
 
-**The one rule:** every route handler is wrapped in `withDonkeyAuth` from
-`@/lib/donkey-api-auth`. A public endpoint is a deliberate exception with an
-explicit product reason — today only Better Auth's own routes and the
-signature-verified Stripe webhook — never a default.
+**The one rule:** every route handler is wrapped in `withDonkeyAuth`. A public
+endpoint is a deliberate exception with a product reason — today only Better
+Auth's own routes, the signature-verified Stripe webhook, and a plain health
+check. Ship a handler without the wrapper and the endpoint is open to anyone.
 
 ## Authentication
 
-- `withDonkeyAuth` accepts a Donkey session cookie by default. Third-party API
-  keys are opt-in per route: `withDonkeyAuth(handler, { allowApiKey: true })`.
-  This typed allowlist is the only way a key reaches a handler — never match on
-  the request path. `request.donkey.method` tells the handler how the caller
-  authenticated (`session-cookie`, `api-key`, or `dev-bypass`).
-- Better Auth is mounted at `site/src/app/api/auth/[...all]/route.ts` and
-  configured through `@/lib/auth`. The supported interactive login provider is
-  Google OAuth only; keep `emailAndPassword.enabled` false unless the product
-  explicitly adds another login method. Configure Google OAuth with
-  `${BETTER_AUTH_URL}/api/auth/callback/google` as the redirect URI.
-- Mac app sign-in uses Better Auth's one-time-token plugin. `/mac-auth/callback`
-  mints a short-lived code from the browser session, renders a browser handoff
-  page that opens `donkey://auth/callback`, then the app exchanges the code at
-  `/api/auth/one-time-token/verify` so `URLSession` stores the resulting Better
-  Auth cookie in the app-owned cookie jar. Keep the code short-lived while
-  still allowing a manual "Open Donkey" fallback click, and keep the Mac app
-  callback origin (`donkey://` by default) in Better Auth trusted origins.
-- In Vercel, configure `BETTER_AUTH_URL`, `BETTER_AUTH_SECRET`,
-  `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and
-  `DONKEY_MAC_AUTH_REDIRECT_ORIGINS`. Do not commit real OAuth credentials.
+`withDonkeyAuth` takes a session cookie by default. A route accepts a
+third-party API key only when it opts in with `allowApiKey: true`. That typed
+allowlist is the only way a key reaches a handler. If a handler instead branches
+on whether the request path starts with `/api/vision`, the allowlist has already
+been bypassed.
+
+Inside the handler, `request.donkey` carries who the caller is. Its `method`
+field says how they authenticated — by session cookie, API key, or dev bypass —
+and the handler branches on that, never on the path.
+
+Better Auth is the login layer, mounted at `/api/auth/[...all]` and configured
+in one place. The only interactive login is Google OAuth; email-and-password
+stays off unless the product deliberately adds another method. Better Auth's own
+Google callback is `${BETTER_AUTH_URL}/api/auth/callback/google`.
+
+Mac app sign-in rides Better Auth's one-time-token plugin. The browser does the
+real login, then hands a short-lived code to the app:
+
+```text
+browser session signs in
+    |
+    v
+/mac-auth/callback mints a one-time code
+    |
+    v
+handoff page opens donkey://auth/callback
+    |
+    v
+app exchanges the code at /api/auth/one-time-token/verify
+    |
+    v
+app stores the Better Auth cookie in its own cookie jar
+```
+
+Keep the code short-lived, leave a manual "Open Donkey" fallback on the handoff
+page, and keep the `donkey://` callback origin in Better Auth's trusted origins.
+
+The hosted deploy needs `BETTER_AUTH_URL`, `BETTER_AUTH_SECRET`,
+`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and
+`DONKEY_MAC_AUTH_REDIRECT_ORIGINS`. Never commit real OAuth credentials.
 
 ## Handler Rules
 
-- Validate request bodies, search params, and route params with Zod before
-  using them.
-- Verify resource ownership before reading or mutating scoped data.
-- Return explicit `NextResponse.json(...)` responses with the intended status
-  code.
-- For access-control failures (missing session, missing/inactive subscription),
-  return a plain 401 via `unauthorizedResponse`; for a missing resource, a
-  plain 404 via `notFoundResponse` (both from `@/lib/donkey-api-auth`). Do not
-  write per-case descriptive auth/not-found errors. Reserve distinct status
-  codes for genuinely different operational outcomes (e.g. 402 over quota, 429
-  rate limit).
-- Do not wrap route handlers in `try/catch` unless the handler can recover and
-  return a different intentional response. Let unexpected errors surface to the
-  framework's logging path.
+- Validate every request body, search param, and route param with Zod before
+  using it.
+- Check resource ownership before reading or mutating scoped data.
+- Return an explicit `NextResponse.json(...)` with the status you mean.
+- For an access-control failure — missing session, missing or inactive
+  subscription — return a plain 401 via `unauthorizedResponse`; for a missing
+  resource, a plain 404 via `notFoundResponse`. Don't hand-write per-case auth
+  or not-found messages. Save distinct codes for genuinely different outcomes:
+  402 over quota, 429 rate-limited.
+- Don't wrap a handler in try/catch unless it can recover and return a different
+  intentional response. Let unexpected errors surface to the framework.
 
 ## Database
 
-- Keep Prisma access server-only through `@/lib/prisma`.
-- Keep Prisma table/model definitions in logically grouped sibling `.prisma`
-  files under `site/prisma/`. Never put table/model definitions in
-  `site/prisma/schema.prisma`; reserve that file for shared Prisma
-  configuration such as generator and datasource blocks.
-- Use Prisma's default table names for new models; do not add `@@map`. (Some
-  earlier tables predate this and keep their mapped snake_case names.)
+- Reach Prisma only through the server-only client; never import it into client
+  code.
+- Put table and model definitions in grouped sibling `.prisma` files, not in
+  `schema.prisma` — that file holds only the generator and datasource config.
+- Use Prisma's default table names for new models; don't add `@@map`. A few
+  older tables predate this and keep their mapped snake_case names.
 - Add `@@index` only for a column a query actually filters or joins on. `@id`
-  and `@unique` already index their columns, so don't restate those or add
-  speculative indexes; an index you don't query is just write overhead.
-- Do not run database migrations as part of normal API work.
+  and `@unique` already index their columns, so a speculative index you never
+  query is just write overhead.
+- Don't run database migrations as part of API work.
 
 ## Inference Gateway
 
-The inference gateway lives under `site/src/app/api/inference/**`. It is a
-Mac-app-facing backend boundary for remote model and asset generation. Routes,
-shared schemas, stateless provider calls, and Swift contracts stay
-provider-neutral; provider names are configuration/data inside private adapters
-only.
+The inference gateway is the Mac-app-facing boundary for remote model calls and
+asset generation. Everything the Mac app and backend share — routes, schemas,
+the stateless provider calls, the Swift contracts — stays provider-neutral.
+Provider names live only inside private adapters, as configuration and data.
 
-- Require `x-donkey-client-id` on inference routes.
-- Keep remote asset generation state on the Mac side. The backend can create or
-  refresh remote provider jobs and return provider job IDs, provider generation
-  IDs, polling URLs, and output references, but it must not persist prompts,
-  generation records, provider output references, or generated assets in
-  Postgres.
-- Keep provider-specific request mapping behind the inference provider registry.
-  Route handlers import the registry and neutral schemas, not individual
-  adapters.
-- Computer-use provider tools are registered as request tools and mapped by
-  adapters. Both browser and guarded macOS desktop interaction use Gemini's
-  built-in `computer_use` tool: `donkey_gemini_browser_interaction` maps to the
-  `ENVIRONMENT_BROWSER` environment and `donkey_gemini_mac_desktop_interaction`
-  to `ENVIRONMENT_DESKTOP`, and the adapter returns the model's native action
-  calls for the Mac app to execute. Developer-only read-only UI inspection uses
-  `donkey_debug_ui_inspection`; adapters route it through hosted
-  vision/computer-use-capable models but must not forward or execute UI action
-  calls.
-- Screenshot parsing is available at `POST /api/inference/screenshots/parse/`.
-  It accepts scoped app/window or system-navigation screenshots only, never
-  whole-desktop captures, and returns read-only UI evidence in the Mac app's
-  local UI understanding shape. The default provider is Gemini Flash through a
-  dedicated screenshot-parsing module configured with hosted Google credentials
-  or `GEMINI_API_KEY`.
-- The Gemini adapter uses the official `@google/genai` Node/TypeScript SDK for
-  general non-streaming chat, structured Responses calls, and computer-use calls
-  (browser and macOS desktop). It uses Vertex AI's global endpoint only when
-  `GOOGLE_APPLICATION_CREDENTIALS_JSON` includes a `project_id`; if the project
-  is missing, the provider is unavailable. The adapter's defaults route fast
-  structured task-intent and follow-up decisions to `gemini-3.1-flash-lite`,
-  and use `gemini-3.5-flash` for general chat, non-decision Responses calls, and
-  Computer Use tool calls — computer use is a built-in tool of the main flash
-  model, so one model serves both environments. Keep model selection in code
-  rather than environment overrides. Structured
-  decision requests normalize JSON schemas for Gemini and retry without
-  provider-enforced schema when Vertex rejects schema parameters; Mac-side
-  runtime validation still owns whether the returned JSON is executable. Set
-  `GOOGLE_APPLICATION_CREDENTIALS_JSON` as a hosted-deploy sensitive env var
-  rather than storing Google provider credentials in the Mac app.
-- The OpenAI hosted Responses adapter uses `OPENAI_API_KEY` only for developer
-  read-only UI inspection. Keep that credential in the hosted deployment
-  environment; the Mac app must not carry OpenAI provider credentials.
+Every inference route requires the `x-donkey-client-id` header. Provider request
+mapping lives behind the provider registry, so handlers import the registry and
+the neutral schemas, never an individual adapter.
+
+**State stays on the Mac.** The backend can create or refresh a provider job and
+hand back job IDs, generation IDs, polling URLs, and output references, but it
+never persists prompts, generation records, provider output references, or
+generated assets in Postgres.
+
+### Computer use
+
+Computer use is a built-in tool of Gemini's main flash model, so one model
+drives both a browser and a guarded macOS desktop. The Mac app sends a request
+tool; the adapter maps it to an environment and returns the model's native
+action calls for the app to execute.
+
+| Request tool | Environment | Used for |
+|---|---|---|
+| `donkey_gemini_browser_interaction` | browser | web interaction |
+| `donkey_gemini_mac_desktop_interaction` | desktop | guarded macOS desktop interaction |
+| `donkey_debug_ui_inspection` | — | developer-only, read-only UI inspection |
+
+The first two return action calls the app executes. UI inspection is read-only:
+the adapter routes it through a vision-capable model but must never forward or
+run a UI action call.
+
+### Screenshot parsing
+
+Screenshot parsing is its own route, `POST /api/inference/screenshots/parse/`.
+It takes a scoped app, window, or system-navigation screenshot — never a
+whole-desktop capture — and returns read-only UI evidence in the Mac app's local
+UI-understanding shape. The default provider is Gemini Flash, configured with
+hosted Google credentials or `GEMINI_API_KEY`.
+
+### Gemini and OpenAI adapters
+
+The Gemini adapter uses the official `@google/genai` SDK. It runs on Vertex AI's
+global endpoint only when `GOOGLE_APPLICATION_CREDENTIALS_JSON` carries a
+`project_id`; without one, the provider is unavailable. Set that JSON as a
+hosted-deploy secret — Google credentials never live in the Mac app.
+
+Model choice stays in code, not environment overrides:
+
+| Call | Model |
+|---|---|
+| Fast structured decisions: task-intent, follow-ups | `gemini-3.1-flash-lite` |
+| General chat, non-decision structured calls, computer use | `gemini-3.5-flash` |
+
+Structured-decision requests normalize their JSON schema for Gemini and retry
+without a provider-enforced schema when Vertex rejects the schema parameters.
+Whether the returned JSON is actually executable is decided by Mac-side runtime
+validation, not the backend.
+
+The OpenAI Responses adapter exists only for developer read-only UI inspection
+and uses `OPENAI_API_KEY`. Keep that key in the hosted deploy; the Mac app never
+carries it.
 
 ## Hosted Model Credits
 
-Hosted inference usage is metered per authenticated user in the backend. The
-Mac app sends provider-neutral inference requests; the backend owns credit
-checks, provider/model rates, debits, and audit rows.
+Hosted inference is metered per signed-in user, and the backend owns the meter.
+The Mac app sends provider-neutral requests; the backend checks credits, knows
+the rates, debits, and writes the audit rows. Each user has one visible balance,
+with grants, expirations, usage charges, and adjustments recorded behind it.
 
-- Keep one visible balance per user, with auditable grants, expirations, usage
-  charges, and adjustments behind it.
-- Provider-invoking inference routes check credits before calling a hosted
-  model, then charge after provider success. Model listing remains uncharged.
-  Provider/config/runtime failures after a successful credit preflight are
-  recorded as zero-cost failed usage events with sanitized error codes.
-- Manual whole-dollar credit grants are available at `POST /api/credits/grants/`.
-  The caller must be authenticated and have `user.superUser = true`; the target
-  user is addressed by internal `user.id`. The route treats `$1` as `1` hosted
-  inference credit (`1,000,000` micros), then writes the grant and ledger entry.
-- Known OpenAI, Gemini, and ElevenLabs models use backend-owned provider price
-  fallbacks unless an active exact or provider/model database rate overrides
-  them. These fallbacks mirror current public provider API prices, apply the
-  supported 30% margin, and round up to the nearest credit micro. Token models
-  are charged per million-token provider rates; hidden reasoning/output tokens
-  are billed as output when the provider reports `totalTokens` greater than
-  visible input plus output tokens. ElevenLabs speech and sound effects use
-  provider-returned billing units when available, while music uses request
-  duration when the request fixes `music_length_ms`.
-- Keep exact/provider-model rate overrides and user limits configurable through
-  backend-owned data, not the Mac app.
-- Usage records may store sanitized provider usage metadata and normalized
-  billable units. They must not store prompts, request bodies, screenshots,
-  generated assets, provider output payloads, provider output references, or
-  other user content.
+A provider-invoking route checks credits before it calls the model and charges
+after the provider succeeds. Listing models is free. If the provider or runtime
+fails after a successful preflight, the route records a zero-cost failed-usage
+event with a sanitized error code.
+
+Manual credit grants go through `POST /api/credits/grants/`. The caller must be
+signed in with `user.superUser` set, and the target user is addressed by
+internal id. The route reads a whole-dollar amount as credits — `$1` is one
+credit, or `1,000,000` micros — then writes the grant and its ledger entry.
+
+Known OpenAI, Gemini, and ElevenLabs models fall back to backend-owned prices
+unless a database rate overrides them. The fallbacks mirror current public
+provider prices, mark them up by the supported margin, and round up to the
+nearest credit micro. Token models charge per million provider tokens; hidden
+reasoning or output tokens are billed as output when the provider's
+`totalTokens` exceeds visible input plus output. ElevenLabs speech and sound
+effects bill by the provider's returned units; music bills by request duration
+when the request fixes its length. Keep rate overrides and per-user limits in
+backend-owned data, not the Mac app.
+
+**Usage rows store units, never content.** They may keep sanitized provider
+usage metadata and normalized billable units. They must not keep prompts,
+request bodies, screenshots, generated assets, provider output, output
+references, or any other user content.
 
 ## Third-Party Vision API
 
-`POST /api/vision` is also a self-serve product for outside developers, sold
-separately from the Mac app. It serves two audiences through the same handler,
-branching on `request.donkey.method`:
+`POST /api/vision` is also a standalone product for outside developers, sold
+separately from the Mac app. One handler serves both audiences, branching on how
+the caller authenticated:
 
 | Caller | `request.donkey.method` | Gate |
 |---|---|---|
-| Mac app | `session-cookie` | hosted credit balance, as above |
-| Third-party developer | `api-key` | active subscription + monthly call quota — never touches the money-credit balance |
+| Mac app | `session-cookie` | hosted credit balance |
+| Third-party developer | `api-key` | active subscription + monthly call quota |
 
-How the third-party path works:
+A third-party developer's calls never touch the money-credit balance.
 
-- Developers sign in with Google and subscribe through Stripe. The subscription
-  is a flat monthly plan that grants a quota of API calls, stored on
-  `VisionApiSubscription` (`site/prisma/Billing.prisma`). The included call
-  count comes from the Stripe price metadata (`monthlyCallQuota`).
-- Keys are issued by the Better Auth API-key plugin (`@better-auth/api-key`),
-  managed from the account settings UI via `/api/api-keys`. Only a hash is
-  stored; the secret is shown once. Key creation requires an active
-  subscription.
-- The vision route opts in with `allowApiKey: true`, enforces a per-key burst
-  limit, and counts succeeded vision usage events in the current period against
-  the quota. Covered calls are recorded with `billingMode: "included"` (zero
-  money cost) so they still appear in usage without debiting credits.
-- Stripe is the source of truth for subscription state. `POST /api/billing/webhook`
-  is signature-verified and therefore a deliberate public exception to the
-  `withDonkeyAuth` rule; it syncs subscription lifecycle and the call quota.
-  Checkout, portal, subscription, and usage live under `/api/billing/**`.
-- The per-user account views (`/app/settings`, including API keys and usage)
-  are client-rendered; all data access goes through the audited TanStack Query
-  hooks in `site/src/queries/`.
+- Developers sign in with Google and subscribe through Stripe. The plan is a
+  flat monthly subscription that grants a quota of API calls; the included count
+  comes from the Stripe price metadata.
+- Keys come from Better Auth's API-key plugin, managed from account settings.
+  Only a hash is stored, the secret is shown once, and creating a key requires
+  an active subscription.
+- The route opts in with `allowApiKey: true`, enforces a per-key burst limit,
+  and counts succeeded vision calls in the current period against the quota. A
+  covered call is recorded as `billingMode: "included"` — it shows up in usage
+  at zero money cost.
+- Stripe is the source of truth for subscription state. Its webhook,
+  `POST /api/billing/webhook`, is signature-verified and therefore the public
+  exception named in the one rule; it syncs the subscription lifecycle and the
+  quota. Checkout, portal, subscription, and usage all live under
+  `/api/billing/`.
+- The account views are client-rendered, and every data read goes through the
+  audited TanStack Query hooks.
 
 ## Pattern
 
@@ -192,3 +220,10 @@ export const GET = withDonkeyAuth((request) => {
   });
 });
 ```
+
+## Where It Lives
+
+Backend handlers live under the site project's API routes; the auth wrapper,
+Prisma client, and inference adapters live in its lib folder, and table
+definitions live in the Prisma folder. Start at the auth wrapper when changing
+how a handler authenticates.
