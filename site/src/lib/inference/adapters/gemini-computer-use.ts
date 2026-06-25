@@ -12,6 +12,8 @@ import type {
   Tool,
 } from "@google/genai";
 
+import { applyContextCacheToRequest } from "./gemini-context-cache";
+
 import {
   geminiApiError,
   geminiCandidateParts,
@@ -132,6 +134,12 @@ export function createGeminiComputerUseProvider(
       model,
     );
     const client = clientFactory(clientConfig.options);
+
+    // Cache the planner's large, byte-identical system instruction once and reference it on later steps, so
+    // its ~11K tokens bill at the cached rate instead of full price on every step. Best-effort: a no-op for
+    // tool/computer-use calls and short instructions, and a clean fallback to the inline instruction on any
+    // caching error — so the request is never made invalid by this.
+    await applyContextCacheToRequest(requestParameters, registeredTools, client);
 
     let rawResponse: unknown;
     let retriedWithoutSchema = false;

@@ -78,6 +78,20 @@ function blockCostSummary(calls: RecentCall[]): string {
   return formatCostValue(total);
 }
 
+// Share of the block's input tokens the provider served from cache, across all its calls. This is the
+// signal for whether our stable prompt prefix is being reused: a near-0% share over a many-call run means
+// the cache isn't being hit and we're paying full input rate every step. null when the block billed no
+// input tokens (nothing to cache).
+function blockCachedShare(calls: RecentCall[]): number | null {
+  let input = 0;
+  let cached = 0;
+  for (const call of calls) {
+    input += call.usage.inputTokens;
+    cached += call.usage.cachedInputTokens;
+  }
+  return input > 0 ? Math.round((cached / input) * 100) : null;
+}
+
 // Per-row annotation for the interleaved timeline. Rows keep the server's
 // chronological (newest-first) order: background (no-conversation) calls are
 // NEVER pulled together — each stays wherever it happened, between the groups. A
@@ -85,13 +99,19 @@ function blockCostSummary(calls: RecentCall[]): string {
 // in it shares a blockKey (the run's start index; -1 for background) plus the
 // run's total count and cost, so a header can render at the run's start and again
 // at a page top when a run carries across the page boundary.
-type RowAnnotation = { blockKey: number; blockCount: number; blockSummary: string };
+type RowAnnotation = {
+  blockKey: number;
+  blockCount: number;
+  blockSummary: string;
+  blockCachedShare: number | null;
+};
 
 function annotateRows(rows: RecentCall[]): RowAnnotation[] {
   const annotations: RowAnnotation[] = rows.map(() => ({
     blockKey: -1,
     blockCount: 0,
     blockSummary: "",
+    blockCachedShare: null,
   }));
   let index = 0;
   while (index < rows.length) {
@@ -106,11 +126,13 @@ function annotateRows(rows: RecentCall[]): RowAnnotation[] {
     }
     const block = rows.slice(index, end);
     const summary = blockCostSummary(block);
+    const cachedShare = blockCachedShare(block);
     for (let i = index; i < end; i += 1) {
       annotations[i] = {
         blockKey: index,
         blockCount: block.length,
         blockSummary: summary,
+        blockCachedShare: cachedShare,
       };
     }
     index = end;
@@ -155,13 +177,18 @@ function CallDetail({ call }: { call: RecentCall }) {
     });
   }
   if (tokenBilled) {
+    // Cached input is billed at a fraction of the input rate, so the cached SHARE is the signal for
+    // whether the provider is reusing our stable prompt prefix. Show it as its own stat (with the share)
+    // and always — a 0% cached call is a cache MISS worth seeing, not an absence to hide.
+    const cachedShare =
+      usage.inputTokens > 0
+        ? Math.round((usage.cachedInputTokens / usage.inputTokens) * 100)
+        : 0;
     stats.push(
+      { label: "Input tokens", value: formatTokens(usage.inputTokens) },
       {
-        label: "Input tokens",
-        value:
-          usage.cachedInputTokens > 0
-            ? `${formatTokens(usage.inputTokens)} (${formatTokens(usage.cachedInputTokens)} cached)`
-            : formatTokens(usage.inputTokens),
+        label: "Cached input",
+        value: `${formatTokens(usage.cachedInputTokens)} (${cachedShare}%)`,
       },
       { label: "Output tokens", value: formatTokens(usage.outputTokens) },
       { label: "Total tokens", value: formatTokens(usage.totalTokens) },
@@ -176,7 +203,7 @@ function CallDetail({ call }: { call: RecentCall }) {
   const explanation = imageBilled
     ? "Image generation is priced per image, not by tokens."
     : tokenBilled
-      ? "Cost is driven by tokens: a large input means a long question or lots of context, a large output means a long answer."
+      ? "Cost is driven by tokens, and input dominates here. Cached input is an unchanged prompt prefix the provider reuses at a fraction of the rate; a low cached share on a repeated call means the cache isn't being hit."
       : flatRate
         ? "Flat rate — vision parses are billed per call."
         : "No billable usage was recorded for this call.";
@@ -347,6 +374,9 @@ export function UsageHistoryCard() {
                               {annotation.blockCount === 1 ? "call" : "calls"}
                               {" · "}
                               {annotation.blockSummary}
+                              {annotation.blockCachedShare !== null
+                                ? ` · ${annotation.blockCachedShare}% cached`
+                                : null}
                             </span>
                           </div>
                         </TableCell>

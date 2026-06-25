@@ -14,7 +14,9 @@ import {
 // adapter routes through the same service-account path instead of re-parsing the
 // environment.
 export type AdapterEnvironment = Record<string, string | undefined>;
-export type GeminiClient = Pick<GoogleGenAI, "models">;
+// `caches` is included for explicit context caching of the planner's stable system instruction; the real
+// GoogleGenAI client provides it, so the default factory satisfies this without change.
+export type GeminiClient = Pick<GoogleGenAI, "models" | "caches">;
 export type GeminiClientFactory = (options: GoogleGenAIOptions) => GeminiClient;
 
 const vertexLocation = "global";
