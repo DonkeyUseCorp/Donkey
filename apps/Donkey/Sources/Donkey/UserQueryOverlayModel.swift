@@ -1097,9 +1097,10 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     /// the same affordance the prototype calls "close".
     func dismissConversation(id conversationID: String) {
         guard let conversation = conversation(withID: conversationID) else { return }
-        // A system-driven conversation (tool setup) is the app's to close, not the user's — it clears
-        // itself once finished (see `scheduleSystemSetupAutoAcknowledge`).
-        guard conversation.isUserControllable else { return }
+        // A system-driven conversation (tool setup) is the app's to run while it works, but once it has
+        // finished it is just a notice the user can clear — so a completed/failed system row is dismissible
+        // too (see `isUserDismissible`). A still-running one stays the app's.
+        guard conversation.isUserDismissible else { return }
         guard conversation.status != .running else { return }
 
         notchConversations.removeAll { $0.id == conversationID }

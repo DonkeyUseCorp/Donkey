@@ -876,8 +876,11 @@ public struct UserQueryNotchStatusView: View {
     /// Trailing room a row's text leaves for the pinned top-right controls, by control set: a lone Close
     /// (or Stop) button, or a Resume + Close pair. Permission rows carry their own banner controls.
     private func controlsReserve(for conversation: UserQueryConversation) -> CGFloat {
-        // A system-driven row carries no controls (see `topRightControls`), so its text spans the full row.
-        if !conversation.isUserControllable { return 0 }
+        if !conversation.isUserControllable {
+            // A finished system row carries a lone Close (see `topRightControls`); a still-running one carries
+            // no controls, so its text spans the full row.
+            return conversation.isUserDismissible ? 44 : 0
+        }
         if conversation.status == .waitingForPermission { return 0 }
         return rowShowsControlPair(conversation) ? 74 : 44
     }
@@ -1043,11 +1046,7 @@ public struct UserQueryNotchStatusView: View {
     /// running → stop; paused → resume + close; everything else → close, so any conversation can be deleted.
     @ViewBuilder
     private func topRightControls(_ conversation: UserQueryConversation) -> some View {
-        if !conversation.isUserControllable {
-            // A system-driven row (tool setup) is the app's to run: the user watches it, but it carries no
-            // Stop / Resume / Close — it can't be stopped or dismissed by hand.
-            EmptyView()
-        } else {
+        if conversation.isUserControllable {
             switch conversation.status {
             case .waitingForPermission:
                 // The permission banner carries its own Approve / Deny; the row needs no extra control.
@@ -1055,6 +1054,14 @@ public struct UserQueryNotchStatusView: View {
             default:
                 stateControls(for: conversation)
             }
+        } else if conversation.isUserDismissible {
+            // A finished system row (tool setup, "Tools ready") is no longer the app's to run — it's just a
+            // notice the user can clear. Offer Close so it can be deleted like any other completed row.
+            closeControl(for: conversation)
+        } else {
+            // A system row still running is the app's to run: the user watches it, but it carries no
+            // Stop / Resume / Close — it can't be stopped or dismissed by hand until it settles.
+            EmptyView()
         }
     }
 

@@ -90,6 +90,20 @@ public extension UserQueryConversation {
     /// Only conversations they started are theirs to control; a system-driven one (tool setup) is watched,
     /// not operated. Every control surface and lifecycle hook gates on this, so the rule can't be missed.
     var isUserControllable: Bool { origin == .user }
+
+    /// Whether the person may dismiss (close) this row. Their own conversations are always theirs to close;
+    /// a system-driven one (tool setup) is the app's to run while it works, but once it has settled it is
+    /// just a finished notice — so a completed or failed system row becomes dismissible too. A still-running
+    /// system row stays untouchable until the app settles it. Broader than `isUserControllable` precisely
+    /// because a finished system row is closeable without being otherwise operable.
+    var isUserDismissible: Bool {
+        switch origin {
+        case .user:
+            return true
+        case .system:
+            return status == .completed || status == .failed
+        }
+    }
 }
 
 public extension UserQueryConversation {

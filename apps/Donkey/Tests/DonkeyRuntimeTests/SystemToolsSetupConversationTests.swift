@@ -5,9 +5,11 @@ import Testing
 @testable import Donkey
 
 /// The first-run tool-bundle download surfaces as a normal-looking conversation, but it is system-driven:
-/// the app runs it to completion and the user can't stop, resume, reply to, or dismiss it. That rule is
-/// carried by `origin == .system` (so `isUserControllable` is false), and the relaunch restore must never
-/// hand a system row to the harness auto-resume — it has no loop behind it. These lock both.
+/// the app runs it to completion and the user can't stop, resume, or reply to it. While it runs it can't be
+/// dismissed either; once it finishes it becomes a closeable notice the user can clear. That is carried by
+/// `origin == .system` (so `isUserControllable` is false) plus `isUserDismissible` (true only for a finished
+/// system row). The relaunch restore must also never hand a system row to the harness auto-resume — it has
+/// no loop behind it. These lock all three.
 @Suite
 @MainActor
 struct SystemToolsSetupConversationTests {
@@ -34,6 +36,17 @@ struct SystemToolsSetupConversationTests {
         // The default origin is `.user`, so every existing call site stays user-controllable.
         #expect(conversation(id: "u", status: .running, origin: .user).isUserControllable)
         #expect(!conversation(id: "s", status: .running, origin: .system).isUserControllable)
+    }
+
+    @Test
+    func systemConversationBecomesDismissibleOnlyOnceFinished() {
+        // The app owns a system row while it runs — not dismissible. Once it settles (Tools ready → completed,
+        // or a give-up → failed) it is just a notice the user can clear, so it becomes dismissible. A user row
+        // is always the user's to close.
+        #expect(!conversation(id: "s", status: .running, origin: .system).isUserDismissible)
+        #expect(conversation(id: "s", status: .completed, origin: .system).isUserDismissible)
+        #expect(conversation(id: "s", status: .failed, origin: .system).isUserDismissible)
+        #expect(conversation(id: "u", status: .running, origin: .user).isUserDismissible)
     }
 
     @Test
