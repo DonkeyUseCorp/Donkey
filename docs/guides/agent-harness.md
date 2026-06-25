@@ -45,8 +45,15 @@ The model decides *what* to do next; Swift decides *whether and how* it
 actually happens. The model picks the tool. Swift owns task state, validation,
 focus checks, permission gates, execution, and recording results.
 
-Planning happens per observation, not as one upfront plan. The harness looks,
-acts, sees what happened, then picks the next step.
+Understanding sketches the few real steps up front — the route, including the
+decisive one — but the loop still plans per observation: it looks, acts, sees what
+happened, then picks the next step against that route.
+
+The loop is built to fail forward, not spin. A result already seen is never
+re-fetched: a view shortened to fit context is marked as shortened, not as missing,
+and an "already done" signal means advance, never retry the same call a different
+way to slip past the guard. A run that keeps scouting without producing anything
+toward its goal is pushed to produce or to name the blocker.
 
 ## Task State
 
@@ -79,9 +86,10 @@ Storage keeps decisions inspectable:
 
 One turn-trace manager is the single sink every model call and the step loop
 report to — the substrate the self-correcting pass learns from. When a run ends,
-a background pass distills its trace into at most one durable operating lesson and
-later runs with a related goal recall it, so the harness improves across runs (see
-"Learning From Finished Runs" in the deep dive).
+a background pass distills its trace into at most one durable operating lesson —
+never one that teaches working around a guardrail — and later runs with a related
+goal recall it, so the harness improves across runs (see "Learning From Finished
+Runs" in the deep dive).
 
 ## Turn Understanding
 
@@ -117,6 +125,12 @@ foreground (the user is meant to watch — pulling something up, a walkthrough).
 Background is the default; foreground is the typed exception, and like every
 other field it is decided here, never matched from raw text. Every later step
 plans against this stable, typed goal instead of re-reading the user's words.
+
+Files the user attached to the turn are described to this boundary by name and
+type — never their bytes — so the goal is read against them ("turn this into a
+headshot," "summarize these") instead of being misclassified. Their paths reach
+the planner as workspace inputs it reads or acts on through the general file,
+image, and document tools.
 
 Context sent to the model is always bounded. Compaction keeps the current
 turn, relevant task state, recent useful evidence, summaries, memory snippets,
@@ -189,12 +203,22 @@ Four situations are hard stops, not things to push through:
 | Dangerous ambiguity | ask before acting |
 | Verification failure | re-plan: recover, clarify, or fail safe |
 
-Core tool families: conversation, clarification, permission requests, memory,
-skills, app lookup, observation, UI element actions, text/keyboard input,
-pointer input (scroll, drag, click variants), waiting, shell commands,
-AppleScript generation and execution, file understanding and file asks,
-text/web and generative image model calls, verification, learning, and
-lifecycle control.
+Core tool families: conversation, clarification (a free-text question, or a
+small interactive options panel of buttons, dropdowns, and toggles whose
+defaults the planner guesses so the user can confirm in one tap), permission
+requests, memory, skills, app lookup, observation, UI element actions,
+text/keyboard input, pointer input (scroll, drag, click variants), waiting,
+shell commands, AppleScript generation and execution, file understanding and
+file asks, text/web calls, image creation (a generative model for photos/art,
+and rendering model-authored HTML/SVG to an image for text- and data-heavy
+infographics), video creation (a generative model for short clips from a
+prompt or a still image), on-device audio transcription with per-word timing,
+deterministic media editing (frame-accurate cutting of filler words and
+silence), verification, learning, and lifecycle control.
+
+The files a turn produces are kept together: a conversation remembers what it has
+written and where, so the planner groups a growing task's output into a named
+folder instead of scattering it (see "Keeping output together" in the deep dive).
 
 ## Shell First, GUI Second
 

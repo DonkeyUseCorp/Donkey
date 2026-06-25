@@ -21,11 +21,7 @@ even when there are no active tasks.
 
 ## Current Sequence
 
-- **Browser automation via Browser Use Cloud** — see
-  `plans/browser-use-integration.md`. Backend proxy + app-facing `web.automate`
-  hosted tool for agentic web tasks and rich page capture. Start with Phase 1
-  (capture + extract) after the open decisions (credit cost, sync vs webhook) are
-  settled.
+_No active tasks._
 
 ## Invariants
 
