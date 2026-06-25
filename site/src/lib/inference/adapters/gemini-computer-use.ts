@@ -46,9 +46,10 @@ const providerID = "gemini-computer-use";
 const geminiProviderID = "gemini";
 const defaultDecisionResponsesModel = geminiModelRoles.fastDecision;
 const defaultVertexResponsesModel = geminiModelRoles.chat;
-const defaultComputerUseModel = geminiModelRoles.browserComputerUse;
+const defaultComputerUseModel = geminiModelRoles.computerUse;
 
 export const geminiBrowserInteractionToolType = "donkey_gemini_browser_interaction";
+export const geminiMacDesktopInteractionToolType = "donkey_gemini_mac_desktop_interaction";
 export const debugUIInspectionToolType = "donkey_debug_ui_inspection";
 
 // Note: `generic_harness_planning` is deliberately NOT fast-decision. Planning is the most
@@ -66,6 +67,17 @@ const fastDecisionPromptVersions = new Set([
 
 const browserOnlyFunctionExclusions = [
   "drag_and_drop",
+];
+
+// On the macOS desktop the agent never drives a web browser chrome, so the
+// browser-navigation predefined functions are excluded — leaving the GUI actions
+// (click, type, scroll, drag_and_drop, key_combination, …) the desktop needs.
+const desktopExcludedFunctions = [
+  "open_web_browser",
+  "navigate",
+  "go_back",
+  "go_forward",
+  "search",
 ];
 
 export function createGeminiComputerUseProvider(
@@ -101,6 +113,7 @@ export function createGeminiComputerUseProvider(
         details: {
           supportedTools: [
             geminiBrowserInteractionToolType,
+            geminiMacDesktopInteractionToolType,
             debugUIInspectionToolType,
           ],
         },
@@ -306,15 +319,26 @@ function geminiGenerateContentParameters(
 
 function geminiTools(registeredTools: string[], rawTools: JsonValue | undefined): Tool[] {
   const tools: Tool[] = [];
-  const hasBrowser = registeredTools.includes(geminiBrowserInteractionToolType);
 
-  if (hasBrowser) {
+  if (registeredTools.includes(geminiBrowserInteractionToolType)) {
     tools.push({
       computerUse: {
         environment: Environment.ENVIRONMENT_BROWSER,
         excludedPredefinedFunctions: excludedPredefinedFunctions(
           rawTools,
           browserOnlyFunctionExclusions,
+        ),
+      },
+    });
+  }
+
+  if (registeredTools.includes(geminiMacDesktopInteractionToolType)) {
+    tools.push({
+      computerUse: {
+        environment: Environment.ENVIRONMENT_DESKTOP,
+        excludedPredefinedFunctions: excludedPredefinedFunctions(
+          rawTools,
+          desktopExcludedFunctions,
         ),
       },
     });
@@ -738,7 +762,10 @@ function responseFormatFromBody(body: JsonObject): { json: boolean; schema?: Jso
 }
 
 function defaultResponseModel(body: JsonObject, registeredTools: string[]) {
-  if (registeredTools.includes(geminiBrowserInteractionToolType)) {
+  if (
+    registeredTools.includes(geminiBrowserInteractionToolType) ||
+    registeredTools.includes(geminiMacDesktopInteractionToolType)
+  ) {
     return defaultComputerUseModel;
   }
 
@@ -861,6 +888,8 @@ function registeredToolTypes(tools: JsonValue | undefined): string[] {
     }
     if (tool.type === geminiBrowserInteractionToolType) {
       registered.add(geminiBrowserInteractionToolType);
+    } else if (tool.type === geminiMacDesktopInteractionToolType) {
+      registered.add(geminiMacDesktopInteractionToolType);
     } else if (tool.type === debugUIInspectionToolType) {
       registered.add(debugUIInspectionToolType);
     }
@@ -943,6 +972,7 @@ function hasExplicitUnsupportedTools(
       return true;
     }
     return tool.type !== geminiBrowserInteractionToolType &&
+      tool.type !== geminiMacDesktopInteractionToolType &&
       tool.type !== debugUIInspectionToolType;
   });
 }
@@ -964,6 +994,7 @@ function staticModel(model: string, computerUse: boolean): InferenceModel {
             computerUse,
             registeredTools: [
               geminiBrowserInteractionToolType,
+              geminiMacDesktopInteractionToolType,
               debugUIInspectionToolType,
             ],
           }

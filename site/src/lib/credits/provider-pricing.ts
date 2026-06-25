@@ -61,13 +61,6 @@ export function providerCreditPricing(
 // OpenAIRunModel union, so adding a run model without a price fails the type-check (and the
 // build). Matched exactly (not by prefix) so it never shadows a more specific table entry.
 const openaiRunModelPricing: Record<OpenAIRunModel, ProviderCreditPricing> = {
-  [openaiModels.computerUse]: textTokenPricing({
-    model: "gpt-5.5",
-    input: "5",
-    cachedInput: "0.5",
-    output: "30",
-    longContext: { input: "10", cachedInput: "1", output: "45" },
-  }),
   [openaiModels.debugInspection]: textTokenPricing({
     model: "gpt-5.4",
     input: "2.5",
@@ -255,7 +248,6 @@ const openAITextCreditRates: {
   { model: "o3-mini", input: "1.1", cachedInput: "0.55", output: "4.4" },
   { model: "o3", input: "2", cachedInput: "0.5", output: "8" },
   { model: "o4-mini", input: "1.1", cachedInput: "0.275", output: "4.4" },
-  { model: "computer-use-preview", input: "3", output: "12" },
 ];
 
 // Every Gemini model we run must appear here: the Record is keyed by the GeminiModel union,
@@ -266,12 +258,6 @@ const geminiModelPricing: Record<GeminiModel, ProviderCreditPricing> = {
     input: "1.5",
     cachedInput: "0.15",
     output: "9",
-  }),
-  [geminiModels.flashComputerUse]: textAudioTokenPricing({
-    input: "0.5",
-    cachedInput: "0.05",
-    output: "3",
-    inputAudio: "1",
   }),
   [geminiModels.flashLite]: textAudioTokenPricing({
     input: "0.25",

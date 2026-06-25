@@ -10,7 +10,6 @@
 export const geminiModels = {
   flash: "gemini-3.5-flash",
   flashLite: "gemini-3.1-flash-lite",
-  flashComputerUse: "gemini-3-flash-preview",
   // Generative image editing/generation ("nano banana"). Bump here when adopting a
   // newer image model; the backend also honors a GEMINI_IMAGE_MODEL override.
   flashImage: "gemini-2.5-flash-image",
@@ -25,8 +24,9 @@ export const geminiModelRoles = {
   chat: geminiModels.flash,
   // Fast structured task-intent and follow-up decisions.
   fastDecision: geminiModels.flashLite,
-  // Browser Computer Use tool calls.
-  browserComputerUse: geminiModels.flashComputerUse,
+  // Computer Use tool calls (browser and macOS desktop environments). Computer
+  // use is a built-in tool of the main flash model, so both share one model.
+  computerUse: geminiModels.flash,
   // Screenshot parsing into read-only UI evidence.
   screenshotParse: geminiModels.flash,
   // Vision grounding: a cheap structured pick over already-parsed elements.

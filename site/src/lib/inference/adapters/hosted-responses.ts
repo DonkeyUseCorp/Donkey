@@ -23,9 +23,7 @@ type AdapterEnvironment = Record<string, string | undefined>;
 const providerID = "hosted-responses";
 const openAIProviderID = "openai";
 const openAIBaseURL = "https://api.openai.com/v1";
-const openAIMacDesktopInteractionToolType = "donkey_openai_mac_desktop_interaction";
 const debugUIInspectionToolType = "donkey_debug_ui_inspection";
-const defaultOpenAIComputerUseModel = openaiModels.computerUse;
 const defaultOpenAIDebugInspectionModel = openaiModels.debugInspection;
 const unsupportedOpenAIComputerUseParameters = ["temperature", "top_p", "topP"];
 
@@ -47,7 +45,6 @@ export function createHostedResponsesProvider(
     }
 
     return [
-      staticModel(defaultOpenAIComputerUseModel),
       staticModel(defaultOpenAIDebugInspectionModel),
     ];
   }
@@ -58,15 +55,12 @@ export function createHostedResponsesProvider(
     ensureConfigured(configured);
     if (!isOpenAIResponsesToolRequest(request.body)) {
       throw new InferenceProviderError(
-        "OpenAI Responses is only configured for Mac desktop computer use and read-only debug UI inspection.",
+        "OpenAI Responses is only configured for read-only debug UI inspection.",
         {
           statusCode: 400,
           code: "openai_computer_tool_required",
           details: {
             supportedTools: [
-              "computer",
-              "computer_use_preview",
-              openAIMacDesktopInteractionToolType,
               debugUIInspectionToolType,
             ],
           },
@@ -114,11 +108,8 @@ export function createHostedResponsesProvider(
   };
 }
 
-function defaultOpenAIModel(body: JsonObject) {
-  if (hasDebugUIInspectionTool(body) && !hasOpenAIMacDesktopTool(body)) {
-    return defaultOpenAIDebugInspectionModel;
-  }
-  return defaultOpenAIComputerUseModel;
+function defaultOpenAIModel(_body: JsonObject) {
+  return defaultOpenAIDebugInspectionModel;
 }
 
 function requestBody(body: JsonObject, model: string): JsonObject {
@@ -132,9 +123,8 @@ function requestBody(body: JsonObject, model: string): JsonObject {
 }
 
 function normalizeOpenAIComputerUseBody(body: JsonObject): JsonObject {
-  const hasMacDesktopTool = hasOpenAIMacDesktopTool(body);
   const hasDebugInspectionTool = hasDebugUIInspectionTool(body);
-  if (!hasMacDesktopTool && !hasDebugInspectionTool) {
+  if (!hasDebugInspectionTool) {
     return body;
   }
 
@@ -142,11 +132,7 @@ function normalizeOpenAIComputerUseBody(body: JsonObject): JsonObject {
   const toolChoice = openAIComputerToolChoice(body.tool_choice);
   const normalized: JsonObject = {
     ...body,
-    instructions: openAIInstructions(
-      body.instructions,
-      hasMacDesktopTool,
-      hasDebugInspectionTool,
-    ),
+    instructions: openAIInstructions(body.instructions),
     ...(toolChoice === undefined ? {} : { tool_choice: toolChoice }),
   };
   for (const parameter of unsupportedOpenAIComputerUseParameters) {
@@ -185,6 +171,9 @@ function openAIComputerToolChoice(value: JsonValue | undefined): JsonValue | und
   };
 }
 
+// The debug-inspection tool is read-only and has no OpenAI-native equivalent, so it is stripped from
+// the request (the work is driven entirely by the inspection instructions). Any other tool passes
+// through untouched.
 function openAIComputerToolReference(value: JsonValue): JsonValue | null {
   if (!isJsonObject(value)) {
     return value;
@@ -194,46 +183,16 @@ function openAIComputerToolReference(value: JsonValue): JsonValue | null {
     return null;
   }
 
-  if (value.type === openAIMacDesktopInteractionToolType) {
-    return { type: "computer" };
-  }
-
-  if (
-    (value.type === "function" || value.type === "custom") &&
-    value.name === openAIMacDesktopInteractionToolType
-  ) {
-    return { type: "computer" };
-  }
-
   return value;
 }
 
-function openAIInstructions(
-  value: JsonValue | undefined,
-  hasMacDesktopTool: boolean,
-  hasDebugInspectionTool: boolean,
-) {
-  const instructions: string[] = [];
-  if (hasMacDesktopTool) {
-    instructions.push(
-      [
-        "Use the OpenAI computer tool for non-browser Mac desktop UI work.",
-        "The Mac client executes returned computer_call actions with focus, safety, permission, and screenshot feedback.",
-      ].join(" "),
-    );
-  }
-  if (hasDebugInspectionTool) {
-    instructions.push(
-      [
-        "Perform read-only macOS UI inspection from the provided screenshot.",
-        "Return strict JSON only and do not return computer_call, function_call, click, type, scroll, drag, or navigation actions.",
-      ].join(" "),
-    );
-  }
-
+function openAIInstructions(value: JsonValue | undefined) {
   return [
     stringValue(value),
-    ...instructions,
+    [
+      "Perform read-only macOS UI inspection from the provided screenshot.",
+      "Return strict JSON only and do not return computer_call, function_call, click, type, scroll, drag, or navigation actions.",
+    ].join(" "),
   ].filter(Boolean).join("\n\n");
 }
 
@@ -250,9 +209,7 @@ function staticModel(model: string): InferenceModel {
       provider: openAIProviderID,
       baseURL: openAIBaseURL,
       api: "responses",
-      computerUse: true,
       registeredTools: [
-        openAIMacDesktopInteractionToolType,
         debugUIInspectionToolType,
       ],
     },
@@ -266,24 +223,7 @@ function isOpenAIResponsesToolRequest(body: JsonObject) {
   }
 
   return tools.some((tool) => {
-    return (
-      isJsonObject(tool) &&
-      (tool.type === "computer" ||
-        tool.type === "computer_use_preview" ||
-        tool.type === openAIMacDesktopInteractionToolType ||
-        tool.type === debugUIInspectionToolType)
-    );
-  });
-}
-
-function hasOpenAIMacDesktopTool(body: JsonObject) {
-  const tools = body.tools;
-  if (!Array.isArray(tools)) {
-    return false;
-  }
-
-  return tools.some((tool) => {
-    return isJsonObject(tool) && tool.type === openAIMacDesktopInteractionToolType;
+    return isJsonObject(tool) && tool.type === debugUIInspectionToolType;
   });
 }
 
