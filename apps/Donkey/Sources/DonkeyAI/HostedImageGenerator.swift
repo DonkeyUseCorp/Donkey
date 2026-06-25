@@ -64,7 +64,8 @@ public struct HostedImageGenerator: Sendable {
         )
         let outputDirectory = Self.resolvedOutputDirectory(
             request.outputDirectory,
-            inputImagePaths: request.inputImagePaths
+            inputImagePaths: request.inputImagePaths,
+            workspaceBaseDir: request.workspaceBaseDir
         )
 
         let backend = self.backend
@@ -118,28 +119,33 @@ public struct HostedImageGenerator: Sendable {
     }
 
     /// Resolves where outputs are written. An absolute `outDir` is used as-is; a relative one resolves
-    /// against the source image's folder (so "edited" lands next to the source) or, with no source,
-    /// against Downloads. With no `outDir`, an edit writes next to its source and a generation writes
-    /// to Downloads. Outputs are written FLAT into this directory (no per-generation nesting).
+    /// against the source image's folder (so "edited" lands next to the source) or, with no source, against
+    /// the base. With no `outDir`, an edit writes next to its source and a generation writes to the base.
+    /// The base is the conversation workspace folder when one exists, else Downloads — so generated images
+    /// and clips collect with the turn's other deliverables instead of scattering into Downloads. Outputs
+    /// are written FLAT into this directory (no per-generation nesting).
     static func resolvedOutputDirectory(
         _ outDir: String?,
-        inputImagePaths: [String]
+        inputImagePaths: [String],
+        workspaceBaseDir: String?
     ) -> URL {
         let fileManager = FileManager.default
         let sourceDir = inputImagePaths.first.map { path in
             URL(fileURLWithPath: (path as NSString).expandingTildeInPath).deletingLastPathComponent()
         }
-        let downloads = fileManager.homeDirectoryForCurrentUser
-            .appendingPathComponent("Downloads", isDirectory: true)
+        let base = workspaceBaseDir.flatMap { dir -> URL? in
+            let trimmed = dir.trimmingCharacters(in: .whitespaces)
+            return trimmed.isEmpty ? nil : URL(fileURLWithPath: (trimmed as NSString).expandingTildeInPath, isDirectory: true)
+        } ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Downloads", isDirectory: true)
 
         guard let outDir, !outDir.trimmingCharacters(in: .whitespaces).isEmpty else {
-            return sourceDir ?? downloads
+            return sourceDir ?? base
         }
         let expanded = (outDir as NSString).expandingTildeInPath
         if expanded.hasPrefix("/") {
             return URL(fileURLWithPath: expanded, isDirectory: true)
         }
-        return (sourceDir ?? downloads).appendingPathComponent(expanded, isDirectory: true)
+        return (sourceDir ?? base).appendingPathComponent(expanded, isDirectory: true)
     }
 
     private static func failureReason(from record: RemoteInferenceGenerationRecord) -> String {

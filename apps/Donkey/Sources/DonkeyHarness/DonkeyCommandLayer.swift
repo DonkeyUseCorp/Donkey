@@ -22,6 +22,7 @@ public enum DonkeyCommandLayer {
         case appCommands = "app_commands"
         case skillRun = "skill_run"
         case webSnapshot = "web_snapshot"
+        case imageRender = "image_render"
     }
 
     public static var descriptors: [HarnessToolDescriptor] {
@@ -121,10 +122,28 @@ public enum DonkeyCommandLayer {
                 inputSchema: [
                     "url": "The http(s) page URL to capture.",
                     "format": "\"pdf\" (default) or \"png\" (full-page screenshot).",
-                    "destination": "Optional output file path; defaults to ~/Downloads."
+                    "destination": "Optional output name. A relative name or subfolder (e.g. assets/page.pdf) lands in the conversation's workspace folder; this runs without consent, so the output always stays inside that folder (else ~/Downloads) — absolute or .. paths are re-rooted there, not written elsewhere. Omit to save to the workspace, else ~/Downloads."
                 ],
                 optionalInputKeys: ["format", "destination"],
                 outputSchema: ["filePath": "Path to the saved PDF or PNG."],
+                requiredPermissions: [],
+                safetyClass: .readOnly,
+                verificationHints: ["the saved file exists and is non-empty"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            HarnessToolDescriptor(
+                name: Command.imageRender.rawValue,
+                pluginID: pluginID,
+                summary: "Render HTML/SVG markup YOU write into a crisp PNG (or PDF) image, using the same built-in headless browser as web_snapshot. This is how you CREATE an image of text or data — an infographic, diagram, chart, standings/bracket, poster, card, certificate, or any explanatory graphic about any topic. Unlike image.generate (a generative model that garbles text and numbers), this renders your exact markup, so every label and value is sharp and you control the whole layout. Write one self-contained HTML document (inline CSS, system fonts, inline <svg> for shapes, data: URIs for any images), then pass it here. Follow the `design` skill for how to make it look good. It only renders your markup and writes the output file, so it runs without consent.",
+                inputSchema: [
+                    "html": "A complete, self-contained HTML (or SVG) document to render. Inline all CSS; use system fonts; remote fonts/images are not loaded (embed images as data: URIs).",
+                    "width": "Canvas width in pixels (default 1200, 200–4000). Author your layout to this width.",
+                    "height": "Optional canvas height in pixels (200–8000). Omit to fit the content's natural height.",
+                    "format": "\"png\" (default) or \"pdf\".",
+                    "destination": "Optional output name. A relative name or subfolder (e.g. charts/q3.png) lands in the conversation's workspace folder; this runs without consent, so the output always stays inside that folder (else ~/Downloads) — absolute or .. paths are re-rooted there, not written elsewhere. Omit to save to the workspace, else ~/Downloads."
+                ],
+                optionalInputKeys: ["width", "height", "format", "destination"],
+                outputSchema: ["filePath": "Path to the saved PNG or PDF."],
                 requiredPermissions: [],
                 safetyClass: .readOnly,
                 verificationHints: ["the saved file exists and is non-empty"],

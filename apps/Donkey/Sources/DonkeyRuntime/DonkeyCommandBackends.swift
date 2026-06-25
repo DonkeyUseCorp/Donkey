@@ -36,6 +36,8 @@ public enum DonkeyCommandBackends {
             return await runSkillScript(context)
         case .webSnapshot:
             return await webSnapshot(context)
+        case .imageRender:
+            return await imageRender(context)
         }
     }
 
@@ -57,7 +59,12 @@ public enum DonkeyCommandBackends {
         guard format == "pdf" || format == "png" else {
             return invalidInput(context, "web_snapshot `format` must be \"pdf\" or \"png\".")
         }
-        let destination = snapshotDestination(trimmed(context.call.input["destination"]), url: url, format: format)
+        let destination = snapshotDestination(
+            trimmed(context.call.input["destination"]),
+            url: url,
+            format: format,
+            baseDir: workspaceBaseDir(context)
+        )
 
         // An offscreen window backs the web view so layout and rendering actually
         // run (an unattached WKWebView can snapshot blank).
@@ -105,24 +112,16 @@ public enum DonkeyCommandBackends {
         )
     }
 
-    /// Resolve the output file URL inside ~/Downloads. A `destination` is treated as
-    /// a file *name* only — any directory components are stripped — so this no-consent
-    /// capture tool can never overwrite a file outside Downloads. Falls back to a
-    /// generated `<host>.<ext>` name.
-    private static func snapshotDestination(_ destination: String?, url: URL, format: String) -> URL {
-        let downloads = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Downloads", isDirectory: true)
-        if let destination {
-            let name = (destination as NSString).lastPathComponent
-            if !name.isEmpty {
-                let candidate = downloads.appendingPathComponent(name)
-                return candidate.pathExtension.isEmpty
-                    ? candidate.appendingPathExtension(format)
-                    : candidate
-            }
-        }
+    /// Resolve the output file URL for `web_snapshot`. Defaults the file name to `<host>.<ext>` and
+    /// resolves through the shared workspace-aware rule (see `resolveOutputDestination`).
+    private static func snapshotDestination(
+        _ destination: String?,
+        url: URL,
+        format: String,
+        baseDir: String?
+    ) -> URL {
         let host = url.host?.replacingOccurrences(of: ".", with: "-") ?? "page"
-        return downloads.appendingPathComponent("\(host).\(format)")
+        return resolveOutputDestination(destination, baseDir: baseDir, format: format, defaultName: host)
     }
 
     @MainActor
@@ -161,6 +160,171 @@ public enum DonkeyCommandBackends {
                 continuation.resume(returning: png)
             }
         }
+    }
+
+    // MARK: - image_render
+
+    /// Render model-authored HTML/SVG markup into a PNG (or PDF) using the same offscreen
+    /// `WKWebView` path as `web_snapshot`. This is the reliable way to CREATE an image of text
+    /// or data — an infographic, diagram, chart, poster — because the markup is rendered exactly,
+    /// so labels and numbers stay sharp (a generative image model would garble them). Like
+    /// `web_snapshot` it only renders and writes a file, so it runs without consent. The output lands in
+    /// the conversation workspace (or ~/Downloads when none is set yet); see `resolveOutputDestination`.
+    @MainActor
+    private static func imageRender(_ context: HarnessToolExecutionContext) async -> HarnessToolResult {
+        guard let html = trimmed(context.call.input["html"]) else {
+            return invalidInput(context, "image_render requires `html` — the HTML/SVG markup to render.")
+        }
+        let format = (trimmed(context.call.input["format"]) ?? "png").lowercased()
+        guard format == "png" || format == "pdf" else {
+            return invalidInput(context, "image_render `format` must be \"png\" or \"pdf\".")
+        }
+        let width = dimension(context.call.input["width"], lower: 200, upper: 4000) ?? 1200
+        let fixedHeight = dimension(context.call.input["height"], lower: 200, upper: 8000)
+        let destination = renderDestination(
+            trimmed(context.call.input["destination"]),
+            format: format,
+            baseDir: workspaceBaseDir(context)
+        )
+
+        // An offscreen window backs the web view so layout and rendering actually run.
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: width, height: fixedHeight ?? 800))
+        let window = NSWindow(
+            contentRect: webView.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = webView
+        let loader = WebSnapshotLoader()
+        webView.navigationDelegate = loader
+
+        let loaded = await loader.loadHTML(html, in: webView, timeout: 20)
+        guard loaded else {
+            return failed(context, "image_render could not render the provided markup.", reason: "imageRenderLoadFailed")
+        }
+        // Give late layout (fonts, inline SVG) a brief beat to settle before capturing.
+        try? await Task.sleep(nanoseconds: 500_000_000)
+
+        do {
+            let data = try await (format == "pdf"
+                ? exportPDF(webView)
+                : exportRenderedPNG(webView, width: width, fixedHeight: fixedHeight))
+            guard !data.isEmpty else {
+                return failed(context, "image_render produced an empty \(format).", reason: "imageRenderEmpty")
+            }
+            try FileManager.default.createDirectory(
+                at: destination.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: destination, options: .atomic)
+        } catch {
+            return failed(
+                context,
+                "image_render could not save the \(format): \(error.localizedDescription)",
+                reason: "imageRenderExportFailed"
+            )
+        }
+        withExtendedLifetime(window) {}
+        return success(
+            context,
+            summary: "Rendered \(format.uppercased()) → \(destination.path)",
+            facts: ["imageRender.format": format],
+            metadata: ["filePath": destination.path, "format": format]
+        )
+    }
+
+    /// Snapshot the rendered markup at the authored width. Height is the caller's fixed value when
+    /// given, else the content's natural height (capped) — so an infographic renders at its designed
+    /// size instead of a giant scrolling page.
+    @MainActor
+    private static func exportRenderedPNG(_ webView: WKWebView, width: CGFloat, fixedHeight: CGFloat?) async throws -> Data {
+        let height: CGFloat
+        if let fixedHeight {
+            height = fixedHeight
+        } else if let measured = try? await webView.evaluateJavaScript("document.body.scrollHeight") as? CGFloat,
+                  measured > 0 {
+            height = min(measured, 8000)
+        } else {
+            height = webView.bounds.size.height
+        }
+        webView.frame.size = CGSize(width: width, height: height)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        let config = WKSnapshotConfiguration()
+        config.rect = CGRect(origin: .zero, size: webView.bounds.size)
+        // Convert to PNG inside the completion handler so the non-Sendable NSImage never
+        // crosses the continuation boundary.
+        return try await withCheckedThrowingContinuation { continuation in
+            webView.takeSnapshot(with: config) { image, error in
+                guard let image else {
+                    continuation.resume(throwing: error ?? CocoaError(.fileWriteUnknown))
+                    return
+                }
+                guard let tiff = image.tiffRepresentation,
+                      let rep = NSBitmapImageRep(data: tiff),
+                      let png = rep.representation(using: .png, properties: [:]) else {
+                    continuation.resume(throwing: CocoaError(.fileWriteUnknown))
+                    return
+                }
+                continuation.resume(returning: png)
+            }
+        }
+    }
+
+    /// Resolve the output file for `image_render`. Defaults the file name to `image.<ext>` and resolves
+    /// through the shared workspace-aware rule (see `resolveOutputDestination`).
+    private static func renderDestination(_ destination: String?, format: String, baseDir: String?) -> URL {
+        resolveOutputDestination(destination, baseDir: baseDir, format: format, defaultName: "image")
+    }
+
+    /// The conversation workspace's current directory, if the runtime has set one. Read from the typed
+    /// fact the harness maintains — never from user text.
+    private static func workspaceBaseDir(_ context: HarnessToolExecutionContext) -> String? {
+        let value = context.worldModel.facts[ConversationWorkspace.baseDirFactKey]
+        return (value?.isEmpty == false) ? value : nil
+    }
+
+    /// Shared destination rule for the no-consent capture/render tools (`image_render`, `web_snapshot`).
+    ///
+    /// The result is ALWAYS inside `base` — the conversation workspace `baseDir` when one exists, else
+    /// `~/Downloads`. These tools run with no permission prompt and their `destination` can be steered by
+    /// content they capture (an injected page or document), so the path must never escape a user directory.
+    /// Subfolders survive (`assets/chart.png`), but `..` traversal and absolute paths are re-rooted under
+    /// `base` rather than honored — escape is impossible by construction. A nil/empty `destination`
+    /// becomes `<base>/<defaultName>.<format>`.
+    static func resolveOutputDestination(
+        _ destination: String?,
+        baseDir: String?,
+        format: String,
+        defaultName: String
+    ) -> URL {
+        let base: URL = {
+            if let baseDir, !baseDir.isEmpty {
+                return URL(fileURLWithPath: (baseDir as NSString).expandingTildeInPath, isDirectory: true)
+            }
+            return FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Downloads", isDirectory: true)
+        }()
+        func ensuringExtension(_ url: URL) -> URL {
+            url.pathExtension.isEmpty ? url.appendingPathExtension(format) : url
+        }
+        // Keep only the non-traversal path components and re-root them under `base`, so no destination —
+        // relative, absolute, or `..`-laden — can resolve outside `base`.
+        let safeComponents = (destination ?? "")
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .filter { $0 != ".." && $0 != "." }
+        guard !safeComponents.isEmpty else {
+            return base.appendingPathComponent("\(defaultName).\(format)")
+        }
+        let confined = safeComponents.reduce(base) { $0.appendingPathComponent(String($1)) }
+        return ensuringExtension(confined)
+    }
+
+    /// Parse a pixel dimension from a string input, clamped to `[lower, upper]`; `nil` when absent or
+    /// not a number.
+    private static func dimension(_ value: String?, lower: CGFloat, upper: CGFloat) -> CGFloat? {
+        guard let value = trimmed(value), let number = Double(value) else { return nil }
+        return Swift.min(Swift.max(CGFloat(number), lower), upper)
     }
 
     // MARK: - app_commands
@@ -508,7 +672,16 @@ public enum DonkeyCommandBackends {
     /// the model must know it saw a prefix, not the whole output.
     private static func boundedOutput(_ output: String) -> (text: String, truncated: Bool) {
         guard output.count > shellOutputMaxLength else { return (output, false) }
-        return (String(output.prefix(shellOutputMaxLength)) + "\n… [output truncated]", true)
+        // This IS partial data — the command produced more than the capture cap, so the tail is gone from
+        // this result. Unlike a prompt-side context trim, re-running won't help; the fix is to redirect the
+        // command's output to a file and read it in pieces. Say so, so the planner reaches for the file
+        // instead of re-running or bumping the timeout.
+        return (
+            String(output.prefix(shellOutputMaxLength))
+                + "\n… [output truncated at \(shellOutputMaxLength) chars; the command produced more — "
+                + "re-run it redirected to a file (`cmd > out.txt`) and read that, don't re-run as-is]",
+            true
+        )
     }
 
     /// The diagnostic TAIL of a failed command's output. A tool prints its banner/help first and the
@@ -559,11 +732,23 @@ public enum DonkeyCommandBackends {
             // failure (e.g. retrying the same `subtitles=` filter without seeing `No such filter`).
             let stderrTail = diagnosticTail(result.stderr)
             let stdoutTail = diagnosticTail(result.stdout)
-            var failureLines = [
-                result.timedOut
-                    ? "Command timed out after \(Int(timeout))s and was terminated. Pass timeoutSeconds (max \(Int(shellTimeoutMax))) for known-slow commands."
-                    : "Command exited with code \(result.exitCode)."
-            ]
+            // A timeout that already produced a lot of stdout is an OUTPUT-VOLUME problem, not a
+            // needs-more-time problem: the command was streaming faster than it could be drained, so a
+            // bigger timeout just buys a bigger truncated dump. Steer to a file redirect instead of a
+            // higher timeout. A timeout with little/no output is genuinely slow — there, bumping helps.
+            let timedOutOnVolume = result.timedOut && result.stdout.count >= shellOutputMaxLength
+            let firstLine: String
+            if timedOutOnVolume {
+                firstLine = "Command timed out after \(Int(timeout))s while producing a large, streaming "
+                    + "output — this is a volume problem, not a speed one. Do NOT just raise timeoutSeconds; "
+                    + "re-run it redirected to a file (`cmd > out.txt`) and read that file in pieces."
+            } else if result.timedOut {
+                firstLine = "Command timed out after \(Int(timeout))s and was terminated. Pass "
+                    + "timeoutSeconds (max \(Int(shellTimeoutMax))) for known-slow commands."
+            } else {
+                firstLine = "Command exited with code \(result.exitCode)."
+            }
+            var failureLines = [firstLine]
             if !stderrTail.isEmpty {
                 failureLines.append("stderr: " + stderrTail)
             } else if !stdoutTail.isEmpty {
@@ -905,6 +1090,19 @@ private final class WebSnapshotLoader: NSObject, WKNavigationDelegate {
         await withCheckedContinuation { continuation in
             self.continuation = continuation
             webView.load(URLRequest(url: url))
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                self.settle(false)
+            }
+        }
+    }
+
+    /// Load an in-memory HTML/SVG document (no network) for `image_render`. Resolves the same way as
+    /// `load` — `true` on `didFinish`, `false` on failure or timeout.
+    func loadHTML(_ html: String, in webView: WKWebView, timeout: TimeInterval) async -> Bool {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+            webView.loadHTMLString(html, baseURL: nil)
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
                 self.settle(false)

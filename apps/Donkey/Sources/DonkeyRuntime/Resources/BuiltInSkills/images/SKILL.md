@@ -36,7 +36,7 @@ directly and fall back to `sips` if it isn't installed. Editing in place is reve
 
 ## Generative edits — image.edit / image.generate
 - Change an existing image: `image.edit` with `inputPath` and a plain-words `prompt` ("remove the background", "make the sky a sunset", "put a hat on the dog"). It writes a NEW file and returns its path; it never touches the source.
-- New image from text: `image.generate` with a `prompt`.
+- New PHOTO or ARTWORK from text: `image.generate` with a `prompt`. But to CREATE an infographic, diagram, chart, poster, or any image of text/data, do NOT use `image.generate` (it garbles text) — follow the `design` skill: write HTML/SVG and render it with `image_render`.
 - These cost credits per image. For a batch, say how many and confirm first, then call `image.edit` once per file (e.g. saving into `edited/`).
 - Verify the returned file exists and looks right (`files.describe` or open it), then report what was saved.
 
