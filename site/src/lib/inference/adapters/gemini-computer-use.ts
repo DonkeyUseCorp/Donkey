@@ -93,9 +93,11 @@ export function createGeminiComputerUseProvider(
       return [];
     }
 
+    // gemini-3.5-flash serves both general Responses and computer use, so list it once with the
+    // computer-use capability — listing it twice would let dedupeModels drop the computer-use entry.
+    // The fast-decision model (flash-lite) is the only other entry.
     return [
       staticModel(defaultDecisionResponsesModel, false),
-      staticModel(defaultVertexResponsesModel, false),
       staticModel(defaultComputerUseModel, true),
     ];
   }
