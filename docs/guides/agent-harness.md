@@ -1,441 +1,226 @@
 # Agent Harness
 
-The agent harness is the runtime that turns a user request into completed work
-on the Mac. It is app-agnostic: it knows how to plan, act, verify, and recover,
-but it knows nothing about specific apps. Everything app-specific lives outside
-the core — in task definitions, catalog data, skills, generated artifacts,
-plugins, or memory.
+The Agent Harness is the runtime that turns a user request into completed work on a Mac.
 
-**The one rule:** core harness code never contains phrase lists, app-name
-branches, or natural-language conditionals. If you're tempted to write
-`if command.contains("music")`, the logic belongs in a skill, the catalog, or a
-typed model boundary instead.
+Its job is simple: understand what the user wants, choose the next action, execute it safely, verify the result, and continue until the task is complete.
 
-## How a Turn Works
+The harness is intentionally generic. It knows how to plan, observe, act, verify, recover, and learn. It does not contain knowledge about individual applications. App-specific behavior lives in skills, catalog data, generated artifacts, plugins, and memory.
 
-A task is not one big model completion. It's a loop of small steps, each one
-checked before and after:
+This separation keeps the runtime small and predictable. The harness provides the execution model; skills provide domain expertise.
+
+## How a Task Runs
+
+A task is a sequence of small verified steps rather than a single model completion.
 
 ```text
-user turn
-  |
-  v
-1. Understand the turn (typed model boundary: goal, target app, parameters)
-  |
-  v
-2. Compact context into task state (never raw history)
-  |
-  v
-3. Ask the model: "what is the single next tool call?"
-  |        (see, act, verify, respond, clarify, or complete)
-  v
-4. Validate the call (registry, permissions, focus, safety class)
-  |
-  v
-5. Execute it through the guarded executor
-  |
-  v
-6. Record the structured observation into the world model
-  |
-  v
-7. Loop back to 3 — or hard-stop at a permission / clarification gate
+user request
+    |
+    v
+understand the task
+    |
+    v
+build task state
+    |
+    v
+choose the next action
+    |
+    v
+validate
+    |
+    v
+execute
+    |
+    v
+record the result
+    |
+    v
+repeat until complete
 ```
 
-The model decides *what* to do next; Swift decides *whether and how* it
-actually happens. The model picks the tool. Swift owns task state, validation,
-focus checks, permission gates, execution, and recording results.
+The model chooses the next action. The harness validates it, executes it, records the result, and decides whether more work is required.
 
-Understanding sketches the few real steps up front — the route, including the
-decisive one — but the loop still plans per observation: it looks, acts, sees what
-happened, then picks the next step against that route.
+Planning happens continuously. The system observes the current state of the world, performs one action, records the outcome, and then decides what to do next. Every step is based on fresh evidence.
 
-The loop is built to fail forward, not spin. A result already seen is never
-re-fetched: a view shortened to fit context is marked as shortened, not as missing,
-and an "already done" signal means advance, never retry the same call a different
-way to slip past the guard. A run that keeps scouting without producing anything
-toward its goal is pushed to produce or to name the blocker.
+The loop is built to fail forward. Each action produces new information, updates the task state, and moves the task toward completion. Existing results are reused, completed work is recognized, and progress is measured against the goal at every step.
+
+The task stops only when it reaches a successful outcome, requires user input, requires permission, or encounters a condition that cannot be resolved safely.
 
 ## Task State
 
-Every task carries its own durable state:
+Every task maintains its own state throughout execution.
 
-- goal and structured intent
-- world model (what the harness currently believes about the screen and system)
-- plan, tool history, and pending continuation
-- granted permissions
-- lifecycle status (running, paused, `waitingForUser`, `waitingForPermission`,
-  interrupted, resuming, completed, failed-safe, timed-out, cancelled)
+Task state contains:
 
-State is task-local. Pausing, clarifying, gating, interrupting, or cancelling
-one task never touches another — and because each task runs its own loop, several
-tasks make progress side by side. A new request that continues a task already
-running is folded into that task's loop and picked up at its next step rather
-than restarting it; an unrelated request starts a new task that runs alongside.
-A task whose loop is torn down before it finishes (it hit the step ceiling, or
-the app quit mid-run) is left retryable, not failed.
+* the goal
+* structured intent
+* the current world model
+* the execution plan
+* tool history
+* pending work
+* granted permissions
+* lifecycle status
 
-Storage keeps decisions inspectable:
+Tasks are isolated from one another. Pausing, clarifying, interrupting, or cancelling one task does not affect any other task.
 
-- **Threads** store the conversation *and* the turn trace, in the same thread
-  file. The trace records every model call (clipped prompt and reply, finish
-  reason, attempt, outcome, and duration), which sensing modality each step used
-  (Accessibility vs. AI vision), and the per-step split of decision time vs.
-  tool time. Timestamps are wall-clock plus monotonic, so a slow turn is pinned
-  to a specific call instead of a coarse end-to-end number.
-- **Task snapshots** store execution state.
+Multiple tasks can make progress at the same time. A request that continues an existing task is added to that task's execution loop. A new request creates a separate task.
 
-One turn-trace manager is the single sink every model call and the step loop
-report to — the substrate the self-correcting pass learns from. When a run ends,
-a background pass distills its trace into at most one durable operating lesson —
-never one that teaches working around a guardrail — and later runs with a related
-goal recall it, so the harness improves across runs (see "Learning From Finished
-Runs" in the deep dive).
+If execution stops before completion—for example because a step limit is reached or an application closes unexpectedly—the task remains resumable and can continue later.
 
-## Turn Understanding
+## Storage
 
-Two rules govern how the harness reads a user request:
+The harness stores two kinds of information.
 
-**1. Never match raw user text.** Semantic intent always passes through an LLM
-or another typed boundary first. After that, deterministic code may match
-*typed fields* — tool names, app ids, schema values, permissions, file paths,
-Accessibility roles — but never the raw string.
+**Threads** record the conversation and execution trace. The trace captures model decisions, tool calls, observations, outcomes, timing information, and recovery attempts.
 
-**2. Understand once, then loop.** Before the per-step loop starts, an
-understanding boundary classifies the turn and restates it. Its first output is
-a typed `turnKind` — `converse`, `act`, or `clarify` — and that one fact routes
-everything after it. A `converse` turn (a greeting, a thanks, a question
-answerable in words) is handed to a responder that holds no tools and never
-touches the action loop, so a misread greeting can produce a slightly-off reply
-but never a command. Only an `act` turn reaches the planner and the Mac. This is
-the structural form of "conversations first": action is unreachable until the
-turn is typed actionable, not merely discouraged by a prompt.
+**Task snapshots** store execution state so work can continue across interruptions.
 
-For an actionable turn the same boundary also names the target app — or marks
-the turn *app-less*, a typed surface for work produced through system, web, and
-generative tools (find a file, change a setting, generate an image, research a
-question) that drives no app at all. That mark is the fact an empty target app
-used to leave ambiguous — "operate the front app" versus "no app is involved" —
-and it routes the run past the GUI machinery: an actionable turn is never
-blocked on a missing frontmost window, because only a GUI turn needs one, and an
-artifact task is never pinned to whatever app happened to be in front. The
-boundary also extracts parameters and success criteria, flags whether
-clarification is needed, and chooses whether the work runs in the background
-(the agent acts without taking over the cursor or raising the app) or the
-foreground (the user is meant to watch — pulling something up, a walkthrough).
-Background is the default; foreground is the typed exception, and like every
-other field it is decided here, never matched from raw text. Every later step
-plans against this stable, typed goal instead of re-reading the user's words.
+When a task finishes, the harness may extract a small operating lesson from the run. Relevant lessons can be reused by future tasks with similar goals, allowing the system to improve over time without changing the core runtime.
 
-Files the user attached to the turn are described to this boundary by name and
-type — never their bytes — so the goal is read against them ("turn this into a
-headshot," "summarize these") instead of being misclassified. Their paths reach
-the planner as workspace inputs it reads or acts on through the general file,
-image, and document tools.
+## Understanding the Request
 
-Context sent to the model is always bounded. Compaction keeps the current
-turn, relevant task state, recent useful evidence, summaries, memory snippets,
-pending questions/permissions, and bounded assets — never unbounded raw
-history.
+Before the loop begins, the harness reads the request once and turns it into a stable goal. Every later step plans against that goal rather than the original words.
 
-The app catalog is part of this boundary. If a requested app or capability
-isn't supported (or is still refreshing), the harness surfaces conversation,
-clarification, waiting, or failed-safe state. It never silently executes an
-unsupported guess.
+**The one rule:** the harness never decides meaning by matching raw text. A request always passes through a model or another typed boundary first. After that, code may match structured fields—tool names, app ids, file paths, permissions—but never the raw string. If you are tempted to branch on whether the request contains the word "music," that logic belongs in a skill, not the runtime.
 
-## Model Boundary and Adapters
+Understanding first decides the kind of turn:
 
-The harness asks an abstract boundary one question: "given this task state,
-what is the single next tool call?" Adapters translate that question into a
-specific provider's wire format and parse the answer back. Adapters live in
-`DonkeyAI/`; the planner and task state never see provider details.
+* A conversation turn—a greeting, a thank-you, a question answered in words—goes to a responder that holds no tools and never touches the action loop.
+* An action turn reaches the planner and the Mac.
+* A clarification turn asks the user a question before anything else.
 
-An adapter's job is narrow:
+Action is unreachable until the turn is typed as an action. Conversations come first by construction, not by a polite instruction in a prompt.
 
-```text
-next-tool-call request
--> render registry tool descriptors into the provider's tool format
--> send compacted task state as the prompt
--> parse the response into one validated registry tool call, or an error
-```
+For an action turn, the same step also:
 
-Because adapters are interchangeable, a fallback adapter — including one for
-an open-weights model that emits tool calls as structured text — is a drop-in
-shape: it implements the same render/parse contract against the same registry
-and changes nothing in the runtime loop. Format-specific parsing stays inside
-the adapter; the rest of the harness only ever sees a validated tool call.
+* names the target app, or marks the turn app-less—work done through system, web, and generative tools with no app involved at all
+* extracts the parameters and what success will look like
+* decides whether clarification is needed
+* chooses background or foreground
 
-Adapters never decide intent, execute tools, or hold task state. Provider
-failures (refusals, truncation, malformed calls) map into harness states the
-planner already handles — no ad hoc retries inside the adapter. Planner-side
-failures are bounded honestly too: a malformed or empty model reply is retried
-with the failure fed back, and an empty tool name never reads as completion.
+Background is the default: the agent works without taking over the cursor or raising the app. Foreground is the exception, used when the user is meant to watch—pulling something up, walking through a flow.
+
+Files the user attaches are described to this step by name and type, never by their contents, so the goal is read against them: "turn this into a headshot," "summarize these." Their paths reach the planner as inputs it can read and act on through the general file, image, and document tools.
+
+The context sent to the model is always bounded. The harness keeps the current turn, relevant task state, recent useful evidence, summaries, memory, and pending questions—never unbounded raw history.
+
+The app catalog is part of this step. If a requested app or capability is not supported, the harness surfaces conversation, clarification, or a safe stop. It never silently executes an unsupported guess.
+
+## The Model Boundary
+
+The harness asks the model one question, over and over: given everything known so far, what is the single next action?
+
+Adapters translate that question into a specific provider's format and translate the answer back. An adapter does three things:
+
+* describe the available tools in the provider's format
+* send the current task state as the prompt
+* turn the response into one validated tool call, or an error
+
+The model decides *what* to do; the harness decides *whether and how* it actually happens.
+
+Adapters never decide intent, run tools, or hold task state. Because every adapter meets the same contract, swapping one provider for another—or adding a fallback model that emits tool calls as plain text—changes nothing in the loop. A bad reply, whether a refusal, a cutoff, or a malformed call, becomes an ordinary harness state the planner already knows how to handle.
 
 ## Tools
 
-Every tool is registered through the generic registry with a descriptor: name,
-plugin id, schemas, required permissions, safety class, required context,
-verification hints, and metadata. The planner sees descriptors and schemas,
-never Swift implementations.
+Every tool is registered with a description: what it does, what it needs, which permissions it requires, and how risky it is. The model reads the descriptions; it never sees the implementation.
 
-**Three homes for model-facing text, split by scope.** Everything the model reads
-is placed by how widely it applies, and the split is deliberate:
+Model-facing text has three homes, chosen by how widely it applies:
 
-- a **tool descriptor** carries one tool's own contract — what it does, its
-  parameters, where it runs, its safety. It travels with the tool and reaches the
-  model only when that tool is offered.
-- a **skill pack** carries one app's or domain's workflow — how to subtitle a video,
-  fill a form — and is surfaced when the task matches it.
-- the **planner prompt** carries only doctrine that holds no matter which tool or task
-  is in play: retry discipline, see-before-act, shell-first.
+* A **tool description** carries one tool's own contract and reaches the model only when that tool is offered.
+* A **skill** carries one app's or domain's workflow and is surfaced when the task matches it.
+* The **planner's core instructions** carry only what holds for every task, no matter the tool—retry discipline, see before acting, shell first.
 
-When a new fact for the model is needed, place it by scope: one tool → its descriptor;
-one domain → its skill; true everywhere → the prompt. A single-tool fact in the prompt
-is the easy mistake — it bloats every turn and drifts from the tool it describes, so the
-two fall out of sync.
+Place a new fact by scope: one tool's detail goes on the tool, one domain's workflow goes in a skill, and only universal doctrine goes in the core instructions. Putting a single tool's detail in the core instructions is the common mistake—it weighs on every turn and drifts out of sync with the tool it describes.
 
-Tool results come back as structured observations that update the world model.
-Four situations are hard stops, not things to push through:
+Four situations stop the task instead of being pushed through:
 
 | Situation | Result |
 |---|---|
-| Missing permission | task → `waitingForPermission` |
-| Missing user detail | task → `waitingForUser` |
+| Missing permission | wait for permission |
+| Missing user detail | wait for the user |
 | Dangerous ambiguity | ask before acting |
 | Verification failure | re-plan: recover, clarify, or fail safe |
 
-Core tool families: conversation, clarification (a free-text question, or a
-small interactive options panel of buttons, dropdowns, and toggles whose
-defaults the planner guesses so the user can confirm in one tap), permission
-requests, memory, skills, app lookup, observation, UI element actions,
-text/keyboard input, pointer input (scroll, drag, click variants), waiting,
-shell commands, AppleScript generation and execution, file understanding and
-file asks, text/web calls, image creation (a generative model for photos/art,
-and rendering model-authored HTML/SVG to an image for text- and data-heavy
-infographics), video creation (a generative model for short clips from a
-prompt or a still image), on-device audio transcription with per-word timing,
-deterministic media editing (frame-accurate cutting of filler words and
-silence), verification, learning, and lifecycle control.
+The tools cover conversation and clarification, permission requests, memory, skills, app lookup, observation, UI actions, keyboard and pointer input, waiting, shell commands, AppleScript, file understanding, web and text calls, image and video creation, audio transcription, media editing, verification, and lifecycle control.
 
-The files a turn produces are kept together: a conversation remembers what it has
-written and where, so the planner groups a growing task's output into a named
-folder instead of scattering it (see "Keeping output together" in the deep dive).
+The files a task produces are kept together. A conversation remembers what it has written and where, so a growing task's output lands in one named folder instead of being scattered.
 
 ## Shell First, GUI Second
 
-Donkey works like an expert terminal user. The planner's first choice is
-`shell_exec` for anything a power user solves without the GUI:
+Donkey works like an expert at the terminal. For anything a power user would solve without a window—finding files, launching apps, reading and changing settings—the planner reaches for a shell command first. Commands run from the user's home directory, so a search for a file the user named lands in the right neighborhood instead of walking the whole disk.
 
-- finding things: `mdfind`, `find`, `ls -t`
-- launching/quitting apps: `open`, `osascript`
-- reading state: `pmset -g`, `system_profiler`, `defaults read`
-- changing settings: `defaults write`, `networksetup`
+Driving a graphical interface is the fallback, used only when the task truly needs it: a canvas, an Electron app, or a proprietary interface with no command-line equivalent.
 
-Commands run from the user's home directory, not the filesystem root: a file the
-user names ("fill out f1120.pdf") lives somewhere under home, so a relative search
-lands in the right neighborhood instead of walking the whole disk and stalling on
-protected system folders.
-
-Driving a GUI is the fallback, used only when the task truly needs it (canvas,
-Electron, or proprietary interfaces with no command-line equivalent). This
-preference lives in the planner doctrine and a built-in `system-tools` skill.
-For system-tool tasks the understanding boundary marks the turn app-less, so
-they're never pinned to a GUI app and never blocked on one being in front.
-
-Shell safety is consent-based, not denylist-based. Each command is classified
-by its argv tokens (typed fields, never natural language) into a risk tier:
+Shell safety is based on consent, not a blocklist. Each command is sorted by its tokens into a risk tier:
 
 | Tier | Examples | Behavior |
 |---|---|---|
-| **read** | `mdfind`, `defaults read`, `pmset -g` | runs immediately |
-| **reversibleWrite** | `defaults write`, `open`, `networksetup -set…` | consent gate: Allow Once / Always Allow (rule keyed on command signature, persists) |
-| **highRisk** | `sudo`, `rm`, `dd`, `curl \| sh`, anything touching `com.apple.TCC` | asks every time, can never be remembered |
+| **read** | listing files, reading settings, checking power state | runs immediately |
+| **reversible write** | changing a setting, opening an app | asks once, then remembers the choice |
+| **high risk** | `sudo`, `rm`, `dd`, piping a download into a shell | asks every time, never remembered |
 
-Consent surfaces in the pointer/notch overlay and reuses the standard
-`waitingForPermission` gate. The planner discovers what's available by *doing*,
-not from a pre-built inventory: it runs the command it needs by bare name, and a
-`command not found` failure is just another observation it adapts to — reaching
-for another tool or reporting what's missing. It never pre-probes the machine and
-never installs anything.
+The planner discovers what is available by doing. It runs the command it needs by name, and a "command not found" is just another observation it adapts to—reaching for another tool or reporting what is missing. It never probes the machine ahead of time and never installs anything.
 
-Broad capability skills extend this power-user surface beyond the tools macOS
-ships — media (`yt-dlp`, `ffmpeg`), images, PDF/document conversion, data
-manipulation, and web capture. The uncommon command-line tools those skills
-rely on are bundled inside the signed app, so the capability works without the
-user installing anything. Because they ship signed as a first-party surface,
-the classifier treats those bundled tools as `read` — they run immediately,
-without a consent prompt, even when they write an output file or fetch the URL
-the user named. The planner never installs software or uses a package manager;
-a missing tool is reported, not fetched.
+Capability skills extend this terminal surface beyond what macOS ships—media tools, image and document conversion, web capture. The uncommon command-line programs those skills rely on are bundled inside the signed app, so the capability works without the user installing anything, and they run immediately like any trusted read.
 
-## Observation and Action (Computer Use)
+## Seeing and Acting
 
-Seeing and acting are plain tools the planner picks per step — not a fixed
-pipeline. The harness re-plans after every observation: look, see the result,
-pick the next tool.
+Seeing and acting are ordinary tools the planner picks per step, not a fixed pipeline. After every observation the harness re-plans: look, see the result, choose the next tool.
 
-**To see**, the planner draws on two paths: Accessibility reads (fast,
-structured, preferred for native apps) and screenshot + vision (any pixels —
-canvas, Electron). Both return elements into the world model, which the planner
-reads as text: each element with its geometry, value, and click eligibility, in
-reading order. With a multimodal model the compressed screenshot goes too
-(`ScreenshotCompression.compressedForModel` — ~896px JPEG), so the planner can
-point at pixels AX and the vision parse miss. Vision is on-demand and tied to the
-run: nothing parses the screen in the background to stay warm — the planner pays
-for a parse only when it chooses to look, and a re-look at an unchanged screen
-within the same run reuses that parse instead of paying again.
+To see, the planner has two paths. Accessibility reads are fast and structured and preferred for native apps. A screenshot with vision reads any pixels at all, including a canvas or an Electron app. Both return elements into the world model, which the planner reads as text—each element with its position, value, and whether it can be clicked. With a multimodal model the compressed screenshot goes along too, so the planner can point at things the structured reads miss. Vision is paid for only when the planner chooses to look, and a fresh look at an unchanged screen reuses the last parse.
 
-A run is not bound to one app. The see-tools take an `app` argument: naming an
-app on an observe/capture step switches the run's *active target* to it, and
-because every act, scroll, and keystroke resolves against that current target,
-the planner operates whatever it just looked at — observe Mail, act on Mail;
-observe Preview, act on Preview. The target is one small piece of shared state
-the providers read per step, seeded from the understood app and mutable
-thereafter; an app-less run starts with no target and acquires its first app the
-moment the planner observes one by name. This is the computer-use shape: the
-model routes per step instead of the run pre-committing to a single app.
+A run is not bound to one app. Naming an app on a look step switches the run's active target, and every later action resolves against that target—look at Mail, act on Mail; look at Preview, act on Preview. An app-less run starts with no target and acquires its first app the moment the planner looks at one.
 
-Three things keep the planner aware of the whole screen, not just the front
-window. Capture widens in scopes, smallest first — `scope=window` (default),
-`scope=screen` (the display, for things drawn outside the window like a modal
-sheet or right-click menu), `scope=desktop` (all displays, when the target is on
-another monitor); detected elements carry the rect they were found in, so a
-click maps through it the same way at any scope. When a modal popup is open the
-Accessibility read surfaces *that* window — its buttons and fields are what the
-planner needs. And the world model lists every open window (app, title, bounds),
-so a request living in a background window exists before the planner navigates
-to it.
+Three things keep the planner aware of the whole screen. A look can widen its scope from the window to the full display to all displays, and a click maps correctly at any scope. When a modal popup is open, the read surfaces that window, because its buttons and fields are what the planner needs. And the world model lists every open window, so a request living in a background window exists before the planner navigates to it.
 
-**To act**, the planner can click an element, type or press keys (including
-modifier chords), scroll, drag one observed element onto another, wait for the
-app to settle, or generate and run an AppleScript. Acting on an Accessibility
-control resolves against the live element captured when it was observed — so it
-stays correct even if a list reordered underneath it — and prefers a native
-semantic action (press, open on a double-click, show-menu on a right-click)
-that the control actually advertises, falling back to a guarded coordinate
-click on the control's frame otherwise; vision elements click by coordinate.
-Responding
-conversationally and asking for clarification are also tools — sometimes the
-right "action" is a question.
+To act, the planner can click an element, type or press keys, scroll, drag one element onto another, wait for the app to settle, or run an AppleScript. Acting on an Accessibility control resolves against the live element captured when it was observed, so it stays correct even if the list reordered underneath it, and it prefers the control's own native action—press, open, show menu—before falling back to a click on its frame. Responding and asking for clarification are tools too; sometimes the right action is a question.
 
-Two invariants:
+Two invariants hold:
 
-1. **Every input is guarded.** Target focus, permission policy, element
-   eligibility, allowed action type, safety class, and verification criteria
-   all apply. Coordinate input is a fallback path, never a shortcut around
-   these checks. If the target window lost focus between observe and act, the
-   guard attempts one recovery activation of the target app (never any other
-   app) before denying — and a denial names whatever is in front, so the
-   planner can react to the blocking window instead of failing opaquely. On a
-   background turn, the guard skips activation for a safe, on-screen target:
-   a native Accessibility action runs as a focus-neutral cross-process call,
-   and coordinate clicks, scrolling, dragging, and keystrokes are delivered to
-   the target process directly — neither path raises the app or moves the
-   cursor. The guard still refuses background for a sensitive surface (login,
-   password, payment, system), falling back to the foreground activation path
-   so the work still completes.
-2. **Done means evidence.** A task isn't complete because the right app is
-   focused. The harness needs post-action proof: a guarded command trace,
-   visible text, selected state, an app-reported result, or a
-   screenshot-backed observation. The runtime enforces this — a completion
-   whose last state-changing step has no later succeeded evidence step is
-   rejected, and the planner re-plans to verify first.
+1. **Every input is guarded.** Focus, permissions, element eligibility, action type, and safety class all apply, and a coordinate click is never a shortcut around them. If the target window lost focus between looking and acting, the guard tries once to reactivate the target app—never any other app—before refusing, and a refusal names whatever is in front so the planner can react to it. On a background turn the guard delivers input straight to the target process without raising the app or moving the cursor, but it still refuses background for a sensitive surface like a login or a payment, falling back to the foreground path so the work still completes.
+2. **Done means evidence.** A task is not complete because the right app is focused. The harness needs proof after the action—visible text, a selected state, an app-reported result, a screenshot-backed observation. A claimed completion whose last change has no later evidence is rejected, and the planner re-plans to verify first.
 
-Pointer playback (the animated cursor the user sees — rotating, traveling,
-labeling its path) is cosmetic and separate from input. AX, AppleScript,
-keyboard input, or guarded coordinate fallback do the real work. The overlay
-narrates every step, not just clicks: steps that move the pointer animate the
-cursor, and steps that don't (observe, shell, wait, verify) hold it in place
-and update its label, so a silent step never looks like a hang. On a background
-turn the agent moves no real pointer, so the traveling cursor is suppressed and
-progress is narrated through the notch text alone.
+The animated cursor the user sees is cosmetic and separate from the real input. The overlay narrates every step, not just clicks: steps that move the pointer animate it, and steps that do not—looking, waiting, running a command—hold it in place and update its label, so a silent step never looks like a hang. On a background turn there is no real cursor to move, so progress is narrated through the notch text alone.
 
 ## AppleScript
 
-AppleScript is a tool path with a strict artifact boundary — never a hardcoded
-helper:
+AppleScript is a tool path with a strict boundary: generation creates a script but never runs it, and execution happens only through the guarded backend.
 
 ```text
-automation.applescript.generate   (creates a script artifact — does NOT run it)
--> automation.applescript.validate
--> automation.applescript.execute (guarded backend only)
--> observe
--> verify
+generate (creates a script — does not run it)
+    |
+    v
+validate
+    |
+    v
+execute (guarded backend only)
+    |
+    v
+observe
+    |
+    v
+verify
 ```
 
-Rules:
+Generation receives structured inputs and produces one bounded operation or a very small sequence. It must not build a whole pipeline; observation, clicking, recovery, and verification stay as separate harness steps. If the operation cannot be expressed as a small scoped script, generation declines cleanly and the plan falls back to Accessibility or the UI tools. The planner's own output never contains script source—a separate generation step writes it.
 
-- Generation receives structured inputs (target app, goal, entity, allowed
-  actions, verification criteria) and produces *one bounded operation* or a
-  very small sequence. It must not build a whole automation pipeline —
-  observation, clicking, recovery, and verification stay as separate harness
-  steps.
-- If the operation can't be done as a small scoped script, generation fails
-  cleanly and the plan falls back to observation, Accessibility, or UI tools.
-- Planner output never contains raw script source. A child generation boundary
-  creates the source, and the plan reuses the same `scriptArtifactID` across
-  generate, validate, and execute.
-- App-specific scripts live in skills, generated artifacts, plugins, catalog
-  entries, or user-reviewed definitions. No app-named Swift helpers like
-  `musicPlaybackScript`.
+Generated AppleScript is grounded in the target app's real scripting dictionary, not the model's memory of AppleScript. The runtime reads the app's dictionary into a typed model, cached per app version, and that vocabulary flows through the whole path:
 
-### Grounded in the App's Real Dictionary
+* The planner can ask for the app's declared commands, parameters, and classes as a bounded digest.
+* Generation must use only that declared terminology, bind every required parameter, and report the commands it used. If the goal does not fit the dictionary, it declines instead of inventing syntax.
+* Validation is deterministic. It rejects unresolved template tokens and commands the dictionary does not declare, then compiles the script against the dictionary—compile only, never launching the app. A compile failure carries the real compiler message back for another attempt.
 
-Generated AppleScript is grounded in the target app's actual scripting
-dictionary, not the model's memory of AppleScript. The runtime parses an app's
-`.sdef` into a typed model, cached per app version, and that vocabulary flows
-through the pipeline in three places:
-
-- An `app_commands` tool gives the planner the app's declared commands,
-  parameters, classes, and enumerations as a bounded digest, with per-suite
-  drill-down. Non-scriptable apps get a deterministic redirect to the
-  Accessibility/vision path.
-- Generation receives the digest, must use only declared terminology, binds
-  every required parameter, and reports the commands it used. If the goal
-  doesn't fit the dictionary, it declines instead of inventing syntax.
-- Validation is deterministic, not advisory: it rejects unresolved template
-  tokens, rejects reported commands the dictionary doesn't declare, and
-  compiles the script against the app's dictionary (compile only — no
-  execution, never launches the app). A compile failure carries the real
-  compiler message back to the planner for regeneration.
-
-A script that compiles, validates, and executes successfully is promoted into
-a learned skill pack — parameterized when a generation-reported binding can
-become an input slot — so the next run of the same task goes straight through
-skill lookup and `skill_run` with no model-generated script at all.
+A script that validates and runs successfully is promoted into a learned skill, parameterized where a reported binding can become an input. The next run of the same task goes straight through skill lookup, with no model-generated script at all.
 
 ## Skills and Learning
 
-Skills are reusable harness extensions: bounded instructions, descriptors, and
-validated scripts the planner can look up — the sanctioned home for
-app-specific knowledge that must never enter core runtime code.
+Skills are reusable harness extensions: bounded instructions, descriptions, and validated scripts the planner can look up. They are the sanctioned home for app-specific knowledge that must never enter core runtime code.
 
-Learning an app is itself a harness task that produces a skill. It gathers
-bounded screenshot and Accessibility evidence, explores only safe/reversible
-states unless the user approves more, distills an app profile and workflow
-recipes, and saves a reusable skill pack with any validated scripts.
+Learning an app is itself a harness task that produces a skill. It gathers bounded screenshot and Accessibility evidence, explores only safe and reversible states unless the user approves more, distills a profile and a few workflow recipes, and saves a reusable skill with any validated scripts.
 
-Learned packs compound across sessions: a saved pack declares its app in
-`apps:` frontmatter and is rediscovered alongside the bundled packs, so a
-later run driving that app preloads its learned playbook exactly like a
-built-in. Bundled packs win when both name the same app.
+Learned skills compound across sessions. A saved skill declares the app it serves and is rediscovered alongside the bundled ones, so a later run driving that app loads its learned playbook exactly like a built-in.
 
-Skills come from three discovered sources, merged in priority order: **built-in**
-(shipped in the app bundle), **installed** (added from the catalog into the
-on-disk install directory and verified at install time), and **learned**. A
-built-in always wins an id collision, so installing a skill can never break a
-curated one. Installed skills need not ship with the app — they are downloaded,
-checksum/signature-verified, placed under a versioned `current` directory, and
-picked up by the same discovery, so a turn can use them on its next step.
+Skills come from three sources, merged in priority order: **built-in**, shipped in the app; **installed**, added from the catalog and verified at install time; and **learned**. A built-in always wins a name collision, so installing a skill can never break a curated one.
 
-## Source Map
+## Where the Code Lives
 
-| Module | Owns |
-|---|---|
-| `apps/Donkey/Sources/DonkeyHarness/` | task state, registry, tools, skills, thread storage, generic runtime |
-| `apps/Donkey/Sources/DonkeyContracts/` | shared contracts across modules |
-| `apps/Donkey/Sources/DonkeyRuntime/` | guarded execution, Accessibility, screenshots, app/window observation, input backends |
-| `apps/Donkey/Sources/DonkeyAI/` | hosted model routing and adapters; prompt doctrine in `DonkeyPrompts.swift` |
-| `apps/Donkey/Sources/Donkey/` | user-query integration |
-
-Tests live in `apps/Donkey/Tests/DonkeyRuntimeTests/`. Run focused
-`swift test` from `apps/Donkey/` when changing harness behavior.
+The harness, registry, tools, skills, and thread storage live in the harness module; guarded execution, Accessibility, screenshots, and input backends live in the runtime module; model routing and adapters live in the AI module. Start in the harness module when changing how a task is planned and run.
