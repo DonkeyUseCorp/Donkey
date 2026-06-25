@@ -8,6 +8,7 @@
 // Subcommands (all I/O is JSON so an LLM can drive it):
 //   pdf-fill list    <in.pdf>                          → fillable fields as JSON
 //   pdf-fill pages   <in.pdf>                          → per-page sizes as JSON
+//   pdf-fill form    <in.pdf> [--page N]               → reading-order page view (text + fields)
 //   pdf-fill set     <in.pdf> --data <map.json> -o <out.pdf>
 //   pdf-fill overlay <in.pdf> --data <items.json> -o <out.pdf>
 //   pdf-fill flatten <in.pdf> -o <out.pdf>
@@ -41,8 +42,16 @@ func emit(_ object: Any) {
 
 // MARK: - Argument parsing
 
+/// Valueless boolean flags: present means true, and they never consume the next
+/// argument. `--pretty` is one because output is always pretty-printed — the `pdf`
+/// skill documents `pdf-fill list … --pretty`, and without this the parser tried to
+/// read a value for it, failed ("missing value for --pretty"), and wrote an empty
+/// field list, so form filling silently had nothing to map.
+let booleanFlags: Set<String> = ["pretty", "full"]
+
 /// Pulls `--flag value` pairs out of an argument list, returning the leftover
-/// positional arguments and a flag map. Supports `-o` as an alias for `--out`.
+/// positional arguments and a flag map. Supports `-o` as an alias for `--out`, and
+/// valueless boolean flags (see `booleanFlags`) that stand alone.
 func parse(_ args: [String]) -> (positional: [String], flags: [String: String]) {
     var positional: [String] = []
     var flags: [String: String] = [:]
@@ -54,9 +63,13 @@ func parse(_ args: [String]) -> (positional: [String], flags: [String: String]) 
         else if arg.hasPrefix("--") { key = String(arg.dropFirst(2)) }
         else { key = nil }
         if let key = key {
-            i += 1
-            guard i < args.count else { fail("missing value for --\(key)") }
-            flags[key] = args[i]
+            if booleanFlags.contains(key) {
+                flags[key] = "true"
+            } else {
+                i += 1
+                guard i < args.count else { fail("missing value for --\(key)") }
+                flags[key] = args[i]
+            }
         } else {
             positional.append(arg)
         }
@@ -164,6 +177,167 @@ func commandPages(_ path: String) {
     emit(pages)
 }
 
+// MARK: - Reading-order page view
+
+/// Groups a page's characters into words with their on-page bounds. PDFKit's
+/// `characterBounds(at:)` returns rects in the same bottom-left coordinate space
+/// as widget annotations, so words and fields can be merged without any flip.
+func words(on page: PDFPage) -> [(rect: CGRect, text: String)] {
+    let count = page.numberOfCharacters
+    guard count > 0, let text = page.string as NSString? else { return [] }
+    var out: [(CGRect, String)] = []
+    var current = ""
+    var rect = CGRect.null
+    func flush() {
+        let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty, !rect.isNull { out.append((rect, trimmed)) }
+        current = ""
+        rect = .null
+    }
+    for index in 0..<count {
+        let char = index < text.length ? text.substring(with: NSRange(location: index, length: 1)) : " "
+        if char == " " || char == "\n" || char == "\t" || char == "\r" { flush(); continue }
+        current += char
+        let bounds = page.characterBounds(at: index)
+        rect = rect.isNull ? bounds : rect.union(bounds)
+    }
+    flush()
+    return out
+}
+
+/// The short, unique id shown for a field and accepted by `set`: the leaf of the
+/// fully-qualified name, keeping the trailing widget index so paired checkbox widgets
+/// (`c1_11[0]` vs `c1_11[1]`) stay distinct. The full name on a real form is ~56
+/// characters (`topmostSubform[0].Page1[0].NameFieldsReadOrder[0].f1_4[0]`), which
+/// is far too verbose to repeat for every field in a page view bound by a small
+/// output budget — the leaf (`f1_4[0]`) carries the same identity in a handful of
+/// characters, and `set` maps it back.
+func leafName(_ fullName: String) -> String {
+    fullName.split(separator: ".").last.map(String.init) ?? fullName
+}
+
+/// An inline marker for a form field, placed where the field sits in the page so an
+/// LLM can read the surrounding label and bind a value to the field's short id.
+/// `⟦id⟧` is a text field, `⟦x id=on⟧` a checkbox (set `id` to `on` to tick it), and
+/// `⟦? id=a|b⟧` a dropdown with its options.
+func fieldMarker(_ annotation: PDFAnnotation, name: String) -> String {
+    let id = leafName(name)
+    switch annotation.widgetFieldType {
+    case .button:
+        let on = annotation.buttonWidgetStateString
+        return on.isEmpty ? "⟦x \(id)⟧" : "⟦x \(id)=\(on)⟧"
+    case .choice:
+        let options = (annotation.value(forAnnotationKey: kChoiceOptions) as? [Any])?.compactMap { $0 as? String } ?? []
+        return options.isEmpty ? "⟦? \(id)⟧" : "⟦? \(id)=\(options.joined(separator: "|"))⟧"
+    default:
+        return "⟦\(id)⟧"
+    }
+}
+
+/// The reading-order lines for ONE page: printed words and inline field markers, banded
+/// top-to-bottom and joined left-to-right. Shared by the paged view and `--full`.
+func formLines(for page: PDFPage) -> [String] {
+    // A token is a positioned piece of the page — either a printed word or a field marker.
+    struct Token { let y: CGFloat; let x: CGFloat; let text: String }
+    var tokens: [Token] = []
+    for (rect, text) in words(on: page) {
+        // Drop dotted leaders ("....") — pure visual fill between a label and its blank,
+        // noise in a text view and a large fraction of a dense form's characters.
+        if text.allSatisfy({ $0 == "." }) { continue }
+        tokens.append(Token(y: rect.midY, x: rect.minX, text: text))
+    }
+    for annotation in page.annotations where annotation.type == "Widget" {
+        guard let name = fieldName(annotation) else { continue }
+        tokens.append(Token(y: annotation.bounds.midY, x: annotation.bounds.minX, text: fieldMarker(annotation, name: name)))
+    }
+
+    // Top-to-bottom, then left-to-right within a band. Bands grow from their own top
+    // edge so a tall field cannot swallow rows far below it. Each band becomes a line.
+    tokens.sort { $0.y != $1.y ? $0.y > $1.y : $0.x < $1.x }
+    let bandTolerance: CGFloat = 6
+    var bands: [[Token]] = []
+    for token in tokens {
+        if let top = bands.last?.first, top.y - token.y <= bandTolerance {
+            bands[bands.count - 1].append(token)
+        } else {
+            bands.append([token])
+        }
+    }
+    return bands.map { band in band.sorted { $0.x < $1.x }.map(\.text).joined(separator: " ") }
+}
+
+let formMarkerLegend = "(⟦id⟧ = text field · ⟦x id=on⟧ = checkbox, set id to its on-value to tick · ⟦? id=a|b⟧ = dropdown. Fill with: pdf-fill set)"
+
+/// Renders ONE page of the form the way a person reads it: top-to-bottom,
+/// left-to-right, with the fillable fields interleaved inline among the printed text
+/// as short-id markers. This replaces guessing one label per field (which fails on
+/// dense grid forms where a field shares a horizontal band with unrelated text) — the
+/// model reads the page and binds values to the ids it sees.
+///
+/// One page at a time (default page 0; `--page N`, 0-indexed) because the model's
+/// per-tool-result budget is small and a whole multi-page form floods it. A single
+/// dense page can still exceed that budget, so the page is packed into PARTS of whole
+/// lines that each fit, navigated with `--part K` — nothing is silently truncated
+/// mid-page, and a footer says how to read the rest.
+func commandForm(_ path: String, _ flags: [String: String]) {
+    let document = loadDocument(path)
+    let pageCount = document.pageCount
+    let pageIndex = flags["page"].flatMap { Int($0) } ?? 0
+    let requestedPart = max(1, flags["part"].flatMap { Int($0) } ?? 1)
+    let fileName = (path as NSString).lastPathComponent
+
+    // `--full` dumps the WHOLE form — every page, no part-chunking, no nav footer — for a
+    // single mapping pass (the pdf.fill tool). The part/budget logic below exists only to
+    // fit the planner's per-result cap, which the one-shot mapper does not have.
+    if flags["full"] != nil {
+        var out: [String] = [formMarkerLegend]
+        for index in 0..<pageCount {
+            guard let page = document.page(at: index) else { continue }
+            let box = page.bounds(for: .mediaBox)
+            out.append("=== \(fileName) · page \(index) of \(pageCount - 1) (\(Int(box.width))x\(Int(box.height))) ===")
+            out.append(contentsOf: formLines(for: page))
+        }
+        print(out.joined(separator: "\n"))
+        return
+    }
+
+    guard pageIndex >= 0, pageIndex < pageCount, let page = document.page(at: pageIndex) else {
+        fail("no such page \(pageIndex); the form has pages 0…\(pageCount - 1)")
+    }
+    let box = page.bounds(for: .mediaBox)
+
+    let lines = formLines(for: page)
+
+    // Pack whole lines into parts that each fit the model's per-result budget, so a
+    // dense page is read part by part instead of being cut off mid-page.
+    let partBudget = 3000
+    var parts: [[String]] = [[]]
+    var size = 0
+    for line in lines {
+        if size + line.count > partBudget, !(parts[parts.count - 1].isEmpty) {
+            parts.append([])
+            size = 0
+        }
+        parts[parts.count - 1].append(line)
+        size += line.count + 1
+    }
+    let partCount = parts.count
+    let part = min(requestedPart, partCount)
+
+    var out: [String] = []
+    let partLabel = partCount > 1 ? ", part \(part) of \(partCount)" : ""
+    out.append("=== \(fileName) · page \(pageIndex) of \(pageCount - 1)\(partLabel) (\(Int(box.width))x\(Int(box.height))) ===")
+    if part == 1 {
+        out.append(formMarkerLegend)
+    }
+    out.append(contentsOf: parts[part - 1])
+    var nav: [String] = []
+    if part < partCount { nav.append("rest of THIS page → --page \(pageIndex) --part \(part + 1)") }
+    if pageIndex < pageCount - 1 { nav.append("NEXT page → --page \(pageIndex + 1)") }
+    if !nav.isEmpty { out.append("[\(nav.joined(separator: "   "))]") }
+    print(out.joined(separator: "\n"))
+}
+
 /// Coerce a JSON value to a number, accepting either a real JSON number or a
 /// numeric string (an LLM may emit `"x":"120"`). Returns nil for anything else.
 func numericValue(_ value: Any?) -> NSNumber? {
@@ -226,11 +400,36 @@ func commandSet(_ path: String, _ flags: [String: String]) {
     for (_, annotation) in widgetAnnotations(document) {
         if let name = fieldName(annotation) { byName[name, default: []].append(annotation) }
     }
+    // Accept the short ids the `form` view shows (`f1_4[0]`, or `f1_4` without the
+    // widget index) as well as full names: index leaf → the full names that carry it,
+    // so a key can be resolved when it is unambiguous.
+    var byLeaf: [String: Set<String>] = [:]
+    for name in byName.keys {
+        let last = leafName(name)
+        byLeaf[last, default: []].insert(name)
+        if let bracket = last.firstIndex(of: "["), last.hasSuffix("]") {
+            byLeaf[String(last[..<bracket]), default: []].insert(name)
+        }
+    }
 
     var applied: [String] = []
     var missing: [String] = []
-    for (name, rawValue) in map {
-        guard let widgets = byName[name], !widgets.isEmpty else { missing.append(name); continue }
+    var ambiguous: [String] = []
+    for (key, rawValue) in map {
+        // Resolve the key to a full field name: exact match first, else a unique leaf.
+        let fullName: String
+        if byName[key] != nil {
+            fullName = key
+        } else if let names = byLeaf[key], names.count == 1 {
+            fullName = names.first!
+        } else if let names = byLeaf[key], names.count > 1 {
+            ambiguous.append("\(key) → \(names.sorted().joined(separator: ", "))")
+            continue
+        } else {
+            missing.append(key)
+            continue
+        }
+        guard let widgets = byName[fullName], !widgets.isEmpty else { missing.append(key); continue }
         // A field is button-like if any of its widgets is a button (radio/checkbox).
         let isButton = widgets.contains { $0.widgetFieldType == .button }
         if isButton {
@@ -243,12 +442,20 @@ func commandSet(_ path: String, _ flags: [String: String]) {
             // Set on every widget sharing the name (text fields spanning pages).
             for widget in widgets { widget.widgetStringValue = string }
         }
-        applied.append(name)
+        // Report the caller's OWN key (the short id it passed), not the resolved full field name, so
+        // `applied`/`missing`/`ambiguous` are all in one key space and a caller can map an applied id back to
+        // the value it sent. Reporting the full name here broke that — the value lookup keyed by short id
+        // missed every applied field.
+        applied.append(key)
     }
 
     let out = outputURL(flags)
     guard document.write(to: out) else { fail("could not write output: \(out.path)") }
-    emit(["out": out.path, "applied": applied.sorted(), "missing": missing.sorted()])
+    var result: [String: Any] = ["out": out.path, "applied": applied.sorted(), "missing": missing.sorted()]
+    // Surface ambiguous ids distinctly (with their candidates) so the caller adds the
+    // widget index rather than assuming the value silently landed.
+    if !ambiguous.isEmpty { result["ambiguous"] = ambiguous.sorted() }
+    emit(result)
 }
 
 func commandOverlay(_ path: String, _ flags: [String: String]) {
@@ -356,10 +563,36 @@ func commandFlatten(_ path: String, _ flags: [String: String]) {
 
 // MARK: - Entry point
 
+/// Usage, printed to stdout (exit 0) for `--help`/`-h`/`help` or a bare invocation.
+/// A confused caller that probes `pdf-fill --help` gets oriented instead of a non-zero
+/// exit that reads as a broken tool and sends it flailing.
+let usageText = """
+pdf-fill — fill PDF forms headlessly (native PDFKit, JSON I/O).
+
+  pdf-fill list    <in.pdf>                 fillable fields as JSON {name,type,value,page,rect}
+  pdf-fill pages   <in.pdf>                 per-page sizes as JSON
+  pdf-fill form    <in.pdf> [--page N] [--part K]
+                                            read ONE page like a person: text with fields shown
+                                            inline as ⟦id⟧ / ⟦x id=on⟧ / ⟦? id=a|b⟧. Default page 0;
+                                            a dense page splits into parts. THIS is how you learn
+                                            which id to fill — read it page by page.
+  pdf-fill set     <in.pdf> --data <map.json|-> -o <out.pdf>
+                                            apply {id: value}. Ids are what `form` shows (e.g.
+                                            "f1_4[0]") or full names; checkboxes take the on-value
+                                            (or true/false). Reports applied / missing / ambiguous.
+  pdf-fill overlay <in.pdf> --data <items.json|-> -o <out.pdf>
+                                            stamp text on a flat/scanned form by position
+  pdf-fill flatten <in.pdf> -o <out.pdf>    burn values into the page (non-editable)
+
+Typical form fill: pdf-fill form in.pdf  →  read page, build {id:value}  →  pdf-fill set … -o out.pdf  →  next page.
+"""
+
 let arguments = Array(CommandLine.arguments.dropFirst())
-guard let command = arguments.first else {
-    fail("usage: pdf-fill <list|pages|set|overlay|flatten> <in.pdf> [options]")
+if arguments.isEmpty || arguments.contains("--help") || arguments.contains("-h") || arguments.first == "help" {
+    print(usageText)
+    exit(0)
 }
+let command = arguments[0]
 let rest = Array(arguments.dropFirst())
 let (positional, flags) = parse(rest)
 guard let input = positional.first else { fail("missing input PDF path") }
@@ -367,8 +600,9 @@ guard let input = positional.first else { fail("missing input PDF path") }
 switch command {
 case "list": commandList(input)
 case "pages": commandPages(input)
+case "form": commandForm(input, flags)
 case "set": commandSet(input, flags)
 case "overlay": commandOverlay(input, flags)
 case "flatten": commandFlatten(input, flags)
-default: fail("unknown command: \(command)")
+default: fail("unknown command: \(command); run `pdf-fill --help`")
 }
