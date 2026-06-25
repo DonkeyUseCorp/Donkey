@@ -1,123 +1,108 @@
 # Engineering Doc Style Guide
 
-For internal architecture docs, runtime specs, and contributor guides — anything
-a teammate (or a coding agent) will read once and then follow precisely.
+How to write the docs in this repo: architecture notes, runtime specs,
+contributor guides — anything a teammate or a coding agent reads once and then
+has to follow. Lead with the point, keep it short, and write like a person.
 
-## Core Principles
+## Principles
 
-**1. Lead with the point.**
-The first paragraph answers "what is this and why does it exist" in plain
-words. No throat-clearing, no history. If the doc has one governing rule,
-state it by the second paragraph and label it (`**The one rule:**`). Readers
-should be able to stop after the intro and still behave correctly.
+**Lead with the point.** The first paragraph says what the thing is and why it
+exists, in plain words — no throat-clearing, no history. If it has a job, sum it
+up in one sentence before any mechanism. If it has one governing rule, state it
+right after and label it (`**The one rule:**`). A reader who stops after the
+intro should still get the important things right.
 
-**2. Say each thing exactly once.**
-One canonical explanation per concept, in the place readers will look for it.
-Everything else references it ("see the loop above") instead of restating it.
-If you find the same idea in two sections, one of them is the home and the
-other becomes a pointer.
+**Say each thing once.** One explanation per idea, where people will look for
+it. Everywhere else, point back ("see the loop above"). If the same idea shows
+up twice, pick its home and cut the other.
 
-**3. Diagrams are the source of truth, prose is the commentary.**
-A loop, pipeline, or lifecycle gets one ASCII diagram — numbered steps if order
-matters. Prose around it explains *why*, never re-narrates *what*. Never draw
-the same flow twice.
+**Let diagrams carry the flow.** A loop, pipeline, or lifecycle gets one ASCII
+diagram. Keep a linear flow as a single vertical column — one step per line, an
+arrow down to the next — and only branch when the flow really branches. The
+prose says *why*; it doesn't re-narrate the steps.
 
-**4. Name the division of labor in one sentence.**
-When two components share responsibility, compress it to a contrast:
-"The model decides *what*; Swift decides *whether and how*." A reader who
-remembers only that sentence still makes correct decisions.
+**Name the division of labor in one line.** When two parts share the work,
+contrast them: "the model decides *what*; the runtime decides *whether and
+how*." If that's the only sentence a reader remembers, they should still make
+the right call.
 
-**5. Rules become tables; stories stay prose.**
-Anything that is a lookup — states and their outcomes, risk tiers and their
-behaviors, file types and what's read from each — goes in a table. Prose is for
-reasoning and intent; tables are for facts you check against.
+**Facts go in tables, reasoning stays in prose.** Anything you look up — states
+and outcomes, risk tiers, file types — belongs in a table. Save prose for the
+why.
 
-**6. State invariants as numbered, named rules.**
-Don't smear a constraint across four paragraphs. Extract it:
+**Pull invariants out as named rules.** Don't bury a constraint in a paragraph.
+Give it a bold name and a consequence:
 
 > 1. **Every input is guarded.** …
 > 2. **Done means evidence.** …
 
-Bold name first, consequence after. The bold name becomes the vocabulary the
-team uses in review comments.
+The name becomes the words people use in review.
 
-**7. Show the negative example.**
-The fastest way to make a rule concrete is to show the violation:
-"If you're tempted to write `if command.contains(\"music\")`, the logic belongs
-in a skill." One forbidden snippet teaches more than a paragraph of abstraction.
+**Show the violation.** One bad example teaches faster than a paragraph: "if
+you're tempted to write `if command.contains(\"music\")`, that logic belongs in
+a skill."
 
-**8. Prefer the concrete word, in plain English.**
-"The model proposes a name and a protected command applies it" beats "the
-generator emits a candidate the executor commits." Be concrete about what
-happens, but say it in plain words — not by naming internal tools, types, or
-file paths, which read as jargon and churn on every refactor.
+**Be concrete, in plain words.** "The model proposes a name and a guarded
+command applies it" beats "the generator emits a candidate the executor
+commits." Say what happens — don't reach for internal tool names, types, or
+file paths, which read as jargon and go stale.
 
-## Sentence-Level Rules
+**Give ideas room to breathe.** One point per paragraph. Break a dense block
+into short ones with space between, so a reader can scan.
 
-- **Imperative or declarative, never hedged.** "Adapters never hold task
-  state," not "adapters should generally avoid holding task state."
-- **Short sentences carry rules; longer sentences carry rationale.** A rule
-  over ~20 words is probably two rules.
-- **Active voice with a named actor.** "The planner picks the tool," not "the
-  tool is selected."
-- **Bold sparingly, and only for rule names and key contrasts.** If half a
-  paragraph is bold, nothing is.
-- **Italics only for word-level contrast** (*what* vs *whether*), never for
-  emphasis-shouting.
-- **State what a thing is; don't negate a foil nobody proposed.** Write "The
-  safety class decides whether the action stops for the user," not "The class,
-  *not the tool's name*, decides…" The appended opposite ("X, not Y," "it's not
-  Z, it's W") reads as defensive and machine-written. This is different from the
-  division-of-labor contrast in Principle 4, which assigns real work to two real
-  actors ("the model decides *what*; Swift decides *whether*"); the foil is bad
-  only when Y is a strawman the reader never would have assumed.
-- **Code font only for what a reader will actually type or run** — a real
-  command or flag. Don't set internal tool names, types, states, or paths in
-  backticks just because they exist in the code; describe what they do in plain
-  English instead.
+## Sentences
 
-## Structure Template
+- Say it straight: "adapters never hold task state," not "adapters should
+  generally avoid holding task state."
+- Short sentences for rules, longer ones for the why. A rule over ~20 words is
+  probably two.
+- Active voice, named actor: "the planner picks the tool," not "the tool is
+  selected."
+- Bold only for rule names and key contrasts. If half the paragraph is bold,
+  none of it is.
+- Italics only for word-level contrast (*what* vs *whether*).
+- State what a thing is; skip the strawman. Write "the safety class decides
+  whether the action stops," not "the class, *not the tool's name*, decides." (A
+  real two-actor contrast like the model/runtime split above is fine — the foil
+  is only bad when nobody would have assumed the opposite.)
+- Code font only for what someone will actually type — a real command or flag.
+  Tool names, types, and paths get described, not back-ticked.
+
+## Shape of a Doc
 
 ```text
 # Title
 
-What this is + why it exists (2–4 sentences).
-**The one rule:** the governing constraint, with a negative example.
+What it is + why it exists (2–4 sentences).
+**The one rule:** the governing constraint, with a bad example.
 
-## How It Works        — the canonical diagram + the division-of-labor sentence
-## [Core nouns]        — one section per major concept (state, boundaries, tools)
-## [Hard constraints]  — invariants as numbered named rules, lookups as tables
-## Where it lives      — one short sentence naming the area to start in
+## How it works   — the diagram + the division-of-labor line
+## [The nouns]    — one section per concept (state, boundaries, tools)
+## [Constraints]  — invariants as named rules, lookups as tables
+## Where it lives — one sentence pointing at the code
 ```
 
-Sections are nouns ("Task State," "Model Boundary"), not gerunds ("Managing
-Task State"). Order by what a new reader needs first, ending with a short
-pointer to where the code lives so the doc lands on "where to go next." That
-pointer is prose, not a catalog: name the area, skip the exact paths, class
-names, and test names — they churn and the reader can grep.
+Name sections after nouns ("Task State"), not gerunds ("Managing Task State").
+Order them by what a new reader needs first. End by pointing at the code in one
+sentence — name the area, skip the paths and class names; they churn and people
+can grep.
 
-## What to Cut
+## Cut
 
 - Restatements ("as mentioned above," "in other words")
-- Adjectives that don't change behavior ("robust," "powerful," "seamless")
-- Anticipatory caveats for situations no reader is in
-- Meta-commentary about the doc itself ("this section describes…")
-- Anything a table header already says
-- Code symbols and jargon when plain English works. Internal tool names, type
-  names, file paths, and coined compound terms ("reversible-write consent")
-  churn and read as jargon — describe what the thing does instead. Keep a symbol
-  or exact command only when a reader genuinely must type or grep it.
-- Catalogs that churn. No Source Map tables, no file-path lists, no test-name
-  lists, no exact line numbers. Point with one short sentence naming the area to
-  start in, and only when it helps.
+- Adjectives that change nothing ("robust," "powerful," "seamless")
+- Caveats for situations no reader is in
+- Talk about the doc itself ("this section describes…")
+- Anything the table header already says
+- Jargon when plain English works — internal names, paths, and coined terms go
+  stale; describe what the thing does
+- Churning catalogs — no source-map tables, file lists, or line numbers; one
+  sentence pointing at the area is enough
 
-## The Test
+## Before You Ship It
 
-After writing, ask three questions:
+1. Could a reader stop after the intro and still avoid the worst mistakes?
+2. Is anything explained twice?
+3. Could someone follow this without asking you a question?
 
-1. Could a reader stop at the end of the intro and still avoid the worst
-   mistakes? (If no — the governing rule is buried.)
-2. Is any concept explained twice? (If yes — pick the home, delete the rest.)
-3. Could a coding agent follow this doc without asking clarifying questions?
-   (If no — a rule is hedged, an example is missing, or a lookup isn't a
-   table.)
+If any answer is no, the rule is buried, doubled, or hedged — fix that.
