@@ -209,12 +209,24 @@ struct ShellCommandClassifierTests {
     @Test
     func boundedFileMutatorsAreWorkspaceTools() {
         // The core file mutators whose whole effect is their visible path arguments: reversible, and
-        // recognized as workspace file tools so the consent gate can skip the prompt when a workspace exists
-        // and every path stays inside it.
-        for command in ["cp a.pdf out/", "mv a b", "mkdir out", "touch x.json",
-                        "tee fields.json", "sed -i '' s/a/b/ x"] {
+        // recognized as workspace file tools so the consent gate can skip the prompt when the command is a
+        // single anchored mutation inside the workspace. `sed -i` is intentionally NOT here — its file
+        // operand can't be told apart from its script statically, so it prompts.
+        for command in ["cp a.pdf out/", "mv a b", "mkdir out", "touch x.json", "tee fields.json"] {
             let c = ShellCommandClassifier.classify(command)
             #expect(c.tier == .reversibleWrite)
+            #expect(ShellCommandClassifier.isWorkspaceFileTool(c.signature), "expected workspace tool: \(command) → \(c.signature)")
+        }
+        #expect(!ShellCommandClassifier.isWorkspaceFileTool("sed -i"))
+    }
+
+    @Test
+    func highRiskWorkspaceToolsAreWorkspaceTools() {
+        // High-risk tools that are strictly for file manipulation inside the workspace (rm, rmdir, chmod)
+        // are recognized as workspace file tools so they can run unprompted when anchored to the workspace.
+        for command in ["rm a.pdf", "rmdir out", "chmod +x run.sh"] {
+            let c = ShellCommandClassifier.classify(command)
+            #expect(c.tier == .highRisk)
             #expect(ShellCommandClassifier.isWorkspaceFileTool(c.signature), "expected workspace tool: \(command) → \(c.signature)")
         }
     }
@@ -231,28 +243,53 @@ struct ShellCommandClassifierTests {
     }
 
     @Test
-    func boundedWorkspaceCommandRejectsRidealongInterpreter() {
-        // The chaining hole: a benign `cp` can be the deciding signature, but a piggybacked interpreter must
-        // not ride through the bypass — isBoundedWorkspaceCommand inspects EVERY segment.
-        #expect(ShellCommandClassifier.isBoundedWorkspaceCommand("cp a b && mkdir out"))
-        #expect(ShellCommandClassifier.isBoundedWorkspaceCommand("ls && cp a b"))
-        #expect(!ShellCommandClassifier.isBoundedWorkspaceCommand("cp a b && python3 evil.py"))
-        #expect(!ShellCommandClassifier.isBoundedWorkspaceCommand("python3 map.py"))
+    func unpromptedWorkspaceMutationAllowsAnchoredMutators() {
+        let ws = "/Users/me/Downloads/donkey/conv1"
+        // Bounded mutators whose every file operand is an explicit absolute path inside the workspace —
+        // whether one command or a chain of them.
+        for command in [
+            "rm \"\(ws)/scratch.txt\"",
+            "mv \"\(ws)/a.pdf\" \"\(ws)/done/a.pdf\"",
+            "cp \"\(ws)/a.txt\" \"\(ws)/b.txt\"",
+            "mkdir \"\(ws)/out\"",
+            "touch \"\(ws)/x.json\"",
+            "chmod 755 \"\(ws)/run.sh\"",          // chmod's leading mode operand is not a path
+            "chmod +x \"\(ws)/run.sh\"",
+            "mv \"\(ws)/a b.pdf\" \"\(ws)/c.pdf\"", // a quoted path with a space is one operand
+            // A move-then-clean-up chain: both links are mutators with workspace-anchored operands. This is
+            // the exact shape the planner emits to fix a nested path, which must not prompt.
+            "mv \"\(ws)/nested/\(ws)/out.pdf\" \"\(ws)/out.pdf\" && rm -rf \"\(ws)/nested\"",
+            "mkdir \"\(ws)/out\" && cp \"\(ws)/a.txt\" \"\(ws)/out/a.txt\"",
+            "rm \"\(ws)/a\" ; rm \"\(ws)/b\"",
+        ] {
+            #expect(ShellCommandClassifier.isUnpromptedWorkspaceMutation(command, workspace: ws), "should run unprompted: \(command)")
+        }
+        // An unquoted `~` path (zsh expands it) anchored to the real home resolves into the workspace too.
+        let homeWs = "\(NSHomeDirectory())/Downloads/donkey/conv1"
+        #expect(ShellCommandClassifier.isUnpromptedWorkspaceMutation("rm ~/Downloads/donkey/conv1/x.txt", workspace: homeWs))
     }
 
     @Test
-    func commandStaysWithinDetectsEscape() {
+    func unpromptedWorkspaceMutationRejectsEverythingNotStaticallyAnchored() {
         let ws = "/Users/me/Downloads/donkey/conv1"
-        // Relative paths and absolute paths inside the workspace stay in.
-        #expect(ShellCommandClassifier.commandStaysWithin("cp a.pdf out/b.pdf", workspace: ws))
-        #expect(ShellCommandClassifier.commandStaysWithin("mv data/x.csv \(ws)/y.csv", workspace: ws))
-        #expect(ShellCommandClassifier.commandStaysWithin("tee fields.json", workspace: ws))
-        // A sed script that merely contains slashes is not a real path and stays in.
-        #expect(ShellCommandClassifier.commandStaysWithin("sed -i '' 's/a/b/' file.txt", workspace: ws))
-        // Absolute-outside, `~`, and `..` escapes all reach out of the workspace.
-        #expect(!ShellCommandClassifier.commandStaysWithin("cp a.pdf /Users/me/Documents/b.pdf", workspace: ws))
-        #expect(!ShellCommandClassifier.commandStaysWithin("mv x ~/Desktop/x", workspace: ws))
-        #expect(!ShellCommandClassifier.commandStaysWithin("cp a.pdf ../b.pdf", workspace: ws))
+        for command in [
+            "rm -rf $HOME",                          // expansion to an absolute path the check can't see
+            "rm -rf \"\(ws)/$junk\"",                // any `$` disqualifies
+            "rm -rf .",                              // not anchored
+            "rm -rf *",                              // glob, not anchored
+            "rm scratch.txt",                        // bare name
+            "mv data/x.csv \(ws)/y.csv",             // a relative source operand
+            "cp \"\(ws)/a.txt\" \"/Users/me/Documents/b.txt\"", // one operand outside the workspace
+            "mv \"\(ws)/a\" \"\(ws)/../b\"",         // `..` climbs out of the workspace
+            "rm \"\(ws)/a\" ; python3 evil.py",      // a chain link that is an interpreter, not a mutator
+            "mv \"\(ws)/a\" \"\(ws)/b\" && curl http://x", // a chain link that is a non-mutator
+            "cp \"\(ws)/a\" \"\(ws)/b\" && rm \"/Users/me/Documents/c\"", // a chain link's operand is outside
+            "xargs rm \"\(ws)/a\"",                  // a wrapper hides the real operands
+            "sed -i '' 's/a/b/' \"\(ws)/f.txt\"",    // sed is not a bounded mutator here
+            "ls \"\(ws)\"",                          // not a mutator at all
+        ] {
+            #expect(!ShellCommandClassifier.isUnpromptedWorkspaceMutation(command, workspace: ws), "should prompt: \(command)")
+        }
     }
 
     @Test

@@ -19,9 +19,18 @@ Almost everything Finder does is faster through shell_exec. Use Finder scripting
 - Reveal the result so the user sees it: `open -R ~/Documents/Reports/report.pdf`.
 
 ## Delete = trash, not rm
-- Prefer the reversible Finder trash: `osascript -e 'tell app "Finder" to delete POSIX file "/Users/me/old.txt"'`.
-- `rm` is destructive and asks every time; reach for it only when the user explicitly wants permanent deletion.
+- For the USER's files, prefer the reversible Finder trash: `osascript -e 'tell app "Finder" to delete POSIX file "/Users/me/old.txt"'`. `rm` outside your own workspace is destructive and asks every time — reach for it only when the user explicitly wants permanent deletion.
+- Inside the workspace folder you own, `rm` with the full workspace path (`rm "<workspace>/scratch.txt"`) runs without asking — including a clean-up chain of file commands like `mv "<workspace>/a" "<workspace>/b" && rm "<workspace>/a"`. A bare name, `*`, `$VAR`, or any non-file command in the chain still prompts.
 - Emptying the trash is irreversible — always confirm with the user first.
+
+## Creating and Naming Folders and Files
+- When creating directories (folders) or files to organize documents, do NOT use the user's raw prompt or simply truncate the input.
+- **Root Folders:**
+  - Generate a very short, user-friendly, and descriptive folder name (2-4 words), ensuring you **correct any spelling mistakes** in the user's query (e.g., `"standard daviation chart"` -> `"Standard Deviation Chart"`).
+  - Format the root folder name as a nice, natural sentence or title with space-separated words, using natural capitalization (e.g., `"Collapsing the Notch"`, `"Organize tax files"`).
+  - Deterministically or creatively map the conversation ID or target to a super-friendly 3-4 letter word (such as `mint`, `wave`, `cozy`, `fern`, `pine`, `glen`, `vibe`, `snug`, `glow`, `plum`), and append it at the end of the root folder name as a capitalized unique hash word (e.g., `"Collapsing the Notch Cozy"`, `"Organize Tax Files Cozy"`).
+- **Child Folders and Files:**
+  - Any child folders and files created *inside* the root folder should be formatted in **CamelCase** (or **PascalCase** where each word is capitalized with no spaces), correcting any spelling mistakes (e.g., a folder name like `"tax receipts"` becomes `TaxReceipts`, and a file name like `"f1120 form.pdf"` becomes `F1120Form.pdf`).
 
 ## Verify
 - After a move/copy/trash, confirm with a read: `ls ~/Documents/Reports`, `stat -f '%N' file`, or check the Trash: `ls ~/.Trash`.

@@ -55,20 +55,23 @@ public enum ShellCommandClassifier {
 
     // MARK: - Public API
 
-    /// Reversible-write signatures whose whole job is creating or transforming files, and whose ENTIRE
-    /// effect is its visible path arguments — the core file mutators. When the conversation has a dedicated
-    /// working directory the agent owns, and every path the command names stays inside that directory, these
-    /// run WITHOUT a consent prompt: the agent is manipulating its own sandbox, exactly the work the user
-    /// said it shouldn't have to ask to do.
+    /// The bare executables whose whole job is creating, transforming, or deleting files, and whose ENTIRE
+    /// effect is their visible path arguments — the core file mutators. Inside the dedicated folder the
+    /// agent owns, these run WITHOUT a consent prompt, but ONLY through the strict static contract in
+    /// `isUnpromptedWorkspaceMutation`: every command in the line a bare mutator with no wrapper, and
+    /// every file operand written as an explicit path inside the workspace. The agent manipulating its own
+    /// sandbox — including a move-then-clean-up chain — is exactly the work the user said it shouldn't have
+    /// to ask to do.
     ///
     /// Scripting interpreters (`python3`, `ruby`, `perl`, `node`) are deliberately ABSENT. Their effect is
     /// the code they run, not the paths in argv — `python3 script.py` can delete a user folder no static
     /// look at the command line can see — so "a workspace exists" is no containment at all for them. They
     /// stay on the normal consent path, surfacing a clear "runs a … script" prompt the user can
-    /// always-allow. Tools with side effects beyond the filesystem (osascript, open, killall, …) are absent
-    /// for the same reason.
+    /// always-allow. `sed -i` is absent for a related reason: its file operand can't be told apart from its
+    /// script argument statically, so it too prompts. Tools with side effects beyond the filesystem
+    /// (osascript, open, killall, …) are absent for the same reason.
     public static let workspaceFileToolSignatures: Set<String> = [
-        "mkdir", "touch", "cp", "mv", "ln", "tee", "sed -i"
+        "mkdir", "touch", "cp", "mv", "ln", "tee", "rm", "rmdir", "chmod"
     ]
 
     /// Whether a classification signature is a bounded file mutator that may run unprompted inside the
@@ -77,49 +80,54 @@ public enum ShellCommandClassifier {
         workspaceFileToolSignatures.contains(signature)
     }
 
-    /// True only when EVERY segment of the command is a read or a bounded workspace file-mutator. This is
-    /// what makes the no-consent workspace bypass sound for a CHAIN: a benign `cp` (which would otherwise be
-    /// the deciding signature on `cp a b && python3 evil.py`) cannot carry a piggybacked interpreter through
-    /// unprompted, because the `python3` segment is reversible but is not a workspace file tool, so the
-    /// chain as a whole fails this check and prompts.
-    public static func isBoundedWorkspaceCommand(_ command: String) -> Bool {
-        for rawSegment in splitSegments(command) {
-            let tokens = tokenize(rawSegment)
-            guard !tokens.isEmpty else { continue }
-            let segment = classifySegment(tokens)
-            if segment.tier == .read { continue }
-            if segment.tier == .reversibleWrite, isWorkspaceFileTool(segment.signature) { continue }
-            return false
-        }
-        return true
-    }
-
-    /// Whether every filesystem path the command names resolves INSIDE `workspace`. Paired with
-    /// `isBoundedWorkspaceCommand` so the no-consent bypass fires only when the command both uses bounded
-    /// tools AND cannot reach outside the folder Donkey owns — escape is then impossible by construction.
-    /// Argv-token analysis on technical fields, never natural-language intent: a bare name (no slash) is a
-    /// file in the working directory, which IS the workspace, and stays in; an absolute path, a `~` path, or
-    /// a relative path that climbs out with `..` must resolve within the workspace or the command is treated
-    /// as reaching outside (and so prompts). A token that merely contains `/` but is not a real path (a
-    /// `sed` script like `s/a/b/`) resolves under the workspace and stays in, so it never forces a prompt.
-    public static func commandStaysWithin(_ command: String, workspace: String) -> Bool {
+    /// The entire condition for running file mutations in the agent's own workspace WITHOUT a consent
+    /// prompt. Sound by construction, on technical argv tokens only — never natural-language intent:
+    ///
+    /// 1. EVERY command in the line is a bare bounded mutator (`mv`, `rm`, `mkdir`, `chmod`, …). A chain
+    ///    (`cp … && rm …` to move a file then clean up) is fine because each link can only create, move, or
+    ///    delete files; a single segment that is a wrapper (`xargs rm` reads paths from stdin the static
+    ///    check can't see), an interpreter, or any non-mutator (`curl`, `osascript`) disqualifies the line.
+    /// 2. No `$` or backtick anywhere: `$HOME`, `$(…)`, `` `…` `` expand at runtime to paths this check
+    ///    can never resolve, so any expansion disqualifies the line.
+    /// 3. EVERY file operand, in every command, is written as an explicit path that resolves inside
+    ///    `workspace` — an absolute or `~` path readable straight off the line (`rm ~/Downloads/Foo/a.txt`).
+    ///    A bare name, `.`, `*`, a relative path, a `..` climb, or a redirect target is not anchored to the
+    ///    workspace and so prompts. (chmod's leading mode operand is not a path and is skipped.)
+    ///
+    /// Each command independently being a bounded mutator over only workspace-anchored operands means the
+    /// whole line can touch nothing outside the folder the agent owns. Anything that fails a clause falls
+    /// through to the normal consent prompt — never blocked, just asked once.
+    public static func isUnpromptedWorkspaceMutation(_ command: String, workspace: String) -> Bool {
         let root = URL(fileURLWithPath: (workspace as NSString).expandingTildeInPath).standardizedFileURL.path
         guard !root.isEmpty else { return false }
-        for raw in argvTokens(command) {
-            let token = raw.trimmingCharacters(in: CharacterSet(charactersIn: "\\\"'"))
-            guard tokenLooksLikePath(token) else { continue }
-            let expanded = (token as NSString).expandingTildeInPath
-            let resolved = (expanded as NSString).isAbsolutePath
-                ? URL(fileURLWithPath: expanded).standardizedFileURL.path
-                : URL(fileURLWithPath: root).appendingPathComponent(expanded).standardizedFileURL.path
-            if resolved != root, !resolved.hasPrefix(root + "/") { return false }
-        }
-        return true
-    }
 
-    private static func tokenLooksLikePath(_ token: String) -> Bool {
-        guard !token.isEmpty, !token.hasPrefix("-") else { return false }
-        return token.hasPrefix("/") || token.hasPrefix("~") || token.contains("/")
+        // No runtime expansion the static anchor check can't see, anywhere in the line.
+        guard !command.contains("$"), !command.contains("`") else { return false }
+
+        let segments = splitSegments(command).map(tokenize).filter { !$0.isEmpty }
+        guard !segments.isEmpty else { return false }
+
+        var sawPathOperand = false
+        for var tokens in segments {
+            // Each command is a bare bounded mutator (the raw first token, so a wrapper like `xargs`/`env`
+            // can't qualify as the thing that runs).
+            let executable = executableName(tokens.removeFirst())
+            guard workspaceFileToolSignatures.contains(executable) else { return false }
+
+            // Every file operand in this command is an explicit path inside the workspace.
+            var nonPathOperandsToSkip = (executable == "chmod") ? 1 : 0   // chmod's leading mode is not a path
+            for raw in tokens {
+                let token = raw.trimmingCharacters(in: CharacterSet(charactersIn: "\\\"'"))
+                if token.isEmpty || token.hasPrefix("-") { continue }     // flags
+                if nonPathOperandsToSkip > 0 { nonPathOperandsToSkip -= 1; continue }
+                let expanded = (token as NSString).expandingTildeInPath
+                guard (expanded as NSString).isAbsolutePath else { return false }   // no bare/relative/`.`/`*`
+                let resolved = URL(fileURLWithPath: expanded).standardizedFileURL.path   // resolves any `..`
+                guard resolved == root || resolved.hasPrefix(root + "/") else { return false }
+                sawPathOperand = true
+            }
+        }
+        return sawPathOperand
     }
 
     /// Classify a one-line command. The overall tier is the most restrictive
@@ -361,8 +369,8 @@ public enum ShellCommandClassifier {
 
     /// Quote-aware split into argv tokens, honoring single/double quotes and backslash escapes (quote
     /// characters are kept in the token so a path detector can dequote and an executable normalizer can
-    /// path-strip). The shared primitive behind `tokenize` (which then drops leading env assignments),
-    /// `commandStaysWithin`, and the output-file detector — so none of them re-implement shell quoting.
+    /// path-strip). The shared primitive behind `tokenize` (which then drops leading env assignments) and
+    /// the output-file detector — so neither re-implements shell quoting.
     static func argvTokens(_ segment: String) -> [String] {
         var tokens: [String] = []
         var current = ""
@@ -499,10 +507,12 @@ public enum ShellCommandClassifier {
     /// scutil, plutil, sed) are handled in `refine` and intentionally absent here.
     ///
     /// `cd`/`pushd`/`popd` are pure directory navigation: they change only the shell's working directory and
-    /// touch no file or state, so they are reads. This matters because `cd <dir> && <real command>` is the
-    /// idiom the planner uses to scope work into the folder it owns — without `cd` here it classified as an
-    /// "unrecognized command" (reversibleWrite) and the most-restrictive-segment rule dragged the whole chain
-    /// to a consent prompt, gating even a bundled tool reworking files the agent itself created.
+    /// touch no file or state, so they are reads. This matters because `cd <dir> && <read or bundled tool>`
+    /// scopes a read into the agent's folder — without `cd` here it classified as an "unrecognized command"
+    /// (reversibleWrite) and the most-restrictive-segment rule dragged the whole chain to a consent prompt,
+    /// gating even a bundled tool reworking files the agent itself created. (A file MUTATION never rides a
+    /// `cd` chain unprompted — `isUnpromptedWorkspaceMutation` requires one command with explicit
+    /// workspace-anchored paths.)
     private static let readExecutables: Set<String> = [
         "cd", "pushd", "popd",
         "ls", "cat", "head", "tail", "grep", "egrep", "fgrep", "rg", "find", "mdfind", "mdls",

@@ -172,8 +172,23 @@ public enum DonkeyCommandBackends {
     /// the conversation workspace (or ~/Downloads when none is set yet); see `resolveOutputDestination`.
     @MainActor
     private static func imageRender(_ context: HarnessToolExecutionContext) async -> HarnessToolResult {
-        guard let html = trimmed(context.call.input["html"]) else {
-            return invalidInput(context, "image_render requires `html` — the HTML/SVG markup to render.")
+        // `html` (inline markup) wins when both are supplied; the schema tells the model to omit it when
+        // passing `htmlPath`. The htmlPath file is read from inside the workspace only (see resolveInputPath).
+        var html: String = ""
+        if let htmlInput = trimmed(context.call.input["html"]) {
+            html = htmlInput
+        } else if let htmlPathInput = trimmed(context.call.input["htmlPath"]) {
+            let path = resolveInputPath(htmlPathInput, baseDir: workspaceBaseDir(context))
+            do {
+                html = try String(contentsOf: path, encoding: .utf8)
+            } catch {
+                return failed(context, "image_render could not read htmlPath '\(htmlPathInput)': \(error.localizedDescription)", reason: "imageRenderReadFailed")
+            }
+            guard !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return invalidInput(context, "image_render's htmlPath file '\(htmlPathInput)' is empty — it must contain the HTML/SVG markup to render.")
+            }
+        } else {
+            return invalidInput(context, "image_render requires either `html` or `htmlPath` — the HTML/SVG markup or path to render.")
         }
         let format = (trimmed(context.call.input["format"]) ?? "png").lowercased()
         guard format == "png" || format == "pdf" else {
@@ -282,6 +297,25 @@ public enum DonkeyCommandBackends {
     private static func workspaceBaseDir(_ context: HarnessToolExecutionContext) -> String? {
         let value = context.worldModel.facts[ConversationWorkspace.baseDirFactKey]
         return (value?.isEmpty == false) ? value : nil
+    }
+
+    /// Resolve `image_render`'s `htmlPath` to a URL ALWAYS inside the workspace `baseDir` (or `~/Downloads`
+    /// when none is set). image_render runs with no consent prompt and its `htmlPath` can be steered by
+    /// content the model ingested, so — exactly like `resolveOutputDestination` on the output side — an
+    /// absolute path, a `~` path, or a `..` climb is re-rooted under `base` rather than honored. Neither
+    /// side of the tool can reach a file Donkey doesn't own.
+    private static func resolveInputPath(_ rawPath: String, baseDir: String?) -> URL {
+        let base: URL = {
+            if let baseDir, !baseDir.isEmpty {
+                return URL(fileURLWithPath: (baseDir as NSString).expandingTildeInPath, isDirectory: true)
+            }
+            return FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Downloads", isDirectory: true)
+        }()
+        let safeComponents = rawPath
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .filter { $0 != ".." && $0 != "." }
+        return safeComponents.reduce(base) { $0.appendingPathComponent(String($1)) }
     }
 
     /// Shared destination rule for the no-consent capture/render tools (`image_render`, `web_snapshot`).
@@ -855,17 +889,15 @@ public enum DonkeyCommandBackends {
         let store = ShellPermissionPolicyStore.shared
         let signature = classification.signature
 
-        // The agent doesn't ask permission to read or change files in the dedicated folder it owns. A
-        // reversible-write file command (cp, mkdir, mv, tee, …) runs unprompted when the conversation has a
-        // working directory AND the command is provably confined to it: every segment is a bounded file
-        // mutator (no interpreter can ride along — `cp a b && python3 evil.py` fails the bounded check), and
-        // every path it names resolves inside the workspace (no absolute, `~`, or `..` escape). High-risk
-        // still gates regardless. Anything touching a file Donkey didn't make, or running opaque code, falls
-        // through to the normal consent prompt.
-        if classification.tier == .reversibleWrite,
+        // The agent doesn't ask permission to change files in the dedicated folder it owns. File commands
+        // (cp, mkdir, mv, tee, rm, chmod, …) run unprompted ONLY when EVERY command in the line is a bare
+        // bounded mutator whose every file operand is written as an explicit path inside the conversation's
+        // workspace — so a move-then-clean-up chain (`mv … && rm …`) is fine, but a wrapper, a `$`/`..`/
+        // glob/bare name, or any non-mutator segment (see `isUnpromptedWorkspaceMutation`) makes the whole
+        // line fall through to the normal consent prompt.
+        if (classification.tier == .reversibleWrite || classification.tier == .highRisk),
            let workspace = workspaceBaseDir(context),
-           ShellCommandClassifier.isBoundedWorkspaceCommand(command),
-           ShellCommandClassifier.commandStaysWithin(command, workspace: workspace) {
+           ShellCommandClassifier.isUnpromptedWorkspaceMutation(command, workspace: workspace) {
             return nil
         }
 

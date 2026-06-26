@@ -232,6 +232,13 @@ tokens into a risk tier:
 | **reversible write** | changing a setting, opening an app | asks once, then remembers the choice |
 | **high risk** | `sudo`, `rm`, `dd`, piping a download into a shell | asks every time, never remembered |
 
+One exception keeps the agent fluent in the folder it owns: file commands (`mv`, `cp`, `mkdir`, `rm`,
+`chmod`) whose every path is written out in full inside the conversation's own folder run without a
+prompt — including a clean-up chain like `mv … && rm …` where every link is such a command. The agent
+managing the files it created shouldn't have to ask. Anything that can't be read off the command line
+as staying in that folder — a bare name, a glob, a shell variable, or a chained command that is not
+one of those file commands — still asks.
+
 The planner discovers what is available by doing. It runs the command it needs
 by name, and a "command not found" is just another observation it adapts to —
 reaching for another tool or reporting what is missing. It never probes the

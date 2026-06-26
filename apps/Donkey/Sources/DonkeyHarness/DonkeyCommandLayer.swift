@@ -134,15 +134,16 @@ public enum DonkeyCommandLayer {
             HarnessToolDescriptor(
                 name: Command.imageRender.rawValue,
                 pluginID: pluginID,
-                summary: "Render HTML/SVG markup YOU write into a crisp PNG (or PDF) image, using the same built-in headless browser as web_snapshot. This is how you CREATE an image of text or data — an infographic, diagram, chart, standings/bracket, poster, card, certificate, or any explanatory graphic about any topic. Unlike image.generate (a generative model that garbles text and numbers), this renders your exact markup, so every label and value is sharp and you control the whole layout. Write one self-contained HTML document (inline CSS, system fonts, inline <svg> for shapes, data: URIs for any images), then pass it here. Follow the `design` skill for how to make it look good. It only renders your markup and writes the output file, so it runs without consent.",
+                summary: "Render HTML/SVG markup YOU write into a crisp PNG (or PDF) image, using the same built-in headless browser as web_snapshot. This is how you CREATE an image of text or data — an infographic, diagram, chart, standings/bracket, poster, card, certificate, or any explanatory graphic about any topic. Unlike image.generate (a generative model that garbles text and numbers), this renders your exact markup, so every label and value is sharp and you control the whole layout. Write one self-contained HTML document (inline CSS, system fonts, inline <svg> for shapes, data: URIs for any images), then pass it here. Follow the `design` skill for how to make it look good. It reads markup from your workspace and writes the output file there, so it runs without consent.",
                 inputSchema: [
-                    "html": "A complete, self-contained HTML (or SVG) document to render. Inline all CSS; use system fonts; remote fonts/images are not loaded (embed images as data: URIs).",
+                    "html": "A complete, self-contained HTML (or SVG) document to render. Inline all CSS; use system fonts; remote fonts/images are not loaded (embed images as data: URIs). Omit when providing `htmlPath`.",
+                    "htmlPath": "Optional path to a file IN YOUR WORKSPACE holding the HTML/SVG markup to render — use it for large or complex documents to avoid escaping, truncation, or token-budget errors. Confined to the workspace: absolute or `..` paths are re-rooted there.",
                     "width": "Canvas width in pixels (default 1200, 200–4000). Author your layout to this width.",
                     "height": "Optional canvas height in pixels (200–8000). Omit to fit the content's natural height.",
                     "format": "\"png\" (default) or \"pdf\".",
                     "destination": "Optional output name. A relative name or subfolder (e.g. charts/q3.png) lands in the conversation's workspace folder; this runs without consent, so the output always stays inside that folder (else ~/Downloads) — absolute or .. paths are re-rooted there, not written elsewhere. Omit to save to the workspace, else ~/Downloads."
                 ],
-                optionalInputKeys: ["width", "height", "format", "destination"],
+                optionalInputKeys: ["html", "htmlPath", "width", "height", "format", "destination"],
                 outputSchema: ["filePath": "Path to the saved PNG or PDF."],
                 requiredPermissions: [],
                 safetyClass: .readOnly,

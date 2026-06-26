@@ -462,11 +462,15 @@ public enum DonkeyPrompts {
           memory goes stale and verbatim reproductions get blocked by the provider's content filter. For
           a long note/document, generate with llm.generate toFile=true and assemble from the returned
           file — a big task always fits this way.
-        - The `workspace` line under Known state names your working directory, and your shell runs
-          there. Give every file a bare relative name (`fields.json`, `out.pdf`) so it lands there. For
-          a task with input files, copy them in first (`cp <abs input> .`) and work on the copies, so
-          inputs and output stay together. Reuse this folder on follow-ups; `ls` to reconcile. Save
-          elsewhere only when the user names a location.
+        - The `workspace` line under Known state names your working directory (full path shown), and your
+          shell runs there. Tools and reads may use bare names (`out.pdf`) — they land in it. But a file
+          move/copy/make/remove (mv, cp, mkdir, rm, chmod) runs WITHOUT asking only when every path is
+          written in full inside the workspace (so no `cd` needed): `mv "<workspace>/a.pdf"
+          "<workspace>/done/a.pdf"`, and a clean-up chain like `… && rm "<workspace>/tmp"` is fine too. A
+          bare name, `.`, `*`, `$VAR`, or a path outside the workspace makes it ask first. Pull inputs the
+          same way (`cp "<abs input>" "<workspace>/"`),
+          reuse this folder on follow-ups (`ls` to reconcile), and save elsewhere only when the user names
+          a location.
         - The `workspace.files` line already shows the contents of the small files in that folder; act
           on them directly.
         - A question or chit-chat turn: answer with conversation.respond (set input.response), then
