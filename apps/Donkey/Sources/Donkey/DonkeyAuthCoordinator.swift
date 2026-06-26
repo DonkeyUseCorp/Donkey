@@ -96,17 +96,24 @@ final class DonkeyAuthCoordinator: ObservableObject {
     private let configuration: DonkeyAuthConfiguration
     private let stateStore: DonkeyAuthStateStoring
     private let nativeSessionExchanger: any DonkeyNativeSessionExchanging
+    private let remoteSessionRevoker: any DonkeyRemoteSessionRevoking
     private let cookieStorage: HTTPCookieStorage
+
+    /// The in-flight best-effort remote revoke spawned by a user-initiated sign-out. Exposed so it can
+    /// be awaited in tests; production code never reads it.
+    private(set) var pendingRemoteRevokeTask: Task<Void, Never>?
 
     init(
         configuration: DonkeyAuthConfiguration = .current(),
         stateStore: DonkeyAuthStateStoring = DonkeyAuthStateStore(),
         nativeSessionExchanger: any DonkeyNativeSessionExchanging = DonkeyNativeSessionCookieExchanger(),
+        remoteSessionRevoker: any DonkeyRemoteSessionRevoking = DonkeyRemoteSessionRevoker(),
         cookieStorage: HTTPCookieStorage = .shared
     ) {
         self.configuration = configuration
         self.stateStore = stateStore
         self.nativeSessionExchanger = nativeSessionExchanger
+        self.remoteSessionRevoker = remoteSessionRevoker
         self.cookieStorage = cookieStorage
 
         if let session = stateStore.loadSession() {
@@ -220,20 +227,39 @@ final class DonkeyAuthCoordinator: ObservableObject {
         phase = stateStore.loadSession().map(DonkeyAuthPhase.signedIn) ?? .signedOut
     }
 
-    /// Drops the local session and its native session cookie, returning to the
-    /// signed-out state. Callers should then surface the login flow again.
-    func signOut() {
+    /// Drops the local session and its native session cookie, returning to the signed-out state. Callers
+    /// should then surface the login flow again.
+    ///
+    /// When `revokingRemoteSessions` is true (a user-initiated sign-out), it also fires a best-effort call
+    /// to revoke every Better Auth session for this user, so the browser — and any other device — signs out
+    /// too. The 401-driven path passes false: the server already revoked the session, so this is only local
+    /// cleanup. Local cleanup always runs, even if the revoke call can't be made (e.g. offline).
+    func signOut(revokingRemoteSessions: Bool = true) {
+        // Snapshot the session cookie before clearing local state, so the best-effort remote revoke can
+        // authenticate even though the cookie jar is wiped immediately below.
+        let cookies = revokingRemoteSessions ? sessionCookies() : []
+        if revokingRemoteSessions, !cookies.isEmpty {
+            let revoker = remoteSessionRevoker
+            let webBaseURL = configuration.webBaseURL
+            pendingRemoteRevokeTask = Task {
+                await revoker.revokeAllSessions(webBaseURL: webBaseURL, cookies: cookies)
+            }
+        } else {
+            pendingRemoteRevokeTask = nil
+        }
+
         stateStore.clearSession()
         stateStore.clearPendingState()
         clearSessionCookies()
         phase = .signedOut
     }
 
+    private func sessionCookies() -> [HTTPCookie] {
+        cookieStorage.cookies(for: configuration.webBaseURL) ?? []
+    }
+
     private func clearSessionCookies() {
-        guard let cookies = cookieStorage.cookies(for: configuration.webBaseURL) else {
-            return
-        }
-        for cookie in cookies {
+        for cookie in sessionCookies() {
             cookieStorage.deleteCookie(cookie)
         }
     }

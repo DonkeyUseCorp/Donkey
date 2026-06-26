@@ -24,6 +24,12 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     /// common "topped up in the browser, came back" path. Both are torn down on sign-out.
     private var creditReloadPollTimer: Timer?
     private var creditReloadActiveObserver: NSObjectProtocol?
+    /// Periodically reconciles the app's session against the server, so a sign-out performed on the website
+    /// (or another device) takes effect here without a relaunch. A periodic tick plus an app-reactivation
+    /// observer fire a cheap auth-gated probe; a 401 routes through the usual session-expiry handling. Both
+    /// run only while signed in and are torn down on sign-out.
+    private var sessionHeartbeatTimer: Timer?
+    private var sessionHeartbeatActiveObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if ManualCaptureDebugLaunchHandler.shouldHandle(arguments: CommandLine.arguments) {
@@ -169,9 +175,10 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         }
         // A mid-run 401 expired the session: sign out (clears the dead cookie, flips phase to signedOut)
         // so the $phase observer below sets needsLogin — surfacing the notch login WITHOUT tearing down
-        // the overlay or opening the window, so running tasks stay put and re-auth happens inline.
+        // the overlay or opening the window, so running tasks stay put and re-auth happens inline. The
+        // server already revoked this session (that's what the 401 means), so this is local cleanup only.
         model.sessionExpired = { [weak self] in
-            self?.authCoordinator?.signOut()
+            self?.authCoordinator?.signOut(revokingRemoteSessions: false)
         }
         if let authCoordinator {
             model.updateNeedsLogin(!authCoordinator.isAuthenticated)
@@ -181,10 +188,6 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
                     self?.applySessionState(isSignedIn: phase.isSignedIn, model: model)
                 }
         }
-
-        // A locally-stored session can already be expired server-side, which otherwise only surfaces on
-        // the first query's 401. Probe the backend on launch so the notch shows login right away.
-        validateStoredSession(model: model)
 
         // Keep the out-of-credits CTA honest: poll the balance while any task is credit-blocked and clear
         // the CTA the moment a top-up lands, so it doesn't linger until the next relaunch.
@@ -236,17 +239,58 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         if isSignedIn {
             uiUnderstandingCoordinator?.start()
             model?.resumeLiveSession()
+            if let model { startSessionHeartbeat(model: model) }
         } else {
             uiUnderstandingCoordinator?.stop()
             model?.suspendLiveSession()
+            stopSessionHeartbeat()
         }
     }
 
-    /// Confirms a locally-stored session is still valid server-side. Fires one cheap, auth-gated GET
+    // MARK: - Session heartbeat
+
+    /// Starts the session heartbeat: a periodic tick plus an app-reactivation observer, each firing a cheap
+    /// session-validity probe, plus one immediate probe. Idempotent — a no-op while already running, so the
+    /// auth-phase observer can call it freely. Torn down by `stopSessionHeartbeat` on sign-out.
+    private func startSessionHeartbeat(model: UserQueryOverlayModel) {
+        guard sessionHeartbeatTimer == nil else { return }
+
+        sessionHeartbeatTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self, weak model] _ in
+            Task { @MainActor in
+                guard let self, let model else { return }
+                self.probeSessionValidity(model: model)
+            }
+        }
+        sessionHeartbeatActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self, weak model] _ in
+            Task { @MainActor in
+                guard let self, let model else { return }
+                self.probeSessionValidity(model: model)
+            }
+        }
+
+        // A locally-stored session can already be dead server-side; probe right away so the notch shows
+        // login immediately instead of only on the first real query's 401.
+        probeSessionValidity(model: model)
+    }
+
+    private func stopSessionHeartbeat() {
+        sessionHeartbeatTimer?.invalidate()
+        sessionHeartbeatTimer = nil
+        if let sessionHeartbeatActiveObserver {
+            NotificationCenter.default.removeObserver(sessionHeartbeatActiveObserver)
+            self.sessionHeartbeatActiveObserver = nil
+        }
+    }
+
+    /// Confirms the session is still valid server-side. Fires one cheap, auth-gated GET
     /// (`/api/inference/models/`); a 401 routes through the model's session-expiry handling (sign out →
-    /// notch login) via the inference client's auth-expiry callback. Network or other errors are
-    /// ignored so a transient hiccup never signs the user out. Runs off the launch path.
-    private func validateStoredSession(model: UserQueryOverlayModel) {
+    /// notch login) via the inference client's auth-expiry callback. Network or other errors are ignored
+    /// so a transient hiccup never signs the user out.
+    private func probeSessionValidity(model: UserQueryOverlayModel) {
         guard authCoordinator?.isAuthenticated == true,
               let configuration = try? DonkeyBackendInferenceConfiguration.fromEnvironment()
         else { return }
@@ -344,7 +388,9 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func signOut() {
-        authCoordinator?.signOut()
+        // User-initiated: revoke every session for this user so the website (and any other device) signs
+        // out too, then tear down local surfaces and surface login.
+        authCoordinator?.signOut(revokingRemoteSessions: true)
         teardownAuthenticatedSurfaces()
         showLoginWindow()
     }
@@ -354,6 +400,7 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     private func teardownAuthenticatedSurfaces() {
         authStateCancellable = nil
         stopCreditReloadReconciler()
+        stopSessionHeartbeat()
         uiUnderstandingCoordinator?.stop()
         uiUnderstandingCoordinator = nil
         overlayController?.stop()
