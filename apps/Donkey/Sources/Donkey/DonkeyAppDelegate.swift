@@ -373,6 +373,24 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         signOut()
     }
 
+    @objc private func showOnboardingMenuAction(_ sender: Any?) {
+        showOnboardingWalkthrough()
+    }
+
+    /// Replays the onboarding walkthrough on demand from the menu. Unlike the first-run path, finishing or
+    /// closing it just dismisses the card — it never routes into sign-in.
+    private func showOnboardingWalkthrough() {
+        NSApp.setActivationPolicy(.regular)
+        let controller = OnboardingWindowController()
+        onboardingWindowController = controller
+        controller.present(
+            pages: OnboardingTour.pages,
+            finishButtonTitle: "Done",
+            onFinish: { [weak self] in self?.onboardingWindowController = nil },
+            onClose: { [weak self] in self?.onboardingWindowController = nil }
+        )
+    }
+
     // MARK: - Permissions setup
 
     /// Reopens the Accessibility / screenshot / microphone permission walkthrough on demand. Uses a
@@ -424,6 +442,14 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         mainMenu.addItem(appMenuItem)
         let appMenu = NSMenu()
         appMenuItem.submenu = appMenu
+
+        let showOnboardingItem = NSMenuItem(
+            title: "Show Onboarding",
+            action: #selector(showOnboardingMenuAction(_:)),
+            keyEquivalent: ""
+        )
+        showOnboardingItem.target = self
+        appMenu.addItem(showOnboardingItem)
 
         let signOutItem = NSMenuItem(
             title: "Sign Out",
