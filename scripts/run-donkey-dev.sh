@@ -452,11 +452,16 @@ create_debug_app_bundle() {
     install_name_tool -add_rpath "@executable_path/../Frameworks" "$MACOS_DIR/$DEV_EXECUTABLE_NAME"
   fi
 
-  resource_bundle="$(find "$APP_DIR/.build" -path "*/debug/Donkey_Donkey.bundle" -type d | head -n 1 || true)"
-  if [ -n "$resource_bundle" ]; then
-    cp -R "$resource_bundle" "$RESOURCES_DIR/"
-  else
-    echo "Missing SwiftPM resource bundle for Donkey." >&2
+  local copied_any_bundle=0
+  local bundle
+  while IFS= read -r bundle; do
+    [ -z "$bundle" ] && continue
+    cp -R "$bundle" "$RESOURCES_DIR/"
+    copied_any_bundle=1
+  done < <(find "$APP_DIR/.build" -name "Donkey_*.bundle" -type d -path "*/debug/*" | grep -v "Tests")
+
+  if [ "$copied_any_bundle" -eq 0 ]; then
+    echo "Missing SwiftPM resource bundles for Donkey." >&2
     exit 1
   fi
 
