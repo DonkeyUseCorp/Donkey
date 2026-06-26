@@ -1,6 +1,26 @@
 import CoreGraphics
 import Foundation
 
+/// What the collapsed notch's trailing (right) lane shows. One source of truth for the gutter: the
+/// layout sizes the lane from this — only the live clock needs the widened lane; a glyph or the update
+/// icon fits the original width; nothing collapses it back — and the view renders the matching content
+/// by switching on the very same value, so the lane width and what sits in it can never drift.
+public enum CollapsedTrailingSlot: String, Equatable, Sendable {
+    /// Nothing in the gutter — the lane collapses to its original width.
+    case empty
+    /// The waiting-on-user attention mark (clarification, review, or permission). Fits the original width.
+    case attentionGlyph
+    /// A surfaced failure's red warning mark. Fits the original width.
+    case errorGlyph
+    /// An available app update. Fits the original width.
+    case updateIcon
+    /// The live elapsed timer ("Nh Nm Ns") — the only gutter content that needs the widened lane.
+    case clock
+
+    /// Only the live clock needs the wide lane; every glyph/icon and the empty lane keep the original width.
+    public var needsWideLane: Bool { self == .clock }
+}
+
 public struct UserQueryNotchLayout: Equatable, Sendable {
     public static let expandedCommandOnlyTopPaddingBelowPhysicalVoid: CGFloat = 16
 
@@ -25,6 +45,9 @@ public struct UserQueryNotchLayout: Equatable, Sendable {
     public var chinHeight: CGFloat
     /// Logged out: render the login call-to-action instead of the task surface.
     public var needsLogin: Bool
+    /// What the collapsed trailing lane shows. The view renders its gutter by switching on this, the
+    /// same value that sized the lane — so the content and the width it sits in are one decision.
+    public var collapsedTrailingSlot: CollapsedTrailingSlot
 
     public init(
         voidWidth: CGFloat,
@@ -41,7 +64,8 @@ public struct UserQueryNotchLayout: Equatable, Sendable {
         canRenderTextInTopRow: Bool,
         collapsedVoidLeadingInset: CGFloat = 0,
         chinHeight: CGFloat = 0,
-        needsLogin: Bool = false
+        needsLogin: Bool = false,
+        collapsedTrailingSlot: CollapsedTrailingSlot = .empty
     ) {
         self.voidWidth = voidWidth
         self.voidHeight = voidHeight
@@ -58,6 +82,7 @@ public struct UserQueryNotchLayout: Equatable, Sendable {
         self.collapsedVoidLeadingInset = collapsedVoidLeadingInset
         self.chinHeight = chinHeight
         self.needsLogin = needsLogin
+        self.collapsedTrailingSlot = collapsedTrailingSlot
     }
 
     public var shouldRenderExpandedTopRowVoidMarker: Bool {
@@ -98,6 +123,15 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
     /// Logged out: render the login call-to-action instead of the task surface. Collapsed shows just
     /// the "Login to use Donkey" line; expanding reveals a wide, short bar with the Login button.
     public var needsLogin: Bool
+    /// What the collapsed trailing lane shows. The lane expands only for the live clock and collapses
+    /// back to the original width for a glyph, the update icon, or nothing — so the width tracks the
+    /// content. Built with `collapsedTrailingSlot(primaryStatus:hasSurfacedError:isUpdateActionable:)`
+    /// from the same conversation state the notch view renders.
+    public var collapsedTrailingSlot: CollapsedTrailingSlot
+    /// How many pointers the collapsed leading lane holds (the surfaced-conversation cluster). The lane
+    /// widens to fit a multi-pointer cluster and collapses back to the original width for one or none,
+    /// so both side lanes are sized by their content rather than a fixed literal.
+    public var collapsedLeadingPointerCount: Int
 
     /// Height of the short collapsed login band that seats the "Login to use Donkey" line below the
     /// void on a real notch. No-notch displays render the line inline in the top row.
@@ -116,7 +150,9 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
         screenWidth: CGFloat,
         chinHeight: CGFloat = 0,
         collapsedTopRowExtraHeight: CGFloat = 0,
-        needsLogin: Bool = false
+        needsLogin: Bool = false,
+        collapsedTrailingSlot: CollapsedTrailingSlot = .empty,
+        collapsedLeadingPointerCount: Int = 0
     ) {
         self.voidWidth = voidWidth
         self.voidHeight = voidHeight
@@ -127,6 +163,33 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
         self.chinHeight = chinHeight
         self.collapsedTopRowExtraHeight = collapsedTopRowExtraHeight
         self.needsLogin = needsLogin
+        self.collapsedTrailingSlot = collapsedTrailingSlot
+        self.collapsedLeadingPointerCount = collapsedLeadingPointerCount
+    }
+
+    /// Classify what the collapsed trailing lane shows, matching the notch view's gutter exactly so the
+    /// lane width (sized from this) and the rendered content (the view's `collapsedRightSlot`) stay one
+    /// decision. A surfaced failure wins first; then the primary conversation's status — running shows
+    /// the clock, a waiting-on-user state shows the attention mark, anything else is empty; an app
+    /// update shows only when no conversation is primary.
+    public static func collapsedTrailingSlot(
+        primaryStatus: UserQueryConversationStatus?,
+        hasSurfacedError: Bool,
+        isUpdateActionable: Bool
+    ) -> CollapsedTrailingSlot {
+        if hasSurfacedError { return .errorGlyph }
+        if let primaryStatus {
+            switch primaryStatus {
+            case .waitingForClarification, .waitingForReview, .waitingForPermission:
+                return .attentionGlyph
+            case .running:
+                return .clock
+            case .chatting, .paused, .completed, .interrupted, .needsAttention, .failed, .timedOut:
+                return .empty
+            }
+        }
+        if isUpdateActionable { return .updateIcon }
+        return .empty
     }
 
     public var surfaceSize: CGSize {
@@ -162,7 +225,8 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
             canRenderTextInTopRow: canRenderTextInTopRow,
             collapsedVoidLeadingInset: collapsedVoidLeadingInset,
             chinHeight: effectiveChinHeight,
-            needsLogin: needsLogin
+            needsLogin: needsLogin,
+            collapsedTrailingSlot: collapsedTrailingSlot
         )
     }
 
@@ -181,7 +245,7 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
     /// nominal ratio, keeping the void's seat stable.
     private var collapsedVoidLeadingInset: CGFloat {
         let laneTotal = max(0, collapsedSurfaceWidth - voidWidth)
-        return laneTotal * (Self.collapsedLeadingLaneWidth / Self.collapsedSideLaneTotal)
+        return laneTotal * (collapsedLeadingLaneWidth / collapsedSideLaneTotal)
     }
 
     /// Only the real notch (with a void) grows a chin; no-notch displays show the
@@ -254,14 +318,14 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
             Self.expandedContentDesignFrame.width,
             max(
                 Self.minimumCollapsedSurfaceFrame.width,
-                Self.commonCollapsedSurfaceFrame.width,
-                voidWidth + Self.collapsedSideLaneTotal
+                commonCollapsedSurfaceFrame.width,
+                voidWidth + collapsedSideLaneTotal
             )
         )
     }
 
     private var collapsedVisibleHeight: CGFloat {
-        max(Self.minimumCollapsedSurfaceFrame.height, Self.commonCollapsedSurfaceFrame.height, voidHeight)
+        max(Self.minimumCollapsedSurfaceFrame.height, commonCollapsedSurfaceFrame.height, voidHeight)
     }
 
     private var expandedVisibleHeight: CGFloat {
@@ -282,7 +346,7 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
 
     private var expandedSurfaceTopInset: CGFloat {
         guard !canRenderTextInTopRow else {
-            return Self.commonCollapsedSurfaceFrame.height
+            return commonCollapsedSurfaceFrame.height
         }
 
         return min(max(0, voidHeight), Self.maximumExpandedContentTopInset)
@@ -293,25 +357,49 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
     }
 
     private static let minimumCollapsedSurfaceFrame = CGRect(x: 0, y: 0, width: 110, height: 28)
-    private static let commonCollapsedSurfaceFrame = CGRect(
-        x: 0,
-        y: 0,
-        width: Self.fallbackVoidWidth + Self.collapsedSideLaneTotal,
-        height: Self.fallbackVoidHeight
-    )
+    private var commonCollapsedSurfaceFrame: CGRect {
+        CGRect(
+            x: 0,
+            y: 0,
+            width: Self.fallbackVoidWidth + collapsedSideLaneTotal,
+            height: Self.fallbackVoidHeight
+        )
+    }
     private static let expandedContentDesignFrame = CGRect(
         x: 0,
         y: 0,
         width: UserQueryLayout.composerInputSurfaceWidth + Self.inputHorizontalMargin * 2,
         height: 280
     )
-    /// The collapsed surface's side lanes flank the void. The trailing (right) lane is wider than the
-    /// leading (left) one so the live elapsed clock — up to "Nh Nm Ns" — fits beside the camera; the
-    /// leading lane only carries the pointer. The void seats off-center between them (see
+    /// The collapsed surface's side lanes flank the void, and each is sized by what it holds. The
+    /// original (unused) lane width is `collapsedOriginalLaneWidth`; a lane expands past it only for
+    /// content that needs the room — the trailing lane for the live clock, the leading lane for a
+    /// multi-pointer cluster — and collapses back when that content is gone. When both sit at the
+    /// original width the void is centered; an expanded lane seats it off-center (see
     /// `surfaceVoidCenterX`), which the host positioning compensates for.
-    private static let collapsedLeadingLaneWidth: CGFloat = 34
-    private static let collapsedTrailingLaneWidth: CGFloat = 64
-    private static var collapsedSideLaneTotal: CGFloat { collapsedLeadingLaneWidth + collapsedTrailingLaneWidth }
+    public static let collapsedOriginalLaneWidth: CGFloat = 34
+    /// The trailing lane width while the live elapsed clock ("Nh Nm Ns") shows beside the camera.
+    public static let collapsedClockLaneWidth: CGFloat = 64
+    /// Pointer-cluster geometry, shared with the notch view's `pointerCluster` so the leading lane is
+    /// sized to the exact cascade it renders: a base pointer plus a fixed step per extra pointer, capped.
+    public static let collapsedPointerSize: CGFloat = 14
+    public static let collapsedPointerStepX: CGFloat = 8
+    public static let collapsedMaxClusterPointers: Int = 3
+
+    /// Width of the rendered pointer cascade for `pointerCount` surfaced conversations (capped at the
+    /// cluster max). One or none is a single pointer; each extra pointer adds one cascade step.
+    public static func collapsedPointerClusterWidth(_ pointerCount: Int) -> CGFloat {
+        let visible = max(1, min(pointerCount, collapsedMaxClusterPointers))
+        return collapsedPointerSize + collapsedPointerStepX * CGFloat(visible - 1)
+    }
+
+    private var collapsedLeadingLaneWidth: CGFloat {
+        max(Self.collapsedOriginalLaneWidth, Self.collapsedPointerClusterWidth(collapsedLeadingPointerCount))
+    }
+    private var collapsedTrailingLaneWidth: CGFloat {
+        collapsedTrailingSlot.needsWideLane ? Self.collapsedClockLaneWidth : Self.collapsedOriginalLaneWidth
+    }
+    private var collapsedSideLaneTotal: CGFloat { collapsedLeadingLaneWidth + collapsedTrailingLaneWidth }
     private static let collapsedCornerRadius: CGFloat = 14
     // Prototype spec: the expanded notch window and its input box both use a 14px radius.
     private static let expandedCornerRadius: CGFloat = 14

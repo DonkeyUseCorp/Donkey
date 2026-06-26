@@ -406,7 +406,7 @@ public struct UserQueryNotchStatusView: View {
         TimelineView(.periodic(from: Self.chinRotationAnchor, by: Self.chinRotationInterval)) { context in
             let speaker = rotatingChinConversation(at: context.date)
             HStack(spacing: 7) {
-                pointerCluster(size: 14, speaker: speaker)
+                pointerCluster(size: UserQueryNotchMetrics.collapsedPointerSize, speaker: speaker)
                     // While a conversation waits on the user, its pointer stays lit and pulses for attention — the
                     // same cue the expanded row gives — so the blocked thread reads at a glance.
                     .modifier(AttentionPulse(active: isPrimaryWaitingOnUser))
@@ -449,7 +449,7 @@ public struct UserQueryNotchStatusView: View {
         TimelineView(.periodic(from: Self.chinRotationAnchor, by: Self.chinRotationInterval)) { context in
             let speaker = rotatingChinConversation(at: context.date)
             ZStack {
-                pointerCluster(size: 14, speaker: speaker)
+                pointerCluster(size: UserQueryNotchMetrics.collapsedPointerSize, speaker: speaker)
                     .modifier(AttentionPulse(active: isPrimaryWaitingOnUser))
                     .position(x: collapsedLeadingLaneCenterX, y: layout.collapsedVisibleHeight / 2)
 
@@ -1415,38 +1415,29 @@ public struct UserQueryNotchStatusView: View {
     /// lonely clock; every state's full elapsed total lives in the expanded row.
     @ViewBuilder
     private var collapsedRightSlot: some View {
-        if surfacedErrorConversation != nil {
+        // Render exactly what the layout sized the lane to hold — the same `CollapsedTrailingSlot` value —
+        // so the gutter content and the lane width around it are one decision and can never disagree (a
+        // running conversation gets the wide clock lane; a glyph/icon or nothing keeps the original width).
+        switch layout.collapsedTrailingSlot {
+        case .errorGlyph:
             // A surfaced failure (e.g. an auth error) raises the red warning glyph here while its message
             // holds the chin, until the user expands to acknowledge it.
             attentionGlyph(color: Self.chinErrorColor)
-        } else if let conversation = primaryConversation {
-            switch conversation.status {
-            case .waitingForClarification, .waitingForReview:
-                // Attention: the agent is blocked waiting for the user to answer or review something.
-                attentionGlyph()
-            case .waitingForPermission:
-                // Waiting on the user, same as a clarification or review — show the attention glyph.
-                attentionGlyph()
-            case .running:
+        case .attentionGlyph:
+            // The agent is blocked waiting on the user — a question, a review, or a permission to approve.
+            attentionGlyph()
+        case .clock:
+            if let conversation = primaryConversation {
                 fullLiveTime(for: conversation)
-            case .completed, .paused, .interrupted, .failed, .chatting, .needsAttention, .timedOut:
-                // The gutter only ever carries the waiting-on-user icons or the live clock — a completed
-                // conversation keeps surfacing as a colored pointer + chin line, and the rest (including a benign
-                // needsAttention or a retryable timed-out run) surface in the list without nagging the
-                // collapsed gutter.
-                EmptyView()
             }
-        } else if updateState.isActionable {
+        case .updateIcon:
             // App update available.
             slotIcon("icloud.and.arrow.down")
-        } else {
+        case .empty:
+            // A completed conversation keeps surfacing as a colored pointer + chin line, and a benign
+            // needsAttention or retryable timed-out run surfaces in the list — neither nags the gutter.
             EmptyView()
         }
-    }
-
-    /// The surfaced failure currently holding the chin, if any — drives the right-rail warning glyph.
-    private var surfacedErrorConversation: UserQueryConversation? {
-        surfacedConversations.first { $0.status == .failed }
     }
 
     private func slotIcon(_ systemName: String, color: Color = Color.white.opacity(0.85)) -> some View {
@@ -1566,9 +1557,10 @@ public struct UserQueryNotchStatusView: View {
     /// the row tail-truncates only after five rendered lines.
     private static let conversationSubtextLineLimit = 5
     /// The collapsed leading lane shows at most this many overlapping pointers; extra surfaced conversations
-    /// are still listed when the notch is expanded.
-    private static let maxClusterPointers = 3
-    private static let clusterStepX: CGFloat = 8
+    /// are still listed when the notch is expanded. The cap and the horizontal step come from the layout so
+    /// the leading lane (sized in `UserQueryNotchMetrics`) and the cascade rendered here use one geometry.
+    private static let maxClusterPointers = UserQueryNotchMetrics.collapsedMaxClusterPointers
+    private static let clusterStepX = UserQueryNotchMetrics.collapsedPointerStepX
     private static let clusterStepY: CGFloat = 3
     /// Chin text metrics, matching the band geometry the controller sizes (10pt on a 12pt line with an
     /// 8pt bottom margin). The text is seated above that bottom margin so it stays constant as the band

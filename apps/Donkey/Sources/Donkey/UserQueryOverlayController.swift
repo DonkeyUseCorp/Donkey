@@ -999,6 +999,16 @@ final class UserQueryOverlayController {
     }
 
     private func notchMetrics(for screen: NSScreen? = nil) -> NotchMetrics {
+        // Size the collapsed side lanes from the same conversation state the notch view renders, so each
+        // lane expands for its content (the trailing lane for the live clock, the leading lane for a
+        // multi-pointer cluster) and collapses back when unused. `notchConversations.first` is the view's
+        // primary; the trailing gutter matches `collapsedRightSlot`'s precedence (failure → status → update).
+        let trailingSlot = NotchMetrics.collapsedTrailingSlot(
+            primaryStatus: model.notchConversations.first?.status,
+            hasSurfacedError: model.notchSurfacedConversations.contains { $0.status == .failed },
+            isUpdateActionable: model.updateState.isActionable
+        )
+        let leadingPointerCount = model.notchSurfacedConversations.count
         let screen = screen ?? activeScreen()
         guard let screen else {
             return NotchMetrics(
@@ -1008,7 +1018,9 @@ final class UserQueryOverlayController {
                 isExpanded: isStatusExpanded,
                 isHostExpanded: isStatusHostExpanded,
                 screenWidth: NotchMetrics.defaultScreenWidth,
-                needsLogin: model.needsLogin
+                needsLogin: model.needsLogin,
+                collapsedTrailingSlot: trailingSlot,
+                collapsedLeadingPointerCount: leadingPointerCount
             )
         }
 
@@ -1038,7 +1050,9 @@ final class UserQueryOverlayController {
             isHostExpanded: isStatusHostExpanded,
             screenWidth: screen.frame.width,
             chinHeight: 0,
-            needsLogin: model.needsLogin
+            needsLogin: model.needsLogin,
+            collapsedTrailingSlot: trailingSlot,
+            collapsedLeadingPointerCount: leadingPointerCount
         )
         let collapsedWidth = widthProbe.layout.collapsedSurfaceFrame.width
         let chinTextWidth = collapsedWidth - Self.statusChinHorizontalInset
@@ -1055,7 +1069,9 @@ final class UserQueryOverlayController {
                 collapsedWidth: collapsedWidth,
                 hasNotch: hasNotch
             ),
-            needsLogin: model.needsLogin
+            needsLogin: model.needsLogin,
+            collapsedTrailingSlot: trailingSlot,
+            collapsedLeadingPointerCount: leadingPointerCount
         )
     }
 
