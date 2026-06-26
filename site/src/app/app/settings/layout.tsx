@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { SettingsShell } from "@/app/app/settings/SettingsShell";
 
 export const metadata: Metadata = {
-  title: "Settings | Donkey Vision API",
+  title: "Settings | Donkey",
   description: "Manage your Vision API subscription and API keys.",
 };
 

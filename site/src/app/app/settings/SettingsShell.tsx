@@ -43,8 +43,17 @@ export function SettingsShell({ children }: { children: ReactNode }) {
     <div className="min-h-screen">
       <header className="border-b">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
-          <Link className="text-lg font-semibold" href="/app/settings">
-            Donkey Vision API
+          <Link className="flex items-center gap-2 text-lg font-semibold" href="/app">
+            <div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-md">
+              <img
+                src="/donkey-site-mark.webp"
+                alt="Donkey Logo"
+                width={32}
+                height={32}
+                className="block h-full w-full object-cover"
+              />
+            </div>
+            <span>Donkey</span>
           </Link>
           <nav className="flex items-center gap-1">
             {navItems.map((item) => (
