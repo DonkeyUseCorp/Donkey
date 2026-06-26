@@ -384,6 +384,9 @@ public struct HarnessMediaCutRequest: Sendable {
     public var fillerWords: [String]
     /// Caller-judged removal spans as `"start-end,start-end"` seconds (e.g. a discourse "like").
     public var explicitRemovals: String?
+    /// The conversation's workspace folder, so the engine confines its ffmpeg spawns there (the seatbelt
+    /// jail) and lands the cut output inside it rather than beside an input that may sit outside the folder.
+    public var workingDirectory: String?
 
     public init(
         inputPath: String,
@@ -392,7 +395,8 @@ public struct HarnessMediaCutRequest: Sendable {
         removeSilence: Bool = false,
         transcriptPath: String? = nil,
         fillerWords: [String] = [],
-        explicitRemovals: String? = nil
+        explicitRemovals: String? = nil,
+        workingDirectory: String? = nil
     ) {
         self.inputPath = inputPath
         self.outputPath = outputPath
@@ -401,6 +405,7 @@ public struct HarnessMediaCutRequest: Sendable {
         self.transcriptPath = transcriptPath
         self.fillerWords = fillerWords
         self.explicitRemovals = explicitRemovals
+        self.workingDirectory = workingDirectory
     }
 }
 
@@ -2409,7 +2414,8 @@ public enum BuiltInHarnessToolExecutors {
             removeSilence: removeSilence,
             transcriptPath: transcriptPath,
             fillerWords: fillerWords,
-            explicitRemovals: explicit
+            explicitRemovals: explicit,
+            workingDirectory: context.worldModel.facts[ConversationWorkspace.baseDirFactKey]
         )
         guard let result = await cutter(request) else {
             return failed(context, "The media-cut engine is unavailable right now.", reason: "mediaCutterUnavailable")

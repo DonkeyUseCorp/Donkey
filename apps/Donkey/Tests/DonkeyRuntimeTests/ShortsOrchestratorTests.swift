@@ -68,7 +68,7 @@ struct ShortsOrchestratorTests {
                 recorder.recordTranscribe()
                 return HarnessTranscriptionResult(text: "hello world", words: Self.words(8), backend: "stub")
             },
-            runTool: Self.stubRunner(recorder)
+            makeRunTool: { _ in Self.stubRunner(recorder) }
         )
 
         let outcome = await orchestrator.make(
@@ -104,7 +104,7 @@ struct ShortsOrchestratorTests {
             transcribe: { _ in
                 HarnessTranscriptionResult(text: "x", words: Self.words(6), backend: "stub")
             },
-            runTool: Self.stubRunner(recorder)
+            makeRunTool: { _ in Self.stubRunner(recorder) }
         )
 
         let outcome = await orchestrator.make(
@@ -125,7 +125,7 @@ struct ShortsOrchestratorTests {
         let orchestrator = ShortsOrchestrator(
             selectMoments: { _, _ in [MomentSpan(startSec: 0, endSec: 30)] },
             transcribe: { _ in HarnessTranscriptionResult(text: "x", words: Self.words(6), backend: "stub") },
-            runTool: Self.stubRunner(recorder)
+            makeRunTool: { _ in Self.stubRunner(recorder) }
         )
 
         let outcome = await orchestrator.make(
@@ -144,7 +144,7 @@ struct ShortsOrchestratorTests {
         let orchestrator = ShortsOrchestrator(
             selectMoments: { _, _ in recorder.recordSelect(); return [MomentSpan(startSec: 0, endSec: 10)] },
             transcribe: { _ in HarnessTranscriptionResult(text: "x", words: Self.words(4), backend: "stub") },
-            runTool: Self.stubRunner(recorder)
+            makeRunTool: { _ in Self.stubRunner(recorder) }
         )
 
         let outcome = await orchestrator.make(

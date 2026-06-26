@@ -36,27 +36,29 @@ public struct ShortsOrchestrator: Sendable {
 
     private let selectMoments: SelectMoments
     private let transcribe: Transcribe
-    private let runTool: MediaPipeline.ToolRunner
+    private let makeRunTool: @Sendable (SandboxPolicy?) -> MediaPipeline.ToolRunner
 
     public init(
         selectMoments: @escaping SelectMoments,
         transcribe: @escaping Transcribe,
-        runTool: @escaping MediaPipeline.ToolRunner = MediaPipeline.bundledToolRunner
+        makeRunTool: @escaping @Sendable (SandboxPolicy?) -> MediaPipeline.ToolRunner = MediaPipeline.sandboxedRunner
     ) {
         self.selectMoments = selectMoments
         self.transcribe = transcribe
-        self.runTool = runTool
+        self.makeRunTool = makeRunTool
     }
 
     public func make(_ request: HarnessShortsRequest) async -> HarnessShortsOutcome {
         // Working directory: the conversation's own folder when present, else home — same rule as shell_exec
         // and the form filler, so produced clips land beside the rest of the task's output.
         let workdir = DonkeyCommandBackends.resolvedWorkingDirectoryPath(request.workingDirectory)
+        // Every bundled-tool spawn for this run is confined to the workspace (with the source readable).
+        let runTool = makeRunTool(SandboxPolicy.forWorkspace(baseDirectory: request.workingDirectory, localSource: request.source))
 
         // 1. Resolve the source to a local file (download a URL with yt-dlp first). Resolve ONCE — a second
         //    call would re-download the URL.
         let sourcePath: String
-        switch resolveSource(request.source, workdir: workdir) {
+        switch resolveSource(request.source, workdir: workdir, using: runTool) {
         case .ok(let resolved): sourcePath = resolved
         case .failed(let reason): return Self.fail(reason)
         }
@@ -90,7 +92,7 @@ public struct ShortsOrchestrator: Sendable {
         let result = await MediaPipeline.fanOut(chosen) { index, moment in
             await makeClip(
                 index: index, moment: moment, sourcePath: sourcePath,
-                workdir: workdir, aspect: aspect, reframe: reframeWanted
+                workdir: workdir, aspect: aspect, reframe: reframeWanted, using: runTool
             )
         }
 
@@ -112,7 +114,7 @@ public struct ShortsOrchestrator: Sendable {
     /// that fails still ships, so one weak moment never sinks the whole job.
     private func makeClip(
         index: Int, moment: MomentSpan, sourcePath: String,
-        workdir: String, aspect: String, reframe: Bool
+        workdir: String, aspect: String, reframe: Bool, using runTool: MediaPipeline.ToolRunner
     ) async -> PipelineItemOutcome {
         let n = index + 1
         func path(_ name: String) -> String { (workdir as NSString).appendingPathComponent(name) }
@@ -129,7 +131,7 @@ public struct ShortsOrchestrator: Sendable {
         if case let .failed(reason) = cut { return .failed(reason: "clip \(n): could not cut the span — \(reason)") }
 
         // b. Transcribe the clip (zero-based) for caption timings and write an SRT. Best-effort.
-        let srtPath = await captionSRT(forClip: clip, index: n, workdir: workdir)
+        let srtPath = await captionSRT(forClip: clip, index: n, workdir: workdir, using: runTool)
 
         // c. Reframe to vertical, following the active speaker. On failure keep the original framing.
         var base = clip
@@ -164,7 +166,7 @@ public struct ShortsOrchestrator: Sendable {
 
     /// Extract compact audio from the clip, transcribe it on-device (timings zero-based to the clip), and
     /// write an SRT next to it. Returns the SRT path, or nil when the clip has no usable transcript.
-    private func captionSRT(forClip clip: String, index n: Int, workdir: String) async -> String? {
+    private func captionSRT(forClip clip: String, index n: Int, workdir: String, using runTool: MediaPipeline.ToolRunner) async -> String? {
         let clipAudio = (workdir as NSString).appendingPathComponent("clip_\(n).mp3")
         let audio = MediaPipeline.runStep(
             "ffmpeg",
@@ -185,7 +187,7 @@ public struct ShortsOrchestrator: Sendable {
 
     // MARK: - Source resolution
 
-    private func resolveSource(_ source: String, workdir: String) -> MediaStepResult {
+    private func resolveSource(_ source: String, workdir: String, using runTool: MediaPipeline.ToolRunner) -> MediaStepResult {
         let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = trimmed.lowercased()
         if lower.hasPrefix("http://") || lower.hasPrefix("https://") {

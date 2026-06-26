@@ -53,7 +53,7 @@ struct CaptionOrchestratorTests {
                 return lines.map { "[\(language)] \($0)" }
             },
             transcribe: { _ in HarnessTranscriptionResult(text: "x", words: Self.words(20), backend: "stub") },
-            runTool: Self.stubRunner(recorder)
+            makeRunTool: { _ in Self.stubRunner(recorder) }
         )
 
         let outcome = await orchestrator.caption(
@@ -78,7 +78,7 @@ struct CaptionOrchestratorTests {
         let orchestrator = CaptionOrchestrator(
             translateCues: { _, _ in recorder.recordTranslate(); return nil },
             transcribe: { _ in HarnessTranscriptionResult(text: "x", words: Self.words(12), backend: "stub") },
-            runTool: Self.stubRunner(recorder)
+            makeRunTool: { _ in Self.stubRunner(recorder) }
         )
 
         let outcome = await orchestrator.caption(
@@ -98,7 +98,7 @@ struct CaptionOrchestratorTests {
         let orchestrator = CaptionOrchestrator(
             translateCues: { _, _ in recorder.recordTranslate(); return nil },
             transcribe: { _ in HarnessTranscriptionResult(text: "x", words: Self.words(8), backend: "stub") },
-            runTool: Self.stubRunner(recorder)
+            makeRunTool: { _ in Self.stubRunner(recorder) }
         )
         let outcome = await orchestrator.caption(
             HarnessCaptionRequest(source: "/no/such/file.mp4", translateTo: "Korean", workingDirectory: workdir)

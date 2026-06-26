@@ -39,7 +39,10 @@ public struct PdfParseOrchestrator: Sendable {
             outPath = resolved
         }
 
-        let result = DonkeyCommandBackends.runBundledTool("lit", arguments, workingDirectory: workingDirectory)
+        // Confine lit to the workspace: it reads the input PDF (wherever the user pointed) and writes only
+        // inside the working folder. nil when there's no owned folder, so behavior is unchanged there.
+        let policy = SandboxPolicy.forWorkspace(baseDirectory: request.workingDirectory, readableInputs: [filePath])
+        let result = DonkeyCommandBackends.runBundledTool("lit", arguments, workingDirectory: workingDirectory, policy: policy)
         guard result.exitCode == 0 else {
             let why = result.stderr.isEmpty ? result.stdout : result.stderr
             return HarnessPdfParseOutcome(text: "Could not parse \(request.file): \(why)", succeeded: false)

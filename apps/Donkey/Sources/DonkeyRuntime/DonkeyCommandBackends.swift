@@ -299,6 +299,31 @@ public enum DonkeyCommandBackends {
         return (value?.isEmpty == false) ? value : nil
     }
 
+    /// The folders Donkey created for this conversation — its workspace root and current base directory.
+    /// Read from the typed workspace facts, never user text. These are the only places a file mutation runs
+    /// WITHOUT a consent prompt; a write anywhere else is the user's to approve.
+    private static func ownedRoots(_ context: HarnessToolExecutionContext) -> [String] {
+        let facts = context.worldModel.facts
+        let root = facts[ConversationWorkspace.rootDirFactKey].flatMap { $0.isEmpty ? nil : $0 }
+        let base = facts[ConversationWorkspace.baseDirFactKey].flatMap { $0.isEmpty ? nil : $0 }
+        var roots: [String] = []
+        if let root { roots.append(root) }
+        if let base, base != root { roots.append(base) }
+        return roots
+    }
+
+    /// The seatbelt policy confining a shell spawn. Reads are open (the consent classifier already treats
+    /// reads as free); writes are confined by the consent outcome. An UNPROMPTED command (a read, or a
+    /// bounded mutator whose operands all sit in an owned folder) is held to the owned folders. A command
+    /// the user APPROVED at a prompt also gets their home directory writable, so the approved write lands —
+    /// the kernel still blocks `/System`, `/usr`, and other users. `nil` when no folder is owned yet, so the
+    /// spawn runs unconfined exactly as before the jail existed; the consent prompt is the gate there.
+    private static func shellPolicy(owned: [String], consented: Bool) -> SandboxPolicy? {
+        guard !owned.isEmpty else { return nil }
+        let writable = consented ? owned + [FileManager.default.homeDirectoryForCurrentUser.path] : owned
+        return SandboxPolicy(writableRoots: writable, readableRoots: [], allowNetwork: true, allowAllReads: true)
+    }
+
     /// Resolve `image_render`'s `htmlPath` to a URL ALWAYS inside the workspace `baseDir` (or `~/Downloads`
     /// when none is set). image_render runs with no consent prompt and its `htmlPath` can be steered by
     /// content the model ingested, so — exactly like `resolveOutputDestination` on the output side — an
@@ -741,11 +766,23 @@ public enum DonkeyCommandBackends {
             )
         }
 
-        // Classify by risk tier. Reads run immediately; anything that changes
-        // state needs consent (allow-once / always-allow) unless it was already
-        // granted. Nothing is silently refused.
+        // Run from the conversation's working directory when one exists, so relative reads/writes land in
+        // the agent's own folder instead of the home root; falls back to home for a run without a workspace.
+        let workingDirectory = workspaceBaseDir(context)
+        let owned = ownedRoots(context)
+
+        // Decide consent. A command runs UNPROMPTED when it is a read, or a bounded file mutator whose every
+        // operand sits inside a folder Donkey created — managing its own folder is not the user's to approve.
+        // Anything else (a mutation reaching a user file, an interpreter, a network tool) prompts first;
+        // nothing is silently refused.
         let classification = ShellCommandClassifier.classify(command)
-        if classification.tier != .read {
+        let unprompted = classification.tier == .read
+            || ShellCommandClassifier.everySegmentMutatesOnlyOwnedRoots(
+                command,
+                ownedRoots: owned,
+                workingDirectory: workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path
+            )
+        if !unprompted {
             if let gate = await consentGate(context, command: command, classification: classification) {
                 return gate
             }
@@ -753,11 +790,11 @@ public enum DonkeyCommandBackends {
 
         let timeout = context.call.input["timeoutSeconds"].flatMap(Double.init)
             .map { min(max($0, 1), shellTimeoutMax) } ?? shellTimeout
-        // Run from the conversation's working directory when one exists, so relative reads/writes land in
-        // the agent's own folder instead of the home root; falls back to home for a run without a workspace.
-        let workingDirectory = workspaceBaseDir(context)
+        // Confine the spawn (kernel-enforced): reads open, writes held to the owned folders — plus the user's
+        // home when they approved this command at a prompt, so the approved write lands. nil → no folder yet.
+        let policy = shellPolicy(owned: owned, consented: !unprompted)
         let result = await Task.detached(priority: .userInitiated) {
-            runShellSync(command, timeout: timeout, workingDirectory: workingDirectory)
+            runShellSync(command, timeout: timeout, workingDirectory: workingDirectory, policy: policy)
         }.value
 
         let stdout = boundedOutput(result.stdout)
@@ -889,18 +926,6 @@ public enum DonkeyCommandBackends {
         let store = ShellPermissionPolicyStore.shared
         let signature = classification.signature
 
-        // The agent doesn't ask permission to change files in the dedicated folder it owns. File commands
-        // (cp, mkdir, mv, tee, rm, chmod, …) run unprompted ONLY when EVERY command in the line is a bare
-        // bounded mutator whose every file operand is written as an explicit path inside the conversation's
-        // workspace — so a move-then-clean-up chain (`mv … && rm …`) is fine, but a wrapper, a `$`/`..`/
-        // glob/bare name, or any non-mutator segment (see `isUnpromptedWorkspaceMutation`) makes the whole
-        // line fall through to the normal consent prompt.
-        if (classification.tier == .reversibleWrite || classification.tier == .highRisk),
-           let workspace = workspaceBaseDir(context),
-           ShellCommandClassifier.isUnpromptedWorkspaceMutation(command, workspace: workspace) {
-            return nil
-        }
-
         var allowed = false
         if classification.tier != .highRisk {
             allowed = await store.isAlwaysAllowed(signature)
@@ -1024,12 +1049,24 @@ public enum DonkeyCommandBackends {
     private static func runShellSync(
         _ command: String,
         timeout: TimeInterval,
-        workingDirectory: String? = nil
+        workingDirectory: String? = nil,
+        policy: SandboxPolicy? = nil
     ) -> ShellResult {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-c", command]
-        process.environment = shellEnvironment()
+        // Under a policy, the command runs inside the seatbelt jail (writes confined to the owned folder,
+        // plus home when consent approved it; reads open) with TMPDIR corralled into the folder. A nil
+        // policy is a passthrough, so a run without an owned folder behaves exactly as before.
+        let environment = WorkspaceSandbox.childEnvironment(shellEnvironment(), policy: policy)
+        let (executable, arguments) = WorkspaceSandbox.wrap(
+            executable: URL(fileURLWithPath: "/bin/zsh"),
+            arguments: ["-c", command],
+            policy: policy,
+            environment: environment,
+            bundledToolsDir: bundledToolsDirectory?.path
+        )
+        process.executableURL = executable
+        process.arguments = arguments
+        process.environment = environment
         process.currentDirectoryURL = resolvedWorkingDirectory(workingDirectory)
         let output = runProcess(process, timeout: timeout)
         return ShellResult(
@@ -1051,7 +1088,8 @@ public enum DonkeyCommandBackends {
     public static func runBundledTool(
         _ name: String,
         _ arguments: [String],
-        workingDirectory: String?
+        workingDirectory: String?,
+        policy: SandboxPolicy? = nil
     ) -> (exitCode: Int32, stdout: String, stderr: String) {
         guard let directory = bundledToolsDirectory else {
             return (127, "", "Bundled tools directory is unavailable, so '\(name)' cannot run.")
@@ -1061,9 +1099,19 @@ public enum DonkeyCommandBackends {
             return (127, "", "Bundled tool '\(name)' is missing from \(directory.path).")
         }
         let process = Process()
-        process.executableURL = binary
-        process.arguments = arguments
-        process.environment = shellEnvironment()
+        // Same seatbelt jail as `runShellSync` when a policy is supplied (orchestrators thread one in);
+        // a nil policy is a passthrough.
+        let environment = WorkspaceSandbox.childEnvironment(shellEnvironment(), policy: policy)
+        let (executable, wrappedArguments) = WorkspaceSandbox.wrap(
+            executable: binary,
+            arguments: arguments,
+            policy: policy,
+            environment: environment,
+            bundledToolsDir: directory.path
+        )
+        process.executableURL = executable
+        process.arguments = wrappedArguments
+        process.environment = environment
         process.currentDirectoryURL = resolvedWorkingDirectory(workingDirectory)
         // Concurrent drain via runProcess: the large `--full` dump on stdout and a verbose error on stderr
         // both flow without either pipe filling and deadlocking the child. Bounded by a generous timeout so a

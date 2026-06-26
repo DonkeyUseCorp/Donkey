@@ -173,6 +173,8 @@ public struct HarnessWorldModel: Codable, Equatable, Sendable {
     /// hidden everywhere at once instead of in separate hand-maintained filters that drift apart.
     public static let modelHiddenFactKeys: Set<String> = [
         ConversationWorkspace.baseDirFactKey,
+        ConversationWorkspace.rootDirFactKey,
+        ConversationWorkspace.inputPathsFactKey,
         HarnessAgentCoordinator.additionalInstructionsFactKey
     ]
 

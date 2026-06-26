@@ -26,21 +26,23 @@ public struct CaptionOrchestrator: Sendable {
 
     private let translateCues: TranslateCues
     private let transcribe: Transcribe
-    private let runTool: MediaPipeline.ToolRunner
+    private let makeRunTool: @Sendable (SandboxPolicy?) -> MediaPipeline.ToolRunner
 
     public init(
         translateCues: @escaping TranslateCues,
         transcribe: @escaping Transcribe,
-        runTool: @escaping MediaPipeline.ToolRunner = MediaPipeline.bundledToolRunner
+        makeRunTool: @escaping @Sendable (SandboxPolicy?) -> MediaPipeline.ToolRunner = MediaPipeline.sandboxedRunner
     ) {
         self.translateCues = translateCues
         self.transcribe = transcribe
-        self.runTool = runTool
+        self.makeRunTool = makeRunTool
     }
 
     public func caption(_ request: HarnessCaptionRequest) async -> HarnessCaptionOutcome {
         let workdir = DonkeyCommandBackends.resolvedWorkingDirectoryPath(request.workingDirectory)
         func path(_ name: String) -> String { (workdir as NSString).appendingPathComponent(name) }
+        // Every bundled-tool spawn for this run is confined to the workspace (with the source readable).
+        let runTool = makeRunTool(SandboxPolicy.forWorkspace(baseDirectory: request.workingDirectory, localSource: request.source))
 
         let startSec = request.clipStart.flatMap(Self.parseSeconds)
         let durationSec = request.clipDuration.flatMap(Self.parseSeconds)
@@ -48,7 +50,7 @@ public struct CaptionOrchestrator: Sendable {
         // 1. Resolve to a local video, applying the requested span as we go (a URL span downloads only that
         //    range; a local span is trimmed with an accurate re-encode, never `-c copy`).
         let base: String
-        switch resolveBase(request.source, startSec: startSec, durationSec: durationSec, workdir: workdir, makePath: path) {
+        switch resolveBase(request.source, startSec: startSec, durationSec: durationSec, workdir: workdir, makePath: path, using: runTool) {
         case .ok(let resolved): base = resolved
         case .failed(let reason): return Self.fail(reason)
         }
@@ -115,7 +117,7 @@ public struct CaptionOrchestrator: Sendable {
 
     private func resolveBase(
         _ source: String, startSec: Double?, durationSec: Double?, workdir: String,
-        makePath: (String) -> String
+        makePath: (String) -> String, using runTool: MediaPipeline.ToolRunner
     ) -> MediaStepResult {
         let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = trimmed.lowercased()

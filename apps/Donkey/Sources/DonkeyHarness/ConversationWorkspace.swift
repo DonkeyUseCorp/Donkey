@@ -105,6 +105,13 @@ public struct ConversationWorkspace: Codable, Equatable, Sendable {
     /// Fact key for the machine-readable resolve directory, read by file-writing executors and hidden
     /// from the planner's prose facts dump.
     public static let baseDirFactKey = "workspace.baseDir"
+    /// Fact key for the machine-readable workspace ROOT — the seatbelt jail's writable root, read at each
+    /// task-work spawn to confine the tool. The stable owned folder, NOT `baseDir`, which can narrow to a
+    /// subfolder and would then wrongly fence off the root. Hidden from the planner's prose facts dump.
+    public static let rootDirFactKey = "workspace.rootDir"
+    /// Fact key for the `\n`-joined declared input paths (the user's attachments / named files), read at
+    /// each spawn to allow-list reads under the jail. Hidden from the planner's prose facts dump.
+    public static let inputPathsFactKey = "workspace.inputPaths"
     /// Fact key for the inlined contents of the small text files in the working directory, surfaced to the
     /// planner every step so it never re-opens its own small inputs (the data file it copied in, a map it
     /// wrote). Sorts right after `workspace`, so it reads as part of the workspace block.

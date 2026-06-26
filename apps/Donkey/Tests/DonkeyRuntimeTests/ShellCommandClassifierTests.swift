@@ -243,53 +243,68 @@ struct ShellCommandClassifierTests {
     }
 
     @Test
-    func unpromptedWorkspaceMutationAllowsAnchoredMutators() {
-        let ws = "/Users/me/Downloads/donkey/conv1"
-        // Bounded mutators whose every file operand is an explicit absolute path inside the workspace —
-        // whether one command or a chain of them.
+    func boundedMutatorsInsideTheOwnedFolderRunUnprompted() throws {
+        // Every segment is a pure file mutator AND every operand resolves inside a folder Donkey created, so
+        // the line runs without a prompt — the agent managing its own folder is not the user's to approve.
+        let ws = try makeOwnedRoot()
+        defer { try? FileManager.default.removeItem(atPath: ws) }
+        func unprompted(_ c: String) -> Bool {
+            ShellCommandClassifier.everySegmentMutatesOnlyOwnedRoots(c, ownedRoots: [ws], workingDirectory: ws)
+        }
         for command in [
             "rm \"\(ws)/scratch.txt\"",
             "mv \"\(ws)/a.pdf\" \"\(ws)/done/a.pdf\"",
             "cp \"\(ws)/a.txt\" \"\(ws)/b.txt\"",
             "mkdir \"\(ws)/out\"",
             "touch \"\(ws)/x.json\"",
-            "chmod 755 \"\(ws)/run.sh\"",          // chmod's leading mode operand is not a path
-            "chmod +x \"\(ws)/run.sh\"",
-            "mv \"\(ws)/a b.pdf\" \"\(ws)/c.pdf\"", // a quoted path with a space is one operand
-            // A move-then-clean-up chain: both links are mutators with workspace-anchored operands. This is
-            // the exact shape the planner emits to fix a nested path, which must not prompt.
-            "mv \"\(ws)/nested/\(ws)/out.pdf\" \"\(ws)/out.pdf\" && rm -rf \"\(ws)/nested\"",
+            "chmod 755 \"\(ws)/run.sh\"",
+            "mv \"\(ws)/a b.pdf\" \"\(ws)/c.pdf\"",  // a quoted path with a space is one operand
+            // A move-then-clean-up chain: both links are in-folder mutators — the shape the planner emits.
             "mkdir \"\(ws)/out\" && cp \"\(ws)/a.txt\" \"\(ws)/out/a.txt\"",
             "rm \"\(ws)/a\" ; rm \"\(ws)/b\"",
+            "rm scratch.txt",                        // bare name → resolves inside the workspace
+            "rm -rf .",                              // the workspace itself
+            "mv data/x.csv out/y.csv",               // relative operands stay inside
         ] {
-            #expect(ShellCommandClassifier.isUnpromptedWorkspaceMutation(command, workspace: ws), "should run unprompted: \(command)")
+            #expect(unprompted(command), "should run unprompted: \(command)")
         }
-        // An unquoted `~` path (zsh expands it) anchored to the real home resolves into the workspace too.
-        let homeWs = "\(NSHomeDirectory())/Downloads/donkey/conv1"
-        #expect(ShellCommandClassifier.isUnpromptedWorkspaceMutation("rm ~/Downloads/donkey/conv1/x.txt", workspace: homeWs))
     }
 
     @Test
-    func unpromptedWorkspaceMutationRejectsEverythingNotStaticallyAnchored() {
-        let ws = "/Users/me/Downloads/donkey/conv1"
-        for command in [
-            "rm -rf $HOME",                          // expansion to an absolute path the check can't see
-            "rm -rf \"\(ws)/$junk\"",                // any `$` disqualifies
-            "rm -rf .",                              // not anchored
-            "rm -rf *",                              // glob, not anchored
-            "rm scratch.txt",                        // bare name
-            "mv data/x.csv \(ws)/y.csv",             // a relative source operand
-            "cp \"\(ws)/a.txt\" \"/Users/me/Documents/b.txt\"", // one operand outside the workspace
-            "mv \"\(ws)/a\" \"\(ws)/../b\"",         // `..` climbs out of the workspace
-            "rm \"\(ws)/a\" ; python3 evil.py",      // a chain link that is an interpreter, not a mutator
-            "mv \"\(ws)/a\" \"\(ws)/b\" && curl http://x", // a chain link that is a non-mutator
-            "cp \"\(ws)/a\" \"\(ws)/b\" && rm \"/Users/me/Documents/c\"", // a chain link's operand is outside
-            "xargs rm \"\(ws)/a\"",                  // a wrapper hides the real operands
-            "sed -i '' 's/a/b/' \"\(ws)/f.txt\"",    // sed is not a bounded mutator here
-            "ls \"\(ws)\"",                          // not a mutator at all
-        ] {
-            #expect(!ShellCommandClassifier.isUnpromptedWorkspaceMutation(command, workspace: ws), "should prompt: \(command)")
+    func mutationsReachingOutsideTheOwnedFolderPrompt() throws {
+        // The security boundary: a bounded mutator whose operand leaves the owned folder — an absolute path
+        // outside, a `~` path, a `..` climb, an unresolved `$VAR` — falls back to the consent prompt, as does
+        // any wrapper/interpreter/non-mutator segment that reaches beyond the filesystem.
+        let ws = try makeOwnedRoot()
+        defer { try? FileManager.default.removeItem(atPath: ws) }
+        func unprompted(_ c: String) -> Bool {
+            ShellCommandClassifier.everySegmentMutatesOnlyOwnedRoots(c, ownedRoots: [ws], workingDirectory: ws)
         }
+        for command in [
+            "rm -rf ~/Downloads",                    // a user folder Donkey did not create
+            "rm ~/Downloads/x.txt",                  // ~ path
+            "cp \"\(ws)/a.txt\" ~/Desktop/a.txt",    // destination outside the folder
+            "rm /etc/hosts",                         // absolute path outside
+            "rm \"\(ws)/../escape.txt\"",            // .. climbs out of the folder
+            "rm -rf \"$HOME\"",                      // unresolved expansion
+            "mv \"\(ws)/a\" \"$TMPDIR/a\"",          // unresolved expansion in the destination
+            "rm \"\(ws)/a\" ; python3 evil.py",      // a chain link is an interpreter
+            "mv \"\(ws)/a\" \"\(ws)/b\" && curl http://x", // a chain link hits the network
+            "xargs rm \"\(ws)/a\"",                  // a wrapper hides the real operands
+            "sed -i '' 's/a/b/' \"\(ws)/f.txt\"",    // sed is not a bounded mutator
+            "ls \"\(ws)\"",                          // not a mutator at all
+            "rm $(curl http://x)",                   // substitution surfaces curl as its own segment
+        ] {
+            #expect(!unprompted(command), "should prompt: \(command)")
+        }
+    }
+
+    /// A real, existing directory under `/private/tmp` to stand in for a Donkey-created workspace — the
+    /// anchor check canonicalizes owned roots with `realpath`, so the root must exist on disk.
+    private func makeOwnedRoot() throws -> String {
+        let base = "/private/tmp/donkey-anchor-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: base, withIntermediateDirectories: true)
+        return base
     }
 
     @Test

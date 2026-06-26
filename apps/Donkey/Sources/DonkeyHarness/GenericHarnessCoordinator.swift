@@ -726,13 +726,23 @@ public actor HarnessAgentCoordinator {
               let workspace = await conversationWorkspace(conversationID: task.conversationID) else { return }
         let newSummary = workspace.plannerSummary()
         let newBase = workspace.currentBaseDirectory.flatMap { $0.isEmpty ? nil : $0 }
+        // The seatbelt jail's writable root (the stable owned folder) and the declared input paths it
+        // allow-lists for reads — projected into facts so each task-work spawn can build its policy. Inputs
+        // are `\n`-joined; a path containing a newline would corrupt the list, so drop any (paths never do).
+        let newRoot = workspace.root.flatMap { $0.isEmpty ? nil : $0 }
+        let inputs = workspace.attachments.map(\.path).filter { !$0.contains("\n") }
+        let newInputs = inputs.isEmpty ? nil : inputs.joined(separator: "\n")
         // Per-step bookkeeping runs every planning iteration. Persisting re-serializes the WHOLE
-        // conversation store to disk, so skip it when neither workspace fact actually changed — otherwise a
+        // conversation store to disk, so skip it when no workspace fact actually changed — otherwise a
         // long run does one redundant full-store write per step, growing with conversation size.
         guard task.worldModel.facts[ConversationWorkspace.summaryFactKey] != newSummary
-            || task.worldModel.facts[ConversationWorkspace.baseDirFactKey] != newBase else { return }
+            || task.worldModel.facts[ConversationWorkspace.baseDirFactKey] != newBase
+            || task.worldModel.facts[ConversationWorkspace.rootDirFactKey] != newRoot
+            || task.worldModel.facts[ConversationWorkspace.inputPathsFactKey] != newInputs else { return }
         task.worldModel.facts[ConversationWorkspace.summaryFactKey] = newSummary
         task.worldModel.facts[ConversationWorkspace.baseDirFactKey] = newBase
+        task.worldModel.facts[ConversationWorkspace.rootDirFactKey] = newRoot
+        task.worldModel.facts[ConversationWorkspace.inputPathsFactKey] = newInputs
         task.updatedAt = Date()
         tasksByID[agentID] = task
         await conversationStore?.upsertAgentSnapshot(task)

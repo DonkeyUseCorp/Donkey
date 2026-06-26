@@ -32,9 +32,21 @@ public struct FormFillOrchestrator: Sendable {
             return request.data
         }()
 
+        // The filled PDF's destination — in the working folder by default, or wherever the user named it.
+        let outPath = Self.resolve(request.out ?? "out.pdf", against: workingDirectory)
+
+        // Confine pdf-fill to the workspace: it reads the form (and any data file, wherever the user
+        // pointed) and writes the map + filled PDF into the working folder, plus the output's own folder
+        // when the user named one outside it. nil with no owned folder.
+        let policy = SandboxPolicy.forWorkspace(
+            baseDirectory: request.workingDirectory,
+            readableInputs: [formPath, Self.resolve(request.data, against: workingDirectory)],
+            alsoWritable: [(outPath as NSString).deletingLastPathComponent]
+        )
+
         // 1. Read the WHOLE form in reading order (fields inline) for a single mapping pass.
         let read = DonkeyCommandBackends.runBundledTool(
-            "pdf-fill", ["form", formPath, "--full"], workingDirectory: workingDirectory
+            "pdf-fill", ["form", formPath, "--full"], workingDirectory: workingDirectory, policy: policy
         )
         guard read.exitCode == 0, !read.stdout.isEmpty else {
             return HarnessFormFillOutcome(
@@ -49,14 +61,13 @@ public struct FormFillOrchestrator: Sendable {
         }
 
         // 3. Write the map and apply it with `pdf-fill set` (writes a NEW pdf, regenerates appearances).
-        let outPath = Self.resolve(request.out ?? "out.pdf", against: workingDirectory)
         let mapPath = (workingDirectory as NSString).appendingPathComponent("map.json")
         guard let mapData = try? JSONSerialization.data(withJSONObject: map, options: [.sortedKeys]),
               (try? mapData.write(to: URL(fileURLWithPath: mapPath))) != nil else {
             return HarnessFormFillOutcome(text: "Could not write the field map.", succeeded: false)
         }
         let set = DonkeyCommandBackends.runBundledTool(
-            "pdf-fill", ["set", formPath, "--data", mapPath, "-o", outPath], workingDirectory: workingDirectory
+            "pdf-fill", ["set", formPath, "--data", mapPath, "-o", outPath], workingDirectory: workingDirectory, policy: policy
         )
 
         // 4. Verify + reconcile from `pdf-fill set`'s own JSON report and the file on disk.

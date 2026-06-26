@@ -30,9 +30,14 @@ public enum MediaPipeline {
         _ workingDirectory: String?
     ) -> (exitCode: Int32, stdout: String, stderr: String)
 
-    /// The production runner, as a plain closure value so it can be a default argument.
-    public static let bundledToolRunner: ToolRunner = { name, arguments, workingDirectory in
-        DonkeyCommandBackends.runBundledTool(name, arguments, workingDirectory: workingDirectory)
+    /// A production runner confined by `policy`: the `runBundledTool` path with each spawned tool inside the
+    /// seatbelt jail. An orchestrator builds its policy (workspace folder + its source input) once per run
+    /// and gets a runner from this; a `nil` policy runs the tool unconfined. The default `makeRunTool`
+    /// injection point, so production jails and a test stub still slots in unchanged.
+    public static let sandboxedRunner: @Sendable (SandboxPolicy?) -> ToolRunner = { policy in
+        { name, arguments, workingDirectory in
+            DonkeyCommandBackends.runBundledTool(name, arguments, workingDirectory: workingDirectory, policy: policy)
+        }
     }
 
     /// Run a bundled tool and confirm it produced `outputPath` on disk. A non-zero exit or a missing file

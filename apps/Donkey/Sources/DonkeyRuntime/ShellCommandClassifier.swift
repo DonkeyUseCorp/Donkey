@@ -56,12 +56,10 @@ public enum ShellCommandClassifier {
     // MARK: - Public API
 
     /// The bare executables whose whole job is creating, transforming, or deleting files, and whose ENTIRE
-    /// effect is their visible path arguments — the core file mutators. Inside the dedicated folder the
-    /// agent owns, these run WITHOUT a consent prompt, but ONLY through the strict static contract in
-    /// `isUnpromptedWorkspaceMutation`: every command in the line a bare mutator with no wrapper, and
-    /// every file operand written as an explicit path inside the workspace. The agent manipulating its own
-    /// sandbox — including a move-then-clean-up chain — is exactly the work the user said it shouldn't have
-    /// to ask to do.
+    /// effect is their visible path arguments — the core file mutators. A line of these runs WITHOUT a
+    /// consent prompt only when every path it names sits inside a folder Donkey created (see
+    /// `everySegmentMutatesOnlyOwnedRoots`): the agent managing its own folder is the work the user said it
+    /// shouldn't have to approve. A mutation that reaches a file the user owns prompts like any other.
     ///
     /// Scripting interpreters (`python3`, `ruby`, `perl`, `node`) are deliberately ABSENT. Their effect is
     /// the code they run, not the paths in argv — `python3 script.py` can delete a user folder no static
@@ -80,54 +78,88 @@ public enum ShellCommandClassifier {
         workspaceFileToolSignatures.contains(signature)
     }
 
-    /// The entire condition for running file mutations in the agent's own workspace WITHOUT a consent
-    /// prompt. Sound by construction, on technical argv tokens only — never natural-language intent:
+    /// Whether EVERY command in the line is a bare bounded file mutator (`mv`, `rm`, `mkdir`, `chmod`, …)
+    /// AND every path operand it names resolves inside one of `ownedRoots` — the folders Donkey created.
+    /// Such a line runs WITHOUT a consent prompt: it only creates, moves, or deletes files, and only inside
+    /// Donkey's own folder, so there is nothing to ask about. The moment an operand is an absolute path
+    /// outside those roots, a `~` path, an unresolved `$VAR`/substitution, or a `..` climb that escapes, the
+    /// line falls back to the normal prompt — a mutation of a file the user owns is the user's to approve.
     ///
-    /// 1. EVERY command in the line is a bare bounded mutator (`mv`, `rm`, `mkdir`, `chmod`, …). A chain
-    ///    (`cp … && rm …` to move a file then clean up) is fine because each link can only create, move, or
-    ///    delete files; a single segment that is a wrapper (`xargs rm` reads paths from stdin the static
-    ///    check can't see), an interpreter, or any non-mutator (`curl`, `osascript`) disqualifies the line.
-    /// 2. No `$` or backtick anywhere: `$HOME`, `$(…)`, `` `…` `` expand at runtime to paths this check
-    ///    can never resolve, so any expansion disqualifies the line.
-    /// 3. EVERY file operand, in every command, is written as an explicit path that resolves inside
-    ///    `workspace` — an absolute or `~` path readable straight off the line (`rm ~/Downloads/Foo/a.txt`).
-    ///    A bare name, `.`, `*`, a relative path, a `..` climb, or a redirect target is not anchored to the
-    ///    workspace and so prompts. (chmod's leading mode operand is not a path and is skipped.)
-    ///
-    /// Each command independently being a bounded mutator over only workspace-anchored operands means the
-    /// whole line can touch nothing outside the folder the agent owns. Anything that fails a clause falls
-    /// through to the normal consent prompt — never blocked, just asked once.
-    public static func isUnpromptedWorkspaceMutation(_ command: String, workspace: String) -> Bool {
-        let root = URL(fileURLWithPath: (workspace as NSString).expandingTildeInPath).standardizedFileURL.path
-        guard !root.isEmpty else { return false }
-
-        // No runtime expansion the static anchor check can't see, anywhere in the line.
-        guard !command.contains("$"), !command.contains("`") else { return false }
-
+    /// A chain (`cp <ws>/a … && rm <ws>/tmp`, move then clean up) qualifies when each link is a bounded
+    /// mutator with in-folder operands. A wrapper (`xargs rm` reads paths from stdin), an interpreter
+    /// (`python3`), or any non-mutator segment (`curl`, `osascript`) disqualifies the line; command
+    /// substitution surfaces its inner program as its own segment (split on `(`/backtick), so `rm $(curl …)`
+    /// fails on `curl`. Argv tokens only — never natural-language intent. Operands resolve relative to
+    /// `workingDirectory` (the workspace), and any resolution ambiguity errs toward prompting, never away.
+    public static func everySegmentMutatesOnlyOwnedRoots(
+        _ command: String,
+        ownedRoots: [String],
+        workingDirectory: String
+    ) -> Bool {
+        let owned = ownedRoots.compactMap(canonicalDirectory)
+        guard !owned.isEmpty else { return false }
+        let workdir = canonicalDirectory(workingDirectory) ?? (workingDirectory as NSString).expandingTildeInPath
         let segments = splitSegments(command).map(tokenize).filter { !$0.isEmpty }
         guard !segments.isEmpty else { return false }
-
-        var sawPathOperand = false
-        for var tokens in segments {
-            // Each command is a bare bounded mutator (the raw first token, so a wrapper like `xargs`/`env`
-            // can't qualify as the thing that runs).
-            let executable = executableName(tokens.removeFirst())
-            guard workspaceFileToolSignatures.contains(executable) else { return false }
-
-            // Every file operand in this command is an explicit path inside the workspace.
-            var nonPathOperandsToSkip = (executable == "chmod") ? 1 : 0   // chmod's leading mode is not a path
-            for raw in tokens {
-                let token = raw.trimmingCharacters(in: CharacterSet(charactersIn: "\\\"'"))
-                if token.isEmpty || token.hasPrefix("-") { continue }     // flags
-                if nonPathOperandsToSkip > 0 { nonPathOperandsToSkip -= 1; continue }
-                let expanded = (token as NSString).expandingTildeInPath
-                guard (expanded as NSString).isAbsolutePath else { return false }   // no bare/relative/`.`/`*`
-                let resolved = URL(fileURLWithPath: expanded).standardizedFileURL.path   // resolves any `..`
-                guard resolved == root || resolved.hasPrefix(root + "/") else { return false }
-                sawPathOperand = true
+        for tokens in segments {
+            guard workspaceFileToolSignatures.contains(executableName(tokens[0])) else { return false }
+            for operand in pathOperands(of: tokens) {
+                guard let resolved = resolveOperandPath(operand, workingDirectory: workdir),
+                      owned.contains(where: { isWithin(resolved, root: $0) }) else { return false }
             }
         }
-        return sawPathOperand
+        return true
+    }
+
+    /// The path operands of a bounded-mutator segment: every token after the executable that is not an
+    /// option flag (`-r`, `--recursive`). A non-path token like `chmod`'s mode (`644`) resolves under the
+    /// workspace and so passes the containment check harmlessly. Flags carry no path to anchor.
+    private static func pathOperands(of tokens: [String]) -> [String] {
+        tokens.dropFirst().filter { !$0.hasPrefix("-") }
+    }
+
+    /// Resolve a mutator operand to an absolute path for the containment check, or nil when it cannot be
+    /// pinned down — a `$VAR`/`${…}`/backtick the shell would expand, which we must NOT assume stays in the
+    /// workspace. An absolute path is taken as written; `~` expands (to a path outside the workspace,
+    /// failing containment); a relative path resolves against `workingDirectory`. `..` and `.` are folded
+    /// out lexically so a `../escape` is measured at its real destination.
+    private static func resolveOperandPath(_ operand: String, workingDirectory: String) -> String? {
+        let dequoted = operand.trimmingCharacters(in: CharacterSet(charactersIn: "'\""))
+        guard !dequoted.isEmpty, !dequoted.contains("$"), !dequoted.contains("`") else { return nil }
+        let expanded = (dequoted as NSString).expandingTildeInPath
+        let absolute = (expanded as NSString).isAbsolutePath
+            ? expanded
+            : (workingDirectory as NSString).appendingPathComponent(expanded)
+        return lexicallyStandardized(absolute)
+    }
+
+    /// Fold `.` and `..` out of an absolute path WITHOUT touching symlinks — unlike `NSString.standardizingPath`,
+    /// which resolves an existing `/private/tmp` back to `/tmp` and so would never prefix-match an owned root
+    /// canonicalized with `realpath`. The operand is appended to a real-path'd working directory, so a purely
+    /// lexical fold preserves that real prefix and the containment check stays exact.
+    private static func lexicallyStandardized(_ path: String) -> String {
+        var stack: [String] = []
+        for component in path.split(separator: "/", omittingEmptySubsequences: true) {
+            if component == "." { continue }
+            if component == ".." { if !stack.isEmpty { stack.removeLast() }; continue }
+            stack.append(String(component))
+        }
+        return "/" + stack.joined(separator: "/")
+    }
+
+    /// True when `path` is `root` itself or sits beneath it, comparing standardized absolute paths.
+    private static func isWithin(_ path: String, root: String) -> Bool {
+        path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
+    }
+
+    /// Canonical absolute path of an existing directory (symlinks resolved via `realpath`), or nil when it
+    /// does not exist. Owned roots and the working directory exist on disk, so they canonicalize cleanly and
+    /// share a real-path prefix with operands resolved against the same working directory.
+    private static func canonicalDirectory(_ path: String) -> String? {
+        let expanded = (path as NSString).expandingTildeInPath
+        guard !expanded.isEmpty, let resolved = realpath(expanded, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 
     /// Classify a one-line command. The overall tier is the most restrictive
@@ -511,8 +543,8 @@ public enum ShellCommandClassifier {
     /// scopes a read into the agent's folder — without `cd` here it classified as an "unrecognized command"
     /// (reversibleWrite) and the most-restrictive-segment rule dragged the whole chain to a consent prompt,
     /// gating even a bundled tool reworking files the agent itself created. (A file MUTATION never rides a
-    /// `cd` chain unprompted — `isUnpromptedWorkspaceMutation` requires one command with explicit
-    /// workspace-anchored paths.)
+    /// `cd` chain unprompted — `everySegmentMutatesOnlyOwnedRoots` requires every segment to be a bounded
+    /// mutator, and `cd` is not one.)
     private static let readExecutables: Set<String> = [
         "cd", "pushd", "popd",
         "ls", "cat", "head", "tail", "grep", "egrep", "fgrep", "rg", "find", "mdfind", "mdls",
