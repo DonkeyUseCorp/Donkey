@@ -146,9 +146,11 @@ build_lgpl_ffmpeg() {
 # "could not find pdfium shared library" unless that dylib ships beside it. We stage both here, and the app
 # (and the evals) point PDFIUM_LIB_PATH at this dir. MANDATORY: the pdf skill's extraction/OCR depends on it.
 build_liteparse() {
-  # Require BOTH lit and its pdfium dylib before treating the build as cached — staging only `lit` (the old
-  # behavior) left PDF parsing broken at runtime.
-  if [ -x "$VENDOR_DIR/lit" ] && [ -f "$VENDOR_DIR/libpdfium.dylib" ]; then ok "lit (cached)"; return 0; fi
+  # Require both the `lit` binary and its pdfium dylib before treating the build as cached.
+  if [ -x "$VENDOR_DIR/lit" ] && [ -f "$VENDOR_DIR/libpdfium.dylib" ]; then
+    ok "lit (cached)"
+    return 0
+  fi
   local ver="2.1.1"
   command -v cargo >/dev/null 2>&1 || brew install rust >/dev/null 2>&1
   command -v cmake >/dev/null 2>&1 || brew install cmake >/dev/null 2>&1
@@ -166,8 +168,13 @@ build_liteparse() {
     tail -25 "$root.log" >&2
     exit 1
   fi
+  
+  # Stage the real binary directly as `lit` — a single signed Mach-O (sign-bundled-tools.sh signs it). It is
+  # never invoked through the model's shell; Donkey drives `lit parse` in-process via runBundledTool, which
+  # sets PDFIUM_LIB_PATH to the tools dir, so the binary always finds its pdfium without a wrapper.
   cp -f "$root/bin/lit" "$VENDOR_DIR/lit"
   chmod +x "$VENDOR_DIR/lit"
+
   # Stage the matching libpdfium.dylib next to `lit` so it loads at runtime via PDFIUM_LIB_PATH. Pick the
   # NEWEST match (this build's fresh download), not an arbitrary one, in case the cache holds more than one.
   local pdfium
@@ -184,9 +191,8 @@ build_liteparse() {
     echo "FATAL: staged libpdfium.dylib is not arm64: $(lipo -archs "$VENDOR_DIR/libpdfium.dylib" 2>/dev/null)" >&2
     exit 1
   fi
-  # Smoke-test the PAIR: lit must actually parse a PDF using the staged pdfium. This catches an
-  # ABI/version mismatch on THIS machine before the bundle ships, instead of every runtime `lit parse`
-  # crashing later. Uses a committed sample PDF; skipped only if that asset is absent.
+  # Smoke-test the PAIR exactly as Donkey runs it: `lit` parses a PDF using the staged pdfium with
+  # PDFIUM_LIB_PATH pointed at the tools dir (the env runBundledTool/shellEnvironment set at runtime).
   local sample="$ROOT_DIR/apps/Donkey/Tests/DonkeyRuntimeTests/Fixtures/FunctionalEval/merge-pdfs/inputs/a.pdf"
   if [ -f "$sample" ]; then
     if ! PDFIUM_LIB_PATH="$VENDOR_DIR" "$VENDOR_DIR/lit" parse "$sample" --no-ocr >/dev/null 2>"$root.smoke.log"; then
@@ -203,7 +209,10 @@ build_liteparse() {
 # self-contained binary — no dylib bundling. MANDATORY: it is the pdf skill's
 # headless form-fill/overlay path (litparse reads PDFs; this writes them).
 build_pdf_fill() {
-  if [ -x "$VENDOR_DIR/pdf-fill" ]; then ok "pdf-fill (cached)"; return 0; fi
+  if [ -x "$VENDOR_DIR/pdf-fill" ] && [ ! "$ROOT_DIR/tools/pdf-fill/main.swift" -nt "$VENDOR_DIR/pdf-fill" ]; then
+    ok "pdf-fill (cached)"
+    return 0
+  fi
   command -v swiftc >/dev/null 2>&1 || { echo "FATAL: swiftc unavailable for pdf-fill build" >&2; exit 1; }
   if ! swiftc -O "$ROOT_DIR/tools/pdf-fill/main.swift" -o "$VENDOR_DIR/pdf-fill" 2>/tmp/pdf-fill-build.log; then
     echo "FATAL: pdf-fill build failed; tail of /tmp/pdf-fill-build.log:" >&2
@@ -219,7 +228,10 @@ build_pdf_fill() {
 # result is a single self-contained binary — no dylib bundling. MANDATORY: it is the book
 # skill's EPUB packaging path (image_render writes the PDF; this writes the .epub).
 build_epub_pack() {
-  if [ -x "$VENDOR_DIR/epub-pack" ]; then ok "epub-pack (cached)"; return 0; fi
+  if [ -x "$VENDOR_DIR/epub-pack" ] && [ ! "$ROOT_DIR/tools/epub-pack/main.swift" -nt "$VENDOR_DIR/epub-pack" ]; then
+    ok "epub-pack (cached)"
+    return 0
+  fi
   command -v swiftc >/dev/null 2>&1 || { echo "FATAL: swiftc unavailable for epub-pack build" >&2; exit 1; }
   if ! swiftc -O "$ROOT_DIR/tools/epub-pack/main.swift" -o "$VENDOR_DIR/epub-pack" 2>/tmp/epub-pack-build.log; then
     echo "FATAL: epub-pack build failed; tail of /tmp/epub-pack-build.log:" >&2
@@ -237,7 +249,12 @@ build_epub_pack() {
 # shipped algorithm is the tested one. MANDATORY: it is the shorts skill's on-device
 # active-speaker auto-reframe (landscape -> vertical 9:16 that follows whoever is talking).
 build_reframe() {
-  if [ -x "$VENDOR_DIR/reframe" ]; then ok "reframe (cached)"; return 0; fi
+  if [ -x "$VENDOR_DIR/reframe" ] && \
+     [ ! "$ROOT_DIR/tools/reframe/main.swift" -nt "$VENDOR_DIR/reframe" ] && \
+     [ ! "$ROOT_DIR/apps/Donkey/Sources/DonkeyRuntime/ReframePlanner.swift" -nt "$VENDOR_DIR/reframe" ]; then
+    ok "reframe (cached)"
+    return 0
+  fi
   command -v swiftc >/dev/null 2>&1 || { echo "FATAL: swiftc unavailable for reframe build" >&2; exit 1; }
   if ! swiftc -O \
        "$ROOT_DIR/tools/reframe/main.swift" \
@@ -332,13 +349,26 @@ log "Signing"
 # that drops --enable-libass (or a libass build break) would silently cripple every caption
 # workflow, so verify the now-signed binary and fail the whole run loudly rather than ship it.
 if [ -x "$VENDOR_DIR/ffmpeg" ]; then
-  if "$VENDOR_DIR/ffmpeg" -hide_banner -filters 2>/dev/null | grep -qw subtitles; then
-    ok "ffmpeg libass(subtitles) verified"
+  out=$(mktemp)
+  err=$(mktemp)
+  if "$VENDOR_DIR/ffmpeg" -hide_banner -filters > "$out" 2> "$err"; then
+    if grep -qw subtitles "$out"; then
+      ok "ffmpeg libass(subtitles) verified"
+    else
+      echo "FATAL: bundled ffmpeg lacks the libass 'subtitles' filter (subtitle burn-in)." >&2
+      echo "       It must be built with --enable-libass; see build_libass/build_lgpl_ffmpeg." >&2
+      rm -f "$out" "$err"
+      exit 1
+    fi
   else
-    echo "FATAL: bundled ffmpeg lacks the libass 'subtitles' filter (subtitle burn-in)." >&2
-    echo "       It must be built with --enable-libass; see build_libass/build_lgpl_ffmpeg." >&2
+    exit_code=$?
+    echo "FATAL: bundled ffmpeg failed to execute (exit code: $exit_code)." >&2
+    echo "       Stderr output:" >&2
+    cat "$err" >&2
+    rm -f "$out" "$err"
     exit 1
   fi
+  rm -f "$out" "$err"
 fi
 
 log "Summary"

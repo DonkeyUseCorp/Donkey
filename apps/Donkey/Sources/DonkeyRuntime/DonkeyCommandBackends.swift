@@ -1041,32 +1041,28 @@ public enum DonkeyCommandBackends {
     }
 
     /// Run a bundled command-line tool (`pdf-fill`, `lit`, …) DIRECTLY by resolving its path in the
-    /// bundled-tools dir, bypassing the shell so arguments with spaces or `⟦…⟧` need no quoting. Falls
-    /// back to the bare name through the login-shell PATH when the bundled dir can't be resolved. Uses
-    /// `shellEnvironment()` so PDFIUM_LIB_PATH and the bundled PATH are set, and runs in `workingDirectory`
-    /// (else home). Blocking — callers run it off the main actor. Used by `FormFillOrchestrator` so the
-    /// `pdf.fill` pipeline drives `pdf-fill` without going through the model-facing `shell_exec` gate.
+    /// bundled-tools dir, bypassing the shell so arguments with spaces or `⟦…⟧` need no quoting. The
+    /// bundled binary is REQUIRED: when it can't be resolved this returns exit 127 with a descriptive
+    /// stderr — never a same-named binary off the user's PATH, which would be the wrong build with no
+    /// pdfium and is worse than a clean failure. Uses `shellEnvironment()` so PDFIUM_LIB_PATH and the
+    /// bundled PATH are set, and runs in `workingDirectory` (else home). Blocking — callers run it off the
+    /// main actor. Used by the form/PDF/media orchestrators so a pipeline drives its tool without going
+    /// through the model-facing `shell_exec` gate.
     public static func runBundledTool(
         _ name: String,
         _ arguments: [String],
         workingDirectory: String?
     ) -> (exitCode: Int32, stdout: String, stderr: String) {
+        guard let directory = bundledToolsDirectory else {
+            return (127, "", "Bundled tools directory is unavailable, so '\(name)' cannot run.")
+        }
+        let binary = directory.appendingPathComponent(name)
+        guard FileManager.default.isExecutableFile(atPath: binary.path) else {
+            return (127, "", "Bundled tool '\(name)' is missing from \(directory.path).")
+        }
         let process = Process()
-        if let directory = bundledToolsDirectory {
-            let binary = directory.appendingPathComponent(name)
-            if FileManager.default.isExecutableFile(atPath: binary.path) {
-                process.executableURL = binary
-                process.arguments = arguments
-            }
-        }
-        if process.executableURL == nil {
-            // No bundled copy — run the bare name through the shell so PATH resolves it.
-            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            let quoted = ([name] + arguments)
-                .map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }
-                .joined(separator: " ")
-            process.arguments = ["-c", quoted]
-        }
+        process.executableURL = binary
+        process.arguments = arguments
         process.environment = shellEnvironment()
         process.currentDirectoryURL = resolvedWorkingDirectory(workingDirectory)
         // Concurrent drain via runProcess: the large `--full` dump on stdout and a verbose error on stderr
@@ -1108,6 +1104,15 @@ public enum DonkeyCommandBackends {
                 if fileManager.fileExists(atPath: dir.path) {
                     return dir
                 }
+            }
+        }
+        // In a development build (where the baked donkey-tools resource is a symlink),
+        // we MUST prioritize it so that local uncommitted changes to native tools are immediately
+        // reflected in the app without being shadowed by older downloads in Application Support.
+        if let baked = Bundle.main.resourceURL?.appendingPathComponent("donkey-tools", isDirectory: true) {
+            let isSymlink = (try? baked.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink ?? false
+            if isSymlink && fileManager.fileExists(atPath: baked.path) {
+                return baked
             }
         }
         let installed = BundledTools.installDirectory

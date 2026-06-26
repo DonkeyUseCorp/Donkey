@@ -766,6 +766,27 @@ public enum BuiltInHarnessToolCatalog {
                 metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
             ),
             descriptor(
+                "pdf.parse",
+                pluginID: "core.pdf",
+                summary: "Read a PDF's contents — text or structured data — from any PDF, digital or scanned (OCR is built in, so there is no separate rasterize/OCR step). Give it the `file`; get the plain text back, or set format=\"json\" for per-element text with layout and bounding boxes (use that for tables or positions). Limit to certain `pages` (e.g. \"1-5,10\"), and set noOcr=\"true\" to skip OCR on a known-digital PDF for speed. For a large document, pass `out` to write the result to a file instead of returning it inline. This is the one and only way to extract a PDF's contents: prefer it over running `lit`/`pdf-fill` yourself.",
+                input: [
+                    "file": "Path to the PDF to read.",
+                    "format": "\"text\" (default) for plain text, or \"json\" for per-element text with layout/bounding boxes.",
+                    "pages": "Optional page range to limit extraction, e.g. \"1-5,10\".",
+                    "noOcr": "Set \"true\" to skip OCR on a known-digital PDF (faster). Omit for scanned PDFs.",
+                    "out": "Optional output path to write the extracted text/JSON to instead of returning it inline (use for large documents)."
+                ],
+                output: [
+                    "text": "The extracted text or JSON, or a short summary when written to a file.",
+                    "filePath": "Path to the written output, when `out` was given."
+                ],
+                optionalInputKeys: ["format", "pages", "noOcr", "out"],
+                permissions: [],
+                safety: .readOnly,
+                verification: ["the returned text (or the written output file) holds the PDF's contents"],
+                metadata: [HarnessToolDescriptor.resultIsEvidenceMetadataKey: "true"]
+            ),
+            descriptor(
                 "shorts.make",
                 pluginID: "core.media",
                 summary: "Turn one long video or podcast into captioned vertical short-form clips, end-to-end, in a SINGLE call. Give it the `source` (a local video path or a URL) and optionally how many clips (`count`); it transcribes on-device, picks the strongest self-contained moments, cuts each one, reframes to 9:16 following whoever is speaking, and burns in captions — then returns the finished clip files. This is the one and only way to make shorts/Reels/TikToks: prefer it over driving yt-dlp/ffmpeg/transcribe/reframe yourself step by step, which costs a model call at every step. If the user did not say how many clips they want, ask with user.choose BEFORE calling. Pass aspect=\"original\" to caption a video without reframing (e.g. \"add subtitles to this clip\").",

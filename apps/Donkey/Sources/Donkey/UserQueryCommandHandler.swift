@@ -795,6 +795,11 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         let hostedFormMapper = HostedFormMapper(backend: backend)
         let formOrchestrator = FormFillOrchestrator(mapper: { form, data in await hostedFormMapper.map(formText: form, dataText: data) })
         harnessServices.formFiller = { request in await formOrchestrator.fill(request) }
+        // PDF reading behind pdf.parse: run the bundled `lit` (liteparse) in-process — it resolves the binary
+        // path and PDFIUM_LIB_PATH — so the planner extracts a PDF's text/JSON through one tool and never
+        // invokes `lit` in a shell. Pure code, no model call.
+        let pdfParseOrchestrator = PdfParseOrchestrator()
+        harnessServices.pdfParser = { request in await pdfParseOrchestrator.parse(request) }
         // Short-form video behind shorts.make: transcribe on-device, make ONE bounded inference to pick the
         // moments, then cut/reframe/caption each clip in fixed code — so the whole download→clip→caption
         // recipe is a single tool call instead of a ~37-step planner loop billed at every tool. Moment

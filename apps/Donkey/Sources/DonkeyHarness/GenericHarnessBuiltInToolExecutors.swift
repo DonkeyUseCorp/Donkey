@@ -492,6 +492,50 @@ public struct HarnessFormFillOutcome: Sendable {
     }
 }
 
+/// The typed request for the `pdf.parse` tool: the PDF to read, the output format (plain text or
+/// structured JSON), an optional page range, whether to skip OCR, an optional output file, and the
+/// conversation's working directory (so the orchestrator runs the bundled `lit` and resolves paths inside
+/// the agent's own folder). Declared in DonkeyHarness so the executor passes it across the closure
+/// boundary without importing the runtime.
+public struct HarnessPdfParseRequest: Sendable {
+    public var file: String
+    public var format: String?
+    public var pages: String?
+    public var noOcr: Bool
+    public var out: String?
+    public var workingDirectory: String?
+
+    public init(
+        file: String,
+        format: String? = nil,
+        pages: String? = nil,
+        noOcr: Bool = false,
+        out: String? = nil,
+        workingDirectory: String? = nil
+    ) {
+        self.file = file
+        self.format = format
+        self.pages = pages
+        self.noOcr = noOcr
+        self.out = out
+        self.workingDirectory = workingDirectory
+    }
+}
+
+/// The result of a `pdf.parse` run: the extracted text/JSON (or a short summary when it was written to a
+/// file), whether parsing succeeded, and the output path when one was written.
+public struct HarnessPdfParseOutcome: Sendable {
+    public var text: String
+    public var succeeded: Bool
+    public var outPath: String?
+
+    public init(text: String, succeeded: Bool, outPath: String? = nil) {
+        self.text = text
+        self.succeeded = succeeded
+        self.outPath = outPath
+    }
+}
+
 /// The typed request for the `shorts.make` tool: the source (a local video path OR a URL to download), an
 /// optional clip count, an optional aspect ratio for the vertical crop, and the conversation's working
 /// directory (so the pipeline writes its clips inside the agent's own folder). Declared in DonkeyHarness so
@@ -666,6 +710,12 @@ public struct HarnessBuiltInToolServices: Sendable {
     /// captions a video in a single call instead of hand-building and debugging the ffmpeg/SRT plumbing.
     /// nil ⇒ the tool reports unavailable.
     public var captioner: (@Sendable (HarnessCaptionRequest) async -> HarnessCaptionOutcome)?
+    /// PDF text/structured-data extraction behind `pdf.parse`: a PDF in, its text or per-element JSON out.
+    /// The runtime supplies an orchestrator that runs the bundled `lit` (liteparse) in-process — resolving
+    /// the binary path and PDFIUM_LIB_PATH itself — so the planner reads a PDF through this tool and never
+    /// invokes `lit` in a shell. nil ⇒ the tool reports unavailable. Set after construction like the other
+    /// injected backends, so it needs no init parameter.
+    public var pdfParser: (@Sendable (HarnessPdfParseRequest) async -> HarnessPdfParseOutcome)? = nil
 
     public init(
         memoryEntries: [HarnessMemoryEntry] = [],
@@ -801,6 +851,8 @@ public enum BuiltInHarnessToolExecutors {
             return await webAutomate(context, services: services)
         case "pdf.fill":
             return await formFill(context, services: services)
+        case "pdf.parse":
+            return await pdfParse(context, services: services)
         case "shorts.make":
             return await shortsMake(context, services: services)
         case "media.caption":
@@ -2516,6 +2568,43 @@ public enum BuiltInHarnessToolExecutors {
         guard outcome.succeeded else {
             let message = outcome.text.isEmpty ? "The form could not be filled." : outcome.text
             return failed(context, message, reason: "formFillFailed", metadata: ["text": message])
+        }
+        var metadata = ["text": outcome.text]
+        if let outPath = outcome.outPath { metadata["filePath"] = outPath }
+        return success(
+            context,
+            summary: outcome.text,
+            facts: ["lastAcceptedTool": context.call.name],
+            metadata: metadata
+        )
+    }
+
+    /// `pdf.parse` — extract a PDF's text or structured data. The injected orchestrator runs the bundled
+    /// `lit` (liteparse) in-process, resolving its path and PDFIUM_LIB_PATH, so the planner never types
+    /// `lit` into a shell. OCR is built in, so a scanned PDF reads the same as a digital one.
+    private static func pdfParse(
+        _ context: HarnessToolExecutionContext,
+        services: HarnessBuiltInToolServices
+    ) async -> HarnessToolResult {
+        guard let parser = services.pdfParser else {
+            return failed(context, "PDF parsing is not configured.", reason: "pdfParseUnavailable")
+        }
+        guard let file = trimmed(context.call.input["file"]) else {
+            return invalidInput(context, "pdf.parse requires a `file` — the path to the PDF to read.")
+        }
+        let workingDirectory = context.worldModel.facts[ConversationWorkspace.baseDirFactKey]
+        let request = HarnessPdfParseRequest(
+            file: file,
+            format: trimmed(context.call.input["format"]),
+            pages: trimmed(context.call.input["pages"]),
+            noOcr: boolFlag(context.call.input["noOcr"]),
+            out: trimmed(context.call.input["out"]),
+            workingDirectory: (workingDirectory?.isEmpty == false) ? workingDirectory : nil
+        )
+        let outcome = await parser(request)
+        guard outcome.succeeded else {
+            let message = outcome.text.isEmpty ? "The PDF could not be parsed." : outcome.text
+            return failed(context, message, reason: "pdfParseFailed", metadata: ["text": message])
         }
         var metadata = ["text": outcome.text]
         if let outPath = outcome.outPath { metadata["filePath"] = outPath }

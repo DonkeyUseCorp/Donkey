@@ -827,7 +827,7 @@ public actor HarnessAgentCoordinator {
         }
         guard !parts.isEmpty else { return nil }
         return "Contents of the small files in your working directory — READ THEM HERE, do not re-open them "
-            + "with cat/python/lit:\n" + parts.joined(separator: "\n\n")
+            + "with cat/python/pdf.parse:\n" + parts.joined(separator: "\n\n")
     }
 
     /// Appends a note to the most recent tool record's summary. The runtime uses this to warn the
