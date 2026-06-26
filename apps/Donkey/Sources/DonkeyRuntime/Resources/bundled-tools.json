@@ -1,7 +1,7 @@
 {
   "_comment": "Single source of truth for the prebuilt CLI tools bundle (ffmpeg, yt-dlp, ...) the app downloads on first run. Produced and published by scripts/publish-bundled-tools.sh, which builds the tools, uploads the tarball as a GitHub release asset, and rewrites version+sha256 here. The app (BundledToolsInstaller) and the dev script (ensure-bundled-tools.sh) both read this. An empty sha256 means nothing is published yet: the installer no-ops and dev falls back to building from source.",
-  "version": "2026.06.25",
+  "version": "2026.06.26",
   "arch": "arm64",
-  "url": "https://github.com/DonkeyUseCorp/Donkey/releases/download/bundled-tools-2026.06.25/donkey-tools-2026.06.25-arm64.tar.gz",
-  "sha256": "7eff8cca9a9c4200fb59ab8685ac966755579724b1e463218a339ed5e6f107cf"
+  "url": "https://github.com/DonkeyUseCorp/Donkey/releases/download/bundled-tools-2026.06.26/donkey-tools-2026.06.26-arm64.tar.gz",
+  "sha256": "0ddebe09229248c53a330e064461e5b81a80aae9e9e0501e047205a395557b16"
 }
