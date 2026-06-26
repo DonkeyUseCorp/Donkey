@@ -46,7 +46,7 @@ export function SettingsShell({ children }: { children: ReactNode }) {
           <Link className="flex items-center gap-2 text-lg font-semibold" href="/app">
             <div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-md">
               <img
-                src="/donkey-site-mark.webp"
+                src="/donkey-app-mark.webp"
                 alt="Donkey Logo"
                 width={32}
                 height={32}
