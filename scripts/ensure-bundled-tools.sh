@@ -37,6 +37,21 @@ pdfium_missing() {
   [ -x "$VENDOR_DIR/lit" ] && [ ! -f "$VENDOR_DIR/libpdfium.dylib" ]
 }
 
+# True only when a bundled-tool SOURCE file has local (uncommitted) changes — the dev is iterating, so the
+# staged binary is stale and fetch-bundled-tools.sh should rebuild just that tool (its own per-tool `-nt`
+# guard decides which). Detected with git, NOT file mtimes: a fresh clone / CI checkout has clone-order
+# mtimes that made the old `-nt` check fire spuriously and recompile a perfectly good prebuilt bundle.
+# `tools/` covers every compiled tool generically (no per-tool path list to keep in sync — that lives once,
+# in fetch-bundled-tools.sh); ReframePlanner.swift is reframe's one source outside `tools/`. Outside a git
+# tree (a source tarball) nothing is being edited, so treat as unchanged.
+any_source_modified() {
+  git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  ! git -C "$ROOT_DIR" diff --quiet HEAD -- \
+      tools/ \
+      apps/Donkey/Sources/DonkeyRuntime/ReframePlanner.swift
+}
+
+
 manifest_value() {
   [ -f "$MANIFEST" ] || return 1
   python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2],''))" "$MANIFEST" "$1" 2>/dev/null
@@ -76,25 +91,42 @@ download_prebuilt() {
   echo "Installed prebuilt tools into $VENDOR_DIR."
 }
 
+# A custom DONKEY_TOOLS_DIR is a caller-supplied prebuilt set: validate what's present and NEVER build into
+# it (nor rebuild for source-change reasons — the prebuilt binaries are authoritative). A complete set is
+# done; only a genuinely missing tool fails, with the real list rather than an empty one.
+if [ -n "${DONKEY_TOOLS_DIR:-}" ]; then
+  missing="$(missing_of "${MANDATORY_TOOLS[@]}" | grep -v '^$' | tr '\n' ' ')"
+  pdfium_missing && missing="$missing libpdfium.dylib"
+  missing="$(echo "$missing" | xargs)"
+  if [ -n "$missing" ]; then
+    echo "ERROR: DONKEY_TOOLS_DIR=$VENDOR_DIR is missing required tools: $missing" >&2
+    exit 1
+  fi
+  echo "Bundled tools present in $VENDOR_DIR (DONKEY_TOOLS_DIR)"
+  exit 0
+fi
+
 mandatory_missing=$(missing_of "${MANDATORY_TOOLS[@]}" | grep -c .)
 optional_missing=$(missing_of "${OPTIONAL_TOOLS[@]}" | grep -c .)
-if [ "$mandatory_missing" -eq 0 ] && [ "$optional_missing" -eq 0 ] && ! pdfium_missing; then
+if [ "$mandatory_missing" -eq 0 ] && [ "$optional_missing" -eq 0 ] && ! pdfium_missing && ! any_source_modified; then
   echo "Bundled tools present in $VENDOR_DIR"
   exit 0
 fi
 
-# A custom DONKEY_TOOLS_DIR is a caller-supplied prebuilt set; validate, never build into it.
-if [ -n "${DONKEY_TOOLS_DIR:-}" ]; then
-  missing="$(missing_of "${MANDATORY_TOOLS[@]}" | tr '\n' ' ')"
-  pdfium_missing && missing="$missing libpdfium.dylib"
-  echo "ERROR: DONKEY_TOOLS_DIR=$VENDOR_DIR is missing required tools: $missing" >&2
-  exit 1
-fi
-
-if ! download_prebuilt; then
+if any_source_modified; then
+  echo "Source changes detected in tools/ — compiling custom tools..."
+  "$SCRIPT_DIR/fetch-bundled-tools.sh" || true
+elif pdfium_missing; then
+  echo "Staged libpdfium.dylib is missing — attempting to restore from prebuilt..."
+  if ! download_prebuilt; then
+    echo "Could not restore prebuilt tools. Compiling from source..."
+    "$SCRIPT_DIR/fetch-bundled-tools.sh" || true
+  fi
+elif ! download_prebuilt; then
   echo "Building tools from source (one-time; ffmpeg builds from source and can take several minutes)..."
   "$SCRIPT_DIR/fetch-bundled-tools.sh" || true
 fi
+
 
 # A published prebuilt bundle can predate a newly added mandatory tool (e.g. a first-party CLI
 # added to the scripts before the next republish). Rather than hard-fail, build just the missing
@@ -111,8 +143,11 @@ if [ -n "$still_mandatory" ]; then
   exit 1
 fi
 if pdfium_missing; then
-  echo "ERROR: lit is present but libpdfium.dylib is missing in $VENDOR_DIR; lit cannot parse PDFs." >&2
-  echo "       Re-run scripts/fetch-bundled-tools.sh (it stages libpdfium.dylib beside lit)." >&2
+  echo "Staged libpdfium.dylib is missing — compiling/fetching it from source..."
+  "$SCRIPT_DIR/fetch-bundled-tools.sh" || true
+fi
+if pdfium_missing; then
+  echo "ERROR: lit is present but libpdfium.dylib is still missing in $VENDOR_DIR; lit cannot parse PDFs." >&2
   exit 1
 fi
 

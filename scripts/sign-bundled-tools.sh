@@ -66,12 +66,22 @@ is_macho() { file -b "$1" 2>/dev/null | grep -q "Mach-O"; }
 sign_one() {
   local f="$1"; shift
   is_macho "$f" || return 0
-  if codesign "${sign_opts[@]}" "$@" "$f" >/dev/null 2>&1; then
+  
+  # To avoid the macOS kernel code-signing cache bug (Killed: 9 / transient verification failures
+  # when running an in-place re-signed binary), we copy the file to a temporary location,
+  # sign it there, and move it back. This guarantees a fresh inode and clears any stale kernel cache.
+  local tmpf
+  tmpf="$(mktemp "$(dirname "$f")/$(basename "$f").XXXXXX")"
+  cp -p "$f" "$tmpf"
+  if codesign "${sign_opts[@]}" "$@" "$tmpf" >/dev/null 2>&1; then
+    mv -f "$tmpf" "$f"
     return 0
-  fi
-  if $real_identity; then
-    echo "FATAL: failed to sign $f with '$IDENTITY'" >&2
-    exit 1
+  else
+    rm -f "$tmpf"
+    if $real_identity; then
+      echo "FATAL: failed to sign $f with '$IDENTITY'" >&2
+      exit 1
+    fi
   fi
 }
 
