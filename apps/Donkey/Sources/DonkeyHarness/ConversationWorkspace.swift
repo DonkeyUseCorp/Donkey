@@ -320,13 +320,22 @@ public struct ConversationWorkspace: Codable, Equatable, Sendable {
     /// `<parent>` is the user's chosen output location (Downloads by default). The goal slug makes the
     /// folder recognizable; the short conversation id keeps two similar goals apart. Pure (string math on
     /// the parent path); the caller creates the directory on disk.
-    public static func defaultRootPath(goal: String, conversationID: String) -> String {
-        let slug = self.slug(goal)
-        let shortID = conversationID
-            .lowercased()
-            .filter { $0.isLetter || $0.isNumber }
-            .prefix(8)
-        let name = slug.isEmpty ? "task-\(shortID)" : "\(slug)-\(shortID)"
+    public static func defaultRootPath(goal: String, conversationID: String, suggestedFolderName: String? = nil) -> String {
+        let name: String
+        if let suggestedFolderName = suggestedFolderName, !suggestedFolderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            name = suggestedFolderName
+                .replacingOccurrences(of: "/", with: "-")
+                .replacingOccurrences(of: ":", with: "-")
+                .replacingOccurrences(of: "\0", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            let slug = self.slug(goal)
+            let shortID = conversationID
+                .lowercased()
+                .filter { $0.isLetter || $0.isNumber }
+                .prefix(8)
+            name = slug.isEmpty ? "task-\(shortID)" : "\(slug)-\(shortID)"
+        }
         return workspaceParentDirectory().appendingPathComponent(name, isDirectory: true).path
     }
 

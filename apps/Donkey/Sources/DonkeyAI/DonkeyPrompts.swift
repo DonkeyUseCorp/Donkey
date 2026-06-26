@@ -178,6 +178,7 @@ public enum DonkeyPrompts {
           in a sentence or three. This is what they will read, so make it complete on its own. When the turn
           is "converse", output this field FIRST in the JSON so it can stream to the user immediately. Leave
           it empty for "act" and "clarify" — those are handled elsewhere.
+        - suggestedFolderName: for "act" turns, suggest a beautiful, spelling-corrected, and user-friendly root folder name for this task by strictly following the authoritative naming rules in the "Creating and Naming Folders and Files" section of the "finder" skill (e.g. spelling corrected, space-separated words, and ending with a capitalized friendly word hash like "Cozy"). Empty/nil for "converse" and "clarify" turns.
 
         Return JSON only.
         """

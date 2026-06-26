@@ -128,6 +128,30 @@ struct ConversationWorkspaceStructTests {
     }
 
     @Test
+    func defaultRootPathHonorsSuggestedFolderName() {
+        let path = ConversationWorkspace.defaultRootPath(
+            goal: "Fill out the f1120.pdf form!",
+            conversationID: "AB12CD34-9999",
+            suggestedFolderName: "Fill out f1120 Cozy"
+        )
+        let parent = ConversationWorkspace.workspaceParentDirectory().path
+        #expect(path.hasPrefix(parent + "/"))
+        let name = (path as NSString).lastPathComponent
+        #expect(name == "Fill out f1120 Cozy")
+    }
+
+    @Test
+    func defaultRootPathSanitizesSuggestedFolderName() {
+        let path = ConversationWorkspace.defaultRootPath(
+            goal: "Fill out the f1120.pdf form!",
+            conversationID: "AB12CD34-9999",
+            suggestedFolderName: "Fill / out: f1120\0 Cozy"
+        )
+        let name = (path as NSString).lastPathComponent
+        #expect(name == "Fill - out- f1120 Cozy")
+    }
+
+    @Test
     func slugSanitizesAndBounds() {
         #expect(ConversationWorkspace.slug("Hello, World! 2025") == "hello-world-2025")
         #expect(ConversationWorkspace.slug("   ") == "")

@@ -1,4 +1,5 @@
 import DonkeyContracts
+import DonkeyRuntime
 import Foundation
 
 /// A focused, one-shot "understand the request" boundary that runs ONCE before the harness loop.
@@ -58,6 +59,8 @@ public struct HarnessRequestUnderstanding: Sendable, Equatable, Codable {
     /// fresh turn and still routes a multi-turn follow-up through the context-aware responder. Empty/nil for
     /// `.act` and `.clarify`.
     public var conversationReply: String?
+    /// A custom suggested root folder name for this task, generated strictly following the finder skill's rules.
+    public var suggestedFolderName: String?
 
     public init(
         turnKind: HarnessTurnKind = .act,
@@ -71,7 +74,8 @@ public struct HarnessRequestUnderstanding: Sendable, Equatable, Codable {
         clarifyingQuestion: String? = nil,
         executionPreference: ExecutionPreference = .background,
         relevantSkillIDs: [String] = [],
-        conversationReply: String? = nil
+        conversationReply: String? = nil,
+        suggestedFolderName: String? = nil
     ) {
         self.turnKind = turnKind
         self.restatedGoal = restatedGoal
@@ -85,6 +89,7 @@ public struct HarnessRequestUnderstanding: Sendable, Equatable, Codable {
         self.executionPreference = executionPreference
         self.relevantSkillIDs = relevantSkillIDs
         self.conversationReply = conversationReply
+        self.suggestedFolderName = suggestedFolderName
     }
 
     /// Serialize to a compact JSON string for persistence (e.g. the root agent's metadata), so a later
@@ -133,10 +138,15 @@ public final class HostedHarnessRequestUnderstanding {
         skillCatalog: String? = nil,
         attachments: [HarnessAttachmentInfo] = []
     ) async -> HarnessRequestUnderstanding? {
+        var augmentedCatalog = skillCatalog ?? ""
+        if let finderGuidance = BuiltInLocalAppSkillPacks.skillGuidance(forID: "finder") {
+            let guidanceBlock = "\n\nAUTHORITATIVE WORKSPACE FILE/FOLDER NAMING PLAYBOOK (from Finder skill):\n\(finderGuidance)\n"
+            augmentedCatalog += guidanceBlock
+        }
         let prompt = DonkeyPrompts.requestUnderstanding(
             command: command,
             frontmostAppName: frontmostAppName,
-            skillCatalog: skillCatalog,
+            skillCatalog: augmentedCatalog.isEmpty ? nil : augmentedCatalog,
             attachments: attachments
         )
         for _ in 0..<Self.maxAttempts {
@@ -146,7 +156,7 @@ public final class HostedHarnessRequestUnderstanding {
                     responseRequest(
                         command: command,
                         frontmostAppName: frontmostAppName,
-                        skillCatalog: skillCatalog,
+                        skillCatalog: augmentedCatalog.isEmpty ? nil : augmentedCatalog,
                         attachments: attachments
                     )
                 )
@@ -200,10 +210,15 @@ public final class HostedHarnessRequestUnderstanding {
         attachments: [HarnessAttachmentInfo] = [],
         onReplyDelta: @escaping @MainActor @Sendable (String) -> Void
     ) async -> HarnessRequestUnderstanding? {
+        var augmentedCatalog = skillCatalog ?? ""
+        if let finderGuidance = BuiltInLocalAppSkillPacks.skillGuidance(forID: "finder") {
+            let guidanceBlock = "\n\nAUTHORITATIVE WORKSPACE FILE/FOLDER NAMING PLAYBOOK (from Finder skill):\n\(finderGuidance)\n"
+            augmentedCatalog += guidanceBlock
+        }
         let prompt = DonkeyPrompts.requestUnderstanding(
             command: command,
             frontmostAppName: frontmostAppName,
-            skillCatalog: skillCatalog,
+            skillCatalog: augmentedCatalog.isEmpty ? nil : augmentedCatalog,
             attachments: attachments
         )
         let startedAt = RunTraceTimestamp.now()
@@ -270,6 +285,9 @@ public final class HostedHarnessRequestUnderstanding {
                 .filter { !$0.isEmpty },
             conversationReply: wire.conversationReply
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .flatMap { $0.isEmpty ? nil : $0 },
+            suggestedFolderName: wire.suggestedFolderName
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .flatMap { $0.isEmpty ? nil : $0 }
         )
     }
@@ -308,10 +326,11 @@ public final class HostedHarnessRequestUnderstanding {
         var executionPreference: String?
         var relevantSkillIDs: [String]?
         var conversationReply: String?
+        var suggestedFolderName: String?
 
         private enum CodingKeys: String, CodingKey {
             case turnKind, restatedGoal, targetAppName, actionSurface, parameters, successCriteria, plan, needsClarification, clarifyingQuestion
-            case executionPreference, relevantSkillIDs, conversationReply
+            case executionPreference, relevantSkillIDs, conversationReply, suggestedFolderName
         }
 
         init(from decoder: Decoder) throws {
@@ -327,6 +346,7 @@ public final class HostedHarnessRequestUnderstanding {
             executionPreference = try container.decodeIfPresent(String.self, forKey: .executionPreference)
             relevantSkillIDs = try container.decodeIfPresent([String].self, forKey: .relevantSkillIDs)
             conversationReply = try container.decodeIfPresent(String.self, forKey: .conversationReply)
+            suggestedFolderName = try container.decodeIfPresent(String.self, forKey: .suggestedFolderName)
             // The schema is non-strict, so a parameter value may arrive as a number or boolean. Coerce
             // scalars to strings instead of failing the whole decode.
             parameters = try container.decodeIfPresent([String: ScalarString].self, forKey: .parameters)?
@@ -422,7 +442,8 @@ public final class HostedHarnessRequestUnderstanding {
                                 "type": .string("array"),
                                 "items": .object(["type": .string("string")])
                             ]),
-                            "conversationReply": .object(["type": .string("string")])
+                            "conversationReply": .object(["type": .string("string")]),
+                            "suggestedFolderName": .object(["type": .string("string")])
                         ])
                     ])
                 ])

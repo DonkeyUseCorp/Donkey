@@ -64,6 +64,14 @@ struct HostedHarnessRequestUnderstandingTests {
     }
 
     @Test
+    func decodesSuggestedFolderName() async {
+        let result = await understanding(forResponseJSON: #"""
+        {"turnKind":"act","restatedGoal":"Fill out f1120 pdf.","needsClarification":false,"suggestedFolderName":"Fill out f1120 Cozy"}
+        """#)
+        #expect(result?.suggestedFolderName == "Fill out f1120 Cozy")
+    }
+
+    @Test
     func aMissingActionSurfaceDefaultsToGuiApp() async {
         // An older model or partial output omits the field; the conservative default is the GUI path, so a
         // turn that really does drive an app is never accidentally treated as app-less.
@@ -88,12 +96,14 @@ struct HostedHarnessRequestUnderstandingTests {
             plan: ["read the data", "list the form's fields", "map and compute", "write", "verify"],
             needsClarification: false,
             executionPreference: .background,
-            relevantSkillIDs: ["pdf", "data"]
+            relevantSkillIDs: ["pdf", "data"],
+            suggestedFolderName: "Fill out f1120 Cozy"
         )
 
         let decoded = HarnessRequestUnderstanding.decode(original.encodedJSON())
 
         #expect(decoded == original)
+        #expect(decoded?.suggestedFolderName == "Fill out f1120 Cozy")
         // The exact failure the reuse prevents: a resume that recomputed re-typed `pdf_path` as `pdf_form`.
         #expect(decoded?.parameters["pdf_path"] == "f1120.pdf")
         #expect(decoded?.parameters["pdf_form"] == nil)

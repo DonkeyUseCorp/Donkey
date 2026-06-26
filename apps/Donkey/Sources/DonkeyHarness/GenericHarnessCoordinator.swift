@@ -682,7 +682,21 @@ public actor HarnessAgentCoordinator {
         if let root = workspace.root, !root.isEmpty, FileManager.default.fileExists(atPath: root) {
             return
         }
-        let path = ConversationWorkspace.defaultRootPath(goal: task.goal, conversationID: conversationID)
+        var suggestedFolderName: String? = nil
+        if let jsonStr = task.metadata["harness.understandingJSON"],
+           let jsonData = jsonStr.data(using: .utf8) {
+            struct MiniUnderstanding: Decodable {
+                var suggestedFolderName: String?
+            }
+            if let mini = try? JSONDecoder().decode(MiniUnderstanding.self, from: jsonData) {
+                suggestedFolderName = mini.suggestedFolderName
+            }
+        }
+        let path = ConversationWorkspace.defaultRootPath(
+            goal: task.goal,
+            conversationID: conversationID,
+            suggestedFolderName: suggestedFolderName
+        )
         // Mark attempted before the syscall so a failure isn't retried every step (see the guard above).
         workspaceRootAttempted.insert(agentID)
         do {
