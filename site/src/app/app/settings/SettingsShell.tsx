@@ -73,7 +73,17 @@ export function SettingsShell({ children }: { children: ReactNode }) {
             <button
               type="button"
               onClick={() => {
-                void authClient.signOut().then(() => router.push("/"));
+                // Sign out everywhere: revoke every session for this user (so the Mac app signs out
+                // too), then clear this browser's session and leave. signOut + redirect always run,
+                // even if the revoke call fails, so the user is never stranded signed-in locally.
+                void (async () => {
+                  try {
+                    await authClient.revokeSessions();
+                  } finally {
+                    await authClient.signOut();
+                    router.push("/");
+                  }
+                })();
               }}
               className="ml-2 rounded-md px-3 py-1.5 text-sm font-medium text-muted-foreground hover:text-foreground"
             >
