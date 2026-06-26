@@ -159,12 +159,13 @@ so an attached file reads the turn as action on that file rather than a
 misclassified request. Any number of files can ride along; nothing here is
 image-specific.
 
-Because the agent owns that folder, it does not ask permission to read or change
-files there: a reversible file or transform command — a Python mapping script, a
-copy, a `mkdir` — confined to the working directory runs without a consent prompt.
-The dangerous tiers are unchanged: a delete, a privileged command, or anything
-reaching the network still gates every time, and a dangerous neighbor anywhere in
-the command line escalates the whole thing.
+The folder is a kernel-enforced sandbox: every tool the agent spawns is confined to
+write inside it, and the kernel blocks an escape even when the model errs. That
+containment is why a bounded file operation whose paths all stay in the folder needs
+no consent prompt — it changes nothing the user owns. A mutation that reaches outside
+the folder asks first, and approval widens the sandbox for that one command. See the
+[Workspace Sandbox](workspace-sandbox.md) guide for what a confined tool can read,
+write, and reach.
 
 ### What stays fixed
 
@@ -177,10 +178,12 @@ the command line escalates the whole thing.
 - **The working directory is seeded; its contents are the model's.** The runtime
   creates the folder and resolves relative paths against it; naming, structure,
   and grouping inside it are the model's per-step judgments.
-- **Work outside the working directory goes through a protected command.**
-  Touching the user's existing files, or deleting, elevating, or reaching the
-  network, asks for confirmation and then verifies. Work confined to the agent's
-  own folder is exempt; describing a file never changes it.
+- **The sandbox bounds writes; consent governs the rest.** A spawned tool can write
+  only inside the working folder — the kernel enforces it, so a stray or malformed
+  path cannot reach the user's other files. Reads are open. Changing a file the user
+  owns, driving another app, changing a system setting, or reaching the network is
+  outside what the sandbox contains and gates on consent; an approved write then
+  widens the sandbox just for that command.
 
 ### Where it lives
 

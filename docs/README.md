@@ -22,6 +22,7 @@ Supported product and engineering guides live in `docs/guides/`. This list is th
 - [Context Compaction](guides/context-compaction.md) — how a long conversation is kept whole on disk while each step gets a bounded rolling slice (recent events plus a rolling summary), and how the end-of-run summary is written.
 - [Donkey Vision](guides/donkey-vision.md) — the observation layer that turns on-screen windows into structured UI the agent can reason about.
 - [Background Input](guides/background-input.md) — driving an app without taking over the cursor or raising it: the foreground/background decision and the delivery lanes.
+- [Workspace Sandbox](guides/workspace-sandbox.md) — the per-task folder as a kernel-enforced jail: what a spawned tool can write, read, and reach, and why a change outside the folder asks first.
 
 **Mac app surfaces**
 

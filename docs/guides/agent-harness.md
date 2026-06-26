@@ -223,8 +223,16 @@ Driving a graphical interface is the fallback, used only when the task truly
 needs it: a canvas, an Electron app, or a proprietary interface with no
 command-line equivalent.
 
-Shell safety is based on consent, not a blocklist. Each command is sorted by its
-tokens into a risk tier:
+Shell safety has two layers: a kernel sandbox that bounds what a command *can*
+do, and consent that governs what it is *allowed* to do.
+
+Every tool the agent spawns runs inside a macOS sandbox. Its writes are confined
+to the conversation's own folder, so a command that tries to change a file
+elsewhere fails at the kernel even when the model errs. Reads are open — the agent
+can inspect a file the user pointed it at — and the network is reachable for API
+calls and downloads. (See the [Workspace Sandbox](workspace-sandbox.md) guide.)
+
+On top of that, each command is sorted by its tokens into a risk tier:
 
 | Tier | Examples | Behavior |
 |---|---|---|
@@ -232,12 +240,14 @@ tokens into a risk tier:
 | **reversible write** | changing a setting, opening an app | asks once, then remembers the choice |
 | **high risk** | `sudo`, `rm`, `dd`, piping a download into a shell | asks every time, never remembered |
 
-One exception keeps the agent fluent in the folder it owns: file commands (`mv`, `cp`, `mkdir`, `rm`,
-`chmod`) whose every path is written out in full inside the conversation's own folder run without a
-prompt — including a clean-up chain like `mv … && rm …` where every link is such a command. The agent
-managing the files it created shouldn't have to ask. Anything that can't be read off the command line
-as staying in that folder — a bare name, a glob, a shell variable, or a chained command that is not
-one of those file commands — still asks.
+A file operation (`mv`, `cp`, `mkdir`, `rm`, `chmod`) runs without a prompt only
+when every path it names sits inside the agent's own folder — managing the files
+it created shouldn't require asking. The moment a path reaches a file the user
+owns — a `~` path, an absolute path outside the folder, a clean-up that climbs
+out, a shell variable we can't resolve — the command asks first, and on approval
+the kernel widens to let that one write land. Anything the sandbox does not
+contain — driving other apps, changing system settings, elevated privileges,
+network egress — gates on consent the same way.
 
 The planner discovers what is available by doing. It runs the command it needs
 by name, and a "command not found" is just another observation it adapts to —
