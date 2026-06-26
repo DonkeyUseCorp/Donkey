@@ -49,6 +49,12 @@ app stores the Better Auth cookie in its own cookie jar
 Keep the code short-lived, leave a manual "Open Donkey" fallback on the handoff
 page, and keep the `donkey://` callback origin in Better Auth's trusted origins.
 
+**Sign-out is everywhere.** The app and each browser hold their own session, so
+signing out on any surface revokes *every* session for that user (Better Auth's
+`revoke-sessions`), not just the current one. The app picks up a web sign-out
+through a periodic session check; the browser picks up an app sign-out when it
+refetches the session on focus. That keeps the two in sync in both directions.
+
 The hosted deploy needs `BETTER_AUTH_URL`, `BETTER_AUTH_SECRET`,
 `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and
 `DONKEY_MAC_AUTH_REDIRECT_ORIGINS`. Never commit real OAuth credentials.
