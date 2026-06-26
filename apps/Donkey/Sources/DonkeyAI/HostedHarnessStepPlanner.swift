@@ -434,8 +434,8 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     /// with headroom for both the thinking and the tool-call JSON. Each retry raises the budget
     /// (`base * (attempt + 1)`, capped) so a reply truncated at the cap can complete — the Hermes
     /// agent's truncation-recovery boost.
-    private static let baseMaxOutputTokens = 3_000
-    private static let maxOutputTokensCap = 8_000
+    private static let baseMaxOutputTokens = 6_000
+    private static let maxOutputTokensCap = 16_000
 
     private func decide(task: HarnessAgentState, rollingContext: String?, retryNote: String?, attempt: Int) async throws -> Decision {
         // Static doctrine, goal, tools, and skills go in the cached system slot; only the dynamic turn
