@@ -291,22 +291,40 @@ struct OnboardingSlideshowView: View {
 
         return VStack(spacing: 0) {
             Text(currentPage.title, tableName: currentPage.tableName, bundle: currentPage.resolvedStringsBundle)
-                .font(.system(size: 28, weight: .bold))
+                .font(.system(size: 28, weight: .semibold))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.white)
                 .fixedSize(horizontal: false, vertical: true)
 
             Text(currentPage.description, tableName: currentPage.tableName, bundle: currentPage.resolvedStringsBundle)
-                .font(.body)
+                .font(.system(size: 18))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(Color.white.opacity(0.70))
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 6)
 
-            Spacer(minLength: 24)
-
-            primaryActionArea
-                .frame(height: Self.primaryRegionHeight, alignment: .bottom)
+            if usesFooterAction {
+                if isLastPage {
+                    // Closing footer slide (no subtitle): center the CTA so its
+                    // gap from the title is about half the bottom-pinned distance.
+                    Spacer(minLength: 0)
+                    footerActionArea
+                    Spacer(minLength: 0)
+                } else {
+                    // Sign-in footer pins to the card's baseline so the Google
+                    // button always lands in the same place.
+                    Spacer(minLength: 24)
+                    footerActionArea
+                        .frame(height: Self.primaryRegionHeight, alignment: .bottom)
+                }
+            } else {
+                // Walkthrough slides sit the Continue button a fixed, tighter
+                // gap below the copy and let the slack fall to the bottom. The
+                // closing slide halves that gap again to sit Done under the title.
+                Color.clear.frame(height: isLastPage ? Self.walkthroughActionGap / 2 : Self.walkthroughActionGap)
+                capsuleButton(isLastPage ? finishButtonTitle : continueButtonTitle, action: advance)
+                Spacer(minLength: 0)
+            }
         }
         .padding(.horizontal, 32)
         .padding(.top, 12)
@@ -346,11 +364,18 @@ struct OnboardingSlideshowView: View {
 
     // MARK: - Primary CTA
 
-    /// Fixed height reserved for the primary action, sized to the tallest case
-    /// (the sign-in footer: Google button + status + Explore link). Every slide
-    /// reserves it and bottom-aligns its button, so the window locks to one card
-    /// height and every CTA sits on the same baseline.
+    /// Fixed height reserved for the footer action (the sign-in / closing footer:
+    /// Google button + status + Explore link). Footer slides reserve it and
+    /// bottom-align their button so it always lands on the same card baseline.
     static let primaryRegionHeight: CGFloat = 96
+
+    /// Height of the pill Continue / Done button.
+    static let capsuleButtonHeight: CGFloat = 42
+
+    /// Gap between the copy and the Continue button on walkthrough slides —
+    /// roughly half the old spacing. Those slides no longer bottom-pin the
+    /// button: it sits just under the copy and the slack falls to the bottom.
+    static let walkthroughActionGap: CGFloat = 40
 
     /// Whether the current slide is the sign-in landing — the first slide, only
     /// when a sign-in footer was injected (signed-out flow).
@@ -358,21 +383,28 @@ struct OnboardingSlideshowView: View {
         signInFooter != nil && currentIndex == 0
     }
 
+    /// Footer slides keep the bottom-pinned Google button: the sign-in landing
+    /// (first slide) and, signed out, the closing slide. Every other slide is a
+    /// walkthrough slide that uses the tighter, top-aligned Continue button.
+    private var usesFooterAction: Bool {
+        signInFooter != nil && (currentIndex == 0 || isLastPage)
+    }
+
     @ViewBuilder
-    private var primaryActionArea: some View {
-        if let signInFooter, isSignInSlide {
-            // Sign-in landing: the Google button, with an Explore link beneath
-            // that drops into the feature tour.
-            VStack(spacing: 12) {
+    private var footerActionArea: some View {
+        if let signInFooter {
+            if isSignInSlide {
+                // Sign-in landing: the Google button, with an Explore link
+                // beneath that drops into the feature tour.
+                VStack(spacing: 12) {
+                    signInFooter()
+                    exploreLink
+                }
+            } else {
+                // The signed-out tour ends on the Google button itself, so the
+                // closing slide takes the user straight into sign-in.
                 signInFooter()
-                exploreLink
             }
-        } else if let signInFooter, isLastPage {
-            // The signed-out tour ends on the Google button itself, so the final
-            // slide takes the user straight into sign-in.
-            signInFooter()
-        } else {
-            capsuleButton(isLastPage ? finishButtonTitle : continueButtonTitle, action: advance)
         }
     }
 
@@ -381,7 +413,7 @@ struct OnboardingSlideshowView: View {
             Text(title, tableName: buttonTableName, bundle: buttonBundle)
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.white)
-                .frame(width: 220, height: 42)
+                .frame(width: 220, height: Self.capsuleButtonHeight)
                 .background(
                     Capsule(style: .continuous)
                         .fill(
@@ -610,7 +642,11 @@ final class OnboardingWindowController {
         // button pin to the top, centre, and bottom of the remaining space
         // respectively. Shorter slides simply get more breathing room.
         let imageHeight = width / OnboardingSlideshowView.imageAspectRatio
-        let maxPanelHeight = Self.maxBottomPanelHeight(pages: pages, width: width)
+        let maxPanelHeight = Self.maxBottomPanelHeight(
+            pages: pages,
+            width: width,
+            hasSignInFooter: signInFooter != nil
+        )
         let totalHeight = max(imageHeight + maxPanelHeight, 1)
 
         let rootView = OnboardingSlideshowView(
@@ -675,12 +711,14 @@ final class OnboardingWindowController {
     /// panel respectively).
     private static func maxBottomPanelHeight(
         pages: [OnboardingPage],
-        width: CGFloat
+        width: CGFloat,
+        hasSignInFooter: Bool
     ) -> CGFloat {
         guard !pages.isEmpty else { return 0 }
 
-        return pages.map { page in
-            let sizingView = OnboardingBottomPanelSizingView(page: page)
+        return pages.enumerated().map { index, page in
+            let usesFooterAction = hasSignInFooter && (index == 0 || index == pages.count - 1)
+            let sizingView = OnboardingBottomPanelSizingView(page: page, usesFooterAction: usesFooterAction)
                 .frame(width: width)
 
             let hosting = NSHostingView(rootView: sizingView)
@@ -709,26 +747,32 @@ final class OnboardingWindowController {
 /// slideshow will render at runtime.
 private struct OnboardingBottomPanelSizingView: View {
     let page: OnboardingPage
+    let usesFooterAction: Bool
 
     var body: some View {
         VStack(spacing: 0) {
             Text(page.title, tableName: page.tableName, bundle: page.resolvedStringsBundle)
-                .font(.system(size: 28, weight: .bold))
+                .font(.system(size: 28, weight: .semibold))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.white)
                 .fixedSize(horizontal: false, vertical: true)
 
             Text(page.description, tableName: page.tableName, bundle: page.resolvedStringsBundle)
-                .font(.body)
+                .font(.system(size: 18))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(Color.white.opacity(0.70))
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 6)
 
-            Spacer(minLength: 24)
-
-            Color.clear
-                .frame(height: OnboardingSlideshowView.primaryRegionHeight)
+            if usesFooterAction {
+                Spacer(minLength: 24)
+                Color.clear
+                    .frame(height: OnboardingSlideshowView.primaryRegionHeight)
+            } else {
+                Color.clear
+                    .frame(height: OnboardingSlideshowView.walkthroughActionGap
+                        + OnboardingSlideshowView.capsuleButtonHeight)
+            }
         }
         .padding(.horizontal, 32)
         .padding(.top, 12)
@@ -790,8 +834,8 @@ struct OnboardingPageIndicator: View {
 /// the `imageName` values below.
 enum OnboardingTour {
     /// The sign-in landing — the first slide when signed out. Its call-to-action
-    /// is the injected Google sign-in footer plus the Explore link; the feature
-    /// tour walks forward and returns here to sign in.
+    /// is the injected Google sign-in footer plus an Explore link into the
+    /// walkthrough, which ends on the closing slide's own Google button.
     static let signInPage = OnboardingPage(
         imageName: "onboarding-signin",
         imageBundle: DonkeyResourceBundle.app,
@@ -800,21 +844,21 @@ enum OnboardingTour {
         background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.50, y: 0.16), bloomIntensity: 0.95)
     )
 
-    /// The feature slides — the walkthrough reached by Explore (signed out) or
-    /// shown directly (signed-in replay).
-    static let featurePages: [OnboardingPage] = [
+    /// The walkthrough body — reached by Explore (signed out) or shown directly
+    /// (signed-in replay), and followed by the closing slide in both flows.
+    static let walkthroughPages: [OnboardingPage] = [
         OnboardingPage(
             imageName: "onboarding-welcome",
             imageBundle: DonkeyResourceBundle.app,
-            title: "Welcome to Donkey",
-            description: "Your AI assistant that gets things done right on your Mac.",
+            title: "Meet Donkey",
+            description: "The workhorse for your Mac. Tell it what you want done — then go do something else.",
             background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.26, y: 0.30), bloomIntensity: 0.30)
         ),
         OnboardingPage(
             imageName: "onboarding-ask",
             imageBundle: DonkeyResourceBundle.app,
-            title: "Just ask, in plain language",
-            description: "Type or speak a request and Donkey figures out the steps.",
+            title: "Ask it for anything",
+            description: "Fill out PDFs, create a website, clip a YouTube video. Command it and Donkey works out the rest.",
             background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.74, y: 0.18), bloomIntensity: 0.60)
         ),
         OnboardingPage(
@@ -825,32 +869,34 @@ enum OnboardingTour {
             background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.50, y: 0.40), bloomIntensity: 0.50)
         ),
         OnboardingPage(
-            imageName: "onboarding-follow",
+            imageName: "onboarding-parallel",
             imageBundle: DonkeyResourceBundle.app,
-            title: "Follow along every step",
-            description: "Watch what Donkey is doing in the notch as it works.",
+            title: "Hand it three jobs at once",
+            description: "Donkey runs several conversations in parallel, so nothing waits in line. Kick off a task, start another, come back when they're done.",
             background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.80, y: 0.22), bloomIntensity: 0.80)
         )
     ]
 
-    /// Closing slide when the user is already signed in (menu replay): a plain
-    /// wrap-up whose Done button dismisses the card.
-    static let finishedPage = OnboardingPage(
+    /// The closing slide that ends both flows. Signed out, it shows the injected
+    /// Google button (sign in straight from the tour's end); signed in, it ends
+    /// the replay with the Done button.
+    static let readyPage = OnboardingPage(
         imageName: "onboarding-ready",
         imageBundle: DonkeyResourceBundle.app,
-        title: "You're all set",
-        description: "Donkey is ready whenever you are.",
+        title: "Donkey is ready to work",
+        description: "",
         background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.46, y: 0.16), bloomIntensity: 1.00)
     )
 
-    /// Signed out: the sign-in landing leads the feature tour. Signed in: the
-    /// feature tour ends on a plain wrap-up. The sign-in slide is always index 0
-    /// when present, which the slideshow relies on for the Explore / return flow.
+    /// Signed out: the sign-in landing leads the walkthrough, which ends on the
+    /// closing slide's Google button. Signed in: the walkthrough ends on the
+    /// closing slide's Done button. The sign-in slide is always index 0 when
+    /// present, which the slideshow relies on for the Explore flow.
     static func pages(isSignedIn: Bool) -> [OnboardingPage] {
         if isSignedIn {
-            return featurePages + [finishedPage]
+            return walkthroughPages + [readyPage]
         } else {
-            return [signInPage] + featurePages
+            return [signInPage] + walkthroughPages + [readyPage]
         }
     }
 }
