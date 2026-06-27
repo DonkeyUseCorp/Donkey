@@ -2,9 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { ArrowRight } from "lucide-react";
 
 import { PillButton } from "@/app/_components/landing/LandingPrimitives";
 import { DONKEY_INSTALL_URL } from "@/app/_components/landing/data";
@@ -23,8 +21,6 @@ type Props = {
   showNav?: boolean;
   // Log in + Sign up cluster. Hidden when an authToggle is supplied.
   showAuthLinks?: boolean;
-  // The Download pill belongs to the main landing page only.
-  showDownload?: boolean;
   // Sign-in/up pages swap the auth links for a single toggle to the other mode.
   authToggle?: { href: string; label: string };
 };
@@ -34,7 +30,6 @@ export function TopNav({
   wordmark = "donkey",
   showNav = true,
   showAuthLinks = true,
-  showDownload = false,
   authToggle,
 }: Props) {
   // Signed-in visitors don't need the auth links or the download CTA; the whole
@@ -43,11 +38,6 @@ export function TopNav({
   // server HTML, so the signed-out cluster shows first and swaps in on resolve.
   const { data: session } = authClient.useSession();
   const isSignedIn = Boolean(session);
-
-  // Don't show the "Use cases" link when the visitor is already in that section.
-  const pathname = usePathname();
-  const onUseCases =
-    pathname === "/use-cases" || Boolean(pathname?.startsWith("/use-cases/"));
 
   // The header is sticky and transparent over the hero; once the page scrolls a
   // little it fades in a translucent backdrop and a hairline divider so the nav
@@ -90,22 +80,21 @@ export function TopNav({
             Download CTA read as a balanced pair in the middle of the bar. Hidden
             below md, where the header collapses to logo + auth. */}
         <div className="col-start-2 hidden items-center gap-6 justify-self-center md:flex">
-          {showNav && !onUseCases ? (
-            <Link
-              href="/use-cases"
-              className="whitespace-nowrap text-sm font-semibold text-ink no-underline"
-            >
-              Use cases
-            </Link>
-          ) : null}
-          {showDownload && !isSignedIn && !authToggle ? (
-            <Link
-              href={DONKEY_INSTALL_URL}
-              className="inline-flex items-center gap-1 whitespace-nowrap text-sm font-semibold text-ink no-underline"
-            >
-              Download
-              <ArrowRight size={14} />
-            </Link>
+          {showNav ? (
+            <>
+              <Link
+                href="/use-cases"
+                className="whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-semibold text-ink no-underline transition-colors hover:bg-white"
+              >
+                Use cases
+              </Link>
+              <Link
+                href={DONKEY_INSTALL_URL}
+                className="inline-flex items-center whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-semibold text-ink no-underline transition-colors hover:bg-white"
+              >
+                Download
+              </Link>
+            </>
           ) : null}
         </div>
         <div className="col-start-3 flex items-center gap-[10px] justify-self-end md:gap-4">
