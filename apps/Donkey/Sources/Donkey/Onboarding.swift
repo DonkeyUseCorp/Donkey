@@ -193,6 +193,20 @@ struct OnboardingSlideshowView: View {
             }
         }
         .frame(width: width)
+        // Left/right arrow keys page through the slides. Hidden buttons carry the
+        // shortcuts so they fire whenever the card window is key, without having to
+        // manage first-responder focus. They page only — never the finish/sign-in
+        // action — and clamp at the first and last slide.
+        .background {
+            ZStack {
+                Button("") { goToPage(currentIndex - 1) }
+                    .keyboardShortcut(.leftArrow, modifiers: [])
+                Button("") { goToPage(currentIndex + 1) }
+                    .keyboardShortcut(.rightArrow, modifiers: [])
+            }
+            .opacity(0)
+            .accessibilityHidden(true)
+        }
         // Purely visual animation: drives the slide cross-fade and the
         // page-indicator's active-dot slide. Layout size never changes
         // because the hosting window is locked to the tallest slide.
