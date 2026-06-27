@@ -131,15 +131,19 @@ private struct DonkeyGoogleSignInScreen<StatusText: View>: View {
 }
 
 /// The sign-in slide's call-to-action inside the onboarding card: the same Google button the login window
-/// uses, plus a compact status line that tracks the in-flight sign-in. Tapping it starts the real Google
-/// flow; the app delegate closes the onboarding card once `authenticationCompleted` fires.
+/// uses, plus a compact status line. Tapping it starts the real Google flow and dismisses the onboarding
+/// card (via `onContinue`) so the browser sign-in takes over; `authenticationCompleted` then brings up the
+/// authenticated surfaces.
 struct OnboardingGoogleSignInFooter: View {
     @ObservedObject var authCoordinator: DonkeyAuthCoordinator
+    /// Invoked right after sign-in starts, so the host can dismiss the onboarding card.
+    var onContinue: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 8) {
             Button {
                 authCoordinator.beginGoogleSignIn()
+                onContinue?()
             } label: {
                 GoogleContinueAsset()
                     .opacity(buttonIsDisabled ? 0.58 : 1)

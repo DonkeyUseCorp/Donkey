@@ -122,6 +122,12 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         onboardingWindowController = controller
 
         let isSignedIn = authCoordinator.isAuthenticated
+        // Reopening the sign-in surface means the user is back to try again: clear any stalled attempt
+        // (e.g. they dismissed the card on "Continue with Google", then closed the browser) so the button
+        // is enabled and ready rather than stuck disabled on `.waitingForCallback`.
+        if !isSignedIn {
+            authCoordinator.resetSignInIfStalled()
+        }
         let pages = OnboardingTour.pages(isSignedIn: isSignedIn)
 
         // Signed-out pages are [sign-in, features...]. `.signIn` opens on the landing (0); `.tour` skips
@@ -142,8 +148,11 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
             continueButtonTitle: "Continue",
             finishButtonTitle: "Done",
             onDismiss: { [weak self] in self?.onboardingWindowController = nil },
-            signInFooter: isSignedIn ? nil : { [authCoordinator] in
-                AnyView(OnboardingGoogleSignInFooter(authCoordinator: authCoordinator))
+            signInFooter: isSignedIn ? nil : { [weak self, authCoordinator] in
+                AnyView(OnboardingGoogleSignInFooter(
+                    authCoordinator: authCoordinator,
+                    onContinue: { self?.onboardingWindowController?.close() }
+                ))
             }
         )
     }

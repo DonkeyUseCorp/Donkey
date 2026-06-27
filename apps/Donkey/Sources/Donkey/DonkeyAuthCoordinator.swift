@@ -227,6 +227,21 @@ final class DonkeyAuthCoordinator: ObservableObject {
         phase = stateStore.loadSession().map(DonkeyAuthPhase.signedIn) ?? .signedOut
     }
 
+    /// Returns a stalled or failed sign-in to the ready (signed-out) state so the sign-in button is
+    /// enabled and its status line is clear when the onboarding card is (re)shown. The common trigger is
+    /// the user dismissing the onboarding card on "Continue with Google", then abandoning the browser:
+    /// without this, `phase` would sit at `.waitingForCallback` forever and the button would stay disabled.
+    /// A live session or an in-progress exchange is left untouched, and the pending state token is kept so a
+    /// late but legitimate callback can still complete.
+    func resetSignInIfStalled() {
+        switch phase {
+        case .openingBrowser, .waitingForCallback, .failed:
+            phase = .signedOut
+        case .signedOut, .exchangingSession, .signedIn:
+            break
+        }
+    }
+
     /// Drops the local session and its native session cookie, returning to the signed-out state. Callers
     /// should then surface the login flow again.
     ///
