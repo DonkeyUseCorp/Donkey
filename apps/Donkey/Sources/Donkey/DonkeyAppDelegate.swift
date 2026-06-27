@@ -6,12 +6,12 @@ import DonkeyAI
 import DonkeyContracts
 import DonkeyRuntime
 import Foundation
+import SwiftUI
 
 @MainActor
 final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     private var authCoordinator: DonkeyAuthCoordinator?
     private var onboardingWindowController: OnboardingWindowController?
-    private var loginWindowController: DonkeyLoginWindowController?
     private var permissionSetupController: MacPermissionSetupWindowController?
     private var manualPermissionSetupController: MacPermissionSetupWindowController?
     private var overlayController: UserQueryOverlayController?
@@ -50,18 +50,22 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         // optimistic default. The phase observer keeps it current from here on.
         BackendSessionGate.shared.update(isAuthenticated: authCoordinator.isAuthenticated)
         authCoordinator.authenticationCompleted = { [weak self] _ in
+            // Sign-in may have happened on the onboarding card's sign-in slide; close it before bringing
+            // up the authenticated surfaces. `close()` clears the retain via onDismiss, and this is a
+            // no-op when the card isn't showing (e.g. notch re-auth).
+            self?.onboardingWindowController?.close()
             self?.startAuthenticatedAppSurfaces()
         }
         registerAuthCallbackHandler()
         installMainMenu()
 
-        // First install (never signed in) runs the onboarding walkthrough, which finishes into the
-        // sign-in window. A returning user whose session has expired skips both: the notch comes up
-        // in login mode (driven by the auth phase observer) and carries them back through sign-in inline.
+        // First install (never signed in) opens the onboarding card on its sign-in landing. A returning
+        // user whose session has expired skips it: the notch comes up in login mode (driven by the auth
+        // phase observer) and carries them back through sign-in inline.
         if authCoordinator.isAuthenticated || authCoordinator.hasEverSignedIn {
             startAuthenticatedAppSurfaces()
         } else {
-            showOnboarding()
+            presentOnboardingCard(entry: .signIn)
         }
     }
 
@@ -76,7 +80,7 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         hasVisibleWindows flag: Bool
     ) -> Bool {
         if authCoordinator?.isAuthenticated != true {
-            showLoginWindow()
+            presentOnboardingCard(entry: .signIn)
         } else if let permissionSetupController {
             permissionSetupController.showSetup()
         } else if overlayController == nil {
@@ -98,38 +102,50 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         uiUnderstandingCoordinator?.stop()
     }
 
-    /// First-run onboarding: a borderless, draggable card window that walks through what Donkey does.
-    /// Whether the user steps through to the final slide or dismisses early, it finishes into sign-in.
-    private func showOnboarding() {
+    /// Where to open the onboarding card.
+    private enum OnboardingEntry {
+        /// Land on the sign-in slide: signed-out app-open, reopen, or post-sign-out.
+        case signIn
+        /// Open on the feature tour: the "Show Onboarding" menu replay.
+        case tour
+    }
+
+    /// Presents the onboarding card — the single surface for both the walkthrough and login. When signed
+    /// out, slide 0 is the Google sign-in landing with an Explore link into the feature tour, and the card
+    /// stays up until sign-in completes (the `authenticationCompleted` handler closes it). When signed in,
+    /// it's the feature tour ending in Done. `entry` chooses the opening slide.
+    private func presentOnboardingCard(entry: OnboardingEntry) {
+        guard let authCoordinator else { return }
         NSApp.setActivationPolicy(.regular)
+
         let controller = OnboardingWindowController()
         onboardingWindowController = controller
+
+        let isSignedIn = authCoordinator.isAuthenticated
+        let pages = OnboardingTour.pages(isSignedIn: isSignedIn)
+
+        // Signed-out pages are [sign-in, features...]. `.signIn` opens on the landing (0); `.tour` skips
+        // to the first feature (1). Signed-in pages are features only, always opened at 0.
+        let initialPageIndex: Int
+        if isSignedIn {
+            initialPageIndex = 0
+        } else {
+            switch entry {
+            case .signIn: initialPageIndex = 0
+            case .tour: initialPageIndex = min(1, pages.count - 1)
+            }
+        }
+
         controller.present(
-            pages: OnboardingTour.pages,
+            pages: pages,
+            initialPageIndex: initialPageIndex,
             continueButtonTitle: "Continue",
-            finishButtonTitle: "Get Started",
-            onFinish: { [weak self] in
-                self?.finishOnboarding()
-            },
-            onClose: { [weak self] in
-                self?.finishOnboarding()
+            finishButtonTitle: "Done",
+            onDismiss: { [weak self] in self?.onboardingWindowController = nil },
+            signInFooter: isSignedIn ? nil : { [authCoordinator] in
+                AnyView(OnboardingGoogleSignInFooter(authCoordinator: authCoordinator))
             }
         )
-    }
-
-    private func finishOnboarding() {
-        onboardingWindowController = nil
-        showLoginWindow()
-    }
-
-    private func showLoginWindow() {
-        guard let authCoordinator else { return }
-
-        NSApp.setActivationPolicy(.regular)
-        if loginWindowController == nil {
-            loginWindowController = DonkeyLoginWindowController(authCoordinator: authCoordinator)
-        }
-        loginWindowController?.showLogin()
     }
 
     private func startAuthenticatedAppSurfaces() {
@@ -137,8 +153,7 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
               permissionSetupController == nil
         else { return }
 
-        loginWindowController?.close()
-        loginWindowController = nil
+        onboardingWindowController?.close()
         NSApp.setActivationPolicy(.regular)
 
         // The notch overlay renders immediately on launch, so it's always present. When permissions
@@ -374,21 +389,7 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showOnboardingMenuAction(_ sender: Any?) {
-        showOnboardingWalkthrough()
-    }
-
-    /// Replays the onboarding walkthrough on demand from the menu. Unlike the first-run path, finishing or
-    /// closing it just dismisses the card — it never routes into sign-in.
-    private func showOnboardingWalkthrough() {
-        NSApp.setActivationPolicy(.regular)
-        let controller = OnboardingWindowController()
-        onboardingWindowController = controller
-        controller.present(
-            pages: OnboardingTour.pages,
-            finishButtonTitle: "Done",
-            onFinish: { [weak self] in self?.onboardingWindowController = nil },
-            onClose: { [weak self] in self?.onboardingWindowController = nil }
-        )
+        presentOnboardingCard(entry: .tour)
     }
 
     // MARK: - Permissions setup
@@ -407,10 +408,10 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
 
     private func signOut() {
         // User-initiated: revoke every session for this user so the website (and any other device) signs
-        // out too, then tear down local surfaces and surface login.
+        // out too, then tear down local surfaces and surface the onboarding card on its sign-in landing.
         authCoordinator?.signOut(revokingRemoteSessions: true)
         teardownAuthenticatedSurfaces()
-        showLoginWindow()
+        presentOnboardingCard(entry: .signIn)
     }
 
     /// Tears down the live overlay/runtime surfaces so a later sign-in can rebuild them cleanly.
@@ -451,6 +452,14 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         showOnboardingItem.target = self
         appMenu.addItem(showOnboardingItem)
 
+        let permissionsSetupItem = NSMenuItem(
+            title: "Permissions Setup",
+            action: #selector(permissionsSetupMenuAction(_:)),
+            keyEquivalent: ""
+        )
+        permissionsSetupItem.target = self
+        appMenu.addItem(permissionsSetupItem)
+
         let signOutItem = NSMenuItem(
             title: "Sign Out",
             action: #selector(signOutMenuAction(_:)),
@@ -458,14 +467,6 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         )
         signOutItem.target = self
         appMenu.addItem(signOutItem)
-
-        let permissionsSetupItem = NSMenuItem(
-            title: "Permissions Setup…",
-            action: #selector(permissionsSetupMenuAction(_:)),
-            keyEquivalent: ""
-        )
-        permissionsSetupItem.target = self
-        appMenu.addItem(permissionsSetupItem)
 
         appMenu.addItem(.separator())
         appMenu.addItem(

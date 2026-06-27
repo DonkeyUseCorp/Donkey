@@ -130,7 +130,64 @@ private struct DonkeyGoogleSignInScreen<StatusText: View>: View {
     }
 }
 
-private struct GoogleContinueAsset: View {
+/// The sign-in slide's call-to-action inside the onboarding card: the same Google button the login window
+/// uses, plus a compact status line that tracks the in-flight sign-in. Tapping it starts the real Google
+/// flow; the app delegate closes the onboarding card once `authenticationCompleted` fires.
+struct OnboardingGoogleSignInFooter: View {
+    @ObservedObject var authCoordinator: DonkeyAuthCoordinator
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Button {
+                authCoordinator.beginGoogleSignIn()
+            } label: {
+                GoogleContinueAsset()
+                    .opacity(buttonIsDisabled ? 0.58 : 1)
+            }
+            .buttonStyle(.plain)
+            .disabled(buttonIsDisabled)
+            .accessibilityLabel("Continue with Google")
+
+            statusText
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(statusColor)
+                .frame(height: 14)
+        }
+    }
+
+    private var buttonIsDisabled: Bool {
+        switch authCoordinator.phase {
+        case .openingBrowser, .waitingForCallback, .exchangingSession:
+            return true
+        default:
+            return false
+        }
+    }
+
+    @ViewBuilder
+    private var statusText: some View {
+        switch authCoordinator.phase {
+        case .waitingForCallback:
+            Text("Finish sign-in in your browser to continue.")
+        case .exchangingSession:
+            Text("Creating a secure Mac session...")
+        case .failed(let message):
+            Text(message)
+        default:
+            Text(" ")
+        }
+    }
+
+    private var statusColor: Color {
+        if case .failed = authCoordinator.phase {
+            return Color(red: 1.0, green: 0.47, blue: 0.36)
+        }
+
+        return .white.opacity(0.54)
+    }
+}
+
+struct GoogleContinueAsset: View {
     var body: some View {
         Group {
             if let image = Self.image {

@@ -27,6 +27,9 @@ struct OnboardingPage: Identifiable, Hashable, @unchecked Sendable {
     /// When `nil`, falls back to `imageBundle`, which is typically the caller's
     /// module bundle.
     let stringsBundle: Bundle?
+    /// Per-slide gradient backdrop rendered behind the artwork. When `nil`, the
+    /// slide falls back to the card's flat dark fill.
+    let background: OnboardingSlideBackground?
 
     init(
         id: UUID = UUID(),
@@ -35,7 +38,8 @@ struct OnboardingPage: Identifiable, Hashable, @unchecked Sendable {
         title: LocalizedStringKey,
         description: LocalizedStringKey,
         tableName: String? = nil,
-        stringsBundle: Bundle? = nil
+        stringsBundle: Bundle? = nil,
+        background: OnboardingSlideBackground? = nil
     ) {
         self.id = id
         self.imageName = imageName
@@ -44,6 +48,7 @@ struct OnboardingPage: Identifiable, Hashable, @unchecked Sendable {
         self.description = description
         self.tableName = tableName
         self.stringsBundle = stringsBundle
+        self.background = background
     }
 
     /// Bundle used for localized string lookup. Prefers `stringsBundle`, then
@@ -61,6 +66,61 @@ struct OnboardingPage: Identifiable, Hashable, @unchecked Sendable {
     }
 }
 
+/// A per-slide gradient backdrop. Every slide shares the same blue wash; only
+/// the spotlight distinguishes them — its position moves and its intensity
+/// visibly brightens and dims as the walkthrough advances.
+struct OnboardingSlideBackground: Sendable {
+    /// Where the spotlight bloom sits over the shared blue wash.
+    var bloomCenter: UnitPoint
+    /// Bloom strength, 0...1. Spread widely across slides so the brightness
+    /// shift reads clearly from one slide to the next.
+    var bloomIntensity: Double
+
+    /// The colour the wash resolves to at the bottom edge — matched to the card
+    /// fill so the gradient seams invisibly into the text panel below.
+    static let baseFill = Color(white: 0.10)
+}
+
+struct OnboardingSlideBackgroundView: View {
+    let background: OnboardingSlideBackground
+
+    /// The shared blue wash. Every slide uses these exact colours; only the
+    /// spotlight (position + intensity) changes between slides.
+    private static let washTop = Color(red: 0.16, green: 0.38, blue: 0.96)
+    private static let washMiddle = Color(red: 0.07, green: 0.17, blue: 0.52)
+    /// Bright sky-blue spotlight — kept blue rather than white so a strong bloom
+    /// glows without washing the hue out.
+    private static let bloomColor = Color(red: 0.60, green: 0.82, blue: 1.0)
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                stops: [
+                    .init(color: Self.washTop, location: 0.0),
+                    .init(color: Self.washMiddle, location: 0.55),
+                    .init(color: OnboardingSlideBackground.baseFill, location: 1.0)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+
+            RadialGradient(
+                colors: [
+                    Self.bloomColor.opacity(background.bloomIntensity),
+                    .clear
+                ],
+                center: background.bloomCenter,
+                startRadius: 0,
+                endRadius: 420
+            )
+            .blendMode(.screen)
+        }
+        // Flatten the blend into its own layer so the bloom screens only over
+        // this slide's wash, never over the artwork or controls above it.
+        .drawingGroup()
+    }
+}
+
 struct OnboardingSlideshowView: View {
     let pages: [OnboardingPage]
     /// Fixed content width of the slideshow card. The image region's height
@@ -72,7 +132,16 @@ struct OnboardingSlideshowView: View {
     let buttonTableName: String?
     let buttonBundle: Bundle?
     let onFinish: (() -> Void)?
+    /// Dismisses the card without finishing the tour. Wired to the top-right
+    /// close button so the user always has a way out — including a signed-out
+    /// user who doesn't want to sign in right now.
     let onClose: (() -> Void)?
+    /// When non-nil, the FIRST slide is the sign-in landing — it renders this
+    /// footer (Donkey's Google button) with an "Explore" link beneath — and the
+    /// final feature slide renders the same footer so it takes the user straight
+    /// into sign-in. When `nil`, the tour is a plain walkthrough ending in the
+    /// finish button.
+    let signInFooter: (() -> AnyView)?
     @Environment(\.dismiss) private var dismiss
     @State var currentIndex: Int
 
@@ -85,7 +154,8 @@ struct OnboardingSlideshowView: View {
         buttonTableName: String? = nil,
         buttonBundle: Bundle? = nil,
         onFinish: (() -> Void)? = nil,
-        onClose: (() -> Void)? = nil
+        onClose: (() -> Void)? = nil,
+        signInFooter: (() -> AnyView)? = nil
     ) {
         self.pages = pages
         self.width = width
@@ -95,6 +165,7 @@ struct OnboardingSlideshowView: View {
         self.buttonBundle = buttonBundle
         self.onFinish = onFinish
         self.onClose = onClose
+        self.signInFooter = signInFooter
         _currentIndex = State(initialValue: Self.clamped(initialPageIndex, pageCount: pages.count))
     }
 
@@ -156,6 +227,13 @@ struct OnboardingSlideshowView: View {
         // `.id + .transition(.opacity)` subtree and visibly fade out and
         // back in at the transition's midpoint.
         ZStack(alignment: .top) {
+            if let background = pages[currentIndex].background {
+                OnboardingSlideBackgroundView(background: background)
+                    .frame(width: width, height: imageHeight)
+                    .id(currentIndex)
+                    .transition(.opacity)
+            }
+
             image(for: pages[currentIndex])
                 .resizable()
                 .scaledToFit()
@@ -178,10 +256,14 @@ struct OnboardingSlideshowView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             .allowsHitTesting(false)
 
-            OnboardingPageIndicator(totalPages: pages.count, currentIndex: currentIndex)
-                .padding(.bottom, 14)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                .allowsHitTesting(false)
+            OnboardingPageIndicator(totalPages: pages.count, currentIndex: currentIndex) { index in
+                goToPage(index)
+            }
+            // Bottom padding is 6 rather than 14 because each dot now carries a
+            // 24pt-tall hit band centred on its 8pt visual; the extra 8pt below
+            // the dot offsets the smaller pad so the dots sit where they did.
+            .padding(.bottom, 6)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
 
             topControls
         }
@@ -209,7 +291,8 @@ struct OnboardingSlideshowView: View {
 
             Spacer(minLength: 24)
 
-            primaryActionButton
+            primaryActionArea
+                .frame(height: Self.primaryRegionHeight, alignment: .bottom)
         }
         .padding(.horizontal, 32)
         .padding(.top, 12)
@@ -229,10 +312,13 @@ struct OnboardingSlideshowView: View {
                 goBack()
             }
             .opacity(currentIndex > 0 ? 1 : 0)
+            .allowsHitTesting(currentIndex > 0)
 
             Spacer()
 
-            iconButton(systemName: "checkmark") {
+            // Always-available escape hatch: closes the card on any slide, so a
+            // signed-out user who isn't ready to sign in can still dismiss it.
+            iconButton(systemName: "xmark") {
                 if let onClose {
                     onClose()
                 } else {
@@ -246,13 +332,39 @@ struct OnboardingSlideshowView: View {
 
     // MARK: - Primary CTA
 
-    private var primaryActionButton: some View {
-        Button(action: advance) {
-            Text(
-                isLastPage ? finishButtonTitle : continueButtonTitle,
-                tableName: buttonTableName,
-                bundle: buttonBundle
-            )
+    /// Fixed height reserved for the primary action, sized to the tallest case
+    /// (the sign-in footer: Google button + status + Explore link). Every slide
+    /// reserves it and bottom-aligns its button, so the window locks to one card
+    /// height and every CTA sits on the same baseline.
+    static let primaryRegionHeight: CGFloat = 96
+
+    /// Whether the current slide is the sign-in landing — the first slide, only
+    /// when a sign-in footer was injected (signed-out flow).
+    private var isSignInSlide: Bool {
+        signInFooter != nil && currentIndex == 0
+    }
+
+    @ViewBuilder
+    private var primaryActionArea: some View {
+        if let signInFooter, isSignInSlide {
+            // Sign-in landing: the Google button, with an Explore link beneath
+            // that drops into the feature tour.
+            VStack(spacing: 12) {
+                signInFooter()
+                exploreLink
+            }
+        } else if let signInFooter, isLastPage {
+            // The signed-out tour ends on the Google button itself, so the final
+            // slide takes the user straight into sign-in.
+            signInFooter()
+        } else {
+            capsuleButton(isLastPage ? finishButtonTitle : continueButtonTitle, action: advance)
+        }
+    }
+
+    private func capsuleButton(_ title: LocalizedStringKey, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title, tableName: buttonTableName, bundle: buttonBundle)
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 220, height: 42)
@@ -274,6 +386,22 @@ struct OnboardingSlideshowView: View {
         }
         .buttonStyle(.plain)
         .keyboardShortcut(.defaultAction)
+    }
+
+    /// "Explore Donkey ›" link under the sign-in button; jumps into the feature
+    /// tour, which walks forward and ends back at this sign-in slide.
+    private var exploreLink: some View {
+        Button(action: exploreFeatures) {
+            HStack(spacing: 4) {
+                Text("Explore Donkey")
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(.white.opacity(0.72))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Icon button (glass circle)
@@ -313,8 +441,6 @@ struct OnboardingSlideshowView: View {
         if isLastPage {
             if let onFinish {
                 onFinish()
-            } else if let onClose {
-                onClose()
             } else {
                 dismiss()
             }
@@ -327,6 +453,21 @@ struct OnboardingSlideshowView: View {
         let newIndex = max(0, currentIndex - 1)
         guard newIndex != currentIndex else { return }
         currentIndex = newIndex
+    }
+
+    /// From the sign-in landing, drop into the feature tour (the first feature
+    /// slide sits right after the sign-in slide).
+    func exploreFeatures() {
+        let target = min(1, pages.count - 1)
+        guard target != currentIndex else { return }
+        currentIndex = target
+    }
+
+    /// Jump straight to a slide, used by the clickable page-indicator dots.
+    func goToPage(_ index: Int) {
+        let target = Self.clamped(index, pageCount: pages.count)
+        guard target != currentIndex else { return }
+        currentIndex = target
     }
 
     private func image(for page: OnboardingPage) -> Image {
@@ -422,18 +563,22 @@ final class OnboardingWindowController {
 
     /// Presents the onboarding window. If a window is already visible, it is brought to the front.
     ///
-    /// The window automatically closes when the user taps the checkmark or finishes the walkthrough.
-    /// `onClose` and `onFinish` are invoked *before* the window is dismissed.
+    /// When the final slide shows the standard finish button, tapping it runs `onFinish` and then
+    /// closes the window. When a `signInFooter` is injected (Donkey's Google sign-in), slide 0 is the
+    /// sign-in landing and the window stays up until the caller closes it — typically once sign-in
+    /// completes. `initialPageIndex` chooses the slide to open on (e.g. the sign-in landing vs. the tour).
     @discardableResult
     func present(
         pages: [OnboardingPage],
         width: CGFloat = 660,
+        initialPageIndex: Int = 0,
         continueButtonTitle: LocalizedStringKey = "Continue",
         finishButtonTitle: LocalizedStringKey = "Done",
         buttonTableName: String? = nil,
         buttonBundle: Bundle? = nil,
         onFinish: (() -> Void)? = nil,
-        onClose: (() -> Void)? = nil
+        onDismiss: (() -> Void)? = nil,
+        signInFooter: (() -> AnyView)? = nil
     ) -> NSWindow {
         if let existing = window {
             existing.makeKeyAndOrderFront(nil)
@@ -451,35 +596,25 @@ final class OnboardingWindowController {
         // button pin to the top, centre, and bottom of the remaining space
         // respectively. Shorter slides simply get more breathing room.
         let imageHeight = width / OnboardingSlideshowView.imageAspectRatio
-        let maxPanelHeight = Self.maxBottomPanelHeight(
-            pages: pages,
-            width: width,
-            continueButtonTitle: continueButtonTitle,
-            finishButtonTitle: finishButtonTitle,
-            buttonTableName: buttonTableName,
-            buttonBundle: buttonBundle
-        )
+        let maxPanelHeight = Self.maxBottomPanelHeight(pages: pages, width: width)
         let totalHeight = max(imageHeight + maxPanelHeight, 1)
 
         let rootView = OnboardingSlideshowView(
             pages: pages,
             width: width,
+            initialPageIndex: initialPageIndex,
             continueButtonTitle: continueButtonTitle,
             finishButtonTitle: finishButtonTitle,
             buttonTableName: buttonTableName,
             buttonBundle: buttonBundle,
             onFinish: {
-                if let onFinish {
-                    onFinish()
-                } else {
-                    onClose?()
-                }
+                onFinish?()
                 dismiss()
             },
             onClose: {
-                onClose?()
                 dismiss()
-            }
+            },
+            signInFooter: signInFooter
         )
 
         let contentSize = CGSize(width: width, height: totalHeight)
@@ -505,6 +640,7 @@ final class OnboardingWindowController {
         let delegate = WindowDelegate { [weak self] in
             self?.window = nil
             self?.windowDelegate = nil
+            onDismiss?()
         }
         window.delegate = delegate
         self.windowDelegate = delegate
@@ -525,23 +661,13 @@ final class OnboardingWindowController {
     /// panel respectively).
     private static func maxBottomPanelHeight(
         pages: [OnboardingPage],
-        width: CGFloat,
-        continueButtonTitle: LocalizedStringKey,
-        finishButtonTitle: LocalizedStringKey,
-        buttonTableName: String?,
-        buttonBundle: Bundle?
+        width: CGFloat
     ) -> CGFloat {
         guard !pages.isEmpty else { return 0 }
 
-        return pages.enumerated().map { index, page in
-            let isLast = (index == pages.count - 1)
-            let sizingView = OnboardingBottomPanelSizingView(
-                page: page,
-                buttonTitle: isLast ? finishButtonTitle : continueButtonTitle,
-                buttonTableName: buttonTableName,
-                buttonBundle: buttonBundle
-            )
-            .frame(width: width)
+        return pages.map { page in
+            let sizingView = OnboardingBottomPanelSizingView(page: page)
+                .frame(width: width)
 
             let hosting = NSHostingView(rootView: sizingView)
             hosting.layoutSubtreeIfNeeded()
@@ -569,12 +695,9 @@ final class OnboardingWindowController {
 /// slideshow will render at runtime.
 private struct OnboardingBottomPanelSizingView: View {
     let page: OnboardingPage
-    let buttonTitle: LocalizedStringKey
-    let buttonTableName: String?
-    let buttonBundle: Bundle?
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 0) {
             Text(page.title, tableName: page.tableName, bundle: page.resolvedStringsBundle)
                 .font(.system(size: 28, weight: .bold))
                 .multilineTextAlignment(.center)
@@ -586,15 +709,15 @@ private struct OnboardingBottomPanelSizingView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(Color.white.opacity(0.70))
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.bottom, 6)
+                .padding(.top, 6)
 
-            Text(buttonTitle, tableName: buttonTableName, bundle: buttonBundle)
-                .font(.system(size: 15, weight: .semibold))
-                .frame(width: 220, height: 42)
-                .padding(.top, 18)
+            Spacer(minLength: 24)
+
+            Color.clear
+                .frame(height: OnboardingSlideshowView.primaryRegionHeight)
         }
         .padding(.horizontal, 32)
-        .padding(.top, 6)
+        .padding(.top, 12)
         .padding(.bottom, 24)
     }
 }
@@ -604,22 +727,42 @@ private struct OnboardingBottomPanelSizingView: View {
 struct OnboardingPageIndicator: View {
     let totalPages: Int
     let currentIndex: Int
+    /// Invoked with the tapped slide index when a dot is clicked.
+    let onSelect: (Int) -> Void
 
-    init(totalPages: Int, currentIndex: Int) {
+    /// Visual gap between dots. It is baked into each dot's hit target rather
+    /// than the HStack spacing, so the space between dots reads the same while
+    /// the area immediately around each dot stays clickable.
+    private static let gap: CGFloat = 7
+
+    init(totalPages: Int, currentIndex: Int, onSelect: @escaping (Int) -> Void) {
         self.totalPages = totalPages
         self.currentIndex = currentIndex
+        self.onSelect = onSelect
     }
 
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 0) {
             ForEach(0..<totalPages, id: \.self) { index in
-                Capsule(style: .continuous)
-                    .fill(index == currentIndex ? Color.white.opacity(0.95) : Color.white.opacity(0.32))
-                    .frame(width: index == currentIndex ? 24 : 8, height: 8)
+                let isCurrent = index == currentIndex
+                let dotWidth: CGFloat = isCurrent ? 24 : 8
+                Button {
+                    onSelect(index)
+                } label: {
+                    Capsule(style: .continuous)
+                        .fill(isCurrent ? Color.white.opacity(0.95) : Color.white.opacity(0.32))
+                        .frame(width: dotWidth, height: 8)
+                        // Grow the hit target around the small dot — the gap to
+                        // its neighbour plus a comfortable vertical band — without
+                        // changing how the dot itself looks.
+                        .frame(width: dotWidth + Self.gap, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Go to page \(index + 1)")
+                .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
             }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Page \(currentIndex + 1) of \(max(totalPages, 1))")
     }
 }
 
@@ -632,36 +775,68 @@ struct OnboardingPageIndicator: View {
 /// them as `.copy(...)` resources in `Package.swift`, and name them to match
 /// the `imageName` values below.
 enum OnboardingTour {
-    static let pages: [OnboardingPage] = [
+    /// The sign-in landing — the first slide when signed out. Its call-to-action
+    /// is the injected Google sign-in footer plus the Explore link; the feature
+    /// tour walks forward and returns here to sign in.
+    static let signInPage = OnboardingPage(
+        imageName: "onboarding-signin",
+        imageBundle: DonkeyResourceBundle.app,
+        title: "Sign in to Donkey",
+        description: "Continue with Google to put Donkey to work on your Mac.",
+        background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.50, y: 0.16), bloomIntensity: 0.95)
+    )
+
+    /// The feature slides — the walkthrough reached by Explore (signed out) or
+    /// shown directly (signed-in replay).
+    static let featurePages: [OnboardingPage] = [
         OnboardingPage(
             imageName: "onboarding-welcome",
             imageBundle: DonkeyResourceBundle.app,
             title: "Welcome to Donkey",
-            description: "Your AI assistant that gets things done right on your Mac."
+            description: "Your AI assistant that gets things done right on your Mac.",
+            background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.26, y: 0.30), bloomIntensity: 0.30)
         ),
         OnboardingPage(
             imageName: "onboarding-ask",
             imageBundle: DonkeyResourceBundle.app,
             title: "Just ask, in plain language",
-            description: "Type or speak a request and Donkey figures out the steps."
+            description: "Type or speak a request and Donkey figures out the steps.",
+            background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.74, y: 0.18), bloomIntensity: 0.60)
         ),
         OnboardingPage(
             imageName: "onboarding-apps",
             imageBundle: DonkeyResourceBundle.app,
             title: "It works your apps for you",
-            description: "Donkey clicks, types, and navigates across the apps you already use."
+            description: "Donkey clicks, types, and navigates across the apps you already use.",
+            background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.50, y: 0.40), bloomIntensity: 0.50)
         ),
         OnboardingPage(
             imageName: "onboarding-follow",
             imageBundle: DonkeyResourceBundle.app,
             title: "Follow along every step",
-            description: "Watch what Donkey is doing in the notch as it works."
-        ),
-        OnboardingPage(
-            imageName: "onboarding-ready",
-            imageBundle: DonkeyResourceBundle.app,
-            title: "You're all set",
-            description: "Sign in to start putting Donkey to work."
+            description: "Watch what Donkey is doing in the notch as it works.",
+            background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.80, y: 0.22), bloomIntensity: 0.80)
         )
     ]
+
+    /// Closing slide when the user is already signed in (menu replay): a plain
+    /// wrap-up whose Done button dismisses the card.
+    static let finishedPage = OnboardingPage(
+        imageName: "onboarding-ready",
+        imageBundle: DonkeyResourceBundle.app,
+        title: "You're all set",
+        description: "Donkey is ready whenever you are.",
+        background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.46, y: 0.16), bloomIntensity: 1.00)
+    )
+
+    /// Signed out: the sign-in landing leads the feature tour. Signed in: the
+    /// feature tour ends on a plain wrap-up. The sign-in slide is always index 0
+    /// when present, which the slideshow relies on for the Explore / return flow.
+    static func pages(isSignedIn: Bool) -> [OnboardingPage] {
+        if isSignedIn {
+            return featurePages + [finishedPage]
+        } else {
+            return [signInPage] + featurePages
+        }
+    }
 }
