@@ -1,38 +1,18 @@
-import SwiftUI
+import AppKit
 
+// Donkey runs on the AppKit lifecycle: every surface — the notch overlay, onboarding,
+// login, and the application menu — is built and owned by DonkeyAppDelegate. There is no
+// SwiftUI scene, so nothing injects a "Settings…" item or competes with the delegate's
+// own main menu (which already exposes Permissions Setup, Sign Out, and Show Onboarding).
 @main
-struct Donkey: App {
-    @NSApplicationDelegateAdaptor(DonkeyAppDelegate.self) private var appDelegate
-
-    var body: some Scene {
-        Settings {
-            LocalRuntimeSettingsView()
+enum DonkeyMain {
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = DonkeyAppDelegate()
+        app.delegate = delegate
+        // NSApplication holds the delegate weakly; keep it alive for the whole run loop.
+        withExtendedLifetime(delegate) {
+            app.run()
         }
-    }
-}
-
-private struct LocalRuntimeSettingsView: View {
-    @State private var permissionSetupController: MacPermissionSetupWindowController?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Permissions")
-                    .font(.headline)
-                Text("Reopen setup for Accessibility, screenshot, and microphone access.")
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button("Open Permissions Setup") {
-                    let controller = MacPermissionSetupWindowController()
-                    permissionSetupController = controller
-                    controller.completed = {
-                        permissionSetupController = nil
-                    }
-                    controller.showSetup()
-                }
-            }
-        }
-        .padding(20)
-        .frame(width: 420, alignment: .leading)
     }
 }
