@@ -128,6 +128,11 @@ equivalent, so it goes straight to Cloud (Phase 2).
   auth, and human-in-the-loop for approvals/payments. Likely its own capability
   skill (`web-automation`) describing when to use it vs. the read/capture tools.
 
+> The **local** counterpart to Phase 2 — driving the user's own Chrome over CDP
+> with the open-source `browser-use` CLI (real sessions, no bundled Chromium) —
+> is planned separately in `plans/local-browser-cdp-automation.md`. It augments
+> this Cloud path with a free "act in your own browser" rung.
+
 ## Files (implemented)
 
 - `apps/Donkey/Sources/DonkeyAI/HostedWebAutomate.swift` — single blocking call;

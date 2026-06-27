@@ -29,6 +29,14 @@ even when there are no active tasks.
    **supported**. Remaining: migrate `pdf.fill` onto the runner (code unification,
    not a cost fix), and capture a real before/after trace.
 
+2. **Local browser automation via the browser-use CLI (CDP)** —
+   `plans/local-browser-cdp-automation.md`. Add a free "act in your own browser"
+   rung beside Browser Use Cloud: bundle the `browser-use` Python sidecar (no
+   Chromium), drive the user's installed Chrome over CDP in agentic `run` mode, and
+   route the agent's LLM through a metered Donkey backend relay. Supports a
+   dedicated persistent profile and a consented seeded-from-real profile. Starts
+   at Phase 1 (sidecar + CDP smoke path).
+
 ## Invariants
 
 - Completed behavior belongs in `docs/`, not in active plans.
