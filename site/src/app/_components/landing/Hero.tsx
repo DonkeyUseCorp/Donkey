@@ -12,9 +12,9 @@ export function Hero() {
       className="mx-auto max-w-[1400px] px-6 pt-8 pb-20 md:px-12 md:pt-16 md:pb-[120px]"
     >
       <h1 className="text-[clamp(45px,9.6vw,134px)] leading-[0.88] font-semibold tracking-[-0.03em]">
-        Get work done
+        Every Mac
         <br />
-        while <span className="italic">you sleep.</span>
+        needs a <span className="italic">Donkey.</span>
       </h1>
       <p className="mt-8 max-w-[560px] text-[18px] leading-[1.55] text-[#454545] md:text-[20px]">
         Donkey gets work done on your Mac. Tell it what to do: research,
