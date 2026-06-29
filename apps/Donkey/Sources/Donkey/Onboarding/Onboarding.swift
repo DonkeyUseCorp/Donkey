@@ -28,8 +28,12 @@ struct OnboardingPage: Identifiable, Hashable, @unchecked Sendable {
     /// module bundle.
     let stringsBundle: Bundle?
     /// Per-slide gradient backdrop rendered behind the artwork. When `nil`, the
-    /// slide falls back to the card's flat dark fill.
+    /// slide falls back to the card's flat cream fill.
     let background: OnboardingSlideBackground?
+    /// What fills the artwork region: a static image by default, or a live mock
+    /// (the screen edge with the collapsed→expanded notch) on the slides that
+    /// demo the app.
+    let artwork: OnboardingArtwork
 
     init(
         id: UUID = UUID(),
@@ -39,7 +43,8 @@ struct OnboardingPage: Identifiable, Hashable, @unchecked Sendable {
         description: LocalizedStringKey,
         tableName: String? = nil,
         stringsBundle: Bundle? = nil,
-        background: OnboardingSlideBackground? = nil
+        background: OnboardingSlideBackground? = nil,
+        artwork: OnboardingArtwork = .image
     ) {
         self.id = id
         self.imageName = imageName
@@ -49,6 +54,7 @@ struct OnboardingPage: Identifiable, Hashable, @unchecked Sendable {
         self.tableName = tableName
         self.stringsBundle = stringsBundle
         self.background = background
+        self.artwork = artwork
     }
 
     /// Bundle used for localized string lookup. Prefers `stringsBundle`, then
@@ -66,11 +72,27 @@ struct OnboardingPage: Identifiable, Hashable, @unchecked Sendable {
     }
 }
 
-/// A per-slide gradient backdrop. Every slide shares the same blue wash; only
-/// the spotlight distinguishes them — its position moves and its intensity
-/// visibly brightens and dims as the walkthrough advances.
+/// The onboarding card mirrors the donkeyuse.com landing palette — a warm cream
+/// surface, near-black ink for text and borders, and a coral primary action —
+/// rather than a dark card with a blue glow. Values track `site`'s theme.ts.
+enum OnboardingPalette {
+    /// Page surface — landing `BG` #F5EFE0.
+    static let cream = Color(red: 0.961, green: 0.937, blue: 0.878)
+    /// A lighter cream for the top of the slide wash — landing cream #FAF6EC.
+    static let creamLight = Color(red: 0.980, green: 0.965, blue: 0.925)
+    /// Text, borders, shadows — landing `BLACK` #0F0E0D.
+    static let ink = Color(red: 0.059, green: 0.055, blue: 0.051)
+    /// Secondary body copy — landing body gray #454545.
+    static let bodyGray = Color(red: 0.271, green: 0.271, blue: 0.271)
+    /// Primary action — landing `CORAL` #EC7868.
+    static let coral = Color(red: 0.925, green: 0.471, blue: 0.408)
+}
+
+/// A per-slide backdrop over the shared cream wash. Every slide shares the same
+/// wash; only the spotlight distinguishes them — its position moves and its
+/// intensity brightens and dims as the walkthrough advances.
 struct OnboardingSlideBackground: Sendable {
-    /// Where the spotlight bloom sits over the shared blue wash.
+    /// Where the spotlight bloom sits over the shared cream wash.
     var bloomCenter: UnitPoint
     /// Bloom strength, 0...1. Spread widely across slides so the brightness
     /// shift reads clearly from one slide to the next.
@@ -78,19 +100,19 @@ struct OnboardingSlideBackground: Sendable {
 
     /// The colour the wash resolves to at the bottom edge — matched to the card
     /// fill so the gradient seams invisibly into the text panel below.
-    static let baseFill = Color(white: 0.10)
+    static let baseFill = OnboardingPalette.cream
 }
 
 struct OnboardingSlideBackgroundView: View {
     let background: OnboardingSlideBackground
 
-    /// The shared blue wash. Every slide uses these exact colours; only the
+    /// The shared cream wash. Every slide uses these exact colours; only the
     /// spotlight (position + intensity) changes between slides.
-    private static let washTop = Color(red: 0.12, green: 0.60, blue: 1.0)
-    private static let washMiddle = Color(red: 0.05, green: 0.45, blue: 0.95)
-    /// Bright sky-blue spotlight — kept blue rather than white so a strong bloom
-    /// glows without washing the hue out.
-    private static let bloomColor = Color(red: 0.60, green: 0.82, blue: 1.0)
+    private static let washTop = OnboardingPalette.creamLight
+    private static let washMiddle = OnboardingPalette.cream
+    /// A soft coral spotlight — the landing accent, screened over the cream so a
+    /// strong bloom warms the slide without reading as a glow.
+    private static let bloomColor = OnboardingPalette.coral
 
     var body: some View {
         ZStack {
@@ -184,11 +206,11 @@ struct OnboardingSlideshowView: View {
                     imageSection
                     bottomPanel
                 }
-                .background(Color(white: 0.10))
+                .background(OnboardingPalette.cream)
                 .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                        .strokeBorder(OnboardingPalette.ink, lineWidth: 2)
                 }
             }
         }
@@ -248,9 +270,7 @@ struct OnboardingSlideshowView: View {
                     .transition(.opacity)
             }
 
-            image(for: pages[currentIndex])
-                .resizable()
-                .scaledToFit()
+            artworkLayer(for: pages[currentIndex])
                 .frame(width: width, height: imageHeight)
                 .id(currentIndex)
                 .transition(.opacity)
@@ -258,10 +278,10 @@ struct OnboardingSlideshowView: View {
             LinearGradient(
                 stops: [
                     .init(color: .clear, location: 0),
-                    .init(color: Color(white: 0.10).opacity(0.15), location: 0.25),
-                    .init(color: Color(white: 0.10).opacity(0.45), location: 0.50),
-                    .init(color: Color(white: 0.10).opacity(0.80), location: 0.75),
-                    .init(color: Color(white: 0.10), location: 1.0)
+                    .init(color: OnboardingPalette.cream.opacity(0.15), location: 0.25),
+                    .init(color: OnboardingPalette.cream.opacity(0.45), location: 0.50),
+                    .init(color: OnboardingPalette.cream.opacity(0.80), location: 0.75),
+                    .init(color: OnboardingPalette.cream, location: 1.0)
                 ],
                 startPoint: .top,
                 endPoint: .bottom
@@ -294,14 +314,15 @@ struct OnboardingSlideshowView: View {
         return VStack(spacing: 0) {
             Text(currentPage.title, tableName: currentPage.tableName, bundle: currentPage.resolvedStringsBundle)
                 .font(.system(size: 28, weight: .semibold))
+                .tracking(-0.8)
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.white)
+                .foregroundStyle(OnboardingPalette.ink)
                 .fixedSize(horizontal: false, vertical: true)
 
             Text(currentPage.description, tableName: currentPage.tableName, bundle: currentPage.resolvedStringsBundle)
                 .font(.system(size: 18))
                 .multilineTextAlignment(.center)
-                .foregroundStyle(Color.white.opacity(0.70))
+                .foregroundStyle(OnboardingPalette.bodyGray)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 6)
 
@@ -414,21 +435,10 @@ struct OnboardingSlideshowView: View {
         Button(action: action) {
             Text(title, tableName: buttonTableName, bundle: buttonBundle)
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(OnboardingPalette.ink)
                 .frame(width: 220, height: Self.capsuleButtonHeight)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color(red: 0.10, green: 0.60, blue: 1.0),
-                                    Color(red: 0.04, green: 0.46, blue: 0.96)
-                                ],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
-                )
+                .background(Capsule(style: .continuous).fill(OnboardingPalette.coral))
+                .overlay(Capsule(style: .continuous).strokeBorder(OnboardingPalette.ink, lineWidth: 2))
                 .clipShape(Capsule(style: .continuous))
                 .contentShape(Capsule(style: .continuous))
         }
@@ -446,7 +456,7 @@ struct OnboardingSlideshowView: View {
                     .font(.system(size: 10, weight: .semibold))
             }
             .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(.white.opacity(0.72))
+            .foregroundStyle(OnboardingPalette.bodyGray)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -458,18 +468,12 @@ struct OnboardingSlideshowView: View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.88))
+                .foregroundStyle(OnboardingPalette.ink)
                 .frame(width: 32, height: 32)
                 .background {
-                    if #available(macOS 26.0, iOS 26.0, *) {
-                        Circle()
-                            .fill(.ultraThinMaterial)
-                            .overlay {
-                                Circle().stroke(Color.white.opacity(0.25), lineWidth: 0.5)
-                            }
-                    } else {
-                        Circle().fill(Color.white.opacity(0.15))
-                    }
+                    Circle()
+                        .fill(Color.white)
+                        .overlay { Circle().strokeBorder(OnboardingPalette.ink, lineWidth: 1.5) }
                 }
                 .contentShape(Circle())
         }
@@ -516,6 +520,32 @@ struct OnboardingSlideshowView: View {
         let target = Self.clamped(index, pageCount: pages.count)
         guard target != currentIndex else { return }
         currentIndex = target
+    }
+
+    /// The artwork region's content: the live notch mock on demo slides,
+    /// otherwise the slide's static image.
+    @ViewBuilder
+    private func artworkLayer(for page: OnboardingPage) -> some View {
+        switch page.artwork {
+        case .image:
+            image(for: page)
+                .resizable()
+                .scaledToFit()
+        case .notchMock(let conversations):
+            OnboardingNotchMock(conversations: conversations, mode: .loop)
+        case .notchPanel(let conversations):
+            OnboardingNotchMock(conversations: conversations, mode: .expandedPanel)
+        case .notchComposer(let conversations):
+            OnboardingNotchMock(conversations: conversations, mode: .openComposer)
+        case .notchCompose(let conversations):
+            OnboardingNotchMock(conversations: conversations, mode: .composeAndRun)
+        case .inputMock(let commands):
+            OnboardingInputMock(commands: commands)
+        case .signInMock(let commands):
+            OnboardingSignInMock(commands: commands)
+        case .inputSummon(let commands):
+            OnboardingInputMock(commands: commands, mode: .commandSummon)
+        }
     }
 
     private func image(for page: OnboardingPage) -> Image {
@@ -755,14 +785,15 @@ private struct OnboardingBottomPanelSizingView: View {
         VStack(spacing: 0) {
             Text(page.title, tableName: page.tableName, bundle: page.resolvedStringsBundle)
                 .font(.system(size: 28, weight: .semibold))
+                .tracking(-0.8)
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.white)
+                .foregroundStyle(OnboardingPalette.ink)
                 .fixedSize(horizontal: false, vertical: true)
 
             Text(page.description, tableName: page.tableName, bundle: page.resolvedStringsBundle)
                 .font(.system(size: 18))
                 .multilineTextAlignment(.center)
-                .foregroundStyle(Color.white.opacity(0.70))
+                .foregroundStyle(OnboardingPalette.bodyGray)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 6)
 
@@ -810,7 +841,7 @@ struct OnboardingPageIndicator: View {
                     onSelect(index)
                 } label: {
                     Capsule(style: .continuous)
-                        .fill(isCurrent ? Color.white.opacity(0.95) : Color.white.opacity(0.32))
+                        .fill(isCurrent ? OnboardingPalette.ink.opacity(0.95) : OnboardingPalette.ink.opacity(0.28))
                         .frame(width: dotWidth, height: 8)
                         // Grow the hit target around the small dot — the gap to
                         // its neighbour plus a comfortable vertical band — without
@@ -828,13 +859,23 @@ struct OnboardingPageIndicator: View {
 
 // MARK: - Default onboarding content
 
-/// The slides shown on first launch. Artwork is loaded from the app resource
-/// bundle by `imageName`; the named images don't ship yet, so each slide
-/// currently renders with an empty (dark) artwork area. To add screenshots,
-/// drop 16:10 images into `apps/Donkey/Sources/Donkey/Resources/`, register
-/// them as `.copy(...)` resources in `Package.swift`, and name them to match
-/// the `imageName` values below.
+/// The slides shown on first launch. Each slide's artwork is a live mock (see
+/// `OnboardingArtwork`): the sign-in and "ask" slides type out example commands
+/// in the Donkey field, the others drop the notch out of the screen edge and run
+/// a task. A slide left as `.image` instead loads `imageName` from the app
+/// resource bundle — drop a 16:10 image into
+/// `apps/Donkey/Sources/Donkey/Resources/` and register it in `Package.swift`.
 enum OnboardingTour {
+    /// Example commands the input-field mock types out, drawn from the eval
+    /// fixtures — concrete, everyday tasks a user actually wants done.
+    static let exampleCommands: [String] = [
+        "give me a markdown of donkeyuse.com",
+        "create a playlist with the top 10 songs from 2021",
+        "turn on dark mode and enable Night Shift",
+        "extract the table from q3-figures.pdf into a CSV",
+        "split book.pdf into one file per chapter"
+    ]
+
     /// The sign-in landing — the first slide when signed out. Its call-to-action
     /// is the injected Google sign-in footer plus an Explore link into the
     /// walkthrough, which ends on the closing slide's own Google button.
@@ -843,7 +884,8 @@ enum OnboardingTour {
         imageBundle: DonkeyResourceBundle.app,
         title: "Sign in to Donkey",
         description: "Continue with Google to put Donkey to work on your Mac.",
-        background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.50, y: 0.16), bloomIntensity: 0.95)
+        background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.50, y: 0.16), bloomIntensity: 0.95),
+        artwork: .signInMock(exampleCommands)
     )
 
     /// The walkthrough body — reached by Explore (signed out) or shown directly
@@ -854,28 +896,62 @@ enum OnboardingTour {
             imageBundle: DonkeyResourceBundle.app,
             title: "Meet Donkey",
             description: "The workhorse for your Mac. Tell it what you want done — then go do something else.",
-            background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.26, y: 0.30), bloomIntensity: 0.30)
+            background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.26, y: 0.30), bloomIntensity: 0.30),
+            artwork: .notchCompose([
+                OnboardingMockConversation(
+                    id: "welcome-running",
+                    accentIndex: 3,
+                    prompt: "summarize report.pdf into a one-page brief and save it to my Desktop",
+                    status: "Reading the PDF",
+                    elapsedOffset: 0
+                ),
+                OnboardingMockConversation(
+                    id: "welcome-idle",
+                    accentIndex: 6,
+                    prompt: "split book.pdf into one file per chapter",
+                    status: "Done",
+                    elapsedOffset: 0,
+                    isRunning: false
+                )
+            ])
         ),
         OnboardingPage(
             imageName: "onboarding-ask",
             imageBundle: DonkeyResourceBundle.app,
             title: "Ask it for anything",
             description: "Fill out PDFs, create a website, clip a YouTube video. Command it and Donkey works out the rest.",
-            background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.74, y: 0.18), bloomIntensity: 0.60)
-        ),
-        OnboardingPage(
-            imageName: "onboarding-apps",
-            imageBundle: DonkeyResourceBundle.app,
-            title: "It works your apps for you",
-            description: "Donkey clicks, types, and navigates across the apps you already use.",
-            background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.50, y: 0.40), bloomIntensity: 0.50)
+            background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.74, y: 0.18), bloomIntensity: 0.60),
+            artwork: .inputSummon(Self.exampleCommands)
         ),
         OnboardingPage(
             imageName: "onboarding-parallel",
             imageBundle: DonkeyResourceBundle.app,
             title: "Hand it three jobs at once",
             description: "Donkey runs several conversations in parallel, so nothing waits in line. Kick off a task, start another, come back when they're done.",
-            background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.80, y: 0.22), bloomIntensity: 0.80)
+            background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.80, y: 0.22), bloomIntensity: 0.80),
+            artwork: .notchPanel([
+                OnboardingMockConversation(
+                    id: "parallel-1",
+                    accentIndex: 0,
+                    prompt: "fill out f1120.pdf using 1120data.txt",
+                    status: "Filling the form fields",
+                    elapsedOffset: 47
+                ),
+                OnboardingMockConversation(
+                    id: "parallel-2",
+                    accentIndex: 3,
+                    prompt: "compare the pricing of the top 3 note-taking apps and write me a summary doc on my Desktop",
+                    status: "Comparing the options",
+                    elapsedOffset: 19
+                ),
+                OnboardingMockConversation(
+                    id: "parallel-3",
+                    accentIndex: 4,
+                    prompt: "download the audio from https://www.youtube.com/watch?v=v8u_7PPEzZE as an mp3",
+                    status: "Downloading the audio",
+                    elapsedOffset: 6
+                )
+            ])
         )
     ]
 
@@ -887,7 +963,16 @@ enum OnboardingTour {
         imageBundle: DonkeyResourceBundle.app,
         title: "Donkey is ready to work",
         description: "",
-        background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.46, y: 0.16), bloomIntensity: 1.00)
+        background: OnboardingSlideBackground(bloomCenter: UnitPoint(x: 0.46, y: 0.16), bloomIntensity: 1.00),
+        artwork: .notchComposer([
+            OnboardingMockConversation(
+                id: "ready-1",
+                accentIndex: 6,
+                prompt: "extract the audio from meeting.mov as an mp3 and give me a transcript with the action items pulled out",
+                status: "Writing the transcript",
+                elapsedOffset: 12
+            )
+        ])
     )
 
     /// Signed out: the sign-in landing leads the walkthrough, which ends on the
