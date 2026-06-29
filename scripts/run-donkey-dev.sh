@@ -20,7 +20,7 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 APP_ICON_SOURCE="$APP_DIR/Sources/Donkey/Resources/Donkey.icns"
 APP_ICONSET_SOURCE="$APP_DIR/Sources/Donkey/Resources/Donkey.iconset"
-AUTH_CALLBACK_SCHEME="${DONKEY_AUTH_CALLBACK_SCHEME:-donkey}"
+AUTH_CALLBACK_SCHEME="${DONKEY_AUTH_CALLBACK_SCHEME:-donkey-dev}"
 LAUNCH_APP="${DONKEY_LAUNCH_APP:-1}"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 SITE_PID=""
@@ -28,6 +28,14 @@ SITE_LOG="${DONKEY_SITE_LOG:-${TMPDIR:-/tmp}/donkey-site-dev.log}"
 LOG_PID=""
 
 export DONKEY_WEB_BASE_URL="${DONKEY_WEB_BASE_URL:-http://localhost:3000}"
+
+# The dev build registers its own auth callback scheme (AUTH_CALLBACK_SCHEME,
+# baked into the dev Info.plist below) so the website's site->app handoff
+# deep-links to THIS build (donkey-dev://) instead of colliding with an installed
+# release that owns donkey://. The site derives the matching scheme automatically
+# from NODE_ENV (next dev -> donkey-dev), so no site env var is needed here.
+# Google OAuth is unaffected: its redirect_uri is the website's own callback
+# (BETTER_AUTH_URL host), which never sees this scheme.
 
 # The app authenticates hosted inference with a real signed-in session: launch
 # it, sign in through Google, and the native session cookie carries the auth.

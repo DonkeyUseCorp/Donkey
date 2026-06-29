@@ -116,10 +116,12 @@ packages, or local model repair steps in the hosted-model install path.
 The dev script starts the local site when `DONKEY_WEB_BASE_URL` points at
 localhost, builds Donkey, wraps the debug executable in
 `apps/Donkey/.build/debug/Donkey Dev.app`, registers that bundle for
-`donkey://auth/callback`, and launches it. The debug wrapper uses the
-`Donkey Dev` display name and `com.donkeyuse.Donkey.dev` bundle identifier by
-default so macOS privacy settings do not collide with packaged `Donkey.app`
-builds. Development builds use the same hosted-model boundary as packaged
+`donkey-dev://auth/callback`, and launches it. The debug wrapper defaults to the
+`Donkey Dev` display name, the `com.donkeyuse.Donkey.dev` bundle identifier, and
+a `donkey-dev://` sign-in callback scheme, so it never collides with a packaged
+`Donkey.app` (which keeps `donkey://`) over macOS privacy settings or the OAuth
+callback handoff. The site derives the matching scheme automatically under
+`next dev`, so its site→app handoff deep-links back to this build. Development builds use the same hosted-model boundary as packaged
 builds; to test provider behavior, configure the site/backend environment and
 keep provider credentials out of the Mac app.
 
