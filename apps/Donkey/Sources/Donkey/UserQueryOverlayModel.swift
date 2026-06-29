@@ -272,12 +272,39 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             )
             scheduleSystemSetupAutoAcknowledge(id: id)
         case .failed:
+            // The row carries a Retry action while failed (see `retrySystemToolsSetup`), so the message
+            // states the outcome plainly rather than promising an automatic retry the user can't see.
             announceLifecycle(
                 conversationID: id,
-                UserQueryActivity(kind: .failed, summary: "Couldn’t finish setting up tools — Donkey will try again later"),
+                UserQueryActivity(kind: .failed, summary: "Couldn’t finish setting up tools"),
                 status: .failed
             )
             scheduleSystemSetupAutoAcknowledge(id: id)
+        }
+    }
+
+    /// Re-run the bundled-tools install for a setup row the user tapped Retry on. The launch-time run gives
+    /// up after a few attempts and parks the row at `.failed`; this lets the user drive a fresh attempt then
+    /// and there — no relaunch. Re-open the row to running immediately so the tap registers and the
+    /// `status == .failed` guard makes a second tap a no-op (no double-launch). The installer's own events
+    /// then drive the row to completed/failed; if it returns having done nothing (tools already current, so
+    /// no events fired) the result settles the optimistic row so it never spins forever.
+    func retrySystemToolsSetup(id: String) {
+        guard let conversation = conversation(withID: id),
+              conversation.origin == .system,
+              conversation.status == .failed else {
+            return
+        }
+        updateConversation(id: id, detail: "Retrying…", status: .running)
+        Task { [weak self] in
+            let installed = await BundledToolsInstaller.shared.installIfNeeded(onEvent: { event in
+                Task { @MainActor in self?.applyToolsSetupEvent(event) }
+            })
+            await MainActor.run {
+                guard let self,
+                      self.conversation(withID: id)?.status == .running else { return }
+                self.applyToolsSetupEvent(installed ? .completed : .failed)
+            }
         }
     }
 

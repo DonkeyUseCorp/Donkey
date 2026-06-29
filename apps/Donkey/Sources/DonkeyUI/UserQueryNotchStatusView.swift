@@ -61,6 +61,9 @@ public struct UserQueryNotchStatusView: View {
     /// A conversation that failed for lack of credits shows a "Reload credits" CTA in its banner; tapping it
     /// fires this so the app can open the billing page (reuses the permission-banner button styling).
     private let reloadCreditsRequested: @MainActor (String) -> Void
+    /// A failed system tool-setup row shows a "Retry" pill; tapping it fires this so the app re-runs the
+    /// bundled-tools install without waiting for the next launch.
+    private let retrySetupRequested: @MainActor (String) -> Void
     /// A conversation waiting on a generative options form (user.choose) submits the user's picks through
     /// this — (conversationID, selection of fieldID→value). The harness resumes the task with the choices.
     private let submitChoiceForm: @MainActor (String, [String: String]) -> Void
@@ -99,6 +102,7 @@ public struct UserQueryNotchStatusView: View {
         needsLogin: Bool = false,
         loginRequested: @escaping @MainActor () -> Void = {},
         reloadCreditsRequested: @escaping @MainActor (String) -> Void = { _ in },
+        retrySetupRequested: @escaping @MainActor (String) -> Void = { _ in },
         submitChoiceForm: @escaping @MainActor (String, [String: String]) -> Void = { _, _ in }
     ) {
         self.state = state
@@ -134,6 +138,7 @@ public struct UserQueryNotchStatusView: View {
         self.needsLogin = needsLogin
         self.loginRequested = loginRequested
         self.reloadCreditsRequested = reloadCreditsRequested
+        self.retrySetupRequested = retrySetupRequested
         self.submitChoiceForm = submitChoiceForm
     }
 
@@ -890,8 +895,9 @@ public struct UserQueryNotchStatusView: View {
     /// (or Stop) button, or a Resume + Close pair. Permission rows carry their own banner controls.
     private func controlsReserve(for conversation: UserQueryConversation) -> CGFloat {
         if !conversation.isUserControllable {
-            // A finished system row carries a lone Close (see `topRightControls`); a still-running one carries
-            // no controls, so its text spans the full row.
+            // A failed setup row carries Retry + Close (a pair); a finished one carries a lone Close; a
+            // still-running one carries no controls, so its text spans the full row (see `topRightControls`).
+            if isRetryableSystemSetup(conversation) { return 74 }
             return conversation.isUserDismissible ? 44 : 0
         }
         if conversation.status == .waitingForPermission { return 0 }
@@ -1067,6 +1073,10 @@ public struct UserQueryNotchStatusView: View {
             default:
                 stateControls(for: conversation)
             }
+        } else if isRetryableSystemSetup(conversation) {
+            // A setup row whose install gave up is the user's to retry — offer Retry + Close, the same
+            // two-button shape a paused user row uses for Resume + Close.
+            retryAndCloseControls(for: conversation)
         } else if conversation.isUserDismissible {
             // A finished system row (tool setup, "Tools ready") is no longer the app's to run — it's just a
             // notice the user can clear. Offer Close so it can be deleted like any other completed row.
@@ -1119,6 +1129,28 @@ public struct UserQueryNotchStatusView: View {
                 dismissRequested(conversation.id)
             }
         }
+    }
+
+    /// A failed tool-setup row gets Retry + Close — the same text-button + Close shape a row waiting on the
+    /// user uses for Reply. Retry re-runs the bundled-tools install now rather than waiting for the next
+    /// launch; Close clears it like any other finished system row.
+    @ViewBuilder
+    private func retryAndCloseControls(for conversation: UserQueryConversation) -> some View {
+        HStack(spacing: 6) {
+            NotchTextButton(label: "Retry", isEnabled: true) {
+                retrySetupRequested(conversation.id)
+            }
+            NotchControlButton(systemName: "xmark", label: "Close", isEnabled: true) {
+                dismissRequested(conversation.id)
+            }
+        }
+    }
+
+    /// Whether this is the system tool-setup row in its failed state — the one row that offers Retry. Typed
+    /// on origin + status, never inferred from the narration text; a failed system row is also dismissible,
+    /// so the Retry it adds sits beside Close.
+    private func isRetryableSystemSetup(_ conversation: UserQueryConversation) -> Bool {
+        conversation.origin == .system && conversation.status == .failed
     }
 
     /// A conversation waiting on the user gets Reply (answer the clarification / respond to the review) + Close.
