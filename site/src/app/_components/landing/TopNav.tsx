@@ -85,13 +85,13 @@ export function TopNav({
             <>
               <Link
                 href="/use-cases"
-                className="whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-semibold text-ink no-underline transition-colors hover:bg-white"
+                className="whitespace-nowrap rounded-full border border-transparent px-3 py-1.5 text-sm font-semibold text-ink no-underline transition-colors hover:border-ink/10 hover:bg-white"
               >
                 Use cases
               </Link>
               <Link
                 href={DONKEY_INSTALL_URL}
-                className="inline-flex items-center whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-semibold text-ink no-underline transition-colors hover:bg-white"
+                className="inline-flex items-center whitespace-nowrap rounded-full border border-transparent px-3 py-1.5 text-sm font-semibold text-ink no-underline transition-colors hover:border-ink/10 hover:bg-white"
               >
                 Download
               </Link>
