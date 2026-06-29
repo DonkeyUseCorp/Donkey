@@ -202,6 +202,15 @@ public struct UserQueryNotchStatusView: View {
                     value: surfaceIsOpen
                 )
 
+            if updateState.isActionable {
+                expandedUpdateBadge
+                    .opacity(surfaceIsOpen ? 1 : 0)
+                    .animation(
+                        surfaceIsOpen ? Self.expandedContentAnimation : Self.expandedContentDismissAnimation,
+                        value: surfaceIsOpen
+                    )
+            }
+
             if !hasConversationDisplayText && !needsLogin {
                 expandedNotchArrow
                     .opacity(surfaceIsOpen ? 1 : 0)
@@ -601,61 +610,49 @@ public struct UserQueryNotchStatusView: View {
     }
 
     private var expandedConversationContent: some View {
-        VStack(spacing: 0) {
-            if updateState.headerButtonTitle != nil {
-                expandedUpdateHeader
-            }
-
-            VStack(spacing: Self.conversationListCommandSpacing) {
-                ScrollViewReader { proxy in
-                    ScrollView(.vertical, showsIndicators: false) {
-                        VStack(spacing: 8) {
-                            if conversations.isEmpty {
-                                currentConversationRow
-                            } else {
-                                ForEach(conversations) { conversation in
-                                    // While replying to one conversation, the others dim back (handled inside the
-                                    // row so an attention pointer can stay lit) — it's clear which thread
-                                    // the next message continues. The dim is instant, not eased: an eased
-                                    // reply-dim made an arrowed-to row brighten ~0.16s after it scrolled
-                                    // in, reading as "scroll, then select."
-                                    conversationRow(conversation)
-                                        .id(conversation.id)
-                                }
+        VStack(spacing: Self.conversationListCommandSpacing) {
+            ScrollViewReader { proxy in
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(spacing: 8) {
+                        if conversations.isEmpty {
+                            currentConversationRow
+                        } else {
+                            ForEach(conversations) { conversation in
+                                // While replying to one conversation, the others dim back (handled inside the
+                                // row so an attention pointer can stay lit) — it's clear which thread
+                                // the next message continues. The dim is instant, not eased: an eased
+                                // reply-dim made an arrowed-to row brighten ~0.16s after it scrolled
+                                // in, reading as "scroll, then select."
+                                conversationRow(conversation)
+                                    .id(conversation.id)
                             }
                         }
-                        .padding(.top, 10)
                     }
-                    // Keep the keyboard-highlighted row on screen as the arrows walk past the fold.
-                    // `anchor: nil` scrolls the minimum to reveal the row (a no-op while it's already
-                    // visible) and stays unanimated, so a fast arrow burst can't restart a scroll
-                    // animation every frame and stall ("stuck", confirmed by profiling). The scroll
-                    // shares the selection's transaction (no defer), so an off-screen row scrolls in
-                    // already highlighted instead of lighting up a frame after it arrives.
-                    .onChange(of: selectedConversationID) {
-                        guard let selectedConversationID else { return }
-                        proxy.scrollTo(selectedConversationID)
-                    }
+                    .padding(.top, 10)
                 }
-
-                commandRow
-            }
-            .padding(.horizontal, Self.contentInset)
-            .padding(.bottom, Self.contentInset)
-        }
-    }
-
-    private var expandedCommandOnlyContent: some View {
-        VStack(spacing: 0) {
-            if updateState.headerButtonTitle != nil {
-                expandedUpdateHeader
+                // Keep the keyboard-highlighted row on screen as the arrows walk past the fold.
+                // `anchor: nil` scrolls the minimum to reveal the row (a no-op while it's already
+                // visible) and stays unanimated, so a fast arrow burst can't restart a scroll
+                // animation every frame and stall ("stuck", confirmed by profiling). The scroll
+                // shares the selection's transaction (no defer), so an off-screen row scrolls in
+                // already highlighted instead of lighting up a frame after it arrives.
+                .onChange(of: selectedConversationID) {
+                    guard let selectedConversationID else { return }
+                    proxy.scrollTo(selectedConversationID)
+                }
             }
 
             commandRow
-                .padding(.top, expandedCommandOnlyTopPadding)
         }
         .padding(.horizontal, Self.contentInset)
         .padding(.bottom, Self.contentInset)
+    }
+
+    private var expandedCommandOnlyContent: some View {
+        commandRow
+            .padding(.top, expandedCommandOnlyTopPadding)
+            .padding(.horizontal, Self.contentInset)
+            .padding(.bottom, Self.contentInset)
     }
 
     /// The leading arrow over the expanded composer-only surface. It renders only while the notch holds no
@@ -687,35 +684,34 @@ public struct UserQueryNotchStatusView: View {
         .accessibilityHidden(true)
     }
 
-    // The right-gutter app action, styled like the prototype: a label + a white pill button.
-    private var expandedUpdateHeader: some View {
+    /// The app-update affordance — "Update Available" + a white Restart pill — seated in the top band
+    /// above the content frame and pinned to the right. The band is the void inset the expanded surface
+    /// already reserves, so the badge rides beside the notch rather than claiming a row: on a real notch
+    /// the centered void sits to its left, on a no-notch display the band is otherwise empty. It never
+    /// pushes the conversation list down or draws a divider.
+    private var expandedUpdateBadge: some View {
         HStack(spacing: 8) {
-            Spacer()
+            Text("Update Available")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.7))
 
-            if updateState.isActionable {
-                Text("Update Available")
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(Color.white.opacity(0.7))
-
-                Button(action: updateRequested) {
-                    Text("Restart")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Color.black.opacity(0.82))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                }
-                .buttonStyle(.plain)
+            Button(action: updateRequested) {
+                Text("Restart")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.black.opacity(0.82))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
+            .buttonStyle(.plain)
         }
-        .padding(.horizontal, 14)
-        .frame(height: 40)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Color.white.opacity(0.08))
-                .frame(height: 1)
-        }
+        .padding(.trailing, Self.contentInset)
+        .frame(
+            width: expandedSurfaceWidth,
+            height: layout.expandedContentFrame.minY,
+            alignment: .trailing
+        )
     }
 
     private var expandedNotchArrowX: CGFloat {
