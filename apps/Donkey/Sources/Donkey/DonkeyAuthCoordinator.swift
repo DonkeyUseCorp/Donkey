@@ -222,6 +222,19 @@ final class DonkeyAuthCoordinator: ObservableObject {
         authenticationCompleted?(session)
     }
 
+    /// Re-reads the durable session and promotes a signed-out phase to signed-in when one exists on disk.
+    /// The sign-in callback can be handled by a different app instance than the one rendering the notch —
+    /// LaunchServices can cold-launch a second copy of this bundle id (which shares this UserDefaults
+    /// domain) to service the donkey:// URL. That copy mints the session on disk and flips its own phase,
+    /// while this instance's in-memory phase stays signed-out, leaving the notch stuck on the login CTA
+    /// until relaunch. Reconciling from the durable store on every activation heals it without a relaunch.
+    /// An in-flight sign-in, a live session, or a failed attempt is left untouched.
+    func reconcileWithPersistedSession() {
+        guard case .signedOut = phase,
+              let session = stateStore.loadSession() else { return }
+        phase = .signedIn(session)
+    }
+
     func clearFailedState() {
         guard case .failed = phase else { return }
         phase = stateStore.loadSession().map(DonkeyAuthPhase.signedIn) ?? .signedOut

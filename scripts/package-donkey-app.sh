@@ -406,6 +406,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <string>$APP_BUILD</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
+  <key>LSMultipleInstancesProhibited</key>
+  <true/>
   <key>DonkeyWebBaseURL</key>
   <string>$WEB_BASE_URL</string>
   <key>DonkeyAuthCallbackScheme</key>

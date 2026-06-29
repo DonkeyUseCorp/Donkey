@@ -75,6 +75,16 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        // The donkey:// sign-in callback can be serviced by a different app instance than the one rendering
+        // the notch (LaunchServices cold-launching a second copy of this bundle id, which shares this
+        // UserDefaults domain). That copy persists the session and exits, leaving this instance's in-memory
+        // phase signed-out and the notch stuck on the login CTA. Clicking "Open Donkey" activates us, so
+        // reconciling from the durable session here flips the phase — and the $phase observer flips the
+        // notch — without a relaunch. A no-op when already signed in or when no session is on disk.
+        authCoordinator?.reconcileWithPersistedSession()
+    }
+
     func applicationShouldHandleReopen(
         _ sender: NSApplication,
         hasVisibleWindows flag: Bool

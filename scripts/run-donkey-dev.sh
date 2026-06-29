@@ -405,6 +405,8 @@ write_info_plist() {
   <string>1</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
+  <key>LSMultipleInstancesProhibited</key>
+  <true/>
   <key>DonkeyWebBaseURL</key>
   <string>$escaped_web_base_url</string>
   <key>DonkeyAuthCallbackScheme</key>
