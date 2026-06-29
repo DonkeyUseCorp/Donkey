@@ -86,8 +86,8 @@ struct OnboardingSlideBackgroundView: View {
 
     /// The shared blue wash. Every slide uses these exact colours; only the
     /// spotlight (position + intensity) changes between slides.
-    private static let washTop = Color(red: 0.16, green: 0.38, blue: 0.96)
-    private static let washMiddle = Color(red: 0.07, green: 0.17, blue: 0.52)
+    private static let washTop = Color(red: 0.12, green: 0.60, blue: 1.0)
+    private static let washMiddle = Color(red: 0.05, green: 0.45, blue: 0.95)
     /// Bright sky-blue spotlight — kept blue rather than white so a strong bloom
     /// glows without washing the hue out.
     private static let bloomColor = Color(red: 0.60, green: 0.82, blue: 1.0)
@@ -97,7 +97,7 @@ struct OnboardingSlideBackgroundView: View {
             LinearGradient(
                 stops: [
                     .init(color: Self.washTop, location: 0.0),
-                    .init(color: Self.washMiddle, location: 0.55),
+                    .init(color: Self.washMiddle, location: 0.72),
                     .init(color: OnboardingSlideBackground.baseFill, location: 1.0)
                 ],
                 startPoint: .top,
@@ -266,7 +266,9 @@ struct OnboardingSlideshowView: View {
                 startPoint: .top,
                 endPoint: .bottom
             )
-            .frame(height: 220)
+            // Bottom-anchored, so a shorter height lowers where the fade begins — pulling the dark barrier
+            // down while the solid bottom still seams into the panel. Sits independently of the dots below.
+            .frame(height: 80)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             .allowsHitTesting(false)
 
