@@ -66,12 +66,13 @@ export function TopNav({
         >
           <div className="flex h-[59px] w-[59px] items-center justify-center overflow-hidden rounded-[10px]">
             <Image
-              src="/donkey-site-mark.webp"
+              src="/donkey-logo.svg"
               alt=""
               width={NAV_ICON_SIZE}
               height={NAV_ICON_SIZE}
               sizes={`${NAV_ICON_SIZE}px`}
-              className="block h-full w-full object-cover"
+              className="block h-full w-full object-contain"
+              unoptimized
             />
           </div>
           <span className="text-2xl font-semibold">{wordmark}</span>

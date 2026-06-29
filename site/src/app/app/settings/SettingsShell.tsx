@@ -46,11 +46,11 @@ export function SettingsShell({ children }: { children: ReactNode }) {
           <Link className="flex items-center gap-2 text-lg font-semibold" href="/app">
             <div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-md">
               <img
-                src="/donkey-app-mark.webp"
+                src="/donkey-logo.svg"
                 alt="Donkey Logo"
                 width={32}
                 height={32}
-                className="block h-full w-full object-cover"
+                className="block h-full w-full object-contain"
               />
             </div>
             <span>Donkey</span>

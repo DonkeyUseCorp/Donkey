@@ -128,11 +128,12 @@ export default async function UseCasePage({ params }: PageProps) {
               <div className="mb-5 flex h-[74px] w-[74px] items-center justify-center overflow-hidden rounded-[14px] border-2 border-ink bg-white">
                 <Image
                   alt=""
-                  className="h-full w-full object-cover"
+                  className="h-full w-full object-contain"
                   height={74}
                   priority
                   sizes="74px"
-                  src="/donkey-site-mark.webp"
+                  src="/donkey-logo.svg"
+                  unoptimized
                   width={74}
                 />
               </div>
@@ -187,7 +188,6 @@ export default async function UseCasePage({ params }: PageProps) {
                     <video
                       className="h-full w-full object-cover"
                       controls
-                      poster="/donkey-site-mark.webp"
                       preload="metadata"
                       src={useCase.videoSrc}
                     />
