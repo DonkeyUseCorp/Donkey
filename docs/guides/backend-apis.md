@@ -56,8 +56,9 @@ through a periodic session check; the browser picks up an app sign-out when it
 refetches the session on focus. That keeps the two in sync in both directions.
 
 The hosted deploy needs `BETTER_AUTH_URL`, `BETTER_AUTH_SECRET`,
-`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and
-`DONKEY_MAC_AUTH_REDIRECT_ORIGINS`. Never commit real OAuth credentials.
+`GOOGLE_CLIENT_ID`, and `GOOGLE_CLIENT_SECRET`. The `donkey://` callback origin is
+derived automatically, so no env var configures it. Never commit real OAuth
+credentials.
 
 ## Handler Rules
 

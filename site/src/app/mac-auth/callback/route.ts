@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { auth } from "@/lib/auth";
+import { macAuthCallbackScheme } from "@/lib/mac-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -195,8 +196,7 @@ function macCallbackURL(
     error?: string;
   },
 ) {
-  const callbackScheme = process.env.DONKEY_MAC_AUTH_CALLBACK_SCHEME ?? "donkey";
-  const url = new URL(`${callbackScheme}://auth/callback`);
+  const url = new URL(`${macAuthCallbackScheme()}://auth/callback`);
   url.searchParams.set("state", state);
 
   if (query.code) {

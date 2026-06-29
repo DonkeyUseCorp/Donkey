@@ -3,23 +3,13 @@ import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { oneTimeToken } from "better-auth/plugins";
 
+import { macAuthRedirectOrigins } from "@/lib/mac-auth";
 import { provisionSignupGrants } from "@/lib/onboarding/signup-grants";
 import { prisma } from "@/lib/prisma";
 
 // Prefix for issued Vision API keys. The full secret is shown to the developer
 // once at creation; only a hash is stored (handled by the apiKey plugin).
 export const visionApiKeyPrefix = "dk_live_";
-
-function macAuthRedirectOrigins() {
-  const configuredOrigins = process.env.DONKEY_MAC_AUTH_REDIRECT_ORIGINS
-    ?.split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean);
-
-  return configuredOrigins && configuredOrigins.length > 0
-    ? configuredOrigins
-    : ["donkey://"];
-}
 
 // Both donkeyuse.com and www.donkeyuse.com serve the app, but the Google OAuth
 // redirect_uri is pinned to BETTER_AUTH_URL's host. A sign-in started on one
