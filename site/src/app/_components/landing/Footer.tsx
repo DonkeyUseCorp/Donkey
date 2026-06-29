@@ -59,7 +59,7 @@ export function Footer() {
               aria-label="Donkey home"
               className="text-[40px] font-semibold text-ink no-underline md:text-[48px]"
             >
-              donkey
+              Donkey
             </Link>
             {socialLinks.map((link) => {
               const Icon = link.icon;

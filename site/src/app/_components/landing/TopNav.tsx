@@ -14,7 +14,7 @@ const NAV_ICON_SIZE = 59;
 type Props = {
   homeHref?: string;
   // Wordmark next to the logo. Donkey Vision is its own B2B product, so that
-  // page overrides the default "donkey" with "donkey vision".
+  // page overrides the default "Donkey" with "Donkey Vision".
   wordmark?: string;
   // Product nav links (e.g. Use cases). Auth screens keep a minimal header and
   // opt out.
@@ -27,7 +27,7 @@ type Props = {
 
 export function TopNav({
   homeHref = "/",
-  wordmark = "donkey",
+  wordmark = "Donkey",
   showNav = true,
   showAuthLinks = true,
   authToggle,

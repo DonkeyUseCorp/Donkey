@@ -168,7 +168,7 @@ export function MacDesktop({
             rows={1}
             value={promptText}
             onChange={(event) => setPromptText(event.target.value)}
-            placeholder="What can donkey do for you?"
+            placeholder="What can Donkey do for you?"
             className="flex-1 resize-none border-0 bg-transparent p-0 pr-[84px] text-[16px] font-light leading-[19.2px] text-white outline-none placeholder:text-white/[0.58]"
             style={{
               height: promptTextHeight,
