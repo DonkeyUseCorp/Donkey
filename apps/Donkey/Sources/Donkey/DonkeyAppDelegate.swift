@@ -469,6 +469,13 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         let appMenu = NSMenu()
         appMenuItem.submenu = appMenu
 
+        appMenu.addItem(
+            withTitle: "About \(Self.appDisplayName)",
+            action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+            keyEquivalent: ""
+        )
+        appMenu.addItem(.separator())
+
         let showOnboardingItem = NSMenuItem(
             title: "Show Onboarding",
             action: #selector(showOnboardingMenuAction(_:)),
