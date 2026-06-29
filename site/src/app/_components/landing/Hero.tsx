@@ -16,7 +16,7 @@ export function Hero() {
         <br />
         needs a <span className="italic">Donkey.</span>
       </h1>
-      <p className="mt-8 max-w-[560px] text-[18px] leading-[1.55] text-[#454545] md:text-[20px]">
+      <p className="mt-8 max-w-[560px] text-[18px] leading-[1.55] text-balance text-[#454545] md:max-w-[700px] md:text-[20px]">
         Donkey gets work done on your Mac. Tell it what to do: research,
         drafting, scheduling, scraping, and it runs the rest of your machine for
         you.
