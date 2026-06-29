@@ -12,8 +12,10 @@ import SwiftUI
 /// collapsed/expanded surface sizes, and the timing of each staged step. This is
 /// the room left to simulate the pointer and timer behaviour — adjust here.
 struct OnboardingNotchMockTuning {
-    // Layout, as fractions of the artwork region unless noted.
-    var edgeYFraction: CGFloat = 0.17
+    // Layout, as fractions of the artwork region unless noted. The notch drops
+    // from the same line as the sign-in slide (`OnboardingSignInMock`), so the
+    // tour's notch sits at a consistent height as the user pages forward.
+    var edgeYFraction: CGFloat = 0.13
     var edgeWidthFraction: CGFloat = 1.0
     var collapsedWidth: CGFloat = 286
     var collapsedHeight: CGFloat = 38
