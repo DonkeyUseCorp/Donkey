@@ -118,6 +118,12 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         guard let authCoordinator else { return }
         NSApp.setActivationPolicy(.regular)
 
+        // Only one onboarding card is ever on screen: if one is already up, close it before showing the
+        // next so a reopen or menu replay replaces the current card rather than stacking another behind it.
+        // `close()` fires the old card's onDismiss synchronously (clearing this reference), so the fresh
+        // controller assigned next isn't clobbered.
+        onboardingWindowController?.close()
+
         let controller = OnboardingWindowController()
         onboardingWindowController = controller
 
