@@ -2,7 +2,7 @@ import type { CardColor } from "@/app/_components/landing/theme";
 
 export const GITHUB_REPO_URL = "https://github.com/DonkeyUseCorp/Donkey";
 export const DONKEY_INSTALL_URL = "/install";
-export const DONKEY_LATEST_VERSION = "0.1.19";
+export const DONKEY_LATEST_VERSION = "0.1.20";
 export const DONKEY_LATEST_RELEASE_TAG = `v${DONKEY_LATEST_VERSION}`;
 export const DONKEY_DOWNLOAD_URL = `${GITHUB_REPO_URL}/releases/download/${DONKEY_LATEST_RELEASE_TAG}/Donkey.dmg`;
 
