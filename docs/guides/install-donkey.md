@@ -55,9 +55,11 @@ immediately after opening `Donkey.dmg`.
 
 ## Sparkle Updates
 
-Donkey uses Sparkle for app updates. Do not add a Donkey-specific update
-installer or custom replacement flow; Sparkle owns appcast parsing, update
-validation, download, install, relaunch, and user-facing update UI.
+Donkey uses Sparkle for app updates. Sparkle owns appcast parsing, update
+validation, download, install, and relaunch; do not add a Donkey-specific
+installer or replacement flow for those. Donkey drives Sparkle through a silent
+user driver and surfaces the update itself in the notch, so Sparkle's standard
+update windows are never shown.
 
 The public Sparkle feed lives in `site/public/appcast.xml`, served as
 `https://donkeyuse.com/appcast.xml`. Appcast enclosure URLs point to the
@@ -88,8 +90,8 @@ For local update testing, use Sparkle's standard local appcast workflow:
    `DONKEY_SPARKLE_PUBLIC_ED_KEY` set to the matching public EdDSA key.
 
 When Sparkle finds a valid signed update, the expanded notch task panel shows
-an update button in its header. Clicking it invokes Sparkle's standard update
-UI.
+an Update Available button in its header. Clicking it downloads, installs, and
+relaunches silently through Sparkle, with no update window shown.
 
 ## Hosted Models
 

@@ -761,7 +761,7 @@ final class UserQueryOverlayController {
     }
 
     private func openAvailableUpdate() {
-        model.showUpdateUI()
+        model.installAvailableUpdate()
     }
 
     /// Brings back a pointer the user dismissed when its conversation is clicked in
