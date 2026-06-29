@@ -38,33 +38,75 @@ public enum BundledTools {
         }
     }
 
-    /// Where first-run-downloaded tools are extracted. Writable, survives app updates, and is the first
-    /// place `shellEnvironment()` looks for the tools on PATH.
-    public static var installDirectory: URL {
+    /// Parent of the per-version tool installs. Writable, survives app updates, and is where
+    /// `shellEnvironment()` looks for the tools on PATH. Each published bundle lives in its own
+    /// `<baseDirectory>/<version>` subdirectory (see `installDirectory(forVersion:)`), so an app build
+    /// reads and writes only the version its manifest pins — a different build (e.g. a dev copy) installing
+    /// another version into a sibling directory cannot disturb it. The overlay symlink dir is a sibling of
+    /// this one.
+    public static var baseDirectory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Donkey", isDirectory: true)
             .appendingPathComponent("donkey-tools", isDirectory: true)
     }
 
-    /// The version-marker file written after a successful install, so we re-download only when the
-    /// manifest names a newer bundle.
-    static var installedVersionMarker: URL {
-        installDirectory.appendingPathComponent(".version", isDirectory: false)
+    /// Where a specific bundle version is installed. The version string IS the directory name, so the
+    /// directory itself records which bundle is present — there is no separate marker file to drift out of
+    /// sync with the bytes on disk.
+    public static func installDirectory(forVersion version: String) -> URL {
+        baseDirectory.appendingPathComponent(version, isDirectory: true)
     }
 
-    /// The bundle is usable if a sentinel tool exists in the install directory. ffmpeg is mandatory in
-    /// every bundle, so its presence is the cheapest "are the tools really here" check.
+    /// The bundle is usable if a sentinel tool exists in the directory. ffmpeg is mandatory in every
+    /// bundle, so its presence is the cheapest "are the tools really here" check.
     public static func isInstalled(at directory: URL) -> Bool {
         FileManager.default.isExecutableFile(atPath: directory.appendingPathComponent("ffmpeg").path)
     }
 
-    /// The version currently installed in Application Support, or nil if none/partial.
-    public static var installedVersion: String? {
-        guard isInstalled(at: installDirectory),
-              let raw = try? String(contentsOf: installedVersionMarker, encoding: .utf8)
-        else { return nil }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+    /// A pre-namespacing install: ffmpeg sits directly under `baseDirectory` instead of in a `<version>`
+    /// subdirectory. The installer clears such a layout once before installing the versioned set, so an
+    /// app updated from an older build reclaims the loose copy rather than leaving it as orphaned cruft.
+    public static var hasLegacyFlatInstall: Bool { isInstalled(at: baseDirectory) }
+
+    /// Installed bundle versions present on disk — each a `<baseDirectory>/<version>` directory holding a
+    /// usable ffmpeg — ordered most-recently-used first (the installer refreshes a version's mtime on every
+    /// launch that uses it). Empty when nothing is installed. The legacy flat layout is not a version
+    /// directory, so it never appears here.
+    public static func installedVersions() -> [URL] {
+        let fileManager = FileManager.default
+        let entries = (try? fileManager.contentsOfDirectory(
+            at: baseDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey]
+        )) ?? []
+        func modified(_ url: URL) -> Date {
+            (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+        }
+        return entries.filter { isInstalled(at: $0) }.sorted { modified($0) > modified($1) }
+    }
+
+    /// The install directory the running app should use right now: the version its manifest pins when that
+    /// version is installed, otherwise the most-recently-used installed version (so usable tools still
+    /// resolve while the pinned version is still downloading, or when the manifest can't be read). `nil`
+    /// only when no tools are installed at all.
+    public static func resolvedInstallDirectory() -> URL? {
+        if let version = loadManifest()?.version {
+            let pinned = installDirectory(forVersion: version)
+            if isInstalled(at: pinned) { return pinned }
+        }
+        if let newest = installedVersions().first { return newest }
+        // A pre-namespacing flat install still has usable tools until the versioned install replaces them,
+        // so a build updated from an older copy keeps its capabilities through the one-time migration.
+        return hasLegacyFlatInstall ? baseDirectory : nil
+    }
+
+    /// Whether the tools this app build pins are ready, i.e. setup has nothing left to do: the manifest's
+    /// version is installed, or — when nothing is published — any usable tools exist (a dev symlink or
+    /// offline-baked copy). Drives the "setup already done" decisions.
+    public static var isCurrentVersionReady: Bool {
+        if let manifest = loadManifest(), manifest.isPublished {
+            return isInstalled(at: installDirectory(forVersion: manifest.version))
+        }
+        return resolvedInstallDirectory() != nil
     }
 
     /// Load the bundled manifest from the app's resources. Returns nil if it is missing or malformed.

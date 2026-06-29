@@ -151,7 +151,8 @@ enum ShellHelper {
         // vendor dir, set by the eval toolchain) wins over the Application Support install — and point
         // pdfium at that dir so `lit` can parse PDFs, matching production.
         let toolsPath = environment["DONKEY_TOOLS_DIR"].flatMap { $0.isEmpty ? nil : $0 }
-            ?? BundledTools.installDirectory.path
+            ?? BundledTools.resolvedInstallDirectory()?.path
+            ?? BundledTools.baseDirectory.path
         environment["PATH"] = (environment["PATH"] ?? "/usr/bin:/bin:/opt/homebrew/bin") + ":" + toolsPath
         environment["PDFIUM_LIB_PATH"] = toolsPath
         process.environment = environment

@@ -55,11 +55,21 @@ The capability skills (media, pdf) run CLI tools — `ffmpeg`, `yt-dlp`, and a f
 others — that the app downloads once the user signs in (so the bundle stays out
 of the app download, and isn't fetched for someone who never gets past sign-in).
 The download surfaces in the notch as a progress conversation the user can watch
-but not stop or dismiss; it retries on its own and no-ops once the published
-version is already installed. The `Publish Bundled Tools` workflow builds them from source on an
+but not stop or dismiss; it retries on its own and no-ops once the version this
+build pins is already installed. The `Publish Bundled Tools` workflow builds them from source on an
 arm64 runner, signs and notarizes them, uploads the bundle as a GitHub release
 asset, and commits the refreshed `bundled-tools.json` (the manifest the app reads
 to know what to fetch). It runs on demand and whenever the tools recipe changes.
+
+Each manifest pins one bundle version by sha256, and that pairing is permanent.
+Every published version installs into its own `donkey-tools/<version>/` directory,
+so an app build reads and writes only the version it pins — a dev build and a
+released build keep separate copies and never disturb each other. Published assets
+are immutable to match: re-publishing a version that already has an asset
+auto-bumps to `<version>.1` instead of overwriting it, so the bytes a shipped app
+pinned always stay fetchable and pass verification. (The bug this prevents: a
+date-named version was once re-uploaded with different bytes, and every app that
+had pinned the original sha could no longer finish tool setup.)
 
 Every tool is re-signed during the build: relocating their bundled libraries
 invalidates the original signature, and macOS will not run an unsigned binary on

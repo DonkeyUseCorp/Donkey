@@ -34,6 +34,11 @@ public actor BundledToolsInstaller {
     /// first run shouldn't strand the tools; the app retries here and again on the next launch.
     private static let maxAttempts = 3
 
+    /// How many recently-used bundle versions to keep alongside the current one. A dev build and a prod
+    /// build pin different versions, so more than one survives; the cap stops the per-version store from
+    /// growing without bound as versions roll (each extracted bundle is ~180MB on disk).
+    private static let versionsToKeep = 3
+
     enum InstallError: Error {
         case badURL
         case checksumMismatch(expected: String, got: String)
@@ -56,15 +61,21 @@ public actor BundledToolsInstaller {
         guard let manifest = BundledTools.loadManifest(), manifest.isPublished else {
             // Nothing published yet (empty sha256): rely on whatever is already on disk (e.g. a dev symlink
             // or an offline-baked bundle); never download something unverified.
-            let present = BundledTools.isInstalled(at: BundledTools.installDirectory)
-            if present { repairSelfExtractingTools(in: BundledTools.installDirectory) }
-            return present
+            if let present = BundledTools.resolvedInstallDirectory() {
+                repairSelfExtractingTools(in: present)
+                return true
+            }
+            return false
         }
-        if BundledTools.installedVersion == manifest.version {
-            // Already current — but still make sure the self-extracting tools actually launch. A copy that
-            // shipped signed with the hardened runtime but no library-validation exception can't start at
-            // all, and the version match alone would hide that until a skill tried to run the tool.
-            repairSelfExtractingTools(in: BundledTools.installDirectory)
+        // This build pins exactly one bundle version; it only ever reads and writes that version's own
+        // directory, so a different build's version sitting in a sibling directory is irrelevant here.
+        let dest = BundledTools.installDirectory(forVersion: manifest.version)
+        if BundledTools.isInstalled(at: dest) {
+            // Already installed — but still make sure the self-extracting tools actually launch (a hardened
+            // copy without the library-validation exception can't start, which the presence check alone
+            // would hide), and refresh the mtime so version GC treats this version as in-use.
+            touch(dest)
+            repairSelfExtractingTools(in: dest)
             return true
         }
         guard !installing else { return false }
@@ -76,7 +87,7 @@ public actor BundledToolsInstaller {
         onEvent?(.started)
         for attempt in 1...Self.maxAttempts {
             do {
-                try await install(manifest, onEvent: onEvent)
+                try await install(manifest, into: dest, onEvent: onEvent)
                 log.info("installed bundled tools \(manifest.version, privacy: .public)")
                 onEvent?(.completed)
                 return true
@@ -91,11 +102,14 @@ public actor BundledToolsInstaller {
             }
         }
         onEvent?(.failed)
-        return BundledTools.isInstalled(at: BundledTools.installDirectory)
+        // Even when this build's pinned version failed to install, the app still has usable tools whenever
+        // any version is present (the agent keeps working), so report that rather than a hard "no tools".
+        return BundledTools.resolvedInstallDirectory() != nil
     }
 
     private func install(
         _ manifest: BundledTools.Manifest,
+        into dest: URL,
         onEvent: (@Sendable (BundledToolsSetupEvent) -> Void)?
     ) async throws {
         guard let url = URL(string: manifest.url) else { throw InstallError.badURL }
@@ -119,14 +133,54 @@ public actor BundledToolsInstaller {
         try extractTarGz(downloaded, into: staging)
 
         let root = try resolveToolsRoot(in: staging)
-        let dest = BundledTools.installDirectory
+        clearLegacyFlatInstall()
         try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
         if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
         try fm.moveItem(at: root, to: dest)
 
         markExecutables(in: dest)
         repairSelfExtractingTools(in: dest)
-        try manifest.version.write(to: BundledTools.installedVersionMarker, atomically: true, encoding: .utf8)
+        touch(dest)
+        pruneOldVersions(keeping: manifest.version)
+    }
+
+    /// Stamp the version directory's mtime as "just used" so version GC keeps the bundles an app build
+    /// actually launches. Called on both the already-installed and the freshly-installed paths.
+    private func touch(_ directory: URL) {
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: directory.path)
+    }
+
+    /// Remove a pre-namespacing flat install (loose ffmpeg + dylibs + the old `.version` marker directly
+    /// under `baseDirectory`) the one time it is found, so an app updated from an older build reclaims that
+    /// copy instead of leaving ~180MB of orphaned files. A version install is a subdirectory that itself
+    /// holds ffmpeg; those are never touched, so this can't delete a sibling build's pinned tools.
+    private func clearLegacyFlatInstall() {
+        guard BundledTools.hasLegacyFlatInstall else { return }
+        let fm = FileManager.default
+        let entries = (try? fm.contentsOfDirectory(
+            at: BundledTools.baseDirectory,
+            includingPropertiesForKeys: [.isDirectoryKey]
+        )) ?? []
+        for entry in entries {
+            let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            if isDirectory && BundledTools.isInstalled(at: entry) { continue }
+            try? fm.removeItem(at: entry)
+        }
+    }
+
+    /// Keep the current version plus the few most-recently-used others, reclaiming truly stale installs so
+    /// the tools store can't grow without bound as versions roll. mtime is refreshed on each launch that
+    /// uses a version, so a dev build and a prod build that are both in active use both survive; only a
+    /// version nothing has launched in a while ages out (and re-downloads on demand, which the now-immutable
+    /// published assets make reliable).
+    private func pruneOldVersions(keeping current: String) {
+        let fm = FileManager.default
+        let versions = BundledTools.installedVersions() // most-recently-used first
+        var keep = Set(versions.prefix(Self.versionsToKeep).map { $0.lastPathComponent })
+        keep.insert(current)
+        for directory in versions where !keep.contains(directory.lastPathComponent) {
+            try? fm.removeItem(at: directory)
+        }
     }
 
     /// Download the archive to a temp file, reporting fractional progress as the bytes arrive. A

@@ -226,7 +226,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
               conversation.status != .failed else {
             return
         }
-        if BundledTools.installedVersion != nil {
+        if BundledTools.isCurrentVersionReady {
             updateConversation(id: id, detail: "Tools ready", status: .completed)
         } else {
             notchConversations.removeAll { $0.id == id }
@@ -433,8 +433,8 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         updateChecker.checkForUpdatesInBackground()
     }
 
-    func showUpdateUI() {
-        updateChecker.showUpdateUI()
+    func installAvailableUpdate() {
+        updateChecker.installAvailableUpdate()
     }
 
     /// Push the logged-out state into the notch. The app delegate drives this from the auth

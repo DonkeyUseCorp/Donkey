@@ -8,7 +8,11 @@
 # Run on an arm64 macOS build machine with Homebrew + Xcode and an authenticated `gh`. Usage:
 #   scripts/publish-bundled-tools.sh [version]   # version defaults to today's date (YYYY.MM.DD)
 #
-# After it finishes, commit the updated bundled-tools.json so the app ships pointing at the new asset.
+# Published assets are IMMUTABLE: once a version's tarball exists on its release, that version is frozen,
+# because a shipped app pins it by sha256 and could never re-verify different bytes. If the chosen version
+# already has a published asset, this auto-bumps to <version>.1, .2, … rather than clobbering it — so a
+# same-day re-publish becomes a new version. After it finishes, commit the updated bundled-tools.json so
+# the app ships pointing at the new asset.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,7 +22,24 @@ MANIFEST="$ROOT_DIR/apps/Donkey/Sources/DonkeyRuntime/Resources/bundled-tools.js
 
 REPO="${DONKEY_TOOLS_REPO:-DonkeyUseCorp/Donkey}"
 ARCH="arm64"
-VERSION="${1:-$(date +%Y.%m.%d)}"
+
+# True when that release already carries that asset — i.e. the version is already published and frozen.
+asset_published() { # tag asset-name
+  gh release view "$1" --repo "$REPO" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$2"
+}
+
+# Pick the first version at or after the requested one whose asset is not already published, so we never
+# overwrite frozen bytes. Bumps <base> -> <base>.1 -> <base>.2 … (matching the existing .N convention).
+choose_immutable_version() {
+  local base="$1" v="$1" n=1
+  while asset_published "bundled-tools-$v" "donkey-tools-$v-$ARCH.tar.gz"; do
+    v="$base.$n"; n=$((n + 1))
+  done
+  [ "$v" = "$base" ] || echo "Version $base already published; using $v to keep bundles immutable." >&2
+  printf '%s' "$v"
+}
+
+VERSION="$(choose_immutable_version "${1:-$(date +%Y.%m.%d)}")"
 TAG="bundled-tools-$VERSION"
 ASSET="donkey-tools-$VERSION-$ARCH.tar.gz"
 URL="https://github.com/$REPO/releases/download/$TAG/$ASSET"
@@ -92,7 +113,9 @@ if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
   gh release create "$TAG" --repo "$REPO" --title "$TAG" \
     --notes "Prebuilt Donkey CLI tools ($ARCH) — $VERSION."
 fi
-gh release upload "$TAG" "$OUT" --repo "$REPO" --clobber
+# No --clobber: choose_immutable_version guaranteed this asset isn't published yet, so this only ever
+# uploads fresh bytes and never overwrites a version a shipped app already pinned.
+gh release upload "$TAG" "$OUT" --repo "$REPO"
 
 echo
 echo "Published $ASSET → $URL"

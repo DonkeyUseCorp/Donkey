@@ -1163,8 +1163,7 @@ public enum DonkeyCommandBackends {
                 return baked
             }
         }
-        let installed = BundledTools.installDirectory
-        if BundledTools.isInstalled(at: installed) {
+        if let installed = BundledTools.resolvedInstallDirectory() {
             return installed
         }
         if let baked = Bundle.main.resourceURL?
@@ -1232,7 +1231,7 @@ public enum DonkeyCommandBackends {
     private static func preferredBundledToolsOverlay() -> URL? {
         guard let toolsDirectory = bundledToolsDirectory else { return nil }
         let fileManager = FileManager.default
-        let overlay = BundledTools.installDirectory
+        let overlay = BundledTools.baseDirectory
             .deletingLastPathComponent()
             .appendingPathComponent("donkey-tools-preferred", isDirectory: true)
         do {
@@ -1245,9 +1244,9 @@ public enum DonkeyCommandBackends {
             let target = toolsDirectory.appendingPathComponent(name)
             guard fileManager.isExecutableFile(atPath: target.path) else { continue }
             let link = overlay.appendingPathComponent(name)
-            // Recreate only when missing or pointing at a stale target — the bundled dir can move from the
-            // baked app copy to the downloaded install dir between launches, but an in-place version bump
-            // keeps the same path so the symlink stays valid and this is a no-op.
+            // Recreate only when missing or pointing at a stale target — the bundled dir can move between
+            // launches (the baked app copy, or a per-version download dir whose path changes when the
+            // pinned version changes), so relink whenever the target no longer matches and otherwise no-op.
             if (try? fileManager.destinationOfSymbolicLink(atPath: link.path)) != target.path {
                 try? fileManager.removeItem(at: link)
                 try? fileManager.createSymbolicLink(at: link, withDestinationURL: target)

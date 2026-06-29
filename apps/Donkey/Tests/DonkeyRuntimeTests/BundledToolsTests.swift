@@ -37,7 +37,16 @@ struct BundledToolsTests {
     }
 
     @Test
-    func installDirectoryIsUnderApplicationSupport() {
-        #expect(BundledTools.installDirectory.path.contains("Application Support/Donkey/donkey-tools"))
+    func baseDirectoryIsUnderApplicationSupport() {
+        #expect(BundledTools.baseDirectory.path.contains("Application Support/Donkey/donkey-tools"))
+    }
+
+    @Test
+    func installDirectoryNestsTheVersionUnderBase() {
+        // Each published version installs into its own `<base>/<version>` directory, so one app build's
+        // pinned tools can never overwrite another's. The version IS the directory name.
+        let dir = BundledTools.installDirectory(forVersion: "2026.06.25")
+        #expect(dir.deletingLastPathComponent().path == BundledTools.baseDirectory.path)
+        #expect(dir.lastPathComponent == "2026.06.25")
     }
 }
