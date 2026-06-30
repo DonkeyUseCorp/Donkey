@@ -78,6 +78,12 @@ public enum ShellCommandClassifier {
         workspaceFileToolSignatures.contains(signature)
     }
 
+    /// Pure directory-navigation builtins. They change only the shell's working directory and touch no file,
+    /// so they ride an owned-folder mutation chain as reads — `everySegmentMutatesOnlyOwnedRoots` skips them
+    /// and advances the directory later relative operands resolve against. (They are also in `readExecutables`
+    /// so a read-only `cd <dir> && <read>` chain classifies as a read on its own.)
+    static let navigationBuiltins: Set<String> = ["cd", "pushd", "popd"]
+
     /// The scripting interpreters whose effect is the opaque code they run, not their argv — so operand
     /// analysis can't clear them the way it clears a bounded mutator. The kernel jail can: confined to the
     /// owned folders, an interpreter can only WRITE inside the workspace (reads and the network stay open,
@@ -137,19 +143,25 @@ public enum ShellCommandClassifier {
         return sawInterpreter
     }
 
-    /// Whether EVERY command in the line is a bare bounded file mutator (`mv`, `rm`, `mkdir`, `chmod`, …)
-    /// AND every path operand it names resolves inside one of `ownedRoots` — the folders Donkey created.
-    /// Such a line runs WITHOUT a consent prompt: it only creates, moves, or deletes files, and only inside
-    /// Donkey's own folder, so there is nothing to ask about. The moment an operand is an absolute path
-    /// outside those roots, a `~` path, an unresolved `$VAR`/substitution, or a `..` climb that escapes, the
-    /// line falls back to the normal prompt — a mutation of a file the user owns is the user's to approve.
+    /// Whether the line only mutates files inside the folders Donkey created (`ownedRoots`) — so it runs
+    /// WITHOUT a consent prompt. It qualifies when every segment is either a directory-navigation builtin
+    /// (`cd`/`pushd`/`popd`), a pure read (`echo`, a read subcommand, a bundled tool), or a bare bounded file
+    /// mutator (`mv`, `rm`, `mkdir`, `chmod`, …) whose every path operand resolves inside an owned root — and
+    /// at least one segment is a mutator (a read-only line is already handled by the read path). The moment a
+    /// mutator operand is an absolute path outside those roots, a `~` path, an unresolved `$VAR`/substitution,
+    /// or a `..` climb that escapes, the line falls back to the normal prompt — a mutation of a file the user
+    /// owns is the user's to approve.
     ///
-    /// A chain (`cp <ws>/a … && rm <ws>/tmp`, move then clean up) qualifies when each link is a bounded
-    /// mutator with in-folder operands. A wrapper (`xargs rm` reads paths from stdin), an interpreter
-    /// (`python3`), or any non-mutator segment (`curl`, `osascript`) disqualifies the line; command
-    /// substitution surfaces its inner program as its own segment (split on `(`/backtick), so `rm $(curl …)`
-    /// fails on `curl`. Argv tokens only — never natural-language intent. Operands resolve relative to
-    /// `workingDirectory` (the workspace), and any resolution ambiguity errs toward prompting, never away.
+    /// A leading `cd <dir>` is the idiom the agent uses to scope its own folder (`cd <ws> && mv a b && rm c`,
+    /// move then clean up). It rides the chain as a read AND advances the directory that later relative
+    /// operands resolve against, so `cd <ws> && rm tmp` stays in-bounds while `cd /etc && rm passwd` resolves
+    /// the operand at `/etc/passwd` and prompts. A navigation whose target can't be pinned down statically
+    /// (`popd`, `cd -`, `cd $VAR`) makes the working directory unknown, after which any relative mutator
+    /// operand fails containment and the line prompts. A wrapper (`xargs rm` reads paths from stdin) or any
+    /// non-read, non-mutator segment (`curl`, `osascript`) disqualifies the line; command substitution
+    /// surfaces its inner program as its own segment (split on `(`/backtick), so `rm $(curl …)` fails on
+    /// `curl`. Argv tokens only — never natural-language intent. Any resolution ambiguity errs toward
+    /// prompting, never away.
     public static func everySegmentMutatesOnlyOwnedRoots(
         _ command: String,
         ownedRoots: [String],
@@ -157,17 +169,42 @@ public enum ShellCommandClassifier {
     ) -> Bool {
         let owned = ownedRoots.compactMap(canonicalDirectory)
         guard !owned.isEmpty else { return false }
-        let workdir = canonicalDirectory(workingDirectory) ?? (workingDirectory as NSString).expandingTildeInPath
         let segments = splitSegments(command).map(tokenize).filter { !$0.isEmpty }
         guard !segments.isEmpty else { return false }
+
+        // The directory later relative operands resolve against. When a navigation segment can't be pinned
+        // down, the working directory becomes this base, which sits under no owned root — so a relative
+        // operand resolved against it fails containment and the line prompts, while an absolute owned operand
+        // still resolves correctly (resolveOperandPath ignores the base for an absolute path).
+        let unresolvedBase = "/dev/null/donkey-unresolved-workdir"
+        var workdir = canonicalDirectory(workingDirectory) ?? (workingDirectory as NSString).expandingTildeInPath
+        var sawMutator = false
         for tokens in segments {
-            guard workspaceFileToolSignatures.contains(executableName(tokens[0])) else { return false }
+            let exe = executableName(tokens[0])
+            // Directory navigation rides the chain and moves the working directory later operands resolve
+            // against. `popd`/`cd -`/`cd $VAR` can't be resolved statically, so the directory goes unknown.
+            if navigationBuiltins.contains(exe) {
+                let operands = pathOperands(of: tokens)
+                if exe != "popd", operands.count == 1,
+                   let resolved = resolveOperandPath(operands[0], workingDirectory: workdir) {
+                    workdir = canonicalDirectory(resolved) ?? resolved
+                } else {
+                    workdir = unresolvedBase
+                }
+                continue
+            }
+            // Any other pure read (`echo`, a read subcommand, a bundled tool) touches no file, so it rides
+            // along — symmetric with the interpreter path's read passthrough.
+            if classifySegment(tokens).tier == .read { continue }
+            // Every remaining segment must be a bounded mutator whose operands all sit in an owned root.
+            guard workspaceFileToolSignatures.contains(exe) else { return false }
             for operand in pathOperands(of: tokens) {
                 guard let resolved = resolveOperandPath(operand, workingDirectory: workdir),
                       owned.contains(where: { isWithin(resolved, root: $0) }) else { return false }
             }
+            sawMutator = true
         }
-        return true
+        return sawMutator
     }
 
     /// The path operands of a bounded-mutator segment: every token after the executable that is not an
@@ -613,9 +650,9 @@ public enum ShellCommandClassifier {
     /// touch no file or state, so they are reads. This matters because `cd <dir> && <read or bundled tool>`
     /// scopes a read into the agent's folder — without `cd` here it classified as an "unrecognized command"
     /// (reversibleWrite) and the most-restrictive-segment rule dragged the whole chain to a consent prompt,
-    /// gating even a bundled tool reworking files the agent itself created. (A file MUTATION never rides a
-    /// `cd` chain unprompted — `everySegmentMutatesOnlyOwnedRoots` requires every segment to be a bounded
-    /// mutator, and `cd` is not one.)
+    /// gating even a bundled tool reworking files the agent itself created. A file MUTATION also rides a `cd`
+    /// chain unprompted when it stays in an owned folder — see `everySegmentMutatesOnlyOwnedRoots`, which
+    /// skips the navigation segment and advances the working directory the later operands resolve against.
     private static let readExecutables: Set<String> = [
         "cd", "pushd", "popd",
         "ls", "cat", "head", "tail", "grep", "egrep", "fgrep", "rg", "find", "mdfind", "mdls",

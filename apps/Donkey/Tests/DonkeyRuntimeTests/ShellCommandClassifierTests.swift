@@ -374,6 +374,51 @@ struct ShellCommandClassifierTests {
         }
     }
 
+    @Test
+    func cdIntoTheOwnedFolderLetsTheCleanupChainRunUnprompted() throws {
+        // The idiom the planner emits — `cd <workspace> && mv … && rm …`, move then clean up — must run
+        // without a prompt. The leading `cd` rides the chain as a read and anchors the later relative
+        // operands inside the owned folder. This is the exact shape that wrongly prompted on the video clip.
+        let ws = try makeOwnedRoot()
+        defer { try? FileManager.default.removeItem(atPath: ws) }
+        func unprompted(_ c: String) -> Bool {
+            ShellCommandClassifier.everySegmentMutatesOnlyOwnedRoots(c, ownedRoots: [ws], workingDirectory: ws)
+        }
+        for command in [
+            "cd \"\(ws)\" && mv output.mp4 KoreanVideoClipCozy.mp4 && rm -f test.mp4 final.mp4",
+            "cd \"\(ws)\" && rm scratch.txt",
+            "cd \"\(ws)\" && echo done && rm a.txt",          // a pure read between mutators rides along
+            "pushd \"\(ws)\" && rm a.txt",                    // pushd <dir> advances like cd
+            "cd \"\(ws)\" && mkdir out && mv a.txt out/a.txt",
+        ] {
+            #expect(unprompted(command), "should run unprompted: \(command)")
+        }
+    }
+
+    @Test
+    func cdThatLeavesOrCannotBeResolvedKeepsTheChainPrompting() throws {
+        // The security boundary for the navigation passthrough: a `cd` out of the owned folder resolves the
+        // later relative operand at its real destination (outside) and prompts; a navigation whose target
+        // can't be pinned down statically (`popd`, `cd -`, `cd $VAR`) makes the working directory unknown, so
+        // a relative mutator after it can no longer be proven in-bounds and also prompts. A bare `cd` with no
+        // mutator declines here (the read path clears it instead).
+        let ws = try makeOwnedRoot()
+        defer { try? FileManager.default.removeItem(atPath: ws) }
+        func unprompted(_ c: String) -> Bool {
+            ShellCommandClassifier.everySegmentMutatesOnlyOwnedRoots(c, ownedRoots: [ws], workingDirectory: ws)
+        }
+        for command in [
+            "cd /etc && rm passwd",                  // operand resolves at /etc/passwd, outside the folder
+            "cd \"\(ws)\" && rm /etc/hosts",         // absolute operand outside, despite cd into the folder
+            "popd && rm a.txt",                      // popd target is unknowable → relative operand unanchored
+            "cd - && rm a.txt",                      // `cd -` (previous dir) is unknowable
+            "cd \"$HOME\" && rm a.txt",              // unresolved expansion → working directory unknown
+            "cd \"\(ws)\"",                          // no mutator → declines (the read path runs it)
+        ] {
+            #expect(!unprompted(command), "should prompt: \(command)")
+        }
+    }
+
     /// A real, existing directory under `/private/tmp` to stand in for a Donkey-created workspace — the
     /// anchor check canonicalizes owned roots with `realpath`, so the root must exist on disk.
     private func makeOwnedRoot() throws -> String {
