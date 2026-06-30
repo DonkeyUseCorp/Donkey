@@ -49,21 +49,19 @@ export function Demo() {
                 background: BLACK,
               }}
             >
-              <video
-                controls
-                playsInline
-                preload="metadata"
+              <iframe
+                src="https://www.youtube-nocookie.com/embed/g4x-HhZ8XII"
+                title="See Donkey in action"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
                 style={{
                   position: "absolute",
                   inset: 0,
                   width: "100%",
                   height: "100%",
-                  objectFit: "cover",
+                  border: 0,
                 }}
-              >
-                <source src="/demo.mp4" type="video/mp4" />
-                Your browser does not support the video tag.
-              </video>
+              />
             </div>
           </div>
         </TapedCard>
