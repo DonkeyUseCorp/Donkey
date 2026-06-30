@@ -21,15 +21,24 @@ a tool the model runs (shell command, bundled converter, ffmpeg)
 launched through the macOS sandbox, scoped to the task folder
       |
       v
-write   → task folder        (+ the user's home, once a prompt approved the command)
-read    → open  (bundled-tool pipelines: only system libraries + declared inputs)
-network → open
+everything    → allowed       (GPU, semaphores, Mach services, network — any capability)
+write         → denied, except the task folder (+ the user's home, once a prompt approved it)
+read          → open          (bundled-tool pipelines: only system libraries + declared inputs)
 ```
 
 A tool is launched through the macOS sandbox (`sandbox-exec`) under a profile
 built fresh for the task. The runtime builds and applies that profile
 automatically for every task that owns a folder, so confinement holds by
 construction.
+
+The profile **allows everything by default and denies only out-of-workspace file
+writes.** It is deliberately not a list of permitted capabilities. An earlier
+deny-by-default profile had to name every capability a tool might use, and each one
+nobody had predicted — a video tool reaching for the GPU, a downloader using a System
+V semaphore — failed with a cryptic error until someone added a rule. Allowing by
+default removes that whole class of failure: a tool can use any capability, because
+none of them let it escape the folder. The filesystem write boundary is the one thing
+the jail enforces, so it is the one thing the profile spells out.
 
 The kernel decides what a tool *can* touch; consent decides what it's *allowed*
 to do. They are separate layers: the kernel bounds the filesystem writes, and
@@ -46,9 +55,8 @@ driving another app, changing a system setting, reaching out over the network.
 
 Reads are open because the agent reading a file is already treated as free — the
 risk it's guarding against is *changing* things, and a read changes nothing. The
-network stays open so a task can call APIs and fetch data; the tools that could
-exfiltrate (a downloader, an interpreter) are gated by consent like any other
-out-of-folder effect.
+network stays open so a task can call APIs and fetch data; a downloader run by its
+own name is still gated by consent like any other out-of-folder effect.
 
 A bundled-tool pipeline (the caption, shorts, PDF, and media-cut orchestrators) is
 the one exception to open reads: it processes one named input, so its profile
@@ -78,9 +86,16 @@ command goes through the normal consent prompt, because it would change a file
 the user owns. When the user approves, the kernel widens for that command to let
 the approved write land. Any resolution ambiguity errs toward asking, never away.
 
-Consent also gates what a filesystem boundary can't contain at all: an interpreter
-or a downloader (its effect is the code it runs or the bytes it fetches), driving
-another app, changing a setting, elevated privileges.
+A scripting interpreter (`python3`, `ruby`, `node`) earns the same unprompted pass,
+but through the kernel rather than its arguments. Its code is opaque, so the runtime
+jails it to the task folder and lets it run: confined that way its **writes** can only
+land on files the agent owns, and a write aimed at a user file is stopped by the kernel,
+not a prompt. Reads and the network stay open, as they are for every spawn, so a script
+that inspects a file or calls an API still works. An interpreter that runs where there
+is no folder to jail it into falls back to asking first.
+
+Consent still gates what no folder boundary contains: a downloader run by its own name,
+driving another app, changing a setting, elevated privileges.
 
 The agent does not overwrite an existing user file unless the user explicitly
 asked. By default it writes a new copy or alternate version and leaves the

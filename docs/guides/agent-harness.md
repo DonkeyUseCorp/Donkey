@@ -226,11 +226,15 @@ command-line equivalent.
 Shell safety has two layers: a kernel sandbox that bounds what a command *can*
 do, and consent that governs what it is *allowed* to do.
 
-Every tool the agent spawns runs inside a macOS sandbox. Its writes are confined
-to the conversation's own folder, so a command that tries to change a file
-elsewhere fails at the kernel even when the model errs. Reads are open — the agent
-can inspect a file the user pointed it at — and the network is reachable for API
-calls and downloads. (See the [Workspace Sandbox](workspace-sandbox.md) guide.)
+Every tool the agent spawns runs inside a macOS sandbox that allows everything
+except writing outside the conversation's own folder. A command that tries to change
+a file elsewhere fails at the kernel even when the model errs; anything else it needs
+— the GPU, the network, whatever syscalls a bundled tool makes — just works, because
+none of that escapes the folder. The sandbox is not a list of permitted capabilities
+(that shape made each unforeseen one a tool needed fail until a rule was added); it
+allows by default and denies only the out-of-folder write. Reads are open so the
+agent can inspect a file the user pointed it at. (See the
+[Workspace Sandbox](workspace-sandbox.md) guide.)
 
 On top of that, each command is sorted by its tokens into a risk tier:
 
@@ -248,6 +252,15 @@ out, a shell variable we can't resolve — the command asks first, and on approv
 the kernel widens to let that one write land. Anything the sandbox does not
 contain — driving other apps, changing system settings, elevated privileges,
 network egress — gates on consent the same way.
+
+A scripting interpreter (`python3`, `ruby`, `node`) gets the same pass for the
+same reason, but earned through the kernel rather than its arguments: its code is
+opaque, so the runtime jails it to the agent's folder and runs it unprompted.
+Confined that way its writes can only land on files the agent owns — a write aimed
+at a user file is stopped by the kernel, not a prompt. Reads and the network stay
+open as for any spawn, so a script that inspects a file or calls an API still
+works. An interpreter that runs where there is no folder to jail it into falls back
+to asking first.
 
 The planner discovers what is available by doing. It runs the command it needs
 by name, and a "command not found" is just another observation it adapts to —
