@@ -161,10 +161,33 @@ final class DonkeyAuthCoordinator: ObservableObject {
             return false
         }
 
+        // The handoff web page both auto-redirects to donkey:// and offers an "Open Donkey" button, so the
+        // same callback URL is routinely opened more than once. LSMultipleInstancesProhibited funnels every
+        // delivery to this one running instance, so handling must be idempotent and monotonic: once the first
+        // delivery has carried the sign-in into the exchange or a live session, a duplicate is already handled
+        // and must not downgrade it back to the login CTA.
+        switch phase {
+        case .exchangingSession, .signedIn:
+            return true
+        case .signedOut, .openingBrowser, .waitingForCallback, .failed:
+            break
+        }
+
         let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-        guard let returnedState = Self.queryValue(named: "state", in: queryItems),
-              let expectedState = stateStore.loadPendingState(),
-              returnedState == expectedState else {
+        guard let returnedState = Self.queryValue(named: "state", in: queryItems) else {
+            phase = .failed("Sign-in could not be verified. Please try again.")
+            return true
+        }
+
+        guard let expectedState = stateStore.loadPendingState() else {
+            // A prior delivery of this same callback already consumed the pending state. Treat the duplicate
+            // as benign rather than a verification failure, and let the durable session decide: a completed
+            // sign-in stays signed in instead of being kicked back to login.
+            reconcileWithPersistedSession()
+            return true
+        }
+
+        guard returnedState == expectedState else {
             phase = .failed("Sign-in could not be verified. Please try again.")
             return true
         }
