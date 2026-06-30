@@ -42,8 +42,7 @@ public enum BundledTools {
     /// `shellEnvironment()` looks for the tools on PATH. Each published bundle lives in its own
     /// `<baseDirectory>/<version>` subdirectory (see `installDirectory(forVersion:)`), so an app build
     /// reads and writes only the version its manifest pins — a different build (e.g. a dev copy) installing
-    /// another version into a sibling directory cannot disturb it. The overlay symlink dir is a sibling of
-    /// this one.
+    /// another version into a sibling directory cannot disturb it.
     public static var baseDirectory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Donkey", isDirectory: true)

@@ -1174,21 +1174,8 @@ public enum DonkeyCommandBackends {
         return nil
     }
 
-    /// Bundled tools where the USER's copy keeps priority over Donkey's. yt-dlp only: its bundled build
-    /// can lag YouTube changes, so a newer Homebrew/pipx copy on the user's PATH wins (the bundled copy is
-    /// still the appended fallback when the user has none). Every other bundled tool is a curated,
-    /// known-good capability build — e.g. an ffmpeg compiled with libass so burning subtitles works — that
-    /// should win over whatever arbitrary copy the user happens to have, so it is NOT listed here.
-    static let userPreferredExecutableNames: Set<String> = ["yt-dlp"]
-
-    /// Bundled tools that should win over a user-installed copy: everything Donkey bundles except the
-    /// user-preferred set above.
-    private static var bundledFirstExecutableNames: Set<String> {
-        BundledTools.executableNames.subtracting(userPreferredExecutableNames)
-    }
-
     /// The environment for a `shell_exec` child: the app's environment, but with PATH rebuilt as
-    /// `<preferred-bundled-overlay> : <login-shell PATH> : <full bundled dir>`.
+    /// `<bundled tools dir> : <login-shell PATH>`.
     ///
     /// A GUI-launched app (Finder/Dock) inherits only launchd's minimal PATH —
     /// `/usr/bin:/bin:/usr/sbin:/sbin` — which omits `/opt/homebrew/bin` and everything else the
@@ -1197,18 +1184,16 @@ public enum DonkeyCommandBackends {
     /// though the user clearly had them in Terminal. Anchoring on the login-shell PATH means the agent
     /// sees exactly what the user sees.
     ///
-    /// The two bundled segments split by intent. The PREPENDED overlay holds only the curated capability
-    /// tools (ffmpeg/ffprobe/…) that a skill's feature depends on, so Donkey's libass ffmpeg wins over a
-    /// user's stripped Homebrew build and "burn the subtitles in" actually works. yt-dlp is absent from
-    /// the overlay, so the user's newer copy still wins for it. The full bundled dir is APPENDED last as
-    /// the install-nothing fallback: any tool the user lacks still resolves to the signed bundled copy.
+    /// The bundled tools dir is PREPENDED, so the app's curated, signed copy ALWAYS wins over whatever the
+    /// user happens to have on their PATH — no per-tool exceptions. Packaged-wins is the whole point of
+    /// bundling: a capability behaves identically on every machine (the libass ffmpeg that can burn in
+    /// subtitles, a yt-dlp that launches under the sandbox), instead of silently deferring to a user's
+    /// stripped or incompatible build. Prepending the same dir also resolves any tool the user lacks, so
+    /// the install-nothing guarantee falls out for free. The login-shell PATH still follows, so everything
+    /// the user has — and that Donkey doesn't bundle — keeps resolving.
     static func shellEnvironment() -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         var segments: [String] = []
-        if let overlay = preferredBundledToolsOverlay() {
-            segments.append(overlay.path)
-        }
-        segments.append(loginShellPath)
         if let toolsDirectory = bundledToolsDirectory {
             segments.append(toolsDirectory.path)
             // `lit` (liteparse) loads pdfium as a shared library at runtime via dlopen, and pdfium-rs
@@ -1218,42 +1203,9 @@ public enum DonkeyCommandBackends {
             // shared library". Only the agent's child sees this; the app process is untouched.
             environment["PDFIUM_LIB_PATH"] = toolsDirectory.path
         }
+        segments.append(loginShellPath)
         environment["PATH"] = segments.joined(separator: ":")
         return environment
-    }
-
-    /// A directory of symlinks to the bundled capability tools that should win over the user's copies,
-    /// kept in a writable app-managed location and refreshed to match the live bundled dir. Prepending
-    /// THIS (rather than the whole bundled dir) lets ffmpeg/ffprobe/… take priority while yt-dlp still
-    /// resolves from the user's PATH. A bundled binary loads its dylibs via `@loader_path`, which dyld
-    /// resolves against the symlink's real target, so a symlinked ffmpeg still finds its libass. Returns
-    /// nil when no bundle is installed, so PATH degrades to login-shell + appended fallback unchanged.
-    private static func preferredBundledToolsOverlay() -> URL? {
-        guard let toolsDirectory = bundledToolsDirectory else { return nil }
-        let fileManager = FileManager.default
-        let overlay = BundledTools.baseDirectory
-            .deletingLastPathComponent()
-            .appendingPathComponent("donkey-tools-preferred", isDirectory: true)
-        do {
-            try fileManager.createDirectory(at: overlay, withIntermediateDirectories: true)
-        } catch {
-            return nil
-        }
-        var linkedAny = false
-        for name in bundledFirstExecutableNames {
-            let target = toolsDirectory.appendingPathComponent(name)
-            guard fileManager.isExecutableFile(atPath: target.path) else { continue }
-            let link = overlay.appendingPathComponent(name)
-            // Recreate only when missing or pointing at a stale target — the bundled dir can move between
-            // launches (the baked app copy, or a per-version download dir whose path changes when the
-            // pinned version changes), so relink whenever the target no longer matches and otherwise no-op.
-            if (try? fileManager.destinationOfSymbolicLink(atPath: link.path)) != target.path {
-                try? fileManager.removeItem(at: link)
-                try? fileManager.createSymbolicLink(at: link, withDestinationURL: target)
-            }
-            if fileManager.fileExists(atPath: link.path) { linkedAny = true }
-        }
-        return linkedAny ? overlay : nil
     }
 
     /// The PATH the user's interactive shell would have, resolved once. Asking the login shell
