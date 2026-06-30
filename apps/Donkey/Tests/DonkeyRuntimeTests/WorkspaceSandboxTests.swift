@@ -34,6 +34,18 @@ struct WorkspaceSandboxTests {
     }
 
     @Test
+    func profileAllowsSystemVIPCForSelfExtractingTools() {
+        // A PyInstaller onefile binary (yt-dlp) relaunches itself through a System V semaphore; without
+        // this rule its bootloader dies with `semctl: Operation not permitted` under (deny default), which
+        // the agent misreads as a broken tool. Lock the allowance in so a profile edit can't silently drop
+        // it and resurrect the pip/python consent loop.
+        let policy = SandboxPolicy(writableRoots: ["/private/tmp"], allowAllReads: true)
+        let sbpl = WorkspaceSandbox.profile(for: policy, programPath: "/usr/bin:/bin", bundledToolsDir: nil)
+        #expect(sbpl.contains("(allow ipc-sysv-sem)"))
+        #expect(sbpl.contains("(allow ipc-sysv-shm)"))
+    }
+
+    @Test
     func networkIsOmittedWhenDisallowed() {
         let policy = SandboxPolicy(writableRoots: ["/private/tmp"], readableRoots: [], allowNetwork: false)
         let sbpl = WorkspaceSandbox.profile(for: policy, programPath: "", bundledToolsDir: nil)
@@ -114,6 +126,59 @@ struct WorkspaceSandboxTests {
         // …but a write outside the jail is still blocked by the kernel.
         #expect(runZsh(": > '\(escape)'", policy: policy) != 0)
         #expect(FileManager.default.fileExists(atPath: escape) == false)
+    }
+
+    @Test
+    func systemVSemaphoreSucceedsInsideTheJail() throws {
+        // The real failure that sent the agent into the pip/python consent loop: a System V semaphore op
+        // (semget/semctl) denied by the seatbelt. Prove the kernel now permits it under the wrap by
+        // compiling and running a tiny program that does exactly what yt-dlp's bootloader does. Skipped
+        // cleanly if no C compiler is available.
+        try requireSandboxExec()
+        let cc = "/usr/bin/cc"
+        try #require(FileManager.default.isExecutableFile(atPath: cc))
+
+        let base = try makeBase()
+        defer { try? FileManager.default.removeItem(atPath: base) }
+        let source = base + "/sem.c"
+        let binary = base + "/sem"
+        try """
+        #include <sys/sem.h>
+        int main(void) {
+            int id = semget(IPC_PRIVATE, 1, IPC_CREAT | 0600);   // what fails under a too-tight jail
+            if (id < 0) return 1;
+            semctl(id, 0, IPC_RMID);                              // the call that emitted "Operation not permitted"
+            return 0;
+        }
+        """.write(toFile: source, atomically: true, encoding: .utf8)
+
+        // Compile unsandboxed; only the run needs to be confined.
+        let compile = Process()
+        compile.executableURL = URL(fileURLWithPath: cc)
+        compile.arguments = [source, "-o", binary]
+        compile.standardOutput = FileHandle.nullDevice
+        compile.standardError = FileHandle.nullDevice
+        try compile.run()
+        compile.waitUntilExit()
+        try #require(compile.terminationStatus == 0)
+
+        // Run it inside the jail — the kernel must allow the SysV semaphore calls.
+        let policy = SandboxPolicy(writableRoots: [base], allowNetwork: false)
+        let (exe, args) = WorkspaceSandbox.wrap(
+            executable: URL(fileURLWithPath: binary),
+            arguments: [],
+            policy: policy,
+            environment: ["PATH": "/usr/bin:/bin"],
+            bundledToolsDir: nil
+        )
+        let run = Process()
+        run.executableURL = exe
+        run.arguments = args
+        run.standardOutput = FileHandle.nullDevice
+        run.standardError = FileHandle.nullDevice
+        try run.run()
+        run.waitUntilExit()
+        #expect(run.terminationStatus == 0)
     }
 
     // MARK: - Helpers

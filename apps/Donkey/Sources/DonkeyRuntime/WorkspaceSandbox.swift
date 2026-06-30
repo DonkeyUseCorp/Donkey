@@ -163,7 +163,13 @@ public enum WorkspaceSandbox {
             "(deny default)",
             "(allow process-fork) (allow process-exec*)",
             "(allow sysctl-read) (allow mach-lookup) (allow signal (target self))",
-            "(allow ipc-posix-shm*)",
+            // IPC: POSIX shared memory plus the System V semaphore/shared-memory pair. A PyInstaller
+            // onefile binary (yt-dlp) unpacks and relaunches itself using a System V semaphore for the
+            // parent/child handshake; under (deny default) `semctl` returns "Operation not permitted" and
+            // the bootloader dies before the tool runs at all — which reads to the agent as a broken tool
+            // and sends it hunting for a pip/python install path. IPC is not a filesystem escape, so
+            // allowing it keeps the jail's filesystem-only contract intact while letting bundled tools run.
+            "(allow ipc-posix-shm*) (allow ipc-sysv-sem) (allow ipc-sysv-shm)",
             "(allow file-read-metadata)"
         ]
         if policy.allowNetwork { lines.append("(allow network*)") }
