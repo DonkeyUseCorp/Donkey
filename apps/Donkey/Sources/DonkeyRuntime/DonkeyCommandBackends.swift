@@ -313,11 +313,12 @@ public enum DonkeyCommandBackends {
     }
 
     /// The seatbelt policy confining a shell spawn. Reads are open (the consent classifier already treats
-    /// reads as free); writes are confined by the consent outcome. An UNPROMPTED command (a read, or a
-    /// bounded mutator whose operands all sit in an owned folder) is held to the owned folders. A command
-    /// the user APPROVED at a prompt also gets their home directory writable, so the approved write lands —
-    /// the kernel still blocks `/System`, `/usr`, and other users. `nil` when no folder is owned yet, so the
-    /// spawn runs unconfined exactly as before the jail existed; the consent prompt is the gate there.
+    /// reads as free) and the network is open (API calls and downloads are common); writes are confined by
+    /// the consent outcome. An UNPROMPTED command (a read, a bounded mutator whose operands all sit in an
+    /// owned folder, or a jailed interpreter) is held to the owned folders. A command the user APPROVED at a
+    /// prompt also gets their home directory writable, so the approved write lands — the kernel still blocks
+    /// `/System`, `/usr`, and other users. `nil` when no folder is owned yet, so the spawn runs unconfined
+    /// exactly as before the jail existed; the consent prompt is the gate there.
     private static func shellPolicy(owned: [String], consented: Bool) -> SandboxPolicy? {
         guard !owned.isEmpty else { return nil }
         let writable = consented ? owned + [FileManager.default.homeDirectoryForCurrentUser.path] : owned
@@ -771,16 +772,23 @@ public enum DonkeyCommandBackends {
         let workingDirectory = workspaceBaseDir(context)
         let owned = ownedRoots(context)
 
-        // Decide consent. A command runs UNPROMPTED when it is a read, or a bounded file mutator whose every
-        // operand sits inside a folder Donkey created — managing its own folder is not the user's to approve.
-        // Anything else (a mutation reaching a user file, an interpreter, a network tool) prompts first;
-        // nothing is silently refused.
+        // Decide consent. A command runs UNPROMPTED when it is a read; a bounded file mutator whose every
+        // operand sits inside a folder Donkey created; or a scripting interpreter the kernel jail can
+        // contain — managing its own folder is not the user's to approve. Anything else (a mutation
+        // reaching a user file, a network tool, a side-effecting app driver) prompts first; nothing is
+        // silently refused.
         let classification = ShellCommandClassifier.classify(command)
+        let resolvedWorkdir = workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path
+        // An interpreter (python3/ruby/…) reshaping files in Donkey's own folder runs unprompted, the same
+        // as a bounded mutator — because the kernel jail keeps its WRITES in those folders. Reads and the
+        // network stay open like every spawn, so a script that inspects a file or calls an API still works;
+        // a write aimed at a user file is stopped by the kernel rather than a prompt.
         let unprompted = classification.tier == .read
+            || ShellCommandClassifier.isWorkspaceConfinedInterpreterRun(
+                command, ownedRoots: owned, workingDirectory: resolvedWorkdir
+            )
             || ShellCommandClassifier.everySegmentMutatesOnlyOwnedRoots(
-                command,
-                ownedRoots: owned,
-                workingDirectory: workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path
+                command, ownedRoots: owned, workingDirectory: resolvedWorkdir
             )
         if !unprompted {
             if let gate = await consentGate(context, command: command, classification: classification) {
@@ -790,8 +798,9 @@ public enum DonkeyCommandBackends {
 
         let timeout = context.call.input["timeoutSeconds"].flatMap(Double.init)
             .map { min(max($0, 1), shellTimeoutMax) } ?? shellTimeout
-        // Confine the spawn (kernel-enforced): reads open, writes held to the owned folders — plus the user's
-        // home when they approved this command at a prompt, so the approved write lands. nil → no folder yet.
+        // Confine the spawn (kernel-enforced): reads open, network open, writes held to the owned folders —
+        // plus the user's home when they approved this command at a prompt, so the approved write lands.
+        // nil → no folder yet.
         let policy = shellPolicy(owned: owned, consented: !unprompted)
         let result = await Task.detached(priority: .userInitiated) {
             runShellSync(command, timeout: timeout, workingDirectory: workingDirectory, policy: policy)

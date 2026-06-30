@@ -61,13 +61,13 @@ public enum ShellCommandClassifier {
     /// `everySegmentMutatesOnlyOwnedRoots`): the agent managing its own folder is the work the user said it
     /// shouldn't have to approve. A mutation that reaches a file the user owns prompts like any other.
     ///
-    /// Scripting interpreters (`python3`, `ruby`, `perl`, `node`) are deliberately ABSENT. Their effect is
-    /// the code they run, not the paths in argv — `python3 script.py` can delete a user folder no static
-    /// look at the command line can see — so "a workspace exists" is no containment at all for them. They
-    /// stay on the normal consent path, surfacing a clear "runs a … script" prompt the user can
-    /// always-allow. `sed -i` is absent for a related reason: its file operand can't be told apart from its
-    /// script argument statically, so it too prompts. Tools with side effects beyond the filesystem
-    /// (osascript, open, killall, …) are absent for the same reason.
+    /// Scripting interpreters (`python3`, `ruby`, `perl`, `node`) are ABSENT here because their effect is
+    /// the opaque code they run, not the paths in argv — no static look at `python3 script.py` can clear
+    /// its operands. They are contained a different way: `isWorkspaceConfinedInterpreterRun` lets one run
+    /// unprompted when the spawn is jailed to the owned folders, so the KERNEL — not an operand check —
+    /// keeps its WRITES in the workspace. `sed -i` is absent for a related reason: its file operand can't be
+    /// told apart from its script argument statically, so it prompts. Tools with side effects the jail does
+    /// not contain (osascript, open, killall, …) are absent for the same reason.
     public static let workspaceFileToolSignatures: Set<String> = [
         "mkdir", "touch", "cp", "mv", "ln", "tee", "rm", "rmdir", "chmod"
     ]
@@ -76,6 +76,65 @@ public enum ShellCommandClassifier {
     /// agent's own working directory. See `workspaceFileToolSignatures`.
     public static func isWorkspaceFileTool(_ signature: String) -> Bool {
         workspaceFileToolSignatures.contains(signature)
+    }
+
+    /// The scripting interpreters whose effect is the opaque code they run, not their argv — so operand
+    /// analysis can't clear them the way it clears a bounded mutator. The kernel jail can: confined to the
+    /// owned folders, an interpreter can only WRITE inside the workspace (reads and the network stay open,
+    /// as for every spawn). This is what lets a workspace data step run without a prompt.
+    public static let workspaceInterpreterSignatures: Set<String> = ["python3", "python", "ruby", "perl", "node"]
+
+    /// Whether the line may run UNPROMPTED because the kernel jail confines its writes to the owned folders.
+    /// It qualifies when nothing escalates the line to high-risk (no sudo/rm/curl/`-exec`/pipe-to-shell/
+    /// device-redirect) AND every segment is one of: a read (a plain read, a bundled tool, a read
+    /// subcommand); a bounded file mutator whose operands all sit in an owned root; or a bare scripting
+    /// interpreter (`python3`/`ruby`/…). At least one interpreter must be present — a line without one is
+    /// already covered by the read or bounded-mutator paths.
+    ///
+    /// An interpreter is opaque, so its safety rests on the KERNEL, not a look at its arguments: the caller
+    /// jails the spawn to the owned folders, so a script can only WRITE inside the workspace — a write
+    /// aimed at a user file is stopped by the kernel instead of a prompt. Reads and the network stay open,
+    /// exactly as they are for every other spawn, so a script that inspects a file or calls an API still
+    /// works. The unprompted pass therefore depends on a folder existing to confine writes into: with no
+    /// owned roots there is no jail, so this returns false and the interpreter prompts as before. Anything
+    /// the jail can't contain — a side-effecting tool (`open`/`osascript`), a mutation reaching outside the
+    /// folder — also disqualifies the line. Argv tokens only; any resolution ambiguity errs toward prompting.
+    public static func isWorkspaceConfinedInterpreterRun(
+        _ command: String,
+        ownedRoots: [String],
+        workingDirectory: String
+    ) -> Bool {
+        // A high-risk construct anywhere (sudo, rm, an -exec flag, pipe-to-shell, a device redirect) is not
+        // contained by the filesystem jail, so it never rides this unprompted path.
+        guard classify(command).tier != .highRisk else { return false }
+        let owned = ownedRoots.compactMap(canonicalDirectory)
+        guard !owned.isEmpty else { return false }
+        let workdir = canonicalDirectory(workingDirectory) ?? (workingDirectory as NSString).expandingTildeInPath
+        let segments = splitSegments(command).map(tokenize).filter { !$0.isEmpty }
+        guard !segments.isEmpty else { return false }
+        var sawInterpreter = false
+        for tokens in segments {
+            let exe = executableName(tokens[0])
+            if workspaceInterpreterSignatures.contains(exe) {
+                sawInterpreter = true
+                continue
+            }
+            // Any read — a plain read, a bundled capability tool, a read subcommand — rides along; reads
+            // change nothing and the jail confines the line's writes regardless.
+            if classifySegment(tokens).tier == .read { continue }
+            // A bounded file mutator is fine only when every operand resolves inside an owned root.
+            if workspaceFileToolSignatures.contains(exe),
+               pathOperands(of: tokens).allSatisfy({ operand in
+                   guard let resolved = resolveOperandPath(operand, workingDirectory: workdir) else { return false }
+                   return owned.contains { isWithin(resolved, root: $0) }
+               }) {
+                continue
+            }
+            // Anything else (open, osascript, an out-of-folder mutation) is not contained by the jail —
+            // disqualify and let the line prompt.
+            return false
+        }
+        return sawInterpreter
     }
 
     /// Whether EVERY command in the line is a bare bounded file mutator (`mv`, `rm`, `mkdir`, `chmod`, …)

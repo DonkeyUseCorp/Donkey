@@ -248,14 +248,73 @@ struct ShellCommandClassifierTests {
     }
 
     @Test
-    func interpretersAreNotWorkspaceTools() {
-        // A scripting interpreter's effect is the opaque code it runs, not the paths in argv, so "a
-        // workspace exists" is no containment — it must prompt (once, always-allowable), never auto-run.
+    func interpretersAreNotBoundedFileTools() {
+        // A scripting interpreter's effect is the opaque code it runs, not the paths in argv, so operand
+        // analysis can't clear it: it is not a bounded FILE tool. (It is instead contained by the kernel
+        // jail — see `workspaceConfinedInterpretersRunUnprompted`.) Its tier stays reversibleWrite so that,
+        // with no workspace to jail it into, it still surfaces a clear "runs a … script" prompt.
         for command in ["python3 map.py", "python3 -c 'print(1)'", "ruby s.rb", "node x.js", "perl y.pl"] {
             let c = ShellCommandClassifier.classify(command)
             #expect(c.tier == .reversibleWrite)
-            #expect(!ShellCommandClassifier.isWorkspaceFileTool(c.signature), "interpreter must prompt: \(command)")
+            #expect(!ShellCommandClassifier.isWorkspaceFileTool(c.signature), "not a bounded file tool: \(command)")
         }
+    }
+
+    @Test
+    func workspaceConfinedInterpretersRunUnprompted() throws {
+        // The motivating annoyance: Donkey parsing a JSON file it created in its own folder with
+        // `python3 -c "json.load(open('fields.json'))"` prompted on every call. An interpreter is opaque,
+        // so it can't be cleared by operand analysis — but jailed to the owned folder (writes confined
+        // there, reads and network open), it can only reshape workspace files, so it runs without a prompt.
+        let ws = try makeOwnedRoot()
+        defer { try? FileManager.default.removeItem(atPath: ws) }
+        func confined(_ c: String) -> Bool {
+            ShellCommandClassifier.isWorkspaceConfinedInterpreterRun(c, ownedRoots: [ws], workingDirectory: ws)
+        }
+        for command in [
+            "python3 -c \"import json; print(len(json.load(open('fields.json'))))\"",
+            "python3 map.py",
+            "ruby s.rb",
+            "node x.js",
+            "perl y.pl",
+            "cat fields.json | python3 -c 'import sys,json; json.load(sys.stdin)'",   // read piped to interpreter
+            "ls && python3 process.py",                                               // read then interpreter
+            "mkdir \"\(ws)/out\" && python3 build.py",                                // owned mutator + interpreter
+            "yt-dlp 'https://x' && python3 process.py",                               // bundled tool keeps its open network
+            "python3 -c \"import urllib.request; urllib.request.urlopen('https://x')\"", // a network call inside the script just works
+        ] {
+            #expect(confined(command), "should run unprompted (jailed writes, network open): \(command)")
+        }
+    }
+
+    @Test
+    func interpretersThatEscapeTheJailStillPrompt() throws {
+        // The free pass is only for what the jail contains. A network tool, a destructive neighbor, an
+        // -exec escape, a pipe-to-shell, or a side-effecting app driver (open/osascript) all disqualify the
+        // line — it prompts as before. (A bare `curl`/`open` is gated on its own; the interpreter's own
+        // network access is fine, since the jail's job is bounding writes, not egress.)
+        let ws = try makeOwnedRoot()
+        defer { try? FileManager.default.removeItem(atPath: ws) }
+        func confined(_ c: String) -> Bool {
+            ShellCommandClassifier.isWorkspaceConfinedInterpreterRun(c, ownedRoots: [ws], workingDirectory: ws)
+        }
+        for command in [
+            "python3 fetch.py && curl http://x",                  // explicit network tool is gated on its own
+            "python3 -c 'print(1)' | sh",                         // pipe to shell
+            "python3 clean.py; rm -rf ~/Downloads",               // destructive neighbor
+            "python3 -c 'print(1)' && open -a Mail",              // app driving — jail doesn't contain it
+            "python3 -c 'print(1)' && osascript -e 'tell app \"Mail\" to quit'",
+            "sudo python3 x.py",                                  // privileged
+            "python3 -c \"open('\(ws)/../escape.txt','w')\" && mv \"\(ws)/../escape.txt\" \"\(ws)/a\"", // mutator climbs out
+        ] {
+            #expect(!confined(command), "should still prompt: \(command)")
+        }
+        // No owned roots → no jail to contain the interpreter → it prompts.
+        #expect(!ShellCommandClassifier.isWorkspaceConfinedInterpreterRun(
+            "python3 -c 'print(1)'", ownedRoots: [], workingDirectory: ws))
+        // No interpreter present → this path doesn't apply (the read/mutator paths cover it).
+        #expect(!ShellCommandClassifier.isWorkspaceConfinedInterpreterRun(
+            "ls -la", ownedRoots: [ws], workingDirectory: ws))
     }
 
     @Test
