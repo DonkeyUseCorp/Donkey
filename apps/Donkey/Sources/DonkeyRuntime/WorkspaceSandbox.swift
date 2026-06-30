@@ -73,9 +73,13 @@ public struct SandboxPolicy: Sendable, Equatable {
 /// writes (`files.write`); `sandbox-exec` confines children, and the in-process equivalent would jail
 /// the whole app. Those writes stay governed by `resolveWritePath`.
 ///
-/// The jail is FILESYSTEM-ONLY: it leaves `network*`, `mach-lookup`, and Apple Events open so API
-/// calls, `osascript`, and `open` still work. Non-filesystem side effects remain the job of the shell
-/// consent classifier; the jail only removes the question "can this tool escape the folder?".
+/// The jail is FILESYSTEM-ONLY, and it expresses that by ALLOWING EVERYTHING by default and then denying
+/// only out-of-workspace file writes. A tool may use the GPU, System V semaphores, the network, Mach
+/// services — anything — because none of those let it escape the folder. The profile is deliberately not a
+/// `(deny default)` allowlist of capabilities: that shape forced a new rule for every capability a tool
+/// turned out to need (yt-dlp's semaphores, VideoToolbox's IOKit), each discovered through a cryptic
+/// failure. Allowing by default removes that failure class entirely; non-filesystem side effects remain the
+/// job of the shell consent classifier. The jail only answers "can this tool escape the folder?" — no.
 public enum WorkspaceSandbox {
     /// The OS sandbox wrapper. Deprecated by Apple but functional on every current macOS, and the same
     /// mechanism Chromium uses to confine its helpers. A future hardening step could call `sandbox_init`
@@ -151,52 +155,53 @@ public enum WorkspaceSandbox {
     public static func profile(for policy: SandboxPolicy, programPath: String, bundledToolsDir: String?) -> String {
         let writable = uniqued(policy.writableRoots.compactMap(canonicalIfPresent))
         let inputs = uniqued(policy.readableRoots.compactMap(canonicalIfPresent))
-
-        var readRoots = systemReadRoots + programReadRoots(programPath)
-        if let bundledToolsDir, let resolved = canonicalIfPresent(bundledToolsDir) { readRoots.append(resolved) }
-        readRoots = uniqued(readRoots)
-
         let darwinTemp = canonical(NSTemporaryDirectory())
+        let caches = userCacheRoots
 
         var lines: [String] = [
             "(version 1)",
-            "(deny default)",
-            "(allow process-fork) (allow process-exec*)",
-            "(allow sysctl-read) (allow mach-lookup) (allow signal (target self))",
-            // IPC: POSIX shared memory plus the System V semaphore/shared-memory pair. A PyInstaller
-            // onefile binary (yt-dlp) unpacks and relaunches itself using a System V semaphore for the
-            // parent/child handshake; under (deny default) `semctl` returns "Operation not permitted" and
-            // the bootloader dies before the tool runs at all — which reads to the agent as a broken tool
-            // and sends it hunting for a pip/python install path. IPC is not a filesystem escape, so
-            // allowing it keeps the jail's filesystem-only contract intact while letting bundled tools run.
-            "(allow ipc-posix-shm*) (allow ipc-sysv-sem) (allow ipc-sysv-shm)",
-            "(allow file-read-metadata)"
+            // Allow every operation by default. The jail's ONLY job is to bound the FILESYSTEM: a tool may
+            // use the GPU, System V semaphores, the network, Mach services — anything — because none of
+            // those let it escape the workspace folder. This is deliberately NOT a (deny default) profile
+            // that allow-lists each capability: every capability we hadn't predicted (yt-dlp's semaphores,
+            // VideoToolbox's IOKit) failed cryptically until a rule was added, one painful tool at a time.
+            // Allowing by default makes that whole class of failure impossible; the filesystem carve-outs
+            // below are the real, load-bearing boundary.
+            "(allow default)"
         ]
-        if policy.allowNetwork { lines.append("(allow network*)") }
 
-        // Reads. Shell commands (allowAllReads) may read anywhere — the consent classifier already treats
-        // reads as free, so the agent can inspect files the user pointed it at. Bundled-tool pipelines stay
-        // locked to system + program dirs + the task's declared inputs, so a hostile input file can't make
-        // its tool read the rest of the disk. Directory listing/stat is covered globally by
-        // file-read-metadata, so an input's siblings stay unreadable.
-        if policy.allowAllReads {
-            lines.append("(allow file-read* (subpath \"/\"))")
-        } else {
-            lines.append("(allow file-read* (literal \"/\")")
+        // Network rides on (allow default); deny it only when a policy explicitly forbids it.
+        if !policy.allowNetwork { lines.append("(deny network*)") }
+
+        // WRITES — the boundary. Deny every write, then re-allow only: the workspace folder(s), any
+        // consent-approved location, the per-user darwin temp and user cache dirs (sanctioned scratch —
+        // auto-purged, no user documents, so a tool's cache lands somewhere), and /dev pseudo-devices. A
+        // write anywhere else — the user's files, /System, /usr — is the escape the jail exists to stop.
+        lines.append("(deny file-write*)")
+        lines.append("(allow file-write*")
+        lines.append("  (subpath \"/dev\")")
+        lines.append("  (subpath \(quote(darwinTemp)))")
+        for path in caches { lines.append("  (subpath \(quote(path)))") }
+        for path in writable { lines.append("  (subpath \(quote(path)))") }
+        lines.append(")")
+
+        // READS stay open by default (the consent classifier treats reads as free). A bundled-tool pipeline
+        // locks them — a possibly-hostile input file shouldn't let its converter read the rest of the disk —
+        // so there we deny data reads and re-allow only the system/program dirs, the bundled tools, the
+        // declared inputs, and the writable scratch (a tool reads what it writes). `file-read-metadata` stays
+        // open everywhere so directory listing/stat still works while an input's siblings' contents do not.
+        if !policy.allowAllReads {
+            var readRoots = systemReadRoots + programReadRoots(programPath)
+            if let bundledToolsDir, let resolved = canonicalIfPresent(bundledToolsDir) { readRoots.append(resolved) }
+            readRoots = uniqued(readRoots + writable + [darwinTemp] + caches)
+            lines.append("(deny file-read* (subpath \"/\"))")
+            lines.append("(allow file-read*")
+            lines.append("  (literal \"/\")")
             for path in readRoots { lines.append("  (subpath \(quote(path)))") }
             for path in inputs { lines.append("  (subpath \(quote(path)))") }
             lines.append(")")
+            lines.append("(allow file-read-metadata)")
         }
-
-        // Writes: the workspace folder(s) plus any consent-approved location, the per-user darwin temp and
-        // user cache dirs (sanctioned scratch outside the jail — auto-purged, hold no user documents so a
-        // tool's model/compile cache lands somewhere), and /dev pseudo-devices.
-        lines.append("(allow file-read* file-write*")
-        lines.append("  (subpath \"/dev\")")
-        lines.append("  (subpath \(quote(darwinTemp)))")
-        for path in userCacheRoots { lines.append("  (subpath \(quote(path)))") }
-        for path in writable { lines.append("  (subpath \(quote(path)))") }
-        lines.append(")")
 
         return lines.joined(separator: "\n")
     }

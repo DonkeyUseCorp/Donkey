@@ -18,38 +18,42 @@ struct WorkspaceSandboxTests {
     func profileEncodesTheJailAndDeclaredInputs() {
         let policy = SandboxPolicy(writableRoots: ["/private/tmp"], readableRoots: ["/etc/hosts"], allowNetwork: true)
         let sbpl = WorkspaceSandbox.profile(for: policy, programPath: "/usr/bin:/bin", bundledToolsDir: nil)
-        #expect(sbpl.contains("(deny default)"))
-        #expect(sbpl.contains("(allow network*)"))
-        #expect(sbpl.contains("(subpath \"/private/tmp\")"))   // the jail, writable
-        #expect(sbpl.contains("(subpath \"/private/etc/hosts\")"))  // declared input, canonicalized for read
+        #expect(sbpl.contains("(allow default)"))      // allow-everything base — capabilities just work
+        #expect(sbpl.contains("(deny file-write*)"))   // out-of-workspace writes are the boundary
+        #expect(!sbpl.contains("(deny default)"))      // not a capability allowlist anymore
+        #expect(sbpl.contains("(subpath \"/private/tmp\")"))   // the jail, re-allowed for write
+        #expect(sbpl.contains("(subpath \"/private/etc/hosts\")"))  // declared input, readable under locked reads
     }
 
     @Test
-    func allowAllReadsOpensEveryRead() {
-        // Shell commands set allowAllReads: the profile opens reads everywhere instead of locking them to
-        // declared inputs, so the agent can inspect a file the user pointed it at.
+    func allowAllReadsLeavesReadsOpen() {
+        // Shell commands set allowAllReads: reads stay open (via allow-default), never locked to declared
+        // inputs, so the agent can inspect a file the user pointed it at.
         let policy = SandboxPolicy(writableRoots: ["/private/tmp"], allowAllReads: true)
         let sbpl = WorkspaceSandbox.profile(for: policy, programPath: "/usr/bin:/bin", bundledToolsDir: nil)
-        #expect(sbpl.contains("(allow file-read* (subpath \"/\"))"))
+        #expect(sbpl.contains("(allow default)"))
+        #expect(!sbpl.contains("(deny file-read"))   // reads are never denied for a shell command
     }
 
     @Test
-    func profileAllowsSystemVIPCForSelfExtractingTools() {
-        // A PyInstaller onefile binary (yt-dlp) relaunches itself through a System V semaphore; without
-        // this rule its bootloader dies with `semctl: Operation not permitted` under (deny default), which
-        // the agent misreads as a broken tool. Lock the allowance in so a profile edit can't silently drop
-        // it and resurrect the pip/python consent loop.
+    func profileAllowsEveryCapabilityByDefault() {
+        // The structural guarantee that ended the whack-a-mole: capabilities are NOT allow-listed, so a tool
+        // needing one we never predicted (yt-dlp's System V semaphores, VideoToolbox's IOKit) can't "fail
+        // the seatbelt". The base is (allow default); only out-of-workspace writes are denied, and there are
+        // no per-capability allow rules left to drift out of date.
         let policy = SandboxPolicy(writableRoots: ["/private/tmp"], allowAllReads: true)
         let sbpl = WorkspaceSandbox.profile(for: policy, programPath: "/usr/bin:/bin", bundledToolsDir: nil)
-        #expect(sbpl.contains("(allow ipc-sysv-sem)"))
-        #expect(sbpl.contains("(allow ipc-sysv-shm)"))
+        #expect(sbpl.contains("(allow default)"))
+        #expect(sbpl.contains("(deny file-write*)"))
+        #expect(!sbpl.contains("ipc-sysv"))
+        #expect(!sbpl.contains("iokit"))
     }
 
     @Test
-    func networkIsOmittedWhenDisallowed() {
+    func networkIsDeniedWhenDisallowed() {
         let policy = SandboxPolicy(writableRoots: ["/private/tmp"], readableRoots: [], allowNetwork: false)
         let sbpl = WorkspaceSandbox.profile(for: policy, programPath: "", bundledToolsDir: nil)
-        #expect(!sbpl.contains("(allow network*)"))
+        #expect(sbpl.contains("(deny network*)"))   // allow-default base, so an opt-out is an explicit deny
     }
 
     @Test
