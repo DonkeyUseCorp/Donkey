@@ -42,6 +42,13 @@ export const auth = betterAuth({
   baseURL: process.env.BETTER_AUTH_URL,
   secret: process.env.BETTER_AUTH_SECRET,
   trustedOrigins: macAuthRedirectOrigins(),
+  // Sessions last a year, and the rolling expiry is refreshed daily on use, so an active user effectively
+  // never has to sign in again. The Mac app's native session cookie rides this same lifetime, keeping the
+  // desktop signed in long after the handoff.
+  session: {
+    expiresIn: 60 * 60 * 24 * 365,
+    updateAge: 60 * 60 * 24,
+  },
   advanced: cookieDomain
     ? { crossSubDomainCookies: { enabled: true, domain: cookieDomain } }
     : undefined,
