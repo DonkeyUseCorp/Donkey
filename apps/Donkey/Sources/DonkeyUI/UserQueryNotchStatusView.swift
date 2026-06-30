@@ -910,7 +910,8 @@ public struct UserQueryNotchStatusView: View {
         case .needsAttention:
             return !conversation.commandText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         default:
-            return false
+            // A credit-exhausted row shows Resume + Close (see `stateControls`), so reserve the pair width.
+            return showsReloadCreditsAction(conversation)
         }
     }
 
@@ -1109,9 +1110,17 @@ public struct UserQueryNotchStatusView: View {
                 resumeAndCloseControls(for: conversation)
             }
         default:
-            // Completed, failed, and chatting only carry Close. A completed thread is still repliable,
-            // but by tapping the row (which activates it) rather than a button — see `conversationRow`'s tap.
-            closeControl(for: conversation)
+            // A credit-exhausted row failed only because the loop couldn't reach the model — the work so
+            // far (downloaded clip, transcript, partial render) is intact, so it is resumable: offer Resume
+            // alongside the "Add credits" reload banner, so the user can top up and continue without
+            // retyping. Resume keeps the world model (the coordinator preserves it for an external-blocker
+            // pause), so it continues rather than redoing. Every other terminal row (completed, a real
+            // failure, chatting) carries only Close; a completed thread is repliable by tapping the row.
+            if showsReloadCreditsAction(conversation) {
+                resumeAndCloseControls(for: conversation)
+            } else {
+                closeControl(for: conversation)
+            }
         }
     }
 

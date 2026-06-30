@@ -308,14 +308,22 @@ public actor HarnessAgentCoordinator {
     public func startRunning(agentID: String, reason: String = "Task running") async -> HarnessAgentState? {
         await mutate(agentID: agentID, status: .running, summary: reason) { task in
             task.pendingContinuation = nil
-            // A new run on a task whose previous run already ended must not inherit that run's
+            // An external-blocker pause (out of credits, signed out) ends the run in a `run.failSafe`, but it
+            // is NOT a real dead-end: the loop stopped because it couldn't reach the model, not because the
+            // work went wrong. Everything done so far — the downloaded clip, the transcript, the partial
+            // render on disk — is still valid, so a resume must CONTINUE from it, not start over. Clearing
+            // facts here made "continue" re-derive the whole task and redo work that was already done.
+            let resumingExternalBlocker = task.metadata[Self.externalBlockerPauseKey] == "true"
+            task.metadata[Self.externalBlockerPauseKey] = nil
+            // Otherwise, a new run on a task whose previous run already ended must not inherit that run's
             // facts as current truth — observed live: a stale "10 songs added" fact convinced the
             // planner a brand-new playlist was already populated, so it skipped the add and then
             // spiraled on the (truthful) empty read. The tool history keeps the full record for
             // context; the facts re-derive from the fresh reads the completion gate already
             // requires. Gate resumes (clarify/permission) continue the SAME run — their history
             // does not end in a terminal call — and keep their facts.
-            if let last = task.toolHistory.last,
+            if !resumingExternalBlocker,
+               let last = task.toolHistory.last,
                BuiltInHarnessToolCatalog.terminalToolNames.contains(last.call.name), last.resultStatus == .succeeded {
                 task.worldModel.facts = [:]
             }
@@ -337,9 +345,25 @@ public actor HarnessAgentCoordinator {
         }
     }
 
+    /// Task metadata key marking a fail-safe that was an EXTERNAL BLOCKER (out of credits, signed out)
+    /// rather than a genuine dead-end. `startRunning` reads it so a resume keeps the world model instead of
+    /// clearing it — the work done before the blocker is still valid and must carry forward.
+    static let externalBlockerPauseKey = "harness.externalBlockerPause"
+
+    /// Fail-safe reasons that mean "stopped on something the user resolves outside the loop" (add credits,
+    /// sign back in), not "the work failed". Matches the same reason codes `GenericHarnessRuntime` treats as
+    /// must-see; substring so a wrapped "Run stopped: insufficientCredits." still counts.
+    static func isExternalBlockerReason(_ reason: String) -> Bool {
+        reason.contains("insufficientCredits") || reason.contains("sessionSignedOut")
+    }
+
     public func failSafe(agentID: String, reason: String) async -> HarnessAgentState? {
         await mutate(agentID: agentID, status: .failedSafe, summary: reason) { task in
             task.pendingContinuation = nil
+            // Mark an external-blocker pause so a later resume keeps the world model (see `startRunning`).
+            if Self.isExternalBlockerReason(reason) {
+                task.metadata[Self.externalBlockerPauseKey] = "true"
+            }
         }
     }
 
