@@ -52,7 +52,7 @@ filter script, and debugging encoders and durations — dozens of round-trips fo
 is built to avoid exactly that.
 
 Reach for raw ffmpeg only to apply a subtitle file the user already has:
-- Burn-in: `ffmpeg -i clip.mp4 -vf "subtitles=subs.srt" -c:v libx264 -pix_fmt yuv420p -c:a aac out.mp4`.
+- Burn-in: `ffmpeg -i clip.mp4 -vf "subtitles=subs.srt" -c:v h264_videotoolbox -pix_fmt yuv420p -c:a aac out.mp4`. The bundled ffmpeg is the LGPL build with **no `libx264`** — use `h264_videotoolbox` (the hardware H.264 encoder that is present); don't pass `-preset`/`-crf` (it ignores them).
 - Soft, toggleable track (no libass, no re-encode): `ffmpeg -i clip.mp4 -i subs.srt -c copy -c:s mov_text out.mp4`.
 
 ## Cut filler words or silence

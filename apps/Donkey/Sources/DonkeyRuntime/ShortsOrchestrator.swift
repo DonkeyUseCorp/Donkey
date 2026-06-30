@@ -125,7 +125,7 @@ public struct ShortsOrchestrator: Sendable {
         let cut = MediaPipeline.runStep(
             "ffmpeg",
             ["-y", "-i", sourcePath, "-ss", Self.seconds(moment.startSec), "-t", Self.seconds(max(0.5, moment.durationSec)),
-             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", clip],
+             "-c:v", "h264_videotoolbox", "-c:a", "aac", clip],
             workingDirectory: workdir, expecting: clip, using: runTool
         )
         if case let .failed(reason) = cut { return .failed(reason: "clip \(n): could not cut the span — \(reason)") }

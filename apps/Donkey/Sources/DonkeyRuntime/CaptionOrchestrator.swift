@@ -11,14 +11,15 @@ import Foundation
 /// encoder, so it probes `ffmpeg -encoders`; a `-c copy` trim of a webm yields the wrong duration, so it
 /// runs eight `ffprobe`s to debug — every probe a full-context LLM round-trip. Here the timings come from
 /// on-device transcription, the SRT is built from them (never parsed back from a model), the trim re-encodes
-/// for an accurate span, and the burn pins `libx264 -pix_fmt yuv420p -c:a aac` so the video stream is never
-/// dropped. The only model call is the optional translation.
+/// for an accurate span, and the burn pins `h264_videotoolbox -pix_fmt yuv420p -c:a aac` so the video stream
+/// is never dropped (VideoToolbox is the bundled LGPL ffmpeg's H.264 encoder — it has no libx264). The only
+/// model call is the optional translation.
 ///
 /// ```
 ///   resolve source (yt-dlp, with --download-sections for a URL span)
 ///        → [trim local span] → extract audio → transcribe (on-device)
 ///        → [translate cue texts]  ← the ONE model call, only when a language is asked for
-///        → build SRT in code → burn (libx264/yuv420p/aac) → verify
+///        → build SRT in code → burn (h264_videotoolbox/yuv420p/aac) → verify
 /// ```
 public struct CaptionOrchestrator: Sendable {
     public typealias TranslateCues = @Sendable (_ lines: [String], _ targetLanguage: String) async -> [String]?
@@ -92,7 +93,7 @@ public struct CaptionOrchestrator: Sendable {
         let burn = MediaPipeline.runStep(
             "ffmpeg",
             ["-y", "-i", base, "-vf", "subtitles=\((srtPath as NSString).lastPathComponent)",
-             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", output],
+             "-c:v", "h264_videotoolbox", "-pix_fmt", "yuv420p", "-c:a", "aac", output],
             workingDirectory: workdir, expecting: output, using: runTool
         )
         if case .ok = burn {
@@ -158,7 +159,7 @@ public struct CaptionOrchestrator: Sendable {
         let trim = MediaPipeline.runStep(
             "ffmpeg",
             ["-y", "-i", resolved, "-ss", MediaSubtitles.seconds(startSec), "-t", MediaSubtitles.seconds(durationSec),
-             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", clip],
+             "-c:v", "h264_videotoolbox", "-c:a", "aac", clip],
             workingDirectory: workdir, expecting: clip, using: runTool
         )
         if case let .failed(reason) = trim { return .failed(reason: "Could not cut the requested span: \(reason)") }
