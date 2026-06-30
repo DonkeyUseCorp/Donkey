@@ -1,11 +1,10 @@
 "use client";
 
-import { Agents } from "@/app/_components/landing/Agents";
+import { Demo } from "@/app/_components/landing/Demo";
 import { DonkeyVisionCTA } from "@/app/_components/landing/DonkeyVisionCTA";
 import { FinalCTA } from "@/app/_components/landing/FinalCTA";
 import { Footer } from "@/app/_components/landing/Footer";
 import { Hero } from "@/app/_components/landing/Hero";
-import { HowItWorks } from "@/app/_components/landing/HowItWorks";
 import { OpenSource } from "@/app/_components/landing/OpenSource";
 import { Pricing } from "@/app/_components/landing/Pricing";
 import { Solutions } from "@/app/_components/landing/Solutions";
@@ -29,8 +28,7 @@ export default function DonkeyLanding() {
       <Hero />
       <TrustedBy />
       <Solutions />
-      <Agents />
-      <HowItWorks />
+      <Demo />
       <VsThePast />
       <OpenSource />
       <Pricing />
