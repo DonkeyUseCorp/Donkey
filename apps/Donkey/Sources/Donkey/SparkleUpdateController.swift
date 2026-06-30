@@ -13,8 +13,8 @@ protocol DonkeyUpdateChecking: AnyObject {
 }
 
 /// Drives Sparkle with no windows. A background check that finds an update surfaces the notch
-/// "Update Available" button; tapping it (`installAvailableUpdate`) downloads, installs, and
-/// relaunches silently. Sparkle's standard update dialog is never shown.
+/// "Update Available" button; tapping it (`installAvailableUpdate`) dismisses the badge at once,
+/// then downloads, installs, and relaunches silently. Sparkle's standard update dialog is never shown.
 @MainActor
 final class SparkleUpdateController: NSObject, DonkeyUpdateChecking, SPUUserDriver {
     private var updater: SPUUpdater?
@@ -60,8 +60,9 @@ final class SparkleUpdateController: NSObject, DonkeyUpdateChecking, SPUUserDriv
         updater.checkForUpdatesInBackground()
     }
 
-    /// The user tapped the notch button. Resume the update Sparkle already found and let it run to
-    /// completion silently; if nothing is pending, kick a fresh background check.
+    /// The user tapped the notch button. Dismiss the "Update Available" badge immediately so the tap
+    /// has instant feedback, then resume the update Sparkle already found and let it download, install,
+    /// and relaunch silently. If nothing is pending, kick a fresh background check instead.
     func installAvailableUpdate() {
         guard let pendingInstall else {
             checkForUpdatesInBackground()
@@ -69,6 +70,7 @@ final class SparkleUpdateController: NSObject, DonkeyUpdateChecking, SPUUserDriv
         }
 
         self.pendingInstall = nil
+        emit(.installing)
         pendingInstall(.install)
     }
 

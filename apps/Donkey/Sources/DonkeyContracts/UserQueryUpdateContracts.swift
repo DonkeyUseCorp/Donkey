@@ -5,6 +5,7 @@ public enum UserQueryUpdateStatus: String, Equatable, Sendable {
     case checking
     case upToDate
     case available
+    case installing
     case unavailable
     case failed
 }
