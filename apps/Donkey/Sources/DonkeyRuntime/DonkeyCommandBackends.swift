@@ -67,8 +67,13 @@ public enum DonkeyCommandBackends {
         )
 
         // An offscreen window backs the web view so layout and rendering actually
-        // run (an unattached WKWebView can snapshot blank).
-        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1280, height: 1600))
+        // run (an unattached WKWebView can snapshot blank). The view requests
+        // reduced motion (see `captureWebViewConfiguration`) so pages render their
+        // settled, fully-revealed state instead of a frozen mid-animation frame.
+        let webView = WKWebView(
+            frame: NSRect(x: 0, y: 0, width: 1280, height: 1600),
+            configuration: captureWebViewConfiguration()
+        )
         let window = NSWindow(
             contentRect: webView.frame,
             styleMask: [.borderless],
@@ -83,8 +88,10 @@ public enum DonkeyCommandBackends {
         guard loaded else {
             return failed(context, "Could not load \(url.absoluteString).", reason: "webSnapshotLoadFailed")
         }
-        // Give late layout/JS a brief beat to settle before capturing.
-        try? await Task.sleep(nanoseconds: 700_000_000)
+        // Scroll through the page to trigger viewport-gated content (lazy images,
+        // reveal-on-scroll), then let layout/JS settle into the reduced-motion
+        // final state before capturing.
+        await prepareForCapture(webView)
 
         do {
             let data = try await (format == "pdf" ? exportPDF(webView) : exportPNG(webView))
@@ -122,6 +129,66 @@ public enum DonkeyCommandBackends {
     ) -> URL {
         let host = url.host?.replacingOccurrences(of: ".", with: "-") ?? "page"
         return resolveOutputDestination(destination, baseDir: baseDir, format: format, defaultName: host)
+    }
+
+    /// Configuration for the `web_snapshot` capture view. A document-start user
+    /// script makes the page report `prefers-reduced-motion: reduce`, so sites that
+    /// honor it (like our own landing page) skip entry animations and render their
+    /// final, fully-revealed state. Without this, intro/reveal animations that start
+    /// at `opacity: 0` are still hidden when a single static snapshot is taken, so
+    /// whole sections capture blank.
+    @MainActor
+    private static func captureWebViewConfiguration() -> WKWebViewConfiguration {
+        let source = """
+        (function () {
+          var real = window.matchMedia ? window.matchMedia.bind(window) : null;
+          function reducedList(query) {
+            return {
+              matches: /prefers-reduced-motion\\s*:\\s*reduce/.test(query),
+              media: query,
+              onchange: null,
+              addListener: function () {},
+              removeListener: function () {},
+              addEventListener: function () {},
+              removeEventListener: function () {},
+              dispatchEvent: function () { return false; }
+            };
+          }
+          window.matchMedia = function (query) {
+            if (typeof query === 'string' && query.indexOf('prefers-reduced-motion') !== -1) {
+              return reducedList(query);
+            }
+            return real ? real(query) : reducedList(query);
+          };
+        })();
+        """
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.addUserScript(
+            WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+        )
+        return configuration
+    }
+
+    /// Walk the page top-to-bottom before capturing so viewport-gated content
+    /// (lazy images, `IntersectionObserver` reveals) loads, then return to the top.
+    /// The trailing sleep lets the scroll pass finish and animations settle into
+    /// their reduced-motion final state.
+    @MainActor
+    private static func prepareForCapture(_ webView: WKWebView) async {
+        let scrollSource = """
+        (function () {
+          var h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+          var step = Math.max(window.innerHeight, 600);
+          var y = 0;
+          var id = setInterval(function () {
+            y += step;
+            window.scrollTo(0, y);
+            if (y >= h) { clearInterval(id); window.scrollTo(0, 0); }
+          }, 50);
+        })();
+        """
+        _ = try? await webView.evaluateJavaScript(scrollSource)
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
     }
 
     @MainActor
