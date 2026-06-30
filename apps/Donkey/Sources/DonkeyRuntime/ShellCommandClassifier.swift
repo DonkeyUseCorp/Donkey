@@ -318,6 +318,18 @@ public enum ShellCommandClassifier {
                 return ShellCommandClassification(tier: .reversibleWrite, signature: "sed -i", reason: "edits a file in place")
             }
             return ShellCommandClassification(tier: .read, signature: "sed", reason: nil)
+        case "python3", "python", "ruby", "perl", "node":
+            // A bare version/help probe of an interpreter prints a string and exits — it runs no script, so
+            // it is a read like `which`/`command -v`, never a "runs a … script" consent prompt. This is what
+            // keeps a stray `python3 --version` capability probe from gating an otherwise read-only chain
+            // (the bug that put an Approve/Deny in front of a video clip). Restricted to the unambiguous long
+            // flags: `python -v` means verbose (it drops into an interactive REPL), so only `--version` /
+            // `--help` — never the short forms — qualify. Any other argument (a `-c`, an `-e`, a script path)
+            // returns nil and falls through to the "runs a … script" reversibleWrite mapping below.
+            if !tokens.isEmpty, tokens.allSatisfy({ $0 == "--version" || $0 == "--help" }) {
+                return ShellCommandClassification(tier: .read, signature: "\(executable) --version", reason: nil)
+            }
+            return nil
         default:
             return nil
         }

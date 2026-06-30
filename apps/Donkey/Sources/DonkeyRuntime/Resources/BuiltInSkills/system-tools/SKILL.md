@@ -36,7 +36,6 @@ Use `shell_exec` as the first choice for anything an expert terminal user would 
 - Battery / power: `pmset -g batt`. Hardware/software: `system_profiler SPHardwareDataType`, `sw_vers`.
 - Disk: `df -h`. Network: `networksetup -getairportpower en0`, `networksetup -getinfo Wi-Fi`.
 - A preference's current value: `defaults read com.apple.dock autohide`.
-- Tool availability/version (to decide what's possible): `which gh`, `python3 --version`.
 
 ## Change settings (asks for consent first)
 - App/UI preferences: `defaults write com.apple.dock autohide -bool true` then `killall Dock` to apply.

@@ -72,6 +72,22 @@ struct ShellCommandClassifierTests {
     }
 
     @Test
+    func versionAndHelpProbesNeverPrompt() {
+        // A version/existence probe prints a string and exits — a read like `which`, even for an
+        // interpreter. This is the exact chain the screenshot prompted on: a stray capability probe must
+        // never put an Approve/Deny in front of a video clip.
+        #expect(tier("uname -a; sw_vers; python3 --version; which python3") == .read)
+        #expect(tier("python3 --version") == .read)
+        #expect(tier("node --version") == .read)
+        #expect(tier("ruby --help") == .read)
+        // But an interpreter that actually runs code still prompts — only the bare version/help flags are
+        // a read; `-c`, a script path, or a bare REPL keep the "runs a script" gate.
+        #expect(tier("python3 -c 'print(1)'") == .reversibleWrite)
+        #expect(tier("python3 map.py --version") == .reversibleWrite)
+        #expect(tier("python3") == .reversibleWrite)
+    }
+
+    @Test
     func commandExecutionFlagsAreHighRiskEvenOnTrustedTools() {
         // yt-dlp's --exec runs an arbitrary command after download — it must never run silently, even
         // though yt-dlp is otherwise a trusted bundled tool that runs read-tier. No `| sh` or separator
