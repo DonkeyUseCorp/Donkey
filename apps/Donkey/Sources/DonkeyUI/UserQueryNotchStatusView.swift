@@ -202,7 +202,7 @@ public struct UserQueryNotchStatusView: View {
                     value: surfaceIsOpen
                 )
 
-            if updateState.isActionable {
+            if updateState.isActionable || updateState.status == .installing {
                 expandedUpdateBadge
                     .opacity(surfaceIsOpen ? 1 : 0)
                     .animation(
@@ -691,20 +691,33 @@ public struct UserQueryNotchStatusView: View {
     /// pushes the conversation list down or draws a divider.
     private var expandedUpdateBadge: some View {
         HStack(spacing: 8) {
-            Text("Update Available")
-                .font(.system(size: 11, weight: .regular))
-                .foregroundStyle(Color.white.opacity(0.7))
+            if updateState.status == .installing {
+                // The Restart tap kicks off a silent download-and-relaunch. Hold the slot with a
+                // spinner so the badge reads as "working" rather than blinking to nothing.
+                Text("Updating")
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(Color.white.opacity(0.7))
 
-            Button(action: updateRequested) {
-                Text("Restart")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color.black.opacity(0.82))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .controlSize(.small)
+                    .tint(Color.white.opacity(0.7))
+            } else {
+                Text("Update Available")
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(Color.white.opacity(0.7))
+
+                Button(action: updateRequested) {
+                    Text("Restart")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.black.opacity(0.82))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(.trailing, Self.contentInset)
         .frame(
