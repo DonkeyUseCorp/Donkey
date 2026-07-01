@@ -10,7 +10,6 @@ import { Pricing } from "@/app/_components/landing/Pricing";
 import { Solutions } from "@/app/_components/landing/Solutions";
 import { TopNav } from "@/app/_components/landing/TopNav";
 import { TrustedBy } from "@/app/_components/landing/TrustedBy";
-import { VsThePast } from "@/app/_components/landing/VsThePast";
 import { BG, BLACK } from "@/app/_components/landing/theme";
 
 export default function DonkeyLanding() {
@@ -29,7 +28,6 @@ export default function DonkeyLanding() {
       <TrustedBy />
       <Solutions />
       <Demo />
-      <VsThePast />
       <OpenSource />
       <Pricing />
       <DonkeyVisionCTA />
