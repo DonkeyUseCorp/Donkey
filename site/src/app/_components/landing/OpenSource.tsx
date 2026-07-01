@@ -11,7 +11,7 @@ export function OpenSource() {
   return (
     <section className="mx-auto max-w-[1400px] px-6 py-20 md:px-12 md:py-24">
       <Headline>
-        Donkey is yours. <span className="italic">All of it.</span>
+        Donkey is <span className="italic">open source.</span>
       </Headline>
       <p className="mt-6 max-w-[600px] text-[17px] leading-[1.55] text-[#454545]">
         Donkey is built in the open. Read the source, host it yourself,

@@ -20,8 +20,7 @@ export function Pricing() {
       }}
     >
       <Headline>
-        Plans for the work.{" "}
-        <span style={{ fontStyle: "italic" }}>Built for momentum.</span>
+        Simple <span style={{ fontStyle: "italic" }}>pricing</span>
       </Headline>
       <div
         style={{

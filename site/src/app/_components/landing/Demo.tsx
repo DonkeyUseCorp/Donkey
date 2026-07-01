@@ -27,8 +27,7 @@ export function Demo() {
           color: "#454545",
         }}
       >
-        Watch Donkey take a real task end-to-end on a Mac: reading the screen,
-        driving your apps, and pausing for your sign-off.
+        Watch Donkey take real tasks end-to-end.
       </p>
 
       <div style={{ marginTop: 48 }}>

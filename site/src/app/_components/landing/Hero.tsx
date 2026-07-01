@@ -17,9 +17,8 @@ export function Hero() {
         needs a <span className="italic">Donkey.</span>
       </h1>
       <p className="mt-8 max-w-[560px] text-[18px] leading-[1.55] text-balance text-[#454545] md:max-w-[700px] md:text-[20px]">
-        Donkey gets work done on your Mac. Tell it what to do: research,
-        drafting, scheduling, scraping, and it runs the rest of your machine for
-        you.
+        Donkey does work on your Mac for you. You describe the task, it operates
+        your apps to finish it.
       </p>
       <div className="mt-9 flex flex-wrap gap-3">
         <PillButton href={DONKEY_INSTALL_URL} variant="primary" size="lg">
