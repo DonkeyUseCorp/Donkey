@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
-import { VID_CLIP_END, VID_CLIP_START, VID_CUES, VID_ID, VID_URL } from "./data";
+import { VID_CLIP_END, VID_CLIP_START, VID_ID, VID_URL } from "./data";
 import { CAP, STAGE_WIDE } from "./shared";
 
 // Minimal shape of the YouTube IFrame Player API we depend on.
@@ -171,11 +171,6 @@ export function VideoStage() {
               </div>
               <div className="absolute z-[3] top-[5%] right-[4%] bg-coral text-ink font-code font-bold text-[2.6cqw] px-2 py-0.5 rounded-[5px]">
                 {CLIP_LABEL} clip
-              </div>
-              <div className="absolute z-[3] left-0 right-0 bottom-[15%] flex flex-col items-center gap-[3px] px-[6%]">
-                <div className="text-[3.4cqw] font-semibold text-white bg-[rgba(0,0,0,0.62)] px-[9px] py-0.5 rounded-[4px] text-center animate-[donkey-slide-in_0.25s_ease_both]">
-                  {VID_CUES[0].s}
-                </div>
               </div>
             </>
           )}

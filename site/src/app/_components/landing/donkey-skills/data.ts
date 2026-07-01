@@ -8,7 +8,6 @@ export type Skill = { kind: SkillKind; name: string; promise: string };
 export type DocType = "sheet" | "word" | "pdf";
 
 export type DeckSlide = { label: string };
-export type VideoCue = { at: number; s: string };
 
 // One field on the form: left/top/width/height as percentages of the page,
 // the value to drop in, alignment ("l"eft or "r"ight), and its label.
@@ -76,16 +75,13 @@ export const DECK_SLIDES: DeckSlide[] = [
   { label: "Get Donkey" },
 ];
 
-export const VID_ID = "_FBivfgOvuE";
-export const VID_URL = "youtube.com/watch?v=_FBivfgOvuE";
-export const VID_CUES: VideoCue[] = [
-  { at: 1.2, s: "But your first 10 customers" },
-  { at: 5.6, s: "almost never come from a tool." },
-];
-// Play the interesting clip (0:54–2:45), not the whole video. Bounds in seconds,
-// fed to the YouTube embed's start/end params.
-export const VID_CLIP_START = 54;
-export const VID_CLIP_END = 165;
+export const VID_ID = "KS571vrkKgQ";
+export const VID_URL = "youtube.com/watch?v=KS571vrkKgQ";
+// The finished clip: Donkey trimmed the source and burned in translated Korean
+// subtitles, so the artifact carries its own captions. Play it whole — bounds in
+// seconds, fed to the YouTube embed's start/end params.
+export const VID_CLIP_START = 0;
+export const VID_CLIP_END = 115;
 
 // The form image (a real IRS Form 1120 page 1) and its detected field boxes.
 export const PDF_DETECT_COUNT = 64;
