@@ -15,7 +15,7 @@ export function DonkeyVisionCTA() {
     <section className="mx-auto box-border w-full max-w-[1400px] px-6 py-20 md:px-12 md:py-24">
       <div className="relative">
         <div className="absolute inset-0 translate-x-2 translate-y-2 rounded-2xl bg-[#A8D5E8]" />
-        <div className="relative grid gap-8 rounded-2xl border-2 border-[#0F0E0D] bg-[#0F0E0D] p-8 text-white md:grid-cols-[minmax(0,1fr)_minmax(320px,0.56fr)] md:p-12">
+        <div className="relative flex flex-col gap-20 rounded-2xl border-2 border-[#0F0E0D] bg-[#0F0E0D] p-8 text-white md:p-12">
           <div className="min-w-0">
             <Headline size="lg">Building computer-use agents?</Headline>
             <p className="mt-6 max-w-2xl text-lg leading-8 text-white/75">
@@ -30,7 +30,7 @@ export function DonkeyVisionCTA() {
               </PillButton>
             </div>
           </div>
-          <div className="grid content-center gap-3">
+          <div className="grid gap-3">
             <VisionCompareSlider dataset={spotify} />
             <p className="m-0 text-center text-xs font-medium text-white/60">
               Drag to compare — raw screenshot vs. detected controls.
