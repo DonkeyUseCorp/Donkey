@@ -40,7 +40,7 @@ export const pricingPlans = [
     },
     body: "For people who want Donkey as a daily Mac assistant for planning, app work, and follow-through.",
     color: "cream",
-    detail: "For individuals and teams",
+    detail: "For individuals",
     features: [
       "Automate your Mac with text and voice input",
       "Prioritized support and feature requests",
