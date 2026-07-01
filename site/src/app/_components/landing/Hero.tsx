@@ -16,7 +16,7 @@ export function Hero() {
         <br />
         needs a <span className="italic">Donkey.</span>
       </h1>
-      <p className="mt-8 max-w-[560px] text-[18px] leading-[1.55] text-balance text-[#454545] md:max-w-[700px] md:text-[20px]">
+      <p className="mt-8 max-w-[640px] text-[18px] leading-[1.55] text-[#454545] md:max-w-[900px] md:text-[20px]">
         Donkey does work on your Mac for you. You describe the task, it operates
         your apps to finish it.
       </p>
