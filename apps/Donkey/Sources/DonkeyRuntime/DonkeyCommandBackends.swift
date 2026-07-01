@@ -139,11 +139,12 @@ public enum DonkeyCommandBackends {
     ///    patch makes the page report `prefers-reduced-motion: reduce`, so those
     ///    jump straight to the fully-revealed state.
     /// 2. CSS entrance animations that start at `opacity: 0` (e.g. `donkey-pop` on
-    ///    the skills card). `createPDF` re-renders in a fresh print context where
-    ///    such animations restart from their first frame, so the element captures
-    ///    invisible no matter how long we wait live. The injected stylesheet
-    ///    fast-forwards every animation/transition to completion, so each element
-    ///    paints at its end (visible) state.
+    ///    the skills card). We disable animations outright rather than fast-forward
+    ///    them: forcing a tiny duration leaves the element *applied* to the animation
+    ///    and pinned to its first keyframe (opacity 0), so the whole card captures
+    ///    blank. `animation: none` drops the animation so each element falls back to
+    ///    its visible base style; entrance effects start from a visible base, so the
+    ///    settled result is exactly what they animate toward.
     ///
     /// Both run at document start so no entrance animation is ever visibly mid-flight.
     @MainActor
@@ -174,12 +175,8 @@ public enum DonkeyCommandBackends {
         let settleAnimationsSource = """
         (function () {
           var css = '*, *::before, *::after {' +
-            'animation-duration: 0.001s !important;' +
-            'animation-delay: 0s !important;' +
-            'animation-iteration-count: 1 !important;' +
-            'animation-fill-mode: both !important;' +
-            'transition-duration: 0.001s !important;' +
-            'transition-delay: 0s !important;' +
+            'animation: none !important;' +
+            'transition: none !important;' +
             '}';
           var style = document.createElement('style');
           style.setAttribute('data-donkey-capture', '');
