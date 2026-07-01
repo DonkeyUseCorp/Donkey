@@ -131,15 +131,24 @@ public enum DonkeyCommandBackends {
         return resolveOutputDestination(destination, baseDir: baseDir, format: format, defaultName: host)
     }
 
-    /// Configuration for the `web_snapshot` capture view. A document-start user
-    /// script makes the page report `prefers-reduced-motion: reduce`, so sites that
-    /// honor it (like our own landing page) skip entry animations and render their
-    /// final, fully-revealed state. Without this, intro/reveal animations that start
-    /// at `opacity: 0` are still hidden when a single static snapshot is taken, so
-    /// whole sections capture blank.
+    /// Configuration for the `web_snapshot` capture view. A static snapshot must
+    /// show the page in its *settled* state, but two things fight that:
+    ///
+    /// 1. JS reveals gated on motion preference (our landing page's `usePhaseLoop`
+    ///    holds content at `opacity: 0` until a timer advances). The `matchMedia`
+    ///    patch makes the page report `prefers-reduced-motion: reduce`, so those
+    ///    jump straight to the fully-revealed state.
+    /// 2. CSS entrance animations that start at `opacity: 0` (e.g. `donkey-pop` on
+    ///    the skills card). `createPDF` re-renders in a fresh print context where
+    ///    such animations restart from their first frame, so the element captures
+    ///    invisible no matter how long we wait live. The injected stylesheet
+    ///    fast-forwards every animation/transition to completion, so each element
+    ///    paints at its end (visible) state.
+    ///
+    /// Both run at document start so no entrance animation is ever visibly mid-flight.
     @MainActor
     private static func captureWebViewConfiguration() -> WKWebViewConfiguration {
-        let source = """
+        let reduceMotionSource = """
         (function () {
           var real = window.matchMedia ? window.matchMedia.bind(window) : null;
           function reducedList(query) {
@@ -162,10 +171,28 @@ public enum DonkeyCommandBackends {
           };
         })();
         """
+        let settleAnimationsSource = """
+        (function () {
+          var css = '*, *::before, *::after {' +
+            'animation-duration: 0.001s !important;' +
+            'animation-delay: 0s !important;' +
+            'animation-iteration-count: 1 !important;' +
+            'animation-fill-mode: both !important;' +
+            'transition-duration: 0.001s !important;' +
+            'transition-delay: 0s !important;' +
+            '}';
+          var style = document.createElement('style');
+          style.setAttribute('data-donkey-capture', '');
+          style.textContent = css;
+          (document.head || document.documentElement).appendChild(style);
+        })();
+        """
         let configuration = WKWebViewConfiguration()
-        configuration.userContentController.addUserScript(
-            WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false)
-        )
+        for source in [reduceMotionSource, settleAnimationsSource] {
+            configuration.userContentController.addUserScript(
+                WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+            )
+        }
         return configuration
     }
 
