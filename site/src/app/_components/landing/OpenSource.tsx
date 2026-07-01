@@ -13,7 +13,7 @@ export function OpenSource() {
       <Headline>
         Donkey is <span className="italic">open source.</span>
       </Headline>
-      <p className="mt-6 max-w-[600px] text-[17px] leading-[1.55] text-[#454545]">
+      <p className="mt-6 max-w-[900px] text-[17px] leading-[1.55] text-[#454545]">
         Donkey is built in the open. Read the source, host it yourself,
         contribute and make it better.
       </p>
@@ -64,8 +64,8 @@ export function OpenSource() {
 
       <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
         {openSourceReasons.map((reason) => (
-          <TapedCard key={reason.title} color={reason.color} tapeColor="cream">
-            <div className="flex items-start gap-4 p-6">
+          <TapedCard key={reason.title} color={reason.color} tapeColor="cream" fill>
+            <div className="flex h-full items-start gap-4 p-6">
               <div className="flex h-12 w-14 min-w-14 items-center justify-center rounded-xl border-2 border-ink bg-white text-xs font-semibold">
                 {reason.icon}
               </div>
