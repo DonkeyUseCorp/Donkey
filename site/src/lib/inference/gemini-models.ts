@@ -17,6 +17,30 @@ export const geminiModels = {
 
 export type GeminiModel = (typeof geminiModels)[keyof typeof geminiModels];
 
+// Generative text/image-to-video (Veo 3.1). Model selection lives in code, so the
+// ids are hardcoded here rather than gated behind an env var — that keeps the
+// feature on by default instead of silently dormant. Bump here when adopting a
+// newer Veo.
+export const veoModels = {
+  // Best quality, slower, priciest per second.
+  quality: "veo-3.1-generate-preview",
+  // Balanced speed/cost; the default when no tier is given.
+  fast: "veo-3.1-fast-generate-preview",
+  // Cheapest and quickest, lower fidelity.
+  lite: "veo-3.1-lite-generate-preview",
+} as const;
+
+export type VeoModel = (typeof veoModels)[keyof typeof veoModels];
+
+// Maps the user-facing speed/quality tier (see the `video` SKILL.md picker) to a
+// Veo model. An unknown/absent tier falls back to `fast` at the call site.
+export const veoTierModels = {
+  lite: veoModels.lite,
+  fast: veoModels.fast,
+  standard: veoModels.fast,
+  high: veoModels.quality,
+} as const;
+
 // Semantic roles map a job to the model we run for it. Prefer referencing a
 // role over a bare constant so intent stays explicit at the call site.
 export const geminiModelRoles = {

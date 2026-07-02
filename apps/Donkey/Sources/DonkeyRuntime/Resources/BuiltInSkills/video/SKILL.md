@@ -18,9 +18,10 @@ are the user's call — so DON'T just generate. First call `user.choose` to surf
 panel, then read the picks and call `video.generate`. Always GUESS sensible defaults from the request
 so they can submit in one tap; only the *defaults* differ run to run.
 
-- **Speed & quality** — a `segmented` field `tier` with options like `fast` ("Quicker, lower cost"),
-  `standard` ("Balanced"), `high` ("Best quality, slower"). Default from the words: "quick"/"draft" →
-  `fast`; "cinematic"/"high quality"/"best" → `high`; otherwise `standard`.
+- **Speed & quality** — a `segmented` field `tier` with options like `lite` ("Cheapest, draft
+  quality"), `fast` ("Quicker, lower cost"), `standard` ("Balanced"), `high` ("Best quality, slower").
+  Default from the words: "draft"/"cheap"/"rough" → `lite`; "quick" → `fast`;
+  "cinematic"/"high quality"/"best" → `high`; otherwise `standard`.
 - **Audio** — a `toggle` field `audio`. Default on, unless they said "silent"/"no sound".
 - **Length** — a `segmented` field `length` with options like `4`, `6`, `8` (seconds). Default `8` (a
   reasonable clip length); honor an explicit ask ("a 4 second clip" → default `4`).

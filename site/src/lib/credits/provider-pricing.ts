@@ -6,7 +6,12 @@ import {
   elevenLabsModels,
   type ElevenLabsRunModel,
 } from "@/lib/inference/elevenlabs-models";
-import { geminiModels, type GeminiModel } from "@/lib/inference/gemini-models";
+import {
+  geminiModels,
+  veoModels,
+  type GeminiModel,
+  type VeoModel,
+} from "@/lib/inference/gemini-models";
 import { openaiModels, type OpenAIRunModel } from "@/lib/inference/openai-models";
 import { browserUsePerStepUsd } from "@/lib/browser/pricing";
 
@@ -42,10 +47,9 @@ export function providerCreditPricing(
   if (normalizedProvider === "gemini") {
     return geminiCreditPricing(normalizedModel);
   }
-  // The video model id is configuration (GEMINI_VIDEO_MODEL), not a hardcoded constant, so the Veo
-  // provider is priced per clip at the provider level rather than keyed to a specific model id.
+  // Veo video ids are hardcoded (gemini-models.ts); each is priced per clip below.
   if (normalizedProvider === "veo") {
-    return veoCreditPricing();
+    return veoCreditPricing(normalizedModel);
   }
   if (normalizedProvider === "elevenlabs") {
     return elevenLabsCreditPricing(normalizedModel);
@@ -270,12 +274,20 @@ const geminiModelPricing: Record<GeminiModel, ProviderCreditPricing> = {
   [geminiModels.flashImage]: { generationCostMicros: usdWithMargin("0.039") },
 };
 
-// Generative text/image-to-video (Veo). The model id is configuration (GEMINI_VIDEO_MODEL), so this
-// is a provider-level flat price per clip, not a per-model rate. Veo bills per second of output; an
-// ~8s clip with audio at ~$0.40/s ≈ $3.20, charged at submit time (assets/refresh is free). Adjust
-// the rate (or move to durationSecondCostMicros) if the real Veo rate or default clip length differs.
-function veoCreditPricing(): ProviderCreditPricing {
-  return { generationCostMicros: usdWithMargin("3.20") };
+// Generative text/image-to-video (Veo). Model ids are hardcoded (gemini-models.ts), so each is priced
+// per clip. Veo bills per second of output; these reflect a default ~8s clip with audio (quality
+// ~$0.40/s ≈ $3.20, fast ~$0.15/s ≈ $1.20, lite ~$0.05/s ≈ $0.40), charged once at submit
+// (assets/refresh is free). A shorter/longer clip still pays the flat rate; move to
+// durationSecondCostMicros if that drifts too far. The Record is keyed by VeoModel, so adding a Veo id
+// without a price fails the build.
+const veoModelPricing: Record<VeoModel, ProviderCreditPricing> = {
+  [veoModels.quality]: { generationCostMicros: usdWithMargin("3.20") },
+  [veoModels.fast]: { generationCostMicros: usdWithMargin("1.20") },
+  [veoModels.lite]: { generationCostMicros: usdWithMargin("0.40") },
+};
+
+function veoCreditPricing(model: string): ProviderCreditPricing | undefined {
+  return veoModelPricing[model as VeoModel];
 }
 
 function geminiCreditPricing(model: string): ProviderCreditPricing | undefined {

@@ -13,6 +13,7 @@ import {
   type AdapterEnvironment,
 } from "@/lib/inference/adapters/gemini-client";
 import { providerCreditPricing } from "@/lib/credits/provider-pricing";
+import { veoModels, veoTierModels } from "@/lib/inference/gemini-models";
 import { ensureConfigured } from "@/lib/inference/http";
 import { isJsonObject, toJsonObject, toJsonValue } from "@/lib/inference/json";
 import {
@@ -33,8 +34,7 @@ import {
 // registry auto-selects this provider for kind="video". Veo is a long-running operation, so unlike
 // the synchronous image adapter this submits a job and the Mac side polls refresh until it lands.
 // A DISTINCT provider id ("veo", not "gemini") keeps that refresh routing from colliding with the
-// image adapter. Veo is named only here; adopting a newer model is a new id in gemini-models.ts (or
-// the GEMINI_VIDEO_MODEL override), not an app change.
+// image adapter. Adopting a newer Veo is a one-line change in gemini-models.ts, not an app change.
 const providerID = "veo";
 
 // Veo needs both `models` (submit) and `operations` (poll) on the client; the shared GeminiClient
@@ -51,53 +51,34 @@ export function createGeminiVideoAssetProvider(
 ): InferenceProvider {
   const clientConfig = geminiClientConfig(environment);
   const configured = clientConfig.configured;
-  // The video model id is configuration, never a hardcoded guess: it comes from GEMINI_VIDEO_MODEL
-  // (or an explicit per-call model). Vertex AI is assumed (see geminiClientConfig). With the env
-  // unset and no caller model, generateAsset fails cleanly rather than inventing a model id.
-  const videoModel = environment.GEMINI_VIDEO_MODEL?.trim() || undefined;
 
+  // Model selection lives in code: the speed/quality tier the user picks maps to a hardcoded Veo id
+  // (see gemini-models.ts), so video is on by default rather than gated behind an env var. Vertex AI
+  // is assumed (see geminiClientConfig).
   async function listModels(
     modalities: InferenceModality[],
   ): Promise<InferenceModel[]> {
-    if (!modalities.includes("video") || !videoModel) {
+    if (!modalities.includes("video")) {
       return [];
     }
-    return [
-      {
-        id: videoModel,
-        name: videoModel,
-        provider: providerID,
-        inputModalities: ["text", "image"],
-        outputModalities: ["video"],
-        contextLength: null,
-        pricing: null,
-        metadata: { provider: providerID, api: "generateVideos" },
-      },
-    ];
-  }
-
-  // The speed/quality tier the user picks selects a per-tier model from configuration —
-  // GEMINI_VIDEO_MODEL_<TIER> (e.g. GEMINI_VIDEO_MODEL_FAST) — never a hardcoded id. An unconfigured
-  // tier falls back to the default GEMINI_VIDEO_MODEL.
-  function modelForTier(tier?: string): string | undefined {
-    const key = tier?.trim().toUpperCase();
-    if (!key) {
-      return undefined;
-    }
-    return environment[`GEMINI_VIDEO_MODEL_${key}`]?.trim() || undefined;
+    return Object.values(veoModels).map((id) => ({
+      id,
+      name: id,
+      provider: providerID,
+      inputModalities: ["text", "image"],
+      outputModalities: ["video"],
+      contextLength: null,
+      pricing: null,
+      metadata: { provider: providerID, api: "generateVideos" },
+    }));
   }
 
   function resolveModel(requested?: string, tier?: string): string {
-    const model = requested?.trim() || modelForTier(tier) || videoModel;
-    // Never guess a video model id — without GEMINI_VIDEO_MODEL (or a caller model) there is nothing
-    // to run, so fail cleanly instead of fabricating one.
-    if (!model) {
-      throw new InferenceProviderError(
-        "No video model is configured. Set GEMINI_VIDEO_MODEL.",
-        { statusCode: 503, code: "missing_provider_credentials" },
-      );
-    }
-    // Fail before spending: the resolved model must have a configured price.
+    const tierModel =
+      veoTierModels[tier?.trim().toLowerCase() as keyof typeof veoTierModels];
+    const model = requested?.trim() || tierModel || veoModels.fast;
+    // Fail before spending: the resolved model must have a configured price. A hardcoded Veo id
+    // always resolves; this only bites if a caller passes an unpriced model override.
     if (!providerCreditPricing(providerID, model)) {
       throw new InferenceProviderError(
         "No credit price is configured for the selected video model.",
