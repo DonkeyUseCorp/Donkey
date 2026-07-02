@@ -159,6 +159,7 @@ export function MediaShowcase({ blurb, heading }: Props) {
                       item={item}
                       key={item.id}
                       onOpen={setSelected}
+                      priority={rowIndex === 0}
                       pack={
                         stretch
                           ? { grow: layoutRatio(item), basis: "0px" }
@@ -177,11 +178,12 @@ export function MediaShowcase({ blurb, heading }: Props) {
           // Uniform column grid for all-vertical sets, and the pre-measure
           // fallback frame for the packed layout's first paint.
           <div className="flex flex-wrap gap-4 [--row-h:180px] after:grow-[9999] after:content-[''] sm:[--row-h:220px] lg:[--row-h:260px] xl:[--row-h:320px] 2xl:[--row-h:400px]">
-            {items.map((item) => (
+            {items.map((item, index) => (
               <MediaCard
                 item={item}
                 key={item.id}
                 onOpen={setSelected}
+                priority={index < 5}
                 uniformGrid={uniformGrid}
               />
             ))}

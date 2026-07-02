@@ -27,6 +27,8 @@ export function layoutRatio(item: MediaShowcaseItem): number {
 type Props = {
   item: MediaShowcaseItem;
   onOpen: (item: MediaShowcaseItem) => void;
+  // Above-the-fold tile: preload its image eagerly (it is a likely LCP).
+  priority?: boolean;
   // Flex sizing from the row packer: grow shares row width by aspect ratio so
   // tiles in a row end up the same height; a sparse last row passes grow 0
   // with a fixed pixel basis instead.
@@ -43,7 +45,13 @@ type Props = {
 // every tile in a flex row ends up the same height and each row fills the full
 // width — landscape rows come out short, vertical-video rows tall. The row
 // height scale lives in the grid container's --row-h variable.
-export function MediaCard({ item, onOpen, pack, uniformGrid = false }: Props) {
+export function MediaCard({
+  item,
+  onOpen,
+  pack,
+  priority = false,
+  uniformGrid = false,
+}: Props) {
   const isVideo = item.kind === "video";
   const KindIcon = isVideo ? Film : ImageIcon;
   const ratio = uniformGrid ? tileRatio(item) : layoutRatio(item);
@@ -89,6 +97,7 @@ export function MediaCard({ item, onOpen, pack, uniformGrid = false }: Props) {
         alt={item.title}
         className="object-cover transition-transform duration-300 group-hover:scale-[1.03]"
         fill
+        priority={priority}
         sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
         src={item.thumbnailSrc}
       />
