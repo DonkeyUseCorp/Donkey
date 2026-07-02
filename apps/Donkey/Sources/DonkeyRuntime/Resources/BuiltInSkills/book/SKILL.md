@@ -1,9 +1,9 @@
 # Book
 
 id: book
-description: Make an ebook from scratch — a comic, picture book, photo book, or storybook — and open it in Apple Books. Author each page as HTML, render a multi-page PDF with image_render, and build a real .epub with epub-pack, then open both in Books.
-tags: book, ebook, epub, comic, picture-book, photo-book, storybook
-keywords: ebook, book, epub, comic, comic book, graphic novel, picture book, photo book, storybook, story, children's book, pages, cover, chapter, apple books, books app, publish
+description: Make an ebook from scratch — a comic book, picture book, photo book, or storybook — and open it in Apple Books. Author each page as HTML, render a multi-page PDF with image_render, and build a real .epub with epub-pack, then open both in Books. A comic the user just wants drawn is one image.generate call, no book.
+tags: book, ebook, epub, comic-book, picture-book, photo-book, storybook
+keywords: ebook, book, epub, comic book, graphic novel, picture book, photo book, storybook, children's book, pages, cover, chapter, apple books, books app, publish
 apps: Books, com.apple.iBooksX
 tools: image_render, image.generate, image.edit, shell_exec, files.write, files.describe, llm.generate
 
@@ -65,6 +65,9 @@ storybook. Creating files is reversible (no consent prompt; `epub-pack` is bundl
 - A failed `epub-pack` or an empty file means it did not work — report it, don't claim success.
 
 ## When NOT to use this
+- "Draw a comic / comic strip about …" → ONE `image.generate` call; the image model draws a
+  multi-panel comic with speech bubbles directly (see the `images` skill). Build a book only
+  when they ask for a book, an ebook, or something in Apple Books.
 - A single infographic, poster, or diagram → the `design` skill (one `image_render`).
 - Filling or merging an EXISTING PDF → the `pdf` skill. Reading a PDF's text → `pdf`/`documents`.
 - One photo or piece of art → `image.generate` / `image.edit`.

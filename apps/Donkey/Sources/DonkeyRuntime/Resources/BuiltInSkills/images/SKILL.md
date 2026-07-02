@@ -3,7 +3,7 @@
 id: images
 description: Expert still-image work — resize/convert/rotate with sips, crop/composite with magick, metadata with exiftool, batch a folder, and generative edits (background removal, restyle, reference-match, text-to-image) with the image.* tools.
 tags: image, photo, resize, convert, metadata, exif, generate, edit
-keywords: image, photo, picture, resize, scale, convert, crop, rotate, jpeg, png, heic, metadata, exif, strip, batch, folder, background, remove, restyle, generate, reference, match, look
+keywords: image, photo, picture, draw, comic, comic strip, cartoon, resize, scale, convert, crop, rotate, jpeg, png, heic, metadata, exif, strip, batch, folder, background, remove, restyle, generate, reference, match, look
 tools: shell_exec, image.edit, image.generate, files.describe
 
 Two kinds of work: mechanical pixels (size, format, crop, metadata) use the local
@@ -37,6 +37,7 @@ directly and fall back to `sips` if it isn't installed. Editing in place is reve
 ## Generative edits — image.edit / image.generate
 - Change an existing image: `image.edit` with `inputPath` and a plain-words `prompt` ("remove the background", "make the sky a sunset", "put a hat on the dog"). It writes a NEW file and returns its path; it never touches the source.
 - New PHOTO or ARTWORK from text: `image.generate` with a `prompt`. But to CREATE an infographic, diagram, chart, poster, or any image of text/data, do NOT use `image.generate` (it garbles text) — follow the `design` skill: write HTML/SVG and render it with `image_render`.
+- A COMIC or comic strip is one `image.generate` call: describe the panel count and layout, what happens in each panel, the art style, and any short speech-bubble or caption lines in quotes. The model draws the whole multi-panel page, bubbles included. If the user wants more pages, call once per page reusing the first page as `referencePaths` via `image.edit` so characters stay consistent.
 - These cost credits per image. For a batch, say how many and confirm first, then call `image.edit` once per file (e.g. saving into `edited/`).
 - Verify the returned file exists and looks right (`files.describe` or open it), then report what was saved.
 

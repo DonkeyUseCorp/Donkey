@@ -615,7 +615,7 @@ public enum BuiltInHarnessToolCatalog {
             descriptor(
                 "image.generate",
                 pluginID: "core.image",
-                summary: "Generate a brand-new image from a text `prompt` with a generative image model — use for photographic or artistic imagery when there is no source image to edit. NOT for charts, diagrams, infographics, posters, standings, or anything containing real text or data: a generative model garbles text and numbers. For those, write HTML/SVG and render it with `image_render` (see the `design` skill). Writes a new image file and returns its path. Costs image-generation credits per image.",
+                summary: "Generate a brand-new image from a text `prompt` with a generative image model — use for photographic or artistic imagery when there is no source image to edit. A comic or comic strip is ONE call: describe the panels, style, and short speech-bubble lines in the prompt and the model draws the whole multi-panel page. NOT for charts, diagrams, infographics, posters, standings, or anything containing real text or data: a generative model garbles text and numbers. For those, write HTML/SVG and render it with `image_render` (see the `design` skill). Writes a new image file and returns its path. Costs image-generation credits per image.",
                 input: [
                     "prompt": "Description of the image to create.",
                     "model": "Optional model id override; omit to use the default image model.",
