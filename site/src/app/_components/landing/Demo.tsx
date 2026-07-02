@@ -51,7 +51,7 @@ export function Demo() {
           }}
         >
           <iframe
-            src="https://www.youtube-nocookie.com/embed/g4x-HhZ8XII"
+            src="https://www.youtube-nocookie.com/embed/g4x-HhZ8XII?cc_load_policy=0"
             title="See Donkey in action"
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
             allowFullScreen
