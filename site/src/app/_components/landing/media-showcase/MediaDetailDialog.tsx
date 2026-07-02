@@ -30,29 +30,40 @@ export function MediaDetailDialog({ item, onClose }: Props) {
         if (!open) onClose();
       }}
     >
-      <DialogContent className="flex h-dvh w-screen max-w-none flex-col overflow-hidden rounded-none border-0 bg-cream p-0 text-ink ring-0 md:flex-row">
+      {/* Lightbox: a centered card over a dark backdrop, so clicking outside
+          it dismisses. sm:max-w-none: the base DialogContent sets sm:max-w-sm,
+          which an unprefixed max-w-none loses to at ≥sm widths; gap-0 clears
+          its gap-4 so the panel's border sits flush against the media pane. */}
+      <DialogContent
+        className="flex h-[92dvh] w-[95vw] max-w-none flex-col gap-0 overflow-hidden rounded-2xl border-2 border-ink bg-cream p-0 text-ink ring-0 sm:max-w-none md:flex-row"
+        overlayClassName="bg-black/70"
+      >
         {item ? (
           <>
-            <div className="relative h-[45vh] w-full shrink-0 bg-ink md:h-auto md:w-[68%] md:flex-1">
-              {item.kind === "video" ? (
-                <video
-                  autoPlay
-                  className="absolute inset-0 h-full w-full object-contain"
-                  controls
-                  loop
-                  muted
-                  playsInline
-                  src={item.mediaSrc}
-                />
-              ) : (
-                <Image
-                  alt={item.title}
-                  className="object-contain"
-                  fill
-                  sizes="(max-width: 768px) 100vw, 70vw"
-                  src={item.mediaSrc}
-                />
-              )}
+            <div className="flex h-[45vh] w-full shrink-0 items-center justify-center bg-ink md:h-auto md:flex-1">
+              {/* Cap the media's rendered size so it stays near source
+                  resolution on huge screens instead of stretching wall to
+                  wall; it still shrinks to fit smaller panes. */}
+              <div className="relative h-full max-h-[1080px] w-full max-w-[1440px]">
+                {item.kind === "video" ? (
+                  <video
+                    autoPlay
+                    className="absolute inset-0 h-full w-full object-contain"
+                    loop
+                    muted
+                    playsInline
+                    src={item.mediaSrc}
+                  />
+                ) : (
+                  <Image
+                    alt={item.title}
+                    className="object-contain"
+                    fill
+                    sizes="(max-width: 768px) 100vw, 70vw"
+                    src={item.mediaSrc}
+                  />
+                )}
+              </div>
             </div>
 
             <div className="flex w-full flex-1 flex-col gap-5 overflow-y-auto p-6 md:w-[420px] md:max-w-[420px] md:flex-none md:border-l-2 md:border-ink md:p-8 lg:w-[480px] lg:max-w-[480px]">
@@ -100,7 +111,7 @@ export function MediaDetailDialog({ item, onClose }: Props) {
                 </div>
               ) : null}
 
-              <div className="mt-auto rounded-xl border-2 border-dashed border-ink/40 bg-white/70 p-4">
+              <div className="mt-auto pt-4">
                 <p className="text-[14px] leading-[1.5] text-[#333]">
                   Paste this prompt into Donkey to generate your own.
                 </p>
