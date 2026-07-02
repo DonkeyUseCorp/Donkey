@@ -21,7 +21,7 @@ struct HostedHarnessRequestUnderstandingTests {
             httpClient: SingleResponseHTTPClient(data: envelope, statusCode: 200)
         )
         return await HostedHarnessRequestUnderstanding(backend: backend)
-            .understand(command: "hi", frontmostAppName: "Finder")
+            .understand(command: "hi", frontmostAppName: "Finder", conversationContext: nil)
     }
 
     @Test

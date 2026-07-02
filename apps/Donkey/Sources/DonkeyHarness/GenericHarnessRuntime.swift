@@ -21,14 +21,9 @@ public struct HarnessStepExecutionResult: Equatable, Sendable {
 /// updated by the previous tool's result, and returns the next call (or nil to stop). It expresses
 /// completion by returning a `run.complete` lifecycle call, which ends the loop.
 public protocol HarnessNextStepPlanning: Sendable {
+    /// `rollingContext` is non-defaulted on purpose: every caller states the conversation history it
+    /// plans against (nil only when there genuinely is none), so no call site can run context-blind.
     func planNextStep(for task: HarnessAgentState, rollingContext: String?) async -> HarnessToolCall?
-}
-
-public extension HarnessNextStepPlanning {
-    /// Convenience for callers without rolling conversation context (e.g. tests).
-    func planNextStep(for task: HarnessAgentState) async -> HarnessToolCall? {
-        await planNextStep(for: task, rollingContext: nil)
-    }
 }
 
 /// Produces the bounded rolling context — recent conversation events plus a rolling summary of older
@@ -77,7 +72,7 @@ public struct GenericHarnessRuntime: Sendable {
         maxNoProgressSteps: Int = 6,
         maxIdenticalRepeats: Int = 3,
         maxRepeatedFailures: Int = 3,
-        compactor: (any HarnessConversationCompacting)? = nil,
+        compactor: (any HarnessConversationCompacting)?,
         onStep: (@Sendable (HarnessStepExecutionResult) async -> Void)? = nil
     ) async -> [HarnessStepExecutionResult] {
         var results: [HarnessStepExecutionResult] = []

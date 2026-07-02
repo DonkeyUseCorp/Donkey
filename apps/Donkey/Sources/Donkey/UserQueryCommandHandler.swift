@@ -561,11 +561,29 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
 
         // A fresh turn — no assistant reply yet in this conversation — lets a `.converse` reply stream
         // straight out of the understanding boundary in ONE round trip: the same call that types the turn
-        // also generates the reply, and the field extractor streams it to the chin live. A follow-up may
-        // lean on earlier context the understanding boundary never sees, so it uses the non-streaming
-        // understanding and routes any converse reply through the context-aware responder below.
+        // also generates the reply, and the field extractor streams it to the chin live. A follow-up uses
+        // the non-streaming understanding and routes any converse reply through the responder below.
         let priorEvents = await genericHarnessLifecycle.conversationStore.events(conversationID: conversationID)
         let isFreshTurn = !priorEvents.contains { $0.role == .assistant }
+        // Any turn with history ("retry", "make it shorter", "now send it") only means anything against
+        // the turns it continues, so the understanding boundary gets the same bounded rolling context the
+        // planner and converse responder carry. Without it, "retry" after a failed video generation was
+        // typed as a fresh GUI task on whatever app happened to be frontmost. Keyed on prior events of ANY
+        // role — not `isFreshTurn`'s assistant check — so a turn after a crash or mid-run follow-up that
+        // never produced an assistant reply still carries the user's own earlier messages.
+        let conversationContext: String?
+        if priorEvents.isEmpty {
+            conversationContext = nil
+        } else {
+            let textGenerator = HostedTextGenerator(backend: backend)
+            let compactionDriver = ConversationCompactionDriver(
+                conversationStore: genericHarnessLifecycle.conversationStore,
+                coordinator: genericHarnessLifecycle.coordinator,
+                compactor: genericHarnessLifecycle.compactor,
+                generate: { await textGenerator.generate($0) }
+            )
+            conversationContext = await compactionDriver.rollingContext(agentID: agentID)
+        }
         // A pure continuation of the same turn (gate approval, auto-resume) arrives with the understanding
         // the first run produced and skips the boundary entirely — no second round-trip, and the goal,
         // parameters, and chosen skills stay exactly what the turn started with. Only a fresh or follow-up
@@ -582,6 +600,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                         frontmostAppName: frontmostAppName,
                         skillCatalog: skillSelectionCatalog,
                         attachments: attachmentInfos,
+                        conversationContext: conversationContext,
                         onReplyDelta: answerStream ?? { _ in }
                     )
                 }
@@ -589,7 +608,8 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                     command: command,
                     frontmostAppName: frontmostAppName,
                     skillCatalog: skillSelectionCatalog,
-                    attachments: attachmentInfos
+                    attachments: attachmentInfos,
+                    conversationContext: conversationContext
                 )
             }
             // Persist the freshly computed understanding on the root agent so a later resume of THIS turn
@@ -621,6 +641,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 preparedTurnMetadata: preparedTurnMetadata,
                 inlineReply: understanding?.conversationReply,
                 inlineReplyAlreadyStreamed: isFreshTurn,
+                conversationContext: conversationContext,
                 answerStream: answerStream
             )
         }
@@ -1392,6 +1413,7 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         preparedTurnMetadata: [String: String],
         inlineReply: String?,
         inlineReplyAlreadyStreamed: Bool,
+        conversationContext: String?,
         answerStream: (@MainActor @Sendable (String) -> Void)?
     ) async -> UserQueryCommandHandlingResult {
         transcript.systemEvent("Conversational turn — responding without driving the Mac.")
@@ -1399,22 +1421,12 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
 
         // On a fresh turn the understanding boundary already generated AND streamed this reply live (one
         // round trip), so adopt it as-is — re-emitting would double it on screen. A follow-up turn falls to
-        // the context-aware responder, which streams a reply that can see the earlier conversation.
+        // the context-aware responder, which streams a reply against the rolling conversation context the
+        // caller already built for the understanding boundary.
         let reply: String
         if let inlineReply, !inlineReply.isEmpty, inlineReplyAlreadyStreamed {
             reply = inlineReply
         } else {
-            // Carry the same bounded rolling conversation context the planner would get, so multi-turn chat
-            // keeps continuity ("what did I just ask?") without ever entering the action loop.
-            let textGenerator = HostedTextGenerator(backend: backend)
-            let compactionDriver = ConversationCompactionDriver(
-                conversationStore: genericHarnessLifecycle.conversationStore,
-                coordinator: genericHarnessLifecycle.coordinator,
-                compactor: genericHarnessLifecycle.compactor,
-                generate: { await textGenerator.generate($0) }
-            )
-            let conversationContext = await compactionDriver.rollingContext(agentID: agentID)
-
             let responder = HostedHarnessConversationalResponder(backend: backend, trace: trace)
             let streamed = await responder.respond(
                 command: command,

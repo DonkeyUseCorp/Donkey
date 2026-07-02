@@ -142,7 +142,10 @@ on through the general file, image, and document tools.
 
 The context sent to the model is always bounded. The harness keeps the current
 turn, relevant task state, recent useful evidence, summaries, memory, and
-pending questions — never unbounded raw history.
+pending questions — never unbounded raw history. A turn that continues a
+conversation is understood against that conversation's rolling history, so a
+follow-up like "retry" or "make it shorter" resolves to the earlier goal.
+Every boundary that reads a turn takes that context as a required input.
 
 The app catalog is part of this step. If a requested app or capability is not
 supported, the harness surfaces conversation, clarification, or a safe stop. It

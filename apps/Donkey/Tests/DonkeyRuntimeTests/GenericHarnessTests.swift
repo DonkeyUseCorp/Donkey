@@ -204,7 +204,7 @@ struct GenericHarnessTests {
             grantedPermissions: [.lifecycle]
         )
 
-        let steps = await runtime.run(agentID: task.id, planner: StubReplanningPlanner(), maxSteps: 5)
+        let steps = await runtime.run(agentID: task.id, planner: StubReplanningPlanner(), maxSteps: 5, compactor: nil)
 
         #expect(steps.map { $0.toolResult?.toolName } == ["test.observe", "run.complete"])
         let finalTask = await coordinator.agent(id: task.id)
@@ -233,7 +233,7 @@ struct GenericHarnessTests {
             grantedPermissions: [.conversation, .lifecycle]
         )
 
-        let steps = await runtime.run(agentID: task.id, planner: AlwaysRespondsPlanner(), maxSteps: 5)
+        let steps = await runtime.run(agentID: task.id, planner: AlwaysRespondsPlanner(), maxSteps: 5, compactor: nil)
 
         #expect(steps.map { $0.toolResult?.toolName } == ["conversation.respond"])
         let finalTask = await coordinator.agent(id: task.id)
@@ -523,7 +523,7 @@ struct GenericHarnessTests {
         let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
         let task = await coordinator.createAgent(id: "task-loop", conversationID: "t", goal: "loop", grantedPermissions: [.lifecycle])
 
-        let steps = await runtime.run(agentID: task.id, planner: StubLoopingPlanner(), maxSteps: 100)
+        let steps = await runtime.run(agentID: task.id, planner: StubLoopingPlanner(), maxSteps: 100, compactor: nil)
 
         // Stops after the repeat guard trips (well under the ceiling), not 100 steps.
         #expect(steps.count < 5)
@@ -546,7 +546,7 @@ struct GenericHarnessTests {
         let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
         let task = await coordinator.createAgent(id: "task-dup", conversationID: "t", goal: "dup", grantedPermissions: [.lifecycle])
 
-        let steps = await runtime.run(agentID: task.id, planner: StubDuplicatePlanner(), maxSteps: 30)
+        let steps = await runtime.run(agentID: task.id, planner: StubDuplicatePlanner(), maxSteps: 30, compactor: nil)
 
         // The action executes exactly once; everything after is a blocked duplicate, so no 16 copies.
         let realRuns = steps.filter { $0.toolResult?.toolName == "test.act" && $0.toolResult?.status == .succeeded }
@@ -576,7 +576,7 @@ struct GenericHarnessTests {
         let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
         let task = await coordinator.createAgent(id: "task-probe", conversationID: "t", goal: "probe", grantedPermissions: [.lifecycle])
 
-        let steps = await runtime.run(agentID: task.id, planner: StubRepeatPlanner(), maxSteps: 30)
+        let steps = await runtime.run(agentID: task.id, planner: StubRepeatPlanner(), maxSteps: 30, compactor: nil)
 
         let blocked = steps.first { $0.toolResult?.metadata["reason"] == "duplicateAction" }
         #expect(blocked != nil)
@@ -619,7 +619,7 @@ struct GenericHarnessTests {
         let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
         let task = await coordinator.createAgent(id: "task-hammer", conversationID: "t", goal: "hammer", grantedPermissions: [.lifecycle])
 
-        _ = await runtime.run(agentID: task.id, planner: StubActThenHammerPlanner(), maxSteps: 30)
+        _ = await runtime.run(agentID: task.id, planner: StubActThenHammerPlanner(), maxSteps: 30, compactor: nil)
 
         // Real work happened and a read followed it (the weak evidence gate would pass), yet a run that
         // ends by hammering one call is stuck, not done.
@@ -647,7 +647,7 @@ struct GenericHarnessTests {
         let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
         let task = await coordinator.createAgent(id: "task-stall", conversationID: "t", goal: "stall", grantedPermissions: [.lifecycle])
 
-        let steps = await runtime.run(agentID: task.id, planner: StubBusyPlanner(), maxSteps: 100, maxNoProgressSteps: 4)
+        let steps = await runtime.run(agentID: task.id, planner: StubBusyPlanner(), maxSteps: 100, maxNoProgressSteps: 4, compactor: nil)
 
         #expect(steps.count <= 5)
         let finalTask = await coordinator.agent(id: task.id)
@@ -836,7 +836,7 @@ struct GenericHarnessTests {
         let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
         let task = await coordinator.createAgent(id: "task-refail", conversationID: "t", goal: "refail", grantedPermissions: [.lifecycle])
 
-        let steps = await runtime.run(agentID: task.id, planner: StubAlternatingPlanner(), maxSteps: 100)
+        let steps = await runtime.run(agentID: task.id, planner: StubAlternatingPlanner(), maxSteps: 100, compactor: nil)
 
         // Three identical failures with successful observes between them — stops at the third
         // failure (5 steps), far below what the no-progress streak alone would allow.
@@ -910,7 +910,7 @@ struct GenericHarnessTests {
         let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
         let task = await coordinator.createAgent(id: "task-reread", conversationID: "t", goal: "reread", grantedPermissions: [.lifecycle])
 
-        let steps = await runtime.run(agentID: task.id, planner: StubRereadingPlanner(), maxSteps: 100)
+        let steps = await runtime.run(agentID: task.id, planner: StubRereadingPlanner(), maxSteps: 100, compactor: nil)
 
         // The first read adds the fact (real progress); repeats teach nothing and trip the
         // identical-call guard instead of looping.
@@ -948,7 +948,7 @@ struct GenericHarnessTests {
         let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
         let task = await coordinator.createAgent(id: "task-malformed", conversationID: "t", goal: "malformed", grantedPermissions: [.lifecycle])
 
-        let steps = await runtime.run(agentID: task.id, planner: StubMalformedPlanner(), maxSteps: 100)
+        let steps = await runtime.run(agentID: task.id, planner: StubMalformedPlanner(), maxSteps: 100, compactor: nil)
 
         #expect(steps.count == 3)
         let finalTask = await coordinator.agent(id: task.id)
@@ -984,7 +984,7 @@ struct GenericHarnessTests {
         let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
         let task = await coordinator.createAgent(id: "task-long", conversationID: "t", goal: "count to 60", grantedPermissions: [.lifecycle])
 
-        let steps = await runtime.run(agentID: task.id, planner: StubProgressingPlanner())
+        let steps = await runtime.run(agentID: task.id, planner: StubProgressingPlanner(), compactor: nil)
 
         // 60 advances + 1 complete — well past the old 40 cap.
         #expect(steps.count == 61)
@@ -1023,7 +1023,7 @@ struct GenericHarnessTests {
             grantedPermissions: [.lifecycle]
         )
 
-        let steps = await runtime.run(agentID: task.id, planner: StubActThenCompletePlanner(), maxSteps: 6)
+        let steps = await runtime.run(agentID: task.id, planner: StubActThenCompletePlanner(), maxSteps: 6, compactor: nil)
 
         #expect(steps.map { $0.toolResult?.toolName } == ["test.act", "run.complete", "test.observe", "run.complete"])
         #expect(steps[1].toolResult?.status == .failed)
@@ -1062,7 +1062,7 @@ struct GenericHarnessTests {
             grantedPermissions: [.lifecycle]
         )
 
-        let steps = await runtime.run(agentID: task.id, planner: StubActThenCompletePlanner(), maxSteps: 4)
+        let steps = await runtime.run(agentID: task.id, planner: StubActThenCompletePlanner(), maxSteps: 4, compactor: nil)
 
         #expect(steps.map { $0.toolResult?.toolName } == ["test.evidence-act", "run.complete"])
         let finalTask = await coordinator.agent(id: task.id)

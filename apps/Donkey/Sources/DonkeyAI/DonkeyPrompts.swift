@@ -89,8 +89,17 @@ public enum DonkeyPrompts {
         command: String,
         frontmostAppName: String,
         skillCatalog: String? = nil,
-        attachments: [HarnessAttachmentInfo] = []
+        attachments: [HarnessAttachmentInfo] = [],
+        conversationContext: String?
     ) -> String {
+        let trimmedContext = conversationContext?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let conversationBlock = trimmedContext.isEmpty
+            ? ""
+            : "\nCONVERSATION SO FAR (most recent last) — this request continues it. Resolve every "
+                + "reference (\"it\", \"that\", \"retry\", \"again\", \"the file\") against this history. "
+                + "\"Retry\"/\"try again\" means re-run the previous turn's goal with the same target, "
+                + "surface, and skills — restate that goal concretely, never as a new task in whatever "
+                + "app is in front:\n\(trimmedContext)\n"
         let trimmedCatalog = skillCatalog?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let skillsBlock = trimmedCatalog.isEmpty
             ? ""
@@ -108,7 +117,7 @@ public enum DonkeyPrompts {
         does that. Be broad in what you accept and specific in what you capture.
 
         The app currently in front of the user is "\(frontmostAppName)".
-
+        \(conversationBlock)
         USER REQUEST: \(command)
         \(attachmentsBlock)\(skillsBlock)
         Fill the fields:

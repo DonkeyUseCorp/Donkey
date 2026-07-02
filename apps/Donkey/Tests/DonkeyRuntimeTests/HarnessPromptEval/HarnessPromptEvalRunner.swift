@@ -180,7 +180,8 @@ enum HarnessEvalRunner {
             .understand(
                 command: scenario.prompt,
                 frontmostAppName: scenario.frontmostApp,
-                skillCatalog: skillCatalog
+                skillCatalog: skillCatalog,
+                conversationContext: nil
             )
 
         // Preload the guides for the skills the understanding picked — mirrors production so the eval tests
@@ -242,7 +243,7 @@ enum HarnessEvalRunner {
         )
 
         let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
-        _ = await runtime.run(agentID: agent.id, planner: planner, maxSteps: scenario.maxSteps)
+        _ = await runtime.run(agentID: agent.id, planner: planner, maxSteps: scenario.maxSteps, compactor: nil)
 
         let final = await coordinator.agent(id: agent.id)
         return HarnessEvalRun(

@@ -134,7 +134,7 @@ struct MusicPlaylistLiveE2ETests {
             successCriteria: "A library playlist named \"\(playlistName)\" exists and lists the 10 songs"
         )
 
-        let steps = await runtime.run(agentID: task.id, planner: ScriptedPlaylistPlanner(playlistName: playlistName)) { step in
+        let steps = await runtime.run(agentID: task.id, planner: ScriptedPlaylistPlanner(playlistName: playlistName), compactor: nil) { step in
             guard let result = step.toolResult else { return }
             transcript.step(
                 number: step.task.toolHistory.count,

@@ -45,6 +45,7 @@ struct GreetingRoundTripEvalTests {
                 command: "Hi",
                 frontmostAppName: "Finder",
                 skillCatalog: BuiltInLocalAppSkillPacks.skillSelectionCatalog(),
+                conversationContext: nil,
                 onReplyDelta: { delta in streamed.append(delta) }
             )
 

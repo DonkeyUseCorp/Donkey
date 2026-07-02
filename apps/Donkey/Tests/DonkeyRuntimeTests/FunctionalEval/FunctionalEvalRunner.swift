@@ -99,7 +99,7 @@ enum FunctionalEvalRunner {
         // Real one-shot understanding, fed the production skill catalog so it surfaces the right skill.
         let skillCatalog = BuiltInLocalAppSkillPacks.skillSelectionCatalog()
         let understanding = await HostedHarnessRequestUnderstanding(backend: backend)
-            .understand(command: prompt, frontmostAppName: frontmostApp, skillCatalog: skillCatalog)
+            .understand(command: prompt, frontmostAppName: frontmostApp, skillCatalog: skillCatalog, conversationContext: nil)
         let preloadedSkillGuides: [String] = (understanding?.relevantSkillIDs ?? [])
             .prefix(2)
             .compactMap { BuiltInLocalAppSkillPacks.skillGuidance(forID: $0) }
@@ -157,7 +157,7 @@ enum FunctionalEvalRunner {
         )
 
         let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
-        _ = await runtime.run(agentID: agent.id, planner: planner, maxSteps: maxSteps)
+        _ = await runtime.run(agentID: agent.id, planner: planner, maxSteps: maxSteps, compactor: nil)
 
         let final = await coordinator.agent(id: agent.id)
         return FunctionalEvalRun(

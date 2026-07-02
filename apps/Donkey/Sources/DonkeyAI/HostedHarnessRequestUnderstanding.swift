@@ -132,11 +132,15 @@ public final class HostedHarnessRequestUnderstanding {
     /// raw-command fallback (observed: the same prompt returning nil on one run and a clean classification
     /// on the next). A signed-out session or spent balance is terminal — retrying re-issues the same doomed
     /// call — so those stop immediately.
+    /// `conversationContext` is deliberately non-defaulted: every caller must state the turn's history
+    /// (nil only for a genuinely history-less turn), so a new call site can't silently run context-blind
+    /// — the failure mode that once typed "retry" as a fresh task on the frontmost app.
     public func understand(
         command: String,
         frontmostAppName: String,
         skillCatalog: String? = nil,
-        attachments: [HarnessAttachmentInfo] = []
+        attachments: [HarnessAttachmentInfo] = [],
+        conversationContext: String?
     ) async -> HarnessRequestUnderstanding? {
         var augmentedCatalog = skillCatalog ?? ""
         if let finderGuidance = BuiltInLocalAppSkillPacks.skillGuidance(forID: "finder") {
@@ -147,7 +151,8 @@ public final class HostedHarnessRequestUnderstanding {
             command: command,
             frontmostAppName: frontmostAppName,
             skillCatalog: augmentedCatalog.isEmpty ? nil : augmentedCatalog,
-            attachments: attachments
+            attachments: attachments,
+            conversationContext: conversationContext
         )
         for _ in 0..<Self.maxAttempts {
             let startedAt = RunTraceTimestamp.now()
@@ -157,7 +162,8 @@ public final class HostedHarnessRequestUnderstanding {
                         command: command,
                         frontmostAppName: frontmostAppName,
                         skillCatalog: augmentedCatalog.isEmpty ? nil : augmentedCatalog,
-                        attachments: attachments
+                        attachments: attachments,
+                        conversationContext: conversationContext
                     )
                 )
                 let endedAt = RunTraceTimestamp.now()
@@ -208,6 +214,7 @@ public final class HostedHarnessRequestUnderstanding {
         frontmostAppName: String,
         skillCatalog: String? = nil,
         attachments: [HarnessAttachmentInfo] = [],
+        conversationContext: String?,
         onReplyDelta: @escaping @MainActor @Sendable (String) -> Void
     ) async -> HarnessRequestUnderstanding? {
         var augmentedCatalog = skillCatalog ?? ""
@@ -219,7 +226,8 @@ public final class HostedHarnessRequestUnderstanding {
             command: command,
             frontmostAppName: frontmostAppName,
             skillCatalog: augmentedCatalog.isEmpty ? nil : augmentedCatalog,
-            attachments: attachments
+            attachments: attachments,
+            conversationContext: conversationContext
         )
         let startedAt = RunTraceTimestamp.now()
         let streamer = ReplyFieldStreamer()
@@ -383,7 +391,8 @@ public final class HostedHarnessRequestUnderstanding {
         command: String,
         frontmostAppName: String,
         skillCatalog: String?,
-        attachments: [HarnessAttachmentInfo] = []
+        attachments: [HarnessAttachmentInfo],
+        conversationContext: String?
     ) -> RemoteInferenceResponseCreateRequest {
         RemoteInferenceResponseCreateRequest(
             input: .array([
@@ -396,7 +405,8 @@ public final class HostedHarnessRequestUnderstanding {
                                 command: command,
                                 frontmostAppName: frontmostAppName,
                                 skillCatalog: skillCatalog,
-                                attachments: attachments
+                                attachments: attachments,
+                                conversationContext: conversationContext
                             ))
                         ])
                     ])

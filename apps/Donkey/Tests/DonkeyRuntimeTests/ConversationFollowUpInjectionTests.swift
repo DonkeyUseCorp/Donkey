@@ -155,7 +155,7 @@ struct ConversationFollowUpInjectionTests {
         )
 
         let planner = InjectingPlanner(coordinator: coordinator, agentID: task.id, injectText: "also empty the trash")
-        let steps = await runtime.run(agentID: task.id, planner: planner, maxSteps: 10)
+        let steps = await runtime.run(agentID: task.id, planner: planner, maxSteps: 10, compactor: nil)
 
         // The queued instruction is delivered at the next loop iteration, so the run completes rather than
         // stalling, and the original goal is untouched (the follow-up amended the work in place).
@@ -175,8 +175,8 @@ struct ConversationFollowUpInjectionTests {
         let taskB = await coordinator.createAgent(id: "task-b", conversationID: "thread-b", goal: "goal B", grantedPermissions: [.lifecycle])
 
         let planner = ObserveThenCompletePlanner()
-        async let runA = runtime.run(agentID: taskA.id, planner: planner, maxSteps: 5)
-        async let runB = runtime.run(agentID: taskB.id, planner: planner, maxSteps: 5)
+        async let runA = runtime.run(agentID: taskA.id, planner: planner, maxSteps: 5, compactor: nil)
+        async let runB = runtime.run(agentID: taskB.id, planner: planner, maxSteps: 5, compactor: nil)
         _ = await (runA, runB)
 
         let finalA = await coordinator.agent(id: taskA.id)
@@ -215,7 +215,7 @@ struct ConversationFollowUpInjectionTests {
         let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
         let task = await coordinator.createAgent(id: "task-timeout", conversationID: "t", goal: "go forever", grantedPermissions: [.lifecycle])
 
-        _ = await runtime.run(agentID: task.id, planner: AlwaysProgressPlanner(), maxSteps: 3)
+        _ = await runtime.run(agentID: task.id, planner: AlwaysProgressPlanner(), maxSteps: 3, compactor: nil)
 
         let finalTask = await coordinator.agent(id: task.id)
         #expect(finalTask?.status == .timedOut)
@@ -231,7 +231,7 @@ struct ConversationFollowUpInjectionTests {
         let runtime = GenericHarnessRuntime(coordinator: coordinator, registry: registry)
         let task = await coordinator.createAgent(id: "task-giveup", conversationID: "t", goal: "g", grantedPermissions: [.lifecycle])
 
-        _ = await runtime.run(agentID: task.id, planner: GivesUpPlanner(), maxSteps: 5)
+        _ = await runtime.run(agentID: task.id, planner: GivesUpPlanner(), maxSteps: 5, compactor: nil)
 
         let finalTask = await coordinator.agent(id: task.id)
         #expect(finalTask?.status == .failedSafe)

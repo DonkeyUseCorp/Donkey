@@ -21,7 +21,7 @@ struct HostedHarnessStepPlannerTests {
             )
         )
 
-        let call = await planner.planNextStep(for: task(goal: "delete it", toolHistory: []))
+        let call = await planner.planNextStep(for: task(goal: "delete it", toolHistory: []), rollingContext: nil)
 
         #expect(call?.name == "user.clarify")
         #expect(call?.input["question"] == "Which file should I delete?")
@@ -44,7 +44,7 @@ struct HostedHarnessStepPlannerTests {
             resultStatus: .succeeded,
             summary: "Observed the window."
         )
-        let call = await planner.planNextStep(for: task(goal: "delete it", toolHistory: [priorStep]))
+        let call = await planner.planNextStep(for: task(goal: "delete it", toolHistory: [priorStep]), rollingContext: nil)
 
         #expect(call?.name == "ax.observe")
     }
@@ -62,7 +62,7 @@ struct HostedHarnessStepPlannerTests {
             )
         )
 
-        let call = await planner.planNextStep(for: task(goal: "raw untouched command", toolHistory: []))
+        let call = await planner.planNextStep(for: task(goal: "raw untouched command", toolHistory: []), rollingContext: nil)
         #expect(call?.name == "ax.observe")
 
         let body = requestBodyString(httpClient)
@@ -80,7 +80,7 @@ struct HostedHarnessStepPlannerTests {
         let httpClient = FixtureHTTPClient(data: cannedDecision(tool: "ax.observe"), statusCode: 200)
         let planner = makePlanner(httpClient: httpClient, understanding: nil)
 
-        _ = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
+        _ = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []), rollingContext: nil)
 
         let body = requestBodyString(httpClient)
         #expect(body.contains("open settings"))
@@ -95,7 +95,7 @@ struct HostedHarnessStepPlannerTests {
         ])
         let planner = makePlanner(httpClient: httpClient, understanding: nil)
 
-        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
+        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []), rollingContext: nil)
 
         #expect(call?.name == "ax.observe")
         #expect(httpClient.requests.count == 2)
@@ -116,7 +116,7 @@ struct HostedHarnessStepPlannerTests {
         ])
         let planner = makePlanner(httpClient: httpClient, understanding: nil)
 
-        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
+        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []), rollingContext: nil)
 
         #expect(call?.name == "run.failSafe")
         #expect(httpClient.requests.count == 3)
@@ -138,7 +138,7 @@ struct HostedHarnessStepPlannerTests {
         let httpClient = SequencedHTTPClient(responses: [(blocked, 200), (blocked, 200), (blocked, 200)])
         let planner = makePlanner(httpClient: httpClient, understanding: nil)
 
-        let call = await planner.planNextStep(for: task(goal: "note the album tracklist", toolHistory: []))
+        let call = await planner.planNextStep(for: task(goal: "note the album tracklist", toolHistory: []), rollingContext: nil)
 
         #expect(call?.name == "run.failSafe")
         #expect(call?.input["reason"] == "plannerContentFiltered(RECITATION)")
@@ -160,7 +160,7 @@ struct HostedHarnessStepPlannerTests {
         let httpClient = SequencedHTTPClient(responses: [(empty, 200), (empty, 200), (empty, 200)])
         let planner = makePlanner(httpClient: httpClient, understanding: nil)
 
-        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
+        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []), rollingContext: nil)
 
         #expect(call?.name == "run.failSafe")
         #expect(call?.input["reason"] == "plannerEmptyReply")
@@ -176,7 +176,7 @@ struct HostedHarnessStepPlannerTests {
         let httpClient = SequencedHTTPClient(responses: [unauthorized, unauthorized, unauthorized])
         let planner = makePlanner(httpClient: httpClient, understanding: nil)
 
-        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
+        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []), rollingContext: nil)
 
         #expect(call?.name == "run.failSafe")
         #expect(call?.input["reason"] == "sessionSignedOut")
@@ -194,7 +194,7 @@ struct HostedHarnessStepPlannerTests {
         let httpClient = SequencedHTTPClient(responses: [outOfCredits, outOfCredits, outOfCredits])
         let planner = makePlanner(httpClient: httpClient, understanding: nil)
 
-        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
+        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []), rollingContext: nil)
 
         #expect(call?.name == "run.failSafe")
         #expect(call?.input["reason"] == "insufficientCredits")
@@ -216,7 +216,7 @@ struct HostedHarnessStepPlannerTests {
         let httpClient = SequencedHTTPClient(responses: [serverError, serverError, serverError])
         let planner = makePlanner(httpClient: httpClient, understanding: nil)
 
-        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
+        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []), rollingContext: nil)
 
         #expect(call?.name == "run.failSafe")
         #expect(call?.input["reason"] == "harnessPlanFailed")
@@ -238,7 +238,7 @@ struct HostedHarnessStepPlannerTests {
         ])
         let planner = makePlanner(httpClient: httpClient, understanding: nil)
 
-        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
+        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []), rollingContext: nil)
 
         #expect(call?.name == "run.failSafe")
         #expect(call?.input["reason"] == "plannerReturnedNoTool")
@@ -252,7 +252,7 @@ struct HostedHarnessStepPlannerTests {
         ])
         let planner = makePlanner(httpClient: httpClient, understanding: nil)
 
-        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
+        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []), rollingContext: nil)
 
         #expect(call?.name == "ax.observe")
         let retryBody = requestBodyString(httpClient, index: 1)
@@ -270,7 +270,7 @@ struct HostedHarnessStepPlannerTests {
         )
         let planner = makePlanner(httpClient: httpClient, understanding: nil)
 
-        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
+        let call = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []), rollingContext: nil)
 
         #expect(call?.name == "ax.observe")
         #expect(planner.lastThinking == "The window state is unknown, so I observe before acting.")
@@ -299,7 +299,7 @@ struct HostedHarnessStepPlannerTests {
             )
         )
 
-        _ = await planner.planNextStep(for: task(goal: "create a subtitled clip", toolHistory: []))
+        _ = await planner.planNextStep(for: task(goal: "create a subtitled clip", toolHistory: []), rollingContext: nil)
         let narration = LocalAppUserQueryCommandHandler.stepNarration(for: step, planner: planner)
 
         #expect(narration == longNarration)
@@ -338,10 +338,10 @@ struct HostedHarnessStepPlannerTests {
             understanding: nil
         )
 
-        _ = await planner.planNextStep(for: task(goal: "fill the form", toolHistory: []))
+        _ = await planner.planNextStep(for: task(goal: "fill the form", toolHistory: []), rollingContext: nil)
         #expect(planner.lastNarration == "Loading the PDF skill.")
 
-        _ = await planner.planNextStep(for: task(goal: "fill the form", toolHistory: []))
+        _ = await planner.planNextStep(for: task(goal: "fill the form", toolHistory: []), rollingContext: nil)
         // Not the prior step's line, and derived from this step's own command.
         #expect(planner.lastNarration != "Loading the PDF skill.")
         #expect(planner.lastNarration == "Running `ls -la`.")
@@ -379,7 +379,7 @@ struct HostedHarnessStepPlannerTests {
             understanding: nil
         )
 
-        let call = await planner.planNextStep(for: task(goal: "confirm what is playing", toolHistory: []))
+        let call = await planner.planNextStep(for: task(goal: "confirm what is playing", toolHistory: []), rollingContext: nil)
 
         #expect(call?.name == "shell_exec")
         #expect(call?.input["command"] == "date")
@@ -419,7 +419,7 @@ struct HostedHarnessStepPlannerTests {
             understanding: nil
         )
 
-        let call = await planner.planNextStep(for: task(goal: "confirm what is playing", toolHistory: []))
+        let call = await planner.planNextStep(for: task(goal: "confirm what is playing", toolHistory: []), rollingContext: nil)
 
         #expect(call?.name == "run.failSafe")
         #expect(call?.input["reason"] == "plannerOmittedRequiredInput(shell_exec)")
@@ -438,7 +438,7 @@ struct HostedHarnessStepPlannerTests {
         let httpClient = FixtureHTTPClient(data: cannedDecision(tool: "ax.observe"), statusCode: 200)
         let planner = makePlanner(httpClient: httpClient, understanding: nil)
 
-        _ = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []))
+        _ = await planner.planNextStep(for: task(goal: "open settings", toolHistory: []), rollingContext: nil)
 
         let body = try #require(
             try JSONSerialization.jsonObject(with: Data(requestBodyString(httpClient, index: 0).utf8)) as? [String: Any]
@@ -468,7 +468,7 @@ struct HostedHarnessStepPlannerTests {
             HarnessWorldElement(id: "lbl1", label: "Banner", role: "staticText", isActionEligible: false)
         ]
 
-        _ = await planner.planNextStep(for: state)
+        _ = await planner.planNextStep(for: state, rollingContext: nil)
 
         let body = requestBodyString(httpClient, index: 0)
         #expect(body.contains("@(100,200 80x30)"))
@@ -488,7 +488,7 @@ struct HostedHarnessStepPlannerTests {
             )
         }
 
-        _ = await planner.planNextStep(for: task(goal: "open settings", toolHistory: history))
+        _ = await planner.planNextStep(for: task(goal: "open settings", toolHistory: history), rollingContext: nil)
 
         let body = requestBodyString(httpClient, index: 0)
         // The first three steps fall outside the detailed window but stay visible condensed.
@@ -513,7 +513,7 @@ struct HostedHarnessStepPlannerTests {
             summary: "listed three files"
         )
 
-        let call = await planner.planNextStep(for: task(goal: "tidy my downloads", toolHistory: [prior]))
+        let call = await planner.planNextStep(for: task(goal: "tidy my downloads", toolHistory: [prior]), rollingContext: nil)
         #expect(call?.name == "ax.observe")
 
         let body = try #require(
