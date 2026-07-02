@@ -549,7 +549,7 @@ export const mediaShowcaseItems: MediaShowcaseItem[] = [
     kind: "image",
     category: "Animation & Illustration",
     prompt:
-      "Anime-style key visual of a teenager standing on a city rooftop at dusk, dramatic clouds, warm lens flare, crisp cel shading, high detail.",
+      "Anime-style scene of a teenager standing on a school rooftop at dusk, vast glowing cumulus clouds, warm lens flare, crisp cel shading, quiet skyline below, high detail, no text or lettering.",
     aspect: "landscape",
     settings: ["Gemini image", "16:9"],
     thumbnailSrc: "/media-showcase/anime-rooftop.webp",
@@ -561,7 +561,7 @@ export const mediaShowcaseItems: MediaShowcaseItem[] = [
     kind: "image",
     category: "Animation & Illustration",
     prompt:
-      "Claymation-style character sheet of a friendly bumblebee mascot, soft studio lighting, tactile fingerprints in the clay, front and side views.",
+      "Claymation-style friendly bumblebee mascot standing on a seamless cream backdrop, soft studio lighting, tactile fingerprints in the clay, cheerful expression, no text or lettering.",
     aspect: "square",
     settings: ["Gemini image", "1:1"],
     thumbnailSrc: "/media-showcase/claymation-bee.webp",

@@ -160,6 +160,7 @@ export function MediaShowcase({ blurb, heading }: Props) {
                       key={item.id}
                       onOpen={setSelected}
                       priority={rowIndex === 0}
+                      showKind={category === "All"}
                       pack={
                         stretch
                           ? { grow: layoutRatio(item), basis: "0px" }
@@ -184,6 +185,7 @@ export function MediaShowcase({ blurb, heading }: Props) {
                 key={item.id}
                 onOpen={setSelected}
                 priority={index < 5}
+                showKind={category === "All"}
                 uniformGrid={uniformGrid}
               />
             ))}

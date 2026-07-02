@@ -29,6 +29,9 @@ type Props = {
   onOpen: (item: MediaShowcaseItem) => void;
   // Above-the-fold tile: preload its image eagerly (it is a likely LCP).
   priority?: boolean;
+  // The image/video badge only appears in mixed-kind views (the "All" tab);
+  // a single-category tab makes the kind self-evident.
+  showKind?: boolean;
   // Flex sizing from the row packer: grow shares row width by aspect ratio so
   // tiles in a row end up the same height; a sparse last row passes grow 0
   // with a fixed pixel basis instead.
@@ -50,6 +53,7 @@ export function MediaCard({
   onOpen,
   pack,
   priority = false,
+  showKind = false,
   uniformGrid = false,
 }: Props) {
   const isVideo = item.kind === "video";
@@ -116,16 +120,19 @@ export function MediaCard({
         />
       ) : null}
 
-      <span className="absolute top-3 left-3 inline-flex items-center gap-1.5 rounded-full border-2 border-ink bg-cream px-2.5 py-1 text-[11px] font-semibold tracking-[0.04em] uppercase">
-        <KindIcon size={12} />
-        {item.kind}
-      </span>
+      {showKind ? (
+        <span className="absolute top-3 left-3 inline-flex items-center gap-1.5 rounded-full border-2 border-ink bg-cream px-2.5 py-1 text-[11px] font-semibold tracking-[0.04em] uppercase">
+          <KindIcon size={12} />
+          {item.kind}
+        </span>
+      ) : null}
 
-      <div className="absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 bg-gradient-to-t from-black/75 via-black/25 to-transparent p-3 pt-8">
+      {/* Title overlay stays hidden until hover/focus so the artwork reads clean. */}
+      <div className="absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 bg-gradient-to-t from-black/75 via-black/25 to-transparent p-3 pt-8 opacity-0 transition-opacity duration-200 group-hover:opacity-100 group-focus-visible:opacity-100">
         <span className="text-[14px] leading-tight font-semibold text-white">
           {item.title}
         </span>
-        <span className="shrink-0 rounded-full bg-white/90 p-1.5 text-ink opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+        <span className="shrink-0 rounded-full bg-white/90 p-1.5 text-ink">
           <Maximize2 size={14} />
         </span>
       </div>
