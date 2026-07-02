@@ -1196,7 +1196,11 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
                 summary: question,
                 traceID: traceID,
                 metadata: baseMetadata.merging([
-                    "appHarness.decision": AppHarnessDecisionKind.askClarification.rawValue
+                    "appHarness.decision": AppHarnessDecisionKind.askClarification.rawValue,
+                    // A user.choose gate carries its form here; the notch renders it inline on the
+                    // waiting row. Without it the row degrades to a bare Reply button and the form's
+                    // title as subtext — an unanswerable ask.
+                    "genericHarness.choiceForm": finalTask?.pendingContinuation?.metadata["choiceForm"] ?? ""
                 ]) { _, new in new }
             )
             await coordinatorRegistry.finish(conversationID: conversationID)
