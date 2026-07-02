@@ -139,6 +139,102 @@ export const mediaShowcaseItems: MediaShowcaseItem[] = [
     thumbnailSrc: "/media-showcase/cyberpunk-alley.webp",
     mediaSrc: "/media-showcase/cyberpunk-alley.webp",
   },
+  {
+    id: "desert-dunes-abstract",
+    title: "Desert dunes at sunset",
+    kind: "image",
+    category: "Image",
+    prompt:
+      "Minimal abstract photograph of rippled desert dunes at sunset, long shadows carving graphic curves, warm amber palette, fine sand texture, telephoto compression.",
+    aspect: "landscape",
+    settings: ["Gemini image", "16:9"],
+    thumbnailSrc: "/media-showcase/desert-dunes-abstract.webp",
+    mediaSrc: "/media-showcase/desert-dunes-abstract.webp",
+  },
+  {
+    id: "greenhouse-interior",
+    title: "Glass greenhouse interior",
+    kind: "image",
+    category: "Image",
+    prompt:
+      "Botanical photograph inside a Victorian glass greenhouse, lush layered tropical plants, soft diffused daylight through fogged panes, gentle green palette, editorial style.",
+    aspect: "landscape",
+    settings: ["Gemini image", "3:2"],
+    thumbnailSrc: "/media-showcase/greenhouse-interior.webp",
+    mediaSrc: "/media-showcase/greenhouse-interior.webp",
+  },
+  {
+    id: "golden-retriever-studio",
+    title: "Golden retriever studio portrait",
+    kind: "image",
+    category: "Image",
+    prompt:
+      "Studio portrait of a golden retriever mid head-tilt, seamless warm beige backdrop, crisp catchlights in the eyes, fur detail razor sharp, joyful expression.",
+    aspect: "square",
+    settings: ["Gemini image", "1:1"],
+    thumbnailSrc: "/media-showcase/golden-retriever-studio.webp",
+    mediaSrc: "/media-showcase/golden-retriever-studio.webp",
+  },
+  {
+    id: "citrus-splash-macro",
+    title: "Citrus splash macro",
+    kind: "image",
+    category: "Image",
+    prompt:
+      "High-speed macro photograph of a lime slice plunging into sparkling water, frozen splash crown, rising bubbles, backlit vivid green, pin-sharp droplets.",
+    aspect: "square",
+    settings: ["Gemini image", "1:1"],
+    thumbnailSrc: "/media-showcase/citrus-splash-macro.webp",
+    mediaSrc: "/media-showcase/citrus-splash-macro.webp",
+  },
+  {
+    id: "macaron-tower-pastel",
+    title: "Pastel macaron tower",
+    kind: "image",
+    category: "Image",
+    prompt:
+      "Food photograph of a tall macaron tower in soft pastels on a marble counter, shallow depth of field, airy high-key light, patisserie editorial styling.",
+    aspect: "portrait",
+    settings: ["Gemini image", "4:5"],
+    thumbnailSrc: "/media-showcase/macaron-tower-pastel.webp",
+    mediaSrc: "/media-showcase/macaron-tower-pastel.webp",
+  },
+  {
+    id: "surfer-barrel-wave",
+    title: "Surfer inside the barrel",
+    kind: "image",
+    category: "Image",
+    prompt:
+      "Action photograph of a surfer crouched inside a glassy turquoise barrel wave, spray backlit by low sun, water texture frozen, shot from the shoulder of the wave.",
+    aspect: "portrait",
+    settings: ["Gemini image", "4:5"],
+    thumbnailSrc: "/media-showcase/surfer-barrel-wave.webp",
+    mediaSrc: "/media-showcase/surfer-barrel-wave.webp",
+  },
+  {
+    id: "northern-lights-cabin",
+    title: "Northern lights over a cabin",
+    kind: "image",
+    category: "Image",
+    prompt:
+      "Night landscape of a lone snow-covered cabin with warm windows under a swirling green aurora, star field, long-exposure feel, deep blue and emerald palette.",
+    aspect: "landscape",
+    settings: ["Gemini image", "3:2"],
+    thumbnailSrc: "/media-showcase/northern-lights-cabin.webp",
+    mediaSrc: "/media-showcase/northern-lights-cabin.webp",
+  },
+  {
+    id: "vintage-roadster-coast",
+    title: "Vintage roadster on a coast road",
+    kind: "image",
+    category: "Image",
+    prompt:
+      "Cinematic photograph of a cream vintage roadster parked on a winding coastal road at golden hour, ocean haze below, chrome catching the sun, travel-editorial mood.",
+    aspect: "landscape",
+    settings: ["Gemini image", "16:9"],
+    thumbnailSrc: "/media-showcase/vintage-roadster-coast.webp",
+    mediaSrc: "/media-showcase/vintage-roadster-coast.webp",
+  },
 
   // ── Video ──────────────────────────────────────────────────────────────
   {
