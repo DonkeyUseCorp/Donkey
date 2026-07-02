@@ -15,10 +15,16 @@ public enum AccessibilityObserver {
     static func observe(
         appName: String?,
         bundleIdentifier: String?,
+        windowTitleHint: String? = nil,
         resolver: MacWindowResolver = MacWindowResolver()
     ) -> ResolvedAccessibilityObservation? {
         guard AXIsProcessTrusted(),
-              let target = resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier, resolver: resolver)
+              let target = resolveTarget(
+                appName: appName,
+                bundleIdentifier: bundleIdentifier,
+                windowTitleHint: windowTitleHint,
+                resolver: resolver
+              )
         else {
             return nil
         }
@@ -49,14 +55,14 @@ public enum AccessibilityObserver {
     public static func resolveTarget(
         appName: String?,
         bundleIdentifier: String?,
+        windowTitleHint: String? = nil,
         resolver: MacWindowResolver = MacWindowResolver()
     ) -> MacWindowTargetCandidate? {
         if appName != nil || bundleIdentifier != nil {
             // A specific app was requested: only ever return that app's window. If it isn't running /
             // has no window, return nil — never fall back to the frontmost window, which would
             // silently ground (and potentially click) in an unrelated app the user didn't name.
-            let candidates = resolver.enumerateCandidates()
-            return candidates.first { candidate in
+            let appWindows = resolver.enumerateCandidates().filter { candidate in
                 if let bundleIdentifier, let candidateBundle = candidate.bundleIdentifier {
                     return candidateBundle.caseInsensitiveCompare(bundleIdentifier) == .orderedSame
                 }
@@ -65,7 +71,29 @@ public enum AccessibilityObserver {
                 }
                 return false
             }
+            // A specific window was named (a conversation, a document): return the app window whose title
+            // matches it, and NEVER fall back to another window when none match — silently reading or
+            // clicking the wrong window of the app is exactly the failure this pin exists to prevent. The
+            // caller reports "no such window; open it first" so the planner opens the chat rather than
+            // acting on the contact list.
+            if let hint = windowTitleHint?.trimmingCharacters(in: .whitespacesAndNewlines), !hint.isEmpty {
+                return appWindows.first { candidate in
+                    guard let title = candidate.title, !title.isEmpty else { return false }
+                    return titleMatches(title, hint)
+                }
+            }
+            return appWindows.first
         }
         return try? resolver.selectTarget()
+    }
+
+    /// Whether a window's title identifies the window the planner named. Case-insensitive containment in
+    /// either direction so a hint of "Juyoung" matches a window titled "Juyoung Lee", and a CG title that
+    /// the system truncated still matches a longer hint. Matching by the human name the user already gave
+    /// keeps this app-agnostic — no per-app window heuristics.
+    static func titleMatches(_ title: String, _ hint: String) -> Bool {
+        let normalizedTitle = title.lowercased()
+        let normalizedHint = hint.lowercased()
+        return normalizedTitle.contains(normalizedHint) || normalizedHint.contains(normalizedTitle)
     }
 }

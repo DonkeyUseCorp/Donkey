@@ -19,10 +19,17 @@ public final class HarnessTargetContext {
     /// The current target's bundle id, when known. Pins observation/action to the exact app even if two
     /// apps share a display name.
     public private(set) var bundleIdentifier: String?
+    /// The title of the specific window this run is driving, when the target app has several open at once
+    /// (a chat app's contact list AND a conversation window, a browser's many tabs). Empty/nil means "any
+    /// window of the app" — the first the resolver finds. When set, every see/act tool resolves the app
+    /// window whose title matches this, so a read/scroll/click lands on the conversation the planner named,
+    /// not whichever window of the app happens to be frontmost.
+    public private(set) var windowTitleHint: String?
 
-    public init(appName: String, bundleIdentifier: String?) {
+    public init(appName: String, bundleIdentifier: String?, windowTitleHint: String? = nil) {
         self.appName = appName
         self.bundleIdentifier = bundleIdentifier
+        self.windowTitleHint = windowTitleHint
     }
 
     /// A stable per-app cache key (bundle id when present, else the name), used by the vision parse store.
@@ -37,10 +44,14 @@ public final class HarnessTargetContext {
         appName.isEmpty && (bundleIdentifier?.isEmpty ?? true)
     }
 
-    /// Point the run at a different app. Called by an observe/capture step that named an `app:` to look at,
-    /// so subsequent actions resolve, focus, and route input to that app rather than the run's first one.
-    public func retarget(appName: String, bundleIdentifier: String?) {
+    /// Point the run at a different app, and optionally a specific window of it. Called by an observe/capture
+    /// step that named an `app:` (and maybe a `window:`) to look at, so subsequent actions resolve, focus,
+    /// and route input to that app's chosen window rather than the run's first one. A retarget without a
+    /// window hint clears any prior one — the planner looked at the app broadly, so we no longer pin a
+    /// window.
+    public func retarget(appName: String, bundleIdentifier: String?, windowTitleHint: String? = nil) {
         self.appName = appName
         self.bundleIdentifier = bundleIdentifier
+        self.windowTitleHint = windowTitleHint
     }
 }

@@ -93,12 +93,13 @@ public final class VisionComputerUseToolProvider {
             HarnessToolDescriptor(
                 name: ToolName.captureAndAnalyze,
                 pluginID: "core.computer-use.vision",
-                summary: "Screenshot and detect UI elements with vision. Three scopes, smallest first: scope=window (default) captures the target window; scope=screen captures the WHOLE display the window is on — use it for things drawn outside the window like a modal confirmation dialog/sheet or a system prompt; scope=desktop captures the ENTIRE desktop across all displays — the fallback when what you need isn't on the active display (another monitor, a background app's window). Widen only as far as you must. Pass app=\"<App Name>\" to capture a specific app and make it the active target for the actions that follow; omit it to capture the current target. vision.click works the same on elements from any scope.",
+                summary: "Screenshot and detect UI elements with vision. Three scopes, smallest first: scope=window (default) captures the target window; scope=screen captures the WHOLE display the window is on — use it for things drawn outside the window like a modal confirmation dialog/sheet or a system prompt; scope=desktop captures the ENTIRE desktop across all displays — the fallback when what you need isn't on the active display (another monitor, a background app's window). Widen only as far as you must. Pass app=\"<App Name>\" to capture a specific app and make it the active target for the actions that follow; omit it to capture the current target. Pass window=\"<title text>\" when the app has more than one window open to pin the one whose title matches. vision.click works the same on elements from any scope.",
                 inputSchema: [
                     "scope": "\"window\" (default), \"screen\" (whole display) for modals/dialogs, or \"desktop\" (all displays) when the target is off the active screen.",
-                    "app": "Optional app name to capture and switch the run's active target to; omit to use the current target."
+                    "app": "Optional app name to capture and switch the run's active target to; omit to use the current target.",
+                    "window": "Optional window title (or a distinctive part of it) to pin a specific window when the app has several open; sticks to the target for the following steps."
                 ],
-                optionalInputKeys: ["scope", "app"],
+                optionalInputKeys: ["scope", "app", "window"],
                 outputSchema: ["elements": "Detected element IDs, labels, roles, and click eligibility."],
                 requiredPermissions: [.screenCapture],
                 safetyClass: .readOnly,
@@ -172,13 +173,13 @@ public final class VisionComputerUseToolProvider {
         // The planner can name an app to look at; that becomes the active target for the actions that
         // follow, so a run can capture and drive any app (or acquire its first one on an app-less run).
         if let requested = trimmed(context.call.input["app"]) {
-            retarget(to: requested)
+            retarget(to: requested, window: trimmed(context.call.input["window"]))
         }
         guard !self.target.isEmpty else {
             return result(context, status: .failed, summary: "No active app to capture. Pass app=\"<App Name>\" to target one, or open the app first.", reason: "noActiveTarget")
         }
-        guard let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier) else {
-            return result(context, status: .failed, summary: "No window for \(appName).", reason: "noWindowForApp")
+        guard let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier, windowTitleHint: self.target.windowTitleHint) else {
+            return result(context, status: .failed, summary: noWindowSummary, reason: "noWindowForApp")
         }
         switch trimmed(context.call.input["scope"])?.lowercased() {
         case "screen": return await captureWideAndAnalyze(context, target: target, scope: "screen")
@@ -278,6 +279,28 @@ public final class VisionComputerUseToolProvider {
                 "elementCount": String(worldElements.count)
             ]
         )
+    }
+
+    /// Capture the current target window and OCR its visible text, in reading order — the reading path
+    /// for apps whose content isn't in the Accessibility tree (a chat transcript's bubbles, custom-drawn
+    /// lists). This uses on-device text recognition, NOT the UI-element detector `captureAndAnalyze` uses:
+    /// that detector finds controls (buttons, fields) and so returns a window's chrome while missing the
+    /// message text drawn between the controls — which is exactly the content a harvest is trying to read.
+    /// Screen capture reads the window's buffer without raising or focusing it, so this stays fully in the
+    /// background. Best-effort: returns [] when there is no window or the capture fails. Distinct lines,
+    /// preserving first-seen order, so the harvest loop can de-duplicate across scroll passes.
+    public func readVisibleTextLines() async -> [String] {
+        guard !target.isEmpty,
+              let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier, windowTitleHint: target.windowTitleHint),
+              let shot = try? await capture(target) else {
+            return []
+        }
+        var seen = Set<String>()
+        var lines: [String] = []
+        for text in ScreenTextRecognizer.recognizeLines(inPNG: shot.pngData) where seen.insert(text).inserted {
+            lines.append(text)
+        }
+        return lines
     }
 
     /// Capture wider than the target window and analyze it. `scope=screen` grabs the whole display the
@@ -388,8 +411,8 @@ public final class VisionComputerUseToolProvider {
               let geometry = Self.geometry(from: element.metadata) else {
             return result(context, status: .failed, summary: "Element \(elementID) cannot be clicked.", reason: "elementNotClickable")
         }
-        guard let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier) else {
-            return result(context, status: .failed, summary: "No window for \(appName).", reason: "noWindowForApp")
+        guard let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier, windowTitleHint: self.target.windowTitleHint) else {
+            return result(context, status: .failed, summary: noWindowSummary, reason: "noWindowForApp")
         }
         guard let routing = await inputRouting(for: target) else {
             return notFrontmost(context)
@@ -431,7 +454,7 @@ public final class VisionComputerUseToolProvider {
         guard let text = context.call.input["text"], !text.isEmpty else {
             return result(context, status: .invalidInput, summary: "text.enter requires non-empty text.", reason: "missingText")
         }
-        guard let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier),
+        guard let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier, windowTitleHint: self.target.windowTitleHint),
               let routing = await inputRouting(for: target) else {
             return notFrontmost(context)
         }
@@ -450,7 +473,7 @@ public final class VisionComputerUseToolProvider {
         guard let key = trimmed(context.call.input["key"]) else {
             return result(context, status: .invalidInput, summary: "keyboard.press requires a key.", reason: "missingKey")
         }
-        guard let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier),
+        guard let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier, windowTitleHint: self.target.windowTitleHint),
               let routing = await inputRouting(for: target) else {
             return notFrontmost(context)
         }
@@ -621,12 +644,22 @@ public final class VisionComputerUseToolProvider {
 
     /// Switch the run's active target to `requestedApp`. Resolves it to a running window's exact identity
     /// when open; otherwise pins it by name so a re-capture after the planner launches it resolves cleanly.
-    private func retarget(to requestedApp: String) {
+    private func retarget(to requestedApp: String, window: String? = nil) {
         if let resolved = AccessibilityObserver.resolveTarget(appName: requestedApp, bundleIdentifier: nil) {
-            target.retarget(appName: resolved.appName ?? requestedApp, bundleIdentifier: resolved.bundleIdentifier)
+            target.retarget(appName: resolved.appName ?? requestedApp, bundleIdentifier: resolved.bundleIdentifier, windowTitleHint: window)
         } else {
-            target.retarget(appName: requestedApp, bundleIdentifier: nil)
+            target.retarget(appName: requestedApp, bundleIdentifier: nil, windowTitleHint: window)
         }
+    }
+
+    /// The failure line when no target window resolves. When a specific window was pinned but isn't open,
+    /// point the planner at opening it instead of the generic "no window", which reads as the whole app
+    /// being gone.
+    private var noWindowSummary: String {
+        if let hint = target.windowTitleHint, !hint.isEmpty {
+            return "No window titled \"\(hint)\" in \(appName). Open that window first, then retry."
+        }
+        return "No window for \(appName)."
     }
 
     private func trimmed(_ value: String?) -> String? {

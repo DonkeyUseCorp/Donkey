@@ -438,6 +438,122 @@ public enum AccessibilityActionExecutor {
             ?? windows.first
     }
 
+    /// The AX window whose on-screen position matches `bounds` — so a scroll acts on the window the run is
+    /// actually reading when an app has several windows open at once (a sidebar list AND a detail window).
+    /// Falls back to the primary window when nothing lines up.
+    private static func window(of app: AXUIElement, matching bounds: WindowTargetBounds) -> AXUIElement? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
+              let windows = value as? [AXUIElement] else { return primaryWindow(of: app) }
+        for window in windows {
+            var posValue: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &posValue) == .success,
+                  let posValue else { continue }
+            var position = CGPoint.zero
+            AXValueGetValue(posValue as! AXValue, .cgPoint, &position)
+            if abs(position.x - bounds.x) < 4, abs(position.y - bounds.y) < 4 { return window }
+        }
+        return primaryWindow(of: app)
+    }
+
+    /// The target window's scrollable CONTENT pane, or nil when it has none. A window can hold several
+    /// scroll areas (a chat's transcript AND its one-line compose box AND a sidebar), so keep only the ones
+    /// we can actually drive — those that implement the page-scroll action, or expose a settable vertical
+    /// scroll bar (the fallback for AppKit apps like KakaoTalk whose scroll views don't implement the
+    /// action) — then pick the one with the most readable text. That is the transcript/feed, not the
+    /// compose field or a thin sidebar.
+    private static func pageScrollArea(processID: pid_t, windowBounds: WindowTargetBounds) -> AXUIElement? {
+        let app = AXUIElementCreateApplication(processID)
+        guard let window = window(of: app, matching: windowBounds) else { return nil }
+        let scrollable = descendants(of: window, role: kAXScrollAreaRole as String, limit: 30).filter { area in
+            advertisesPageScroll(area) || verticalScrollBar(of: area) != nil
+        }
+        return scrollable.max { scrollAreaTextLineCount($0) < scrollAreaTextLineCount($1) }
+    }
+
+    private static func advertisesPageScroll(_ area: AXUIElement) -> Bool {
+        var names: CFArray?
+        guard AXUIElementCopyActionNames(area, &names) == .success, let list = names as? [String] else { return false }
+        return list.contains("AXScrollUpByPage") && list.contains("AXScrollDownByPage")
+    }
+
+    /// The scroll area's vertical scroll bar, whose `AXValue` (0 = top … 1 = bottom) is settable even when
+    /// the scroll area's own page-scroll action isn't implemented. Prefers the bar explicitly marked
+    /// vertical, else the only bar present.
+    private static func verticalScrollBar(of area: AXUIElement) -> AXUIElement? {
+        let bars = children(area).filter { axString($0, kAXRoleAttribute as CFString) == (kAXScrollBarRole as String) }
+        return bars.first { axString($0, kAXOrientationAttribute as CFString) == (kAXVerticalOrientationValue as String) } ?? bars.first
+    }
+
+    /// The target window's page-scrollable Accessibility scroll area, resolved ONCE so a scroll loop can
+    /// act on the same handle every pass instead of re-walking the whole tree each time. Nil when the
+    /// window exposes none — the caller then falls back to a synthetic wheel event. Whether this is
+    /// non-nil is also the deciding fact for whether a background read can stay off the foreground.
+    public static func pageScrollAreaHandle(processID: pid_t, windowBounds: WindowTargetBounds) -> AXUIElement? {
+        pageScrollArea(processID: processID, windowBounds: windowBounds)
+    }
+
+    /// Scrolls a resolved scroll area one page, staying fully in the background (no frontmost requirement,
+    /// no cursor). Prefers the native `AXScrollUpByPage`/`AXScrollDownByPage` action where the scroll view
+    /// implements it; otherwise steps the vertical scroll bar's value (0 = top … 1 = bottom) by a fraction
+    /// of the range so consecutive reads overlap. Many AppKit apps (KakaoTalk) advertise the page-scroll
+    /// action but don't implement it — it returns an error — yet accept a scroll-bar value set. Returns
+    /// false when it can't move (no scroll bar, or already at the edge with nothing more to load), which
+    /// ends the harvest loop.
+    public static func performPageScroll(_ area: AXUIElement, up: Bool) -> Bool {
+        if AXUIElementPerformAction(area, (up ? "AXScrollUpByPage" : "AXScrollDownByPage") as CFString) == .success {
+            return true
+        }
+        guard let bar = verticalScrollBar(of: area) else { return false }
+        var current: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(bar, kAXValueAttribute as CFString, &current) == .success,
+              let value = (current as? NSNumber)?.doubleValue else { return false }
+        let next = up ? max(0, value - 0.2) : min(1, value + 0.2)
+        guard abs(next - value) > 0.0005 else { return false }
+        return AXUIElementSetAttributeValue(bar, kAXValueAttribute as CFString, next as CFNumber) == .success
+    }
+
+    /// The scroll area's on-screen text in reading order (top-to-bottom, then left-to-right). Collects
+    /// static text (timestamps, sender names), TEXT AREAS (where chat apps like KakaoTalk put the actual
+    /// message body — NOT static text), and link titles, so a transcript reads as real content rather than
+    /// just its chrome. Walks the content pane directly and deeply, so a message nested far below the
+    /// window root isn't cut the way the shallow whole-window snapshot is.
+    public static func scrollAreaTextLines(_ area: AXUIElement) -> [String] {
+        struct Positioned { var y: Double; var x: Double; var text: String }
+        var collected: [Positioned] = []
+        func walk(_ element: AXUIElement, depth: Int) {
+            guard depth <= 22, collected.count <= 4000 else { return }
+            for child in children(element) {
+                let role = axString(child, kAXRoleAttribute as CFString) ?? ""
+                let text: String?
+                if role == (kAXStaticTextRole as String) || role == (kAXTextAreaRole as String) || role == (kAXTextFieldRole as String) {
+                    text = axString(child, kAXValueAttribute as CFString)
+                } else if role == "AXLink" {
+                    text = axString(child, kAXTitleAttribute as CFString) ?? axString(child, kAXValueAttribute as CFString)
+                } else {
+                    text = nil
+                }
+                if let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty {
+                    let frame = elementFrame(child)
+                    collected.append(Positioned(y: frame?.y ?? 0, x: frame?.x ?? 0, text: trimmed))
+                }
+                walk(child, depth: depth + 1)
+            }
+        }
+        walk(area, depth: 0)
+        return collected
+            .sorted { $0.y != $1.y ? $0.y < $1.y : $0.x < $1.x }
+            .map(\.text)
+    }
+
+    /// The count of distinct content lines the scroll area exposes — the signal for whether the content it
+    /// scrolls is AX-readable (a native list, a chat whose bubbles are text areas) or drawn outside the
+    /// tree (a canvas), which decides AX vs. vision reading. Counts the same text roles `scrollAreaTextLines`
+    /// reads, so a transcript whose bodies are text areas isn't mistaken for empty.
+    public static func scrollAreaTextLineCount(_ area: AXUIElement) -> Int {
+        Set(scrollAreaTextLines(area)).count
+    }
+
     private static func matchingRow(in list: AXUIElement, label: String) -> AXUIElement? {
         for row in descendants(of: list, role: kAXRowRole as String, limit: 400) {
             if rowText(row).contains(label) { return row }

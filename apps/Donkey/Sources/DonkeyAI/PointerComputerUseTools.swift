@@ -188,7 +188,7 @@ public final class PointerComputerUseToolProvider {
     /// otherwise it brings the target frontmost (one recovery activation, never any other app) and
     /// returns a nil input target for the HID path. Returns nil only when a required activation failed.
     private func resolveRouting() async -> (target: MacWindowTargetCandidate, inputTarget: InputTarget?)? {
-        guard let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier) else {
+        guard let target = AccessibilityObserver.resolveTarget(appName: appName, bundleIdentifier: bundleIdentifier, windowTitleHint: self.target.windowTitleHint) else {
             return nil
         }
         switch TargetActionGuard.resolve(candidate: target, preference: executionPreference, lane: .pidEventPost) {
