@@ -381,33 +381,44 @@ public enum DonkeyCommandBackends {
         return png
     }
 
-    /// web_snapshot PDF: the stitched full-page image as one long continuous page.
-    /// This path is raster (an image PDF) rather than vector, because the page is
-    /// composited from per-viewport photographs — the tradeoff that buys void-free
-    /// motion-site capture. (`image_render` still uses vector `exportPDF`.)
+    /// web_snapshot PDF: the stitched full-page image as one continuous page when
+    /// it fits, sliced into equal tall pages when it does not. This path is raster
+    /// (an image PDF) rather than vector, because the page is composited from
+    /// per-viewport photographs — the tradeoff that buys void-free motion-site
+    /// capture. (`image_render` still uses vector `exportPDF`.)
     ///
-    /// The page is sized in CSS points, with the higher-resolution pixels drawn
-    /// into it (~144 DPI on a 2x snapshot). Sizing the page at pixel dimensions
-    /// doubles an already enormous page — tall pages far exceed the PDF spec's
-    /// 14,400 pt limit, and viewers rasterize such pages into a capped backing
-    /// store, which reads as blur.
+    /// Pages are sized in CSS points with the higher-resolution pixels drawn in
+    /// (~144 DPI on a 2x snapshot), and capped at the PDF spec's 14,400 pt page
+    /// limit. Measured in Preview: pages near the limit render sharp, but far past
+    /// it the whole page is rasterized into a capped backing store and reads as
+    /// blur at every zoom — and out-of-spec pages break other viewers.
     @MainActor
     private static func snapshotStitchedPDF(_ webView: WKWebView) async throws -> Data {
         let stitched = try await captureStitched(webView)
         let scale = max(CGFloat(stitched.width) / max(webView.bounds.width, 1), 1)
-        var mediaBox = CGRect(
-            x: 0, y: 0,
-            width: CGFloat(stitched.width) / scale,
-            height: CGFloat(stitched.height) / scale
-        )
+        let cssWidth = CGFloat(stitched.width) / scale
+        let cssHeight = CGFloat(stitched.height) / scale
+        let pageLimit: CGFloat = 14_400
+        let pageCount = max(1, Int((cssHeight / pageLimit).rounded(.up)))
+        let pixelPageHeight = Int((CGFloat(stitched.height) / CGFloat(pageCount)).rounded(.up))
+
         let data = NSMutableData()
         guard let consumer = CGDataConsumer(data: data as CFMutableData),
-              let ctx = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
+              let ctx = CGContext(consumer: consumer, mediaBox: nil, nil) else {
             throw CocoaError(.fileWriteUnknown)
         }
-        ctx.beginPage(mediaBox: &mediaBox)
-        ctx.draw(stitched, in: mediaBox)
-        ctx.endPage()
+        for page in 0..<pageCount {
+            let pixelY = page * pixelPageHeight
+            let sliceHeight = min(pixelPageHeight, stitched.height - pixelY)
+            guard sliceHeight > 0,
+                  let slice = stitched.cropping(
+                    to: CGRect(x: 0, y: pixelY, width: stitched.width, height: sliceHeight)
+                  ) else { continue }
+            var mediaBox = CGRect(x: 0, y: 0, width: cssWidth, height: CGFloat(sliceHeight) / scale)
+            ctx.beginPage(mediaBox: &mediaBox)
+            ctx.draw(slice, in: mediaBox)
+            ctx.endPage()
+        }
         ctx.closePDF()
         return data as Data
     }
