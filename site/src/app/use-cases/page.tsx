@@ -102,8 +102,8 @@ export default function UseCasesPage() {
       </section>
 
       <MediaShowcase
-        blurb="Generate images and video with Gemini and Veo, plus motion graphics, UGC, and illustration. Click any example to reveal its prompt and copy it into Donkey."
-        heading="Media Donkey can make"
+        blurb="Generate images, video, motion graphics, UGC, and illustration. Click any example to reveal its prompt and copy it into Donkey."
+        heading="Donkey can make"
       />
 
       <section className="mx-auto w-full max-w-[1400px] px-6 pb-20 md:px-12 md:pb-28">

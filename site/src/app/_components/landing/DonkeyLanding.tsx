@@ -11,7 +11,6 @@ import { Pricing } from "@/app/_components/landing/Pricing";
 import { Solutions } from "@/app/_components/landing/Solutions";
 import { TopNav } from "@/app/_components/landing/TopNav";
 import { TrustedBy } from "@/app/_components/landing/TrustedBy";
-import { UseCasesOverview } from "@/app/_components/landing/UseCasesOverview";
 import { BG, BLACK } from "@/app/_components/landing/theme";
 
 export default function DonkeyLanding() {
@@ -30,12 +29,9 @@ export default function DonkeyLanding() {
       <TrustedBy />
       <Solutions />
       <MediaShowcase
-        blurb="Generate images and video with Gemini and Veo — then keep going with motion graphics, UGC, and more. Click any example to reveal its prompt and copy it straight into Donkey."
-        heading="Media Donkey can make"
-        limit={10}
-        viewAllHref="/use-cases"
+        blurb="Generate images, video, motion graphics, UGC, and more. Click any example to reveal its prompt and copy it into Donkey."
+        heading="Donkey can make"
       />
-      <UseCasesOverview />
       <Demo />
       <OpenSource />
       <Pricing />

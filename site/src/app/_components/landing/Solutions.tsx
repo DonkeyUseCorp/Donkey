@@ -15,11 +15,7 @@ export function Solutions() {
         margin: "0 auto",
       }}
     >
-      <Headline>
-        You hand off.
-        <br />
-        It hands back.
-      </Headline>
+      <Headline>Donkey can do work</Headline>
       <p
         style={{
           marginTop: 24,
