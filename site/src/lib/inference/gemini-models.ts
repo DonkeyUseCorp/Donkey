@@ -23,11 +23,11 @@ export type GeminiModel = (typeof geminiModels)[keyof typeof geminiModels];
 // newer Veo.
 export const veoModels = {
   // Best quality, slower, priciest per second.
-  quality: "veo-3.1-generate-preview",
+  quality: "veo-3.1-generate-001",
   // Balanced speed/cost; the default when no tier is given.
-  fast: "veo-3.1-fast-generate-preview",
+  fast: "veo-3.1-fast-generate-001",
   // Cheapest and quickest, lower fidelity.
-  lite: "veo-3.1-lite-generate-preview",
+  lite: "veo-3.1-lite-generate-001",
 } as const;
 
 export type VeoModel = (typeof veoModels)[keyof typeof veoModels];
