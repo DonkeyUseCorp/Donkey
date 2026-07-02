@@ -65,6 +65,24 @@ public struct HarnessChoiceForm: Codable, Equatable, Sendable {
             self.on = on
         }
 
+        private enum CodingKeys: String, CodingKey {
+            case id, label, help, control, options, selected, on
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(String.self, forKey: .id)
+            label = try container.decode(String.self, forKey: .label)
+            help = try container.decodeIfPresent(String.self, forKey: .help)
+            control = try container.decode(ControlKind.self, forKey: .control)
+            // A `toggle` legitimately carries no `options`. Synthesized Decodable would require the key
+            // and reject the whole form (an invalid-input dead end for any form with a toggle), so decode
+            // it as empty when absent.
+            options = try container.decodeIfPresent([Option].self, forKey: .options) ?? []
+            selected = try container.decodeIfPresent(String.self, forKey: .selected)
+            on = try container.decodeIfPresent(Bool.self, forKey: .on)
+        }
+
         /// The value this field starts on — the planner's guessed default. Segmented/dropdown resolve to
         /// the declared `selected` if it names a real option, else the first option's id; a toggle to
         /// "true"/"false". Returns nil only for an option-less select (a malformed field).
@@ -96,6 +114,21 @@ public struct HarnessChoiceForm: Codable, Equatable, Sendable {
         self.subtitle = subtitle
         self.submitLabel = submitLabel
         self.fields = fields
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case title, subtitle, submitLabel, fields
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        // Only `fields` is required — the executor rejects a form solely for an empty/absent fields
+        // array. `title`/`submitLabel` are optional per the tool contract, so default them instead of
+        // failing the whole form when the planner omits them.
+        title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
+        subtitle = try container.decodeIfPresent(String.self, forKey: .subtitle)
+        submitLabel = try container.decodeIfPresent(String.self, forKey: .submitLabel) ?? "Continue"
+        fields = try container.decode([Field].self, forKey: .fields)
     }
 }
 

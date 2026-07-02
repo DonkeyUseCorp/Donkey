@@ -379,10 +379,18 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
                 value = String(double)
             } else if container.decodeNil() {
                 value = ""
+            } else if let json = try? RemoteInferenceJSONValue(from: decoder),
+                      let encoded = try? JSONEncoder().encode(json),
+                      let text = String(data: encoded, encoding: .utf8) {
+                // A non-scalar input (object/array) — e.g. user.choose's `form`, which the planner emits
+                // as a JSON object per its descriptor. Re-serialize it to compact JSON text so the tool,
+                // which reads `form` as a JSON string, gets exactly that. Keeps every tool input a string
+                // without forcing the model to hand-stringify nested JSON (which wastes turns and truncates).
+                value = text
             } else {
                 throw DecodingError.dataCorruptedError(
                     in: container,
-                    debugDescription: "Tool input value is not a JSON scalar"
+                    debugDescription: "Tool input value is not valid JSON"
                 )
             }
         }
