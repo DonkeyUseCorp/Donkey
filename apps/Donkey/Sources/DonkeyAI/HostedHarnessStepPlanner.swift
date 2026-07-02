@@ -436,7 +436,18 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     /// input, act-vs-verify-vs-complete); we set it explicitly so the choice is intentional rather than
     /// an accident of an ignored parameter. The reasoning summary is persisted to the thread; it is
     /// never fed back into the prompt, so context stays bounded.
-    private static let plannerThinkingLevel = "medium"
+    private static let plannerThinkingLevelDefault = "medium"
+
+    /// Lighter budget used only for the step that directly follows a raw scroll. After scrolling, the next
+    /// move is mechanical — re-read what came into view, scroll again, or move on — so full reasoning is
+    /// wasted latency there. Gated on the previous tool's NAME (a structured field), never on request text,
+    /// and self-correcting: a weak low-effort choice is caught by the same retry/stall machinery as any
+    /// other. Most reads now go through `content.harvest`, which scrolls locally, so raw scroll steps are
+    /// rare; this stays a safe backstop for the manual paging that remains.
+    private static let plannerThinkingLevelMechanical = "low"
+
+    /// Tools after which the next planning step is mechanical enough to plan at the lighter budget.
+    private static let mechanicalPredecessorTools: Set<String> = ["mouse.scroll"]
 
     /// Base output-token budget for a planning reply, and the ceiling a boosted retry may reach. Sized
     /// with headroom for both the thinking and the tool-call JSON. Each retry raises the budget
@@ -467,7 +478,12 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         )
         let conversation = Self.conversationTurns(toolHistory: task.toolHistory, currentState: turnState)
         let imageDataURL = await captureScreenshot()
-        let request = responseRequest(instructions: instructions, conversation: conversation, attempt: attempt, imageDataURL: imageDataURL)
+        // Plan the mechanical step after a raw scroll at a lighter budget; every other step keeps the
+        // default. Keyed on the previous tool's name (a structured field), so no request text is matched.
+        let thinkingLevel = Self.mechanicalPredecessorTools.contains(task.toolHistory.last?.call.name ?? "")
+            ? Self.plannerThinkingLevelMechanical
+            : Self.plannerThinkingLevelDefault
+        let request = responseRequest(instructions: instructions, conversation: conversation, attempt: attempt, thinkingLevel: thinkingLevel, imageDataURL: imageDataURL)
         // The trace records exactly what was sent — the cached instructions followed by the conversation
         // turns — so the thread shows the model's true context even though the wire form is now a moving
         // thread rather than one prompt.
@@ -555,6 +571,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
         instructions: String,
         conversation: [Turn],
         attempt: Int,
+        thinkingLevel: String,
         imageDataURL: String? = nil
     ) -> RemoteInferenceResponseCreateRequest {
         let maxOutputTokens = min(Self.baseMaxOutputTokens * (attempt + 1), Self.maxOutputTokensCap)
@@ -604,7 +621,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
             parameters: [
                 "temperature": .number(0),
                 "max_output_tokens": .number(Double(maxOutputTokens)),
-                "thinking_level": .string(Self.plannerThinkingLevel)
+                "thinking_level": .string(thinkingLevel)
             ]
         )
     }
