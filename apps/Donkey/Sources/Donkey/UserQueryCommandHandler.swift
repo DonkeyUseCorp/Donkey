@@ -233,6 +233,12 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // model, so redacting here keeps secrets on-device without touching the planner.
         let redactedCommand = AIHarnessRedactor().redact(command, surface: .modelContext).redactedText
         let harnessRequest = Self.harnessRequest(command: redactedCommand, context: context)
+        // Sample BEFORE preparing the turn: preparation records the reply on an awaiting agent
+        // (`provideUserResponse`) and flips its status to resuming, so this is the only moment the
+        // "this text answers a pending user.choose/user.clarify" signal is observable.
+        let answersPendingUserQuestion = await genericHarnessLifecycle.agentState(
+            agentID: managingAgentID(forConversation: conversationID)
+        )?.status == .waitingForUser
         let genericPreparedTurn = await genericHarnessLifecycle.prepareUserQueryTurn(
             request: harnessRequest,
             pointerTask: context?.conversation,
@@ -268,6 +274,19 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
             )
             logHandlingResult(result, stage: "empty", hint: "Empty command; no action was run.")
             return result
+        }
+
+        // A reply to a pending user.choose/user.clarify continues the ORIGINAL task: preparation
+        // already recorded the reply on the agent (`lastUserClarification`), so resume with the
+        // task's stored goal and persisted understanding. Deriving a fresh understanding from the
+        // bare reply ("Selected options: tier=high, …") loses the goal and re-asks the question.
+        if answersPendingUserQuestion,
+           let answered = await resumeExistingTask(
+               conversationID: conversationID,
+               context: context,
+               tracePrefix: "user-query-answer"
+           ) {
+            return answered
         }
 
         // Every typed query runs the generic harness loop against the frontmost app: the planner

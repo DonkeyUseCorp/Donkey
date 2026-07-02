@@ -901,24 +901,46 @@ public struct UserQueryNotchStatusView: View {
     }
 
     /// Trailing room a row's text leaves for the pinned top-right controls, by control set: a lone Close
-    /// (or Stop) button, or a Resume + Close pair. Permission rows carry their own banner controls.
+    /// (or Stop) icon, an icon pair (Resume + Close), or a text-pill pair (Reply/Retry + Close), which is
+    /// wider than two icons. Permission rows carry their own banner controls.
     private func controlsReserve(for conversation: UserQueryConversation) -> CGFloat {
         if !conversation.isUserControllable {
-            // A failed setup row carries Retry + Close (a pair); a finished one carries a lone Close; a
-            // still-running one carries no controls, so its text spans the full row (see `topRightControls`).
-            if isRetryableSystemSetup(conversation) { return 74 }
+            // A failed setup row carries Retry + Close (a text-pill pair); a finished one carries a lone
+            // Close; a still-running one carries no controls, so its text spans the full row (see
+            // `topRightControls`).
+            if isRetryableSystemSetup(conversation) { return Self.textPairControlsReserve }
             return conversation.isUserDismissible ? 44 : 0
         }
         if conversation.status == .waitingForPermission { return 0 }
+        if rowShowsReplyControl(conversation) { return Self.textPairControlsReserve }
         return rowShowsControlPair(conversation) ? 74 : 44
     }
 
-    /// Whether a row shows a two-button pair (Resume + Close, or Reply + Close) vs a single Close/Stop —
-    /// mirrors `stateControls`, so the title/subtext reserve the right trailing room for the controls.
+    /// Reserve for a text-pill + Close pair: the pill (~48pt for "Reply"/"Retry") + 6pt gap + the 24pt
+    /// Close circle, plus breathing room so the truncated title never touches the pill.
+    private static let textPairControlsReserve: CGFloat = 92
+
+    /// Whether a row shows the Reply text pill + Close — mirrors `stateControls`, so the title reserves
+    /// the wider text-pair room for it.
+    private func rowShowsReplyControl(_ conversation: UserQueryConversation) -> Bool {
+        guard conversation.isUserControllable else { return false }
+        switch conversation.status {
+        case .waitingForReview:
+            return true
+        case .waitingForClarification:
+            // A form-bearing clarification row shows only Close (see `stateControls`).
+            return choiceForm(for: conversation) == nil
+        default:
+            return false
+        }
+    }
+
+    /// Whether a row shows the icon two-button pair (Resume + Close) vs a single Close/Stop — mirrors
+    /// `stateControls`, so the title/subtext reserve the right trailing room for the controls.
     private func rowShowsControlPair(_ conversation: UserQueryConversation) -> Bool {
         guard conversation.isUserControllable else { return false }
         switch conversation.status {
-        case .paused, .interrupted, .timedOut, .waitingForClarification, .waitingForReview:
+        case .paused, .interrupted, .timedOut:
             return true
         case .needsAttention:
             return !conversation.commandText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1109,7 +1131,13 @@ public struct UserQueryNotchStatusView: View {
         case .waitingForClarification, .waitingForReview:
             // The agent is blocked waiting on the user (the white attention glyph). Offer Reply so the
             // user can answer the question (or respond to the review) right from the row, plus Close.
-            replyAndCloseControls(for: conversation)
+            // A row showing an inline options form is answered through the form's own controls, so it
+            // carries only Close.
+            if choiceForm(for: conversation) != nil {
+                closeControl(for: conversation)
+            } else {
+                replyAndCloseControls(for: conversation)
+            }
         case .paused, .interrupted, .timedOut:
             // Paused (user), interrupted (changed course), and timed out (hit the step ceiling) all carry a
             // goal and real progress, so they are retryable: offer Resume + Close.
