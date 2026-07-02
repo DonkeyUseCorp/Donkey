@@ -10,6 +10,7 @@ import {
   PillButton,
   TapedCard,
 } from "@/app/_components/landing/LandingPrimitives";
+import { CopyPromptButton } from "@/app/_components/landing/media-showcase/CopyPromptButton";
 import { TopNav } from "@/app/_components/landing/TopNav";
 import { getUseCase, useCases } from "@/app/use-cases/useCases";
 
@@ -153,8 +154,11 @@ export default async function UseCasePage({ params }: PageProps) {
           <TapedCard color="blue" tapeColor="cream">
             <div className="p-7 md:p-9">
               <div className="mb-7 rounded-xl border-2 border-ink bg-white p-5">
-                <div className="text-[12px] font-semibold tracking-[0.12em] uppercase text-[#666]">
-                  Prompt
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-[12px] font-semibold tracking-[0.12em] uppercase text-[#666]">
+                    Prompt
+                  </div>
+                  <CopyPromptButton className="py-1.5" text={useCase.prompt} />
                 </div>
                 <p className="mt-2 font-code text-[15px] leading-[1.55] text-ink">
                   {useCase.prompt}

@@ -8,6 +8,7 @@ import {
   PillButton,
   TapedCard,
 } from "@/app/_components/landing/LandingPrimitives";
+import { MediaShowcase } from "@/app/_components/landing/media-showcase/MediaShowcase";
 import { TopNav } from "@/app/_components/landing/TopNav";
 import {
   getUseCasesByCategory,
@@ -99,6 +100,11 @@ export default function UseCasesPage() {
           </PillButton>
         </div>
       </section>
+
+      <MediaShowcase
+        blurb="Generate images and video with Gemini and Veo, plus motion graphics, UGC, and illustration. Click any example to reveal its prompt and copy it into Donkey."
+        heading="Media Donkey can make"
+      />
 
       <section className="mx-auto w-full max-w-[1400px] px-6 pb-20 md:px-12 md:pb-28">
         <div className="flex flex-col gap-14">
