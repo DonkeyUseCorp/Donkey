@@ -287,6 +287,11 @@ goes along too, so the planner can point at things the structured reads miss.
 Vision is paid for only when the planner chooses to look, and a fresh look at an
 unchanged screen reuses the last parse.
 
+When the content runs past one screen — a chat backlog, a long feed, a scrolling
+list — the planner can harvest the whole span in a single step. That read scrolls
+and re-reads on its own, collecting the distinct lines it finds, so a scrollback
+that would otherwise be dozens of look-scroll-look round-trips costs one.
+
 A run is not bound to one app. Naming an app on a look step switches the run's
 active target, and every later action resolves against that target — look at
 Mail, act on Mail; look at Preview, act on Preview. An app-less run starts with

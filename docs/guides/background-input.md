@@ -17,71 +17,74 @@ returns a typed preference the rest of the system obeys.
 
 ## How It Works
 
-```text
-understand the turn ──► preference: background (default) or foreground
-        │
-        ▼  per action
-   guard: is background safe for this target?
-     • the turn asked for background
-     • the window is a safe surface
-        │
-        ├─ no ──► foreground: raise the app (one recovery), act through the cursor
-        │
-        ▼ yes
-   deliver to the target — no raise, no cursor move
-     • Accessibility action — for a control that advertises one
-     • event to the process — for clicks, scroll, drag, keystrokes
-```
+Every turn carries a typed preference — background by default. Per action, a
+guard decides whether background delivery is safe for the resolved window; a
+foreground turn, or a sensitive surface like a login or payment, degrades to the
+foreground path. Because a target is resolved from the on-screen window list, it
+is already on the active desktop and not minimized — no separate desktop check,
+and a window on another desktop simply isn't found.
 
-The understanding step decides *whether* to run in the background; the guard
-decides *whether that is safe* for the resolved window; the delivery lane
-decides *how* the action reaches the app.
+The truth macOS imposes on the rest: a synthetic mouse or scroll event only
+lands on the **active** app. A window that isn't in front silently drops it,
+however the event is routed to the process. So "background" is not one trick — it
+is a ladder, and which rung an action takes depends on what the app exposes.
+None of this is app-specific: the rungs are chosen from what a window advertises,
+never from which app it is.
 
-Because a target window is resolved from the on-screen window list, a resolved
-target is already on the active desktop and not minimized — so the guard needs
-no separate desktop check, and a window on another desktop simply isn't found.
+## Reading Is Always Background
 
-## The Two Background Lanes
+Seeing never needs the foreground. The agent reads a window two ways, both of
+which work while it sits in the background and neither of which moves the cursor
+or raises the app:
 
-Both reach the target process directly, so neither moves the cursor nor changes
-which app is in front.
+- **Accessibility text** — fast and structured, for content that lives in the
+  Accessibility tree.
+- **Screenshot + on-device OCR** — for content an app draws itself and does not
+  put in the Accessibility tree at all (a chat transcript's bubbles, a canvas, a
+  custom list). The window's pixels are captured without raising it and the text
+  is recognized on device.
 
-| Lane | Used for | How it acts |
-|---|---|---|
-| Accessibility action | a control that advertises a native action (press, open, show-menu, pick, confirm, cancel) | a cross-process Accessibility call on the exact control the agent observed |
-| Event to the process | coordinate clicks, scrolling, dragging, typing, key chords | a synthetic event delivered to the target process |
+A single read tool gathers content that runs past one screen — a chat backlog, a
+long feed — by scrolling and re-reading in one call, so a scrollback that would
+otherwise be dozens of look-scroll-look steps costs one.
 
-The Accessibility lane is preferred wherever it applies — it activates the
-control regardless of where it sits on screen. The event lane covers everything
-the Accessibility lane can't express, including web-page content and text
-entry.
+## Acting In The Background
 
-## Delivery Fallback
+Acting takes the richest rung that reaches the app without the foreground:
 
-Background event delivery tries the richest path first and degrades on its own.
-There is no switch to turn it on: it runs when the system entry points it needs
-resolve, and steps down a path when they don't.
+1. **Accessibility action** — press, open, show-menu, and *scroll by page* are
+   cross-process Accessibility calls that act on a window regardless of whether
+   it is frontmost. This is the preferred rung: a control that advertises an
+   action, and a scroll view that advertises page scrolling, are both driven with
+   no raise and no cursor. Most native lists expose a page-scrollable area even
+   when their rows are drawn outside the Accessibility tree — so a custom-drawn
+   transcript still scrolls in the background.
+2. **Synthetic event to the process** — a cursor-neutral event posted to the
+   target process, carrying the live-input signal and the key-authentication
+   envelope some apps (Chromium, Electron) require. This reaches apps that accept
+   routed input — chiefly keyboard and text entry — but a window that isn't active
+   drops synthetic mouse and scroll, so it is not a reliable background path for
+   coordinate gestures on every app.
+3. **Brief foreground, then restore** — when a gesture can only land on the active
+   app (a coordinate click on a control with no Accessibility action, a scroll an
+   app ignores while backgrounded), the agent brings the target to the front for
+   the moment of the gesture, acts through the real event tap, and hands focus
+   back to whatever the user had in front. Reading around the gesture stays in the
+   background; only the gesture itself borrows focus.
 
-1. The SkyLight path — cursor-neutral delivery that carries the live-input
-   signal and the key-authentication envelope some apps (Chromium, Electron)
-   require — is used when those private system entry points resolve.
-2. Otherwise the public per-process post, also cursor-neutral, carries the
-   event.
-3. If neither can deliver to the process — or the control isn't drivable in the
-   background, or the surface is unsafe — the action falls back to the
-   foreground path, bringing the app to the front so the work still completes.
-
-The richer paths are private and version-fragile, so they are isolated to one
-place and treated as best-effort: a missing entry point means the next path
-runs, never a dropped action.
+The upshot: reading and scrolling a typical native app — including one whose
+content is custom-drawn — stay fully in the background. Only a click on something
+the app exposes no Accessibility action for has to borrow the foreground, and even
+then it returns focus immediately.
 
 ## Invariants
 
 1. **Every input is guarded.** Foreground input requires the target frontmost,
    recovering focus once before denying. Background input requires a safe,
-   on-screen target and a cursor-neutral delivery lane. A sensitive surface —
-   login, password, payment, system — is never driven in the background; it
-   degrades to foreground so the user sees it.
+   on-screen target. A gesture that can only land on the active app borrows the
+   foreground for the moment of the action and restores the user's app after. A
+   sensitive surface — login, password, payment, system — is driven in the
+   foreground so the user sees it.
 2. **Done means evidence.** A background action runs where the user isn't
    looking, so the agent re-observes and confirms the effect. A completion whose
    last state-changing action has no later succeeded verification is rejected.
