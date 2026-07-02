@@ -19,6 +19,43 @@ public enum DonkeyBackendInferenceClientError: Error, Equatable, Sendable {
     case invalidBase64(String)
 }
 
+extension DonkeyBackendInferenceClientError {
+    /// The backend's own message from an `httpStatus` JSON error body, e.g.
+    /// {"error":"provider_error","message":"Veo video generation failed.","details":{"status":404,"message":"…"}}.
+    /// Provider errors nest the upstream provider's raw JSON in `details.message`; when that inner
+    /// text decodes as {"error":{"message":…}} the inner sentence is appended, so the actionable
+    /// cause ("model not found", "quota exceeded") reaches the tool's failure reason.
+    public var backendMessage: String? {
+        guard case .httpStatus(_, let body) = self,
+              let data = body.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        var parts: [String] = []
+        if let message = object["message"] as? String, !message.isEmpty {
+            parts.append(message)
+        } else if let code = object["error"] as? String, !code.isEmpty {
+            parts.append(code)
+        }
+        if let details = object["details"] as? [String: Any],
+           let detail = details["message"] as? String, !detail.isEmpty {
+            parts.append(Self.upstreamErrorMessage(fromDetail: detail) ?? detail)
+        }
+        guard !parts.isEmpty else { return nil }
+        return String(parts.joined(separator: " ").prefix(600))
+    }
+
+    private static func upstreamErrorMessage(fromDetail detail: String) -> String? {
+        guard let data = detail.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let error = object["error"] as? [String: Any],
+              let message = error["message"] as? String, !message.isEmpty else {
+            return nil
+        }
+        return message
+    }
+}
+
 /// Shared, app-agnostic copy for the "out of credits" state. Centralized so every consumer (the step
 /// planner's fail-safe, the image generator, any future caller) surfaces one consistent message and
 /// the same billing destination rather than leaking a raw `httpStatus(402, …)` dump to the user.

@@ -116,7 +116,7 @@ public struct HostedVideoGenerator: Sendable {
         } catch {
             return HarnessVideoGenerationResult(
                 savedPaths: [],
-                failureReason: "Video generation timed out or could not reach the model."
+                failureReason: HostedImageGenerator.generationFailureReason("Video generation", for: error)
             )
         }
     }

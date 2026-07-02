@@ -111,7 +111,7 @@ public struct HostedImageGenerator: Sendable {
         } catch {
             return HarnessImageGenerationResult(
                 savedPaths: [],
-                failureReason: "Image generation timed out or could not reach the model."
+                failureReason: Self.generationFailureReason("Image generation", for: error)
             )
         }
 
@@ -157,6 +157,21 @@ public struct HostedImageGenerator: Sendable {
             return "Image generation \(record.status.rawValue): \(detail)"
         }
         return "Image generation \(record.status.rawValue)."
+    }
+
+    /// The catch-all failure text for a generation request that threw. The backend names the real
+    /// failure in its error body (provider reject, bad request), so that message is surfaced for the
+    /// planner to act on; only a genuine deadline or transport failure falls back to generic wording.
+    /// Shared with the video tool so both asset generators report errors the same way.
+    static func generationFailureReason(_ operation: String, for error: Error) -> String {
+        if error is AIDeadline.Exceeded {
+            return "\(operation) timed out."
+        }
+        if let clientError = error as? DonkeyBackendInferenceClientError,
+           let message = clientError.backendMessage {
+            return "\(operation) failed: \(message)"
+        }
+        return "\(operation) could not reach the model."
     }
 
     private static func errorText(_ value: RemoteInferenceJSONValue?) -> String? {
