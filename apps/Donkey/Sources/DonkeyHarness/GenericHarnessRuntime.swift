@@ -718,6 +718,12 @@ public struct GenericHarnessRuntime: Sendable {
         // A plain read-only tool that doesn't opt into caching re-runs freely (re-reading/observing is
         // cheap and legitimately reflects fresh state).
         if isReadOnly, !isCacheableRead { return nil }
+        // A VOLATILE tool re-reflects live, changed state on every call — a scrolling `content.harvest`
+        // after a "load more" click, a fresh capture — so re-running it with the same input is the whole
+        // point, not a redundant repeat. It is never deduped (the read cache above already exempts it; this
+        // exempts it from the "already done" block below, which fires for non-read-only tools like harvest
+        // and would otherwise trap the load-more→re-harvest loop into repeating "already done" forever).
+        if descriptor?.metadata[HarnessToolDescriptor.volatileResultMetadataKey] == "true" { return nil }
         let signature = Self.canonicalInput(call.input)
         let runHistory = Self.currentRunHistory(task.toolHistory)
         guard let priorIndex = runHistory.lastIndex(where: { record in

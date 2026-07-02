@@ -6,7 +6,10 @@ import os
 public enum LocalAppUserQueryHarnessServices {
     private static let logger = Logger(subsystem: "com.donkey.app", category: "skill-script")
 
-    public static func builtInSkillBackedServices() -> HarnessBuiltInToolServices {
+    /// `backgroundTurn` flows to the shell path so a background run hands focus back after any command that
+    /// raises an app, keeping the turn off the foreground. Defaults false for callers with no background
+    /// context.
+    public static func builtInSkillBackedServices(backgroundTurn: Bool = false) -> HarnessBuiltInToolServices {
         HarnessBuiltInToolServices(
             skillRegistry: HarnessSkillRegistry(skills: BuiltInLocalAppSkillPacks.descriptors()),
             generatedScripts: HarnessGeneratedScriptStore(artifacts: builtInValidatedScriptArtifacts()),
@@ -46,8 +49,9 @@ public enum LocalAppUserQueryHarnessServices {
             },
             // The Command Layer (incl. shell_exec) is intentionally available to
             // the local planner as well as the Gemini Live session; both go
-            // through the same DonkeyCommandBackends guardrails.
-            commandExecutor: DonkeyCommandBackends.makeExecutor()
+            // through the same DonkeyCommandBackends guardrails. backgroundTurn flows on so a background
+            // run hands focus back after a command that raises an app.
+            commandExecutor: DonkeyCommandBackends.makeExecutor(backgroundTurn: backgroundTurn)
         )
     }
 

@@ -695,9 +695,16 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // duration so it never races us on a parse.
         let analyzer = HostedDebugUIInspectionAnalyzer(backend: backend)
 
+        // The turn's foreground/background choice — resolved here (not just at input-tool construction
+        // below) so the shell path can keep a background turn off the foreground: a `shell_exec` that
+        // raises an app (`osascript … activate`) has its focus steal handed straight back.
+        let executionPreference = forcedExecutionPreference ?? understanding?.executionPreference ?? .background
+
         // Built-in action/lifecycle/skill tools, minus the placeholder see/act tools that the real AX +
         // vision tools below replace, and restricted to what this turn is permitted to run.
-        var harnessServices = LocalAppUserQueryHarnessServices.builtInSkillBackedServices()
+        var harnessServices = LocalAppUserQueryHarnessServices.builtInSkillBackedServices(
+            backgroundTurn: executionPreference == .background
+        )
         let appleScriptGenerationAdapter = HostedAppleScriptGenerationAdapter()
         harnessServices.appleScriptGenerator = { request in
             await appleScriptGenerationAdapter.generateAppleScript(request)
@@ -835,21 +842,29 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         // understanding is unavailable we still default to background (each lane degrades to foreground on
         // its own when an action can't be delivered that way).
         // An unattended auto-resume forces background so it never raises an app or moves the cursor while
-        // the user is away; an interactive turn lets the understanding boundary decide.
-        let executionPreference = forcedExecutionPreference ?? understanding?.executionPreference ?? .background
+        // the user is away; an interactive turn lets the understanding boundary decide. (Resolved once
+        // above, before the built-in services are built, so the shell path shares the same decision.)
         // One shared, mutable target the three see/act providers read per call: an observe/capture step
         // that names an `app:` retargets it, and every later act/scroll/keystroke follows to that app.
         // Seeded with the run's resolved app — empty on an app-less run, which acquires its first app the
         // moment the planner observes one by name. This is what unbinds the run from a single pinned app.
         let targetContext = HarnessTargetContext(appName: appName, bundleIdentifier: bundleIdentifier)
-        let axProvider = AXComputerUseToolProvider(
-            target: targetContext,
-            executionPreference: executionPreference
-        )
         let visionProvider = VisionComputerUseToolProvider(
             target: targetContext,
             executionPreference: executionPreference,
             analyzer: analyzer
+        )
+        // Let content.harvest read the pixels when the Accessibility tree is too thin to hold the content
+        // (a chat transcript's bubbles, a custom-drawn list). Wired only when this turn holds screen-capture, so
+        // harvest stays AX-only otherwise. The reader captures the window's buffer — no app raise.
+        var harvestVisionReader: (@MainActor () async -> [String])?
+        if granted.contains(.screenCapture) {
+            harvestVisionReader = { await visionProvider.readVisibleTextLines() }
+        }
+        let axProvider = AXComputerUseToolProvider(
+            target: targetContext,
+            executionPreference: executionPreference,
+            visionTextReader: harvestVisionReader
         )
         let pointerProvider = PointerComputerUseToolProvider(
             target: targetContext,

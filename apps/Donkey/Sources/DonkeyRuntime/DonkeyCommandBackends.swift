@@ -14,18 +14,22 @@ public enum DonkeyCommandBackends {
     /// Build the closure wired into `HarnessBuiltInToolServices.commandExecutor`.
     /// Returns a result for a recognized command, or `nil` so harness dispatch
     /// falls through to its `unknownTool` handling.
-    public static func makeExecutor() -> @Sendable (HarnessToolExecutionContext) async -> HarnessToolResult? {
-        { context in await execute(context) }
+    /// `backgroundTurn` marks a turn the user is not watching: the shell path then restores the frontmost
+    /// app after each command so a `shell_exec` that raises an app (an `osascript … activate`) can't leave
+    /// it in front. Defaults false so callers that don't run background work (the Live voice session) keep
+    /// the foreground behavior unchanged.
+    public static func makeExecutor(backgroundTurn: Bool = false) -> @Sendable (HarnessToolExecutionContext) async -> HarnessToolResult? {
+        { context in await execute(context, backgroundTurn: backgroundTurn) }
     }
 
     @MainActor
-    static func execute(_ context: HarnessToolExecutionContext) async -> HarnessToolResult? {
+    static func execute(_ context: HarnessToolExecutionContext, backgroundTurn: Bool = false) async -> HarnessToolResult? {
         guard let command = DonkeyCommandLayer.Command(rawValue: context.call.name) else {
             return nil
         }
         switch command {
         case .shellExec:
-            return await shellExec(context)
+            return await shellExec(context, backgroundTurn: backgroundTurn)
         case .appsList:
             return listApps(context)
         case .appSkill:
@@ -845,7 +849,8 @@ public enum DonkeyCommandBackends {
         return "… [earlier output truncated]\n" + String(output.suffix(shellFailureDiagnosticMaxLength))
     }
 
-    private static func shellExec(_ context: HarnessToolExecutionContext) async -> HarnessToolResult {
+    @MainActor
+    private static func shellExec(_ context: HarnessToolExecutionContext, backgroundTurn: Bool = false) async -> HarnessToolResult {
         guard let command = trimmed(context.call.input["command"]) ?? trimmed(context.call.input["cmd"]) else {
             return invalidInput(context, "shell_exec requires a `command`.")
         }
@@ -893,9 +898,30 @@ public enum DonkeyCommandBackends {
         // plus the user's home when they approved this command at a prompt, so the approved write lands.
         // nil → no folder yet.
         let policy = shellPolicy(owned: owned, consented: !unprompted)
+        // On a background turn the user is not watching, so no command may leave another app in front.
+        // A shell command can raise one as a side effect (`osascript … activate`, `open -a`) outside the
+        // input guard, so snapshot the frontmost app before the run and hand focus back after — the steal
+        // never survives the call. Foreground turns keep whatever the command intentionally brought up.
+        let restoreTarget = backgroundTurn ? TargetFocusRecovery.frontmostProcessID() : nil
         let result = await Task.detached(priority: .userInitiated) {
             runShellSync(command, timeout: timeout, workingDirectory: workingDirectory, policy: policy)
         }.value
+        if let restoreTarget {
+            // `open -a` raises the app ASYNCHRONOUSLY — it returns before the window server makes the app
+            // frontmost — so the steal may still be pending here. Poll briefly for the raise to land, then
+            // hand focus back; without the wait the restore sees "still frontmost, nothing moved", no-ops,
+            // and the app comes forward a beat later and stays. The poll exits the instant focus moves, so a
+            // synchronous raise (`osascript … activate`, which blocks until the app is up) costs nothing;
+            // only a slow async raise waits, and the cap is short so a non-raising write barely pays. A read
+            // never raises an app, so it skips the wait and the restore just confirms nothing moved.
+            if classification.tier != .read {
+                for _ in 0..<5 {
+                    if TargetFocusRecovery.frontmostProcessID() != restoreTarget { break }
+                    try? await Task.sleep(nanoseconds: 40_000_000)
+                }
+            }
+            TargetFocusRecovery.restoreFrontmost(to: restoreTarget)
+        }
 
         let stdout = boundedOutput(result.stdout)
         guard result.exitCode == 0 else {
