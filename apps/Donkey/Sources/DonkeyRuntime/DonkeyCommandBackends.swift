@@ -71,12 +71,17 @@ public enum DonkeyCommandBackends {
         )
 
         // An offscreen window backs the web view so layout and rendering actually
-        // run (an unattached WKWebView can snapshot blank). The view requests
-        // reduced motion (see `captureWebViewConfiguration`) so pages render their
-        // settled, fully-revealed state instead of a frozen mid-animation frame.
+        // run (an unattached WKWebView can snapshot blank). The view stays at one
+        // viewport (1280×1600); `captureStitched` scrolls it a screen at a time and
+        // composites the shots. The page runs unmodified — no reduced-motion patch,
+        // no animation-disabling CSS. Sites that honor `prefers-reduced-motion`
+        // (stripe.com) respond by never mounting their animated demo content, which
+        // captures as empty boxes; and killing transitions can stall reveal logic
+        // that waits on `transitionend`. Tiling is what settles motion instead:
+        // every viewport is photographed after dwelling at its own scroll position.
         let webView = WKWebView(
             frame: NSRect(x: 0, y: 0, width: 1280, height: 1600),
-            configuration: captureWebViewConfiguration()
+            configuration: WKWebViewConfiguration()
         )
         let window = NSWindow(
             contentRect: webView.frame,
@@ -92,13 +97,12 @@ public enum DonkeyCommandBackends {
         guard loaded else {
             return failed(context, "Could not load \(url.absoluteString).", reason: "webSnapshotLoadFailed")
         }
-        // Scroll through the page to trigger viewport-gated content (lazy images,
-        // reveal-on-scroll), then let layout/JS settle into the reduced-motion
-        // final state before capturing.
+        // Warm the page (scroll to mount lazy content, settle media and fonts)
+        // before the tiled capture measures its full height and photographs it.
         await prepareForCapture(webView)
 
         do {
-            let data = try await (format == "pdf" ? exportPDF(webView) : exportPNG(webView))
+            let data = try await (format == "pdf" ? snapshotStitchedPDF(webView) : snapshotStitchedPNG(webView))
             guard !data.isEmpty else {
                 return failed(context, "web_snapshot produced an empty \(format).", reason: "webSnapshotEmpty")
             }
@@ -135,126 +139,277 @@ public enum DonkeyCommandBackends {
         return resolveOutputDestination(destination, baseDir: baseDir, format: format, defaultName: host)
     }
 
-    /// Configuration for the `web_snapshot` capture view. A static snapshot must
-    /// show the page in its *settled* state, but two things fight that:
+    /// Warm the page before the tiled capture. A single top-to-bottom walk mounts
+    /// viewport-gated content (lazy images, `IntersectionObserver` reveals) and lets
+    /// the document reach its full height, then we settle media and wait on fonts:
     ///
-    /// 1. JS reveals gated on motion preference (our landing page's `usePhaseLoop`
-    ///    holds content at `opacity: 0` until a timer advances). The `matchMedia`
-    ///    patch makes the page report `prefers-reduced-motion: reduce`, so those
-    ///    jump straight to the fully-revealed state.
-    /// 2. CSS entrance animations that start at `opacity: 0` (e.g. `donkey-pop` on
-    ///    the skills card). We disable animations outright rather than fast-forward
-    ///    them: forcing a tiny duration leaves the element *applied* to the animation
-    ///    and pinned to its first keyframe (opacity 0), so the whole card captures
-    ///    blank. `animation: none` drops the animation so each element falls back to
-    ///    its visible base style; entrance effects start from a visible base, so the
-    ///    settled result is exactly what they animate toward.
+    /// 1. Walk top-to-bottom slowly enough for frameworks to hydrate each screen.
+    /// 2. Give every `<video>` a real frame, swap in its poster, or hide it so a
+    ///    section shows its background instead of a black rectangle.
+    /// 3. De-pin scroll-scrub sections. A `position: sticky` element pinned inside a
+    ///    much taller parent is a scroll *runway*: its extra height is empty space
+    ///    the pin animation scrubs through, and a static capture renders it as a
+    ///    black void. Unpinning the element and collapsing the runway to content
+    ///    height makes the section render once, at its natural size.
+    /// 4. Wait (bounded) for web fonts and in-flight images so text metrics and
+    ///    thumbnails are final, not half-loaded.
     ///
-    /// Both run at document start so no entrance animation is ever visibly mid-flight.
-    @MainActor
-    private static func captureWebViewConfiguration() -> WKWebViewConfiguration {
-        let reduceMotionSource = """
-        (function () {
-          var real = window.matchMedia ? window.matchMedia.bind(window) : null;
-          function reducedList(query) {
-            return {
-              matches: /prefers-reduced-motion\\s*:\\s*reduce/.test(query),
-              media: query,
-              onchange: null,
-              addListener: function () {},
-              removeListener: function () {},
-              addEventListener: function () {},
-              removeEventListener: function () {},
-              dispatchEvent: function () { return false; }
-            };
-          }
-          window.matchMedia = function (query) {
-            if (typeof query === 'string' && query.indexOf('prefers-reduced-motion') !== -1) {
-              return reducedList(query);
-            }
-            return real ? real(query) : reducedList(query);
-          };
-        })();
-        """
-        let settleAnimationsSource = """
-        (function () {
-          var css = '*, *::before, *::after {' +
-            'animation: none !important;' +
-            'transition: none !important;' +
-            '}';
-          var style = document.createElement('style');
-          style.setAttribute('data-donkey-capture', '');
-          style.textContent = css;
-          (document.head || document.documentElement).appendChild(style);
-        })();
-        """
-        let configuration = WKWebViewConfiguration()
-        for source in [reduceMotionSource, settleAnimationsSource] {
-            configuration.userContentController.addUserScript(
-                WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false)
-            )
-        }
-        return configuration
-    }
-
-    /// Walk the page top-to-bottom before capturing so viewport-gated content
-    /// (lazy images, `IntersectionObserver` reveals) loads, then return to the top.
-    /// The trailing sleep lets the scroll pass finish and animations settle into
-    /// their reduced-motion final state.
+    /// It does *not* flatten transforms or freeze scroll-linked animation: the tiled
+    /// capture (`captureStitched`) photographs each viewport while it is actually on
+    /// screen, so scroll-scrubbed sections resolve naturally at their own position —
+    /// forcing them to a resting state here would distort exactly those layouts.
     @MainActor
     private static func prepareForCapture(_ webView: WKWebView) async {
-        let scrollSource = """
-        (function () {
-          var h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
-          var step = Math.max(window.innerHeight, 600);
-          var y = 0;
-          var id = setInterval(function () {
-            y += step;
-            window.scrollTo(0, y);
-            if (y >= h) { clearInterval(id); window.scrollTo(0, 0); }
-          }, 50);
-        })();
+        let settleBody = """
+        function fullHeight() {
+          return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+        }
+        // Cap the walk at the capture cap so infinite-scroll feeds, which grow the
+        // document faster than we walk it, can't keep the loop alive forever.
+        var step = Math.max(window.innerHeight * 0.85, 600);
+        for (var y = 0; y < Math.min(fullHeight(), 20000); y += step) {
+          window.scrollTo(0, y);
+          await new Promise(function (r) { setTimeout(r, 300); });
+        }
+        window.scrollTo(0, fullHeight());
+        await new Promise(function (r) { setTimeout(r, 500); });
+
+        var videos = document.querySelectorAll('video');
+        for (var i = 0; i < videos.length; i++) {
+          var v = videos[i];
+          try {
+            v.pause();
+            v.removeAttribute('autoplay');
+            v.removeAttribute('loop');
+            if (v.readyState >= 2 && v.duration && isFinite(v.duration)) {
+              v.currentTime = Math.min(0.1 * v.duration, 1);
+            } else if (v.poster) {
+              var img = document.createElement('img');
+              img.src = v.poster;
+              img.width = v.clientWidth;
+              img.height = v.clientHeight;
+              img.style.objectFit = 'cover';
+              v.replaceWith(img);
+            } else {
+              v.style.visibility = 'hidden';
+            }
+          } catch (e) {}
+        }
+
+        var nodes = document.querySelectorAll('body *');
+        for (var j = 0; j < nodes.length; j++) {
+          var el = nodes[j];
+          if (getComputedStyle(el).position !== 'sticky') continue;
+          el.style.position = 'relative';
+          el.style.top = 'auto';
+          // Collapse the pin runway, identified by BOTH: a parent much taller than
+          // the sticky child, and overflow visible. The overflow gate keeps this
+          // off scroll containers (sticky table headers, sticky sidebars in
+          // overflow panes), where forcing height auto would explode the layout.
+          var parent = el.parentElement;
+          if (parent &&
+              getComputedStyle(parent).overflowY === 'visible' &&
+              parent.getBoundingClientRect().height > el.getBoundingClientRect().height * 1.3) {
+            parent.style.height = 'auto';
+            parent.style.minHeight = '0';
+          }
+        }
+
+        function withTimeout(p, ms) {
+          return Promise.race([p, new Promise(function (r) { setTimeout(r, ms); })]);
+        }
+        try { await withTimeout(document.fonts.ready, 3000); } catch (e) {}
+        var pending = Array.prototype.slice.call(document.images)
+          .filter(function (im) { return !im.complete; })
+          .map(function (im) { return im.decode().catch(function () {}); });
+        await withTimeout(Promise.all(pending), 4000);
+
+        window.scrollTo(0, 0);
+        await new Promise(function (r) { setTimeout(r, 500); });
+        return true;
         """
-        _ = try? await webView.evaluateJavaScript(scrollSource)
-        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        _ = try? await webView.callAsyncJavaScript(
+            settleBody,
+            arguments: [:],
+            in: nil,
+            contentWorld: .page
+        )
+    }
+
+    /// Grow the web view to its full scrollable height (capped) so a capture takes
+    /// in the whole page in one pass. Returns the height actually used.
+    @MainActor
+    private static func fitToContentHeight(_ webView: WKWebView) async -> CGFloat {
+        guard let height = try? await webView.evaluateJavaScript("document.body.scrollHeight") as? CGFloat,
+              height > 0 else {
+            return webView.bounds.height
+        }
+        let fitted = min(height, 20_000)
+        webView.frame.size.height = fitted
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        return fitted
     }
 
     @MainActor
     private static func exportPDF(_ webView: WKWebView) async throws -> Data {
-        try await withCheckedThrowingContinuation { continuation in
-            webView.createPDF(configuration: WKPDFConfiguration()) { result in
+        // One long continuous page: fit the view to the full document and hand
+        // createPDF an explicit rect so it emits a single tall page instead of
+        // paginating or clipping to the initial viewport.
+        let height = await fitToContentHeight(webView)
+        let config = WKPDFConfiguration()
+        config.rect = CGRect(x: 0, y: 0, width: webView.bounds.width, height: height)
+        return try await withCheckedThrowingContinuation { continuation in
+            webView.createPDF(configuration: config) { result in
                 continuation.resume(with: result)
             }
         }
     }
 
+    // MARK: web_snapshot tiled capture
+
+    /// Photograph the page one viewport at a time and composite the shots into a
+    /// single tall image. A one-shot full-height snapshot leaves dark voids on
+    /// motion-heavy pages: sections built with `content-visibility`,
+    /// `IntersectionObserver`, or scroll-linked ("scrubbed") animation are
+    /// un-rendered once off screen, so a grab from the top captures them blank.
+    /// Capturing each band *while it is on screen* is the general fix — it holds
+    /// for any site, not just one layout. Fixed overlays (nav bars, cookie strips)
+    /// are hidden on every tile after the first so they aren't stamped down the
+    /// whole page; sticky sections were already de-pinned in `prepareForCapture`.
     @MainActor
-    private static func exportPNG(_ webView: WKWebView) async throws -> Data {
-        // Resize to the full scrollable height so the snapshot captures the whole page.
-        if let height = try? await webView.evaluateJavaScript("document.body.scrollHeight") as? CGFloat,
-           height > 0 {
-            webView.frame.size.height = min(height, 20_000)
-            try? await Task.sleep(nanoseconds: 300_000_000)
+    private static func captureStitched(_ webView: WKWebView) async throws -> CGImage {
+        let viewportW = webView.bounds.width
+        let viewportH = webView.bounds.height
+        let measured = (try? await webView.evaluateJavaScript(
+            "Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)"
+        ) as? CGFloat) ?? viewportH
+        let fullHeight = min(max(measured, viewportH), 20_000)
+
+        // Cache fixed overlays (nav bars, cookie strips) once so we can hide them on
+        // later tiles. Only `fixed` — sticky sections were already de-pinned to flow
+        // inline in `prepareForCapture`, so they appear once naturally.
+        _ = try? await webView.evaluateJavaScript("""
+        window.__donkeyChrome = Array.prototype.slice.call(document.querySelectorAll('body *'))
+          .filter(function (e) { return getComputedStyle(e).position === 'fixed'; });
+        true;
+        """)
+
+        var offsets: [CGFloat] = []
+        var y: CGFloat = 0
+        while y + viewportH < fullHeight { offsets.append(y); y += viewportH }
+        offsets.append(max(0, fullHeight - viewportH))
+
+        // Per tile: scroll, hide fixed chrome on tiles > 0, dwell so this
+        // viewport's entrance animations play out, then wait (bounded) for the
+        // images intersecting it to decode — lazy images only start fetching when
+        // they enter the viewport, so a fixed dwell photographs their empty boxes.
+        let tileSettleBody = """
+        window.scrollTo(0, offset);
+        var chrome = window.__donkeyChrome || [];
+        for (var i = 0; i < chrome.length; i++) {
+          chrome[i].style.visibility = index > 0 ? 'hidden' : '';
         }
+        await new Promise(function (r) { setTimeout(r, 600); });
+        var pending = Array.prototype.slice.call(document.images).filter(function (im) {
+          var rect = im.getBoundingClientRect();
+          return rect.bottom > 0 && rect.top < window.innerHeight && !im.complete;
+        }).map(function (im) { return im.decode().catch(function () {}); });
+        await Promise.race([
+          Promise.all(pending),
+          new Promise(function (r) { setTimeout(r, 2500); })
+        ]);
+        await new Promise(function (r) { setTimeout(r, 120); });
+        return true;
+        """
+        var tiles: [(offset: CGFloat, image: CGImage)] = []
+        var scale: CGFloat = 1
+        for (index, offset) in offsets.enumerated() {
+            _ = try? await webView.callAsyncJavaScript(
+                tileSettleBody,
+                arguments: ["offset": Double(offset), "index": index],
+                in: nil,
+                contentWorld: .page
+            )
+            let tile = try await snapshotImage(webView)
+            scale = CGFloat(tile.width) / max(viewportW, 1)
+            tiles.append((offset, tile))
+        }
+
+        let pxW = Int((viewportW * scale).rounded())
+        let pxH = Int((fullHeight * scale).rounded())
+        guard pxW > 0, pxH > 0, let ctx = CGContext(
+            data: nil, width: pxW, height: pxH, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        // CGContext is bottom-left origin, so a band at document offset `y` sits at
+        // context y = totalHeight - y - tileHeight. Later tiles overwrite overlap.
+        for tile in tiles {
+            let drawY = CGFloat(pxH) - (tile.offset * scale) - CGFloat(tile.image.height)
+            ctx.draw(tile.image, in: CGRect(x: 0, y: drawY, width: CGFloat(tile.image.width), height: CGFloat(tile.image.height)))
+        }
+        guard let stitched = ctx.makeImage() else { throw CocoaError(.fileWriteUnknown) }
+        return stitched
+    }
+
+    /// Snapshot the current viewport as a `CGImage`. Converts inside the completion
+    /// handler so the non-Sendable `NSImage` never crosses the continuation boundary.
+    @MainActor
+    private static func snapshotImage(_ webView: WKWebView) async throws -> CGImage {
         let config = WKSnapshotConfiguration()
         config.rect = CGRect(origin: .zero, size: webView.bounds.size)
-        // Convert to PNG inside the completion handler so the non-Sendable NSImage never
-        // crosses the continuation boundary.
         return try await withCheckedThrowingContinuation { continuation in
             webView.takeSnapshot(with: config) { image, error in
-                guard let image else {
+                guard let image, let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
                     continuation.resume(throwing: error ?? CocoaError(.fileWriteUnknown))
                     return
                 }
-                guard let tiff = image.tiffRepresentation,
-                      let rep = NSBitmapImageRep(data: tiff),
-                      let png = rep.representation(using: .png, properties: [:]) else {
-                    continuation.resume(throwing: CocoaError(.fileWriteUnknown))
-                    return
-                }
-                continuation.resume(returning: png)
+                continuation.resume(returning: cg)
             }
         }
+    }
+
+    /// web_snapshot PNG: the stitched full-page image encoded as PNG.
+    @MainActor
+    private static func snapshotStitchedPNG(_ webView: WKWebView) async throws -> Data {
+        let stitched = try await captureStitched(webView)
+        guard let png = NSBitmapImageRep(cgImage: stitched).representation(using: .png, properties: [:]) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        return png
+    }
+
+    /// web_snapshot PDF: the stitched full-page image as one long continuous page.
+    /// This path is raster (an image PDF) rather than vector, because the page is
+    /// composited from per-viewport photographs — the tradeoff that buys void-free
+    /// motion-site capture. (`image_render` still uses vector `exportPDF`.)
+    ///
+    /// The page is sized in CSS points, with the higher-resolution pixels drawn
+    /// into it (~144 DPI on a 2x snapshot). Sizing the page at pixel dimensions
+    /// doubles an already enormous page — tall pages far exceed the PDF spec's
+    /// 14,400 pt limit, and viewers rasterize such pages into a capped backing
+    /// store, which reads as blur.
+    @MainActor
+    private static func snapshotStitchedPDF(_ webView: WKWebView) async throws -> Data {
+        let stitched = try await captureStitched(webView)
+        let scale = max(CGFloat(stitched.width) / max(webView.bounds.width, 1), 1)
+        var mediaBox = CGRect(
+            x: 0, y: 0,
+            width: CGFloat(stitched.width) / scale,
+            height: CGFloat(stitched.height) / scale
+        )
+        let data = NSMutableData()
+        guard let consumer = CGDataConsumer(data: data as CFMutableData),
+              let ctx = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        ctx.beginPage(mediaBox: &mediaBox)
+        ctx.draw(stitched, in: mediaBox)
+        ctx.endPage()
+        ctx.closePDF()
+        return data as Data
     }
 
     // MARK: - image_render
