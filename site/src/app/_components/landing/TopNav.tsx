@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { PillButton } from "@/app/_components/landing/LandingPrimitives";
-import { DONKEY_INSTALL_URL } from "@/app/_components/landing/data";
 import { authClient } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
 
@@ -16,9 +15,6 @@ type Props = {
   // Wordmark next to the logo. Donkey Vision is its own B2B product, so that
   // page overrides the default "Donkey" with "Donkey Vision".
   wordmark?: string;
-  // Product nav links (e.g. Use cases). Auth screens keep a minimal header and
-  // opt out.
-  showNav?: boolean;
   // Log in + Sign up cluster. Hidden when an authToggle is supplied.
   showAuthLinks?: boolean;
   // Sign-in/up pages swap the auth links for a single toggle to the other mode.
@@ -28,7 +24,6 @@ type Props = {
 export function TopNav({
   homeHref = "/",
   wordmark = "Donkey",
-  showNav = true,
   showAuthLinks = true,
   authToggle,
 }: Props) {
@@ -54,7 +49,7 @@ export function TopNav({
     <header className="sticky top-0 z-50 w-full py-3 md:py-4">
       <div
         className={cn(
-          "mx-auto grid w-full max-w-[1400px] grid-cols-[1fr_auto_1fr] items-center rounded-[24px] px-6 py-2 transition-all duration-300 md:px-12 md:py-2.5",
+          "mx-auto flex w-full max-w-[1400px] items-center justify-between rounded-[24px] px-6 py-2 transition-all duration-300 md:px-12 md:py-2.5",
           scrolled
             ? "border border-ink/10 bg-cream/95 shadow-[0_18px_50px_rgba(15,14,13,0.10)] backdrop-blur-md"
             : "border border-transparent bg-transparent shadow-none",
@@ -62,7 +57,7 @@ export function TopNav({
       >
         <Link
           href={homeHref}
-          className="col-start-1 flex items-center gap-0 justify-self-start text-ink no-underline"
+          className="flex items-center gap-0 text-ink no-underline"
         >
           <div className="flex h-[59px] w-[59px] items-center justify-center overflow-hidden rounded-[10px]">
             <Image
@@ -77,28 +72,7 @@ export function TopNav({
           </div>
           <span className="text-2xl font-semibold">{wordmark}</span>
         </Link>
-        {/* Center cluster: the product nav lives here so Use cases and the
-            Download CTA read as a balanced pair in the middle of the bar. Hidden
-            below md, where the header collapses to logo + auth. */}
-        <div className="col-start-2 hidden items-center gap-6 justify-self-center md:flex">
-          {showNav ? (
-            <>
-              <Link
-                href="/use-cases"
-                className="whitespace-nowrap rounded-full border border-transparent px-3 py-1.5 text-sm font-semibold text-ink no-underline transition-colors hover:border-ink/10 hover:bg-white"
-              >
-                Use cases
-              </Link>
-              <Link
-                href={DONKEY_INSTALL_URL}
-                className="inline-flex items-center whitespace-nowrap rounded-full border border-transparent px-3 py-1.5 text-sm font-semibold text-ink no-underline transition-colors hover:border-ink/10 hover:bg-white"
-              >
-                Download
-              </Link>
-            </>
-          ) : null}
-        </div>
-        <div className="col-start-3 flex items-center gap-[10px] justify-self-end md:gap-4">
+        <div className="flex items-center gap-[10px] md:gap-4">
           {isSignedIn ? (
             <PillButton href="/app" variant="secondary" size="sm">
               Dashboard

@@ -138,7 +138,6 @@ export function AuthScreen({ mode }: Props) {
   return (
     <main className="min-h-screen w-full bg-background font-system text-ink antialiased">
       <TopNav
-        showNav={false}
         authToggle={{
           href: screenCopy.alternateHref,
           label: copy[otherMode].title,
