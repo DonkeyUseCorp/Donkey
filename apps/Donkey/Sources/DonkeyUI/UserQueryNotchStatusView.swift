@@ -205,10 +205,11 @@ public struct UserQueryNotchStatusView: View {
         ZStack(alignment: .top) {
             Color.black
 
-            // While replying, a tap on bare chrome (not a row, control, or the composer — those sit above
-            // this layer and take their own taps first) leaves reply mode. Only present while targeted, so
-            // it never interferes with normal taps.
-            if replyTargetConversationID != nil {
+            // While a row is selected or reply-pinned, a tap on the chrome outside the conversation list
+            // (the edge insets and the band beside the void — the list handles clicks inside its own
+            // frame, see `expandedConversationContent`) deselects. Only present while something is
+            // selected, so it never interferes with normal taps.
+            if replyTargetConversationID != nil || selectedConversationID != nil {
                 Rectangle()
                     .fill(Color.white.opacity(0.001))
                     .contentShape(Rectangle())
@@ -680,6 +681,16 @@ public struct UserQueryNotchStatusView: View {
                 .onChange(of: selectedConversationID) {
                     guard let selectedConversationID else { return }
                     proxy.scrollTo(selectedConversationID)
+                }
+                // The list's bare background deselects. The ScrollView hit-tests its whole frame — the
+                // empty space around and below the rows included — so clicks there never reach the
+                // tap-catcher layered under the content in `contentCanvas`; the exit has to ride on the
+                // ScrollView itself. Row clicks are untouched: a row's own tap gesture takes the click
+                // first. Guarded inside the gesture (not an `if` around the modifier) so toggling
+                // selection never restructures the view tree mid-click.
+                .onTapGesture {
+                    guard replyTargetConversationID != nil || selectedConversationID != nil else { return }
+                    replyModeExited()
                 }
             }
 
