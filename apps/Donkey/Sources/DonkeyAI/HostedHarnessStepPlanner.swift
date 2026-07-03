@@ -237,8 +237,9 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
     /// A neutral one-line account synthesized for a step whose reply carried no narration, so the live
     /// pointer still updates for THIS step instead of repeating the previous step's line. Derived from the
     /// step's own tool call, never from prior narration: for `shell_exec` the command itself is the most
-    /// informative and keeps consecutive steps distinct; everything else names the tool. Kept short so it
-    /// reads cleanly in the notch.
+    /// informative and keeps consecutive steps distinct; everything else shows the tool's friendly
+    /// activity label ("Done", "Searching", "Looking at the screen") — a raw tool name like
+    /// `run.complete` reads as an internal in the notch.
     static func fallbackNarration(tool: String, input: [String: String]) -> String {
         if tool == "shell_exec",
            let command = input["command"]?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -247,7 +248,7 @@ public final class HostedHarnessStepPlanner: HarnessNextStepPlanning {
             let clipped = firstLine.count > 80 ? String(firstLine.prefix(80)) + "…" : firstLine
             return "Running `\(clipped)`."
         }
-        return "Running `\(tool)`."
+        return UserQueryActivity.kind(forToolNamed: tool).label
     }
 
     /// The corrective note fed back on the next attempt. A content-filter block gets a

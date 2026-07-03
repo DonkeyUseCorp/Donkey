@@ -1,5 +1,5 @@
 @testable import Donkey
-import DonkeyAI
+@testable import DonkeyAI
 import DonkeyContracts
 import DonkeyHarness
 import Foundation
@@ -345,6 +345,21 @@ struct HostedHarnessStepPlannerTests {
         // Not the prior step's line, and derived from this step's own command.
         #expect(planner.lastNarration != "Loading the PDF skill.")
         #expect(planner.lastNarration == "Running `ls -la`.")
+    }
+
+    @Test
+    func fallbackNarrationShowsFriendlyActivityLabelsNotRawToolNames() {
+        // Raw tool names ("Running `run.complete`.") read as internals in the notch; a narration-less
+        // step surfaces the tool's activity label instead. shell_exec keeps the command itself — it is
+        // the most informative line and keeps consecutive steps distinct.
+        #expect(HostedHarnessStepPlanner.fallbackNarration(tool: "run.complete", input: [:]) == "Done")
+        #expect(HostedHarnessStepPlanner.fallbackNarration(tool: "web.search", input: [:]) == "Searching")
+        #expect(HostedHarnessStepPlanner.fallbackNarration(tool: "ax.observe", input: [:]) == "Looking at the screen")
+        #expect(HostedHarnessStepPlanner.fallbackNarration(tool: "content.harvest", input: [:]) == "Thinking")
+        #expect(
+            HostedHarnessStepPlanner.fallbackNarration(tool: "shell_exec", input: ["command": "ls -la"])
+                == "Running `ls -la`."
+        )
     }
 
     @Test
