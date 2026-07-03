@@ -73,12 +73,15 @@ public enum DonkeyCommandBackends {
         // An offscreen window backs the web view so layout and rendering actually
         // run (an unattached WKWebView can snapshot blank). The view stays at one
         // viewport (1280×1600); `captureStitched` scrolls it a screen at a time and
-        // composites the shots. The page runs unmodified — no reduced-motion patch,
+        // composites the shots. The page loads unmodified — no reduced-motion patch,
         // no animation-disabling CSS. Sites that honor `prefers-reduced-motion`
         // (stripe.com) respond by never mounting their animated demo content, which
         // captures as empty boxes; and killing transitions can stall reveal logic
-        // that waits on `transitionend`. Tiling is what settles motion instead:
-        // every viewport is photographed after dwelling at its own scroll position.
+        // that waits on `transitionend`. Motion settles per tile instead: each
+        // viewport is photographed at its own scroll position after its finite
+        // animations are fast-forwarded to their finished state (see
+        // `captureStitched` — this window is never shown, so animations never
+        // advance on their own and would otherwise pin at frame 0).
         let webView = WKWebView(
             frame: NSRect(x: 0, y: 0, width: 1280, height: 1600),
             configuration: WKWebViewConfiguration()
@@ -300,9 +303,21 @@ public enum DonkeyCommandBackends {
         offsets.append(max(0, fullHeight - viewportH))
 
         // Per tile: scroll, hide fixed chrome on tiles > 0, dwell so this
-        // viewport's entrance animations play out, then wait (bounded) for the
-        // images intersecting it to decode — lazy images only start fetching when
-        // they enter the viewport, so a fixed dwell photographs their empty boxes.
+        // viewport's lazy content mounts, fast-forward entrance animations to
+        // their finished state, then wait (bounded) for the images intersecting
+        // it to decode — lazy images only start fetching when they enter the
+        // viewport, so a fixed dwell photographs their empty boxes.
+        //
+        // The fast-forward exists because CSS animations never advance in this
+        // offscreen, never-shown window: a finite entrance animation stays at
+        // frame 0, and `fill-mode: both/backwards` holds its element at the
+        // `from` state — typically opacity 0 — so whole sections photograph
+        // blank however long the dwell. `finish()` jumps the animation to its
+        // end state and still fires animationend/transitionend, so reveal logic
+        // waiting on those events keeps working. Infinite loops (spinners,
+        // pulses) are visible at any frame and `finish()` would throw on them;
+        // scroll-driven timelines must resolve at the tile's own scroll
+        // position. Both are skipped.
         let tileSettleBody = """
         window.scrollTo(0, offset);
         var chrome = window.__donkeyChrome || [];
@@ -310,6 +325,16 @@ public enum DonkeyCommandBackends {
           chrome[i].style.visibility = index > 0 ? 'hidden' : '';
         }
         await new Promise(function (r) { setTimeout(r, 600); });
+        var anims = document.getAnimations ? document.getAnimations() : [];
+        for (var j = 0; j < anims.length; j++) {
+          var a = anims[j];
+          try {
+            if (a.timeline && a.timeline !== document.timeline) continue;
+            var timing = a.effect && a.effect.getTiming ? a.effect.getTiming() : null;
+            if (!timing || !isFinite(timing.iterations)) continue;
+            a.finish();
+          } catch (e) {}
+        }
         var pending = Array.prototype.slice.call(document.images).filter(function (im) {
           var rect = im.getBoundingClientRect();
           return rect.bottom > 0 && rect.top < window.innerHeight && !im.complete;
