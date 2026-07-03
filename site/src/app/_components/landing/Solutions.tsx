@@ -15,7 +15,7 @@ export function Solutions() {
         margin: "0 auto",
       }}
     >
-      <Headline>Donkey can do work</Headline>
+      <Headline size="lg">Donkey can work</Headline>
       <p
         style={{
           marginTop: 24,

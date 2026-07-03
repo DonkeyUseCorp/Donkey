@@ -19,7 +19,7 @@ export function Pricing() {
         width: "100%",
       }}
     >
-      <Headline>
+      <Headline size="lg">
         Simple <span style={{ fontStyle: "italic" }}>pricing</span>
       </Headline>
       <div

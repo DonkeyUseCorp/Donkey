@@ -10,7 +10,7 @@ import { GITHUB_REPO_URL, openSourceReasons } from "@/app/_components/landing/da
 export function OpenSource() {
   return (
     <section className="mx-auto max-w-[1400px] px-6 py-20 md:px-12 md:py-24">
-      <Headline>
+      <Headline size="lg">
         Donkey is <span className="italic">open source.</span>
       </Headline>
       <p className="mt-6 max-w-[900px] text-[17px] leading-[1.55] text-[#454545]">

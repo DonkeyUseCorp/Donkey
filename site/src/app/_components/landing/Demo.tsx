@@ -15,7 +15,7 @@ export function Demo() {
         margin: "0 auto",
       }}
     >
-      <Headline>
+      <Headline size="lg">
         See Donkey <span style={{ fontStyle: "italic" }}>in action.</span>
       </Headline>
       <p
