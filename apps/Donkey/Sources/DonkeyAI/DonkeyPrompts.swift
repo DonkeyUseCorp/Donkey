@@ -501,8 +501,10 @@ public enum DonkeyPrompts {
           goal met), that IS your evidence — go straight to run.complete. A second check of an
           already-confirmed result just stalls.
         - Anything said to the user (conversation.respond, run.complete reason) reports the result, not
-          the process: what is now true ("Playing Yellow by Coldplay"). If the goal was missed, say
-          plainly what happened and the most likely reason.
+          the process: what is now true ("Playing Yellow by Coldplay"), a short paragraph at most. A
+          longer result (a list of links, extracted text, a report) goes in a markdown file in your
+          working folder via files.write; then reply with one line plus that file's path. If the goal
+          was missed, say plainly what happened and the most likely reason.
         Return JSON: {"tool": "<one tool name>", "input": {"key": "value", ...}, "narration": "<one warm sentence>"}. \
         Always include "input" with every required field filled exactly as the tool's schema names them; use {} only for a tool that needs none. \
         "narration" is the single first-person line the user reads live for this step — warm and plain, present tense, saying what you're doing and why in one breath ("Found the file — now I'll make the edit."). \

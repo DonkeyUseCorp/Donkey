@@ -190,7 +190,7 @@ public enum BuiltInHarnessToolCatalog {
             descriptor(
                 "conversation.respond",
                 pluginID: "core.conversation",
-                summary: "Answer the user or chat when the request needs a reply rather than an action. Set 'response' to the message.",
+                summary: "Answer the user or chat when the request needs a reply rather than an action. Set 'response' to the message — a short paragraph at most; the display has little room. A longer result (a list of links, extracted text, a report) goes in a markdown file in the working folder via files.write first; then respond with one line plus that file's path.",
                 input: ["response": "The message to say to the user."],
                 permissions: [.conversation],
                 safety: .readOnly
