@@ -44,6 +44,11 @@ export function DonkeySkills() {
   const [active, setActive] = useState(0);
   const [docType, setDocType] = useState<DocType>("sheet");
   const [docAuto, setDocAuto] = useState(true);
+  // The card pops only on tab switches. The initial render stays static so the
+  // section is visible even when the page is painted without running
+  // animations (full-page screenshot capture renders at animation frame 0,
+  // where the pop's fill-mode:both state is opacity 0).
+  const [interacted, setInteracted] = useState(false);
   const skill = SKILLS[active];
 
   useEffect(() => {
@@ -79,7 +84,10 @@ export function DonkeySkills() {
               "text-ink",
               active === idx ? "bg-coral" : "bg-cream",
             )}
-            onClick={() => setActive(idx)}
+            onClick={() => {
+              setInteracted(true);
+              setActive(idx);
+            }}
           >
             {s.name}
           </button>
@@ -88,7 +96,10 @@ export function DonkeySkills() {
 
       <div
         key={active}
-        className="border-2 border-ink rounded-[22px] bg-cream p-[clamp(20px,3vw,34px)] shadow-[5px_5px_0_0_#0f0e0d] animate-[donkey-pop_0.28s_ease_both]"
+        className={cn(
+          "border-2 border-ink rounded-[22px] bg-cream p-[clamp(20px,3vw,34px)] shadow-[5px_5px_0_0_#0f0e0d]",
+          interacted && "animate-[donkey-pop_0.28s_ease_both]",
+        )}
       >
         <div className="flex flex-col gap-[18px]">
           {skill.kind === "doc" ? (
