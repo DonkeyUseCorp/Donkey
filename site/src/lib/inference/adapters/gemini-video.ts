@@ -1,7 +1,6 @@
-import { GoogleGenAI } from "@google/genai";
+import { GenerateVideosOperation, GoogleGenAI } from "@google/genai";
 import type {
   GenerateVideosConfig,
-  GenerateVideosOperation,
   GenerateVideosParameters,
   GoogleGenAIOptions,
 } from "@google/genai";
@@ -184,10 +183,14 @@ export function createGeminiVideoAssetProvider(
     }
 
     const client = clientFactory(clientConfig.options);
+    // The SDK polls by calling methods on the operation instance itself, so a plain
+    // `{ name }` literal is not enough — construct a real GenerateVideosOperation.
+    const operationHandle = new GenerateVideosOperation();
+    operationHandle.name = operationName;
     let operation: GenerateVideosOperation;
     try {
       operation = await client.operations.getVideosOperation({
-        operation: { name: operationName } as GenerateVideosOperation,
+        operation: operationHandle,
       });
     } catch (error) {
       throw geminiApiError("Polling the Veo operation failed.", error);
