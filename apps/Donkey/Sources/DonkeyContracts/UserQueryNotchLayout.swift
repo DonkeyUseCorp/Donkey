@@ -103,6 +103,11 @@ public struct UserQueryNotchMetrics: Equatable, Sendable {
     public static let expandedConversationContentHeight: CGFloat = 280
     public static let inputHorizontalMargin: CGFloat = 14
     public static let compactCommandContentVerticalPadding: CGFloat = 30
+    /// Side of a staged-attachment preview chip in the expanded notch.
+    public static let stagedAssetChipSide: CGFloat = 84
+    /// Extra expanded-content height while staged attachments render above the composer:
+    /// one chip row plus the row's spacing to the composer.
+    public static let stagedAssetsRowExtraHeight: CGFloat = stagedAssetChipSide + 8
     /// How long the open host window lingers after the surface starts collapsing, before it snaps to
     /// the notch size. Timed just past the surface close animation (0.22s) so the host always stays
     /// large enough to contain the still-shrinking surface, then closes once it has reached the notch.

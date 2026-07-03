@@ -653,7 +653,10 @@ final class UserQueryOverlayController {
             selectedSpawnID: model.selectedSpawnID,
             replyTargetConversationID: model.replyTargetConversationID,
             selectedConversationID: model.selectedConversationID,
-            needsLogin: model.needsLogin
+            needsLogin: model.needsLogin,
+            stagedAssets: model.stagedNotchAssets,
+            conversationAssets: model.notchConversationAssets,
+            conversationOutputs: model.notchConversationOutputs
         )
     }
 
@@ -695,6 +698,19 @@ final class UserQueryOverlayController {
             },
             assetsDropped: { [weak self] drafts in
                 self?.model.handleDroppedAssets(drafts)
+            },
+            stagedAssets: model.stagedNotchAssets,
+            stagedAssetRemoved: { [weak self] stagedID in
+                self?.model.removeStagedAsset(id: stagedID)
+            },
+            conversationAssets: model.notchConversationAssets,
+            assetOpenRequested: { asset in
+                guard let url = URL(string: asset.urlString), url.isFileURL else { return }
+                NSWorkspace.shared.open(url)
+            },
+            conversationOutputs: model.notchConversationOutputs,
+            outputOpenRequested: { path in
+                NSWorkspace.shared.open(URL(fileURLWithPath: path))
             },
             pauseRequested: { [weak self] conversationID in
                 self?.model.pauseAgent(id: conversationID)
@@ -1158,11 +1174,16 @@ final class UserQueryOverlayController {
             return NotchMetrics.loginExpandedContentHeight
         }
 
+        // Staged drops render a chip row above the composer; the surface grows to seat it so the
+        // conversation list and composer keep their height.
+        let stagedAssetsExtraHeight = model.stagedNotchAssets.isEmpty ? 0 : NotchMetrics.stagedAssetsRowExtraHeight
         if hasStatusConversationDisplayText || !model.notchConversations.isEmpty || model.updateState.headerButtonTitle != nil {
-            return NotchMetrics.expandedConversationContentHeight
+            return NotchMetrics.expandedConversationContentHeight + stagedAssetsExtraHeight
         }
 
-        return model.notchCommandInputSurfaceHeight + NotchMetrics.compactCommandContentVerticalPadding
+        return model.notchCommandInputSurfaceHeight
+            + NotchMetrics.compactCommandContentVerticalPadding
+            + stagedAssetsExtraHeight
     }
 
     private var hasStatusConversationDisplayText: Bool {
@@ -1624,6 +1645,9 @@ private struct StatusPanelViewSnapshot: Equatable {
     var replyTargetConversationID: String?
     var selectedConversationID: String?
     var needsLogin: Bool
+    var stagedAssets: [UserQueryStagedAsset]
+    var conversationAssets: [String: [UserQueryConversationAsset]]
+    var conversationOutputs: [String: UserQueryWorkspaceOutputs]
 }
 
 private enum StatusHoverPhase {

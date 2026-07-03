@@ -33,6 +33,18 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     @Published private(set) var notchConversations: [UserQueryConversation]
     @Published private(set) var spawnStates: [UserQuerySpawnState] = []
     @Published private(set) var selectedSpawnID: String?
+    /// Files dropped on the notch, staged as removable preview chips above the composer. They are
+    /// committed to a conversation — and onto its workspace, where the planner reads them — only when
+    /// the next message is submitted; the chip's ✕ takes a drop back before then.
+    @Published private(set) var stagedNotchAssets: [UserQueryStagedAsset] = []
+    /// The files the user attached to each displayed conversation (keyed by conversation id), rendered
+    /// as clickable pills in the conversation's row. Loaded when a conversation enters the rail and
+    /// appended to as staged drops commit.
+    @Published private(set) var notchConversationAssets: [String: [UserQueryConversationAsset]] = [:]
+    /// The files each conversation's runs produced (keyed by conversation id), rendered as output pills
+    /// in the row — one file as its own pill, several as one folder pill. Refreshed when a run finishes
+    /// and once at launch for restored conversations.
+    @Published private(set) var notchConversationOutputs: [String: UserQueryWorkspaceOutputs] = [:]
     /// Logged out: the notch renders a login call-to-action instead of the conversation surface. The app
     /// delegate pushes this from the auth coordinator's session state (true while signed out after a
     /// prior sign-in, i.e. an expired session) and clears it once sign-in completes.
@@ -138,6 +150,13 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         )
         let restoredConversations = restoration.conversations
         notchConversations = restoredConversations
+        var restoredAssets: [String: [UserQueryConversationAsset]] = [:]
+        for conversation in restoredConversations {
+            restoredAssets[conversation.id] = conversationStore
+                .loadAssets(conversationID: conversation.id)
+                .filter { $0.source == .userUploaded }
+        }
+        notchConversationAssets = restoredAssets
         notchAccentIndex = restoredConversations.first.map { UserQueryAccentPalette.normalizedIndex($0.accentIndex) }
             ?? UserQueryAccentPalette.firstIndex
         isCurrentConversationPaused = restoredConversations.first?.status == .paused
@@ -156,6 +175,8 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             self?.updateState = state
         }
         updateChecker.start()
+        // Staged drops never outlive the session that staged them; clear leftovers from a prior run.
+        Self.purgeStagedAssets()
         SQLiteAgentMemoryStore.shared?.prewarmDefaultLocalItemsInBackground()
         appCatalogRefreshLoop.start()
         checkForUpdates()
@@ -166,6 +187,9 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             self?.handleSessionExpired()
         }
         autoResumeInterruptedConversations(restoration.autoResumeIDs)
+        for conversation in restoredConversations {
+            refreshConversationOutputs(conversationID: conversation.id)
+        }
     }
 
     /// Resume conversations that were actively running when the app last quit (see `restoredConversations`). Each runs as
@@ -668,6 +692,10 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
     }
 
     private func runLocalCommand(_ text: String, source: AppHarnessTurnSource = .typedPrompt) {
+        // The submitted message takes the staged drops with it: drained here, committed onto whichever
+        // conversation the turn resolves to, so the chips clear the moment the message leaves.
+        let stagedAssets = stagedNotchAssets
+        stagedNotchAssets = []
         let candidates = followUpCandidates()
         let promptFollowUpTarget = promptSubmissionFollowUpTarget()
         let replyTargetConversationID = consumePendingReplyTarget()
@@ -721,39 +749,80 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
                     text: text,
                     matchedConversationID: matchedConversationID,
                     source: source,
-                    spawnID: spawnID
+                    spawnID: spawnID,
+                    stagedAssets: stagedAssets
                 )
             }
         }
     }
 
+    /// Stage dropped files as chips above the composer. Each file is copied into a staging directory
+    /// immediately — drags out of browsers and mail hand over temporary files that can vanish before the
+    /// user submits — so the chip and the eventual commit always read from a stable copy.
     func handleDroppedAssets(_ drafts: [UserQueryConversationAssetDraft]) {
-        guard !drafts.isEmpty else { return }
-
-        let targetConversation = conversationForDroppedAssets()
-        let assetNames = drafts.map(\.displayName)
-        let eventText = Self.assetUploadEventText(assetNames)
-        let eventID = appendAgentEvent(conversationID: targetConversation.id, role: .user, text: eventText)
         for draft in drafts {
-            let assetID = UUID().uuidString
-            conversationStore.appendAsset(
-                Self.persistedAsset(
-                    from: draft,
-                    assetID: assetID,
-                    conversationID: targetConversation.id,
-                    eventID: eventID
-                )
-            )
+            let stagedID = UUID().uuidString
+            var stagedDraft = draft
+            if let sourceURL = URL(string: draft.urlString),
+               sourceURL.isFileURL,
+               let stagedURL = Self.copyAssetToStaging(
+                sourceURL: sourceURL,
+                stagedID: stagedID,
+                displayName: draft.displayName
+               ) {
+                stagedDraft.urlString = stagedURL.absoluteString
+            }
+            stagedNotchAssets.append(UserQueryStagedAsset(id: stagedID, draft: stagedDraft))
         }
+    }
 
-        var updatedConversation = targetConversation
-        updatedConversation.detail = drafts.count == 1 ? "1 asset attached" : "\(drafts.count) assets attached"
-        updatedConversation.updatedAt = Date()
-        prependConversation(updatedConversation)
-        lastActiveConversationID = updatedConversation.id
-        promptState.promptText = updatedConversation.title
-        promptState.leadingSignalLevel = updatedConversation.status == .running ? .thinking : .ready
-        syncPrimaryConversationPausedFlag()
+    func removeStagedAsset(id: String) {
+        guard let index = stagedNotchAssets.firstIndex(where: { $0.id == id }) else { return }
+
+        Self.deleteStagedAssetFile(urlString: stagedNotchAssets[index].draft.urlString)
+        stagedNotchAssets.remove(at: index)
+    }
+
+    /// Re-read what the conversation's runs have produced and publish it for the row's output pills.
+    /// Fired when a run finishes and once per restored conversation at launch.
+    private func refreshConversationOutputs(conversationID: String) {
+        Task { [weak self, commandHandler] in
+            let outputs = await commandHandler.workspaceOutputs(conversationID: conversationID)
+            await MainActor.run {
+                guard let self else { return }
+                if let outputs {
+                    self.notchConversationOutputs[conversationID] = outputs
+                } else {
+                    self.notchConversationOutputs.removeValue(forKey: conversationID)
+                }
+            }
+        }
+    }
+
+    /// Move staged drops onto the conversation the submitted turn resolved to: each becomes a persisted
+    /// user-uploaded asset (copied into the conversation's asset directory) and its staging copy is
+    /// deleted. Returns the persisted assets so a live loop can register them onto its workspace.
+    @discardableResult
+    private func commitStagedAssets(
+        _ stagedAssets: [UserQueryStagedAsset],
+        conversationID: String,
+        eventID: String?
+    ) -> [UserQueryConversationAsset] {
+        let committedAssets = stagedAssets.map { staged in
+            let asset = Self.persistedAsset(
+                from: staged.draft,
+                assetID: staged.id,
+                conversationID: conversationID,
+                eventID: eventID
+            )
+            conversationStore.appendAsset(asset)
+            Self.deleteStagedAssetFile(urlString: staged.draft.urlString)
+            return asset
+        }
+        if !committedAssets.isEmpty {
+            notchConversationAssets[conversationID, default: []].append(contentsOf: committedAssets)
+        }
+        return committedAssets
     }
 
     func markSpawnDesktopEmerged(id spawnID: String) {
@@ -802,7 +871,8 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         text: String,
         matchedConversationID: String?,
         source: AppHarnessTurnSource = .typedPrompt,
-        spawnID: String? = nil
+        spawnID: String? = nil,
+        stagedAssets: [UserQueryStagedAsset] = []
     ) {
         // A follow-up to a conversation whose loop is still running — or one blocked at a permission gate — is
         // queued into that conversation: the running loop folds it in at its next step, and a gated conversation keeps its
@@ -811,10 +881,22 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         // the fresh/resume path below, which runs concurrently with any other in-flight conversation.
         let matchedStatus = matchedConversationID.flatMap { conversation(withID: $0)?.status }
         if let matchedConversationID, matchedStatus == .running || matchedStatus == .waitingForPermission {
-            queueFollowUpIntoRunningConversation(text: text, conversationID: matchedConversationID, source: source, spawnID: spawnID)
+            queueFollowUpIntoRunningConversation(
+                text: text,
+                conversationID: matchedConversationID,
+                source: source,
+                spawnID: spawnID,
+                stagedAssets: stagedAssets
+            )
             return
         }
-        runFreshOrResumedCommand(text: text, matchedConversationID: matchedConversationID, source: source, spawnID: spawnID)
+        runFreshOrResumedCommand(
+            text: text,
+            matchedConversationID: matchedConversationID,
+            source: source,
+            spawnID: spawnID,
+            stagedAssets: stagedAssets
+        )
     }
 
     /// Queue a follow-up onto a conversation whose loop is still running. The live loop picks it up at its next
@@ -823,9 +905,13 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         text: String,
         conversationID: String,
         source: AppHarnessTurnSource,
-        spawnID: String?
+        spawnID: String?,
+        stagedAssets: [UserQueryStagedAsset] = []
     ) {
-        appendAgentEvent(conversationID: conversationID, role: .user, text: text)
+        let eventID = appendAgentEvent(conversationID: conversationID, role: .user, text: text)
+        // Commit the drops now and hand them to the live loop, which registers them onto the running
+        // conversation's workspace so the planner sees the new inputs at its next step.
+        let committedAssets = commitStagedAssets(stagedAssets, conversationID: conversationID, eventID: eventID)
         updateSpawn(id: spawnID, conversationID: conversationID)
         clearSubmissionInputs()
         lastActiveConversationID = conversationID
@@ -835,10 +921,15 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         promptState.promptText = conversation(withID: conversationID)?.title ?? Self.collapsedDisplayText(for: text)
         syncPrimaryConversationPausedFlag()
         Task { [weak self, commandHandler] in
-            let injected = await commandHandler.injectFollowUp(conversationID: conversationID, text: text)
+            let injected = await commandHandler.injectFollowUp(
+                conversationID: conversationID,
+                text: text,
+                assets: committedAssets
+            )
             guard !injected else { return }
             // Race: the loop finished between the live check and the enqueue. Resume the conversation with the
-            // instruction instead. The user event is already recorded, so it is not appended again.
+            // instruction instead. The user event and assets are already recorded, so neither is added again;
+            // the resumed run picks the assets up from the conversation store.
             await MainActor.run {
                 self?.runFreshOrResumedCommand(
                     text: text,
@@ -856,7 +947,8 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         matchedConversationID: String?,
         source: AppHarnessTurnSource = .typedPrompt,
         spawnID: String? = nil,
-        appendUserEvent: Bool = true
+        appendUserEvent: Bool = true,
+        stagedAssets: [UserQueryStagedAsset] = []
     ) {
         let isFollowUp = matchedConversationID != nil
         let reservedAccentIndex = spawnID.flatMap { spawn(withID: $0)?.accentIndex }
@@ -872,9 +964,13 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         )
         activeAgentIDs.insert(conversation.id)
         lastActiveConversationID = conversation.id
+        var userEventID: String?
         if appendUserEvent {
-            appendAgentEvent(conversationID: conversation.id, role: .user, text: text)
+            userEventID = appendAgentEvent(conversationID: conversation.id, role: .user, text: text)
         }
+        // Committed before the run context is built below, so the turn's asset load already includes
+        // the drops and the harness registers them onto the conversation workspace for the planner.
+        commitStagedAssets(stagedAssets, conversationID: conversation.id, eventID: userEventID)
         clearSubmissionInputs()
         promptState.isActive = false
         promptState.leadingSignalLevel = .thinking
@@ -916,6 +1012,7 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         )
         appendAgentEvent(conversationID: conversationID, role: .assistant, text: result.summary)
         activeAgentIDs.remove(conversationID)
+        refreshConversationOutputs(conversationID: conversationID)
         refreshPromptStateAfterRunResult(conversationID: conversationID, result: result)
         let cursorOverlayRequest = result.cursorOverlayRequest
         if let cursorOverlayRequest {
@@ -1132,6 +1229,8 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
 
         notchConversations.removeAll { $0.id == conversationID }
         activeAgentIDs.remove(conversationID)
+        notchConversationAssets.removeValue(forKey: conversationID)
+        notchConversationOutputs.removeValue(forKey: conversationID)
         // Closing the targeted conversation ends reply mode so the remaining rows don't stay dimmed.
         if replyTargetConversationID == conversationID {
             replyTargetConversationID = nil
@@ -1487,6 +1586,13 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         if notchConversations.count > Self.notchConversationDisplayLimit {
             notchConversations = Array(notchConversations.prefix(Self.notchConversationDisplayLimit))
         }
+        // An older conversation re-entering the rail (a matched follow-up) brings its attached files
+        // back with it; a brand-new conversation just seeds an empty entry.
+        if notchConversationAssets[conversation.id] == nil {
+            notchConversationAssets[conversation.id] = conversationStore
+                .loadAssets(conversationID: conversation.id)
+                .filter { $0.source == .userUploaded }
+        }
         conversationStore.upsertConversation(conversation)
     }
 
@@ -1548,38 +1654,6 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
             detail: text,
             commandText: text,
             status: .running,
-            accentIndex: nextAccentIndex
-        )
-        prependConversation(conversation)
-        return conversation
-    }
-
-    private func conversationForDroppedAssets() -> UserQueryConversation {
-        // A drop only ever attaches to one of the user's own conversations — never to a system-driven row
-        // like tool setup, which has no goal to fold an asset into.
-        if let lastActiveConversationID,
-           activeAgentIDs.contains(lastActiveConversationID),
-           let conversation = conversation(withID: lastActiveConversationID),
-           conversation.isUserControllable {
-            return conversation
-        }
-
-        if let activeConversation = notchConversations.first(where: { $0.isUserControllable && ($0.status == .running || $0.status == .paused) }) {
-            return activeConversation
-        }
-
-        if let recentConversation = notchConversations.first(where: { $0.isUserControllable }) {
-            return recentConversation
-        }
-
-        let nextAccentIndex = nextRoundRobinAccentIndex()
-        notchAccentIndex = nextAccentIndex
-        let conversation = UserQueryConversation(
-            id: UUID().uuidString,
-            title: "Uploaded assets",
-            detail: "Assets attached",
-            commandText: "",
-            status: .needsAttention,
             accentIndex: nextAccentIndex
         )
         prependConversation(conversation)
@@ -1984,15 +2058,6 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         return truncated(collapsed, maxLength: maxSpawnLabelLength)
     }
 
-    private static func assetUploadEventText(_ assetNames: [String]) -> String {
-        let displayNames = assetNames
-            .map { truncated($0, maxLength: 80) }
-            .joined(separator: ", ")
-        guard !displayNames.isEmpty else { return "Uploaded assets" }
-
-        return "Uploaded assets: \(displayNames)"
-    }
-
     private static func persistedAsset(
         from draft: UserQueryConversationAssetDraft,
         assetID: String,
@@ -2049,6 +2114,65 @@ final class UserQueryOverlayModel: ObservableObject, UserQueryIntentSink {
         } catch {
             return nil
         }
+    }
+
+    /// Where drops wait between the drag and the submit. Distinct from any conversation's asset
+    /// directory (those are keyed by conversation UUID) and purged on launch, since staged chips
+    /// don't survive a restart.
+    private static func stagedAssetsDirectory() -> URL? {
+        FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first?
+            .appendingPathComponent("Donkey", isDirectory: true)
+            .appendingPathComponent("UserQueryAssets", isDirectory: true)
+            .appendingPathComponent("Staged", isDirectory: true)
+    }
+
+    private static func copyAssetToStaging(
+        sourceURL: URL,
+        stagedID: String,
+        displayName: String
+    ) -> URL? {
+        guard let stagingDirectory = stagedAssetsDirectory() else { return nil }
+
+        do {
+            try FileManager.default.createDirectory(
+                at: stagingDirectory,
+                withIntermediateDirectories: true
+            )
+            let fileName = "\(stagedID)-\(safeAssetFileName(displayName))"
+            let destinationURL = stagingDirectory.appendingPathComponent(fileName, isDirectory: false)
+            let didStartAccess = sourceURL.startAccessingSecurityScopedResource()
+            defer {
+                if didStartAccess {
+                    sourceURL.stopAccessingSecurityScopedResource()
+                }
+            }
+            try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+            return destinationURL
+        } catch {
+            return nil
+        }
+    }
+
+    /// Deletes a staged file. Guarded to the staging directory: when the copy-to-staging failed, the
+    /// chip still points at the user's original file, which must never be touched.
+    private static func deleteStagedAssetFile(urlString: String) {
+        guard let url = URL(string: urlString),
+              url.isFileURL,
+              let stagingDirectory = stagedAssetsDirectory(),
+              url.standardizedFileURL.path.hasPrefix(stagingDirectory.standardizedFileURL.path + "/") else {
+            return
+        }
+
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    static func purgeStagedAssets() {
+        guard let stagingDirectory = stagedAssetsDirectory() else { return }
+
+        try? FileManager.default.removeItem(at: stagingDirectory)
     }
 
     private static func conversationAssetDirectory(conversationID: String) -> URL? {

@@ -1,5 +1,7 @@
+import AppKit
 import DonkeyContracts
 import Foundation
+import QuickLookThumbnailing
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -12,6 +14,8 @@ public struct UserQueryNotchStatusView: View {
     /// the open state into `@State` and flipping it in `.onChange` moves the animation onto SwiftUI's own
     /// fresh transaction, so the surface always interpolates from the committed collapsed notch.
     @State private var surfaceIsOpen = false
+    /// True while a drag hovers over the surface; drives the "Add anything" drop overlay.
+    @State private var isDropTargeted = false
 
     private let state: UserQueryState
     private let updateState: UserQueryUpdateState
@@ -40,6 +44,20 @@ public struct UserQueryNotchStatusView: View {
     private let commandInputTextHeightChanged: @MainActor (CGFloat) -> Void
     private let commandInputExpansionChanged: @MainActor (Bool) -> Void
     private let assetsDropped: @MainActor ([UserQueryConversationAssetDraft]) -> Void
+    /// Dropped files staged for the next message; each renders as a preview chip above the composer.
+    private let stagedAssets: [UserQueryStagedAsset]
+    /// The chip's ✕ — removes that staged asset before it is ever committed to a conversation.
+    private let stagedAssetRemoved: @MainActor (String) -> Void
+    /// Files the user attached to each conversation, keyed by conversation id; they render as
+    /// clickable pills under the row's subtext.
+    private let conversationAssets: [String: [UserQueryConversationAsset]]
+    /// Tapping an attachment pill — opens the persisted copy of the file.
+    private let assetOpenRequested: @MainActor (UserQueryConversationAsset) -> Void
+    /// What each conversation's runs produced, keyed by conversation id. One output file renders as its
+    /// own pill; several collapse into a single pill that opens their folder.
+    private let conversationOutputs: [String: UserQueryWorkspaceOutputs]
+    /// Tapping an output pill — opens the produced file, or the outputs folder (absolute path).
+    private let outputOpenRequested: @MainActor (String) -> Void
     private let pauseRequested: @MainActor (String) -> Void
     private let resumeRequested: @MainActor (String) -> Void
     private let dismissRequested: @MainActor (String) -> Void
@@ -90,6 +108,12 @@ public struct UserQueryNotchStatusView: View {
         commandInputTextHeightChanged: @escaping @MainActor (CGFloat) -> Void,
         commandInputExpansionChanged: @escaping @MainActor (Bool) -> Void,
         assetsDropped: @escaping @MainActor ([UserQueryConversationAssetDraft]) -> Void,
+        stagedAssets: [UserQueryStagedAsset] = [],
+        stagedAssetRemoved: @escaping @MainActor (String) -> Void = { _ in },
+        conversationAssets: [String: [UserQueryConversationAsset]] = [:],
+        assetOpenRequested: @escaping @MainActor (UserQueryConversationAsset) -> Void = { _ in },
+        conversationOutputs: [String: UserQueryWorkspaceOutputs] = [:],
+        outputOpenRequested: @escaping @MainActor (String) -> Void = { _ in },
         pauseRequested: @escaping @MainActor (String) -> Void,
         resumeRequested: @escaping @MainActor (String) -> Void,
         dismissRequested: @escaping @MainActor (String) -> Void,
@@ -126,6 +150,12 @@ public struct UserQueryNotchStatusView: View {
         self.commandInputTextHeightChanged = commandInputTextHeightChanged
         self.commandInputExpansionChanged = commandInputExpansionChanged
         self.assetsDropped = assetsDropped
+        self.stagedAssets = stagedAssets
+        self.stagedAssetRemoved = stagedAssetRemoved
+        self.conversationAssets = conversationAssets
+        self.assetOpenRequested = assetOpenRequested
+        self.conversationOutputs = conversationOutputs
+        self.outputOpenRequested = outputOpenRequested
         self.pauseRequested = pauseRequested
         self.resumeRequested = resumeRequested
         self.dismissRequested = dismissRequested
@@ -223,14 +253,25 @@ public struct UserQueryNotchStatusView: View {
             if let renderedSpawnCue {
                 spawnCueArrow(renderedSpawnCue)
             }
+
+            // While a drag hovers, a translucent scrim dims the whole surface and invites the drop.
+            // Hover expansion is location-driven (the controller's tick reads the pointer every frame),
+            // so by the time the overlay shows, the surface is already opening. Hit testing stays off:
+            // the overlay narrates the drop, the canvas underneath receives it.
+            if isDropTargeted && !needsLogin {
+                dropTargetOverlay
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
         }
+        .animation(.easeOut(duration: 0.16), value: isDropTargeted)
         // The canvas is laid out once at the full expanded size and pinned to the top, so every layer
         // holds its final position. The growing clip in `body` reveals more of it; nothing reflows.
         .frame(width: expandedSurfaceWidth, height: expandedSurfaceHeight, alignment: .top)
         .contentShape(Rectangle())
         .onDrop(
             of: [UTType.fileURL],
-            isTargeted: nil,
+            isTargeted: $isDropTargeted,
             perform: handleDroppedFileProviders
         )
         .onAppear(perform: updateRenderedSpawnCue)
@@ -642,6 +683,10 @@ public struct UserQueryNotchStatusView: View {
                 }
             }
 
+            if !stagedAssets.isEmpty {
+                stagedAssetChipsRow
+            }
+
             commandRow
         }
         .padding(.horizontal, Self.contentInset)
@@ -649,10 +694,61 @@ public struct UserQueryNotchStatusView: View {
     }
 
     private var expandedCommandOnlyContent: some View {
-        commandRow
-            .padding(.top, expandedCommandOnlyTopPadding)
-            .padding(.horizontal, Self.contentInset)
-            .padding(.bottom, Self.contentInset)
+        VStack(spacing: Self.conversationListCommandSpacing) {
+            if !stagedAssets.isEmpty {
+                stagedAssetChipsRow
+            }
+
+            commandRow
+        }
+        .padding(.top, expandedCommandOnlyTopPadding)
+        .padding(.horizontal, Self.contentInset)
+        .padding(.bottom, Self.contentInset)
+    }
+
+    /// The staged attachments, one preview chip per dropped file, seated directly above the composer
+    /// (the row scrolls sideways when the drops outgrow the surface). The row's height is mirrored into
+    /// the expanded-surface metrics (`UserQueryNotchMetrics.stagedAssetsRowExtraHeight`) so the surface
+    /// grows to seat it instead of squeezing the composer.
+    private var stagedAssetChipsRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(stagedAssets) { asset in
+                    StagedAssetChip(asset: asset) {
+                        stagedAssetRemoved(asset.id)
+                    }
+                }
+            }
+        }
+        .frame(height: UserQueryNotchMetrics.stagedAssetChipSide)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The drag-hover scrim: the surface dims and reads back what a drop will do. Centered over the
+    /// expanded content frame so it seats correctly beside a physical notch's void and on a no-notch
+    /// display alike.
+    private var dropTargetOverlay: some View {
+        ZStack(alignment: .top) {
+            Color.black.opacity(0.6)
+
+            VStack(spacing: 5) {
+                Text("Add anything")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Color.white)
+                Text("Drop any file here to add it to the conversation")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.white.opacity(0.7))
+            }
+            .frame(
+                width: layout.expandedContentFrame.width,
+                height: layout.expandedContentFrame.height
+            )
+            .offset(
+                x: layout.expandedContentFrame.minX,
+                y: layout.expandedContentFrame.minY
+            )
+        }
+        .accessibilityHidden(true)
     }
 
     /// The leading arrow over the expanded composer-only surface. It renders only while the notch holds no
@@ -953,6 +1049,65 @@ public struct UserQueryNotchStatusView: View {
     /// Trailing room the subtext leaves for the bottom-pinned elapsed time at its widest (e.g. "59m 59s").
     private static let conversationTimeColumnReserve: CGFloat = 52
 
+    private func hasFilePills(for conversation: UserQueryConversation) -> Bool {
+        conversationAssets[conversation.id]?.isEmpty == false || conversationOutputs[conversation.id] != nil
+    }
+
+    /// The row's file pills — one per file the user attached, then the run's outputs — wrapping onto
+    /// additional lines when they outgrow the row's width (the row grows; nothing clips). Sits under
+    /// the subtext with the same trailing reserve, so pills never run beneath the pinned controls or
+    /// elapsed time.
+    private func conversationFilesRow(for conversation: UserQueryConversation) -> some View {
+        PillFlowLayout(spacing: 6) {
+            ForEach(conversationAssets[conversation.id] ?? []) { asset in
+                RowFilePill(urlString: asset.urlString, label: asset.displayName) {
+                    assetOpenRequested(asset)
+                }
+            }
+
+            if let outputs = conversationOutputs[conversation.id] {
+                outputPills(outputs)
+            }
+        }
+        .padding(.top, 2)
+        .padding(.trailing, max(controlsReserve(for: conversation), Self.conversationTimeColumnReserve))
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The produced-files pill(s): a lone output renders as its own pill; several collapse into one
+    /// pill that opens the outputs folder (labeled with the count, or the folder's name once every
+    /// recorded file has been moved or renamed away from its recorded path).
+    @ViewBuilder
+    private func outputPills(_ outputs: UserQueryWorkspaceOutputs) -> some View {
+        if outputs.files.count == 1, let file = outputs.files.first {
+            RowFilePill(
+                urlString: URL(fileURLWithPath: file.path).absoluteString,
+                label: file.displayName
+            ) {
+                outputOpenRequested(file.path)
+            }
+        } else if let folderPath = outputs.folderPath {
+            RowFilePill(
+                urlString: URL(fileURLWithPath: folderPath).absoluteString,
+                label: outputs.files.count > 1
+                    ? "\(outputs.files.count) files"
+                    : URL(fileURLWithPath: folderPath).lastPathComponent
+            ) {
+                outputOpenRequested(folderPath)
+            }
+        } else {
+            // Several loose files with no recorded folder — each opens individually.
+            ForEach(outputs.files, id: \.path) { file in
+                RowFilePill(
+                    urlString: URL(fileURLWithPath: file.path).absoluteString,
+                    label: file.displayName
+                ) {
+                    outputOpenRequested(file.path)
+                }
+            }
+        }
+    }
+
     /// Full opacity normally; while a reply is targeted, every row except the targeted one dims back so
     /// the user sees which thread their next message answers.
     private func rowReplyDimOpacity(for conversation: UserQueryConversation) -> Double {
@@ -1017,6 +1172,13 @@ public struct UserQueryNotchStatusView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             // Subtext runs to just left of the controls, or the bottom-pinned elapsed time.
                             .padding(.trailing, max(controlsReserve(for: conversation), Self.conversationTimeColumnReserve))
+                    }
+
+                    // The thread's files, as clickable pills: what the user attached, then what the run
+                    // produced. The row grows to seat them, and a pill's tap opens the file (or outputs
+                    // folder) before the row's own select tap sees the click.
+                    if hasFilePills(for: conversation) {
+                        conversationFilesRow(for: conversation)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1939,6 +2101,227 @@ private struct DonkeyAttentionGlyph: View {
             path.move(to: point(12, 16))
             path.addLine(to: point(12.01, 16))
         }
+    }
+}
+
+/// Preview image for an on-disk asset: a QuickLook thumbnail when the type has a visual
+/// representation, otherwise the file's Finder icon (flagged so callers can restyle around it).
+private enum AssetThumbnailLoader {
+    struct Thumbnail {
+        let image: NSImage
+        let isFileIcon: Bool
+    }
+
+    static func load(urlString: String, side: CGFloat) async -> Thumbnail? {
+        guard let url = URL(string: urlString), url.isFileURL else { return nil }
+
+        let request = QLThumbnailGenerator.Request(
+            fileAt: url,
+            size: CGSize(width: side, height: side),
+            scale: 2,
+            representationTypes: .thumbnail
+        )
+        if let representation = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request) {
+            return Thumbnail(image: representation.nsImage, isFileIcon: false)
+        }
+
+        return Thumbnail(image: NSWorkspace.shared.icon(forFile: url.path), isFileIcon: true)
+    }
+}
+
+/// Left-to-right pill flow that wraps to a new line when the next pill would overflow the proposed
+/// width, so a row's attachments stack into as many lines as they need instead of clipping.
+private struct PillFlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrangement(proposal: proposal, subviews: subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let positions = arrangement(proposal: proposal, subviews: subviews).positions
+        for (subview, position) in zip(subviews, positions) {
+            subview.place(
+                at: CGPoint(x: bounds.minX + position.x, y: bounds.minY + position.y),
+                proposal: .unspecified
+            )
+        }
+    }
+
+    private func arrangement(
+        proposal: ProposedViewSize,
+        subviews: Subviews
+    ) -> (positions: [CGPoint], size: CGSize) {
+        let maxWidth = proposal.width ?? .infinity
+        var positions: [CGPoint] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var lineHeight: CGFloat = 0
+        var totalWidth: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                x = 0
+                y += lineHeight + spacing
+                lineHeight = 0
+            }
+            positions.append(CGPoint(x: x, y: y))
+            lineHeight = max(lineHeight, size.height)
+            totalWidth = max(totalWidth, x + size.width)
+            x += size.width + spacing
+        }
+        return (positions, CGSize(width: totalWidth, height: y + lineHeight))
+    }
+}
+
+/// A file (or folder) inside a conversation row: a small thumbnail-and-name pill. Tapping it opens the
+/// target; the pill's click takes precedence over the row's own select tap. Hover brightens the fill
+/// and label, and the press dims-and-shrinks it, so the pill visibly reads as clickable.
+private struct RowFilePill: View {
+    let urlString: String
+    let label: String
+    let open: @MainActor () -> Void
+
+    @State private var thumbnail: NSImage?
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 6) {
+                Group {
+                    if let thumbnail {
+                        Image(nsImage: thumbnail)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } else {
+                        Image(systemName: "doc")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.white.opacity(0.6))
+                    }
+                }
+                .frame(width: 20, height: 20)
+                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+
+                Text(label)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.white.opacity(isHovering ? 0.92 : 0.75))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 180, alignment: .leading)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .padding(.leading, 4)
+            .padding(.trailing, 8)
+            .padding(.vertical, 4)
+        }
+        .buttonStyle(RowFilePillButtonStyle(isHovering: isHovering))
+        .onHover { hovering in
+            isHovering = hovering
+        }
+        .animation(.easeOut(duration: 0.12), value: isHovering)
+        .task(id: urlString) {
+            thumbnail = await AssetThumbnailLoader.load(urlString: urlString, side: 20)?.image
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Open \(label)")
+    }
+}
+
+/// The pill's fill and press feedback: idle 0.08 white, brightening on hover, brighter still and
+/// slightly shrunken while pressed — the same enabled/hover tinting scale the notch controls use.
+private struct RowFilePillButtonStyle: ButtonStyle {
+    let isHovering: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(Color.white.opacity(configuration.isPressed ? 0.22 : (isHovering ? 0.14 : 0.08)))
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
+    }
+}
+
+/// One staged attachment: a square preview (QuickLook thumbnail, falling back to the file's icon over
+/// the file name) with a ✕ in the top-right corner that removes the asset before it is committed.
+private struct StagedAssetChip: View {
+    let asset: UserQueryStagedAsset
+    let remove: @MainActor () -> Void
+
+    @State private var thumbnail: NSImage?
+    @State private var thumbnailIsFileIcon = false
+
+    private static let side = UserQueryNotchMetrics.stagedAssetChipSide
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            preview
+                .frame(width: Self.side, height: Self.side)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
+                )
+
+            removeButton
+                .padding(5)
+        }
+        .frame(width: Self.side, height: Self.side)
+        .task(id: asset.draft.urlString) { await loadThumbnail() }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Attached file \(asset.draft.displayName)")
+    }
+
+    @ViewBuilder
+    private var preview: some View {
+        if let thumbnail, !thumbnailIsFileIcon {
+            Image(nsImage: thumbnail)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } else {
+            VStack(spacing: 6) {
+                if let thumbnail {
+                    Image(nsImage: thumbnail)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 30, height: 30)
+                }
+                Text(asset.draft.displayName)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.white.opacity(0.7))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 6)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.white.opacity(0.085))
+        }
+    }
+
+    private var removeButton: some View {
+        Button(action: remove) {
+            ZStack {
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 18, height: 18)
+                    .shadow(color: Color.black.opacity(0.35), radius: 2, y: 1)
+
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(Color.black.opacity(0.8))
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Remove attached file \(asset.draft.displayName)")
+    }
+
+    private func loadThumbnail() async {
+        guard let loaded = await AssetThumbnailLoader.load(urlString: asset.draft.urlString, side: Self.side) else {
+            return
+        }
+
+        thumbnail = loaded.image
+        thumbnailIsFileIcon = loaded.isFileIcon
     }
 }
 

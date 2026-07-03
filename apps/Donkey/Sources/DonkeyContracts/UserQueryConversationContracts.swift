@@ -263,6 +263,46 @@ public struct UserQueryConversationAsset: Codable, Equatable, Identifiable, Send
     }
 }
 
+/// What a conversation's agent produced on disk: the output files still present, and the folder
+/// they live in. Rendered in the conversation's notch row — one file as its own pill, several as
+/// a single folder pill — so the user can open what the run made.
+public struct UserQueryWorkspaceOutputs: Equatable, Sendable {
+    public struct File: Equatable, Sendable {
+        public var path: String
+
+        public init(path: String) {
+            self.path = path
+        }
+
+        public var displayName: String {
+            URL(fileURLWithPath: path).lastPathComponent
+        }
+    }
+
+    /// The folder holding the outputs (the promoted project folder, else the conversation's working
+    /// directory) — what a multi-file pill opens.
+    public var folderPath: String?
+    public var files: [File]
+
+    public init(folderPath: String? = nil, files: [File] = []) {
+        self.folderPath = folderPath
+        self.files = files
+    }
+}
+
+/// A dropped file staged in the notch composer: it renders as a removable preview chip and is
+/// committed to a conversation only when the user submits the next message, so a drop can still
+/// be taken back with the chip's ✕.
+public struct UserQueryStagedAsset: Equatable, Identifiable, Sendable {
+    public var id: String
+    public var draft: UserQueryConversationAssetDraft
+
+    public init(id: String, draft: UserQueryConversationAssetDraft) {
+        self.id = id
+        self.draft = draft
+    }
+}
+
 public struct UserQueryConversationAssetDraft: Codable, Equatable, Sendable {
     public var source: UserQueryConversationAssetSource
     public var displayName: String

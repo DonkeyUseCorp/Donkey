@@ -138,15 +138,25 @@ protocol UserQueryCommandHandling: Sendable {
         context: UserQueryCommandContext?
     ) async -> UserQueryCommandHandlingResult?
     /// Queue a follow-up instruction onto a task whose loop is still running so it folds it in at its
-    /// next step. Returns true when the task is live (a loop will pick it up); false means the caller
-    /// should fall back to resuming the task with the instruction as a fresh turn.
-    func injectFollowUp(conversationID: String, text: String) async -> Bool
+    /// next step. Files the user attached with the follow-up are registered onto the conversation's
+    /// workspace so the running planner sees them. Returns true when the task is live (a loop will pick
+    /// it up); false means the caller should fall back to resuming the task with the instruction as a
+    /// fresh turn.
+    func injectFollowUp(
+        conversationID: String,
+        text: String,
+        assets: [UserQueryConversationAsset]
+    ) async -> Bool
     /// Re-run a previously-interrupted task in the BACKGROUND (no focus steal), for unattended
     /// auto-resume on relaunch. Returns nil when the task is unknown or has no goal to resume.
     func autoResumeCommand(
         conversationID: String,
         context: UserQueryCommandContext?
     ) async -> UserQueryCommandHandlingResult?
+    /// The files the conversation's runs have produced (its workspace deliverables) that still exist on
+    /// disk, plus the folder they live in — for the conversation row's output pills. Nil when the
+    /// conversation has no workspace record.
+    func workspaceOutputs(conversationID: String) async -> UserQueryWorkspaceOutputs?
     /// Set by the overlay so a mid-run hosted 401 (an expired session) surfaces re-login. The inference
     /// client fires it off the main actor, so the hook hops back to the main actor itself.
     var onAuthenticationRequired: (@MainActor @Sendable () -> Void)? { get set }
@@ -164,8 +174,16 @@ extension UserQueryCommandHandling {
         nil
     }
 
-    func injectFollowUp(conversationID: String, text: String) async -> Bool {
+    func injectFollowUp(
+        conversationID: String,
+        text: String,
+        assets: [UserQueryConversationAsset]
+    ) async -> Bool {
         false
+    }
+
+    func workspaceOutputs(conversationID: String) async -> UserQueryWorkspaceOutputs? {
+        nil
     }
 
     func autoResumeCommand(
@@ -321,25 +339,112 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         await genericHarnessLifecycle.coordinator.rootAgents(conversationID: conversationID).first?.id ?? conversationID
     }
 
-    func injectFollowUp(conversationID: String, text: String) async -> Bool {
+    func injectFollowUp(
+        conversationID: String,
+        text: String,
+        assets: [UserQueryConversationAsset]
+    ) async -> Bool {
         let agentID = await managingAgentID(forConversation: conversationID)
         guard let task = await genericHarnessLifecycle.agentState(agentID: agentID) else { return false }
         switch task.status {
         case .running, .resuming:
             // A live loop drains the queue. The returned flag is authoritative — false means the loop
-            // ended in the meantime, so the caller resumes the task instead (which drains it on start).
-            return await genericHarnessLifecycle.coordinator.enqueueUserMessage(agentID: agentID, text: text)
+            // ended in the meantime, so the caller resumes the task instead (which drains it on start;
+            // the assets are already persisted on the conversation, so that run loads them itself).
+            await registerFollowUpAttachments(assets, conversationID: conversationID, agentID: agentID)
+            return await genericHarnessLifecycle.coordinator.enqueueUserMessage(
+                agentID: agentID,
+                text: Self.followUpText(text, assets: assets)
+            )
         case .waitingForPermission:
             // Blocked on the user at a permission gate. Queue the follow-up WITHOUT resuming, so the gate
             // is preserved; it drains when the user approves and the loop resumes. Report accepted so the
             // caller does not start a competing run that would clear the pending gate.
-            _ = await genericHarnessLifecycle.coordinator.enqueueUserMessage(agentID: agentID, text: text)
+            await registerFollowUpAttachments(assets, conversationID: conversationID, agentID: agentID)
+            _ = await genericHarnessLifecycle.coordinator.enqueueUserMessage(
+                agentID: agentID,
+                text: Self.followUpText(text, assets: assets)
+            )
             return true
         default:
             // No live or gated loop (paused, timedOut, completed, failedSafe, interrupted, cancelled, or a
             // clarification awaiting an answer): the caller resumes/answers, and that run drains the queue.
             return false
         }
+    }
+
+    func workspaceOutputs(conversationID: String) async -> UserQueryWorkspaceOutputs? {
+        guard let workspace = await genericHarnessLifecycle.coordinator.conversationWorkspace(
+            conversationID: conversationID
+        ) else {
+            return nil
+        }
+
+        // A run that produced nothing renders nothing (its empty working folder is removed at run end).
+        guard !workspace.deliverables.isEmpty else { return nil }
+
+        // Deliverable paths are recorded at first creation; the planner may later promote them into a
+        // project folder (mv), leaving the recorded loose path stale. Only paths still on disk render
+        // as pills — a moved file's home is still reachable through the folder pill.
+        var existingFiles = workspace.deliverables
+            .map(\.path)
+            .filter { FileManager.default.fileExists(atPath: $0) }
+        var isFolder = ObjCBool(false)
+        let folderPath = [workspace.folderPath, workspace.root, workspace.anchorBase]
+            .compactMap { $0 }
+            .first { FileManager.default.fileExists(atPath: $0, isDirectory: &isFolder) && isFolder.boolValue }
+        // Every recorded path went stale (promoted into the folder under a new path). When the folder
+        // holds exactly one visible file, that file IS the run's output — link it directly rather than
+        // pointing at its folder.
+        if existingFiles.isEmpty, let folderPath {
+            let visibleEntries = ((try? FileManager.default.contentsOfDirectory(atPath: folderPath)) ?? [])
+                .filter { !$0.hasPrefix(".") }
+            if visibleEntries.count == 1 {
+                let soleEntryPath = folderPath + "/" + visibleEntries[0]
+                var entryIsFolder = ObjCBool(false)
+                if FileManager.default.fileExists(atPath: soleEntryPath, isDirectory: &entryIsFolder),
+                   !entryIsFolder.boolValue {
+                    existingFiles = [soleEntryPath]
+                }
+            }
+        }
+        guard !existingFiles.isEmpty || folderPath != nil else { return nil }
+
+        return UserQueryWorkspaceOutputs(
+            folderPath: folderPath,
+            files: existingFiles.map { UserQueryWorkspaceOutputs.File(path: $0) }
+        )
+    }
+
+    /// Register files attached to a mid-run follow-up onto the conversation workspace — the same path a
+    /// fresh turn takes at its start — and reproject the workspace fact so the running planner sees the
+    /// new inputs at its next step rather than after the run.
+    private func registerFollowUpAttachments(
+        _ assets: [UserQueryConversationAsset],
+        conversationID: String,
+        agentID: String
+    ) async {
+        let records = assets
+            .filter { $0.source == .userUploaded }
+            .compactMap { asset -> (path: String, displayName: String, contentType: String, byteCount: Int?)? in
+                guard let path = Self.localPath(forAssetURLString: asset.urlString) else { return nil }
+                return (path, asset.displayName, asset.contentType, asset.byteCount.map(Int.init))
+            }
+        guard !records.isEmpty else { return }
+
+        await genericHarnessLifecycle.coordinator.recordWorkspaceAttachments(
+            conversationID: conversationID, attachments: records, at: Date()
+        )
+        await genericHarnessLifecycle.coordinator.refreshWorkspaceFact(agentID: agentID)
+    }
+
+    /// The queued follow-up names its attachments (name only, never contents) so the planner reads the
+    /// instruction against them; their paths arrive through the workspace fact.
+    private static func followUpText(_ text: String, assets: [UserQueryConversationAsset]) -> String {
+        let names = assets.filter { $0.source == .userUploaded }.map(\.displayName)
+        guard !names.isEmpty else { return text }
+
+        return text + "\n\nAttached files: " + names.joined(separator: ", ")
     }
 
     func autoResumeCommand(
