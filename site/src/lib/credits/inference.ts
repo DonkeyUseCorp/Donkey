@@ -999,7 +999,7 @@ async function resolveCreditRate(
     return rateSnapshot(globalRate, providerDefaultRate);
   }
 
-  // Flat-priced routes (vision, refresh) don't need per-model pricing.
+  // Flat-priced routes (vision) don't need per-model pricing.
   if (routeHasFlatPrice(route)) {
     return providerDefaultRate;
   }
@@ -1043,13 +1043,10 @@ function rateSnapshot(
 // InferenceCreditRate row still overrides it.
 export const visionCallDefaultMicros = creditStringToMicros("0.004");
 
-// Routes priced per call regardless of model (no per-model pricing required): refresh is free
-// and a vision parse is a flat per-call charge. Every other route bills against a model price.
+// Routes priced per call regardless of model (no per-model pricing required): a vision parse is
+// a flat per-call charge. Every other route bills against a model price.
 function routeHasFlatPrice(route: string): boolean {
-  return (
-    route === inferenceUsageRoutes.assetsRefresh ||
-    route === inferenceUsageRoutes.vision
-  );
+  return route === inferenceUsageRoutes.vision;
 }
 
 function defaultCreditRate(

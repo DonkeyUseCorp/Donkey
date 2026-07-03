@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
 
 import {
-  creditUsageHeaders,
   inferenceUsageRoutes,
   recordFailedInferenceUsage,
-  recordInferenceUsage,
   requireInferenceCredits,
 } from "@/lib/credits/inference";
 import { refreshedAssetGenerationResponse } from "@/lib/inference/assets";
@@ -45,29 +43,14 @@ export const POST = withDonkeyAuth(async (request) => {
   try {
     const registry = createProviderRegistry();
     const result = await registry.refresh(parsed.data);
-    const recordedUsage = await recordInferenceUsage({
-      clientId: client.clientId,
-      conversationId: request.donkey.conversationId,
-      metadata: {
-        assetKind: parsed.data.kind,
-      },
-      model: result.model,
-      provider: result.provider,
-      requestKind: "asset_refresh",
-      route: inferenceUsageRoutes.assetsRefresh,
-      status: "succeeded",
-      usage: result.usage,
-      userId: request.donkey.userId,
-    });
 
+    // A successful poll is free and already covered by the submit-time charge, so it writes no
+    // usage event — only failed refreshes are recorded, as the diagnostic trail.
     return NextResponse.json(
       refreshedAssetGenerationResponse({
         generation: parsed.data,
         result,
       }),
-      {
-        headers: creditUsageHeaders(recordedUsage),
-      },
     );
   } catch (error) {
     await recordFailedInferenceUsage({
