@@ -571,3 +571,95 @@ struct CommandBackendDestinationTests {
         #expect(url.path == "/Users/x/Downloads/summary.pdf")
     }
 }
+
+/// A run that ends without ever putting a file in its working directory removes that folder, so an
+/// answered-in-words task leaves no empty folder in the user's Downloads. A folder with real content, or
+/// a run merely paused at a gate, keeps its folder.
+@Suite
+struct WorkspaceRootCleanupTests {
+    private func makeRoot() throws -> String {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("donkey-root-cleanup-\(UUID().uuidString)", isDirectory: true).path
+        try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    private func seed(
+        store: InMemoryHarnessConversationStore,
+        conversationID: String,
+        root: String
+    ) async {
+        var convo = HarnessConversation(id: conversationID, title: "")
+        let workspace = ConversationWorkspace(root: root, anchorBase: root)
+        convo.metadata[ConversationWorkspace.metadataKey] = workspace.encodedJSON()
+        await store.upsertConversation(convo)
+    }
+
+    @Test
+    func emptyRootIsRemovedWhenTheRunCompletesWithoutFiles() async throws {
+        let root = try makeRoot()
+        let store = InMemoryHarnessConversationStore()
+        let coordinator = HarnessAgentCoordinator(conversationStore: store)
+        _ = await coordinator.createAgent(id: "t1", conversationID: "conv1", goal: "answer a question")
+        await seed(store: store, conversationID: "conv1", root: root)
+        _ = await coordinator.complete(agentID: "t1")
+
+        await coordinator.removeWorkspaceRootIfEmpty(agentID: "t1")
+
+        #expect(!FileManager.default.fileExists(atPath: root))
+        let after = await coordinator.conversationWorkspace(conversationID: "conv1")
+        #expect(after?.root == nil)
+        #expect(after?.anchorBase == nil)
+    }
+
+    @Test
+    func rootWithAFileSurvivesRunEnd() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        FileManager.default.createFile(atPath: root + "/links.md", contents: Data("# Links\n".utf8))
+        let store = InMemoryHarnessConversationStore()
+        let coordinator = HarnessAgentCoordinator(conversationStore: store)
+        _ = await coordinator.createAgent(id: "t2", conversationID: "conv2", goal: "collect links")
+        await seed(store: store, conversationID: "conv2", root: root)
+        _ = await coordinator.complete(agentID: "t2")
+
+        await coordinator.removeWorkspaceRootIfEmpty(agentID: "t2")
+
+        #expect(FileManager.default.fileExists(atPath: root + "/links.md"))
+        let after = await coordinator.conversationWorkspace(conversationID: "conv2")
+        #expect(after?.root == root)
+    }
+
+    @Test
+    func gateStopKeepsTheEmptyRootForTheResumedRun() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let store = InMemoryHarnessConversationStore()
+        let coordinator = HarnessAgentCoordinator(conversationStore: store)
+        _ = await coordinator.createAgent(id: "t3", conversationID: "conv3", goal: "fill the form")
+        await seed(store: store, conversationID: "conv3", root: root)
+        _ = await coordinator.waitForUser(agentID: "t3", question: "Which account?")
+
+        await coordinator.removeWorkspaceRootIfEmpty(agentID: "t3")
+
+        #expect(FileManager.default.fileExists(atPath: root))
+        let after = await coordinator.conversationWorkspace(conversationID: "conv3")
+        #expect(after?.root == root)
+    }
+
+    @Test
+    func alreadyDeletedRootStillClearsTheRecordOnCompletion() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("donkey-root-cleanup-gone-\(UUID().uuidString)", isDirectory: true).path
+        let store = InMemoryHarnessConversationStore()
+        let coordinator = HarnessAgentCoordinator(conversationStore: store)
+        _ = await coordinator.createAgent(id: "t4", conversationID: "conv4", goal: "answer")
+        await seed(store: store, conversationID: "conv4", root: root)
+        _ = await coordinator.complete(agentID: "t4")
+
+        await coordinator.removeWorkspaceRootIfEmpty(agentID: "t4")
+
+        let after = await coordinator.conversationWorkspace(conversationID: "conv4")
+        #expect(after?.root == nil)
+    }
+}

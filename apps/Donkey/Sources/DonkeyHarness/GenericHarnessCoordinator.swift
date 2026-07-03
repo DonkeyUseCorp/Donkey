@@ -735,6 +735,62 @@ public actor HarnessAgentCoordinator {
         await store.upsertConversation(convo)
     }
 
+    /// Remove the conversation's working directory when a run ends having never put a file in it, so a
+    /// task that answered in words (or failed before producing anything) leaves no empty folder in the
+    /// user's Downloads. The inverse of `ensureWorkspaceRoot`, and the reason eager seeding is safe: the
+    /// folder exists while the run might need it and is gone the moment the run ends without using it.
+    /// Runs only on a terminal status — a gate (clarify, permission) keeps the folder for the resumed run.
+    /// Deletion requires the directory to be genuinely empty (Finder's `.DS_Store` aside); a read failure
+    /// keeps the folder. Clears the workspace record and the projected facts so a later turn in the same
+    /// conversation re-seeds a fresh working directory instead of resolving into the deleted one.
+    public func removeWorkspaceRootIfEmpty(agentID: String) async {
+        guard let store = conversationStore else { return }
+        let existing: HarnessAgentState?
+        if let cached = tasksByID[agentID] {
+            existing = cached
+        } else {
+            existing = await store.agentSnapshot(id: agentID)
+        }
+        guard var task = existing else { return }
+        switch task.status {
+        case .completed, .failedSafe, .cancelled, .timedOut:
+            break
+        default:
+            return
+        }
+        guard var convo = await store.conversation(id: task.conversationID),
+              var workspace = ConversationWorkspace.decode(convo.metadata[ConversationWorkspace.metadataKey]),
+              let root = workspace.root, !root.isEmpty else { return }
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: root, isDirectory: &isDirectory) {
+            guard isDirectory.boolValue,
+                  let contents = try? FileManager.default.contentsOfDirectory(atPath: root),
+                  contents.allSatisfy({ $0 == ".DS_Store" }) else { return }
+            do {
+                try FileManager.default.removeItem(atPath: root)
+            } catch {
+                return
+            }
+        }
+        workspace.root = nil
+        let insideRoot: (String?) -> Bool = { $0 == root || ($0?.hasPrefix(root + "/") ?? false) }
+        if insideRoot(workspace.anchorBase) { workspace.anchorBase = nil }
+        if insideRoot(workspace.folderPath) { workspace.folderPath = nil }
+        convo.metadata[ConversationWorkspace.metadataKey] = workspace.encodedJSON()
+        convo.updatedAt = Date()
+        await store.upsertConversation(convo)
+        // Clear the projected facts and the attempt mark so `ensureWorkspaceRoot`'s fast path doesn't
+        // resolve a follow-up turn into the deleted directory.
+        workspaceRootAttempted.remove(agentID)
+        task.worldModel.facts[ConversationWorkspace.summaryFactKey] = nil
+        task.worldModel.facts[ConversationWorkspace.baseDirFactKey] = nil
+        task.worldModel.facts[ConversationWorkspace.rootDirFactKey] = nil
+        task.worldModel.facts[ConversationWorkspace.fileContentsFactKey] = nil
+        task.updatedAt = Date()
+        tasksByID[agentID] = task
+        await store.upsertAgentSnapshot(task)
+    }
+
     /// Project the conversation workspace into the agent's world model facts so the planner sees, every
     /// step, what it has produced and where (and executors get the machine-readable resolve directory).
     /// Quiet: persists the snapshot without a lifecycle event, since this is per-step bookkeeping, not a

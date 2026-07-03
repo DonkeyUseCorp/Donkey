@@ -286,6 +286,10 @@ public struct GenericHarnessRuntime: Sendable {
             }
             lastCallSignature = signature
         }
+        // A run that ended without ever putting a file in its working directory leaves no folder behind —
+        // an answered-in-words task must not litter Downloads with an empty folder. Terminal-status-gated
+        // inside, so a gate stop (clarify, permission) keeps the folder for the resumed run.
+        await coordinator.removeWorkspaceRootIfEmpty(agentID: agentID)
         return results
     }
 

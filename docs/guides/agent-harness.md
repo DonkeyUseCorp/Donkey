@@ -212,7 +212,9 @@ The files a task produces are kept together in one named folder per conversation
 — created under the user's Downloads by default, and configurable to Desktop,
 Documents, or another path. The agent owns that folder, and a write aimed loosely
 at the top of Downloads, Desktop, Documents, or the home root is pulled back into
-it, so a task's output lands in one place instead of scattering loose.
+it, so a task's output lands in one place instead of scattering loose. A run that
+ends without putting any file in the folder removes it, so a task answered in
+words leaves nothing behind.
 
 ## Shell First, GUI Second
 
