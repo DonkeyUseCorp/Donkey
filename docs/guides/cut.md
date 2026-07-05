@@ -52,4 +52,4 @@ Because storage is local disk and AI rides the serving machine's CLI logins, Cut
 
 ## Where it lives
 
-The editor and its server code sit under the site app's Cut folder; its pages and API handlers mount under the shared route tree, and host-based routing lives in the site's middleware.
+The editor and its server code sit under the site app's Cut folder; its pages and API handlers mount under the shared route tree, and host-based routing lives in the site's proxy file (`src/proxy.ts`, the Next 16 successor to middleware).
