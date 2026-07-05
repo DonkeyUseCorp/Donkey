@@ -1,14 +1,18 @@
-import { spawn } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { createUIMessageStream, createUIMessageStreamResponse, type UIMessage } from "ai";
 
-export const runtime = "nodejs";
-
-import { callBrowserTool, registerSession, unregisterSession, type UIChunkWriter } from "@/cut/server/ai/bridge";
-import { systemPrompt } from "@/cut/server/ai/catalog";
-import { hostedApiBlock } from "@/cut/server/local-only";
+import {
+  callBrowserTool,
+  registerSession,
+  resolveBrowserTool,
+  unregisterSession,
+  type UIChunkWriter,
+} from "../ai/bridge";
+import { AI_SKILL_INDEX, AI_SKILLS, AI_TOOLS, systemPrompt } from "../ai/catalog";
+import { AI_MODELS } from "../ai/models";
 
 interface ChatBody {
   messages: UIMessage[];
@@ -22,6 +26,14 @@ interface ChatBody {
 // imported/bundled), so it is resolved from the dev cwd (site/) to its source.
 const proxyPath = () =>
   path.join(process.cwd(), "src", "cut", "server", "ai", "mcp-proxy.mjs");
+
+/** How to spawn the MCP proxy. The engine binary spawns itself with its
+ * mcp-proxy subcommand; the dev server spawns node on the proxy source. */
+function mcpCommand(base: string, sessionKey: string): { command: string; args: string[] } {
+  return process.env.DONKEY_CUT_ENGINE
+    ? { command: process.execPath, args: ["mcp-proxy", base, sessionKey] }
+    : { command: process.execPath, args: [proxyPath(), base, sessionKey] };
+}
 
 function lastUserText(messages: UIMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -46,47 +58,6 @@ function lastUserAttachments(messages: UIMessage[]): unknown[] {
   return [];
 }
 
-export async function POST(req: Request) {
-  const blocked = hostedApiBlock();
-  if (blocked) return blocked;
-  const body = (await req.json()) as ChatBody;
-  const base = new URL(req.url).origin;
-  const sessionKey = crypto.randomUUID();
-  const userText = lastUserText(body.messages);
-  const attachments = lastUserAttachments(body.messages);
-  const attachBlock = attachments.length
-    ? `\n\n<attached_assets>\nThe user attached these project media assets to this message (ids are usable with the editor tools):\n${JSON.stringify(attachments)}\n</attached_assets>`
-    : "";
-  const prompt = `${userText}${attachBlock}\n\n<editor_state>\n${JSON.stringify(body.context ?? {})}\n</editor_state>`;
-
-  const stream = createUIMessageStream({
-    execute: async ({ writer }) => {
-      const emit: UIChunkWriter["write"] = (chunk) =>
-        writer.write(chunk as Parameters<typeof writer.write>[0]);
-      registerSession(sessionKey, { write: emit });
-      emit({ type: "start" });
-      // The browser posts tool outputs back to /api/ai/tool-result with this key.
-      emit({ type: "data-session", data: { sessionKey }, transient: true });
-      try {
-        if (body.model.startsWith("claude")) {
-          await runClaude(emit, prompt, body, base, sessionKey, req.signal);
-        } else if (body.model === "cut-test") {
-          await runFake(emit, sessionKey, userText);
-        } else {
-          await runCodex(emit, prompt, body, base, sessionKey, req.signal);
-        }
-      } catch (err) {
-        emit({ type: "error", errorText: err instanceof Error ? err.message : String(err) });
-      } finally {
-        unregisterSession(sessionKey);
-        emit({ type: "finish" });
-      }
-    },
-  });
-
-  return createUIMessageStreamResponse({ stream });
-}
-
 /** Claude models through the Agent SDK — the user's Claude Code login. */
 async function runClaude(
   emit: UIChunkWriter["write"],
@@ -101,13 +72,17 @@ async function runClaude(
     options: {
       model: body.model,
       ...(body.providerSession ? { resume: body.providerSession } : {}),
+      // Inside the compiled engine the SDK can't resolve its built-in CLI;
+      // the engine resolves the user's own Claude Code install at startup.
+      ...(process.env.DONKEY_CUT_CLAUDE
+        ? { pathToClaudeCodeExecutable: process.env.DONKEY_CUT_CLAUDE }
+        : {}),
       systemPrompt: systemPrompt(),
       tools: [], // no built-in tools — the editor MCP server is the whole surface
       mcpServers: {
         cut: {
           type: "stdio",
-          command: process.execPath,
-          args: [proxyPath(), base, sessionKey],
+          ...mcpCommand(base, sessionKey),
           alwaysLoad: true,
         },
       },
@@ -164,6 +139,7 @@ async function runCodex(
   sessionKey: string,
   signal: AbortSignal
 ) {
+  const mcp = mcpCommand(base, sessionKey);
   const args = ["exec"];
   if (body.providerSession) args.push("resume", body.providerSession);
   args.push(
@@ -176,9 +152,9 @@ async function runCodex(
     "-C",
     os.tmpdir(),
     "-c",
-    `mcp_servers.cut.command=${JSON.stringify(process.execPath)}`,
+    `mcp_servers.cut.command=${JSON.stringify(mcp.command)}`,
     "-c",
-    `mcp_servers.cut.args=${JSON.stringify([proxyPath(), base, sessionKey])}`,
+    `mcp_servers.cut.args=${JSON.stringify(mcp.args)}`,
     body.providerSession ? prompt : `${systemPrompt()}\n\n${prompt}`
   );
 
@@ -278,3 +254,163 @@ async function runFake(emit: UIChunkWriter["write"], sessionKey: string, userTex
     say("t2", r.errorText ? `Tool failed: ${r.errorText}` : "Done: TESTMARK title added.");
   }
 }
+
+function probe(cmd: string, args: string[]): Promise<{ ok: boolean; note: string }> {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { timeout: 8000 }, (err, stdout, stderr) => {
+      if (err) {
+        const note = err.message.includes("ENOENT")
+          ? `${cmd} is not installed`
+          : (stderr || err.message).trim().split("\n")[0];
+        resolve({ ok: false, note });
+      } else {
+        // Some CLIs (codex) report status on stderr.
+        resolve({ ok: true, note: (stdout.trim() || stderr.trim()).split("\n")[0] });
+      }
+    });
+  });
+}
+
+// Providers rarely change mid-session; cache probes for a minute.
+let aiProbe: {
+  at: number;
+  value: { claude: { ok: boolean; note: string }; codex: { ok: boolean; note: string } };
+} | null = null;
+
+const mcpText = (value: unknown) => ({
+  content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value) }],
+});
+
+/** The AI assistant: chat streaming, provider probing, and the MCP bridge. */
+export const aiApi = {
+  async chat(req: Request) {
+    const body = (await req.json()) as ChatBody;
+    const base = new URL(req.url).origin;
+    const sessionKey = crypto.randomUUID();
+    const userText = lastUserText(body.messages);
+    const attachments = lastUserAttachments(body.messages);
+    const attachBlock = attachments.length
+      ? `\n\n<attached_assets>\nThe user attached these project media assets to this message (ids are usable with the editor tools):\n${JSON.stringify(attachments)}\n</attached_assets>`
+      : "";
+    const prompt = `${userText}${attachBlock}\n\n<editor_state>\n${JSON.stringify(body.context ?? {})}\n</editor_state>`;
+
+    const stream = createUIMessageStream({
+      execute: async ({ writer }) => {
+        const emit: UIChunkWriter["write"] = (chunk) =>
+          writer.write(chunk as Parameters<typeof writer.write>[0]);
+        registerSession(sessionKey, { write: emit });
+        emit({ type: "start" });
+        // The browser posts tool outputs back to /api/cut/ai/tool-result with this key.
+        emit({ type: "data-session", data: { sessionKey }, transient: true });
+        try {
+          if (body.model.startsWith("claude")) {
+            await runClaude(emit, prompt, body, base, sessionKey, req.signal);
+          } else if (body.model === "cut-test") {
+            await runFake(emit, sessionKey, userText);
+          } else {
+            await runCodex(emit, prompt, body, base, sessionKey, req.signal);
+          }
+        } catch (err) {
+          emit({ type: "error", errorText: err instanceof Error ? err.message : String(err) });
+        } finally {
+          unregisterSession(sessionKey);
+          emit({ type: "finish" });
+        }
+      },
+    });
+
+    return createUIMessageStreamResponse({ stream });
+  },
+
+  async models() {
+    let value = aiProbe && Date.now() - aiProbe.at < 60_000 ? aiProbe.value : null;
+    if (!value) {
+      const [claude, codexLogin] = await Promise.all([
+        probe("claude", ["--version"]),
+        probe("codex", ["login", "status"]),
+      ]);
+      const codex = codexLogin.ok
+        ? /logged in/i.test(codexLogin.note)
+          ? { ok: true, note: codexLogin.note }
+          : { ok: false, note: "Not signed in — run: codex login" }
+        : codexLogin;
+      value = { claude, codex };
+      aiProbe = { at: Date.now(), value };
+    }
+    return Response.json({
+      models: AI_MODELS,
+      providers: {
+        claude: { available: value.claude.ok, note: value.claude.note },
+        codex: { available: value.codex.ok, note: value.codex.note },
+        test: { available: true, note: "hermetic test provider" },
+      },
+    });
+  },
+
+  /** MCP-shaped tool catalog for the stdio proxy. */
+  async proxyCatalog(req: Request) {
+    const type = new URL(req.url).searchParams.get("type");
+    if (type !== "catalog") return Response.json({ error: "Bad request." }, { status: 400 });
+    return Response.json({
+      tools: AI_TOOLS.map((t) => ({
+        name: t.name,
+        description: t.description,
+        inputSchema: t.inputSchema,
+      })),
+    });
+  },
+
+  /** Execute one tool call: server-side skills directly, editor tools via the browser. */
+  async proxyCall(req: Request) {
+    const { sessionKey, name, args } = (await req.json()) as {
+      sessionKey?: string;
+      name?: string;
+      args?: Record<string, unknown>;
+    };
+    const def = AI_TOOLS.find((t) => t.name === name);
+    if (!name || !def) {
+      return Response.json({ ...mcpText(`Unknown tool: ${name}`), isError: true });
+    }
+
+    if (def.server) {
+      if (name === "list_skills") return Response.json(mcpText({ skills: AI_SKILL_INDEX }));
+      if (name === "read_skill") {
+        const doc = AI_SKILLS[String(args?.name ?? "")];
+        return doc
+          ? Response.json(mcpText(doc))
+          : Response.json({
+              ...mcpText(`No such skill. Available: ${AI_SKILL_INDEX.join(", ")}`),
+              isError: true,
+            });
+      }
+    }
+
+    const result = await callBrowserTool(String(sessionKey ?? ""), name, args ?? {});
+    if (result.errorText !== undefined) {
+      return Response.json({ ...mcpText(result.errorText), isError: true });
+    }
+    // Screenshots come back as data URLs; hand them to the model as images.
+    const out = result.output as { image?: string } | undefined;
+    if (name === "capture_frame" && out?.image?.startsWith("data:image/")) {
+      const [head, data] = out.image.split(",", 2);
+      const mimeType = head.slice(5, head.indexOf(";"));
+      return Response.json({ content: [{ type: "image", data, mimeType }] });
+    }
+    return Response.json(mcpText(result.output ?? { ok: true }));
+  },
+
+  /** The browser posts tool outputs here after executing them on the store. */
+  async toolResult(req: Request) {
+    const { sessionKey, toolCallId, output, errorText } = (await req.json()) as {
+      sessionKey?: string;
+      toolCallId?: string;
+      output?: unknown;
+      errorText?: string;
+    };
+    if (!sessionKey || !toolCallId) {
+      return Response.json({ error: "sessionKey and toolCallId required." }, { status: 400 });
+    }
+    const ok = resolveBrowserTool(sessionKey, toolCallId, { output, errorText });
+    return Response.json({ ok });
+  },
+};

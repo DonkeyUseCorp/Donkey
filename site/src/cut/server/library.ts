@@ -1,12 +1,13 @@
 import { spawn } from "node:child_process";
 import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { cutDataRoot } from "./dataDir";
 import { assertLocalRuntime } from "./local-only";
 import { mediaPath as projectMediaPath, readProject } from "./projects";
 import { exists, uniqueName } from "./util";
 
 /** The shared library: reusable media that lives outside any project. */
-export const LIBRARY_ROOT = path.join(process.cwd(), "library");
+export const LIBRARY_ROOT = path.join(cutDataRoot(), "library");
 const LIB_MEDIA = path.join(LIBRARY_ROOT, "media");
 const INDEX = path.join(LIBRARY_ROOT, "library.json");
 

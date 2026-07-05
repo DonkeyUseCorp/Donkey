@@ -1,12 +1,13 @@
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ProjectDoc, ProjectSummary } from "@/cut/lib/types";
+import { cutDataRoot } from "./dataDir";
 import { assertLocalRuntime } from "./local-only";
 import { exists, uniqueName } from "./util";
 
 /** All projects live here; each project is one folder holding project.json,
  * its raw media files, and its exports. */
-export const PROJECTS_ROOT = path.join(process.cwd(), "projects");
+export const PROJECTS_ROOT = path.join(cutDataRoot(), "projects");
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{2,40}$/;
 

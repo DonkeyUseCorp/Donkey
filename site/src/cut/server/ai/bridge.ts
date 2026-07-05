@@ -78,7 +78,7 @@ export function callBrowserTool(
   });
 }
 
-/** Called by /api/ai/tool-result when the browser finishes a tool. */
+/** Called by /api/cut/ai/tool-result when the browser finishes a tool. */
 export function resolveBrowserTool(
   sessionKey: string,
   toolCallId: string,

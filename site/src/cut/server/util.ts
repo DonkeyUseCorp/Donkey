@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { stat } from "node:fs/promises";
+import { access, constants, stat } from "node:fs/promises";
 import path from "node:path";
 
 /** Does a file/dir exist? (stat, coerced to a boolean.) */
@@ -8,6 +8,24 @@ export async function exists(p: string) {
     () => true,
     () => false
   );
+}
+
+/** First executable *file* named `name` on PATH, or null. Directories carry the
+ * execute bit too, so a like-named directory must not shadow the real CLI. */
+export async function findOnPath(name: string): Promise<string | null> {
+  for (const dir of (process.env.PATH ?? "").split(":")) {
+    if (!dir) continue;
+    const candidate = path.join(dir, name);
+    try {
+      const s = await stat(candidate); // follows symlinks
+      if (!s.isFile()) continue;
+      await access(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // absent or not executable — keep looking
+    }
+  }
+  return null;
 }
 
 /**

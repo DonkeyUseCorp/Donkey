@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { assertLocalRuntime } from "./local-only";
 import { mediaPath, readProject } from "./projects";
-import { hasStream, num, round } from "./util";
+import { findOnPath, hasStream, num, round } from "./util";
 
 /** The audible slice of the cut, in timeline time (mirrors ExportSpec). */
 export interface TranscribeSpec {
@@ -65,14 +65,21 @@ function run(cmd: string, args: string[], notFound?: string): Promise<string> {
 
 /**
  * The speech engine: Apple's on-device SpeechAnalyzer (macOS 26+), wrapped by
- * a tiny Swift CLI compiled on first use into ~/.cache/cut. Nothing ever
- * leaves the machine.
+ * a tiny Swift CLI. A prebuilt cut-stt (shipped with the app's bundled tools,
+ * on PATH) wins; the dev fallback compiles the source on first use into
+ * ~/.cache/cut. Nothing ever leaves the machine.
  */
 async function ensureStt(): Promise<string> {
+  const prebuilt = await findOnPath("cut-stt");
+  if (prebuilt) return prebuilt;
+
   const src = path.join(process.cwd(), "src", "cut", "server", "native", "cut-stt.swift");
   const bin = path.join(os.homedir(), ".cache", "cut", "cut-stt");
-  const [b, s] = await Promise.all([stat(bin).catch(() => null), stat(src)]);
-  if (b?.isFile() && b.mtimeMs >= s.mtimeMs) return bin;
+  const [b, s] = await Promise.all([stat(bin).catch(() => null), stat(src).catch(() => null)]);
+  if (b?.isFile() && (!s || b.mtimeMs >= s.mtimeMs)) return bin;
+  if (!s) {
+    throw new Error("The speech tool is missing. Update Donkey to restore transcription.");
+  }
   await mkdir(path.dirname(bin), { recursive: true });
   await run(
     "swiftc",
