@@ -76,7 +76,11 @@ interface EditorState {
   setAspect: (a: Aspect) => void;
   addAsset: (asset: MediaAsset) => void;
   updateAsset: (id: string, patch: Partial<MediaAsset>) => void;
-  addClipFromAsset: (assetId: string) => void;
+  /** Remove a project asset and any clips/audio that reference it. */
+  removeAsset: (id: string) => void;
+  /** Add a video clip from an asset. With `index`, insert at that position on
+   * the magnetic video track; otherwise append. */
+  addClipFromAsset: (assetId: string, index?: number) => void;
   addAudioFromAsset: (assetId: string, start?: number) => void;
   addOverlay: () => void;
   updateClip: (id: string, patch: Partial<VideoClip>) => void;
@@ -291,7 +295,25 @@ export const useEditor = create<EditorState>((set, get) => {
         assets: s.assets.map((a) => (a.id === id ? { ...a, ...patch } : a)),
       })),
 
-    addClipFromAsset: (assetId) => {
+    removeAsset: (id) => {
+      if (!get().assets.some((a) => a.id === id)) return;
+      push();
+      set((s) => {
+        const sel = s.selection;
+        const selGone =
+          (sel?.kind === "clip" && s.clips.some((c) => c.id === sel.id && c.assetId === id)) ||
+          (sel?.kind === "audio" &&
+            s.audioClips.some((c) => c.id === sel.id && c.assetId === id));
+        return {
+          assets: s.assets.filter((a) => a.id !== id),
+          clips: s.clips.filter((c) => c.assetId !== id),
+          audioClips: s.audioClips.filter((c) => c.assetId !== id),
+          selection: selGone ? null : s.selection,
+        };
+      });
+    },
+
+    addClipFromAsset: (assetId, index) => {
       const asset = get().assets.find((a) => a.id === assetId);
       if (!asset || asset.type !== "video") return;
       push();
@@ -302,10 +324,13 @@ export const useEditor = create<EditorState>((set, get) => {
         out: asset.duration,
         muted: false,
       };
-      set((s) => ({
-        clips: [...s.clips, clip],
-        selection: { kind: "clip", id: clip.id },
-      }));
+      set((s) => {
+        const at =
+          index === undefined ? s.clips.length : Math.max(0, Math.min(index, s.clips.length));
+        const clips = [...s.clips];
+        clips.splice(at, 0, clip);
+        return { clips, selection: { kind: "clip", id: clip.id } };
+      });
     },
 
     addAudioFromAsset: (assetId, start) => {
@@ -472,6 +497,10 @@ export const useEditor = create<EditorState>((set, get) => {
           sel.kind === "text"
             ? s.overlays.filter((o) => o.id !== sel.id)
             : s.overlays,
+        subtitles:
+          sel.kind === "cue"
+            ? { ...s.subtitles, cues: s.subtitles.cues.filter((c) => c.id !== sel.id) }
+            : s.subtitles,
         selection: null,
       }));
     },
@@ -723,10 +752,12 @@ export const useEditor = create<EditorState>((set, get) => {
         const a = s.audioClips.find((x) => x.id === sel.id);
         if (!a) return false;
         clipboard = { kind: "audio", item: { ...a } };
-      } else {
+      } else if (sel.kind === "text") {
         const o = s.overlays.find((x) => x.id === sel.id);
         if (!o) return false;
         clipboard = { kind: "text", item: { ...o } };
+      } else {
+        return false;
       }
       return true;
     },

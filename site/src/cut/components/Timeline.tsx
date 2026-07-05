@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AudioLines, EllipsisVertical, Music, Pause, Play, Plus, Scissors, SkipBack, Trash2, Type, VolumeX } from "lucide-react";
+import { AudioLines, EllipsisVertical, Pause, Play, Plus, Scissors, SkipBack, Trash2, Type, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -10,7 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Slider } from "@/components/ui/slider";
-import { draggedAssetId, hasAssetDrag } from "@/cut/lib/assetDrag";
+import { clearAssetDrag, draggedAssetId, draggingAssetId, hasAssetDrag } from "@/cut/lib/assetDrag";
 import { startDrag } from "@/cut/lib/drag";
 import { ensurePeaks } from "@/cut/lib/media";
 import { clipLen, getClipSpans, TIMELINE_H_MAX, totalDuration, useEditor } from "@/cut/lib/store";
@@ -64,6 +64,13 @@ function dropIndex(spans: ClipSpan[], from: number, dxSec: number): number {
   return to;
 }
 
+/** Insertion slot for a new clip dropped at time `t`: it lands before the
+ * first span whose midpoint is past `t` (spans.length = at the very end). */
+function videoInsertIndex(spans: ClipSpan[], t: number): number {
+  for (let k = 0; k < spans.length; k++) if (t < spans[k].start + spans[k].len / 2) return k;
+  return spans.length;
+}
+
 export function Timeline() {
   const clips = useEditor((s) => s.clips);
   const audioClips = useEditor((s) => s.audioClips);
@@ -83,6 +90,9 @@ export function Timeline() {
   // Reorder drag on the video track: neighbors part to open a highlighted
   // slot at the insertion point; releasing drops the clip into it.
   const [clipDrag, setClipDrag] = useState<{ id: string; dx: number; dy: number } | null>(null);
+  // Insertion preview while dragging a media asset onto the video track:
+  // `index` is the span it lands before (spans.length = end), `len` its length.
+  const [assetDrop, setAssetDrop] = useState<{ index: number; len: number } | null>(null);
   const dragInfo = useMemo<ClipDrag | null>(() => {
     if (!clipDrag) return null;
     const from = spans.findIndex((sp) => sp.clip.id === clipDrag.id);
@@ -236,20 +246,47 @@ export function Timeline() {
       className="relative flex min-w-0 shrink-0 flex-col overflow-hidden border-t border-border bg-card"
       style={{ height: timelineH }}
       onDragOver={(e) => {
-        if (hasAssetDrag(e)) {
-          e.preventDefault();
-          e.dataTransfer.dropEffect = "copy";
+        if (!hasAssetDrag(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+        // Preview where a video asset would land; audio drops free-form.
+        const id = draggingAssetId();
+        const asset = id ? useEditor.getState().assets.find((a) => a.id === id) : null;
+        if (!asset || asset.type !== "video") {
+          setAssetDrop(null);
+          return;
         }
+        const index = videoInsertIndex(spans, Math.max(0, timeAt(e.clientX)));
+        setAssetDrop((prev) =>
+          prev && prev.index === index && prev.len === asset.duration
+            ? prev
+            : { index, len: asset.duration }
+        );
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setAssetDrop(null);
       }}
       onDrop={(e) => {
+        setAssetDrop(null);
+        clearAssetDrag();
         const id = draggedAssetId(e);
         if (!id) return;
         e.preventDefault();
         const s = useEditor.getState();
         const asset = s.assets.find((a) => a.id === id);
         if (!asset) return;
-        if (asset.type === "video") s.addClipFromAsset(id);
-        else s.addAudioFromAsset(id);
+        const t = Math.max(0, timeAt(e.clientX));
+        if (asset.type === "video") {
+          const sp = getClipSpans(s.clips, s.assets);
+          const spanIndex = videoInsertIndex(sp, t);
+          const clipsIndex =
+            spanIndex < sp.length
+              ? s.clips.findIndex((c) => c.id === sp[spanIndex].clip.id)
+              : s.clips.length;
+          s.addClipFromAsset(id, clipsIndex);
+        } else {
+          s.addAudioFromAsset(id, t);
+        }
       }}
     >
       <div
@@ -323,6 +360,18 @@ export function Timeline() {
                 }}
               />
             )}
+            {assetDrop && (
+              <div
+                className="tl-asset-drop-slot pointer-events-none absolute top-0.5 flex items-center justify-center rounded-lg border-[1.5px] border-dashed border-[#0a84ff]/70 bg-[#0a84ff]/10 text-[#0a84ff] transition-[left] duration-150 ease-out"
+                style={{
+                  left: (assetDrop.index < spans.length ? spans[assetDrop.index].start : total) * pps,
+                  width: Math.max(10, assetDrop.len * pps - CLIP_GAP),
+                  height: VIDEO_H - 4,
+                }}
+              >
+                <Plus className="size-4" />
+              </div>
+            )}
             {spans.map((span, i) => (
               <ClipView
                 key={span.clip.id}
@@ -331,6 +380,8 @@ export function Timeline() {
                 pps={pps}
                 selected={selection?.kind === "clip" && selection.id === span.clip.id}
                 drag={dragInfo}
+                insertAtIndex={assetDrop ? assetDrop.index : null}
+                insertLen={assetDrop ? assetDrop.len : 0}
                 scrollRef={scrollRef}
                 onDrag={onClipDrag}
                 onDrop={onClipDrop}
@@ -338,34 +389,32 @@ export function Timeline() {
             ))}
           </div>
 
-          <div className="relative mt-1.5" style={{ height: AUDIO_H }} onPointerDown={deselectIfSelf}>
-            {audioClips.length === 0 && (
-              <TrackHint icon={<Music className="size-3" />} label="Soundtrack" />
-            )}
-            {audioClips.map((a) => (
-              <AudioView
-                key={a.id}
-                clip={a}
-                asset={assets.find((x) => x.id === a.assetId)}
-                pps={pps}
-                selected={selection?.kind === "audio" && selection.id === a.id}
-              />
-            ))}
-          </div>
+          {audioClips.length > 0 && (
+            <div className="relative mt-1.5" style={{ height: AUDIO_H }} onPointerDown={deselectIfSelf}>
+              {audioClips.map((a) => (
+                <AudioView
+                  key={a.id}
+                  clip={a}
+                  asset={assets.find((x) => x.id === a.assetId)}
+                  pps={pps}
+                  selected={selection?.kind === "audio" && selection.id === a.id}
+                />
+              ))}
+            </div>
+          )}
 
-          <div className="relative mt-1.5" style={{ height: TEXT_H }} onPointerDown={deselectIfSelf}>
-            {overlays.length === 0 && (
-              <TrackHint icon={<Type className="size-3" />} label="Titles" />
-            )}
-            {overlays.map((o) => (
-              <TextBar
-                key={o.id}
-                overlay={o}
-                pps={pps}
-                selected={selection?.kind === "text" && selection.id === o.id}
-              />
-            ))}
-          </div>
+          {overlays.length > 0 && (
+            <div className="relative mt-1.5" style={{ height: TEXT_H }} onPointerDown={deselectIfSelf}>
+              {overlays.map((o) => (
+                <TextBar
+                  key={o.id}
+                  overlay={o}
+                  pps={pps}
+                  selected={selection?.kind === "text" && selection.id === o.id}
+                />
+              ))}
+            </div>
+          )}
 
           {subtitles.showOnTimeline && subtitles.cues.length > 0 && (
             <div
@@ -374,7 +423,12 @@ export function Timeline() {
               onPointerDown={deselectIfSelf}
             >
               {subtitles.cues.map((c) => (
-                <SubBar key={c.id} cue={c} pps={pps} />
+                <SubBar
+                  key={c.id}
+                  cue={c}
+                  pps={pps}
+                  selected={selection?.kind === "cue" && selection.id === c.id}
+                />
               ))}
             </div>
           )}
@@ -474,13 +528,6 @@ function Transport({ total }: { total: number }) {
   );
 }
 
-function TrackHint({ icon, label }: { icon: React.ReactNode; label: string }) {
-  return (
-    <div className="pointer-events-none sticky left-0 inline-flex h-full items-center gap-1.5 px-4 text-[10.5px] font-semibold tracking-wider text-muted-foreground/70 uppercase">
-      {icon} {label}
-    </div>
-  );
-}
 
 function Ruler({
   pps,
@@ -555,6 +602,8 @@ function ClipView({
   pps,
   selected,
   drag,
+  insertAtIndex,
+  insertLen,
   scrollRef,
   onDrag,
   onDrop,
@@ -564,6 +613,10 @@ function ClipView({
   pps: number;
   selected: boolean;
   drag: ClipDrag | null;
+  /** While a media asset is dragged in, clips at/after this index part to
+   * open a slot of `insertLen` seconds. Null when no asset drag is active. */
+  insertAtIndex: number | null;
+  insertLen: number;
   scrollRef: React.RefObject<HTMLDivElement | null>;
   onDrag: (id: string, dx: number, dy: number) => void;
   onDrop: (id: string, dx: number | null) => void;
@@ -580,7 +633,7 @@ function ClipView({
   const boxW = trimL ? (clip.out - stripIn) * pps : w;
   const isDragged = drag?.id === clip.id;
   // Neighbors part to make room for the open slot.
-  const shiftSec =
+  const reorderShift =
     !drag || isDragged
       ? 0
       : drag.from < index && index <= drag.to
@@ -588,6 +641,10 @@ function ClipView({
         : drag.to <= index && index < drag.from
           ? drag.len
           : 0;
+  // Clips at/after the media-drop point slide right to open the insertion slot.
+  const insertShift = insertAtIndex !== null && index >= insertAtIndex ? insertLen : 0;
+  const shiftSec = reorderShift + insertShift;
+  const parting = drag !== null || insertAtIndex !== null;
 
   // During a left-trim the strip is computed from the drag-start in-point so
   // every frame stays pinned in place while the hidden region sweeps over it.
@@ -670,7 +727,7 @@ function ClipView({
           selected && SELECTED_SHADOW,
           isDragged
             ? "tl-clip-ghost pointer-events-none z-7 cursor-grabbing opacity-80 shadow-2xl"
-            : drag && "transition-transform duration-150 ease-out"
+            : parting && "transition-transform duration-150 ease-out"
         )}
         style={{
           left,
@@ -947,9 +1004,9 @@ function TextBar({
   );
 }
 
-/** A subtitle cue on its track: drag to retime, edges to trim, click seeks.
- * Editing the words happens in the Subtitles panel. */
-function SubBar({ cue, pps }: { cue: SubtitleCue; pps: number }) {
+/** A subtitle cue on its track: click selects (⌫ deletes it), drag to retime,
+ * edges to trim. Editing the words happens in the Subtitles panel. */
+function SubBar({ cue, pps, selected }: { cue: SubtitleCue; pps: number; selected: boolean }) {
   const w = Math.max(8, (cue.end - cue.start) * pps);
 
   const finish = (moved: boolean) => {
@@ -960,6 +1017,7 @@ function SubBar({ cue, pps }: { cue: SubtitleCue; pps: number }) {
 
   const onBody = (e: React.PointerEvent) => {
     const s = useEditor.getState();
+    s.select({ kind: "cue", id: cue.id });
     s.pushHistory();
     const start0 = cue.start;
     const len = cue.end - cue.start;
@@ -975,6 +1033,7 @@ function SubBar({ cue, pps }: { cue: SubtitleCue; pps: number }) {
 
   const trim = (side: "l" | "r") => (e: React.PointerEvent) => {
     const s = useEditor.getState();
+    s.select({ kind: "cue", id: cue.id });
     s.pushHistory();
     const { start: start0, end: end0 } = cue;
     startDrag(e, {
@@ -996,7 +1055,10 @@ function SubBar({ cue, pps }: { cue: SubtitleCue; pps: number }) {
 
   return (
     <div
-      className="tl-sub-bar group absolute top-px flex cursor-grab items-center overflow-hidden rounded-[5px] bg-gradient-to-b from-amber-300 to-amber-400 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]"
+      className={cn(
+        "tl-sub-bar group absolute top-px flex cursor-grab items-center overflow-hidden rounded-[5px] bg-gradient-to-b from-amber-300 to-amber-400 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]",
+        selected && SELECTED_SHADOW
+      )}
       style={{ left: cue.start * pps, width: w, height: SUB_H - 4 }}
       title={cue.text}
       onPointerDown={onBody}

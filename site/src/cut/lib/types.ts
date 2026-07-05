@@ -130,6 +130,7 @@ export type Selection =
   | { kind: "clip"; id: string }
   | { kind: "audio"; id: string }
   | { kind: "text"; id: string }
+  | { kind: "cue"; id: string }
   | null;
 
 export interface ClipSpan {
