@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Captions, Check, Circle, Copy, Film, FolderOpen, FolderPlus, Loader2, Mic, Music, Play, Plus, Send, Type, Upload, Video } from "lucide-react";
+import { Captions, Check, Circle, Copy, Film, FolderOpen, FolderPlus, Loader2, Mic, Music, Play, Plus, Send, Upload, Video } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -27,13 +27,12 @@ import { PlatformPreviewDialog, type ExportItem } from "./PlatformPreview";
 import { RecordDialog, type RecordMode } from "./RecordDialog";
 import { SubtitlesPanel } from "./SubtitlesPanel";
 
-type Tab = "media" | "library" | "record" | "text" | "subtitles" | "publish";
+type Tab = "media" | "library" | "record" | "subtitles" | "publish";
 
 const TABS: { id: Tab; label: string; icon: typeof Film }[] = [
   { id: "media", label: "Media", icon: Film },
   { id: "library", label: "Library", icon: FolderOpen },
   { id: "record", label: "Record", icon: Circle },
-  { id: "text", label: "Text", icon: Type },
   { id: "subtitles", label: "Subtitles", icon: Captions },
   { id: "publish", label: "Publish", icon: Send },
 ];
@@ -113,7 +112,6 @@ export function SidePanel({
           <MediaPanel projectId={projectId} onImport={onImport} importing={importing} />
         )}
         {tab === "library" && <LibraryPanel projectId={projectId} />}
-        {tab === "text" && <TextPanel />}
         {tab === "subtitles" && <SubtitlesPanel />}
         {tab === "publish" && <PublishPanel />}
       </div>
@@ -365,28 +363,6 @@ function LibraryPanel({ projectId }: { projectId: string }) {
           ))}
         </div>
       )}
-    </>
-  );
-}
-
-function TextPanel() {
-  return (
-    <>
-      <PanelHead title="Text" />
-      <div className="px-3.5">
-        <Button
-          variant="outline"
-          className="w-full"
-          onClick={() => useEditor.getState().addOverlay()}
-        >
-          <Type data-icon="inline-start" /> Add a title
-        </Button>
-        <p className="mt-3 text-[11.5px] leading-relaxed text-muted-foreground">
-          Titles land at the playhead. Drag them around the preview, resize with
-          the corner handle, and double-click to edit in place. Font, color,
-          shadow, and backdrop are in the inspector.
-        </p>
-      </div>
     </>
   );
 }

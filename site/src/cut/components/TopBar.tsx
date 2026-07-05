@@ -47,7 +47,7 @@ export function TopBar() {
                     {a === "9:16" ? "TikTok, Reels, Shorts" : "YouTube"}
                   </span>
                 </span>
-                {aspect === a && <Check className="size-3.5 text-coral" />}
+                {aspect === a && <Check className="size-3.5 text-muted-foreground" />}
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>
@@ -63,8 +63,14 @@ export function TopBar() {
         >
           <ChevronLeft />
         </Button>
-        <span className="grid size-[22px] shrink-0 place-items-center overflow-hidden rounded-md">
-          <img src="/donkey-logo.svg" alt="Donkey" className="block h-full w-full object-contain" />
+        <span className="grid size-[22px] shrink-0 place-items-center">
+          <img
+            src="/donkey-logo.svg"
+            alt="Donkey"
+            width={22}
+            height={22}
+            className="block h-full w-full object-contain"
+          />
         </span>
         {editing ? (
           <input
