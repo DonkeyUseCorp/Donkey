@@ -1,28 +1,26 @@
 # Cut
 
-Cut is a standalone video editor served at `cut.donkeyuse.com` (`cut.localhost` in dev). It is a free product that runs on local resources: editing, transcription, export, and the AI assistant all use tools and logins already on the machine that serves it. Cut shares the site's Next.js app for hosting only — it does not touch Donkey's accounts, credits, sign-in, or database.
+Cut (publicly "Donkey Cut") is a standalone, free video editor. The hosted domain `cut.donkeyuse.com` serves only its client bundle — every page is client-rendered — and the page does all real work against the engine running on the user's own Mac: local disk, local ffmpeg, on-device speech, and the user's own Claude/Codex CLI logins. Cut shares the site's Next.js app for hosting only — it does not touch Donkey's accounts, credits, sign-in, database, or hosted models.
 
-**The one rule:** Cut stands alone. No Donkey login, no credit metering, no shared tables — for now. So the unauthenticated routes and the local-disk storage are the design, not a gap to patch. Don't wrap Cut's API routes in the Donkey auth helper, reach for Prisma, or bill against credits to "harden" them; that coupling is what this boundary keeps out until Cut stops being local and free.
+**The one rule:** Cut's server side runs only on the user's Mac. On a hosted deploy every Cut API answers 404 before any handler runs, so the unauthenticated routes are unreachable there and nothing can execute off-Mac — including any path to Donkey's production models, which Cut has none of. Don't wrap Cut's API routes in the Donkey auth helper, reach for Prisma, or bill against credits to "harden" them; local-only is the design.
 
 ## How it works
 
-Cut and the Donkey marketing site are one deployment. A request is split by host: only the Cut subdomain reaches the editor.
+The hosted domain and the local engine split the work: the page comes from wherever is convenient, the work always happens on the Mac.
 
 ```
-request
-  │
-  ▼
-host is cut.donkeyuse.com / cut.localhost ?
-  │ no ──▶ Donkey site (unchanged)
-  │ yes
-  ▼
-rewrite page paths to /cut/*        (api paths pass through untouched)
-  │
-  ▼
-Cut editor (browser)  ──▶  shared /api tree  ──▶  local resources on the serving machine
+page from cut.donkeyuse.com (hosted)      page from cut.localhost (local dev)
+  │  client bundle only;                    │  one local server:
+  │  every Cut API 404s there               │  pages + APIs, same origin
+  ▼                                         ▼
+browser ──────────── API calls ──────────▶ engine on the user's Mac (127.0.0.1)
+                                            │
+                                            ▼
+                              local disk · ffmpeg · on-device speech
+                              · the user's own claude/codex CLI logins
 ```
 
-The browser renders the editor; the machine that serves Cut does the heavy work — encoding, transcription, and AI all run there, against local binaries and CLI logins.
+The engine grants the hosted origin cross-origin access, and only that origin. Loading the page from the hosted domain without a running engine shows a "start Donkey Cut on this Mac" state instead of a broken editor.
 
 ## Boundary with Donkey
 
@@ -48,8 +46,8 @@ Cut assumes the machine serving it is a Mac with these tools present. Missing to
 | AI assistant | the operator's own `claude` and `codex` CLI logins |
 | Projects, library, exports | writable local disk under the app's working directory |
 
-Because storage is local disk and AI rides the serving machine's CLI logins, Cut is a local product: it runs where those resources live, not on ephemeral serverless hosts. Serving it on a public host would expose the unauthenticated routes and burn the operator's own AI logins, so keep it local until it gets its own auth and storage.
+Because storage is local disk and AI rides the user's own CLI logins, the engine runs where those resources live — never on hosted infrastructure. That boundary is enforced twice: the site's proxy 404s every Cut API path on a hosted deploy, and the engine's disk and process-spawning code refuses to run there.
 
 ## Where it lives
 
-The editor and its server code sit under the site app's Cut folder; its pages and API handlers mount under the shared route tree, and host-based routing lives in the site's proxy file (`src/proxy.ts`, the Next 16 successor to middleware).
+The editor and its engine code sit under the site app's Cut folder; its pages and API handlers mount under the shared route tree. Host routing, the hosted API shut-off, and the CORS grant all live in the site's proxy file (`src/proxy.ts`, the Next 16 successor to middleware), with the engine-side guard beside the Cut server code.
