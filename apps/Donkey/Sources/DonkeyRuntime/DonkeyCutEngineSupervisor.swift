@@ -1,0 +1,148 @@
+import Foundation
+
+/// Runs the Donkey Cut engine — the local server behind cut.donkeyuse.com — for the app's lifetime.
+///
+/// Cut's page is static html/js served from the hosted site; everything real (project files, ffmpeg,
+/// on-device speech, the user's own claude/codex logins) happens in this engine on 127.0.0.1. The app
+/// spawns it at launch, restarts it with backoff if it dies, and terminates it on quit. The engine is
+/// version-locked to the app: updates ride app releases, and the stamped version feeds the site's
+/// update nudge.
+///
+/// Cut is free and standalone, so the engine runs regardless of Donkey sign-in state.
+public final class DonkeyCutEngineSupervisor: @unchecked Sendable {
+    /// The port the Cut client probes (see the site's engine discovery).
+    private static let port = 41417
+
+    /// All mutable state is confined to this queue.
+    private let queue = DispatchQueue(label: "donkey.cut-engine-supervisor")
+    private var process: Process?
+    private var stopped = false
+    private var restartDelay: TimeInterval = 2
+    private var spawnedAt: Date?
+
+    public init() {}
+
+    public func start() {
+        queue.async { self.spawnIfNeeded() }
+    }
+
+    public func stop() {
+        queue.sync {
+            stopped = true
+            process?.terminate()
+            process = nil
+        }
+    }
+
+    /// The engine binary: a dev/test override first, then the copy shipped in the app bundle.
+    /// `nil` (e.g. a dev build made without the site checkout) just means Donkey runs without Cut.
+    private static func engineBinary() -> URL? {
+        let fileManager = FileManager.default
+        if let raw = getenv("DONKEY_CUT_ENGINE_BIN") {
+            let override = String(cString: raw)
+            if !override.isEmpty {
+                let url = URL(fileURLWithPath: (override as NSString).expandingTildeInPath)
+                if fileManager.isExecutableFile(atPath: url.path) { return url }
+            }
+        }
+        guard let baked = Bundle.main.resourceURL?
+            .appendingPathComponent("cut-engine", isDirectory: true)
+            .appendingPathComponent("donkey-cut-engine")
+        else { return nil }
+        return fileManager.isExecutableFile(atPath: baked.path) ? baked : nil
+    }
+
+    /// Thread-crossing result box for the synchronous health probe.
+    private final class Flag: @unchecked Sendable {
+        var value = false
+    }
+
+    /// True when something on the port already answers as a Cut engine — another app instance or a
+    /// dev server. Don't fight it; check again later.
+    private func portAlreadyServed() -> Bool {
+        guard let url = URL(string: "http://127.0.0.1:\(Self.port)/api/cut/engine/health") else { return false }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 1.0
+        let semaphore = DispatchSemaphore(value: 0)
+        let healthy = Flag()
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            if let data, let body = String(data: data, encoding: .utf8), body.contains("donkey-cut") {
+                healthy.value = true
+            }
+            semaphore.signal()
+        }.resume()
+        semaphore.wait()
+        return healthy.value
+    }
+
+    private func spawnIfNeeded() {
+        guard !stopped, process == nil else { return }
+        guard let binary = Self.engineBinary() else { return }
+        if portAlreadyServed() {
+            scheduleRespawn(after: 60)
+            return
+        }
+
+        var environment = DonkeyCommandBackends.shellEnvironment()
+        environment["DONKEY_CUT_ENGINE"] = "1"
+        environment["DONKEY_CUT_VERSION"] =
+            Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        if let tools = DonkeyCommandBackends.bundledToolsDirectory {
+            environment["DONKEY_CUT_TOOLS_DIR"] = tools.path
+        }
+
+        let child = Process()
+        child.executableURL = binary
+        child.environment = environment
+        child.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+        let log = Self.openLog()
+        child.standardOutput = log ?? FileHandle.nullDevice
+        child.standardError = log ?? FileHandle.nullDevice
+        child.terminationHandler = { [weak self] _ in
+            guard let self else { return }
+            self.queue.async {
+                self.process = nil
+                guard !self.stopped else { return }
+                // A crash after a healthy stretch restarts promptly; rapid crash loops back off.
+                let uptime = self.spawnedAt.map { Date().timeIntervalSince($0) } ?? 0
+                if uptime > 300 { self.restartDelay = 2 }
+                let delay = self.restartDelay
+                self.restartDelay = min(self.restartDelay * 2, 60)
+                self.scheduleRespawn(after: delay)
+            }
+        }
+
+        do {
+            try child.run()
+            process = child
+            spawnedAt = Date()
+        } catch {
+            scheduleRespawn(after: 60)
+        }
+    }
+
+    private func scheduleRespawn(after delay: TimeInterval) {
+        queue.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.spawnIfNeeded()
+        }
+    }
+
+    /// Engine stdout/stderr land in ~/Library/Logs/Donkey/cut-engine.log; truncated when it grows
+    /// past a few MB so it never balloons.
+    private static func openLog() -> FileHandle? {
+        let fileManager = FileManager.default
+        let dir = fileManager.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Logs", isDirectory: true)
+            .appendingPathComponent("Donkey", isDirectory: true)
+        let file = dir.appendingPathComponent("cut-engine.log")
+        try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        let size = (try? fileManager.attributesOfItem(atPath: file.path))?[.size] as? Int ?? 0
+        if size > 5_000_000 { try? fileManager.removeItem(at: file) }
+        if !fileManager.fileExists(atPath: file.path) {
+            fileManager.createFile(atPath: file.path, contents: nil)
+        }
+        guard let handle = try? FileHandle(forWritingTo: file) else { return nil }
+        handle.seekToEndOfFile()
+        return handle
+    }
+}

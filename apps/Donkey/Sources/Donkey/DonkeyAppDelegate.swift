@@ -30,6 +30,9 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     /// run only while signed in and are torn down on sign-out.
     private var sessionHeartbeatTimer: Timer?
     private var sessionHeartbeatActiveObserver: NSObjectProtocol?
+    /// Runs the Donkey Cut engine (the local server behind cut.donkeyuse.com) for the app's
+    /// lifetime. Cut is free and standalone, so this starts regardless of sign-in state.
+    private var cutEngineSupervisor: DonkeyCutEngineSupervisor?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if ManualCaptureDebugLaunchHandler.shouldHandle(arguments: CommandLine.arguments) {
@@ -58,6 +61,10 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         }
         registerAuthCallbackHandler()
         installMainMenu()
+
+        let cutEngineSupervisor = DonkeyCutEngineSupervisor()
+        self.cutEngineSupervisor = cutEngineSupervisor
+        cutEngineSupervisor.start()
 
         // First install (never signed in) opens the onboarding card on its sign-in landing. A returning
         // user whose session has expired skips it: the notch comes up in login mode (driven by the auth
@@ -110,6 +117,7 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         )
         overlayController?.stop()
         uiUnderstandingCoordinator?.stop()
+        cutEngineSupervisor?.stop()
     }
 
     /// Where to open the onboarding card.

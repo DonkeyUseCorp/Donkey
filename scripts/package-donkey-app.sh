@@ -323,6 +323,43 @@ stage_bundled_tools() {
   echo "Baked bundled tools from $source_dir into $dest_dir (offline override)."
 }
 
+# The Donkey Cut engine — the local server behind cut.donkeyuse.com — is built from site/ by
+# `npm run engine:build` and version-locked to the app. Point DONKEY_CUT_ENGINE_BIN at the built
+# binary to bundle it; unset ships the app without Cut support.
+stage_cut_engine() {
+  local source_bin="${DONKEY_CUT_ENGINE_BIN:-}"
+  if [ -z "$source_bin" ]; then
+    echo "Not bundling the Donkey Cut engine (DONKEY_CUT_ENGINE_BIN unset)."
+    return 0
+  fi
+  if [ ! -f "$source_bin" ]; then
+    echo "DONKEY_CUT_ENGINE_BIN=$source_bin does not exist." >&2
+    exit 1
+  fi
+  local dest_dir="$RESOURCES_DIR/cut-engine"
+  mkdir -p "$dest_dir"
+  cp "$source_bin" "$dest_dir/donkey-cut-engine"
+  chmod +x "$dest_dir/donkey-cut-engine"
+  # Bun-compiled binaries JIT through JavaScriptCore; under the hardened runtime they need the
+  # JIT entitlements or the engine crashes at launch on a notarized build.
+  local ents
+  ents="$(mktemp -t cut-engine-entitlements).plist"
+  cat > "$ents" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>com.apple.security.cs.allow-jit</key><true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+</dict></plist>
+PLIST
+  local sopts=(--force --sign "$APP_SIGN_IDENTITY")
+  [ "$APP_SIGN_IDENTITY" != "-" ] && sopts+=(--options runtime --timestamp --entitlements "$ents")
+  [ -n "${DONKEY_SIGN_KEYCHAIN:-}" ] && sopts+=(--keychain "$DONKEY_SIGN_KEYCHAIN")
+  codesign "${sopts[@]}" "$dest_dir/donkey-cut-engine" >/dev/null 2>&1 || true
+  rm -f "$ents"
+  echo "Bundled the Donkey Cut engine from $source_bin."
+}
+
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$FRAMEWORKS_DIR"
 cp "$EXECUTABLE" "$MACOS_DIR/Donkey"
@@ -370,6 +407,7 @@ if [ -n "$SPARKLE_FRAMEWORK" ]; then
 fi
 
 stage_bundled_tools
+stage_cut_engine
 
 SPARKLE_PLIST_KEYS=""
 if [ -n "$SPARKLE_FEED_URL" ] && [ -n "$SPARKLE_PUBLIC_ED_KEY" ]; then

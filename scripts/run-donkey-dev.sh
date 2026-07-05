@@ -483,6 +483,16 @@ create_debug_app_bundle() {
     ln -sfn "$ROOT_DIR/vendor/donkey-tools" "$RESOURCES_DIR/donkey-tools"
   fi
 
+  # Stage the Donkey Cut engine (built by `npm run engine:build` in site/) so the app
+  # supervises it in dev. Optional: a build without it simply runs Donkey without Cut.
+  cut_engine_arch="$(uname -m)"
+  [ "$cut_engine_arch" = "x86_64" ] && cut_engine_arch="x64"
+  cut_engine="$ROOT_DIR/site/dist/cut-engine/donkey-cut-engine-$cut_engine_arch"
+  if [ -f "$cut_engine" ]; then
+    mkdir -p "$RESOURCES_DIR/cut-engine"
+    ln -sf "$cut_engine" "$RESOURCES_DIR/cut-engine/donkey-cut-engine"
+  fi
+
   sparkle_framework="$(find "$APP_DIR/.build" -path "*/debug/Sparkle.framework" -type d | head -n 1 || true)"
   if [ -n "$sparkle_framework" ]; then
     cp -R "$sparkle_framework" "$FRAMEWORKS_DIR/"
