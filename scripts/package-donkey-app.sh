@@ -323,17 +323,20 @@ stage_bundled_tools() {
   echo "Baked bundled tools from $source_dir into $dest_dir (offline override)."
 }
 
-# The Donkey Cut engine — the local server behind cut.donkeyuse.com — is built from site/ by
-# `npm run engine:build` and version-locked to the app. Point DONKEY_CUT_ENGINE_BIN at the built
-# binary to bundle it; unset ships the app without Cut support.
+# The Donkey Cut engine — the local server behind cut.donkeyuse.com — is version-locked to the
+# app and built here as part of packaging, so one command produces a complete app. Set
+# DONKEY_CUT_ENGINE_BIN to reuse a prebuilt binary (e.g. a cross-arch or cached CI build) instead.
 stage_cut_engine() {
   local source_bin="${DONKEY_CUT_ENGINE_BIN:-}"
   if [ -z "$source_bin" ]; then
-    echo "Not bundling the Donkey Cut engine (DONKEY_CUT_ENGINE_BIN unset)."
-    return 0
+    local arch
+    arch="$(uname -m)"; [ "$arch" = "x86_64" ] && arch="x64"
+    echo "Building the Donkey Cut engine..."
+    bash "$ROOT_DIR/site/scripts/build-cut-engine.sh"
+    source_bin="$ROOT_DIR/site/dist/cut-engine/donkey-cut-engine-$arch"
   fi
   if [ ! -f "$source_bin" ]; then
-    echo "DONKEY_CUT_ENGINE_BIN=$source_bin does not exist." >&2
+    echo "Donkey Cut engine binary not found at $source_bin." >&2
     exit 1
   fi
   local dest_dir="$RESOURCES_DIR/cut-engine"

@@ -483,11 +483,17 @@ create_debug_app_bundle() {
     ln -sfn "$ROOT_DIR/vendor/donkey-tools" "$RESOURCES_DIR/donkey-tools"
   fi
 
-  # Stage the Donkey Cut engine (built by `npm run engine:build` in site/) so the app
-  # supervises it in dev. Optional: a build without it simply runs Donkey without Cut.
+  # Build and stage the Donkey Cut engine so the app supervises a current copy — no separate
+  # manual build step. Non-fatal: a Cut build hiccup shouldn't block Donkey dev (the app just
+  # runs without Cut). Set DONKEY_BUILD_CUT_ENGINE=0 to skip.
   cut_engine_arch="$(uname -m)"
   [ "$cut_engine_arch" = "x86_64" ] && cut_engine_arch="x64"
   cut_engine="$ROOT_DIR/site/dist/cut-engine/donkey-cut-engine-$cut_engine_arch"
+  if [ "${DONKEY_BUILD_CUT_ENGINE:-1}" != "0" ] && [ -d "$ROOT_DIR/site" ]; then
+    echo "Building Donkey Cut engine..."
+    bash "$ROOT_DIR/site/scripts/build-cut-engine.sh" ||
+      echo "Warning: Cut engine build failed; running Donkey without Cut." >&2
+  fi
   if [ -f "$cut_engine" ]; then
     mkdir -p "$RESOURCES_DIR/cut-engine"
     ln -sf "$cut_engine" "$RESOURCES_DIR/cut-engine/donkey-cut-engine"

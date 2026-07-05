@@ -26,7 +26,7 @@ page polls → connects → works                     ├─ data: ~/Library/App
                                                   └─ version in /api/cut/engine/health
 ```
 
-- **Slice 3 — app-side supervision (done)**: the Donkey app spawns the engine at launch regardless of sign-in (Cut is free and standalone), via a supervisor in the runtime module: shell environment from the app's existing helper plus the engine flag, app version stamp, and tools dir; crash restarts with backoff; a health preflight skips spawning when another engine already owns the port; the app's quit path stops it. Engine logs go to the user's Logs folder, size-capped. Staging: dev builds symlink the built binary into the app bundle; release packaging copies and signs it with the JIT entitlements a bun binary needs under the hardened runtime; the nightly workflow builds the engine and passes it to packaging. The app builds clean with all of it.
+- **Slice 3 — app-side supervision (done)**: the Donkey app spawns the engine at launch regardless of sign-in (Cut is free and standalone), via a supervisor in the runtime module: shell environment from the app's existing helper plus the engine flag, app version stamp, and tools dir; crash restarts with backoff; a health preflight skips spawning when another engine already owns the port; the app's quit path stops it. Engine logs go to the user's Logs folder, size-capped. Staging is one automatic step: the dev run script and release packaging each build the engine (via `site/scripts/build-cut-engine.sh`, which installs site deps if missing) and stage it — dev symlinks it, release copies and signs it with the JIT entitlements a bun binary needs under the hardened runtime. `DONKEY_CUT_ENGINE_BIN` can point at a prebuilt binary to skip the build. The app builds clean with all of it.
 - **Slice 6 — docs (done)**: `docs/guides/cut.md` describes the app-hosted engine as supported behavior.
 
 ## Verification left
@@ -38,4 +38,4 @@ Code-complete and verified as far as this machine allows (engine smoke-tested en
 
 ## What Should Be Done Next
 
-Run a nightly (or local `package-donkey-app.sh` with `DONKEY_CUT_ENGINE_BIN` set), install the dmg, and verify the live path: app launch → engine on 41417 → cut.donkeyuse.com connects and edits. Then move this plan to `plans/done/`.
+Run a nightly (or local `package-donkey-app.sh`, which now builds and bundles the engine itself), install the dmg, and verify the live path: app launch → engine on 41417 → cut.donkeyuse.com connects and edits. Then move this plan to `plans/done/`.

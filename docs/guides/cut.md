@@ -28,7 +28,7 @@ Every Cut API route is a framework-free handler (web-standard request in, respon
 
 ## The engine
 
-The engine is a single compiled binary built from the site's Cut code (`npm run engine:build` in `site/`) and version-locked to the app: the app stamps its own release version into the engine's environment, and updates ride app releases. The Donkey app spawns it at launch — regardless of sign-in, since Cut is free and standalone — restarts it with backoff if it dies, skips spawning when another engine already answers on the port, and stops it on quit. Its data lives under the user's Application Support; its logs under the user's Logs folder.
+The engine is a single compiled binary built from the site's Cut code and version-locked to the app: the app's dev run script and release packaging build and bundle it automatically (no separate step), and the app stamps its own release version into the engine's environment, so updates ride app releases. The Donkey app spawns it at launch — regardless of sign-in, since Cut is free and standalone — restarts it with backoff if it dies, skips spawning when another engine already answers on the port, and stops it on quit. Its data lives under the user's Application Support; its logs under the user's Logs folder.
 
 Because a GUI-spawned process inherits a bare PATH, the engine rebuilds it: the app's bundled tools first (bundled tool always wins), then the user's login-shell PATH and common install dirs. That is how it finds ffmpeg, the user's `claude` and `codex`, and the prebuilt speech tool.
 
