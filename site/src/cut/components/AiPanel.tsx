@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import {
@@ -8,6 +8,7 @@ import {
   Check,
   ChevronDown,
   CircleDashed,
+  Copy,
   Ellipsis,
   FolderPlus,
   History,
@@ -118,12 +119,8 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
   const [model, setModel] = useState<string>(() =>
     typeof window === "undefined" ? "claude-fable-5" : localStorage.getItem(MODEL_KEY) ?? "claude-fable-5"
   );
-  // Concurrent chat sessions: every open chat stays mounted (hidden when not
-  // active) so a busy chat keeps streaming while you talk in another one.
-  const [openChats, setOpenChats] = useState<string[]>(() => [crypto.randomUUID()]);
-  const [active, setActive] = useState<string>(() => openChats[0]);
-  const [titles, setTitles] = useState<Record<string, string>>({});
-  const [busyMap, setBusyMap] = useState<Record<string, boolean>>({});
+  // One chat is active at a time; every past chat lives in the Threads panel.
+  const [activeChat, setActiveChat] = useState<string>(() => crypto.randomUUID());
   const [historyOpen, setHistoryOpen] = useState(false);
   const [threads, setThreads] = useState<ChatThread[]>([]);
 
@@ -138,36 +135,13 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
-  const onTitle = useCallback((id: string, title: string) => {
-    setTitles((p) => (p[id] === title ? p : { ...p, [id]: title }));
-  }, []);
-  const onBusy = useCallback((id: string, b: boolean) => {
-    setBusyMap((p) => (!!p[id] === b ? p : { ...p, [id]: b }));
-  }, []);
-
   const newChat = () => {
-    const id = crypto.randomUUID();
-    setOpenChats((p) => [...p, id]);
-    setActive(id);
+    setActiveChat(crypto.randomUUID());
     setHistoryOpen(false);
   };
 
-  const closeChat = (id: string) => {
-    const idx = openChats.indexOf(id);
-    const next = openChats.filter((x) => x !== id);
-    if (next.length === 0) {
-      const fresh = crypto.randomUUID();
-      setOpenChats([fresh]);
-      setActive(fresh);
-      return;
-    }
-    setOpenChats(next);
-    if (active === id) setActive(next[Math.min(Math.max(idx - 1, 0), next.length - 1)]);
-  };
-
-  const openThreadTab = (t: ChatThread) => {
-    if (!openChats.includes(t.id)) setOpenChats((p) => [...p, t.id]);
-    setActive(t.id);
+  const openThread = (t: ChatThread) => {
+    setActiveChat(t.id);
     setHistoryOpen(false);
   };
 
@@ -179,9 +153,9 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
   const deleteThread = (id: string) => {
     writeThreads(readThreads().filter((t) => t.id !== id));
     setThreads((p) => p.filter((t) => t.id !== id));
-    // Close its tab too — a still-open chat would re-save itself on the next
-    // message and resurrect the thread.
-    if (openChats.includes(id)) closeChat(id);
+    // If the open chat was deleted, start a fresh one so it can't re-save
+    // itself on the next message and resurrect the thread.
+    if (activeChat === id) setActiveChat(crypto.randomUUID());
   };
 
   const selectModel = (id: string) => {
@@ -218,41 +192,6 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
         </Button>
       </div>
 
-      {openChats.length > 1 && (
-        <div className="ai-chat-tabs flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2 py-1.5">
-          {openChats.map((id, i) => (
-            <div
-              key={id}
-              role="tab"
-              aria-selected={active === id}
-              className={cn(
-                "group flex max-w-36 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[11px] transition-colors",
-                active === id
-                  ? "bg-muted font-medium text-foreground"
-                  : "text-muted-foreground hover:bg-muted/60"
-              )}
-              onClick={() => setActive(id)}
-            >
-              {busyMap[id] && (
-                <CircleDashed className="size-2.5 shrink-0 animate-spin text-[#0a84ff]" />
-              )}
-              <span className="truncate">{titles[id] ?? `Chat ${i + 1}`}</span>
-              <button
-                aria-label="Close chat"
-                title="Close chat"
-                className="rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/10"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  closeChat(id);
-                }}
-              >
-                <X className="size-3" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
       {historyOpen && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => setHistoryOpen(false)} />
@@ -263,7 +202,7 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
                 <X />
               </Button>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto p-2">
+            <div className="ai-thread-items flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2">
               {threads.length === 0 ? (
                 <p className="px-2 py-3 text-[11.5px] leading-relaxed text-muted-foreground">
                   No past threads yet.
@@ -272,11 +211,8 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
                 threads.map((t) => (
                   <button
                     key={t.id}
-                    className={cn(
-                      "group relative flex w-full flex-col gap-0.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-muted",
-                      openChats.includes(t.id) && "bg-muted/70"
-                    )}
-                    onClick={() => openThreadTab(t)}
+                    className="group relative flex w-full flex-col gap-0.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-muted"
+                    onClick={() => openThread(t)}
                   >
                     <span className="w-full truncate pr-6 text-[12px] font-medium">{t.title}</span>
                     <span className="text-[10.5px] text-muted-foreground">
@@ -307,40 +243,29 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
         </>
       )}
 
-      {openChats.map((id) => (
-        <ChatSession
-          key={id}
-          threadId={id}
-          visible={id === active}
-          info={info}
-          model={model}
-          onModelChange={selectModel}
-          onTitle={onTitle}
-          onBusy={onBusy}
-        />
-      ))}
+      <ChatSession
+        key={activeChat}
+        threadId={activeChat}
+        info={info}
+        model={model}
+        onModelChange={selectModel}
+      />
     </aside>
   );
 }
 
-/** One chat with the agent. Stays mounted while hidden so its stream, tool
- * calls, and provider session survive tab switches. */
+/** One chat with the agent. Remounts per active thread; its messages and
+ * provider session are restored from the saved thread on open. */
 function ChatSession({
   threadId,
-  visible,
   info,
   model,
   onModelChange,
-  onTitle,
-  onBusy,
 }: {
   threadId: string;
-  visible: boolean;
   info: ModelsInfo | null;
   model: string;
   onModelChange: (id: string) => void;
-  onTitle: (id: string, title: string) => void;
-  onBusy: (id: string, busy: boolean) => void;
 }) {
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<ChatAsset[]>([]);
@@ -414,12 +339,7 @@ function ChatSession({
 
   const busy = status === "submitted" || status === "streaming";
 
-  useEffect(() => {
-    onBusy(threadId, busy);
-    return () => onBusy(threadId, false);
-  }, [busy, threadId, onBusy]);
-
-  // Keep the thread saved (and its tab title fresh) as it grows.
+  // Keep the thread saved (so it shows up in the Threads panel) as it grows.
   useEffect(() => {
     if (messages.length === 0) return;
     const firstUser = messages.find((m) => m.role === "user");
@@ -429,7 +349,6 @@ function ChatSession({
         .join("")
         .trim()
         .slice(0, 80) || "New chat";
-    onTitle(threadId, title);
     const rest = readThreads().filter((t) => t.id !== threadId);
     writeThreads([
       {
@@ -441,13 +360,13 @@ function ChatSession({
       },
       ...rest,
     ]);
-  }, [messages, threadId, onTitle]);
+  }, [messages, threadId]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, busy, visible]);
+  }, [messages, busy]);
 
   const send = (text: string) => {
     const t = text.trim();
@@ -471,12 +390,11 @@ function ChatSession({
     );
   };
 
-  const current = info?.models.find((m) => m.id === model);
   const currentAvailable = info ? info.providers[provider(model)]?.available !== false : true;
 
   return (
     <div
-      className={cn("relative flex min-h-0 flex-1 flex-col", !visible && "hidden")}
+      className="relative flex min-h-0 flex-1 flex-col"
       onDragEnter={(e) => {
         if (hasAssetDrag(e)) {
           e.preventDefault();
@@ -603,10 +521,6 @@ function ChatSession({
             {PROVIDER_LABEL[provider(model)]}: {info.providers[provider(model)]?.note}
           </p>
         )}
-        <p className="mt-1.5 px-1 text-[10px] leading-relaxed text-muted-foreground/70">
-          Runs locally through your {current?.provider === "codex" ? "Codex" : "Claude Code"} sign-in.
-          Every edit is undoable.
-        </p>
       </div>
     </div>
   );
@@ -686,13 +600,34 @@ function MessageAssetCard({ asset }: { asset: ChatAsset }) {
   );
 }
 
+/** Copy-to-clipboard affordance revealed on message hover. */
+function MessageCopy({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  if (!text) return null;
+  return (
+    <button
+      aria-label="Copy message"
+      title="Copy"
+      className="ai-msg-copy grid size-6 place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-muted hover:text-foreground"
+      onClick={() => {
+        void navigator.clipboard.writeText(text).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        });
+      }}
+    >
+      {copied ? <Check className="size-3.5 text-emerald-600" /> : <Copy className="size-3.5" />}
+    </button>
+  );
+}
+
 function MessageView({ message }: { message: UIMessage }) {
   if (message.role === "user") {
     const text = message.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
     const attachments = (message.metadata as { attachments?: ChatAsset[] } | undefined)
       ?.attachments;
     return (
-      <div className="ai-msg-user mb-3 flex flex-col items-end gap-1.5">
+      <div className="ai-msg-user group mb-3 flex flex-col items-end gap-1">
         {attachments && attachments.length > 0 && (
           <div className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
             {attachments.map((a) => (
@@ -705,11 +640,13 @@ function MessageView({ message }: { message: UIMessage }) {
             {text}
           </div>
         )}
+        <MessageCopy text={text} />
       </div>
     );
   }
+  const text = message.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
   return (
-    <div className="ai-msg-assistant mb-3 flex flex-col gap-1.5">
+    <div className="ai-msg-assistant group mb-3 flex flex-col gap-1.5">
       {message.parts.map((part, i) => {
         if (part.type === "text") {
           return (
@@ -765,6 +702,7 @@ function MessageView({ message }: { message: UIMessage }) {
         }
         return null;
       })}
+      <MessageCopy text={text} />
     </div>
   );
 }
