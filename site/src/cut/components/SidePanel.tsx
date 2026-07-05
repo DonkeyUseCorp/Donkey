@@ -1,8 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Captions, Check, Circle, Copy, Film, FolderOpen, FolderPlus, Loader2, Mic, Music, Play, Plus, Send, Upload, Video } from "lucide-react";
+import { Captions, Check, Circle, ClipboardList, Copy, Film, FolderOpen, FolderPlus, Loader2, Mic, Music, Play, Plus, Trash2, Upload, Video } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -10,9 +20,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { apiFetch, apiUrl } from "@/cut/lib/api";
-import { setAssetDragData } from "@/cut/lib/assetDrag";
+import { clearAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
 import {
   addLibraryAssetToProject,
+  deleteFromLibrary,
   fetchLibrary,
   saveAssetToLibrary,
   type LibraryAsset,
@@ -34,7 +45,7 @@ const TABS: { id: Tab; label: string; icon: typeof Film }[] = [
   { id: "library", label: "Library", icon: FolderOpen },
   { id: "record", label: "Record", icon: Circle },
   { id: "subtitles", label: "Subtitles", icon: Captions },
-  { id: "publish", label: "Publish", icon: Send },
+  { id: "publish", label: "Details", icon: ClipboardList },
 ];
 
 export function SidePanel({
@@ -280,13 +291,18 @@ function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string 
     }
   };
 
+  const remove = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    useEditor.getState().removeAsset(asset.id);
+  };
+
   return (
-    <button
+    <div
       className="asset-card group flex flex-col gap-1.5 text-left"
-      title="Add to timeline"
+      title="Drag onto the timeline, or click + to add"
       draggable
       onDragStart={(e) => setAssetDragData(e, asset.id)}
-      onClick={add}
+      onDragEnd={clearAssetDrag}
       onMouseEnter={() => {
         void videoRef.current?.play().catch(() => {});
       }}
@@ -318,29 +334,61 @@ function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string 
         <span className="absolute right-1 bottom-1 rounded-[5px] bg-black/65 px-1 py-px font-mono text-[9.5px] text-white tabular-nums">
           {formatTime(asset.duration)}
         </span>
-        <span className="absolute top-1 left-1 grid size-5 scale-75 place-items-center rounded-full bg-primary text-primary-foreground opacity-0 transition-all group-hover:scale-100 group-hover:opacity-100">
-          <Plus className="size-3" />
-        </span>
         <span
           role="button"
-          title="Save to library for reuse"
-          className="absolute top-1 right-1 grid size-5 place-items-center rounded-full bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/65"
-          onClick={saveToLibrary}
+          title="Add to timeline"
+          className="absolute top-1 left-1 grid size-5 scale-75 cursor-pointer place-items-center rounded-full bg-primary text-primary-foreground opacity-0 transition-all group-hover:scale-100 group-hover:opacity-100 hover:brightness-110"
+          onClick={(e) => {
+            e.stopPropagation();
+            add();
+          }}
         >
-          {saved ? <Check className="size-3" /> : <FolderPlus className="size-3" />}
+          <Plus className="size-3" />
+        </span>
+        <span className="absolute top-1 right-1 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+          <span
+            role="button"
+            title="Save to library for reuse"
+            className="grid size-5 place-items-center rounded-full bg-black/45 text-white hover:bg-black/65"
+            onClick={saveToLibrary}
+          >
+            {saved ? <Check className="size-3" /> : <FolderPlus className="size-3" />}
+          </span>
+          <span
+            role="button"
+            title="Remove from project"
+            className="grid size-5 place-items-center rounded-full bg-black/45 text-white hover:bg-black/65"
+            onClick={remove}
+          >
+            <Trash2 className="size-3" />
+          </span>
         </span>
       </div>
       <div className="truncate text-[11px] text-muted-foreground">{asset.name}</div>
-    </button>
+    </div>
   );
 }
 
 function LibraryPanel({ projectId }: { projectId: string }) {
   const [assets, setAssets] = useState<LibraryAsset[] | null>(null);
+  const [deleting, setDeleting] = useState<LibraryAsset | null>(null);
 
   useEffect(() => {
     void fetchLibrary().then(setAssets).catch(() => setAssets([]));
   }, []);
+
+  const remove = async () => {
+    if (!deleting) return;
+    const id = deleting.id;
+    setAssets((prev) => (prev ?? []).filter((a) => a.id !== id));
+    setDeleting(null);
+    try {
+      await deleteFromLibrary(id);
+    } catch {
+      // Server delete failed; pull a fresh list so the UI stays truthful.
+      void fetchLibrary().then(setAssets).catch(() => {});
+    }
+  };
 
   return (
     <>
@@ -359,10 +407,34 @@ function LibraryPanel({ projectId }: { projectId: string }) {
               key={a.id}
               asset={a}
               onUse={() => void addLibraryAssetToProject(projectId, a)}
+              onDelete={() => setDeleting(a)}
             />
           ))}
         </div>
       )}
+
+      <AlertDialog open={!!deleting} onOpenChange={(o) => !o && setDeleting(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove “{deleting?.name}” from the library?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Projects that already use it keep their own copy.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive/10 text-destructive hover:bg-destructive/20"
+              onClick={(e) => {
+                e.preventDefault();
+                void remove();
+              }}
+            >
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
@@ -399,7 +471,7 @@ function PublishPanel() {
 
   return (
     <>
-      <PanelHead title="Publish" />
+      <PanelHead title="Details" />
       <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-3.5 pb-4">
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between">
