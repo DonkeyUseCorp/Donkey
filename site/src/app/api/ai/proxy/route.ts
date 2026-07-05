@@ -4,9 +4,12 @@ export const runtime = "nodejs";
 
 import { callBrowserTool } from "@/cut/server/ai/bridge";
 import { AI_SKILL_INDEX, AI_SKILLS, AI_TOOLS } from "@/cut/server/ai/catalog";
+import { hostedApiBlock } from "@/cut/server/local-only";
 
 /** MCP-shaped tool catalog for the stdio proxy. */
 export async function GET(req: Request) {
+  const blocked = hostedApiBlock();
+  if (blocked) return blocked;
   const type = new URL(req.url).searchParams.get("type");
   if (type !== "catalog") return NextResponse.json({ error: "Bad request." }, { status: 400 });
   return NextResponse.json({
@@ -24,6 +27,8 @@ const text = (value: unknown) => ({
 
 /** Execute one tool call: server-side skills directly, editor tools via the browser. */
 export async function POST(req: Request) {
+  const blocked = hostedApiBlock();
+  if (blocked) return blocked;
   const { sessionKey, name, args } = (await req.json()) as {
     sessionKey?: string;
     name?: string;

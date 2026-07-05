@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { assertLocalRuntime } from "./local-only";
 import { mediaPath as projectMediaPath, readProject } from "./projects";
 import { exists, uniqueName } from "./util";
 
@@ -25,12 +26,14 @@ interface LibraryIndex {
 }
 
 export function libMediaPath(fileName: string) {
+  assertLocalRuntime();
   const safe = path.basename(fileName);
   if (!safe || safe.startsWith(".")) throw new Error("Invalid file name.");
   return path.join(LIB_MEDIA, safe);
 }
 
 async function readIndex(): Promise<LibraryIndex> {
+  assertLocalRuntime();
   try {
     return JSON.parse(await readFile(INDEX, "utf8")) as LibraryIndex;
   } catch {
@@ -39,6 +42,7 @@ async function readIndex(): Promise<LibraryIndex> {
 }
 
 async function writeIndex(idx: LibraryIndex) {
+  assertLocalRuntime();
   await mkdir(LIB_MEDIA, { recursive: true });
   await writeFile(INDEX, JSON.stringify(idx, null, 2));
 }

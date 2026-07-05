@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 
 import { AI_MODELS } from "@/cut/server/ai/models";
+import { hostedApiBlock } from "@/cut/server/local-only";
 
 function probe(cmd: string, args: string[]): Promise<{ ok: boolean; note: string }> {
   return new Promise((resolve) => {
@@ -27,6 +28,8 @@ const g = globalThis as unknown as {
 };
 
 export async function GET() {
+  const blocked = hostedApiBlock();
+  if (blocked) return blocked;
   const cached = g.__veditorAiProbe;
   let value = cached && Date.now() - cached.at < 60_000 ? cached.value : null;
   if (!value) {

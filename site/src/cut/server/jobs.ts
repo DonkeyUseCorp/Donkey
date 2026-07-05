@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { assertLocalRuntime } from "./local-only";
 import { exportsDir, mediaPath, readProject } from "./projects";
 import { hasStream, num } from "./util";
 
@@ -71,6 +72,7 @@ function stamp() {
 }
 
 export async function createJob(form: FormData): Promise<Job> {
+  assertLocalRuntime();
   const spec = JSON.parse(String(form.get("spec"))) as ExportSpec;
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "veditor-"));
   const id = crypto.randomUUID().slice(0, 12);

@@ -1,6 +1,7 @@
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ProjectDoc, ProjectSummary } from "@/cut/lib/types";
+import { assertLocalRuntime } from "./local-only";
 import { exists, uniqueName } from "./util";
 
 /** All projects live here; each project is one folder holding project.json,
@@ -10,6 +11,7 @@ export const PROJECTS_ROOT = path.join(process.cwd(), "projects");
 const ID_RE = /^[a-z0-9][a-z0-9-]{2,40}$/;
 
 export function projectDir(id: string) {
+  assertLocalRuntime();
   if (!ID_RE.test(id)) throw new Error("Invalid project id.");
   return path.join(PROJECTS_ROOT, id);
 }
@@ -109,6 +111,7 @@ function summarize(id: string, doc: ProjectDoc): ProjectSummary {
 }
 
 export async function listProjects(): Promise<ProjectSummary[]> {
+  assertLocalRuntime();
   await mkdir(PROJECTS_ROOT, { recursive: true });
   const entries = await readdir(PROJECTS_ROOT, { withFileTypes: true });
   const names = entries

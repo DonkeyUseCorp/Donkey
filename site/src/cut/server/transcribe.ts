@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { assertLocalRuntime } from "./local-only";
 import { mediaPath, readProject } from "./projects";
 import { hasStream, num, round } from "./util";
 
@@ -121,6 +122,7 @@ export function groupWords(words: Word[]): Cue[] {
 }
 
 export async function createTranscribeJob(spec: TranscribeSpec): Promise<TranscribeJob> {
+  assertLocalRuntime();
   const job: TranscribeJob = {
     id: crypto.randomUUID().slice(0, 12),
     projectId: spec.projectId,

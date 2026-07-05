@@ -8,6 +8,7 @@ export const runtime = "nodejs";
 
 import { callBrowserTool, registerSession, unregisterSession, type UIChunkWriter } from "@/cut/server/ai/bridge";
 import { systemPrompt } from "@/cut/server/ai/catalog";
+import { hostedApiBlock } from "@/cut/server/local-only";
 
 interface ChatBody {
   messages: UIMessage[];
@@ -46,6 +47,8 @@ function lastUserAttachments(messages: UIMessage[]): unknown[] {
 }
 
 export async function POST(req: Request) {
+  const blocked = hostedApiBlock();
+  if (blocked) return blocked;
   const body = (await req.json()) as ChatBody;
   const base = new URL(req.url).origin;
   const sessionKey = crypto.randomUUID();

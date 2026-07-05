@@ -3,9 +3,12 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 
 import { resolveBrowserTool } from "@/cut/server/ai/bridge";
+import { hostedApiBlock } from "@/cut/server/local-only";
 
 /** The browser posts tool outputs here after executing them on the store. */
 export async function POST(req: Request) {
+  const blocked = hostedApiBlock();
+  if (blocked) return blocked;
   const { sessionKey, toolCallId, output, errorText } = (await req.json()) as {
     sessionKey?: string;
     toolCallId?: string;
