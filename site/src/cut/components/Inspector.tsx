@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Bold } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,7 +14,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useEditor } from "@/cut/lib/store";
-import { PLATE_RADIUS } from "@/cut/lib/textRender";
+import { PLATE_COLOR, PLATE_OPACITY, PLATE_RADIUS } from "@/cut/lib/textRender";
 import { formatTime } from "@/cut/lib/time";
 import { FONTS, type AudioClip, type TextOverlay, type VideoClip } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
@@ -50,6 +50,70 @@ function readRecentColors(): string[] {
   } catch {
     return [];
   }
+}
+
+/** Preset swatches, recent custom colors, and an eyedropper. `onBegin` marks
+ * an undo checkpoint, `onLive` streams the drag, `onCommit` sets a final pick. */
+function ColorSwatches({
+  value,
+  onBegin,
+  onLive,
+  onCommit,
+}: {
+  value: string;
+  onBegin: () => void;
+  onLive: (c: string) => void;
+  onCommit: (c: string) => void;
+}) {
+  const [recents, setRecents] = useState<string[]>(() =>
+    typeof window === "undefined" ? [] : readRecentColors()
+  );
+
+  const recordRecent = (c: string) => {
+    if (SWATCHES.some((s) => s.toUpperCase() === c.toUpperCase())) return;
+    const next = [c, ...recents.filter((r) => r.toUpperCase() !== c.toUpperCase())].slice(0, 3);
+    setRecents(next);
+    try {
+      localStorage.setItem(RECENT_COLORS_KEY, JSON.stringify(next));
+    } catch {
+      // Storage full/blocked — recents just won't persist.
+    }
+  };
+
+  return (
+    <div className="flex max-w-44 flex-wrap items-center justify-end gap-1.5">
+      {[...SWATCHES, ...recents].map((c) => (
+        <button
+          key={c}
+          title={c}
+          aria-label={`Color ${c}`}
+          className={cn(
+            "size-5 rounded-full border border-black/15 transition-transform hover:scale-110",
+            value.toUpperCase() === c.toUpperCase() &&
+              "ring-2 ring-primary ring-offset-2 ring-offset-card"
+          )}
+          style={{ background: c }}
+          onClick={() => onCommit(c)}
+        />
+      ))}
+      <label
+        title="Custom color"
+        className="color-picker-well relative size-5 cursor-pointer rounded-full border border-black/15 bg-[conic-gradient(from_0deg,#f43f5e,#f59e0b,#84cc16,#06b6d4,#6366f1,#d946ef,#f43f5e)] transition-transform hover:scale-110"
+      >
+        <span className="absolute inset-1 rounded-full bg-card" />
+        <span className="absolute inset-[5px] rounded-full" style={{ background: value }} />
+        <input
+          type="color"
+          aria-label="Pick a custom color"
+          className="absolute inset-0 size-full cursor-pointer opacity-0"
+          value={/^#[0-9a-fA-F]{6}$/.test(value) ? value : "#ffffff"}
+          onFocus={onBegin}
+          onChange={(e) => onLive(e.target.value)}
+          onBlur={() => recordRecent(value)}
+        />
+      </label>
+    </div>
+  );
 }
 
 export function Inspector() {
@@ -227,19 +291,7 @@ function TextPanel({ overlay: o }: { overlay: TextOverlay }) {
   const update = useEditor((s) => s.updateOverlay);
   const sizeCk = useSliderCheckpoint();
   const radiusCk = useSliderCheckpoint();
-  const [recents, setRecents] = useState<string[]>([]);
-  useEffect(() => setRecents(readRecentColors()), []);
-
-  const recordRecent = (c: string) => {
-    if (SWATCHES.some((s) => s.toUpperCase() === c.toUpperCase())) return;
-    const next = [c, ...recents.filter((r) => r.toUpperCase() !== c.toUpperCase())].slice(0, 3);
-    setRecents(next);
-    try {
-      localStorage.setItem(RECENT_COLORS_KEY, JSON.stringify(next));
-    } catch {
-      // Storage full/blocked — recents just won't persist.
-    }
-  };
+  const opacityCk = useSliderCheckpoint();
   return (
     <>
       <PanelTitle>Title</PanelTitle>
@@ -296,45 +348,12 @@ function TextPanel({ overlay: o }: { overlay: TextOverlay }) {
           <Value className="w-9 text-right text-muted-foreground">{o.size}</Value>
         </Row>
         <Row label="Color">
-          <div className="flex max-w-44 flex-wrap items-center justify-end gap-1.5">
-            {[...SWATCHES, ...recents].map((c) => (
-              <button
-                key={c}
-                title={c}
-                aria-label={`Color ${c}`}
-                className={cn(
-                  "size-5 rounded-full border border-black/15 transition-transform hover:scale-110",
-                  o.color.toUpperCase() === c.toUpperCase() &&
-                    "ring-2 ring-primary ring-offset-2 ring-offset-card"
-                )}
-                style={{ background: c }}
-                onClick={() => update(o.id, { color: c })}
-              />
-            ))}
-            <label
-              title="Custom color"
-              className="color-picker-well relative size-5 cursor-pointer rounded-full border border-black/15 bg-[conic-gradient(from_0deg,#f43f5e,#f59e0b,#84cc16,#06b6d4,#6366f1,#d946ef,#f43f5e)] transition-transform hover:scale-110"
-            >
-              <span className="absolute inset-1 rounded-full bg-card" />
-              <span className="absolute inset-[5px] rounded-full" style={{ background: o.color }} />
-              <input
-                type="color"
-                aria-label="Pick a custom color"
-                className="absolute inset-0 size-full cursor-pointer opacity-0"
-                value={/^#[0-9a-fA-F]{6}$/.test(o.color) ? o.color : "#ffffff"}
-                onFocus={() => useEditor.getState().pushHistory()}
-                onChange={(e) =>
-                  useEditor.getState().updateOverlayTransient(o.id, { color: e.target.value })
-                }
-                onBlur={() => {
-                  const c = useEditor
-                    .getState()
-                    .overlays.find((x) => x.id === o.id)?.color;
-                  if (c) recordRecent(c);
-                }}
-              />
-            </label>
-          </div>
+          <ColorSwatches
+            value={o.color}
+            onBegin={() => useEditor.getState().pushHistory()}
+            onLive={(c) => useEditor.getState().updateOverlayTransient(o.id, { color: c })}
+            onCommit={(c) => update(o.id, { color: c })}
+          />
         </Row>
         <Row label="Shadow">
           <Switch checked={o.shadow} onCheckedChange={(v) => update(o.id, { shadow: v })} />
@@ -343,23 +362,50 @@ function TextPanel({ overlay: o }: { overlay: TextOverlay }) {
           <Switch checked={o.plate} onCheckedChange={(v) => update(o.id, { plate: v })} />
         </Row>
         {o.plate && (
-          <Row label="Radius">
-            <Slider
-              className="data-horizontal:w-24"
-              min={0}
-              max={1}
-              step={0.01}
-              value={o.plateRadius ?? PLATE_RADIUS}
-              onValueChange={(v) => {
-                radiusCk.begin();
-                useEditor.getState().updateOverlayTransient(o.id, { plateRadius: Number(v) });
-              }}
-              onValueCommitted={radiusCk.end}
-            />
-            <Value className="w-9 text-right text-muted-foreground">
-              {Math.round((o.plateRadius ?? PLATE_RADIUS) * 100)}
-            </Value>
-          </Row>
+          <>
+            <Row label="Backdrop color">
+              <ColorSwatches
+                value={o.plateColor ?? PLATE_COLOR}
+                onBegin={() => useEditor.getState().pushHistory()}
+                onLive={(c) => useEditor.getState().updateOverlayTransient(o.id, { plateColor: c })}
+                onCommit={(c) => update(o.id, { plateColor: c })}
+              />
+            </Row>
+            <Row label="Opacity">
+              <Slider
+                className="data-horizontal:w-24"
+                min={0}
+                max={1}
+                step={0.01}
+                value={o.plateOpacity ?? PLATE_OPACITY}
+                onValueChange={(v) => {
+                  opacityCk.begin();
+                  useEditor.getState().updateOverlayTransient(o.id, { plateOpacity: Number(v) });
+                }}
+                onValueCommitted={opacityCk.end}
+              />
+              <Value className="w-9 text-right text-muted-foreground">
+                {Math.round((o.plateOpacity ?? PLATE_OPACITY) * 100)}
+              </Value>
+            </Row>
+            <Row label="Radius">
+              <Slider
+                className="data-horizontal:w-24"
+                min={0}
+                max={1}
+                step={0.01}
+                value={o.plateRadius ?? PLATE_RADIUS}
+                onValueChange={(v) => {
+                  radiusCk.begin();
+                  useEditor.getState().updateOverlayTransient(o.id, { plateRadius: Number(v) });
+                }}
+                onValueCommitted={radiusCk.end}
+              />
+              <Value className="w-9 text-right text-muted-foreground">
+                {Math.round((o.plateRadius ?? PLATE_RADIUS) * 100)}
+              </Value>
+            </Row>
+          </>
         )}
         <p className="mt-2.5 text-[11.5px] leading-relaxed text-muted-foreground">
           Drag the title in the preview to place it; use the corner handle to resize.

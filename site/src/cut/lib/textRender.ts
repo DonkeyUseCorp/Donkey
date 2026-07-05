@@ -6,8 +6,20 @@ export const LINE_HEIGHT = 1.25;
 export const PLATE_PAD_X = 0.55; // em
 export const PLATE_PAD_Y = 0.3; // em
 export const PLATE_RADIUS = 0.32; // em
+export const PLATE_COLOR = "#000000";
+export const PLATE_OPACITY = 0.55;
 export const PLATE_FILL = "rgba(0, 0, 0, 0.55)";
 export const SHADOW = { color: "rgba(0, 0, 0, 0.65)", blur: 14, offsetY: 2 };
+
+/** A title's plate fill as an rgba() string, defaulting to translucent black
+ * when color/opacity are unset. Shared by the preview and the export burn-in. */
+export function plateFill(o: { plateColor?: string; plateOpacity?: number }): string {
+  const a = o.plateOpacity ?? PLATE_OPACITY;
+  const m = /^#?([0-9a-fA-F]{6})$/.exec((o.plateColor ?? PLATE_COLOR).trim());
+  if (!m) return `rgba(0, 0, 0, ${a})`;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
 
 /**
  * Render an overlay to a transparent full-frame PNG at the export resolution.
@@ -46,7 +58,7 @@ export async function renderOverlayPng(
     const r = (overlay.plateRadius ?? PLATE_RADIUS) * fpx;
     const w = maxW + padX * 2;
     const h = totalH + padY * 2;
-    ctx.fillStyle = PLATE_FILL;
+    ctx.fillStyle = plateFill(overlay);
     ctx.beginPath();
     ctx.roundRect(cx - w / 2, cy - h / 2, w, h, r);
     ctx.fill();

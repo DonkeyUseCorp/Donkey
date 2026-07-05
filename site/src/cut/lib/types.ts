@@ -95,8 +95,13 @@ export interface TextOverlay {
   weight: 400 | 700;
   color: string;
   shadow: boolean;
-  plate: boolean; // translucent rounded plate behind the text
+  plate: boolean; // rounded plate behind the text
   plateRadius?: number; // plate corner radius in em (default PLATE_RADIUS)
+  plateColor?: string; // plate fill color (default black)
+  plateOpacity?: number; // plate fill opacity 0..1 (default PLATE_OPACITY)
+  /** Which title track (row) this sits on, 0-based. Tracks are kept
+   * contiguous: empty ones collapse and dragging past the last adds one. */
+  lane?: number;
 }
 
 /** One subtitle caption, timed against the timeline (not the source files). */

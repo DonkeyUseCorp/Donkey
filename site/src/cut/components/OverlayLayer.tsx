@@ -10,6 +10,7 @@ import {
   PLATE_PAD_X,
   PLATE_PAD_Y,
   PLATE_RADIUS,
+  plateFill,
   SHADOW,
 } from "@/cut/lib/textRender";
 import { FRAME, fontStack, type TextOverlay } from "@/cut/lib/types";
@@ -127,7 +128,7 @@ function OverlayItem({
     textShadow: o.shadow
       ? `0 ${SHADOW.offsetY * scale}px ${SHADOW.blur * scale}px ${SHADOW.color}`
       : undefined,
-    background: o.plate ? PLATE_FILL : undefined,
+    background: o.plate ? plateFill(o) : undefined,
     padding: o.plate ? PLATE_PADDING : undefined,
     borderRadius: o.plate ? `${o.plateRadius ?? PLATE_RADIUS}em` : undefined,
     opacity: ghost ? 0.35 : 1,

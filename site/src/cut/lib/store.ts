@@ -83,6 +83,9 @@ interface EditorState {
   addClipFromAsset: (assetId: string, index?: number) => void;
   addAudioFromAsset: (assetId: string, start?: number) => void;
   addOverlay: () => void;
+  /** Move a title to a title track (row); lanes are renumbered to stay
+   * contiguous, so empty tracks collapse and a past-the-end lane adds one. */
+  moveOverlayToLane: (id: string, lane: number) => void;
   updateClip: (id: string, patch: Partial<VideoClip>) => void;
   updateAudio: (id: string, patch: Partial<AudioClip>) => void;
   updateOverlay: (id: string, patch: Partial<TextOverlay>) => void;
@@ -369,11 +372,26 @@ export const useEditor = create<EditorState>((set, get) => {
         color: "#FFFFFF",
         shadow: true,
         plate: false,
+        lane: 0,
       };
       set((s) => ({
         overlays: [...s.overlays, overlay],
         selection: { kind: "text", id: overlay.id },
       }));
+    },
+
+    moveOverlayToLane: (id, lane) => {
+      const overlays = get().overlays;
+      if (!overlays.some((o) => o.id === id)) return;
+      // No checkpoint here: the drag gesture that calls this already pushed
+      // one at pointer-down, so the whole move is a single undo step.
+      // Drop the title on the target row, then renumber so lanes stay
+      // contiguous — empty tracks vanish, and a past-the-end target becomes a
+      // fresh top-numbered track.
+      const moved = overlays.map((o) => (o.id === id ? { ...o, lane } : o));
+      const used = [...new Set(moved.map((o) => o.lane ?? 0))].sort((a, b) => a - b);
+      const remap = new Map(used.map((l, i) => [l, i]));
+      set({ overlays: moved.map((o) => ({ ...o, lane: remap.get(o.lane ?? 0) ?? 0 })) });
     },
 
     // The non-transient updaters are just a checkpoint plus the live update.

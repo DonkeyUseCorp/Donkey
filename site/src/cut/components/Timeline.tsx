@@ -116,6 +116,32 @@ export function Timeline() {
     if (from >= 0) s.moveClip(id, dropIndex(sp, from, dx / s.pxPerSec));
   }, []);
 
+  // Title tracks: overlays carry a `lane`; used lanes compact to contiguous
+  // display rows, so empty tracks disappear on their own.
+  const [textDrag, setTextDrag] = useState<{ id: string; targetRow: number } | null>(null);
+  const overlayLanes = useMemo(() => {
+    const used = [...new Set(overlays.map((o) => o.lane ?? 0))].sort((a, b) => a - b);
+    const rowOf = new Map(used.map((l, i) => [l, i]));
+    return { used, rowOf, count: used.length };
+  }, [overlays]);
+
+  const onTextLaneDrag = useCallback(
+    (id: string, targetRow: number) => setTextDrag({ id, targetRow }),
+    []
+  );
+  const onTextLaneDrop = useCallback((id: string, targetRow: number) => {
+    setTextDrag(null);
+    const s = useEditor.getState();
+    const used = [...new Set(s.overlays.map((o) => o.lane ?? 0))].sort((a, b) => a - b);
+    const cur = s.overlays.find((o) => o.id === id);
+    if (!cur) return;
+    const curRow = used.indexOf(cur.lane ?? 0);
+    if (targetRow === curRow) return;
+    // A row past the end becomes a brand-new track above the current max.
+    const lane = targetRow < used.length ? used[targetRow] : (used[used.length - 1] ?? -1) + 1;
+    s.moveOverlayToLane(id, lane);
+  }, []);
+
   const timeAt = (clientX: number) => {
     const rect = innerRef.current!.getBoundingClientRect();
     return (clientX - rect.left) / pps;
@@ -404,15 +430,31 @@ export function Timeline() {
           )}
 
           {overlays.length > 0 && (
-            <div className="relative mt-1.5" style={{ height: TEXT_H }} onPointerDown={deselectIfSelf}>
-              {overlays.map((o) => (
-                <TextBar
-                  key={o.id}
-                  overlay={o}
-                  pps={pps}
-                  selected={selection?.kind === "text" && selection.id === o.id}
-                />
-              ))}
+            <div
+              className="relative mt-1.5"
+              style={{
+                height:
+                  Math.max(overlayLanes.count, (textDrag?.targetRow ?? -1) + 1) * TEXT_H,
+              }}
+              onPointerDown={deselectIfSelf}
+            >
+              {overlays.map((o) => {
+                const baseRow = overlayLanes.rowOf.get(o.lane ?? 0) ?? 0;
+                const row = textDrag?.id === o.id ? textDrag.targetRow : baseRow;
+                return (
+                  <TextBar
+                    key={o.id}
+                    overlay={o}
+                    pps={pps}
+                    top={row * TEXT_H}
+                    baseRow={baseRow}
+                    laneCount={overlayLanes.count}
+                    selected={selection?.kind === "text" && selection.id === o.id}
+                    onLaneDrag={onTextLaneDrag}
+                    onLaneDrop={onTextLaneDrop}
+                  />
+                );
+              })}
             </div>
           )}
 
@@ -938,11 +980,21 @@ function AudioView({
 function TextBar({
   overlay: o,
   pps,
+  top,
+  baseRow,
+  laneCount,
   selected,
+  onLaneDrag,
+  onLaneDrop,
 }: {
   overlay: TextOverlay;
   pps: number;
+  top: number;
+  baseRow: number;
+  laneCount: number;
   selected: boolean;
+  onLaneDrag: (id: string, targetRow: number) => void;
+  onLaneDrop: (id: string, targetRow: number) => void;
 }) {
   const w = Math.max(8, (o.end - o.start) * pps);
 
@@ -952,11 +1004,19 @@ function TextBar({
     s.pushHistory();
     const start0 = o.start;
     const len = o.end - o.start;
+    let targetRow = baseRow;
     startDrag(e, {
-      onMove: (dx) => {
+      onMove: (dx, dy) => {
         const start = Math.max(0, start0 + dx / pps);
         s.updateOverlayTransient(o.id, { start, end: start + len });
+        // Vertical drag retracks the title; one row past the end opens a new one.
+        const next = Math.min(laneCount, Math.max(0, baseRow + Math.round(dy / TEXT_H)));
+        if (next !== targetRow) {
+          targetRow = next;
+          onLaneDrag(o.id, targetRow);
+        }
       },
+      onUp: () => onLaneDrop(o.id, targetRow),
     });
   };
 
@@ -989,10 +1049,10 @@ function TextBar({
   return (
     <div
       className={cn(
-        "tl-text-bar group absolute top-0.5 flex cursor-grab items-center overflow-hidden rounded-md bg-gradient-to-b from-purple-500 to-purple-600 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.1)]",
+        "tl-text-bar group absolute flex cursor-grab items-center overflow-hidden rounded-md bg-gradient-to-b from-purple-500 to-purple-600 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.1)]",
         selected && SELECTED_SHADOW
       )}
-      style={{ left: o.start * pps, width: w, height: TEXT_H - 6 }}
+      style={{ left: o.start * pps, top: top + 2, width: w, height: TEXT_H - 6 }}
       onPointerDown={onBody}
     >
       <span className="pointer-events-none truncate px-2 text-[10.5px] font-medium text-white">
