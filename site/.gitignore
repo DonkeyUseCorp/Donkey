@@ -46,3 +46,6 @@ next-env.d.ts
 # Cut (video editor) local runtime data — per-project media/exports + shared library
 /projects/
 /library/
+
+# Cut engine build output
+/dist/
