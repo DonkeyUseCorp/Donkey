@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useEffect, useRef, useState } from "react";
-import { AlertCircle, Captions, ChevronDown, Loader2, MicOff, RefreshCw } from "lucide-react";
+import { AlertCircle, Captions, ChevronDown, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { fmtCueTime } from "@/cut/lib/subtitles";
@@ -137,11 +137,10 @@ function EmptyState({
   return (
     <div className="flex flex-col gap-3 px-3.5">
       {status === "empty" && (
-        <div className="sub-empty flex items-start gap-2 rounded-lg bg-muted/70 px-3 py-2.5 text-[11.5px] leading-relaxed text-muted-foreground">
-          <MicOff className="mt-0.5 size-3.5 shrink-0" />
+        <p className="sub-empty pt-1 text-[11.5px] leading-relaxed text-muted-foreground">
           No speech was found in this cut, so no subtitles were added to the
           video.
-        </div>
+        </p>
       )}
       {status === "error" && error && (
         <div className="sub-error flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2.5 text-[11.5px] leading-relaxed text-red-700">
@@ -149,14 +148,16 @@ function EmptyState({
           {error}
         </div>
       )}
-      <div className="flex flex-col items-center gap-1 pt-4 pb-1 text-center">
-        <Captions className="mb-1 size-6 text-muted-foreground" />
-        <p className="text-[13px] font-semibold">Subtitles from your audio</p>
-        <p className="text-[11.5px] leading-relaxed text-muted-foreground">
-          Transcribed with Apple speech recognition, entirely on this Mac —
-          your audio never leaves it.
-        </p>
-      </div>
+      {status !== "empty" && (
+        <div className="flex flex-col items-center gap-1 pt-4 pb-1 text-center">
+          <Captions className="mb-1 size-6 text-muted-foreground" />
+          <p className="text-[13px] font-semibold">Subtitles from your audio</p>
+          <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+            Transcribed with Apple speech recognition, entirely on this Mac —
+            your audio never leaves it.
+          </p>
+        </div>
+      )}
       <div className="relative">
         <select
           className="sub-locale w-full appearance-none rounded-lg border border-input bg-transparent py-2 pr-9 pl-2.5 text-[12.5px] outline-none focus:border-ring"
