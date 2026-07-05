@@ -9,7 +9,9 @@ import {
   Loader2,
   MoreHorizontal,
   Pencil,
+  Plus,
   Trash2,
+  Unplug,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -37,6 +39,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { apiFetch, engineOrigin } from "@/cut/lib/api";
 import { formatTime } from "@/cut/lib/time";
 import { mediaUrl, type ProjectSummary } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
@@ -66,6 +69,7 @@ export function ProjectsHome() {
   const [deleting, setDeleting] = useState<ProjectSummary | null>(null);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [engineDown, setEngineDown] = useState(false);
 
   useEffect(() => {
     const saved = localStorage.getItem("cut-projects-view");
@@ -78,8 +82,16 @@ export function ProjectsHome() {
   };
 
   const refresh = useCallback(async () => {
-    const res = await fetch("/api/projects");
-    setProjects((await res.json()) as ProjectSummary[]);
+    try {
+      const res = await apiFetch("/api/projects");
+      if (!res.ok) throw new Error(String(res.status));
+      setProjects((await res.json()) as ProjectSummary[]);
+      setEngineDown(false);
+    } catch {
+      // The engine on this Mac isn't reachable — not running, or the page was
+      // loaded from the hosted domain before starting it locally.
+      setEngineDown(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -89,7 +101,7 @@ export function ProjectsHome() {
   const create = async () => {
     setBusy(true);
     try {
-      const res = await fetch("/api/projects", {
+      const res = await apiFetch("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: name.trim() || "Untitled" }),
@@ -105,7 +117,7 @@ export function ProjectsHome() {
     if (!renaming) return;
     setBusy(true);
     try {
-      await fetch(`/api/projects/${renaming.id}`, {
+      await apiFetch(`/api/projects/${renaming.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: name.trim() || renaming.name }),
@@ -121,7 +133,7 @@ export function ProjectsHome() {
     if (!deleting) return;
     setBusy(true);
     try {
-      await fetch(`/api/projects/${deleting.id}`, { method: "DELETE" });
+      await apiFetch(`/api/projects/${deleting.id}`, { method: "DELETE" });
       setDeleting(null);
       await refresh();
     } finally {
@@ -131,53 +143,81 @@ export function ProjectsHome() {
 
   return (
     <div className="mx-auto w-full max-w-6xl px-10 py-9">
-      <div className="mb-5 flex items-center justify-between">
-        <h1 className="text-lg font-semibold tracking-tight">Recent videos</h1>
-        <div className="flex rounded-lg border border-border bg-card p-0.5">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Gallery view"
-            aria-pressed={view === "gallery"}
-            className={cn(view === "gallery" && "bg-muted text-foreground")}
-            onClick={() => switchView("gallery")}
-          >
-            <LayoutGrid />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="List view"
-            aria-pressed={view === "list"}
-            className={cn(view === "list" && "bg-muted text-foreground")}
-            onClick={() => switchView("list")}
-          >
-            <List />
-          </Button>
+      {!engineDown && projects && projects.length > 0 && (
+        <div className="mb-5 flex items-center justify-between">
+          <h1 className="text-lg font-semibold tracking-tight">Recent videos</h1>
+          <div className="flex rounded-lg border border-border bg-card p-0.5">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Gallery view"
+              aria-pressed={view === "gallery"}
+              className={cn(view === "gallery" && "bg-muted text-foreground")}
+              onClick={() => switchView("gallery")}
+            >
+              <LayoutGrid />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="List view"
+              aria-pressed={view === "list"}
+              className={cn(view === "list" && "bg-muted text-foreground")}
+              onClick={() => switchView("list")}
+            >
+              <List />
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
 
-      {projects === null ? (
+      {engineDown ? (
+        <div className="grid min-h-[60vh] place-items-center">
+          <div className="flex max-w-sm flex-col items-center gap-4 text-center">
+            <div className="grid size-14 place-items-center rounded-2xl bg-muted">
+              <Unplug className="size-7 text-muted-foreground" />
+            </div>
+            <h1 className="text-lg font-semibold tracking-tight">
+              Can&rsquo;t reach Donkey Cut on this Mac
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              Donkey Cut does all its work locally. Start it on this Mac
+              {engineOrigin() ? ` (${engineOrigin()})` : ""}, then try again.
+            </p>
+            <Button
+              onClick={() => {
+                setEngineDown(false);
+                setProjects(null);
+                void refresh();
+              }}
+            >
+              Try again
+            </Button>
+          </div>
+        </div>
+      ) : projects === null ? (
         <div className="grid place-items-center py-24 text-muted-foreground">
           <Loader2 className="size-5 animate-spin" />
         </div>
       ) : projects.length === 0 ? (
-        <button
-          className="grid w-full cursor-pointer place-items-center rounded-2xl border-2 border-dashed border-border py-24 transition-colors hover:border-primary/40"
-          onClick={() => {
-            setName("");
-            setCreateOpen(true);
-          }}
-        >
-          <div className="flex flex-col items-center gap-3 text-center">
-            <Film className="size-8 text-muted-foreground" />
-            <div className="text-base font-medium">No videos yet</div>
-            <p className="max-w-xs text-sm text-muted-foreground">
-              Create your first project, then drop in videos and music to start
-              cutting.
-            </p>
+        <div className="grid min-h-[60vh] place-items-center">
+          <div className="flex flex-col items-center gap-4 text-center">
+            <div className="grid size-14 place-items-center rounded-2xl bg-muted">
+              <Film className="size-7 text-muted-foreground" />
+            </div>
+            <h1 className="text-lg font-semibold tracking-tight">
+              Create a new project to get started
+            </h1>
+            <Button
+              onClick={() => {
+                setName("");
+                setCreateOpen(true);
+              }}
+            >
+              <Plus data-icon="inline-start" /> New project
+            </Button>
           </div>
-        </button>
+        </div>
       ) : view === "gallery" ? (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-5">
           {projects.map((p) => (

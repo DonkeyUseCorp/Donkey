@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { apiFetch } from "@/cut/lib/api";
 import type { ProjectSummary } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -31,7 +32,7 @@ export function AppSidebar() {
   const create = async () => {
     setBusy(true);
     try {
-      const res = await fetch("/api/projects", {
+      const res = await apiFetch("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: name.trim() || "Untitled" }),
@@ -46,16 +47,16 @@ export function AppSidebar() {
   return (
     <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-card px-3 py-4">
       <div className="mb-5 flex items-center gap-2.5 px-2">
-        <span className="grid size-8 place-items-center overflow-hidden rounded-xl">
+        <span className="grid size-9 shrink-0 place-items-center p-0.5">
           <img
             src="/donkey-logo.svg"
-            alt="Donkey"
-            width={32}
-            height={32}
+            alt="Donkey Cut"
+            width={36}
+            height={36}
             className="block h-full w-full object-contain"
           />
         </span>
-        <span className="text-[17px] font-semibold tracking-tight">Cut</span>
+        <span className="text-[17px] font-semibold tracking-tight">Donkey Cut</span>
       </div>
 
       <Button

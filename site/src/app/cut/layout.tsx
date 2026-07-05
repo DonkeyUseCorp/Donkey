@@ -1,6 +1,12 @@
+import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
 import { AppSurfaceBackground } from "@/app/app/_components/AppSurfaceBackground";
+
+export const metadata: Metadata = {
+  title: "Donkey Cut",
+  description: "A video editor that does all its work on your Mac.",
+};
 
 // Cut (the video editor) renders on the same white product surface as Donkey's
 // /app, not the cream marketing background. AppSurfaceBackground paints the root
