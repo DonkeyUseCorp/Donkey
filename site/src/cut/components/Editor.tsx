@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Clapperboard, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { apiFetch } from "@/cut/lib/api";
 import { enrichAsset, importFileToProject } from "@/cut/lib/media";
 import { serializeDoc, totalDuration, useEditor } from "@/cut/lib/store";
 import { AiPanel } from "./AiPanel";
@@ -44,7 +45,7 @@ export function Editor({ projectId }: { projectId: string }) {
       if (!s.loaded || s.projectId !== projectId) return;
       s.setSaveState("saving");
       try {
-        const res = await fetch(`/api/projects/${projectId}`, {
+        const res = await apiFetch(`/api/projects/${projectId}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(serializeDoc(s)),

@@ -32,6 +32,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { apiFetch, apiUrl } from "@/cut/lib/api";
 import { buildAiContext } from "@/cut/lib/aiContext";
 import { runAiTool } from "@/cut/lib/aiTools";
 import { draggedAssetId, hasAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
@@ -128,7 +129,7 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     let alive = true;
-    void fetch("/api/ai/models")
+    void apiFetch("/api/ai/models")
       .then((r) => r.json())
       .then((d: ModelsInfo) => alive && setInfo(d))
       .catch(() => {});
@@ -356,7 +357,7 @@ function ChatSession({
   const transport = useMemo(
     () =>
       new DefaultChatTransport({
-        api: "/api/ai/chat",
+        api: apiUrl("/api/ai/chat"),
         prepareSendMessagesRequest: ({ messages }) => ({
           body: {
             messages,
@@ -385,7 +386,7 @@ function ChatSession({
       // server-side bridge (which is holding the provider's tool call open).
       void (async () => {
         const post = (payload: Record<string, unknown>) =>
-          fetch("/api/ai/tool-result", {
+          apiFetch("/api/ai/tool-result", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({

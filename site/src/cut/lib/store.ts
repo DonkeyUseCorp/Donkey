@@ -14,6 +14,7 @@ import type {
   TextOverlay,
   VideoClip,
 } from "./types";
+import { apiFetch } from "./api";
 import { emptySubtitles, mediaUrl } from "./types";
 import { loadUiState, saveUiState } from "./uiState";
 
@@ -224,7 +225,7 @@ export const useEditor = create<EditorState>((set, get) => {
         exportOpen: false,
       });
       try {
-        const [res, ui] = await Promise.all([fetch(`/api/projects/${id}`), loadUiState(id)]);
+        const [res, ui] = await Promise.all([apiFetch(`/api/projects/${id}`), loadUiState(id)]);
         if (!res.ok) throw new Error("This project no longer exists.");
         const doc = (await res.json()) as ProjectDoc;
         const assets: MediaAsset[] = doc.assets.map((a) => ({
@@ -520,7 +521,7 @@ export const useEditor = create<EditorState>((set, get) => {
       };
       set({ subtitleStatus: "running", subtitleError: null });
       try {
-        const res = await fetch(`/api/projects/${projectId}/transcribe`, {
+        const res = await apiFetch(`/api/projects/${projectId}/transcribe`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(spec),
@@ -530,7 +531,7 @@ export const useEditor = create<EditorState>((set, get) => {
         for (;;) {
           await new Promise((r) => setTimeout(r, 600));
           if (get().projectId !== projectId) return; // switched projects mid-run
-          const st = await fetch(`/api/projects/${projectId}/transcribe?job=${body.id}`);
+          const st = await apiFetch(`/api/projects/${projectId}/transcribe?job=${body.id}`);
           if (!st.ok) throw new Error("The transcription job was lost — try again.");
           const status = (await st.json()) as {
             status: string;

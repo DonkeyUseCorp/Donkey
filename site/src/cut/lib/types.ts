@@ -1,3 +1,5 @@
+import { apiUrl } from "./api";
+
 export type AssetType = "video" | "audio";
 
 /** Project output frame. Vertical (TikTok/Reels) or widescreen (YouTube). */
@@ -178,4 +180,4 @@ export interface ProjectSummary {
 }
 
 export const mediaUrl = (projectId: string, fileName: string) =>
-  `/api/projects/${projectId}/media/${encodeURIComponent(fileName)}`;
+  apiUrl(`/api/projects/${projectId}/media/${encodeURIComponent(fileName)}`);

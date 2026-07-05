@@ -1,5 +1,6 @@
 "use client";
 
+import { apiFetch } from "./api";
 import { useEditor } from "./store";
 import type { MediaAsset } from "./types";
 import { mediaUrl } from "./types";
@@ -34,7 +35,7 @@ export async function importFileToProject(
 
   const form = new FormData();
   form.append("file", file, file.name);
-  const res = await fetch(`/api/projects/${projectId}/media`, {
+  const res = await apiFetch(`/api/projects/${projectId}/media`, {
     method: "POST",
     body: form,
   });
@@ -118,6 +119,9 @@ function loadVideoMeta(url: string): Promise<HTMLVideoElement> {
     const v = document.createElement("video");
     v.preload = "metadata";
     v.muted = true;
+    // Media may come from the engine on another origin; anonymous CORS keeps
+    // canvas frame grabs (filmstrips, AI captures) from tainting.
+    v.crossOrigin = "anonymous";
     v.src = url;
     v.onloadedmetadata = () => void ensureFiniteDuration(v).then(() => resolve(v));
     v.onerror = () => reject(new Error("Could not read this video file."));

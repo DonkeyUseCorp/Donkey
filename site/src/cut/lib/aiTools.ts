@@ -1,5 +1,6 @@
 "use client";
 
+import { apiFetch } from "./api";
 import { enrichAsset, ensurePeaks } from "./media";
 import { getClipSpans, TIMELINE_H_MAX, TIMELINE_H_MIN, totalDuration, useEditor } from "./store";
 import { buildAiContext } from "./aiContext";
@@ -180,7 +181,7 @@ export async function runAiTool(
       const t = clamp(isNum(input.t) ? input.t : s.currentTime, 0, Math.max(0, total - 0.001));
       const span = spans.find((sp) => t >= sp.start && t < sp.start + sp.len) ?? spans[spans.length - 1];
       const srcTime = span.clip.in + (t - span.start);
-      const res = await fetch(`/api/projects/${projectId}/freeze`, {
+      const res = await apiFetch(`/api/projects/${projectId}/freeze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

@@ -1,5 +1,6 @@
 "use client";
 
+import { apiFetch, apiUrl } from "./api";
 import { getClipSpans, totalDuration } from "./store";
 import { cueOverlay } from "./subtitles";
 import { renderOverlayPng } from "./textRender";
@@ -127,7 +128,7 @@ export function startExport(
     );
 
     onProgress("Starting encoder", 0);
-    const res = await fetch("/api/export", { method: "POST", body: form });
+    const res = await apiFetch("/api/export", { method: "POST", body: form });
     const body = (await res.json()) as { id?: string; error?: string };
     if (!res.ok || !body.id) throw new Error(body.error ?? "Export failed to start.");
     jobId = body.id;
@@ -136,7 +137,7 @@ export function startExport(
     for (;;) {
       if (canceled) throw new Error("Export canceled.");
       await new Promise((r) => setTimeout(r, 400));
-      const st = await fetch(`/api/export/${jobId}`);
+      const st = await apiFetch(`/api/export/${jobId}`);
       const status = (await st.json()) as {
         status: string;
         progress: number;
@@ -153,7 +154,7 @@ export function startExport(
 
     onProgress("Done", 1);
     const a = document.createElement("a");
-    a.href = `/api/export/${jobId}/file`;
+    a.href = apiUrl(`/api/export/${jobId}/file`);
     a.download = outName;
     document.body.appendChild(a);
     a.click();
@@ -165,7 +166,7 @@ export function startExport(
     done,
     cancel: () => {
       canceled = true;
-      if (jobId) void fetch(`/api/export/${jobId}`, { method: "DELETE" });
+      if (jobId) void apiFetch(`/api/export/${jobId}`, { method: "DELETE" });
     },
   };
 }
