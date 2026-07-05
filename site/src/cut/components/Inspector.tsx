@@ -72,9 +72,7 @@ export function Inspector() {
         <AudioPanel clip={audio} />
       ) : overlay ? (
         <TextPanel overlay={overlay} />
-      ) : (
-        <ProjectPanel />
-      )}
+      ) : null}
     </aside>
   );
 }
@@ -99,14 +97,6 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 const Value = ({ children, className }: { children: React.ReactNode; className?: string }) => (
   <span className={cn("font-mono text-[11.5px] tabular-nums", className)}>{children}</span>
 );
-
-function ProjectPanel() {
-  return (
-    <>
-      <PanelTitle>Project</PanelTitle>
-    </>
-  );
-}
 
 function ClipPanel({ clip }: { clip: VideoClip }) {
   const asset = useEditor((s) => s.assets.find((a) => a.id === clip.assetId));
