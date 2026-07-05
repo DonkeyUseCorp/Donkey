@@ -28,7 +28,7 @@ export interface StoredAsset {
 
 /** Runtime asset: stored fields plus derived/browser-only data. */
 export interface MediaAsset extends StoredAsset {
-  url: string; // /api/projects/<id>/media/<fileName>
+  url: string; // /api/cut/projects/<id>/media/<fileName>
   /** Filmstrip frames (video only), evenly spaced every `thumbStep` seconds. */
   thumbs?: string[];
   thumbStep?: number;
@@ -180,4 +180,4 @@ export interface ProjectSummary {
 }
 
 export const mediaUrl = (projectId: string, fileName: string) =>
-  apiUrl(`/api/projects/${projectId}/media/${encodeURIComponent(fileName)}`);
+  apiUrl(`/api/cut/projects/${projectId}/media/${encodeURIComponent(fileName)}`);

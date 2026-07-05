@@ -32,7 +32,7 @@ export function AppSidebar() {
   const create = async () => {
     setBusy(true);
     try {
-      const res = await apiFetch("/api/projects", {
+      const res = await apiFetch("/api/cut/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: name.trim() || "Untitled" }),

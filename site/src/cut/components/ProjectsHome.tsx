@@ -39,7 +39,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { apiFetch, engineOrigin } from "@/cut/lib/api";
+import { apiFetch } from "@/cut/lib/api";
 import { formatTime } from "@/cut/lib/time";
 import { mediaUrl, type ProjectSummary } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
@@ -83,7 +83,7 @@ export function ProjectsHome() {
 
   const refresh = useCallback(async () => {
     try {
-      const res = await apiFetch("/api/projects");
+      const res = await apiFetch("/api/cut/projects");
       if (!res.ok) throw new Error(String(res.status));
       setProjects((await res.json()) as ProjectSummary[]);
       setEngineDown(false);
@@ -98,10 +98,18 @@ export function ProjectsHome() {
     void refresh();
   }, [refresh]);
 
+  // While the engine is unreachable, keep probing so the page springs to life
+  // the moment it starts.
+  useEffect(() => {
+    if (!engineDown) return;
+    const t = setInterval(() => void refresh(), 3000);
+    return () => clearInterval(t);
+  }, [engineDown, refresh]);
+
   const create = async () => {
     setBusy(true);
     try {
-      const res = await apiFetch("/api/projects", {
+      const res = await apiFetch("/api/cut/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: name.trim() || "Untitled" }),
@@ -117,7 +125,7 @@ export function ProjectsHome() {
     if (!renaming) return;
     setBusy(true);
     try {
-      await apiFetch(`/api/projects/${renaming.id}`, {
+      await apiFetch(`/api/cut/projects/${renaming.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: name.trim() || renaming.name }),
@@ -133,7 +141,7 @@ export function ProjectsHome() {
     if (!deleting) return;
     setBusy(true);
     try {
-      await apiFetch(`/api/projects/${deleting.id}`, { method: "DELETE" });
+      await apiFetch(`/api/cut/projects/${deleting.id}`, { method: "DELETE" });
       setDeleting(null);
       await refresh();
     } finally {
@@ -178,21 +186,28 @@ export function ProjectsHome() {
               <Unplug className="size-7 text-muted-foreground" />
             </div>
             <h1 className="text-lg font-semibold tracking-tight">
-              Can&rsquo;t reach Donkey Cut on this Mac
+              Donkey Cut works with the Donkey app
             </h1>
             <p className="text-sm text-muted-foreground">
-              Donkey Cut does all its work locally. Start it on this Mac
-              {engineOrigin() ? ` (${engineOrigin()})` : ""}, then try again.
+              Everything runs locally on your Mac. Install Donkey — or open it
+              if it&rsquo;s already installed — and this page connects
+              automatically.
             </p>
-            <Button
-              onClick={() => {
-                setEngineDown(false);
-                setProjects(null);
-                void refresh();
-              }}
-            >
-              Try again
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button onClick={() => window.open("https://donkeyuse.com", "_blank")}>
+                Get Donkey for Mac
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setEngineDown(false);
+                  setProjects(null);
+                  void refresh();
+                }}
+              >
+                Try again
+              </Button>
+            </div>
           </div>
         </div>
       ) : projects === null ? (

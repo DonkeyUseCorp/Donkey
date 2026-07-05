@@ -181,7 +181,7 @@ export async function runAiTool(
       const t = clamp(isNum(input.t) ? input.t : s.currentTime, 0, Math.max(0, total - 0.001));
       const span = spans.find((sp) => t >= sp.start && t < sp.start + sp.len) ?? spans[spans.length - 1];
       const srcTime = span.clip.in + (t - span.start);
-      const res = await apiFetch(`/api/projects/${projectId}/freeze`, {
+      const res = await apiFetch(`/api/cut/projects/${projectId}/freeze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

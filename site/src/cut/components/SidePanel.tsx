@@ -156,7 +156,7 @@ function MediaPanel({
   useEffect(() => {
     if (exportOpen) return;
     let alive = true;
-    void apiFetch(`/api/projects/${projectId}/exports`)
+    void apiFetch(`/api/cut/projects/${projectId}/exports`)
       .then((r) => (r.ok ? (r.json() as Promise<ExportItem[]>) : []))
       .then((list) => alive && setExports(list))
       .catch(() => {});
@@ -225,7 +225,7 @@ function MediaPanel({
                     muted
                     playsInline
                     preload="metadata"
-                    src={`${apiUrl(`/api/projects/${projectId}/exports/${encodeURIComponent(it.file)}`)}#t=0.1`}
+                    src={`${apiUrl(`/api/cut/projects/${projectId}/exports/${encodeURIComponent(it.file)}`)}#t=0.1`}
                     className="h-11 w-[25px] shrink-0 rounded-[4px] bg-black object-cover"
                   />
                   <span className="min-w-0 flex-1">

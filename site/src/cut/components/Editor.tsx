@@ -34,7 +34,7 @@ export function Editor({ projectId }: { projectId: string }) {
       });
   }, [projectId]);
 
-  // Autosave: debounce document changes into PUT /api/projects/<id>.
+  // Autosave: debounce document changes into PUT /api/cut/projects/<id>.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
     let last = serializeDoc(useEditor.getState());
@@ -45,7 +45,7 @@ export function Editor({ projectId }: { projectId: string }) {
       if (!s.loaded || s.projectId !== projectId) return;
       s.setSaveState("saving");
       try {
-        const res = await apiFetch(`/api/projects/${projectId}`, {
+        const res = await apiFetch(`/api/cut/projects/${projectId}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(serializeDoc(s)),

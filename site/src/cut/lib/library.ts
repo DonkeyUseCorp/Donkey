@@ -17,10 +17,10 @@ export interface LibraryAsset {
 }
 
 export const libraryMediaUrl = (fileName: string) =>
-  apiUrl(`/api/library/media/${encodeURIComponent(fileName)}`);
+  apiUrl(`/api/cut/library/media/${encodeURIComponent(fileName)}`);
 
 export async function fetchLibrary(): Promise<LibraryAsset[]> {
-  const res = await apiFetch("/api/library");
+  const res = await apiFetch("/api/cut/library");
   if (!res.ok) throw new Error("Could not load the library.");
   return (await res.json()) as LibraryAsset[];
 }
@@ -28,14 +28,14 @@ export async function fetchLibrary(): Promise<LibraryAsset[]> {
 export async function uploadToLibrary(file: File): Promise<LibraryAsset> {
   const form = new FormData();
   form.append("file", file, file.name);
-  const res = await apiFetch("/api/library", { method: "POST", body: form });
+  const res = await apiFetch("/api/cut/library", { method: "POST", body: form });
   const body = (await res.json()) as LibraryAsset & { error?: string };
   if (!res.ok) throw new Error(body.error ?? "Upload failed.");
   return body;
 }
 
 export async function deleteFromLibrary(id: string) {
-  const res = await apiFetch(`/api/library/${id}`, { method: "DELETE" });
+  const res = await apiFetch(`/api/cut/library/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error("Could not delete.");
 }
 
@@ -44,7 +44,7 @@ export async function addLibraryAssetToProject(
   projectId: string,
   lib: LibraryAsset
 ): Promise<MediaAsset> {
-  const res = await apiFetch("/api/library/use", {
+  const res = await apiFetch("/api/cut/library/use", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ assetId: lib.id, projectId }),
@@ -71,7 +71,7 @@ export async function addLibraryAssetToProject(
 
 /** Copy a project asset into the shared library for reuse. */
 export async function saveAssetToLibrary(projectId: string, asset: MediaAsset) {
-  const res = await apiFetch("/api/library/save", {
+  const res = await apiFetch("/api/cut/library/save", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ projectId, fileName: asset.fileName, name: asset.name }),

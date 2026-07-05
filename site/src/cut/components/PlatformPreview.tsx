@@ -67,7 +67,7 @@ export function PlatformPreviewDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const url = apiUrl(`/api/projects/${projectId}/exports/${encodeURIComponent(item.file)}`);
+  const url = apiUrl(`/api/cut/projects/${projectId}/exports/${encodeURIComponent(item.file)}`);
   const handle = publish.handle.trim().replace(/^@+/, "") || "you";
   const caption = publish.caption.trim();
   const tagsLine = normalizeTags(publish.tags);

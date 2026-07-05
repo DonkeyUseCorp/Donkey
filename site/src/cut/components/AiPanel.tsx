@@ -32,7 +32,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { apiFetch, apiUrl } from "@/cut/lib/api";
+import { apiFetch, engineReady } from "@/cut/lib/api";
 import { buildAiContext } from "@/cut/lib/aiContext";
 import { runAiTool } from "@/cut/lib/aiTools";
 import { draggedAssetId, hasAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
@@ -129,7 +129,7 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     let alive = true;
-    void apiFetch("/api/ai/models")
+    void apiFetch("/api/cut/ai/models")
       .then((r) => r.json())
       .then((d: ModelsInfo) => alive && setInfo(d))
       .catch(() => {});
@@ -357,8 +357,12 @@ function ChatSession({
   const transport = useMemo(
     () =>
       new DefaultChatTransport({
-        api: apiUrl("/api/ai/chat"),
-        prepareSendMessagesRequest: ({ messages }) => ({
+        // The engine origin is discovered asynchronously; await it per request
+        // (not at mount) so an early send still targets the local engine rather
+        // than the hosted origin, where the Cut APIs 404. engineReady memoizes,
+        // so only the first request pays for discovery.
+        prepareSendMessagesRequest: async ({ messages }) => ({
+          api: `${await engineReady()}/api/cut/ai/chat`,
           body: {
             messages,
             model: modelRef.current,
@@ -386,7 +390,7 @@ function ChatSession({
       // server-side bridge (which is holding the provider's tool call open).
       void (async () => {
         const post = (payload: Record<string, unknown>) =>
-          apiFetch("/api/ai/tool-result", {
+          apiFetch("/api/cut/ai/tool-result", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({

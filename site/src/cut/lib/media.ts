@@ -35,7 +35,7 @@ export async function importFileToProject(
 
   const form = new FormData();
   form.append("file", file, file.name);
-  const res = await apiFetch(`/api/projects/${projectId}/media`, {
+  const res = await apiFetch(`/api/cut/projects/${projectId}/media`, {
     method: "POST",
     body: form,
   });

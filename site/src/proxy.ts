@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { allowedOrigin, corsHeaders, preflightHeaders } from "@/cut/server/cors";
+
 // Cut (the video editor, publicly "Donkey Cut") is served on the
 // cut.donkeyuse.com subdomain, but its routes live under /cut in this single
 // site app. For requests on the Cut host we rewrite page paths to /cut/* so
@@ -21,37 +23,28 @@ const CUT_HOSTS = new Set(["cut.donkeyuse.com", "cut.localhost"]);
 //    unauthenticated routes are unreachable.
 //  - local: the page served from the hosted origin calls this engine
 //    cross-origin, so grant exactly that origin CORS.
-const CUT_API_PREFIXES = ["/api/ai", "/api/export", "/api/library", "/api/projects"];
-const CUT_CLIENT_ORIGINS = new Set(["https://cut.donkeyuse.com"]);
+const CUT_API_PREFIX = "/api/cut";
 const HOSTED = Boolean(process.env.VERCEL);
 
 const isCutApi = (pathname: string) =>
-  CUT_API_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+  pathname === CUT_API_PREFIX || pathname.startsWith(`${CUT_API_PREFIX}/`);
 
 function cutApi(req: NextRequest): NextResponse {
   if (HOSTED) return new NextResponse(null, { status: 404 });
 
-  const origin = req.headers.get("origin") ?? "";
-  if (!CUT_CLIENT_ORIGINS.has(origin)) return NextResponse.next();
+  // Same CORS policy as the packaged engine (src/cut/server/cors.ts): grant the
+  // hosted Cut origin, pass everything else through as same-origin dev traffic.
+  const cors = allowedOrigin(req.headers.get("origin") ?? "");
+  if (!cors) return NextResponse.next();
 
   if (req.method === "OPTIONS") {
     return new NextResponse(null, {
       status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": origin,
-        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers":
-          req.headers.get("access-control-request-headers") ?? "Content-Type",
-        // Chrome preflights public-site → local-network requests.
-        "Access-Control-Allow-Private-Network": "true",
-        "Access-Control-Max-Age": "86400",
-        Vary: "Origin",
-      },
+      headers: preflightHeaders(cors, req.headers.get("access-control-request-headers")),
     });
   }
   const res = NextResponse.next();
-  res.headers.set("Access-Control-Allow-Origin", origin);
-  res.headers.set("Vary", "Origin");
+  for (const [k, v] of Object.entries(corsHeaders(cors))) res.headers.set(k, v);
   return res;
 }
 
@@ -76,9 +69,6 @@ export const config = {
   // hosted 404 and local CORS above cover all of them.
   matcher: [
     "/((?!_next/|.*\\..*).*)",
-    "/api/ai/:path*",
-    "/api/export/:path*",
-    "/api/library/:path*",
-    "/api/projects/:path*",
+    "/api/cut/:path*",
   ],
 };
