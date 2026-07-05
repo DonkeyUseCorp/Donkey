@@ -68,23 +68,16 @@ export function SubtitlesPanel() {
         <EmptyState status={status} error={error} onGenerate={generate} />
       ) : (
         <>
-          <div className="flex shrink-0 flex-col gap-2 border-b border-border px-4 pb-3">
+          <Transcript cues={subtitles.cues} />
+          <div className="flex shrink-0 flex-col gap-2 border-t border-border px-4 py-3">
             <label className="flex items-center justify-between text-xs font-medium">
-              Show on video
+              Show
               <Switch
-                className="sub-show-video"
-                checked={subtitles.showOnVideo}
-                onCheckedChange={(v) => useEditor.getState().setSubtitlesView({ showOnVideo: v })}
-              />
-            </label>
-            <label className="flex items-center justify-between text-xs font-medium">
-              Show on timeline
-              <Switch
-                className="sub-show-timeline"
-                checked={subtitles.showOnTimeline}
+                className="sub-show"
+                checked={subtitles.showOnVideo || subtitles.showOnTimeline}
                 onCheckedChange={(v) => {
                   const s = useEditor.getState();
-                  s.setSubtitlesView({ showOnTimeline: v });
+                  s.setSubtitlesView({ showOnVideo: v, showOnTimeline: v });
                   if (v && s.timelineH < TIMELINE_H_WITH_SUBS) s.setTimelineH(TIMELINE_H_WITH_SUBS);
                 }}
               />
@@ -98,12 +91,6 @@ export function SubtitlesPanel() {
               <p className="sub-error text-[11px] leading-relaxed text-red-600">{error}</p>
             )}
           </div>
-          <Transcript cues={subtitles.cues} />
-          <p className="shrink-0 border-t border-border px-4 py-2 text-[10.5px] leading-relaxed text-muted-foreground">
-            Click a timestamp to jump there. Return splits a caption at the
-            cursor (new timestamp) · ⌫ at the start merges it into the one
-            before · delete all its text to remove it.
-          </p>
         </>
       )}
     </>
