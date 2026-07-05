@@ -1,0 +1,121 @@
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
+import { Clapperboard, FolderOpen, Loader2, Plus } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import type { ProjectSummary } from "@/cut/lib/types";
+import { cn } from "@/lib/utils";
+
+const NAV = [
+  { href: "/", label: "Projects", icon: Clapperboard },
+  { href: "/library", label: "Library", icon: FolderOpen },
+];
+
+export function AppSidebar() {
+  const pathname = usePathname();
+  const router = useRouter();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const create = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim() || "Untitled" }),
+      });
+      const project = (await res.json()) as ProjectSummary;
+      router.push(`/p/${project.id}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-card px-3 py-4">
+      <div className="mb-5 flex items-center gap-2.5 px-2">
+        <span className="grid size-8 place-items-center overflow-hidden rounded-xl">
+          <img
+            src="/donkey-logo.svg"
+            alt="Donkey"
+            width={32}
+            height={32}
+            className="block h-full w-full object-contain"
+          />
+        </span>
+        <span className="text-[17px] font-semibold tracking-tight">Cut</span>
+      </div>
+
+      <Button
+        className="mb-5 w-full"
+        onClick={() => {
+          setName("");
+          setCreateOpen(true);
+        }}
+      >
+        <Plus data-icon="inline-start" /> New project
+      </Button>
+
+      <nav className="flex flex-col gap-0.5">
+        {NAV.map(({ href, label, icon: Icon }) => {
+          const active = pathname === href;
+          return (
+            <Link
+              key={href}
+              href={href}
+              className={cn(
+                "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+                active && "bg-muted text-foreground"
+              )}
+            >
+              <Icon className="size-4" />
+              {label}
+            </Link>
+          );
+        })}
+      </nav>
+      <div className="mt-auto px-2.5 text-[11px] leading-relaxed text-muted-foreground/70">
+        Everything stays on this Mac.
+      </div>
+
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>New project</DialogTitle>
+          </DialogHeader>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void create();
+            }}
+          >
+            <Input
+              autoFocus
+              placeholder="Project name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+            <DialogFooter className="mt-4">
+              <Button type="submit" disabled={busy} className="w-full">
+                {busy && <Loader2 className="animate-spin" data-icon="inline-start" />}
+                Create project
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </aside>
+  );
+}

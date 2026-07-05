@@ -1,0 +1,864 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport, type UIMessage } from "ai";
+import {
+  ArrowUp,
+  Check,
+  ChevronDown,
+  CircleDashed,
+  Ellipsis,
+  FolderPlus,
+  History,
+  Music,
+  Plus,
+  Sparkles,
+  Square,
+  Star,
+  Trash2,
+  TriangleAlert,
+  Wrench,
+  X,
+} from "lucide-react";
+import Markdown from "react-markdown";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { buildAiContext } from "@/cut/lib/aiContext";
+import { runAiTool } from "@/cut/lib/aiTools";
+import { draggedAssetId, hasAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
+import { saveAssetToLibrary } from "@/cut/lib/library";
+import { useEditor } from "@/cut/lib/store";
+import { formatTime } from "@/cut/lib/time";
+import type { AssetType } from "@/cut/lib/types";
+import { cn } from "@/lib/utils";
+
+/** Asset reference attached to a chat message — enough to render a card and
+ * for the model to act on the asset via its editor tools. */
+export interface ChatAsset {
+  id: string;
+  name: string;
+  type: AssetType;
+  duration: number;
+  url: string;
+}
+
+interface AiModel {
+  id: string;
+  label: string;
+  provider: "claude" | "codex" | "test";
+  hidden?: boolean;
+}
+
+interface ModelsInfo {
+  models: AiModel[];
+  providers: Record<string, { available: boolean; note: string }>;
+}
+
+/** A saved chat thread, persisted per project in localStorage. */
+interface ChatThread {
+  id: string;
+  title: string;
+  updatedAt: number;
+  messages: UIMessage[];
+  /** Provider-native session ids so a resumed thread keeps its context. */
+  sessions: Record<string, string>;
+}
+
+const THREAD_LIMIT = 30;
+const threadsKey = () => `cut-ai-threads-${useEditor.getState().projectId ?? "global"}`;
+
+function readThreads(): ChatThread[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(threadsKey()) ?? "[]") as unknown;
+    return Array.isArray(v) ? (v as ChatThread[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeThreads(list: ChatThread[]) {
+  try {
+    localStorage.setItem(threadsKey(), JSON.stringify(list.slice(0, THREAD_LIMIT)));
+  } catch {
+    // Storage full/blocked — history just won't persist.
+  }
+}
+
+const MODEL_KEY = "cut-ai-model";
+const FAVS_KEY = "cut-ai-favs";
+const PROVIDER_LABEL: Record<string, string> = {
+  claude: "Claude Code",
+  codex: "Codex",
+  test: "Testing",
+};
+
+const SUGGESTIONS = [
+  "What's in this video?",
+  "Make my title punchier",
+  "Add subtitles",
+  "Write a TikTok caption",
+];
+
+/** Chat provider bucket for a model id. */
+const provider = (id: string): string =>
+  id.startsWith("claude") ? "claude" : id === "cut-test" ? "test" : "codex";
+
+export function AiPanel({ onClose }: { onClose: () => void }) {
+  const [info, setInfo] = useState<ModelsInfo | null>(null);
+  const [model, setModel] = useState<string>(() =>
+    typeof window === "undefined" ? "claude-fable-5" : localStorage.getItem(MODEL_KEY) ?? "claude-fable-5"
+  );
+  // Concurrent chat sessions: every open chat stays mounted (hidden when not
+  // active) so a busy chat keeps streaming while you talk in another one.
+  const [openChats, setOpenChats] = useState<string[]>(() => [crypto.randomUUID()]);
+  const [active, setActive] = useState<string>(() => openChats[0]);
+  const [titles, setTitles] = useState<Record<string, string>>({});
+  const [busyMap, setBusyMap] = useState<Record<string, boolean>>({});
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [threads, setThreads] = useState<ChatThread[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    void fetch("/api/ai/models")
+      .then((r) => r.json())
+      .then((d: ModelsInfo) => alive && setInfo(d))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const onTitle = useCallback((id: string, title: string) => {
+    setTitles((p) => (p[id] === title ? p : { ...p, [id]: title }));
+  }, []);
+  const onBusy = useCallback((id: string, b: boolean) => {
+    setBusyMap((p) => (!!p[id] === b ? p : { ...p, [id]: b }));
+  }, []);
+
+  const newChat = () => {
+    const id = crypto.randomUUID();
+    setOpenChats((p) => [...p, id]);
+    setActive(id);
+    setHistoryOpen(false);
+  };
+
+  const closeChat = (id: string) => {
+    const idx = openChats.indexOf(id);
+    const next = openChats.filter((x) => x !== id);
+    if (next.length === 0) {
+      const fresh = crypto.randomUUID();
+      setOpenChats([fresh]);
+      setActive(fresh);
+      return;
+    }
+    setOpenChats(next);
+    if (active === id) setActive(next[Math.min(Math.max(idx - 1, 0), next.length - 1)]);
+  };
+
+  const openThreadTab = (t: ChatThread) => {
+    if (!openChats.includes(t.id)) setOpenChats((p) => [...p, t.id]);
+    setActive(t.id);
+    setHistoryOpen(false);
+  };
+
+  const toggleHistory = () => {
+    if (!historyOpen) setThreads(readThreads());
+    setHistoryOpen((v) => !v);
+  };
+
+  const deleteThread = (id: string) => {
+    writeThreads(readThreads().filter((t) => t.id !== id));
+    setThreads((p) => p.filter((t) => t.id !== id));
+    // Close its tab too — a still-open chat would re-save itself on the next
+    // message and resurrect the thread.
+    if (openChats.includes(id)) closeChat(id);
+  };
+
+  const selectModel = (id: string) => {
+    setModel(id);
+    localStorage.setItem(MODEL_KEY, id);
+  };
+
+  return (
+    <aside className="ai-panel relative flex min-h-0 w-[340px] shrink-0 animate-in flex-col border-l border-border bg-card duration-300 ease-out slide-in-from-right-full">
+      <div className="flex h-[46px] shrink-0 items-center gap-1.5 border-b border-border pr-2 pl-3.5">
+        <Sparkles className="size-4 text-[#0a84ff]" />
+        <div className="flex-1" />
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ai-threads"
+          title="Past threads"
+          aria-pressed={historyOpen}
+          onClick={toggleHistory}
+        >
+          <History />
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ai-new-thread"
+          title="New chat"
+          onClick={newChat}
+        >
+          <Plus />
+        </Button>
+        <Button variant="ghost" size="sm" title="Close (⌘J)" onClick={onClose}>
+          <X />
+        </Button>
+      </div>
+
+      {openChats.length > 1 && (
+        <div className="ai-chat-tabs flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2 py-1.5">
+          {openChats.map((id, i) => (
+            <div
+              key={id}
+              role="tab"
+              aria-selected={active === id}
+              className={cn(
+                "group flex max-w-36 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[11px] transition-colors",
+                active === id
+                  ? "bg-muted font-medium text-foreground"
+                  : "text-muted-foreground hover:bg-muted/60"
+              )}
+              onClick={() => setActive(id)}
+            >
+              {busyMap[id] && (
+                <CircleDashed className="size-2.5 shrink-0 animate-spin text-[#0a84ff]" />
+              )}
+              <span className="truncate">{titles[id] ?? `Chat ${i + 1}`}</span>
+              <button
+                aria-label="Close chat"
+                title="Close chat"
+                className="rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/10"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  closeChat(id);
+                }}
+              >
+                <X className="size-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {historyOpen && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setHistoryOpen(false)} />
+          <div className="ai-thread-list absolute top-0 right-full bottom-0 z-40 flex w-[280px] animate-in flex-col border-x border-border bg-card shadow-[-16px_0_40px_rgba(0,0,0,0.14)] duration-200 ease-out fade-in-0 slide-in-from-right-6">
+            <div className="flex h-[46px] shrink-0 items-center justify-between border-b border-border pr-2 pl-3.5">
+              <span className="text-sm font-semibold tracking-tight">Threads</span>
+              <Button variant="ghost" size="sm" title="Close" onClick={() => setHistoryOpen(false)}>
+                <X />
+              </Button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-2">
+              {threads.length === 0 ? (
+                <p className="px-2 py-3 text-[11.5px] leading-relaxed text-muted-foreground">
+                  No past threads yet.
+                </p>
+              ) : (
+                threads.map((t) => (
+                  <button
+                    key={t.id}
+                    className={cn(
+                      "group relative flex w-full flex-col gap-0.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-muted",
+                      openChats.includes(t.id) && "bg-muted/70"
+                    )}
+                    onClick={() => openThreadTab(t)}
+                  >
+                    <span className="w-full truncate pr-6 text-[12px] font-medium">{t.title}</span>
+                    <span className="text-[10.5px] text-muted-foreground">
+                      {new Date(t.updatedAt).toLocaleString([], {
+                        month: "short",
+                        day: "numeric",
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })}
+                    </span>
+                    <span
+                      role="button"
+                      aria-label="Delete thread"
+                      title="Delete thread"
+                      className="absolute top-1/2 right-1.5 grid size-6 -translate-y-1/2 place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/10 hover:text-red-600"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteThread(t.id);
+                      }}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {openChats.map((id) => (
+        <ChatSession
+          key={id}
+          threadId={id}
+          visible={id === active}
+          info={info}
+          model={model}
+          onModelChange={selectModel}
+          onTitle={onTitle}
+          onBusy={onBusy}
+        />
+      ))}
+    </aside>
+  );
+}
+
+/** One chat with the agent. Stays mounted while hidden so its stream, tool
+ * calls, and provider session survive tab switches. */
+function ChatSession({
+  threadId,
+  visible,
+  info,
+  model,
+  onModelChange,
+  onTitle,
+  onBusy,
+}: {
+  threadId: string;
+  visible: boolean;
+  info: ModelsInfo | null;
+  model: string;
+  onModelChange: (id: string) => void;
+  onTitle: (id: string, title: string) => void;
+  onBusy: (id: string, busy: boolean) => void;
+}) {
+  const [input, setInput] = useState("");
+  const [attachments, setAttachments] = useState<ChatAsset[]>([]);
+  const [dragDepth, setDragDepth] = useState(0);
+  const sessionKeyRef = useRef<string | null>(null);
+  // Resume from the saved thread when this id exists in history.
+  const [initialThread] = useState<ChatThread | undefined>(() =>
+    typeof window === "undefined" ? undefined : readThreads().find((t) => t.id === threadId)
+  );
+  const providerSessions = useRef<Record<string, string>>({ ...(initialThread?.sessions ?? {}) });
+  const modelRef = useRef(model);
+  modelRef.current = model;
+
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport({
+        api: "/api/ai/chat",
+        prepareSendMessagesRequest: ({ messages }) => ({
+          body: {
+            messages,
+            model: modelRef.current,
+            context: buildAiContext(),
+            providerSession: providerSessions.current[provider(modelRef.current)],
+          },
+        }),
+      }),
+    []
+  );
+
+  const { messages, sendMessage, stop, status, error, clearError } = useChat({
+    id: threadId,
+    messages: initialThread?.messages,
+    transport,
+    onData: (part) => {
+      if (part.type === "data-session") {
+        const d = part.data as { sessionKey?: string; providerSession?: string };
+        if (d.sessionKey) sessionKeyRef.current = d.sessionKey;
+        if (d.providerSession) providerSessions.current[provider(modelRef.current)] = d.providerSession;
+      }
+    },
+    onToolCall: ({ toolCall }) => {
+      // Execute on the editor store, then hand the result back to the
+      // server-side bridge (which is holding the provider's tool call open).
+      void (async () => {
+        const post = (payload: Record<string, unknown>) =>
+          fetch("/api/ai/tool-result", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionKey: sessionKeyRef.current,
+              toolCallId: toolCall.toolCallId,
+              ...payload,
+            }),
+          });
+        try {
+          const output = await runAiTool(
+            toolCall.toolName,
+            (toolCall.input ?? {}) as Record<string, unknown>
+          );
+          await post({ output });
+        } catch (err) {
+          await post({ errorText: err instanceof Error ? err.message : String(err) });
+        }
+      })();
+    },
+  });
+
+  const busy = status === "submitted" || status === "streaming";
+
+  useEffect(() => {
+    onBusy(threadId, busy);
+    return () => onBusy(threadId, false);
+  }, [busy, threadId, onBusy]);
+
+  // Keep the thread saved (and its tab title fresh) as it grows.
+  useEffect(() => {
+    if (messages.length === 0) return;
+    const firstUser = messages.find((m) => m.role === "user");
+    const title =
+      firstUser?.parts
+        .map((p) => (p.type === "text" ? p.text : ""))
+        .join("")
+        .trim()
+        .slice(0, 80) || "New chat";
+    onTitle(threadId, title);
+    const rest = readThreads().filter((t) => t.id !== threadId);
+    writeThreads([
+      {
+        id: threadId,
+        title,
+        updatedAt: Date.now(),
+        messages,
+        sessions: { ...providerSessions.current },
+      },
+      ...rest,
+    ]);
+  }, [messages, threadId, onTitle]);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages, busy, visible]);
+
+  const send = (text: string) => {
+    const t = text.trim();
+    if ((!t && attachments.length === 0) || busy) return;
+    clearError();
+    void sendMessage({
+      text: t,
+      ...(attachments.length > 0 && { metadata: { attachments } }),
+    });
+    setInput("");
+    setAttachments([]);
+  };
+
+  const attachAsset = (id: string) => {
+    const a = useEditor.getState().assets.find((x) => x.id === id);
+    if (!a) return;
+    setAttachments((prev) =>
+      prev.some((x) => x.id === a.id)
+        ? prev
+        : [...prev, { id: a.id, name: a.name, type: a.type, duration: a.duration, url: a.url }]
+    );
+  };
+
+  const current = info?.models.find((m) => m.id === model);
+  const currentAvailable = info ? info.providers[provider(model)]?.available !== false : true;
+
+  return (
+    <div
+      className={cn("relative flex min-h-0 flex-1 flex-col", !visible && "hidden")}
+      onDragEnter={(e) => {
+        if (hasAssetDrag(e)) {
+          e.preventDefault();
+          setDragDepth((n) => n + 1);
+        }
+      }}
+      onDragOver={(e) => {
+        if (hasAssetDrag(e)) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+        }
+      }}
+      onDragLeave={(e) => {
+        if (hasAssetDrag(e)) setDragDepth((n) => Math.max(0, n - 1));
+      }}
+      onDrop={(e) => {
+        setDragDepth(0);
+        const id = draggedAssetId(e);
+        if (!id) return;
+        e.preventDefault();
+        attachAsset(id);
+      }}
+    >
+      {dragDepth > 0 && (
+        <div className="pointer-events-none absolute inset-1.5 z-10 grid place-items-center rounded-xl border-2 border-dashed border-[#0a84ff] bg-[#0a84ff]/8">
+          <span className="rounded-full bg-card px-3 py-1 text-[11.5px] font-medium text-[#0a84ff] shadow-sm">
+            Drop to attach
+          </span>
+        </div>
+      )}
+
+      <div ref={scrollRef} className="ai-messages min-h-0 flex-1 overflow-y-auto px-3.5 py-3">
+        {messages.length === 0 && (
+          <div className="flex flex-col gap-3 pt-6">
+            <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+              I can see your whole project — clips, titles, subtitles, publish
+              metadata — and edit it for you. Select something and tell me what
+              to change, or ask anything about the cut.
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {SUGGESTIONS.map((sug) => (
+                <button
+                  key={sug}
+                  className="ai-suggestion rounded-full border border-border px-2.5 py-1 text-[11.5px] text-muted-foreground transition-colors hover:border-input hover:text-foreground"
+                  onClick={() => send(sug)}
+                >
+                  {sug}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {messages.map((m) => (
+          <MessageView key={m.id} message={m} />
+        ))}
+        {busy && (
+          <div className="ai-busy mt-1 flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
+            <CircleDashed className="size-3 animate-spin" /> Working…
+          </div>
+        )}
+        {error && (
+          <div className="ai-error mt-2 flex items-start gap-2 rounded-lg bg-red-50 px-2.5 py-2 text-[11.5px] leading-relaxed text-red-700">
+            <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+            {error.message}
+          </div>
+        )}
+      </div>
+
+      <div className="shrink-0 border-t border-border p-2.5">
+        <div className="rounded-xl border border-input bg-background focus-within:border-ring">
+          {attachments.length > 0 && (
+            <div className="flex flex-wrap gap-2 px-2.5 pt-2.5">
+              {attachments.map((a) => (
+                <div key={a.id} className="ai-attachment relative">
+                  <AssetThumb asset={a} className="size-14" />
+                  <button
+                    aria-label={`Remove ${a.name}`}
+                    title="Remove"
+                    className="absolute -top-1.5 -right-1.5 grid size-4.5 place-items-center rounded-full bg-neutral-900 text-white shadow-sm transition-colors hover:bg-neutral-700"
+                    onClick={() => setAttachments((p) => p.filter((x) => x.id !== a.id))}
+                  >
+                    <X className="size-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <textarea
+            className="ai-input max-h-40 min-h-[38px] w-full resize-none bg-transparent px-3 pt-2 text-[12.5px] leading-relaxed outline-none placeholder:text-muted-foreground/70"
+            rows={2}
+            placeholder="Ask about your video, or tell me what to change…"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send(input);
+              }
+            }}
+          />
+          <div className="flex items-center gap-1 px-1.5 pb-1.5">
+            <ModelSelector info={info} model={model} onSelect={onModelChange} />
+            <div className="flex-1" />
+            {busy ? (
+              <Button variant="outline" size="sm" className="ai-stop" title="Stop" onClick={() => void stop()}>
+                <Square className="size-3" />
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                className="ai-send"
+                title="Send (Enter)"
+                disabled={(!input.trim() && attachments.length === 0) || !currentAvailable}
+                onClick={() => send(input)}
+              >
+                <ArrowUp className="size-3.5" />
+              </Button>
+            )}
+          </div>
+        </div>
+        {info && !currentAvailable && (
+          <p className="ai-provider-note mt-1.5 px-1 text-[10.5px] leading-relaxed text-amber-700">
+            {PROVIDER_LABEL[provider(model)]}: {info.providers[provider(model)]?.note}
+          </p>
+        )}
+        <p className="mt-1.5 px-1 text-[10px] leading-relaxed text-muted-foreground/70">
+          Runs locally through your {current?.provider === "codex" ? "Codex" : "Claude Code"} sign-in.
+          Every edit is undoable.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/** Square media preview used by attachment chips and in-chat asset cards. */
+function AssetThumb({ asset, className }: { asset: ChatAsset; className?: string }) {
+  return (
+    <div
+      className={cn(
+        "relative overflow-hidden rounded-lg border border-border bg-muted",
+        className
+      )}
+    >
+      {asset.type === "video" ? (
+        <video
+          src={`${asset.url}#t=0.1`}
+          preload="metadata"
+          muted
+          playsInline
+          className="size-full object-cover"
+        />
+      ) : (
+        <div className="grid size-full place-items-center bg-gradient-to-br from-emerald-100 to-emerald-50 text-emerald-600">
+          <Music className="size-4.5" />
+        </div>
+      )}
+      <span className="absolute right-1 bottom-1 rounded-[5px] bg-black/65 px-1 py-px font-mono text-[8.5px] text-white tabular-nums">
+        {formatTime(asset.duration)}
+      </span>
+    </div>
+  );
+}
+
+/** Asset card inside a sent message — click to open, drag onto the timeline,
+ * "…" menu for more actions. */
+function MessageAssetCard({ asset }: { asset: ChatAsset }) {
+  return (
+    <div className="ai-msg-asset group relative w-16">
+      <button
+        className="flex w-full flex-col gap-1 text-left"
+        title="Click to open · drag to the timeline"
+        draggable
+        onDragStart={(e) => setAssetDragData(e, asset.id)}
+        onClick={() => window.open(asset.url, "_blank", "noopener")}
+      >
+        <AssetThumb asset={asset} className="size-16 transition-colors group-hover:border-input" />
+        <span className="w-full truncate text-[10px] text-muted-foreground">{asset.name}</span>
+      </button>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <button
+              aria-label="Asset options"
+              className="absolute top-1 right-1 grid size-5 place-items-center rounded-md bg-black/55 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/75"
+            />
+          }
+        >
+          <Ellipsis className="size-3" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-40">
+          <DropdownMenuItem
+            onClick={() => {
+              const s = useEditor.getState();
+              const full = s.assets.find((a) => a.id === asset.id);
+              if (!full || !s.projectId) return;
+              void saveAssetToLibrary(s.projectId, full).catch(() => {
+                // Library write failed; nothing to roll back.
+              });
+            }}
+          >
+            <FolderPlus /> Add to library
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
+function MessageView({ message }: { message: UIMessage }) {
+  if (message.role === "user") {
+    const text = message.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
+    const attachments = (message.metadata as { attachments?: ChatAsset[] } | undefined)
+      ?.attachments;
+    return (
+      <div className="ai-msg-user mb-3 flex flex-col items-end gap-1.5">
+        {attachments && attachments.length > 0 && (
+          <div className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
+            {attachments.map((a) => (
+              <MessageAssetCard key={a.id} asset={a} />
+            ))}
+          </div>
+        )}
+        {text && (
+          <div className="max-w-[85%] rounded-2xl rounded-br-md bg-neutral-900 px-3 py-2 text-[12.5px] leading-relaxed whitespace-pre-wrap text-white">
+            {text}
+          </div>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="ai-msg-assistant mb-3 flex flex-col gap-1.5">
+      {message.parts.map((part, i) => {
+        if (part.type === "text") {
+          return (
+            <div key={i} className="ai-md max-w-full text-[12.5px] leading-relaxed">
+              <Markdown
+                components={{
+                  p: (p) => <p className="mb-1.5 last:mb-0" {...p} />,
+                  ul: (p) => <ul className="mb-1.5 list-disc pl-4 last:mb-0" {...p} />,
+                  ol: (p) => <ol className="mb-1.5 list-decimal pl-4 last:mb-0" {...p} />,
+                  li: (p) => <li className="mb-0.5" {...p} />,
+                  code: (p) => (
+                    <code className="rounded bg-muted px-1 py-px font-mono text-[11px]" {...p} />
+                  ),
+                  a: (p) => <a className="text-[#0a84ff] underline" target="_blank" {...p} />,
+                }}
+              >
+                {part.text}
+              </Markdown>
+            </div>
+          );
+        }
+        if (part.type.startsWith("tool-") || part.type === "dynamic-tool") {
+          const p = part as unknown as {
+            type: string;
+            toolName?: string;
+            state: string;
+            input?: unknown;
+            output?: unknown;
+            errorText?: string;
+          };
+          const name = p.toolName ?? part.type.slice(5);
+          const failed = p.state === "output-error";
+          const done = p.state === "output-available";
+          return (
+            <details key={i} className="ai-tool group max-w-full">
+              <summary
+                className={cn(
+                  "flex cursor-pointer list-none items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors select-none hover:bg-muted/60 [&::-webkit-details-marker]:hidden",
+                  failed && "border-red-200 text-red-700"
+                )}
+              >
+                <Wrench className="size-3 shrink-0" />
+                <span className="font-mono">{name}</span>
+                {done && <Check className="size-3 text-emerald-600" />}
+                {failed && <TriangleAlert className="size-3" />}
+                {!done && !failed && <CircleDashed className="size-3 animate-spin" />}
+              </summary>
+              <pre className="mt-1 max-h-40 overflow-auto rounded-md bg-muted/70 p-2 font-mono text-[10px] leading-relaxed whitespace-pre-wrap">
+                {JSON.stringify({ input: p.input, output: p.output, error: p.errorText }, null, 2)}
+              </pre>
+            </details>
+          );
+        }
+        return null;
+      })}
+    </div>
+  );
+}
+
+function ModelSelector({
+  info,
+  model,
+  onSelect,
+}: {
+  info: ModelsInfo | null;
+  model: string;
+  onSelect: (id: string) => void;
+}) {
+  const [favs, setFavs] = useState<string[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      return JSON.parse(localStorage.getItem(FAVS_KEY) ?? "[]") as string[];
+    } catch {
+      return [];
+    }
+  });
+  const showTest = typeof window !== "undefined" && localStorage.getItem("cut-ai-test") === "1";
+  const models = (info?.models ?? []).filter((m) => !m.hidden || showTest);
+  const groups = ["claude", "codex", ...(showTest ? ["test"] : [])].map((p) => ({
+    provider: p,
+    models: models.filter((m) => m.provider === p),
+    available: info?.providers[p]?.available ?? true,
+    note: info?.providers[p]?.note ?? "",
+  }));
+  const flat = groups.flatMap((group) => group.models);
+  const currentLabel = models.find((m) => m.id === model)?.label ?? model;
+
+  const toggleFav = (id: string) => {
+    const next = favs.includes(id) ? favs.filter((f) => f !== id) : [...favs, id];
+    setFavs(next);
+    localStorage.setItem(FAVS_KEY, JSON.stringify(next));
+  };
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        className="ai-model-trigger flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      >
+        <Sparkles className="size-3" />
+        {currentLabel}
+        <ChevronDown className="size-3" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        className="ai-model-menu w-60"
+        onKeyDown={(e) => {
+          const n = Number(e.key);
+          if (n >= 1 && n <= flat.length) onSelect(flat[n - 1].id);
+        }}
+      >
+        {groups.map((group, gi) =>
+          group.models.length === 0 ? null : (
+            <DropdownMenuGroup key={group.provider}>
+              {gi > 0 && <DropdownMenuSeparator />}
+              <DropdownMenuLabel className="flex items-center gap-1.5 text-[10.5px] tracking-wider text-muted-foreground uppercase">
+                <Sparkles className="size-3" /> {PROVIDER_LABEL[group.provider]}
+                {!group.available && (
+                  <span className="ml-1 font-normal normal-case text-amber-700">· {group.note}</span>
+                )}
+              </DropdownMenuLabel>
+              {group.models.map((m) => (
+                <DropdownMenuItem
+                  key={m.id}
+                  disabled={!group.available}
+                  className="ai-model-item gap-2"
+                  onClick={() => onSelect(m.id)}
+                >
+                  <span className="flex-1 text-[12px]">{m.label}</span>
+                  {model === m.id && <Check className="size-3.5 text-[#0a84ff]" />}
+                  <button
+                    className="rounded p-0.5 hover:bg-muted"
+                    title={favs.includes(m.id) ? "Unfavorite" : "Favorite"}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      toggleFav(m.id);
+                    }}
+                  >
+                    <Star
+                      className={cn(
+                        "size-3",
+                        favs.includes(m.id) ? "fill-amber-400 text-amber-400" : "text-muted-foreground/50"
+                      )}
+                    />
+                  </button>
+                  <span className="w-3 text-right font-mono text-[10px] text-muted-foreground/60">
+                    {flat.indexOf(m) + 1}
+                  </span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuGroup>
+          )
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
