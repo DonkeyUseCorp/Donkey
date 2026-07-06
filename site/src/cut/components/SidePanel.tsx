@@ -332,6 +332,8 @@ function MediaPanel({
 
 function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string }) {
   const [saved, setSaved] = useState(false);
+  // Number of timeline items that would be cascade-deleted; null = no prompt.
+  const [confirmUses, setConfirmUses] = useState<number | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const add = () => {
@@ -353,10 +355,18 @@ function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string 
 
   const remove = (e: React.MouseEvent) => {
     e.stopPropagation();
-    useEditor.getState().removeAsset(asset.id);
+    const s = useEditor.getState();
+    const uses =
+      s.clips.filter((c) => c.assetId === asset.id).length +
+      s.audioClips.filter((c) => c.assetId === asset.id).length;
+    // Deleting an unused asset is harmless; only confirm when it would also
+    // remove clips from the timeline.
+    if (uses > 0) setConfirmUses(uses);
+    else s.removeAsset(asset.id);
   };
 
   return (
+    <>
     <div
       className="asset-card group flex flex-col gap-1.5 text-left"
       title="Drag onto the timeline, or click + to add"
@@ -426,6 +436,31 @@ function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string 
       </div>
       <div className="truncate text-[11px] text-muted-foreground">{asset.name}</div>
     </div>
+    <AlertDialog open={confirmUses !== null} onOpenChange={(o) => !o && setConfirmUses(null)}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Remove “{asset.name}” from the project?</AlertDialogTitle>
+          <AlertDialogDescription>
+            It’s used by {confirmUses} {confirmUses === 1 ? "clip" : "clips"} on the timeline,
+            which will be removed too. This can be undone with ⌘Z.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            className="bg-destructive/10 text-destructive hover:bg-destructive/20"
+            onClick={(e) => {
+              e.preventDefault();
+              useEditor.getState().removeAsset(asset.id);
+              setConfirmUses(null);
+            }}
+          >
+            Remove
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   );
 }
 
