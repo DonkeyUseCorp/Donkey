@@ -9,7 +9,16 @@ import { exists, uniqueName, writeJsonAtomic } from "./util";
 /** The shared library: reusable media that lives outside any project. */
 export const LIBRARY_ROOT = path.join(cutDataRoot(), "library");
 const LIB_MEDIA = path.join(LIBRARY_ROOT, "media");
+const LIB_THUMBS = path.join(LIBRARY_ROOT, "thumbs");
 const INDEX = path.join(LIBRARY_ROOT, "library.json");
+
+/** Where a URL-imported asset came from, kept as notes on the asset. */
+export interface LibrarySource {
+  url: string;
+  title?: string;
+  uploader?: string;
+  uploadDate?: string; // yt-dlp YYYYMMDD
+}
 
 export interface LibraryAsset {
   id: string;
@@ -20,10 +29,19 @@ export interface LibraryAsset {
   width?: number;
   height?: number;
   addedAt: number;
+  folderId?: string | null;
+  source?: LibrarySource;
+}
+
+export interface LibraryFolder {
+  id: string;
+  name: string;
+  createdAt: number;
 }
 
 interface LibraryIndex {
   assets: LibraryAsset[];
+  folders?: LibraryFolder[];
 }
 
 export function libMediaPath(fileName: string) {
@@ -31,6 +49,13 @@ export function libMediaPath(fileName: string) {
   const safe = path.basename(fileName);
   if (!safe || safe.startsWith(".")) throw new Error("Invalid file name.");
   return path.join(LIB_MEDIA, safe);
+}
+
+export function libThumbPath(id: string) {
+  assertLocalRuntime();
+  const safe = id.replace(/[^a-zA-Z0-9_-]/g, "");
+  if (!safe) throw new Error("Invalid id.");
+  return path.join(LIB_THUMBS, `${safe}.jpg`);
 }
 
 async function readIndex(): Promise<LibraryIndex> {
@@ -110,6 +135,54 @@ async function probe(filePath: string) {
   return { duration: Number.isFinite(duration) ? duration : 0, width, height };
 }
 
+function ffmpeg(args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const p = spawn("ffmpeg", args);
+    const timer = setTimeout(() => p.kill("SIGKILL"), 30_000);
+    let err = "";
+    p.stderr.on("data", (d) => (err = (err + d.toString()).slice(-1000)));
+    p.on("error", reject);
+    p.on("close", (code) => {
+      clearTimeout(timer);
+      code === 0
+        ? resolve()
+        : reject(new Error(err.split("\n").slice(-2).join("\n") || "ffmpeg failed."));
+    });
+  });
+}
+
+// Concurrent thumbnail requests for the same asset share one ffmpeg run.
+const thumbInFlight = new Map<string, Promise<string | null>>();
+
+/** A sharp still for a library video, generated with ffmpeg and cached to disk.
+ * Audio assets have none. Returns the jpg path, or null when unavailable. */
+export async function ensureLibraryThumb(id: string): Promise<string | null> {
+  const asset = await getAsset(id);
+  if (!asset || asset.type !== "video") return null;
+  const dest = libThumbPath(id);
+  if (await exists(dest)) return dest;
+  const running = thumbInFlight.get(id);
+  if (running) return running;
+  const job = (async () => {
+    try {
+      await mkdir(LIB_THUMBS, { recursive: true });
+      // A frame a beat in avoids black leading frames; scale down but stay sharp.
+      const at = Math.min(1, Math.max(0.1, (asset.duration || 2) / 10));
+      await ffmpeg([
+        "-y", "-ss", at.toFixed(2), "-i", libMediaPath(asset.fileName),
+        "-frames:v", "1", "-vf", "scale='min(640,iw)':-2", "-q:v", "3", dest,
+      ]);
+      return dest;
+    } catch {
+      return null;
+    } finally {
+      thumbInFlight.delete(id);
+    }
+  })();
+  thumbInFlight.set(id, job);
+  return job;
+}
+
 async function freeName(original: string) {
   const base = path.basename(original).replace(/[^\w.\-() ]+/g, "_").slice(-80);
   return uniqueName(base, libMediaPath);
@@ -121,7 +194,11 @@ function typeOf(fileName: string): "video" | "audio" | null {
   return null;
 }
 
-async function register(fileName: string, name: string): Promise<LibraryAsset> {
+export async function register(
+  fileName: string,
+  name: string,
+  source?: LibrarySource
+): Promise<LibraryAsset> {
   const type = typeOf(fileName);
   if (!type) throw new Error("Unsupported file type.");
   const meta = await probe(libMediaPath(fileName));
@@ -133,10 +210,14 @@ async function register(fileName: string, name: string): Promise<LibraryAsset> {
     duration: meta.duration,
     ...(meta.width ? { width: meta.width, height: meta.height } : {}),
     addedAt: Date.now(),
+    folderId: null,
+    ...(source ? { source } : {}),
   };
   const idx = await readIndex();
   idx.assets.push(asset);
   await writeIndex(idx);
+  // Warm the thumbnail so the tile paints without waiting on the serve path.
+  void ensureLibraryThumb(asset.id).catch(() => {});
   return asset;
 }
 
@@ -163,6 +244,19 @@ export async function addFromProject(
   return register(dest, name || fileName);
 }
 
+/** Move a freshly downloaded file into the library and register it. */
+export async function addDownloaded(
+  srcPath: string,
+  name: string,
+  source?: LibrarySource
+): Promise<LibraryAsset> {
+  if (!typeOf(srcPath)) throw new Error("Unsupported file type.");
+  await mkdir(LIB_MEDIA, { recursive: true });
+  const dest = await freeName(path.basename(srcPath));
+  await copyFile(srcPath, libMediaPath(dest));
+  return register(dest, name || path.basename(srcPath), source);
+}
+
 /** Copy a library asset into a project's media folder. Returns the file name
  * inside the project. */
 export async function useInProject(assetId: string, projectId: string): Promise<string> {
@@ -184,8 +278,60 @@ export async function removeAsset(id: string) {
   idx.assets = idx.assets.filter((a) => a.id !== id);
   await writeIndex(idx);
   await rm(libMediaPath(asset.fileName), { force: true });
+  await rm(libThumbPath(id), { force: true });
 }
 
 export function getAsset(id: string) {
   return readIndex().then((idx) => idx.assets.find((a) => a.id === id));
+}
+
+// --- Folders: a flat set of named groups; assets carry a folderId. ---
+
+export async function listFolders(): Promise<LibraryFolder[]> {
+  const idx = await readIndex();
+  return (idx.folders ?? []).slice().sort((a, b) => a.createdAt - b.createdAt);
+}
+
+export async function createFolder(name: string): Promise<LibraryFolder> {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("Folder name required.");
+  const folder: LibraryFolder = {
+    id: crypto.randomUUID().slice(0, 8),
+    name: trimmed.slice(0, 80),
+    createdAt: Date.now(),
+  };
+  const idx = await readIndex();
+  idx.folders = [...(idx.folders ?? []), folder];
+  await writeIndex(idx);
+  return folder;
+}
+
+export async function renameFolder(id: string, name: string): Promise<LibraryFolder> {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("Folder name required.");
+  const idx = await readIndex();
+  const folder = (idx.folders ?? []).find((f) => f.id === id);
+  if (!folder) throw new Error("Folder not found.");
+  folder.name = trimmed.slice(0, 80);
+  await writeIndex(idx);
+  return folder;
+}
+
+export async function deleteFolder(id: string) {
+  const idx = await readIndex();
+  idx.folders = (idx.folders ?? []).filter((f) => f.id !== id);
+  // Assets in the folder fall back to ungrouped rather than vanishing.
+  for (const a of idx.assets) if (a.folderId === id) a.folderId = null;
+  await writeIndex(idx);
+}
+
+export async function moveAsset(assetId: string, folderId: string | null) {
+  const idx = await readIndex();
+  const asset = idx.assets.find((a) => a.id === assetId);
+  if (!asset) throw new Error("Library asset not found.");
+  if (folderId && !(idx.folders ?? []).some((f) => f.id === folderId)) {
+    throw new Error("Folder not found.");
+  }
+  asset.folderId = folderId;
+  await writeIndex(idx);
 }
