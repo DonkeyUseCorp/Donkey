@@ -8,9 +8,15 @@ const r = (n: number) => Math.round(n * 100) / 100;
  * Compact JSON snapshot of everything the assistant should know: the cut,
  * the selection, what's on screen, and every user-facing setting. Sent with
  * each message and served by the get_state tool.
+ *
+ * `fullCues` includes the entire transcript. The per-message snapshot leaves
+ * it off (a long transcript would inflate every turn's token cost, even ones
+ * that never touch captions); the get_state tool passes it so the model can
+ * pull every cue on demand.
  */
-export function buildAiContext() {
+export function buildAiContext(opts?: { fullCues?: boolean }) {
   const s = useEditor.getState();
+  const cueCap = opts?.fullCues ? Infinity : 60;
   const spans = getClipSpans(s.clips, s.assets);
   const duration = totalDuration(s.clips);
   const assetById = new Map(s.assets.map((a) => [a.id, a]));
@@ -21,7 +27,15 @@ export function buildAiContext() {
     if (kind === "clip") {
       const sp = spans.find((x) => x.clip.id === id);
       return sp
-        ? { kind, id, asset: sp.asset.name, start: r(sp.start), len: r(sp.len), muted: sp.clip.muted }
+        ? {
+            kind,
+            id,
+            asset: sp.asset.name,
+            start: r(sp.start),
+            len: r(sp.len),
+            muted: sp.clip.muted,
+            speed: r(sp.clip.speed ?? 1),
+          }
         : { kind, id };
     }
     if (kind === "audio") {
@@ -55,6 +69,8 @@ export function buildAiContext() {
       sourceDuration: r(sp.asset.duration),
       muted: sp.clip.muted,
       framing: sp.clip.fit ?? "fit",
+      speed: r(sp.clip.speed ?? 1),
+      ...(sp.transitionOut > 0 ? { crossfadeToNext: r(sp.transitionOut) } : {}),
       ...(sp.clip.fit === "fill"
         ? { panX: r(sp.clip.panX ?? 0), panY: r(sp.clip.panY ?? 0) }
         : {}),
@@ -67,13 +83,15 @@ export function buildAiContext() {
       showOnTimeline: s.subtitles.showOnTimeline,
       locale: s.subtitles.locale ?? "en-US",
       status: s.subtitleStatus,
-      cues: s.subtitles.cues.slice(0, 40).map((c) => ({
+      // A window of cues by default; when truncated the model calls get_state
+      // for the whole transcript (e.g. "clean up all the captions").
+      cues: s.subtitles.cues.slice(0, cueCap).map((c) => ({
         id: c.id,
         start: r(c.start),
         end: r(c.end),
         text: c.text,
       })),
-      cuesTruncated: s.subtitles.cues.length > 40,
+      cuesTruncated: s.subtitles.cues.length > cueCap,
     },
     publish: s.publish,
     view: {
@@ -85,18 +103,20 @@ export function buildAiContext() {
 }
 
 function describeAudio(
-  a: { assetId: string; start: number; in: number; out: number; volume: number; fadeIn?: number; fadeOut?: number },
+  a: { assetId: string; start: number; in: number; out: number; volume: number; fadeIn?: number; fadeOut?: number; speed?: number },
   assets: Map<string, { name: string }>
 ) {
+  const speed = a.speed && a.speed > 0 ? a.speed : 1;
   return {
     asset: assets.get(a.assetId)?.name ?? a.assetId,
     start: r(a.start),
-    len: r(a.out - a.in),
+    len: r((a.out - a.in) / speed),
     in: r(a.in),
     out: r(a.out),
     volume: r(a.volume),
     fadeIn: r(a.fadeIn ?? 0),
     fadeOut: r(a.fadeOut ?? 0),
+    ...(speed !== 1 ? { speed: r(speed) } : {}),
   };
 }
 

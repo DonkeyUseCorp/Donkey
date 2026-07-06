@@ -15,12 +15,18 @@ import type {
   VideoClip,
 } from "./types";
 import { apiFetch } from "./api";
-import { emptySubtitles, mediaUrl } from "./types";
+import { emptySubtitles, mediaUrl, SPEED_MAX, SPEED_MIN, TRANSITION_MAX } from "./types";
 import { loadUiState, saveUiState } from "./uiState";
 
 const uid = () => crypto.randomUUID().slice(0, 8);
 
 const MIN_LEN = 0.1;
+
+/** A single-item selection: the primary that drives the Inspector plus the
+ * one-element multiSelection that bulk actions (delete, copy) and the timeline
+ * highlight read. Every mutation that selects its own result funnels through
+ * this so the two can never drift apart. */
+const sole = (sel: NonNullable<Selection>) => ({ selection: sel, multiSelection: [sel] });
 
 export const TIMELINE_H_DEFAULT = 248;
 export const TIMELINE_H_MIN = 170;
@@ -51,6 +57,9 @@ interface EditorState {
   /** Output frame (9:16 vertical or 16:9 widescreen), persisted per project. */
   aspect: Aspect;
   selection: Selection;
+  /** Everything selected, including `selection` (the primary that drives the
+   * inspector). Bulk actions — delete, copy — act on this whole set. */
+  multiSelection: Selection[];
   currentTime: number;
   playing: boolean;
   pxPerSec: number;
@@ -87,6 +96,11 @@ interface EditorState {
    * contiguous, so empty tracks collapse and a past-the-end lane adds one. */
   moveOverlayToLane: (id: string, lane: number) => void;
   updateClip: (id: string, patch: Partial<VideoClip>) => void;
+  /** Set a clip's playback rate (0.25–4). The clip's timeline footprint
+   * changes, so later titles/captions ripple to stay in sync. */
+  setClipSpeed: (id: string, speed: number) => void;
+  /** Set the cross-dissolve into the next clip (seconds; 0 clears it). */
+  setClipTransition: (id: string, seconds: number) => void;
   updateAudio: (id: string, patch: Partial<AudioClip>) => void;
   updateOverlay: (id: string, patch: Partial<TextOverlay>) => void;
   /** Live-drag updates that should not create undo entries. */
@@ -114,6 +128,14 @@ interface EditorState {
   sortCues: () => void;
   deleteSelection: () => void;
   select: (sel: Selection) => void;
+  /** ⌘/⇧-click: add the item to the selection (or remove it if already in),
+   * making it the new primary. */
+  toggleSelect: (sel: NonNullable<Selection>) => void;
+  /** Shift every free-positioned title and subtitle cue starting at or after
+   * `afterTime` by `delta` seconds (clamped to ≥0). Keeps annotations synced
+   * when the video track's length changes upstream. Caller owns the history
+   * checkpoint. */
+  rippleShift: (afterTime: number, delta: number) => void;
   seek: (t: number) => void;
   setPlaying: (p: boolean) => void;
   setPxPerSec: (v: number) => void;
@@ -124,9 +146,13 @@ interface EditorState {
   undo: () => void;
   redo: () => void;
   pushHistory: () => void;
-  /** Copy the selected clip/audio/title to the timeline clipboard. */
+  /** Coalesce every edit until the matching `endHistoryBatch` into one undo
+   * step. Used so a whole assistant turn reverts with a single ⌘Z. */
+  beginHistoryBatch: () => void;
+  endHistoryBatch: () => void;
+  /** Copy the selected clip/audio/title(s) to the timeline clipboard. */
   copySelection: () => boolean;
-  /** Paste the clipboard at the playhead; selects the pasted item. */
+  /** Paste the clipboard at the playhead; selects the pasted item(s). */
   paste: () => boolean;
 }
 
@@ -142,14 +168,17 @@ let pending: { snap: DocSnapshot; seq: number } | null = null;
 /** Bumped whenever the persistable doc actually changes, letting a pending
  * checkpoint tell a real edit apart from a select/seek that touched nothing. */
 let docSeq = 0;
+/** >0 while a run of edits is being coalesced into one undo step (see
+ * beginHistoryBatch). One checkpoint is captured when it goes 0→1. */
+let batchDepth = 0;
 
-/** Timeline clipboard (⌘C/⌘V) — survives across projects in one session. */
-type Clipboard =
+/** Timeline clipboard (⌘C/⌘V) — survives across projects in one session. One
+ * entry per copied item so a multi-selection round-trips. */
+type ClipboardItem =
   | { kind: "clip"; item: VideoClip }
   | { kind: "audio"; item: AudioClip }
-  | { kind: "text"; item: TextOverlay }
-  | null;
-let clipboard: Clipboard = null;
+  | { kind: "text"; item: TextOverlay };
+let clipboard: ClipboardItem[] = [];
 
 export const useEditor = create<EditorState>((set, get) => {
   const snapshot = (): DocSnapshot => {
@@ -179,6 +208,9 @@ export const useEditor = create<EditorState>((set, get) => {
   };
 
   const push = () => {
+    // Inside a batch a single checkpoint (taken at beginHistoryBatch) already
+    // covers every edit, so individual pushes are no-ops.
+    if (batchDepth > 0) return;
     flush(); // seal the previous edit's checkpoint before starting a new one
     pending = { snap: snapshot(), seq: docSeq };
   };
@@ -196,6 +228,7 @@ export const useEditor = create<EditorState>((set, get) => {
     overlays: [],
     aspect: "9:16",
     selection: null,
+    multiSelection: [],
     currentTime: 0,
     playing: false,
     pxPerSec: 60,
@@ -224,6 +257,7 @@ export const useEditor = create<EditorState>((set, get) => {
         overlays: [],
         aspect: "9:16",
         selection: null,
+        multiSelection: [],
         currentTime: 0,
         playing: false,
         subtitles: emptySubtitles(),
@@ -273,6 +307,18 @@ export const useEditor = create<EditorState>((set, get) => {
 
     pushHistory: push,
 
+    beginHistoryBatch: () => {
+      if (batchDepth === 0) {
+        flush(); // seal any prior edit before opening the batch
+        pending = { snap: snapshot(), seq: docSeq };
+      }
+      batchDepth++;
+    },
+    endHistoryBatch: () => {
+      batchDepth = Math.max(0, batchDepth - 1);
+      if (batchDepth === 0) flush(); // commit the whole run as one undo step
+    },
+
     setAspect: (a) => set({ aspect: a }),
 
     addAsset: (asset) =>
@@ -299,19 +345,28 @@ export const useEditor = create<EditorState>((set, get) => {
       })),
 
     removeAsset: (id) => {
-      if (!get().assets.some((a) => a.id === id)) return;
+      const st = get();
+      if (!st.assets.some((a) => a.id === id)) return;
       push();
+      // Cascade removes this asset's clips; ripple later annotations so they
+      // stay aligned with the content that survives.
+      const bump = makeRipple(st.clips, st.clips.filter((c) => c.assetId !== id), st.assets);
       set((s) => {
-        const sel = s.selection;
-        const selGone =
-          (sel?.kind === "clip" && s.clips.some((c) => c.id === sel.id && c.assetId === id)) ||
-          (sel?.kind === "audio" &&
-            s.audioClips.some((c) => c.id === sel.id && c.assetId === id));
+        const goneClips = new Set(s.clips.filter((c) => c.assetId === id).map((c) => c.id));
+        const goneAudio = new Set(s.audioClips.filter((c) => c.assetId === id).map((c) => c.id));
+        const keep = (sel: Selection) =>
+          !!sel &&
+          !((sel.kind === "clip" && goneClips.has(sel.id)) ||
+            (sel.kind === "audio" && goneAudio.has(sel.id)));
+        const multiSelection = s.multiSelection.filter(keep);
         return {
           assets: s.assets.filter((a) => a.id !== id),
           clips: s.clips.filter((c) => c.assetId !== id),
           audioClips: s.audioClips.filter((c) => c.assetId !== id),
-          selection: selGone ? null : s.selection,
+          overlays: s.overlays.map(bump),
+          subtitles: { ...s.subtitles, cues: s.subtitles.cues.map(bump) },
+          multiSelection,
+          selection: keep(s.selection) ? s.selection : multiSelection[multiSelection.length - 1] ?? null,
         };
       });
     },
@@ -332,7 +387,7 @@ export const useEditor = create<EditorState>((set, get) => {
           index === undefined ? s.clips.length : Math.max(0, Math.min(index, s.clips.length));
         const clips = [...s.clips];
         clips.splice(at, 0, clip);
-        return { clips, selection: { kind: "clip", id: clip.id } };
+        return { clips, ...sole({ kind: "clip", id: clip.id }) };
       });
     },
 
@@ -350,7 +405,7 @@ export const useEditor = create<EditorState>((set, get) => {
       };
       set((s) => ({
         audioClips: [...s.audioClips, clip],
-        selection: { kind: "audio", id: clip.id },
+        ...sole({ kind: "audio", id: clip.id }),
       }));
     },
 
@@ -376,7 +431,7 @@ export const useEditor = create<EditorState>((set, get) => {
       };
       set((s) => ({
         overlays: [...s.overlays, overlay],
-        selection: { kind: "text", id: overlay.id },
+        ...sole({ kind: "text", id: overlay.id }),
       }));
     },
 
@@ -399,6 +454,38 @@ export const useEditor = create<EditorState>((set, get) => {
       push();
       get().updateClipTransient(id, patch);
     },
+
+    setClipSpeed: (id, speed) => {
+      const s = get();
+      const clip = s.clips.find((c) => c.id === id);
+      if (!clip) return;
+      const clamped = Math.max(SPEED_MIN, Math.min(SPEED_MAX, speed));
+      if (Math.abs(clamped - clipSpeed(clip)) < 1e-4) return;
+      const span = getClipSpans(s.clips, s.assets).find((sp) => sp.clip.id === id);
+      const oldLen = span?.len ?? clipLen(clip);
+      const newLen = Math.max(MIN_LEN, (clip.out - clip.in) / clamped);
+      const editEnd = (span?.start ?? 0) + oldLen;
+      push();
+      get().updateClipTransient(id, { speed: clamped });
+      get().rippleShift(editEnd, newLen - oldLen);
+    },
+
+    setClipTransition: (id, seconds) => {
+      const s = get();
+      const idx = s.clips.findIndex((c) => c.id === id);
+      if (idx < 0) return;
+      const clip = s.clips[idx];
+      const next = s.clips[idx + 1];
+      const value = Math.max(0, Math.min(TRANSITION_MAX, seconds));
+      const oldOverlap = transitionOverlap(clip, next);
+      const newOverlap = transitionOverlap({ ...clip, transition: value }, next);
+      const span = getClipSpans(s.clips, s.assets).find((sp) => sp.clip.id === id);
+      const editEnd = (span?.start ?? 0) + (span?.len ?? clipLen(clip));
+      push();
+      get().updateClipTransient(id, { transition: value || undefined });
+      get().rippleShift(editEnd, oldOverlap - newOverlap);
+    },
+
     updateAudio: (id, patch) => {
       push();
       get().updateAudioTransient(id, patch);
@@ -453,11 +540,14 @@ export const useEditor = create<EditorState>((set, get) => {
         in: clip.in,
         out: clip.out,
         volume: 1,
+        // Carry the clip's rate so the detached track keeps the muted picture's
+        // length and stays in sync (an AudioClip plays at its own `speed`).
+        ...(clipSpeed(clip) !== 1 ? { speed: clipSpeed(clip) } : {}),
       };
       set((s) => ({
         audioClips: [...s.audioClips, audio],
         clips: s.clips.map((c) => (c.id === clip.id ? { ...c, muted: true } : c)),
-        selection: { kind: "audio", id: audio.id },
+        ...sole({ kind: "audio", id: audio.id }),
       }));
     },
 
@@ -478,7 +568,7 @@ export const useEditor = create<EditorState>((set, get) => {
             const idx = s.audioClips.findIndex((c) => c.id === a.id);
             const next = [...s.audioClips];
             next.splice(idx, 1, left, right);
-            return { audioClips: next, selection: { kind: "audio", id: right.id } };
+            return { audioClips: next, ...sole({ kind: "audio", id: right.id }) };
           });
           return;
         }
@@ -490,40 +580,88 @@ export const useEditor = create<EditorState>((set, get) => {
       );
       if (!span) return;
       push();
-      const cutAt = span.clip.in + (t - span.start);
-      const left: VideoClip = { ...span.clip, out: cutAt };
+      // Source time advances `speed`× faster than timeline time.
+      const cutAt = span.clip.in + (t - span.start) * clipSpeed(span.clip);
+      // The left half hard-cuts into the right; the right keeps the original
+      // dissolve into whatever came after.
+      const left: VideoClip = { ...span.clip, out: cutAt, transition: undefined };
       const right: VideoClip = { ...span.clip, id: uid(), in: cutAt };
       set((s) => {
         const idx = s.clips.findIndex((c) => c.id === span.clip.id);
         const next = [...s.clips];
         next.splice(idx, 1, left, right);
-        return { clips: next, selection: { kind: "clip", id: right.id } };
+        return { clips: next, ...sole({ kind: "clip", id: right.id }) };
       });
     },
 
     deleteSelection: () => {
-      const sel = get().selection;
-      if (!sel) return;
+      const st = get();
+      const sels = st.multiSelection.length
+        ? st.multiSelection
+        : st.selection
+          ? [st.selection]
+          : [];
+      if (sels.length === 0) return;
       push();
+      const idsOf = (k: NonNullable<Selection>["kind"]) =>
+        new Set(
+          sels
+            .filter((x): x is NonNullable<Selection> => !!x && x.kind === k)
+            .map((x) => x.id)
+        );
+      const clipIds = idsOf("clip");
+      const audioIds = idsOf("audio");
+      const textIds = idsOf("text");
+      const cueIds = idsOf("cue");
+      // Removing video clips shortens the track; ripple later titles/captions
+      // so they stay aligned with the content that survives.
+      const bump = clipIds.size
+        ? makeRipple(st.clips, st.clips.filter((c) => !clipIds.has(c.id)), st.assets)
+        : <T extends { start: number; end: number }>(x: T): T => x;
       set((s) => ({
-        clips: sel.kind === "clip" ? s.clips.filter((c) => c.id !== sel.id) : s.clips,
-        audioClips:
-          sel.kind === "audio"
-            ? s.audioClips.filter((c) => c.id !== sel.id)
-            : s.audioClips,
-        overlays:
-          sel.kind === "text"
-            ? s.overlays.filter((o) => o.id !== sel.id)
-            : s.overlays,
-        subtitles:
-          sel.kind === "cue"
-            ? { ...s.subtitles, cues: s.subtitles.cues.filter((c) => c.id !== sel.id) }
-            : s.subtitles,
+        clips: s.clips.filter((c) => !clipIds.has(c.id)),
+        audioClips: s.audioClips.filter((c) => !audioIds.has(c.id)),
+        overlays: s.overlays.filter((o) => !textIds.has(o.id)).map(bump),
+        subtitles: {
+          ...s.subtitles,
+          cues: s.subtitles.cues.filter((c) => !cueIds.has(c.id)).map(bump),
+        },
         selection: null,
+        multiSelection: [],
       }));
     },
 
-    select: (sel) => set({ selection: sel }),
+    select: (sel) => set({ selection: sel, multiSelection: sel ? [sel] : [] }),
+
+    toggleSelect: (sel) =>
+      set((s) => {
+        const has = s.multiSelection.some((x) => x?.kind === sel.kind && x.id === sel.id);
+        const next = has
+          ? s.multiSelection.filter((x) => !(x?.kind === sel.kind && x.id === sel.id))
+          : [...s.multiSelection, sel];
+        // Primary is the just-added item, or the last survivor when removing.
+        const primary = has ? next[next.length - 1] ?? null : sel;
+        return { multiSelection: next, selection: primary };
+      }),
+
+    rippleShift: (afterTime, delta) => {
+      if (delta === 0) return;
+      set((s) => ({
+        overlays: s.overlays.map((o) =>
+          o.start >= afterTime - 0.001
+            ? { ...o, start: Math.max(0, o.start + delta), end: Math.max(0, o.end + delta) }
+            : o
+        ),
+        subtitles: {
+          ...s.subtitles,
+          cues: s.subtitles.cues.map((c) =>
+            c.start >= afterTime - 0.001
+              ? { ...c, start: Math.max(0, c.start + delta), end: Math.max(0, c.end + delta) }
+              : c
+          ),
+        },
+      }));
+    },
 
     seek: (t) => {
       const total = totalDuration(get().clips);
@@ -555,6 +693,10 @@ export const useEditor = create<EditorState>((set, get) => {
           in: sp.clip.in,
           out: sp.clip.out,
           muted: sp.clip.muted,
+          speed: clipSpeed(sp.clip),
+          // The clamped cross-dissolve overlap, so the transcribe mix overlaps
+          // clip audio the same way the timeline does and cues stay in sync.
+          transition: sp.transitionOut,
         })),
         audio: s.audioClips
           .filter((a) => a.start < duration && assetById.has(a.assetId))
@@ -564,6 +706,7 @@ export const useEditor = create<EditorState>((set, get) => {
             out: a.out,
             start: a.start,
             volume: a.volume,
+            speed: a.speed,
           })),
       };
       set({ subtitleStatus: "running", subtitleError: null });
@@ -622,14 +765,19 @@ export const useEditor = create<EditorState>((set, get) => {
       const cue = get().subtitles.cues.find((c) => c.id === id);
       if (!cue || cue.text === trimmed) return;
       push();
+      // A same-length edit (fixing a misheard word) keeps the real per-word
+      // timings, just swapping the text; a word added/removed drops them and
+      // falls back to proportional timing.
+      const parts = trimmed.split(" ").filter(Boolean);
+      const words =
+        cue.words && cue.words.length === parts.length
+          ? parts.map((w, i) => ({ ...cue.words![i], w }))
+          : undefined;
       set((s) => ({
         subtitles: {
           ...s.subtitles,
           cues: trimmed
-            ? s.subtitles.cues.map((c) =>
-                // Hand-edited text no longer matches the word timings.
-                c.id === id ? { ...c, text: trimmed, words: undefined } : c
-              )
+            ? s.subtitles.cues.map((c) => (c.id === id ? { ...c, text: trimmed, words } : c))
             : s.subtitles.cues.filter((c) => c.id !== id),
         },
       }));
@@ -760,67 +908,73 @@ export const useEditor = create<EditorState>((set, get) => {
 
     copySelection: () => {
       const s = get();
-      const sel = s.selection;
-      if (!sel) return false;
-      if (sel.kind === "clip") {
-        const c = s.clips.find((x) => x.id === sel.id);
-        if (!c) return false;
-        clipboard = { kind: "clip", item: { ...c } };
-      } else if (sel.kind === "audio") {
-        const a = s.audioClips.find((x) => x.id === sel.id);
-        if (!a) return false;
-        clipboard = { kind: "audio", item: { ...a } };
-      } else if (sel.kind === "text") {
-        const o = s.overlays.find((x) => x.id === sel.id);
-        if (!o) return false;
-        clipboard = { kind: "text", item: { ...o } };
-      } else {
-        return false;
+      const sels = s.multiSelection.length ? s.multiSelection : s.selection ? [s.selection] : [];
+      const items: ClipboardItem[] = [];
+      for (const sel of sels) {
+        if (sel?.kind === "clip") {
+          const c = s.clips.find((x) => x.id === sel.id);
+          if (c) items.push({ kind: "clip", item: { ...c } });
+        } else if (sel?.kind === "audio") {
+          const a = s.audioClips.find((x) => x.id === sel.id);
+          if (a) items.push({ kind: "audio", item: { ...a } });
+        } else if (sel?.kind === "text") {
+          const o = s.overlays.find((x) => x.id === sel.id);
+          if (o) items.push({ kind: "text", item: { ...o } });
+        }
       }
+      if (items.length === 0) return false;
+      clipboard = items;
       return true;
     },
 
     paste: () => {
-      const cb = clipboard;
-      if (!cb) return false;
+      if (clipboard.length === 0) return false;
       const s = get();
-      // The copied item's media must still exist in this project.
+      // Every copied clip/audio's media must still exist in this project.
       if (
-        (cb.kind === "clip" || cb.kind === "audio") &&
-        !s.assets.some((a) => a.id === cb.item.assetId)
+        clipboard.some(
+          (cb) =>
+            (cb.kind === "clip" || cb.kind === "audio") &&
+            !s.assets.some((a) => a.id === cb.item.assetId)
+        )
       )
         return false;
       push();
       const t = s.currentTime;
-      if (cb.kind === "clip") {
-        // Insert after the clip under the playhead (end of track otherwise).
-        const spans = getClipSpans(s.clips, s.assets);
-        let index = s.clips.length;
-        for (let i = 0; i < spans.length; i++) {
-          if (t < spans[i].start + spans[i].len) {
-            index = i + 1;
-            break;
+      // Video clips insert together, after the clip under the playhead.
+      const spans = getClipSpans(s.clips, s.assets);
+      let insertAt = s.clips.length;
+      for (let i = 0; i < spans.length; i++) {
+        if (t < spans[i].start + spans[i].len) {
+          insertAt = i + 1;
+          break;
+        }
+      }
+      const newSel: Selection[] = [];
+      set((cur) => {
+        let clips = cur.clips;
+        let audioClips = cur.audioClips;
+        let overlays = cur.overlays;
+        let at = insertAt;
+        for (const cb of clipboard) {
+          if (cb.kind === "clip") {
+            const clip: VideoClip = { ...cb.item, id: uid() };
+            clips = [...clips.slice(0, at), clip, ...clips.slice(at)];
+            at++;
+            newSel.push({ kind: "clip", id: clip.id });
+          } else if (cb.kind === "audio") {
+            const item: AudioClip = { ...cb.item, id: uid(), start: Math.max(0, t) };
+            audioClips = [...audioClips, item];
+            newSel.push({ kind: "audio", id: item.id });
+          } else {
+            const len = Math.max(0.2, cb.item.end - cb.item.start);
+            const item: TextOverlay = { ...cb.item, id: uid(), start: Math.max(0, t), end: Math.max(0, t) + len };
+            overlays = [...overlays, item];
+            newSel.push({ kind: "text", id: item.id });
           }
         }
-        const clip: VideoClip = { ...cb.item, id: uid() };
-        set((cur) => ({
-          clips: [...cur.clips.slice(0, index), clip, ...cur.clips.slice(index)],
-          selection: { kind: "clip", id: clip.id },
-        }));
-      } else if (cb.kind === "audio") {
-        const item: AudioClip = { ...cb.item, id: uid(), start: Math.max(0, t) };
-        set((cur) => ({
-          audioClips: [...cur.audioClips, item],
-          selection: { kind: "audio", id: item.id },
-        }));
-      } else {
-        const len = Math.max(0.2, cb.item.end - cb.item.start);
-        const item: TextOverlay = { ...cb.item, id: uid(), start: Math.max(0, t), end: Math.max(0, t) + len };
-        set((cur) => ({
-          overlays: [...cur.overlays, item],
-          selection: { kind: "text", id: item.id },
-        }));
-      }
+        return { clips, audioClips, overlays, selection: newSel[newSel.length - 1] ?? null, multiSelection: newSel };
+      });
       return true;
     },
 
@@ -829,7 +983,7 @@ export const useEditor = create<EditorState>((set, get) => {
       const prev = history.pop();
       if (!prev) return;
       future.push(snapshot());
-      set({ ...prev, selection: null });
+      set({ ...prev, selection: null, multiSelection: [] });
     },
 
     redo: () => {
@@ -838,7 +992,7 @@ export const useEditor = create<EditorState>((set, get) => {
       if (!next) return;
       history.push(snapshot());
       if (history.length > HISTORY_CAP) history.shift();
-      set({ ...next, selection: null });
+      set({ ...next, selection: null, multiSelection: [] });
     },
   };
 });
@@ -889,8 +1043,27 @@ export function serializeDoc(s: {
   };
 }
 
+/** Effective playback rate of a video clip (>0, default 1). */
+export function clipSpeed(c: VideoClip) {
+  const s = c.speed ?? 1;
+  return s > 0 ? s : 1;
+}
+
 export function clipLen(c: VideoClip | AudioClip) {
-  return Math.max(MIN_LEN, c.out - c.in);
+  const src = c.out - c.in;
+  // Video clips play their source at `speed`, so the timeline footprint is
+  // shorter/longer than the source. Audio clips have no speed.
+  const eff = "speed" in c && c.speed && c.speed > 0 ? src / c.speed : src;
+  return Math.max(MIN_LEN, eff);
+}
+
+/** Cross-dissolve overlap (timeline seconds) between a clip and its successor,
+ * clamped so it can never swallow either clip whole. 0 when there is no next
+ * clip or no transition set. */
+export function transitionOverlap(a: VideoClip, b: VideoClip | undefined): number {
+  const d = a.transition ?? 0;
+  if (!b || d <= 0) return 0;
+  return Math.min(d, clipLen(a) * 0.9, clipLen(b) * 0.9);
 }
 
 export function getClipSpans(
@@ -899,20 +1072,62 @@ export function getClipSpans(
 ): ClipSpan[] {
   // Map lookup, not a per-clip assets.find — this runs every playback frame.
   const byId = new Map(assets.map((a) => [a.id, a]));
+  // Lay out only clips whose media is present; a transition joins adjacent
+  // present clips, so resolve the list first.
+  const present = clips
+    .map((clip) => ({ clip, asset: byId.get(clip.assetId) }))
+    .filter((x): x is { clip: VideoClip; asset: MediaAsset } => !!x.asset);
   const spans: ClipSpan[] = [];
   let t = 0;
-  for (const clip of clips) {
-    const asset = byId.get(clip.assetId);
-    if (!asset) continue;
+  for (let i = 0; i < present.length; i++) {
+    const { clip, asset } = present[i];
     const len = clipLen(clip);
-    spans.push({ clip, asset, start: t, len });
-    t += len;
+    const overlap = transitionOverlap(clip, present[i + 1]?.clip);
+    spans.push({ clip, asset, start: t, len, transitionOut: overlap });
+    t += len - overlap; // the next clip starts early by the dissolve length
   }
   return spans;
 }
 
 export function totalDuration(clips: VideoClip[]) {
-  return clips.reduce((sum, c) => sum + clipLen(c), 0);
+  let t = 0;
+  for (let i = 0; i < clips.length; i++) {
+    t += clipLen(clips[i]) - transitionOverlap(clips[i], clips[i + 1]);
+  }
+  return Math.max(0, t);
+}
+
+/**
+ * Build the annotation shifter for a video-track edit (clip delete, asset
+ * removal). Titles and cues are pinned to timeline time, so when clips go the
+ * track re-lays-out and everything downstream must move with the content it
+ * sat over. Comparing the real old/new overlap-aware layouts — rather than
+ * assuming each removed clip vacates its full length — keeps annotations
+ * aligned even across cross-dissolves. An annotation over surviving content
+ * moves by that clip's shift; one over a removed gap collapses to the join;
+ * one past everything shifts by the whole-timeline length change.
+ */
+function makeRipple(oldClips: VideoClip[], newClips: VideoClip[], assets: MediaAsset[]) {
+  const newStart = new Map(getClipSpans(newClips, assets).map((sp) => [sp.clip.id, sp.start]));
+  const totalDelta = totalDuration(newClips) - totalDuration(oldClips);
+  const survivors = getClipSpans(oldClips, assets)
+    .filter((sp) => newStart.has(sp.clip.id))
+    .map((sp) => ({
+      oldStart: sp.start,
+      oldEnd: sp.start + sp.len,
+      newStart: newStart.get(sp.clip.id)!,
+    }));
+  const shiftFor = (a: number) => {
+    for (const s of survivors) {
+      if (a <= s.oldEnd + 1e-6)
+        return a >= s.oldStart - 1e-6 ? s.newStart - s.oldStart : s.newStart - a;
+    }
+    return totalDelta;
+  };
+  return <T extends { start: number; end: number }>(item: T): T => {
+    const d = shiftFor(item.start);
+    return d ? { ...item, start: Math.max(0, item.start + d), end: Math.max(0, item.end + d) } : item;
+  };
 }
 
 export const useTotalDuration = () => useEditor((s) => totalDuration(s.clips));

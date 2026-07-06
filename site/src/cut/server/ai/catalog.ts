@@ -228,6 +228,34 @@ export const AI_TOOLS: AiToolDef[] = [
     inputSchema: obj({}),
   },
   {
+    name: "set_speed",
+    description:
+      "Set a video clip's playback speed (0.25–4×). Faster shortens the clip on the timeline; slower stretches it. Later titles and captions shift to stay in sync.",
+    inputSchema: obj({ clipId: str("Video clip id"), speed: num("Playback rate 0.25–4 (1 = normal)") }, ["clipId", "speed"]),
+  },
+  {
+    name: "set_transition",
+    description:
+      "Set a cross-dissolve from this clip into the next one, in seconds (0 clears it, max 2). The two clips overlap by that much, so the cut shortens. Only valid when a next clip exists.",
+    inputSchema: obj({ clipId: str("Video clip id (the clip the dissolve starts from)"), seconds: num("Dissolve length in seconds, 0–2 (0 = hard cut)") }, ["clipId", "seconds"]),
+  },
+  {
+    name: "merge_cue",
+    description: "Merge a subtitle cue into the one before it (joins their text and timing). Not valid for the first cue.",
+    inputSchema: obj({ id: str("Cue id to merge into its predecessor") }, ["id"]),
+  },
+  {
+    name: "set_aspect",
+    description:
+      "Switch the project's output frame: '9:16' vertical (1080×1920, TikTok/Reels/Shorts) or '16:9' widescreen (1920×1080, YouTube).",
+    inputSchema: obj({ aspect: { type: "string", enum: ["9:16", "16:9"], description: "Output aspect" } }, ["aspect"]),
+  },
+  {
+    name: "set_project_name",
+    description: "Rename the current project.",
+    inputSchema: obj({ name: str("New project name") }, ["name"]),
+  },
+  {
     name: "list_skills",
     description: "List the available skill documents about how this editor works.",
     inputSchema: obj({}),
@@ -254,10 +282,12 @@ Everything autosaves to the project folder. Undo/redo is unlimited (⌘Z / ⇧�
 Times are in seconds on the shared timeline. The playhead is currentTime; a skimmer previews under the mouse without moving the playhead.`,
 
   "timeline-editing": `# Timeline editing
-- Video track is magnetic: clips are ordered by index; there are no gaps. move_clip reorders; total duration = sum of (out-in).
+- Video track is magnetic: clips are ordered by index; there are no gaps. move_clip reorders. A clip's timeline length is (out-in)/speed; total duration = the sum of those minus any cross-dissolve overlaps.
 - trim_clip changes in/out inside the source media. in >= 0, out <= source duration, out-in >= 0.1.
+- set_speed sets a clip's playback rate (0.25–4×); it changes the clip's timeline length, and later titles/captions ripple to stay in sync.
+- set_transition adds a cross-dissolve from a clip into the next one (0–2s). The clips overlap by that duration, so the cut gets shorter; splitting or deleting clears the affected dissolve.
 - split_at cuts the clip under that time into two clips at the exact frame. With a soundtrack clip selected it splits that instead.
-- delete_item removes items; the video track closes the gap automatically.
+- delete_item removes items; the video track closes the gap automatically. The user can multi-select (⌘/⇧-click) and delete several at once.
 - detach_audio lifts a video clip's sound to the soundtrack track (and mutes the clip) so audio can be cut independently of video.
 - freeze_frame grabs one frame (default: the playhead — what the user currently sees) as a still clip and inserts it, by default at index 0 as a cover/hook frame ("make this the first frame"). The still is baked at the project's current aspect with the clip's framing applied; if the user later switches aspect they should capture a fresh one.
 - set_framing: per-clip Fit (letterbox) vs Fill (crop to cover the project frame). In Fill, panX/panY position the crop window; the user can also drag the video directly in the preview. The control lives in the Inspector under "Framing" when a video clip is selected. Landscape footage usually wants fill + a pan that keeps the subject.

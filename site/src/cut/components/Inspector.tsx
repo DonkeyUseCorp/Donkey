@@ -16,7 +16,15 @@ import { Textarea } from "@/components/ui/textarea";
 import { useEditor } from "@/cut/lib/store";
 import { PLATE_COLOR, PLATE_OPACITY, PLATE_RADIUS } from "@/cut/lib/textRender";
 import { formatTime } from "@/cut/lib/time";
-import { FONTS, type AudioClip, type TextOverlay, type VideoClip } from "@/cut/lib/types";
+import {
+  FONTS,
+  SPEED_MAX,
+  SPEED_MIN,
+  TRANSITION_MAX,
+  type AudioClip,
+  type TextOverlay,
+  type VideoClip,
+} from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
 
 const SWATCHES = ["#FFFFFF", "#111114", "#FFD60A", "#FF375F", "#0A84FF", "#30D158"];
@@ -131,11 +139,11 @@ export function Inspector() {
   return (
     <aside className="flex min-h-0 flex-col overflow-y-auto border-l border-border bg-card">
       {clip ? (
-        <ClipPanel clip={clip} />
+        <ClipPanel key={clip.id} clip={clip} />
       ) : audio ? (
-        <AudioPanel clip={audio} />
+        <AudioPanel key={audio.id} clip={audio} />
       ) : overlay ? (
-        <TextPanel overlay={overlay} />
+        <TextPanel key={overlay.id} overlay={overlay} />
       ) : null}
     </aside>
   );
@@ -165,6 +173,17 @@ const Value = ({ children, className }: { children: React.ReactNode; className?:
 function ClipPanel({ clip }: { clip: VideoClip }) {
   const asset = useEditor((s) => s.assets.find((a) => a.id === clip.assetId));
   const updateClip = useEditor((s) => s.updateClip);
+  // A cross-dissolve dissolves this clip into the next one, so only offer it
+  // when there is a next clip on the track.
+  const hasNext = useEditor((s) => {
+    const i = s.clips.findIndex((c) => c.id === clip.id);
+    return i >= 0 && i < s.clips.length - 1;
+  });
+  const [speedDraft, setSpeedDraft] = useState<number | null>(null);
+  const [xfadeDraft, setXfadeDraft] = useState<number | null>(null);
+  const speed = speedDraft ?? clip.speed ?? 1;
+  const xfade = xfadeDraft ?? clip.transition ?? 0;
+  const speedLen = (clip.out - clip.in) / (speed > 0 ? speed : 1);
   return (
     <>
       <PanelTitle>Video clip</PanelTitle>
@@ -172,10 +191,44 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
         <div className="mb-1.5 truncate border-b border-border pb-2.5 text-xs font-medium" title={asset?.name}>
           {asset?.name}
         </div>
-        <Row label="Length"><Value>{formatTime(clip.out - clip.in)}</Value></Row>
+        <Row label="Length"><Value>{formatTime(speedLen)}</Value></Row>
         <Row label="Trim">
           <Value>{formatTime(clip.in)} – {formatTime(clip.out)}</Value>
         </Row>
+        <Row label="Speed">
+          <Slider
+            className="clip-speed data-horizontal:w-24"
+            min={SPEED_MIN}
+            max={SPEED_MAX}
+            step={0.05}
+            value={speed}
+            onValueChange={(v) => setSpeedDraft(Number(v))}
+            onValueCommitted={() => {
+              if (speedDraft != null) useEditor.getState().setClipSpeed(clip.id, speedDraft);
+              setSpeedDraft(null);
+            }}
+          />
+          <Value className="w-9 text-right text-muted-foreground">{speed.toFixed(2)}×</Value>
+        </Row>
+        {hasNext && (
+          <Row label="Crossfade">
+            <Slider
+              className="clip-xfade data-horizontal:w-24"
+              min={0}
+              max={TRANSITION_MAX}
+              step={0.1}
+              value={xfade}
+              onValueChange={(v) => setXfadeDraft(Number(v))}
+              onValueCommitted={() => {
+                if (xfadeDraft != null) useEditor.getState().setClipTransition(clip.id, xfadeDraft);
+                setXfadeDraft(null);
+              }}
+            />
+            <Value className="w-9 text-right text-muted-foreground">
+              {xfade < 0.05 ? "Off" : `${xfade.toFixed(1)}s`}
+            </Value>
+          </Row>
+        )}
         <Row label="Mute audio">
           <Switch
             checked={clip.muted}
@@ -229,8 +282,11 @@ function AudioPanel({ clip }: { clip: AudioClip }) {
     ck.begin();
     updateAudioTransient(clip.id, patch);
   };
+  // Detached audio can carry a playback rate; its timeline length is (out-in)/speed.
+  const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
+  const len = (clip.out - clip.in) / speed;
   // A fade can take at most half the clip so in+out never overlap.
-  const maxFade = Math.max(0.1, Math.round(((clip.out - clip.in) / 2) * 10) / 10);
+  const maxFade = Math.max(0.1, Math.round((len / 2) * 10) / 10);
   return (
     <>
       <PanelTitle>Soundtrack</PanelTitle>
@@ -238,7 +294,7 @@ function AudioPanel({ clip }: { clip: AudioClip }) {
         <div className="mb-1.5 truncate border-b border-border pb-2.5 text-xs font-medium" title={asset?.name}>
           {asset?.name}
         </div>
-        <Row label="Length"><Value>{formatTime(clip.out - clip.in)}</Value></Row>
+        <Row label="Length"><Value>{formatTime(len)}</Value></Row>
         <Row label="Starts at"><Value>{formatTime(clip.start)}</Value></Row>
         <Row label="Volume">
           <Slider

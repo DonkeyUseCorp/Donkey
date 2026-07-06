@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AudioLines, EllipsisVertical, Pause, Play, Plus, Scissors, SkipBack, Trash2, Type, VolumeX } from "lucide-react";
+import { AudioLines, Blend, EllipsisVertical, Pause, Play, Plus, Scissors, SkipBack, Trash2, Type, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -13,7 +13,7 @@ import { Slider } from "@/components/ui/slider";
 import { clearAssetDrag, draggedAssetId, draggingAssetId, hasAssetDrag } from "@/cut/lib/assetDrag";
 import { startDrag } from "@/cut/lib/drag";
 import { ensurePeaks } from "@/cut/lib/media";
-import { clipLen, getClipSpans, TIMELINE_H_MAX, totalDuration, useEditor } from "@/cut/lib/store";
+import { clipLen, clipSpeed, getClipSpans, TIMELINE_H_MAX, totalDuration, useEditor } from "@/cut/lib/store";
 import { formatTime, formatTimecode } from "@/cut/lib/time";
 import type { AudioClip, ClipSpan, MediaAsset, SubtitleCue, TextOverlay } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
@@ -78,10 +78,17 @@ export function Timeline() {
   const assets = useEditor((s) => s.assets);
   const pps = useEditor((s) => s.pxPerSec);
   const timelineH = useEditor((s) => s.timelineH);
-  const selection = useEditor((s) => s.selection);
+  const multiSelection = useEditor((s) => s.multiSelection);
   const subtitles = useEditor((s) => s.subtitles);
   const scrollRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
+
+  // Membership set so every track can highlight all selected items, not just
+  // the primary one.
+  const selKeys = useMemo(
+    () => new Set(multiSelection.map((x) => (x ? `${x.kind}:${x.id}` : ""))),
+    [multiSelection]
+  );
 
   const spans = useMemo(() => getClipSpans(clips, assets), [clips, assets]);
   const total = totalDuration(clips);
@@ -216,8 +223,13 @@ export function Timeline() {
         const t = (el.scrollLeft + px - PAD_SIDE) / cur;
         zoomTo(cur * Math.exp(-e.deltaY * 0.012), t, px);
       } else if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
-        e.preventDefault();
-        el.scrollLeft += e.deltaY;
+        // When the tracks overflow vertically, let the wheel scroll them;
+        // otherwise map vertical wheel to horizontal panning (the timeline is
+        // mostly wide).
+        if (el.scrollHeight <= el.clientHeight) {
+          e.preventDefault();
+          el.scrollLeft += e.deltaY;
+        }
       }
     };
     el.addEventListener("wheel", onWheel, { passive: false });
@@ -339,10 +351,10 @@ export function Timeline() {
           variant="ghost"
           size="sm"
           title="Delete (⌫)"
-          disabled={!selection}
+          disabled={multiSelection.length === 0}
           onClick={() => useEditor.getState().deleteSelection()}
         >
-          <Trash2 /> Delete
+          <Trash2 /> {multiSelection.length > 1 ? `Delete ${multiSelection.length}` : "Delete"}
         </Button>
 
         <Transport total={total} />
@@ -361,11 +373,11 @@ export function Timeline() {
         </Button>
       </div>
 
-      <div ref={scrollRef} className="tl-scroll min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
-        <div className="h-full" style={{ width: contentW + PAD_SIDE * 2 }}>
+      <div ref={scrollRef} className="tl-scroll min-h-0 flex-1 overflow-auto">
+        <div className="min-h-full" style={{ width: contentW + PAD_SIDE * 2 }}>
           <div
             ref={innerRef}
-            className="tl-content relative h-full pb-2"
+            className="tl-content relative min-h-full pb-2"
             style={{ width: contentW, marginLeft: PAD_SIDE }}
           >
           <Ruler pps={pps} width={contentW} onScrub={scrub} />
@@ -404,7 +416,7 @@ export function Timeline() {
                 span={span}
                 index={i}
                 pps={pps}
-                selected={selection?.kind === "clip" && selection.id === span.clip.id}
+                selected={selKeys.has(`clip:${span.clip.id}`)}
                 drag={dragInfo}
                 insertAtIndex={assetDrop ? assetDrop.index : null}
                 insertLen={assetDrop ? assetDrop.len : 0}
@@ -413,6 +425,25 @@ export function Timeline() {
                 onDrop={onClipDrop}
               />
             ))}
+            {/* Cross-dissolve markers sit over the overlap between two clips. */}
+            {!clipDrag &&
+              spans.map((span) =>
+                span.transitionOut > 0 ? (
+                  <div
+                    key={`xf-${span.clip.id}`}
+                    className="tl-xfade pointer-events-none absolute z-6 flex -translate-x-1/2 items-center justify-center rounded-full bg-[#0a84ff] text-white shadow-[0_0_0_2px_rgba(255,255,255,0.9)]"
+                    style={{
+                      left: (span.start + span.len - span.transitionOut / 2) * pps,
+                      top: (VIDEO_H - 4) / 2 - 8,
+                      width: 16,
+                      height: 16,
+                    }}
+                    title={`Cross-dissolve ${span.transitionOut.toFixed(1)}s`}
+                  >
+                    <Blend className="size-2.5" />
+                  </div>
+                ) : null
+              )}
           </div>
 
           {audioClips.length > 0 && (
@@ -423,7 +454,7 @@ export function Timeline() {
                   clip={a}
                   asset={assets.find((x) => x.id === a.assetId)}
                   pps={pps}
-                  selected={selection?.kind === "audio" && selection.id === a.id}
+                  selected={selKeys.has(`audio:${a.id}`)}
                 />
               ))}
             </div>
@@ -449,7 +480,7 @@ export function Timeline() {
                     top={row * TEXT_H}
                     baseRow={baseRow}
                     laneCount={overlayLanes.count}
-                    selected={selection?.kind === "text" && selection.id === o.id}
+                    selected={selKeys.has(`text:${o.id}`)}
                     onLaneDrag={onTextLaneDrag}
                     onLaneDrop={onTextLaneDrop}
                   />
@@ -469,7 +500,7 @@ export function Timeline() {
                   key={c.id}
                   cue={c}
                   pps={pps}
-                  selected={selection?.kind === "cue" && selection.id === c.id}
+                  selected={selKeys.has(`cue:${c.id}`)}
                 />
               ))}
             </div>
@@ -667,12 +698,14 @@ function ClipView({
   // the clip and the leading area dims as "hidden"; release collapses it.
   const [trim, setTrim] = useState<{ side: "l"; in0: number } | { side: "r" } | null>(null);
   const { clip, asset } = span;
+  const speed = clipSpeed(clip);
   const w = span.len * pps;
   const left = span.start * pps;
   const trimL = trim?.side === "l" ? trim : null;
   const stripIn = trimL ? Math.min(clip.in, trimL.in0) : clip.in;
-  const hidPx = trimL ? Math.max(0, (clip.in - trimL.in0) * pps) : 0;
-  const boxW = trimL ? (clip.out - stripIn) * pps : w;
+  // Source seconds → timeline px goes through the clip's speed.
+  const hidPx = trimL ? Math.max(0, ((clip.in - trimL.in0) / speed) * pps) : 0;
+  const boxW = trimL ? ((clip.out - stripIn) / speed) * pps : w;
   const isDragged = drag?.id === clip.id;
   // Neighbors part to make room for the open slot.
   const reorderShift =
@@ -696,16 +729,20 @@ function ClipView({
     const imgW = Math.max(26, Math.round((VIDEO_H - 4) * aspect));
     const count = Math.min(120, Math.ceil(boxW / imgW));
     return Array.from({ length: count }, (_, k) => {
-      const timeAt = stripIn + (k * imgW + imgW / 2) / pps;
+      const timeAt = stripIn + ((k * imgW + imgW / 2) / pps) * speed;
       const idx = Math.min(
         asset.thumbs!.length - 1,
         Math.max(0, Math.floor(timeAt / asset.thumbStep!))
       );
       return { src: asset.thumbs![idx], left: k * imgW, width: imgW };
     });
-  }, [asset, stripIn, boxW, pps]);
+  }, [asset, stripIn, boxW, pps, speed]);
 
   const onBody = (e: React.PointerEvent) => {
+    if (e.metaKey || e.shiftKey) {
+      useEditor.getState().toggleSelect({ kind: "clip", id: clip.id });
+      return;
+    }
     const s = useEditor.getState();
     s.select({ kind: "clip", id: clip.id });
     // Clicking anywhere on the timeline moves the playhead — clips included.
@@ -731,18 +768,28 @@ function ClipView({
     });
   };
 
+  // Shift later titles/captions by however much this clip's footprint changed.
+  const rippleTrim = (len0: number) => {
+    const c = useEditor.getState().clips.find((x) => x.id === clip.id);
+    if (c) useEditor.getState().rippleShift(span.start + len0, clipLen(c) - len0);
+  };
+
   const onTrimLeft = (e: React.PointerEvent) => {
     const s = useEditor.getState();
     s.select({ kind: "clip", id: clip.id });
     s.pushHistory();
     const in0 = clip.in;
+    const len0 = span.len;
     setTrim({ side: "l", in0 });
     startDrag(e, {
       onMove: (dx) => {
-        const nin = Math.min(clip.out - 0.15, Math.max(0, in0 + dx / pps));
+        const nin = Math.min(clip.out - 0.15, Math.max(0, in0 + (dx / pps) * speed));
         s.updateClipTransient(clip.id, { in: nin });
       },
-      onUp: () => setTrim(null),
+      onUp: () => {
+        setTrim(null);
+        rippleTrim(len0);
+      },
     });
   };
 
@@ -752,12 +799,16 @@ function ClipView({
     s.pushHistory();
     setTrim({ side: "r" });
     const out0 = clip.out;
+    const len0 = span.len;
     startDrag(e, {
       onMove: (dx) => {
-        const nout = Math.max(clip.in + 0.15, Math.min(asset.duration, out0 + dx / pps));
+        const nout = Math.max(clip.in + 0.15, Math.min(asset.duration, out0 + (dx / pps) * speed));
         s.updateClipTransient(clip.id, { out: nout });
       },
-      onUp: () => setTrim(null),
+      onUp: () => {
+        setTrim(null);
+        rippleTrim(len0);
+      },
     });
   };
 
@@ -813,6 +864,14 @@ function ClipView({
         {clip.muted && (
           <span className="tl-mute-chip absolute bottom-1 left-1 z-2 grid size-[18px] place-items-center rounded-[5px] bg-black/70 text-white" title="Muted">
             <VolumeX className="size-3" />
+          </span>
+        )}
+        {(clip.speed ?? 1) !== 1 && (
+          <span
+            className="tl-speed-chip absolute right-1.5 bottom-1 z-2 rounded-[5px] bg-black/70 px-1 py-px font-mono text-[9.5px] tabular-nums text-white"
+            title={`${clip.speed}× speed`}
+          >
+            {+(clip.speed ?? 1).toFixed(2)}×
           </span>
         )}
         <DropdownMenu>
@@ -906,6 +965,10 @@ function AudioView({
   if (!asset) return null;
 
   const onBody = (e: React.PointerEvent) => {
+    if (e.metaKey || e.shiftKey) {
+      useEditor.getState().toggleSelect({ kind: "audio", id: clip.id });
+      return;
+    }
     const s = useEditor.getState();
     s.select({ kind: "audio", id: clip.id });
     s.seek(clip.start + (e.clientX - e.currentTarget.getBoundingClientRect().left) / pps);
@@ -999,6 +1062,10 @@ function TextBar({
   const w = Math.max(8, (o.end - o.start) * pps);
 
   const onBody = (e: React.PointerEvent) => {
+    if (e.metaKey || e.shiftKey) {
+      useEditor.getState().toggleSelect({ kind: "text", id: o.id });
+      return;
+    }
     const s = useEditor.getState();
     s.select({ kind: "text", id: o.id });
     s.pushHistory();
@@ -1076,6 +1143,10 @@ function SubBar({ cue, pps, selected }: { cue: SubtitleCue; pps: number; selecte
   };
 
   const onBody = (e: React.PointerEvent) => {
+    if (e.metaKey || e.shiftKey) {
+      useEditor.getState().toggleSelect({ kind: "cue", id: cue.id });
+      return;
+    }
     const s = useEditor.getState();
     s.select({ kind: "cue", id: cue.id });
     s.pushHistory();

@@ -339,6 +339,14 @@ function ChatSession({
 
   const busy = status === "submitted" || status === "streaming";
 
+  // Coalesce every edit the assistant makes in one turn into a single undo
+  // step, so ⌘Z reverts the whole turn rather than one tool call at a time.
+  useEffect(() => {
+    if (!busy) return;
+    useEditor.getState().beginHistoryBatch();
+    return () => useEditor.getState().endHistoryBatch();
+  }, [busy]);
+
   // Keep the thread saved (so it shows up in the Threads panel) as it grows.
   useEffect(() => {
     if (messages.length === 0) return;

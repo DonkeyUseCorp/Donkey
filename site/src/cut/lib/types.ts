@@ -50,7 +50,19 @@ export interface VideoClip {
    * of the oversized video stays visible. */
   panX?: number;
   panY?: number;
+  /** Playback rate, default 1 (absent). The source (out-in) seconds play in
+   * (out-in)/speed timeline seconds, so >1 is faster and shorter. */
+  speed?: number;
+  /** Cross-dissolve into the next clip, in timeline seconds (absent/0 = hard
+   * cut). The two clips overlap by this much, so the cut shortens by it. */
+  transition?: number;
 }
+
+/** Speed limits — matches the Inspector control and export atempo range. */
+export const SPEED_MIN = 0.25;
+export const SPEED_MAX = 4;
+/** Longest cross-dissolve offered; also clamps against the clips it joins. */
+export const TRANSITION_MAX = 2;
 
 /** A clip on the free-form soundtrack track. */
 export interface AudioClip {
@@ -62,6 +74,10 @@ export interface AudioClip {
   volume: number; // 0..1.5
   fadeIn?: number; // seconds, ramp up from the clip start
   fadeOut?: number; // seconds, ramp down into the clip end
+  /** Playback rate, default 1 (absent). Set only when audio was detached from
+   * a sped-up video clip, so it stays the same length and in sync with the
+   * (now muted) picture. The timeline footprint is (out-in)/speed. */
+  speed?: number;
 }
 
 export type FontId = "sf" | "serif" | "rounded" | "mono" | "impact";
@@ -110,8 +126,9 @@ export interface SubtitleCue {
   start: number; // timeline seconds
   end: number;
   text: string;
-  /** Word timings from the transcriber; dropped once the text is hand-edited
-   * (they no longer match), which falls back to proportional splitting. */
+  /** Word timings from the transcriber. A same-word-count hand-edit keeps them
+   * (text swapped in place); adding/removing a word drops them and splitting
+   * falls back to proportional timing. */
   words?: { t0: number; t1: number; w: string }[];
 }
 
@@ -142,7 +159,10 @@ export interface ClipSpan {
   clip: VideoClip;
   asset: MediaAsset;
   start: number; // timeline start
-  len: number;
+  len: number; // own timeline footprint (source length / speed)
+  /** Cross-dissolve overlap into the next span, in timeline seconds. The next
+   * span's start already sits `transitionOut` earlier, so the two intersect. */
+  transitionOut: number;
 }
 
 /** The document persisted as project.json inside each project folder. */

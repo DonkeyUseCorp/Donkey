@@ -3,16 +3,25 @@ import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { assertLocalRuntime } from "./local-only";
+import { createJobRegistry } from "./jobRegistry";
 import { mediaPath, readProject } from "./projects";
-import { findOnPath, hasStream, num, round } from "./util";
+import { atempoChain, findOnPath, hasStream, num, round } from "./util";
 
 /** The audible slice of the cut, in timeline time (mirrors ExportSpec). */
 export interface TranscribeSpec {
   projectId: string;
   duration: number;
   locale?: string;
-  clips: { file: string; in: number; out: number; muted: boolean }[];
-  audio: { file: string; in: number; out: number; start: number; volume: number }[];
+  clips: {
+    file: string;
+    in: number;
+    out: number;
+    muted: boolean;
+    speed?: number;
+    /** Cross-dissolve overlap into the next clip, timeline seconds. */
+    transition?: number;
+  }[];
+  audio: { file: string; in: number; out: number; start: number; volume: number; speed?: number }[];
 }
 
 interface Word {
@@ -38,25 +47,32 @@ export interface TranscribeJob {
   cues?: Cue[];
 }
 
-// Survives dev-server module reloads (same trick as export jobs).
-const g = globalThis as unknown as { __veditorSttJobs?: Map<string, TranscribeJob> };
-const jobs = (g.__veditorSttJobs ??= new Map<string, TranscribeJob>());
+const MAX_RUNNING = 1; // on-device transcription is heavy; one at a time
+// Survives dev-server module reloads; caps the terminal backlog.
+const { jobs, runningCount, retire } = createJobRegistry<TranscribeJob>("__veditorSttJobs");
 
 export function getTranscribeJob(id: string) {
   return jobs.get(id);
 }
 
-function run(cmd: string, args: string[], notFound?: string): Promise<string> {
+function run(cmd: string, args: string[], notFound?: string, timeoutMs = 600_000): Promise<string> {
   return new Promise((resolve, reject) => {
     const p = spawn(cmd, args);
     let out = "";
     let err = "";
+    const timer = setTimeout(() => {
+      p.kill("SIGKILL");
+      reject(new Error(`${cmd} timed out after ${Math.round(timeoutMs / 1000)}s.`));
+    }, timeoutMs);
+    timer.unref();
     p.stdout.on("data", (d) => (out += d));
     p.stderr.on("data", (d) => (err += d));
-    p.on("error", (e) =>
-      reject(e.message.includes("ENOENT") && notFound ? new Error(notFound) : e)
-    );
+    p.on("error", (e) => {
+      clearTimeout(timer);
+      reject(e.message.includes("ENOENT") && notFound ? new Error(notFound) : e);
+    });
     p.on("close", (code) => {
+      clearTimeout(timer);
       if (code === 0) resolve(out);
       else reject(new Error(err.trim().split("\n").slice(-4).join("\n") || `${cmd} exited ${code}`));
     });
@@ -130,17 +146,32 @@ export function groupWords(words: Word[]): Cue[] {
 
 export async function createTranscribeJob(spec: TranscribeSpec): Promise<TranscribeJob> {
   assertLocalRuntime();
+  const id = crypto.randomUUID().slice(0, 12);
+  if (runningCount() >= MAX_RUNNING) {
+    const job: TranscribeJob = {
+      id,
+      projectId: spec.projectId,
+      status: "error",
+      stage: "audio",
+      error: "A transcription is already running — wait for it to finish.",
+    };
+    jobs.set(id, job);
+    retire(job);
+    return job;
+  }
   const job: TranscribeJob = {
-    id: crypto.randomUUID().slice(0, 12),
+    id,
     projectId: spec.projectId,
     status: "running",
     stage: "audio",
   };
   jobs.set(job.id, job);
-  void runTranscribe(job, spec).catch((err: unknown) => {
-    job.status = "error";
-    job.error = err instanceof Error ? err.message : String(err);
-  });
+  void runTranscribe(job, spec)
+    .catch((err: unknown) => {
+      job.status = "error";
+      job.error = err instanceof Error ? err.message : String(err);
+    })
+    .finally(() => retire(job));
   return job;
 }
 
@@ -182,11 +213,19 @@ async function runTranscribe(job: TranscribeJob, spec: TranscribeSpec) {
     }
 
     const filters: string[] = [];
+    // Per-clip timeline length: a sped-up clip is shorter and time-stretched,
+    // so the transcript's cue times line up with what the user sees.
+    const clipDur = (c: TranscribeSpec["clips"][number]) => {
+      const speed = c.speed && c.speed > 0 ? c.speed : 1;
+      return Math.max(0.1, (c.out - c.in) / speed);
+    };
     spec.clips.forEach((c, j) => {
-      const dur = Math.max(0.1, c.out - c.in);
+      const speed = c.speed && c.speed > 0 ? c.speed : 1;
+      const dur = clipDur(c);
       if (!c.muted && audible.get(c.file)) {
+        const tempo = speed !== 1 ? `${atempoChain(speed)},` : "";
         filters.push(
-          `[${inputIndex.get(c.file)}:a]atrim=${num(c.in)}:${num(c.out)},asetpts=PTS-STARTPTS,` +
+          `[${inputIndex.get(c.file)}:a]atrim=${num(c.in)}:${num(c.out)},asetpts=PTS-STARTPTS,${tempo}` +
             `aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono,` +
             `apad=whole_dur=${num(dur)},atrim=0:${num(dur)}[a${j}]`
         );
@@ -194,24 +233,43 @@ async function runTranscribe(job: TranscribeJob, spec: TranscribeSpec) {
         filters.push(`anullsrc=r=16000:cl=mono,atrim=0:${num(dur)},asetpts=PTS-STARTPTS[a${j}]`);
       }
     });
-    filters.push(
-      spec.clips.map((_, j) => `[a${j}]`).join("") + `concat=n=${spec.clips.length}:v=0:a=1[acat]`
-    );
+    // Join clip audio exactly as the timeline (and export) do: adjacent clips
+    // with a cross-dissolve overlap by the transition length (acrossfade), the
+    // rest concatenate. A flat concat would run longer than the timeline, so
+    // every cue after a dissolve would land progressively late.
+    let aAcc = "a0";
+    let acc = clipDur(spec.clips[0]);
+    for (let j = 1; j < spec.clips.length; j++) {
+      const prev = spec.clips[j - 1];
+      const durJ = clipDur(spec.clips[j]);
+      const d = Math.min(prev.transition ?? 0, acc * 0.9, durJ * 0.9);
+      const out = `aj${j}`;
+      if (d > 0.01) {
+        filters.push(`[${aAcc}][a${j}]acrossfade=d=${num(d)}[${out}]`);
+        acc = acc + durJ - d;
+      } else {
+        filters.push(`[${aAcc}][a${j}]concat=n=2:v=0:a=1[${out}]`);
+        acc = acc + durJ;
+      }
+      aAcc = out;
+    }
 
     const soundLabels: string[] = [];
     spec.audio.forEach((a, k) => {
       if (!audible.get(a.file)) return;
+      const speed = a.speed && a.speed > 0 ? a.speed : 1;
+      const tempo = speed !== 1 ? `${atempoChain(speed)},` : "";
       filters.push(
-        `[${inputIndex.get(a.file)}:a]atrim=${num(a.in)}:${num(a.out)},asetpts=PTS-STARTPTS,` +
+        `[${inputIndex.get(a.file)}:a]atrim=${num(a.in)}:${num(a.out)},asetpts=PTS-STARTPTS,${tempo}` +
           `aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono,` +
           `volume=${num(a.volume)},adelay=${Math.max(0, Math.round(a.start * 1000))}:all=1[snd${k}]`
       );
       soundLabels.push(`snd${k}`);
     });
-    let aLabel = "acat";
+    let aLabel = aAcc;
     if (soundLabels.length > 0) {
       filters.push(
-        ["acat", ...soundLabels].map((l) => `[${l}]`).join("") +
+        [aAcc, ...soundLabels].map((l) => `[${l}]`).join("") +
           `amix=inputs=${soundLabels.length + 1}:duration=first:dropout_transition=0:normalize=0[amix]`
       );
       aLabel = "amix";

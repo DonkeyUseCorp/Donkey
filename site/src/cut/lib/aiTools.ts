@@ -23,7 +23,9 @@ export async function runAiTool(
 
   switch (name) {
     case "get_state":
-      return buildAiContext();
+      // The tool result carries the whole transcript; the per-message context
+      // snapshot trims it, so this is how the model pulls every cue when needed.
+      return buildAiContext({ fullCues: true });
 
     case "capture_frame": {
       const canvas = document.querySelector<HTMLCanvasElement>(".stage canvas");
@@ -142,7 +144,8 @@ export async function runAiTool(
 
     case "update_audio": {
       const a = requireItem(s.audioClips, input.id, "soundtrack clip");
-      const len = a.out - a.in;
+      const aSpeed = a.speed && a.speed > 0 ? a.speed : 1;
+      const len = (a.out - a.in) / aSpeed;
       const patch: Record<string, number> = {};
       if (isNum(input.volume)) patch.volume = clamp(input.volume, 0, 1.5);
       if (isNum(input.fadeIn)) patch.fadeIn = clamp(input.fadeIn, 0, len / 2);
@@ -309,6 +312,46 @@ export async function runAiTool(
         throw new ToolError("Add a video to the timeline first.");
       s.setExportOpen(true);
       return { open: true };
+    }
+
+    case "set_speed": {
+      const clip = requireItem(s.clips, input.clipId, "video clip");
+      if (!isNum(input.speed)) throw new ToolError("speed is required (0.25–4).");
+      s.setClipSpeed(clip.id, input.speed);
+      const next = useEditor.getState().clips.find((c) => c.id === clip.id)!;
+      return { id: next.id, speed: next.speed ?? 1 };
+    }
+
+    case "set_transition": {
+      const clip = requireItem(s.clips, input.clipId, "video clip");
+      if (s.clips.findIndex((c) => c.id === clip.id) === s.clips.length - 1)
+        throw new ToolError("The last clip has no next clip to dissolve into.");
+      if (!isNum(input.seconds)) throw new ToolError("seconds is required (0 clears the crossfade).");
+      s.setClipTransition(clip.id, input.seconds);
+      const next = useEditor.getState().clips.find((c) => c.id === clip.id)!;
+      return { id: next.id, transition: next.transition ?? 0 };
+    }
+
+    case "merge_cue": {
+      const cue = requireItem(s.subtitles.cues, input.id, "subtitle cue");
+      if (s.subtitles.cues.findIndex((c) => c.id === cue.id) <= 0)
+        throw new ToolError("That is the first cue — nothing before it to merge into.");
+      s.mergeCueIntoPrev(cue.id);
+      return { mergedInto: "previous cue" };
+    }
+
+    case "set_aspect": {
+      const a = input.aspect === "16:9" ? "16:9" : input.aspect === "9:16" ? "9:16" : null;
+      if (!a) throw new ToolError('aspect must be "9:16" or "16:9".');
+      s.setAspect(a);
+      return { aspect: a };
+    }
+
+    case "set_project_name": {
+      if (typeof input.name !== "string" || !input.name.trim())
+        throw new ToolError("name is required.");
+      s.setProjectName(input.name.trim());
+      return { name: input.name.trim() };
     }
 
     default:

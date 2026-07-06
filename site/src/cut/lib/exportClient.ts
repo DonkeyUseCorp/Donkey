@@ -1,7 +1,7 @@
 "use client";
 
 import { apiFetch, apiUrl } from "./api";
-import { getClipSpans, totalDuration } from "./store";
+import { clipSpeed, getClipSpans, totalDuration } from "./store";
 import { cueOverlay } from "./subtitles";
 import { renderOverlayPng } from "./textRender";
 import { FRAME } from "./types";
@@ -125,6 +125,9 @@ export function startExport(
       fit: sp.clip.fit ?? "fit",
       panX: sp.clip.panX ?? 0,
       panY: sp.clip.panY ?? 0,
+      speed: clipSpeed(sp.clip),
+      // The already-clamped dissolve overlap into the next clip.
+      transition: sp.transitionOut,
     }));
 
     const audio = doc.audioClips
@@ -137,6 +140,7 @@ export function startExport(
         volume: a.volume,
         fadeIn: a.fadeIn ?? 0,
         fadeOut: a.fadeOut ?? 0,
+        speed: a.speed,
       }));
 
     const overlays: { file: string; start: number; end: number }[] = [];

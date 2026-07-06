@@ -3,8 +3,9 @@ import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { assertLocalRuntime } from "./local-only";
+import { createJobRegistry } from "./jobRegistry";
 import { exportsDir, mediaPath, readProject } from "./projects";
-import { hasStream, num } from "./util";
+import { atempoChain, hasStream, num } from "./util";
 
 export interface ExportSpec {
   projectId: string;
@@ -23,6 +24,9 @@ export interface ExportSpec {
     fit?: "fit" | "fill";
     panX?: number; // crop-window pan -1..1 (fill mode)
     panY?: number;
+    speed?: number; // playback rate, default 1
+    /** Cross-dissolve into the next clip, in timeline seconds (overlap). */
+    transition?: number;
   }[];
   audio: {
     file: string;
@@ -32,6 +36,8 @@ export interface ExportSpec {
     volume: number;
     fadeIn?: number;
     fadeOut?: number;
+    /** Playback rate (detached-audio clips inherit their video clip's speed). */
+    speed?: number;
   }[];
   overlays: { file: string; start: number; end: number }[];
 }
@@ -48,9 +54,9 @@ export interface Job {
   log: string[];
 }
 
-// Survives dev-server module reloads.
-const g = globalThis as unknown as { __veditorJobs?: Map<string, Job> };
-const jobs = (g.__veditorJobs ??= new Map<string, Job>());
+const MAX_RUNNING = 2; // concurrent ffmpeg exports
+// Survives dev-server module reloads; caps the terminal backlog.
+const { jobs, runningCount, retire } = createJobRegistry<Job>("__veditorJobs");
 
 export function getJob(id: string) {
   return jobs.get(id);
@@ -62,6 +68,7 @@ export function cancelJob(id: string) {
     job.proc.kill("SIGKILL");
     job.status = "error";
     job.error = "Export canceled.";
+    retire(job);
   }
 }
 
@@ -74,10 +81,23 @@ function stamp() {
 export async function createJob(form: FormData): Promise<Job> {
   assertLocalRuntime();
   const spec = JSON.parse(String(form.get("spec"))) as ExportSpec;
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "veditor-"));
   const id = crypto.randomUUID().slice(0, 12);
+  if (runningCount() >= MAX_RUNNING) {
+    const job: Job = {
+      id,
+      status: "error",
+      progress: 0,
+      tmpDir: "",
+      outPath: "",
+      outName: "",
+      error: "Another export is already running — wait for it to finish.",
+      log: [],
+    };
+    jobs.set(id, job);
+    retire(job);
+    return job;
+  }
   const outDir = exportsDir(spec.projectId);
-  await mkdir(outDir, { recursive: true });
   // Include the unique job id so two exports in the same second can't collide
   // on the same output path (which would clobber the first render).
   const outName = `export-${stamp()}-${id}.mp4`;
@@ -85,29 +105,38 @@ export async function createJob(form: FormData): Promise<Job> {
     id,
     status: "running",
     progress: 0,
-    tmpDir,
+    tmpDir: "",
     outPath: path.join(outDir, outName),
     outName,
     log: [],
   };
-  jobs.set(id, job);
+  jobs.set(id, job); // reserve the concurrency slot before the first await
 
   try {
+    await mkdir(outDir, { recursive: true });
+    job.tmpDir = await mkdtemp(path.join(os.tmpdir(), "veditor-"));
     if (!(await readProject(spec.projectId))) throw new Error("Project not found.");
     // Overlay PNGs are rendered in the browser and uploaded with the spec.
     for (const [key, value] of form.entries()) {
       if (value instanceof File && key !== "spec") {
-        await writeFile(path.join(tmpDir, path.basename(key)), Buffer.from(await value.arrayBuffer()));
+        await writeFile(path.join(job.tmpDir, path.basename(key)), Buffer.from(await value.arrayBuffer()));
       }
     }
-    void runExport(job, spec).catch((err: unknown) => {
-      job.status = "error";
-      job.error = err instanceof Error ? err.message : String(err);
-      void rm(job.outPath, { force: true }); // no half-written files in exports/
-    });
+    void runExport(job, spec)
+      .catch((err: unknown) => {
+        job.status = "error";
+        job.error = err instanceof Error ? err.message : String(err);
+        void rm(job.outPath, { force: true }); // no half-written files in exports/
+      })
+      .finally(() => {
+        void rm(job.tmpDir, { recursive: true, force: true }); // overlay tmp, win or lose
+        retire(job);
+      });
   } catch (err) {
     job.status = "error";
     job.error = err instanceof Error ? err.message : String(err);
+    if (job.tmpDir) void rm(job.tmpDir, { recursive: true, force: true });
+    retire(job);
   }
   return job;
 }
@@ -118,6 +147,12 @@ async function resolveMedia(spec: ExportSpec, file: string) {
   if (!info?.isFile()) throw new Error(`Media file missing from project: ${file}`);
   return p;
 }
+
+/** A clip's effective playback rate (>0, default 1). */
+function clipRate(c: ExportSpec["clips"][number]) {
+  return c.speed && c.speed > 0 ? c.speed : 1;
+}
+
 
 async function runExport(job: Job, spec: ExportSpec) {
   if (spec.clips.length === 0) throw new Error("Nothing to export.");
@@ -141,13 +176,16 @@ async function runExport(job: Job, spec: ExportSpec) {
   });
   await Promise.all(
     mediaFiles.map(async (f, i) => {
-      audioPresence.set(f, await hasStream(paths[i], "a"));
-      // If the video probe itself fails, assume the clip HAS video rather than
-      // silently replacing it with black frames — a normal .mp4 must never
-      // export as a black screen just because one ffprobe hiccupped.
-      let probeFailed = false;
-      const hasVideo = await hasStream(paths[i], "v", () => (probeFailed = true));
-      videoPresence.set(f, hasVideo || probeFailed);
+      // A probe that errors (timeout, non-zero exit) must not be read as
+      // "no stream" — that would silently drop real audio to silence or real
+      // video to black. Genuine absence returns false with no error, so on a
+      // probe error we assume the stream is present and let ffmpeg map it.
+      let audioProbeFailed = false;
+      const hasAudio = await hasStream(paths[i], "a", () => (audioProbeFailed = true));
+      audioPresence.set(f, hasAudio || audioProbeFailed);
+      let videoProbeFailed = false;
+      const hasVideo = await hasStream(paths[i], "v", () => (videoProbeFailed = true));
+      videoPresence.set(f, hasVideo || videoProbeFailed);
     })
   );
   for (const o of spec.overlays) {
@@ -157,10 +195,15 @@ async function runExport(job: Job, spec: ExportSpec) {
 
   const filters: string[] = [];
 
-  // Per-clip normalized video + audio segments for concat.
+  // Per-clip timeline length (source span compressed/expanded by speed).
+  const clipDur = (c: ExportSpec["clips"][number]) =>
+    Math.max(0.1, (c.out - c.in) / clipRate(c));
+
+  // Per-clip normalized video + audio segments for the join below.
   spec.clips.forEach((c, j) => {
     const idx = inputIndex.get(c.file)!;
-    const dur = Math.max(0.1, c.out - c.in);
+    const speed = clipRate(c);
+    const dur = clipDur(c);
     if (videoPresence.get(c.file)) {
       const frame =
         c.fit === "fill"
@@ -170,8 +213,9 @@ async function runExport(job: Job, spec: ExportSpec) {
             `:(ih-oh)*${num(0.5 + Math.max(-1, Math.min(1, c.panY ?? 0)) / 2)}`
           : `scale=${W}:${H}:force_original_aspect_ratio=decrease,` +
             `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=black`;
+      // setpts/speed rescales the clip's duration on the timeline.
       filters.push(
-        `[${idx}:v]trim=${num(c.in)}:${num(c.out)},setpts=PTS-STARTPTS,` +
+        `[${idx}:v]trim=${num(c.in)}:${num(c.out)},setpts=(PTS-STARTPTS)/${num(speed)},` +
           `fps=${fps},${frame},setsar=1,format=yuv420p[v${j}]`
       );
     } else {
@@ -181,8 +225,9 @@ async function runExport(job: Job, spec: ExportSpec) {
       );
     }
     if (!c.muted && audioPresence.get(c.file)) {
+      const tempo = speed !== 1 ? `${atempoChain(speed)},` : "";
       filters.push(
-        `[${idx}:a]atrim=${num(c.in)}:${num(c.out)},asetpts=PTS-STARTPTS,` +
+        `[${idx}:a]atrim=${num(c.in)}:${num(c.out)},asetpts=PTS-STARTPTS,${tempo}` +
           `aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,` +
           `apad=whole_dur=${num(dur)},atrim=0:${num(dur)}[a${j}]`
       );
@@ -193,11 +238,35 @@ async function runExport(job: Job, spec: ExportSpec) {
     }
   });
 
-  const concatIn = spec.clips.map((_, j) => `[v${j}][a${j}]`).join("");
-  filters.push(`${concatIn}concat=n=${spec.clips.length}:v=1:a=1[vcat][acat]`);
+  // Join the segments. Adjacent clips with a transition cross-dissolve
+  // (xfade/acrossfade, overlapping by the transition length); the rest hard-cut
+  // (concat). Fold left so mixed sequences chain correctly.
+  let vAcc = "v0";
+  let aAcc = "a0";
+  let acc = clipDur(spec.clips[0]); // running timeline length of the accumulator
+  for (let j = 1; j < spec.clips.length; j++) {
+    const prev = spec.clips[j - 1];
+    const durJ = clipDur(spec.clips[j]);
+    // The overlap can't exceed most of either clip, matching the editor clamp.
+    const d = Math.min(prev.transition ?? 0, acc * 0.9, durJ * 0.9);
+    const vOut = `vj${j}`;
+    const aOut = `aj${j}`;
+    if (d > 0.01) {
+      const offset = Math.max(0, acc - d);
+      filters.push(`[${vAcc}][v${j}]xfade=transition=fade:duration=${num(d)}:offset=${num(offset)}[${vOut}]`);
+      filters.push(`[${aAcc}][a${j}]acrossfade=d=${num(d)}[${aOut}]`);
+      acc = acc + durJ - d;
+    } else {
+      filters.push(`[${vAcc}][v${j}]concat=n=2:v=1:a=0[${vOut}]`);
+      filters.push(`[${aAcc}][a${j}]concat=n=2:v=0:a=1[${aOut}]`);
+      acc = acc + durJ;
+    }
+    vAcc = vOut;
+    aAcc = aOut;
+  }
 
   // Burn in text overlays, each windowed to its timeline range.
-  let vLabel = "vcat";
+  let vLabel = vAcc;
   spec.overlays.forEach((o, k) => {
     const idx = inputIndex.get(o.file)!;
     const next = `vov${k}`;
@@ -212,14 +281,18 @@ async function runExport(job: Job, spec: ExportSpec) {
   spec.audio.forEach((a, k) => {
     const idx = inputIndex.get(a.file)!;
     if (!audioPresence.get(a.file)) return;
+    const speed = a.speed && a.speed > 0 ? a.speed : 1;
     const delayMs = Math.max(0, Math.round(a.start * 1000));
-    const len = Math.max(0.1, a.out - a.in);
+    // Timeline length after any speed change; fade offsets are in these
+    // (post-tempo) seconds, so atempo runs before the fades.
+    const len = Math.max(0.1, (a.out - a.in) / speed);
+    const tempo = speed !== 1 ? `${atempoChain(speed)},` : "";
     const fades: string[] = [];
     if (a.fadeIn && a.fadeIn > 0.01) fades.push(`afade=t=in:st=0:d=${num(a.fadeIn)}`);
     if (a.fadeOut && a.fadeOut > 0.01)
       fades.push(`afade=t=out:st=${num(Math.max(0, len - a.fadeOut))}:d=${num(a.fadeOut)}`);
     filters.push(
-      `[${idx}:a]atrim=${num(a.in)}:${num(a.out)},asetpts=PTS-STARTPTS,` +
+      `[${idx}:a]atrim=${num(a.in)}:${num(a.out)},asetpts=PTS-STARTPTS,${tempo}` +
         `aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,` +
         `volume=${num(a.volume)},` +
         (fades.length ? fades.join(",") + "," : "") +
@@ -228,9 +301,9 @@ async function runExport(job: Job, spec: ExportSpec) {
     soundLabels.push(`snd${k}`);
   });
 
-  let aLabel = "acat";
+  let aLabel = aAcc;
   if (soundLabels.length > 0) {
-    const mixIn = ["acat", ...soundLabels].map((l) => `[${l}]`).join("");
+    const mixIn = [aAcc, ...soundLabels].map((l) => `[${l}]`).join("");
     filters.push(
       `${mixIn}amix=inputs=${soundLabels.length + 1}:duration=first:dropout_transition=0:normalize=0[amix]`
     );
@@ -260,7 +333,21 @@ async function runExport(job: Job, spec: ExportSpec) {
   await new Promise<void>((resolve, reject) => {
     const proc = spawn("ffmpeg", args);
     job.proc = proc;
+    // Stall watchdog: legit exports can run long, so bound silence, not total
+    // time — kill only if ffmpeg emits nothing for STALL_MS.
+    const STALL_MS = 120_000;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    const bump = () => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => {
+        proc.kill("SIGKILL");
+        reject(new Error("Export stalled — no ffmpeg output for 120s."));
+      }, STALL_MS);
+      watchdog.unref();
+    };
+    bump();
     proc.stderr.on("data", (chunk: Buffer) => {
+      bump();
       const text = chunk.toString();
       job.log.push(text);
       if (job.log.length > 200) job.log.shift();
@@ -270,14 +357,16 @@ async function runExport(job: Job, spec: ExportSpec) {
         job.progress = Math.min(0.99, t / Math.max(0.1, spec.duration));
       }
     });
-    proc.on("error", (err) =>
+    proc.on("error", (err) => {
+      clearTimeout(watchdog);
       reject(
         err.message.includes("ENOENT")
           ? new Error("ffmpeg was not found. Install it with: brew install ffmpeg")
           : err
-      )
-    );
+      );
+    });
     proc.on("close", (code) => {
+      clearTimeout(watchdog);
       if (code === 0) resolve();
       else if (job.error) reject(new Error(job.error));
       else reject(new Error(`ffmpeg exited with code ${code}.\n${job.log.slice(-8).join("")}`));

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, type RefObject } from "react";
-import { getClipSpans, totalDuration, useEditor } from "@/cut/lib/store";
+import { clipSpeed, getClipSpans, totalDuration, useEditor } from "@/cut/lib/store";
 import type { ClipSpan, MediaAsset, VideoClip } from "@/cut/lib/types";
 
 // The canvas backing store is the full frame resolution (1080×1920 or
@@ -20,7 +20,6 @@ class Engine {
   private audioEls = new Map<string, HTMLAudioElement>();
   private raf = 0;
   private activeClipId: string | null = null;
-  private lastWritten = -1;
   private disposed = false;
 
   constructor(private canvas: HTMLCanvasElement) {
@@ -54,36 +53,58 @@ class Engine {
     return el;
   }
 
-  private switchTo(span: ClipSpan, t: number, play: boolean) {
+  /** Seek/rate/play one clip's element toward its frame at timeline time `t`,
+   * without touching any other element (the caller pauses stale ones). */
+  private prepare(span: ClipSpan, t: number, play: boolean, muted: boolean) {
     const el = this.videoFor(span.asset);
-    for (const [assetId, other] of this.videoEls) {
-      if (assetId !== span.asset.id && !other.paused) other.pause();
-    }
-    const target = span.clip.in + Math.max(0, t - span.start);
+    const speed = clipSpeed(span.clip);
+    if (el.playbackRate !== speed) el.playbackRate = speed;
+    const target = span.clip.in + Math.max(0, t - span.start) * speed;
+    // While playing, the element is its own clock and advances on its own, so
+    // only re-seek on a real jump (a clip switch or a scrub) — never for the
+    // sub-second lag between this frame's `target` (built from last frame's
+    // clock read) and the freely-running element. At high speed that lag is
+    // `speed × frameInterval` every frame, which a tight threshold would seek
+    // backward each tick, stalling playback. When paused (scrubbing) keep it
+    // tight so the frame under the mouse tracks precisely.
     // Let an in-flight seek finish before issuing the next one — restarting
-    // the decoder every mousemove makes scrubbing stutter. The tick loop
-    // re-applies the newest target as soon as the element is free.
-    if (Math.abs(el.currentTime - target) > 0.05 && !el.seeking) el.currentTime = target;
-    this.activeClipId = span.clip.id;
-    if (play) void el.play().catch(() => {});
+    // the decoder every mousemove makes scrubbing stutter.
+    const tol = play ? 0.34 : 0.05;
+    if (Math.abs(el.currentTime - target) > tol && !el.seeking) el.currentTime = target;
+    el.muted = muted;
+    if (play) {
+      if (el.paused && el.readyState >= 2) void el.play().catch(() => {});
+    } else if (!el.paused) {
+      el.pause();
+    }
     return el;
   }
 
-  private draw(el: HTMLVideoElement | null, clip?: VideoClip) {
+  private pauseExcept(keep: Set<string>) {
+    for (const [assetId, el] of this.videoEls) {
+      if (!keep.has(assetId) && !el.paused) el.pause();
+    }
+  }
+
+  private drawLayer(el: HTMLVideoElement | null, clip: VideoClip | undefined, clear: boolean, alpha: number) {
     const ctx = this.canvas.getContext("2d");
     if (!ctx) return;
     const W = this.canvas.width;
     const H = this.canvas.height;
     if (!el) {
-      ctx.fillStyle = "#000";
-      ctx.fillRect(0, 0, W, H);
+      if (clear) {
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, W, H);
+      }
       return;
     }
     // Mid-seek the element has no decodable frame; keep the previous frame
     // on the canvas instead of strobing black (matters while skimming).
     if (el.readyState < 2 || !el.videoWidth) return;
-    ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, W, H);
+    if (clear) {
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, W, H);
+    }
     const fill = clip?.fit === "fill";
     const scale = fill
       ? Math.max(W / el.videoWidth, H / el.videoHeight)
@@ -99,7 +120,33 @@ class Engine {
       dx = -(dw - W) * kx;
       dy = -(dh - H) * ky;
     }
+    const prevAlpha = ctx.globalAlpha;
+    ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
     ctx.drawImage(el, dx, dy, dw, dh);
+    ctx.globalAlpha = prevAlpha;
+  }
+
+  /** Draw `masterSpan` full-frame, and if a cross-dissolve into the next span
+   * is live at time `t`, draw that next clip over it at ramping opacity — a
+   * true A·(1−α)+B·α blend. Returns the master element (the playback clock). */
+  private composite(masterSpan: ClipSpan, spans: ClipSpan[], t: number, play: boolean) {
+    const masterEl = this.prepare(masterSpan, t, play, masterSpan.clip.muted);
+    this.activeClipId = masterSpan.clip.id;
+    const keep = new Set([masterSpan.asset.id]);
+    const next = spans[spans.indexOf(masterSpan) + 1];
+    let incEl: HTMLVideoElement | null = null;
+    let alpha = 0;
+    // Same asset on both sides shares one <video>, so it can't show two frames
+    // at once — fall back to a hard cut there.
+    if (masterSpan.transitionOut > 0 && next && t >= next.start && next.asset.id !== masterSpan.asset.id) {
+      alpha = (t - next.start) / masterSpan.transitionOut;
+      incEl = this.prepare(next, t, play, true); // the outgoing clip keeps the audio
+      keep.add(next.asset.id);
+    }
+    this.pauseExcept(keep);
+    this.drawLayer(masterEl, masterSpan.clip, true, 1);
+    if (incEl) this.drawLayer(incEl, next!.clip, false, alpha);
+    return masterEl;
   }
 
   private syncSoundtrack(t: number, playing: boolean) {
@@ -115,7 +162,9 @@ class Engine {
         el.preload = "auto";
         this.audioEls.set(a.id, el);
       }
-      const len = Math.max(0.1, a.out - a.in);
+      // Detached audio can carry its video clip's rate; footprint is (out-in)/speed.
+      const speed = a.speed && a.speed > 0 ? a.speed : 1;
+      const len = Math.max(0.1, (a.out - a.in) / speed);
       const active = playing && t >= a.start && t < a.start + len;
       if (active) {
         // Fade envelope: linear ramps at either end of the clip.
@@ -126,7 +175,8 @@ class Engine {
         if (fi > 0 && rel < fi) gain *= rel / fi;
         if (fo > 0 && rel > len - fo) gain *= Math.max(0, (len - rel) / fo);
         el.volume = Math.max(0, Math.min(1, a.volume * gain));
-        const expected = a.in + (t - a.start);
+        if (el.playbackRate !== speed) el.playbackRate = speed;
+        const expected = a.in + rel * speed;
         if (Math.abs(el.currentTime - expected) > 0.25) el.currentTime = expected;
         if (el.paused) void el.play().catch(() => {});
       } else if (!el.paused) {
@@ -150,17 +200,16 @@ class Engine {
     const total = totalDuration(s.clips);
 
     if (spans.length === 0) {
-      this.draw(null);
+      this.pauseExcept(new Set());
+      this.drawLayer(null, undefined, true, 1);
       this.syncSoundtrack(0, false);
       if (s.playing) useEditor.setState({ playing: false, currentTime: 0 });
       return;
     }
 
     let t = Math.min(s.currentTime, total);
-    const externalSeek = Math.abs(t - this.lastWritten) > 0.15;
 
     if (!s.playing) {
-      for (const el of this.videoEls.values()) if (!el.paused) el.pause();
       // iMovie skimming: while the mouse hovers the timeline, preview the
       // frame under it. The playhead (currentTime) is never touched.
       const pt =
@@ -168,9 +217,7 @@ class Engine {
       const span =
         spans.find((sp) => pt >= sp.start && pt < sp.start + sp.len) ??
         spans[spans.length - 1];
-      const el = this.switchTo(span, Math.min(pt, span.start + span.len), false);
-      this.lastWritten = t;
-      this.draw(el, span.clip);
+      this.composite(span, spans, Math.min(pt, span.start + span.len), false);
       this.syncSoundtrack(t, false);
       return;
     }
@@ -179,21 +226,18 @@ class Engine {
     if (!span) {
       // Reached the end of the last clip.
       useEditor.setState({ playing: false, currentTime: total });
-      this.lastWritten = total;
-      for (const el of this.videoEls.values()) el.pause();
+      this.pauseExcept(new Set());
       this.syncSoundtrack(total, false);
       return;
     }
 
-    let el = this.videoFor(span.asset);
-    if (span.clip.id !== this.activeClipId || externalSeek) {
-      el = this.switchTo(span, t, true);
-    }
-    el.muted = span.clip.muted;
-    if (el.paused && el.readyState >= 2) void el.play().catch(() => {});
+    // Prime the master element (and any dissolve partner) and read the clock.
+    let el = this.composite(span, spans, t, true);
 
-    // The active element is the master clock.
-    const derived = span.start + (el.currentTime - span.clip.in);
+    // The active element is the master clock; source time maps back through
+    // the clip's speed.
+    const speed = clipSpeed(span.clip);
+    const derived = span.start + (el.currentTime - span.clip.in) / speed;
     if (Math.abs(derived - t) < 1.5) {
       t = Math.max(span.start, Math.min(derived, span.start + span.len));
     }
@@ -203,23 +247,23 @@ class Engine {
       const idx = spans.indexOf(span);
       const next = spans[idx + 1];
       if (next) {
-        t = next.start + 0.0001;
+        // Jump past the finished clip's whole footprint (including any
+        // cross-dissolve overlap), not back to next.start — which still sits
+        // inside the outgoing clip's footprint, so find() would re-pick the
+        // clip we just finished and playback would ping-pong across the
+        // dissolve forever.
+        t = Math.max(next.start + 0.0001, span.start + span.len);
         span = next;
-        el = this.switchTo(next, t, true);
-        el.muted = next.clip.muted;
+        el = this.composite(next, spans, t, true);
       } else {
         useEditor.setState({ playing: false, currentTime: total });
-        this.lastWritten = total;
         el.pause();
-        this.draw(el, span.clip);
         this.syncSoundtrack(total, false);
         return;
       }
     }
 
-    this.lastWritten = t;
     useEditor.setState({ currentTime: t });
-    this.draw(el, span.clip);
     this.syncSoundtrack(t, true);
   }
 }
