@@ -10,7 +10,16 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Slider } from "@/components/ui/slider";
-import { clearAssetDrag, draggedAssetId, draggingAssetId, hasAssetDrag } from "@/cut/lib/assetDrag";
+import {
+  clearAssetDrag,
+  draggedAssetId,
+  draggedLibraryId,
+  draggingAssetId,
+  draggingLibrary,
+  hasAssetDrag,
+  hasLibraryDrag,
+} from "@/cut/lib/assetDrag";
+import { importLibraryAsset } from "@/cut/lib/library";
 import { startDrag } from "@/cut/lib/drag";
 import { ensurePeaks } from "@/cut/lib/media";
 import { clipLen, clipSpeed, getClipSpans, TIMELINE_H_MAX, totalDuration, useEditor } from "@/cut/lib/store";
@@ -82,6 +91,9 @@ export function Timeline() {
   const subtitles = useEditor((s) => s.subtitles);
   const scrollRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
+  // Measured width of the scroll viewport, so the ruler and tracks always draw
+  // end-to-end no matter how wide the window is.
+  const [viewportW, setViewportW] = useState(900);
 
   // Membership set so every track can highlight all selected items, not just
   // the primary one.
@@ -92,7 +104,9 @@ export function Timeline() {
 
   const spans = useMemo(() => getClipSpans(clips, assets), [clips, assets]);
   const total = totalDuration(clips);
-  const contentW = Math.max(total * pps + PAD_END, 900);
+  // Fill the viewport at minimum so a wide window never leaves the ruler/tracks
+  // cut off; grow past it once the content is longer.
+  const contentW = Math.max(total * pps + PAD_END, viewportW - PAD_SIDE * 2, 600);
 
   // Reorder drag on the video track: neighbors part to open a highlighted
   // slot at the insertion point; releasing drops the clip into it.
@@ -236,6 +250,17 @@ export function Timeline() {
     return () => el.removeEventListener("wheel", onWheel);
   }, [zoomTo]);
 
+  // Track the viewport width so `contentW` can fill it end-to-end.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const measure = () => setViewportW(el.clientWidth);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   // Timeline-scoped keys: = / - zoom around the playhead, Home/End jump.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -267,6 +292,23 @@ export function Timeline() {
     return () => window.removeEventListener("keydown", onKey);
   }, [zoomTo]);
 
+  // Drop an asset onto the timeline: video snaps into the nearest slot at time
+  // `t`, audio lands free-form there.
+  const placeAssetAt = (assetId: string, type: "video" | "audio", t: number) => {
+    const s = useEditor.getState();
+    if (type === "video") {
+      const sp = getClipSpans(s.clips, s.assets);
+      const spanIndex = videoInsertIndex(sp, t);
+      const clipsIndex =
+        spanIndex < sp.length
+          ? s.clips.findIndex((c) => c.id === sp[spanIndex].clip.id)
+          : s.clips.length;
+      s.addClipFromAsset(assetId, clipsIndex);
+    } else {
+      s.addAudioFromAsset(assetId, t);
+    }
+  };
+
   // Drag the panel's top border to resize; the border itself stays as-is,
   // only an invisible grab strip sits on top of it.
   const resize = (e: React.PointerEvent) => {
@@ -281,24 +323,34 @@ export function Timeline() {
 
   return (
     <footer
-      className="relative flex min-w-0 shrink-0 flex-col overflow-hidden border-t border-border bg-card"
+      className="relative flex min-w-0 shrink-0 flex-col overflow-hidden border-t border-border bg-card select-none"
       style={{ height: timelineH }}
       onDragOver={(e) => {
-        if (!hasAssetDrag(e)) return;
+        const isLib = hasLibraryDrag(e);
+        if (!hasAssetDrag(e) && !isLib) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = "copy";
-        // Preview where a video asset would land; audio drops free-form.
-        const id = draggingAssetId();
-        const asset = id ? useEditor.getState().assets.find((a) => a.id === id) : null;
-        if (!asset || asset.type !== "video") {
+        // Preview where a video would land; audio drops free-form. Library drags
+        // carry their own shape since they aren't in the project yet.
+        let type: "video" | "audio" | undefined;
+        let duration = 0;
+        if (isLib) {
+          const lib = draggingLibrary();
+          type = lib?.type;
+          duration = lib?.duration ?? 0;
+        } else {
+          const id = draggingAssetId();
+          const asset = id ? useEditor.getState().assets.find((a) => a.id === id) : null;
+          type = asset?.type;
+          duration = asset?.duration ?? 0;
+        }
+        if (type !== "video" || !duration) {
           setAssetDrop(null);
           return;
         }
         const index = videoInsertIndex(spans, Math.max(0, timeAt(e.clientX)));
         setAssetDrop((prev) =>
-          prev && prev.index === index && prev.len === asset.duration
-            ? prev
-            : { index, len: asset.duration }
+          prev && prev.index === index && prev.len === duration ? prev : { index, len: duration }
         );
       }}
       onDragLeave={(e) => {
@@ -306,25 +358,26 @@ export function Timeline() {
       }}
       onDrop={(e) => {
         setAssetDrop(null);
+        const t = Math.max(0, timeAt(e.clientX));
+
+        // A library asset must be copied into the project before it can land.
+        const lib = draggingLibrary();
+        const libId = draggedLibraryId(e);
+        const projectId = useEditor.getState().projectId;
         clearAssetDrag();
+        if (libId && lib && projectId) {
+          e.preventDefault();
+          void importLibraryAsset(projectId, lib)
+            .then((asset) => placeAssetAt(asset.id, asset.type, t))
+            .catch(() => {});
+          return;
+        }
+
         const id = draggedAssetId(e);
         if (!id) return;
         e.preventDefault();
-        const s = useEditor.getState();
-        const asset = s.assets.find((a) => a.id === id);
-        if (!asset) return;
-        const t = Math.max(0, timeAt(e.clientX));
-        if (asset.type === "video") {
-          const sp = getClipSpans(s.clips, s.assets);
-          const spanIndex = videoInsertIndex(sp, t);
-          const clipsIndex =
-            spanIndex < sp.length
-              ? s.clips.findIndex((c) => c.id === sp[spanIndex].clip.id)
-              : s.clips.length;
-          s.addClipFromAsset(id, clipsIndex);
-        } else {
-          s.addAudioFromAsset(id, t);
-        }
+        const asset = useEditor.getState().assets.find((a) => a.id === id);
+        if (asset) placeAssetAt(id, asset.type, t);
       }}
     >
       <div
@@ -344,8 +397,8 @@ export function Timeline() {
         >
           <Scissors /> Split
         </Button>
-        <Button variant="ghost" size="sm" title="Title (T)" onClick={() => useEditor.getState().addOverlay()}>
-          <Type /> Title
+        <Button variant="ghost" size="sm" title="Text (T)" onClick={() => useEditor.getState().addOverlay()}>
+          <Type /> Text
         </Button>
         <Button
           variant="ghost"
@@ -374,11 +427,12 @@ export function Timeline() {
       </div>
 
       <div ref={scrollRef} className="tl-scroll min-h-0 flex-1 overflow-auto">
-        <div className="min-h-full" style={{ width: contentW + PAD_SIDE * 2 }}>
+        <div className="flex min-h-full flex-col" style={{ width: contentW + PAD_SIDE * 2 }}>
           <div
             ref={innerRef}
-            className="tl-content relative min-h-full pb-2"
+            className="tl-content relative flex-1 pb-2"
             style={{ width: contentW, marginLeft: PAD_SIDE }}
+            onPointerDown={deselectIfSelf}
           >
           <Ruler pps={pps} width={contentW} onScrub={scrub} />
 

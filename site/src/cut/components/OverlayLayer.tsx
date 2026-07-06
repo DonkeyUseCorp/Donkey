@@ -3,10 +3,9 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { startDrag } from "@/cut/lib/drag";
 import { useEditor } from "@/cut/lib/store";
-import { cueAt, SUB_STYLE, wrapCaption } from "@/cut/lib/subtitles";
+import { captionStyle, cueAt, cueOverlay } from "@/cut/lib/subtitles";
 import {
   LINE_HEIGHT,
-  PLATE_FILL,
   PLATE_PAD_X,
   PLATE_PAD_Y,
   PLATE_RADIUS,
@@ -40,7 +39,7 @@ export function OverlayLayer({ stageWidth }: { stageWidth: number }) {
             key={o.id}
             overlay={o}
             selected={selected}
-            ghost={!inRange}
+            ghost={!inRange && !selected}
             stageWidth={stageWidth}
           />
         );
@@ -63,26 +62,38 @@ export function SubtitleLayer({ stageWidth }: { stageWidth: number }) {
   const cue = cueAt(subtitles.cues, t);
   if (!cue || !cue.text.trim()) return null;
 
+  // Captions ride the same style/opener logic as the export burn-in, so the
+  // preview and the rendered file match exactly.
+  const ov = cueOverlay(
+    cue,
+    captionStyle(subtitles.style),
+    cue.id === subtitles.cues[0]?.id
+  );
   const scale = stageWidth / FRAME[aspect].w;
   return (
     <div className="pointer-events-none absolute inset-0">
       <div
-        className="sub-caption absolute -translate-x-1/2 -translate-y-1/2 text-center whitespace-pre"
+        className="sub-caption absolute -translate-x-1/2 -translate-y-1/2 text-center whitespace-pre-wrap"
         style={{
-          left: `${SUB_STYLE.x * 100}%`,
-          top: `${SUB_STYLE.y * 100}%`,
-          fontSize: SUB_STYLE.size * scale,
-          fontFamily: fontStack(SUB_STYLE.font),
-          fontWeight: SUB_STYLE.weight,
+          left: `${ov.x * 100}%`,
+          top: `${ov.y * 100}%`,
+          // Hard cap at the safe area so a caption can never spill past the
+          // frame edge, even if a line slips past the wrap estimate.
+          maxWidth: `${0.9 * stageWidth}px`,
+          fontSize: ov.size * scale,
+          fontFamily: fontStack(ov.font),
+          fontWeight: ov.weight,
           lineHeight: LINE_HEIGHT,
-          color: SUB_STYLE.color,
-          textShadow: `0 ${SHADOW.offsetY * scale}px ${SHADOW.blur * scale}px ${SHADOW.color}`,
-          background: PLATE_FILL,
-          padding: PLATE_PADDING,
-          borderRadius: PLATE_RADIUS_EM,
+          color: ov.color,
+          textShadow: ov.shadow
+            ? `0 ${SHADOW.offsetY * scale}px ${SHADOW.blur * scale}px ${SHADOW.color}`
+            : undefined,
+          background: ov.plate ? plateFill(ov) : undefined,
+          padding: ov.plate ? PLATE_PADDING : undefined,
+          borderRadius: ov.plate ? PLATE_RADIUS_EM : undefined,
         }}
       >
-        {wrapCaption(cue.text)}
+        {ov.text}
       </div>
     </div>
   );
@@ -143,6 +154,19 @@ function OverlayItem({
       s.updateOverlayTransient(o.id, { text: text || "Your text" });
     }
   };
+
+  // A single click anywhere outside the editable box commits and dismisses it,
+  // so text doesn't stay "stuck" in edit mode when the click misses focus.
+  useEffect(() => {
+    if (!editing) return;
+    const onDown = (e: PointerEvent) => {
+      if (!editRef.current?.contains(e.target as Node)) commitText();
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+    // commitText closes over the current overlay; re-bind when editing toggles.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing]);
 
   return (
     <div
