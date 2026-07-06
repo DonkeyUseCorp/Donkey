@@ -1,6 +1,6 @@
-import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { ProjectDoc, ProjectSummary } from "@/cut/lib/types";
+import type { ProjectDoc, ProjectFolder, ProjectSummary } from "@/cut/lib/types";
 import { cutDataRoot } from "./dataDir";
 import { assertLocalRuntime } from "./local-only";
 import { exists, uniqueName, writeJsonAtomic } from "./util";
@@ -8,6 +8,9 @@ import { exists, uniqueName, writeJsonAtomic } from "./util";
 /** All projects live here; each project is one folder holding project.json,
  * its raw media files, and its exports. */
 export const PROJECTS_ROOT = path.join(cutDataRoot(), "projects");
+// Project folders are grouping metadata only; it lives beside the project dirs
+// as a plain file, so the project-dir scan (which requires ID_RE) skips it.
+const FOLDERS_INDEX = path.join(PROJECTS_ROOT, "folders.json");
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{2,40}$/;
 
@@ -19,6 +22,8 @@ export function projectDir(id: string) {
 
 export const mediaDir = (id: string) => path.join(projectDir(id), "media");
 export const exportsDir = (id: string) => path.join(projectDir(id), "exports");
+/** A low-res proxy of the actual edit, played on the project card's hover. */
+export const previewPath = (id: string) => path.join(projectDir(id), "preview.mp4");
 
 export function mediaPath(id: string, fileName: string) {
   const safe = path.basename(fileName);
@@ -111,14 +116,35 @@ export async function deleteProject(id: string) {
   await rm(dir, { recursive: true, force: true });
 }
 
-function summarize(id: string, doc: ProjectDoc): ProjectSummary {
+/** Total bytes under a directory (media, exports, proxy, doc). */
+async function dirSize(dir: string): Promise<number> {
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+  let total = 0;
+  for (const e of entries) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) total += await dirSize(p);
+    else {
+      const info = await stat(p).catch(() => null);
+      if (info) total += info.size;
+    }
+  }
+  return total;
+}
+
+async function summarize(id: string, doc: ProjectDoc): Promise<ProjectSummary> {
   const duration = doc.clips.reduce((sum, c) => sum + Math.max(0, c.out - c.in), 0);
   // Preview: the first clip's source video, else any video asset.
-  const firstClipAsset = doc.clips.length
-    ? doc.assets.find((a) => a.id === doc.clips[0].assetId)
+  const firstClip = doc.clips[0];
+  const firstClipAsset = firstClip
+    ? doc.assets.find((a) => a.id === firstClip.assetId)
     : undefined;
-  const previewAsset =
-    firstClipAsset ?? doc.assets.find((a) => a.type === "video");
+  const previewAsset = firstClipAsset ?? doc.assets.find((a) => a.type === "video");
+  // Poster the clip's actual first frame (its trim-in), not the source's 0s.
+  const previewStart = firstClipAsset && firstClip ? firstClip.in : 0;
+  const [hasPreview, sizeBytes] = await Promise.all([
+    exists(previewPath(id)),
+    dirSize(projectDir(id)),
+  ]);
   return {
     id,
     name: doc.name,
@@ -128,7 +154,97 @@ function summarize(id: string, doc: ProjectDoc): ProjectSummary {
     clipCount: doc.clips.length,
     assetCount: doc.assets.length,
     previewFile: previewAsset?.fileName,
+    previewStart,
+    hasPreview,
+    folderId: doc.folderId ?? null,
+    sizeBytes,
   };
+}
+
+// --- Project folders: a flat set of named groups; each project's doc carries
+// its folderId, so grouping travels with the project. ---
+
+async function readFolders(): Promise<ProjectFolder[]> {
+  try {
+    const raw = JSON.parse(await readFile(FOLDERS_INDEX, "utf8")) as { folders?: ProjectFolder[] };
+    return Array.isArray(raw.folders) ? raw.folders : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeFolders(folders: ProjectFolder[]) {
+  await mkdir(PROJECTS_ROOT, { recursive: true });
+  await writeJsonAtomic(FOLDERS_INDEX, { folders });
+}
+
+export async function listProjectFolders(): Promise<ProjectFolder[]> {
+  return (await readFolders()).sort((a, b) => a.createdAt - b.createdAt);
+}
+
+export async function createProjectFolder(name: string): Promise<ProjectFolder> {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("Folder name required.");
+  const folder: ProjectFolder = {
+    id: crypto.randomUUID().slice(0, 8),
+    name: trimmed.slice(0, 80),
+    createdAt: Date.now(),
+  };
+  await writeFolders([...(await readFolders()), folder]);
+  return folder;
+}
+
+export async function renameProjectFolder(id: string, name: string): Promise<ProjectFolder> {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("Folder name required.");
+  const folders = await readFolders();
+  const folder = folders.find((f) => f.id === id);
+  if (!folder) throw new Error("Folder not found.");
+  folder.name = trimmed.slice(0, 80);
+  await writeFolders(folders);
+  return folder;
+}
+
+export async function deleteProjectFolder(id: string) {
+  await writeFolders((await readFolders()).filter((f) => f.id !== id));
+  // Projects in the folder fall back to ungrouped rather than disappearing.
+  const entries = await readdir(PROJECTS_ROOT, { withFileTypes: true }).catch(() => []);
+  await Promise.all(
+    entries
+      .filter((e) => e.isDirectory() && ID_RE.test(e.name))
+      .map(async (e) => {
+        const doc = await readProject(e.name);
+        if (doc && doc.folderId === id) {
+          doc.folderId = null;
+          await writeProject(e.name, doc);
+        }
+      })
+  );
+}
+
+export async function moveProjectToFolder(id: string, folderId: string | null) {
+  const doc = await readProject(id);
+  if (!doc) throw new Error("Project not found.");
+  if (folderId && !(await readFolders()).some((f) => f.id === folderId)) {
+    throw new Error("Folder not found.");
+  }
+  doc.folderId = folderId;
+  await writeProject(id, doc);
+}
+
+/** Duplicate a project: copy the doc and its media (not its exports) into a
+ * fresh project folder. */
+export async function duplicateProject(id: string): Promise<ProjectSummary> {
+  const doc = await readProject(id);
+  if (!doc) throw new Error("Project not found.");
+  const newId = crypto.randomUUID().slice(0, 10);
+  await mkdir(mediaDir(newId), { recursive: true });
+  await mkdir(exportsDir(newId), { recursive: true });
+  await cp(mediaDir(id), mediaDir(newId), { recursive: true }).catch(() => {});
+  const now = Date.now();
+  const copy: ProjectDoc = { ...doc, name: `${doc.name} copy`, createdAt: now, updatedAt: now };
+  await writeJsonAtomic(docPath(newId), copy);
+  return summarize(newId, copy);
 }
 
 export async function listProjects(): Promise<ProjectSummary[]> {
@@ -141,8 +257,10 @@ export async function listProjects(): Promise<ProjectSummary[]> {
   // Read every project.json concurrently — listing latency shouldn't grow
   // linearly with the number of projects.
   const docs = await Promise.all(names.map((n) => readProject(n)));
-  return names
-    .map((n, i) => (docs[i] ? summarize(n, docs[i]!) : null))
+  const summaries = await Promise.all(
+    names.map((n, i) => (docs[i] ? summarize(n, docs[i]!) : Promise.resolve(null)))
+  );
+  return summaries
     .filter((x): x is ProjectSummary => x !== null)
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }

@@ -3,13 +3,20 @@ import type { ProjectDoc } from "@/cut/lib/types";
 import { makeFreezeFrame } from "../frames";
 import {
   createProject,
+  createProjectFolder,
   deleteExport,
   deleteProject,
+  deleteProjectFolder,
+  duplicateProject,
   exportPath,
   listExports,
+  listProjectFolders,
   listProjects,
   mediaPath,
+  moveProjectToFolder,
+  previewPath,
   readProject,
+  renameProjectFolder,
   saveMedia,
   writeProject,
 } from "../projects";
@@ -25,6 +32,48 @@ const caught = (e: unknown, fallback: string, status = 500) =>
 export const projectsApi = {
   async list() {
     return Response.json(await listProjects());
+  },
+
+  async folders() {
+    return Response.json(await listProjectFolders());
+  },
+
+  async createFolder(req: Request) {
+    try {
+      const { name } = (await req.json()) as { name?: string };
+      return Response.json(await createProjectFolder(name ?? ""));
+    } catch (e) {
+      return caught(e, "Could not create folder.");
+    }
+  },
+
+  async renameFolder(req: Request, { id }: { id: string }) {
+    try {
+      const { name } = (await req.json()) as { name?: string };
+      return Response.json(await renameProjectFolder(id, name ?? ""));
+    } catch (e) {
+      return caught(e, "Could not rename folder.");
+    }
+  },
+
+  async deleteFolder(_req: Request, { id }: { id: string }) {
+    try {
+      await deleteProjectFolder(id);
+      return Response.json({ ok: true });
+    } catch (e) {
+      return caught(e, "Could not delete folder.");
+    }
+  },
+
+  /** File a project under a folder (or `null` to ungroup). */
+  async move(req: Request, { id }: { id: string }) {
+    try {
+      const { folderId } = (await req.json()) as { folderId: string | null };
+      await moveProjectToFolder(id, folderId ?? null);
+      return Response.json({ ok: true });
+    } catch (e) {
+      return caught(e, "Could not move project.");
+    }
   },
 
   async create(req: Request) {
@@ -65,6 +114,10 @@ export const projectsApi = {
           body.publish && typeof body.publish === "object"
             ? { ...existing.publish, ...body.publish }
             : existing.publish,
+        notes:
+          body.notes && typeof body.notes === "object"
+            ? { ...existing.notes, ...body.notes }
+            : existing.notes,
       };
       await writeProject(id, doc);
       return Response.json({ ok: true, updatedAt: doc.updatedAt });
@@ -80,6 +133,26 @@ export const projectsApi = {
     } catch (e) {
       return caught(e, "Could not delete project.");
     }
+  },
+
+  /** Duplicate a project (doc + media) into a fresh one. */
+  async duplicate(_req: Request, { id }: { id: string }) {
+    try {
+      return Response.json(await duplicateProject(id));
+    } catch (e) {
+      return caught(e, "Could not duplicate project.");
+    }
+  },
+
+  /** The low-res proxy of the edit, played on the project card's hover. */
+  async servePreview(req: Request, { id }: { id: string }) {
+    let p: string;
+    try {
+      p = previewPath(id);
+    } catch {
+      return new Response("Bad request.", { status: 400 });
+    }
+    return serveFileRange(p, req, { contentType: "video/mp4" });
   },
 
   async uploadMedia(req: Request, { id }: { id: string }) {

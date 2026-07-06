@@ -3,7 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  Check,
+  Copy,
   Film,
+  Folder,
+  FolderPlus,
   LayoutGrid,
   List,
   Loader2,
@@ -12,6 +16,7 @@ import {
   Plus,
   Trash2,
   Unplug,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -39,12 +44,20 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { apiFetch } from "@/cut/lib/api";
+import { apiFetch, apiUrl } from "@/cut/lib/api";
 import { formatTime } from "@/cut/lib/time";
-import { mediaUrl, type ProjectSummary } from "@/cut/lib/types";
+import { mediaUrl, type ProjectFolder, type ProjectSummary } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
 
 type View = "gallery" | "list";
+
+const PROJECT_MIME = "application/x-cut-project";
+
+function formatBytes(n: number): string {
+  if (n <= 0) return "0 MB";
+  const mb = n / (1024 * 1024);
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
+}
 
 function formatDate(ts: number) {
   const d = new Date(ts);
@@ -63,6 +76,8 @@ function formatDate(ts: number) {
 export function ProjectsHome() {
   const router = useRouter();
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
+  const [folders, setFolders] = useState<ProjectFolder[]>([]);
+  const [activeFolder, setActiveFolder] = useState<string | null>(null);
   const [view, setView] = useState<View>("gallery");
   const [createOpen, setCreateOpen] = useState(false);
   const [renaming, setRenaming] = useState<ProjectSummary | null>(null);
@@ -83,9 +98,13 @@ export function ProjectsHome() {
 
   const refresh = useCallback(async () => {
     try {
-      const res = await apiFetch("/api/cut/projects");
+      const [res, fres] = await Promise.all([
+        apiFetch("/api/cut/projects"),
+        apiFetch("/api/cut/projects/folders"),
+      ]);
       if (!res.ok) throw new Error(String(res.status));
       setProjects((await res.json()) as ProjectSummary[]);
+      setFolders(fres.ok ? ((await fres.json()) as ProjectFolder[]) : []);
       setEngineDown(false);
     } catch {
       // The engine on this Mac isn't reachable — not running, or the page was
@@ -93,6 +112,44 @@ export function ProjectsHome() {
       setEngineDown(true);
     }
   }, []);
+
+  const createFolder = async (fname: string) => {
+    const res = await apiFetch("/api/cut/projects/folders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: fname }),
+    });
+    if (res.ok) {
+      const f = (await res.json()) as ProjectFolder;
+      setFolders((prev) => [...prev, f]);
+      setActiveFolder(f.id);
+    }
+  };
+
+  const renameFolder = async (id: string, fname: string) => {
+    setFolders((prev) => prev.map((f) => (f.id === id ? { ...f, name: fname } : f)));
+    await apiFetch(`/api/cut/projects/folders/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: fname }),
+    }).catch(() => void refresh());
+  };
+
+  const deleteFolder = async (id: string) => {
+    setFolders((prev) => prev.filter((f) => f.id !== id));
+    setProjects((prev) => (prev ?? []).map((p) => (p.folderId === id ? { ...p, folderId: null } : p)));
+    if (activeFolder === id) setActiveFolder(null);
+    await apiFetch(`/api/cut/projects/folders/${id}`, { method: "DELETE" }).catch(() => void refresh());
+  };
+
+  const moveProject = async (id: string, folderId: string | null) => {
+    setProjects((prev) => (prev ?? []).map((p) => (p.id === id ? { ...p, folderId } : p)));
+    await apiFetch(`/api/cut/projects/${id}/move`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ folderId }),
+    }).catch(() => void refresh());
+  };
 
   useEffect(() => {
     void refresh();
@@ -137,6 +194,16 @@ export function ProjectsHome() {
     }
   };
 
+  const duplicate = async (p: ProjectSummary) => {
+    setBusy(true);
+    try {
+      await apiFetch(`/api/cut/projects/${p.id}/duplicate`, { method: "POST" });
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const remove = async () => {
     if (!deleting) return;
     setBusy(true);
@@ -148,6 +215,10 @@ export function ProjectsHome() {
       setBusy(false);
     }
   };
+
+  const shown = (projects ?? []).filter((p) =>
+    activeFolder === null ? true : (p.folderId ?? null) === activeFolder
+  );
 
   return (
     <div className="mx-auto w-full max-w-6xl px-10 py-9">
@@ -177,6 +248,19 @@ export function ProjectsHome() {
             </Button>
           </div>
         </div>
+      )}
+
+      {!engineDown && projects && (projects.length > 0 || folders.length > 0) && (
+        <ProjectFolderBar
+          folders={folders}
+          active={activeFolder}
+          projects={projects}
+          onSelect={setActiveFolder}
+          onCreate={createFolder}
+          onRename={renameFolder}
+          onDelete={deleteFolder}
+          onDropProject={(pid, fid) => void moveProject(pid, fid)}
+        />
       )}
 
       {engineDown ? (
@@ -235,10 +319,12 @@ export function ProjectsHome() {
         </div>
       ) : view === "gallery" ? (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-5">
-          {projects.map((p) => (
+          {shown.map((p) => (
             <div
               key={p.id}
               className="group cursor-pointer"
+              draggable
+              onDragStart={(e) => e.dataTransfer.setData(PROJECT_MIME, p.id)}
               onClick={() => router.push(`/p/${p.id}`)}
             >
               {/* Vertical 9:16 tile — the project is mobile video, show it that way. */}
@@ -253,10 +339,13 @@ export function ProjectsHome() {
                 <ProjectMenu
                   project={p}
                   className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100"
+                  folders={folders}
                   onRename={() => {
                     setName(p.name);
                     setRenaming(p);
                   }}
+                  onDuplicate={() => void duplicate(p)}
+                  onMove={(folderId) => void moveProject(p.id, folderId)}
                   onDelete={() => setDeleting(p)}
                 />
               </div>
@@ -276,10 +365,12 @@ export function ProjectsHome() {
             <span>Edited</span>
             <span />
           </div>
-          {projects.map((p) => (
+          {shown.map((p) => (
             <div
               key={p.id}
               className="group grid cursor-pointer grid-cols-[1fr_90px_70px_110px_40px] items-center gap-3 border-b border-border px-4 py-2.5 text-sm last:border-b-0 hover:bg-muted/50"
+              draggable
+              onDragStart={(e) => e.dataTransfer.setData(PROJECT_MIME, p.id)}
               onClick={() => router.push(`/p/${p.id}`)}
             >
               <span className="flex min-w-0 items-center gap-2.5">
@@ -295,10 +386,13 @@ export function ProjectsHome() {
               </span>
               <ProjectMenu
                 project={p}
+                folders={folders}
                 onRename={() => {
                   setName(p.name);
                   setRenaming(p);
                 }}
+                onDuplicate={() => void duplicate(p)}
+                onMove={(folderId) => void moveProject(p.id, folderId)}
                 onDelete={() => setDeleting(p)}
               />
             </div>
@@ -382,15 +476,24 @@ export function ProjectsHome() {
   );
 }
 
-/** Card art: a real frame from the project's first video, playing on hover. */
+/** Card art: the actual edit (a rendered proxy) plays on hover; the poster is
+ * the first clip's real first frame. Falls back to the source when no proxy
+ * has been rendered yet. */
 function CardPreview({ project: p }: { project: ProjectSummary }) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  if (!p.previewFile) {
+  if (!p.previewFile && !p.hasPreview) {
     return (
       <Film className="size-7 text-muted-foreground/50 transition-transform group-hover:scale-110" />
     );
   }
+
+  // The proxy starts at the edit's first frame; the source starts at the clip's
+  // trim-in, so both posters show what actually plays first.
+  const posterT = p.hasPreview ? 0 : p.previewStart ?? 0.1;
+  const src = p.hasPreview
+    ? apiUrl(`/api/cut/projects/${p.id}/preview`)
+    : mediaUrl(p.id, p.previewFile!);
 
   return (
     <div
@@ -400,13 +503,13 @@ function CardPreview({ project: p }: { project: ProjectSummary }) {
         const v = videoRef.current;
         if (v) {
           v.pause();
-          v.currentTime = 0.1;
+          v.currentTime = posterT;
         }
       }}
     >
       <video
         ref={videoRef}
-        src={`${mediaUrl(p.id, p.previewFile)}#t=0.1`}
+        src={`${src}#t=${posterT}`}
         muted
         loop
         playsInline
@@ -418,14 +521,20 @@ function CardPreview({ project: p }: { project: ProjectSummary }) {
 }
 
 function ProjectMenu({
-  project: _p,
+  project: p,
   className,
+  folders,
   onRename,
+  onDuplicate,
+  onMove,
   onDelete,
 }: {
   project: ProjectSummary;
   className?: string;
+  folders: ProjectFolder[];
   onRename: () => void;
+  onDuplicate: () => void;
+  onMove: (folderId: string | null) => void;
   onDelete: () => void;
 }) {
   return (
@@ -447,11 +556,214 @@ function ProjectMenu({
         <DropdownMenuItem onClick={onRename}>
           <Pencil /> Rename
         </DropdownMenuItem>
+        <DropdownMenuItem onClick={onDuplicate}>
+          <Copy /> Duplicate
+        </DropdownMenuItem>
+        {folders.length > 0 && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => onMove(null)}>
+              {(p.folderId ?? null) === null && <Check />} No folder
+            </DropdownMenuItem>
+            {folders.map((f) => (
+              <DropdownMenuItem key={f.id} onClick={() => onMove(f.id)}>
+                {p.folderId === f.id ? <Check /> : <Folder />} {f.name}
+              </DropdownMenuItem>
+            ))}
+          </>
+        )}
         <DropdownMenuSeparator />
         <DropdownMenuItem variant="destructive" onClick={onDelete}>
           <Trash2 /> Delete
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/** The folder rail on the projects home: All + each folder with its project
+ * count and total size, drop targets for dragged projects, and inline
+ * create / rename / delete. */
+function ProjectFolderBar({
+  folders,
+  active,
+  projects,
+  onSelect,
+  onCreate,
+  onRename,
+  onDelete,
+  onDropProject,
+}: {
+  folders: ProjectFolder[];
+  active: string | null;
+  projects: ProjectSummary[] | null;
+  onSelect: (id: string | null) => void;
+  onCreate: (name: string) => void | Promise<void>;
+  onRename: (id: string, name: string) => void | Promise<void>;
+  onDelete: (id: string) => void | Promise<void>;
+  onDropProject: (projectId: string, folderId: string | null) => void;
+}) {
+  const [creating, setCreating] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const [over, setOver] = useState<string | "all" | null>(null);
+
+  const list = projects ?? [];
+  const stat = (folderId: string | null) => {
+    const items = list.filter((p) => (p.folderId ?? null) === folderId);
+    const size = items.reduce((n, p) => n + (p.sizeBytes ?? 0), 0);
+    return { count: items.length, size };
+  };
+  const total = { count: list.length, size: list.reduce((n, p) => n + (p.sizeBytes ?? 0), 0) };
+
+  const dropHandlers = (folderId: string | null, key: string) => ({
+    onDragOver: (e: React.DragEvent) => {
+      if (!Array.from(e.dataTransfer.types).includes(PROJECT_MIME)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      setOver(key);
+    },
+    onDragLeave: () => setOver((o) => (o === key ? null : o)),
+    onDrop: (e: React.DragEvent) => {
+      const id = e.dataTransfer.getData(PROJECT_MIME);
+      setOver(null);
+      if (id) {
+        e.preventDefault();
+        onDropProject(id, folderId);
+      }
+    },
+  });
+
+  const chipClass = (selected: boolean, isOver: boolean) =>
+    cn(
+      "flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+      isOver
+        ? "border-primary bg-primary/20 text-primary"
+        : selected
+          ? "border-primary bg-primary/10 text-primary"
+          : "border-border text-muted-foreground hover:text-foreground"
+    );
+
+  return (
+    <div className="mb-5 flex flex-wrap items-center gap-2">
+      <button
+        className={chipClass(active === null, over === "all")}
+        onClick={() => onSelect(null)}
+        {...dropHandlers(null, "all")}
+      >
+        All
+        <span className="tabular-nums opacity-60">
+          {total.count} · {formatBytes(total.size)}
+        </span>
+      </button>
+
+      {folders.map((f) => {
+        const s = stat(f.id);
+        return editingId === f.id ? (
+          <span key={f.id} className="flex items-center gap-1">
+            <Input
+              autoFocus
+              value={draft}
+              className="h-7 w-32 text-xs"
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && draft.trim()) {
+                  void onRename(f.id, draft.trim());
+                  setEditingId(null);
+                } else if (e.key === "Escape") setEditingId(null);
+              }}
+            />
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={() => {
+                if (draft.trim()) void onRename(f.id, draft.trim());
+                setEditingId(null);
+              }}
+            >
+              <Check />
+            </Button>
+          </span>
+        ) : (
+          <span key={f.id} className="group/pf flex items-center gap-0.5">
+            <button
+              className={chipClass(active === f.id, over === f.id)}
+              onClick={() => onSelect(f.id)}
+              onDoubleClick={() => {
+                setDraft(f.name);
+                setEditingId(f.id);
+              }}
+              {...dropHandlers(f.id, f.id)}
+            >
+              <Folder className="size-3" />
+              {f.name}
+              <span className="tabular-nums opacity-60">
+                {s.count} · {formatBytes(s.size)}
+              </span>
+            </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Folder options"
+                    className="size-6 text-muted-foreground opacity-0 group-hover/pf:opacity-100"
+                  />
+                }
+              >
+                <MoreHorizontal className="size-3.5" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuItem
+                  onClick={() => {
+                    setDraft(f.name);
+                    setEditingId(f.id);
+                  }}
+                >
+                  <Pencil /> Rename
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem variant="destructive" onClick={() => void onDelete(f.id)}>
+                  <Trash2 /> Delete folder
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </span>
+        );
+      })}
+
+      {creating ? (
+        <span className="flex items-center gap-1">
+          <Input
+            autoFocus
+            value={draft}
+            placeholder="Folder name"
+            className="h-7 w-32 text-xs"
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && draft.trim()) {
+                void onCreate(draft.trim());
+                setDraft("");
+                setCreating(false);
+              } else if (e.key === "Escape") setCreating(false);
+            }}
+          />
+          <Button size="icon-sm" variant="ghost" onClick={() => setCreating(false)}>
+            <X />
+          </Button>
+        </span>
+      ) : (
+        <button
+          className="flex shrink-0 items-center gap-1 rounded-full border border-dashed border-border px-3 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          onClick={() => {
+            setDraft("");
+            setCreating(true);
+          }}
+        >
+          <FolderPlus className="size-3.5" /> New folder
+        </button>
+      )}
+    </div>
   );
 }
