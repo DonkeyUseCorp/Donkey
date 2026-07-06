@@ -8,17 +8,24 @@ function run(cmd: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     const p = spawn(cmd, args);
     let err = "";
+    const timer = setTimeout(() => {
+      p.kill("SIGKILL");
+      reject(new Error(`${cmd} timed out after 60s.`));
+    }, 60_000);
+    timer.unref();
     p.stderr.on("data", (d) => (err = (err + d.toString()).slice(-2000)));
-    p.on("error", (e) =>
+    p.on("error", (e) => {
+      clearTimeout(timer);
       reject(
         e.message.includes("ENOENT")
           ? new Error("ffmpeg was not found. Install it with: brew install ffmpeg")
           : e
-      )
-    );
-    p.on("close", (code) =>
-      code === 0 ? resolve() : reject(new Error(err.split("\n").slice(-3).join("\n")))
-    );
+      );
+    });
+    p.on("close", (code) => {
+      clearTimeout(timer);
+      code === 0 ? resolve() : reject(new Error(err.split("\n").slice(-3).join("\n")));
+    });
   });
 }
 
@@ -32,12 +39,21 @@ function probeDims(file: string): Promise<{ width: number; height: number }> {
       file,
     ]);
     let out = "";
+    const timer = setTimeout(() => {
+      p.kill("SIGKILL");
+      resolve({ width: 1080, height: 1920 });
+    }, 30_000);
+    timer.unref();
     p.stdout.on("data", (d) => (out += d));
     p.on("close", () => {
+      clearTimeout(timer);
       const [w, h] = out.trim().split(",").map(Number);
       resolve({ width: w || 1080, height: h || 1920 });
     });
-    p.on("error", () => resolve({ width: 1080, height: 1920 }));
+    p.on("error", () => {
+      clearTimeout(timer);
+      resolve({ width: 1080, height: 1920 });
+    });
   });
 }
 

@@ -3,7 +3,7 @@ import path from "node:path";
 import type { ProjectDoc, ProjectSummary } from "@/cut/lib/types";
 import { cutDataRoot } from "./dataDir";
 import { assertLocalRuntime } from "./local-only";
-import { exists, uniqueName } from "./util";
+import { exists, uniqueName, writeJsonAtomic } from "./util";
 
 /** All projects live here; each project is one folder holding project.json,
  * its raw media files, and its exports. */
@@ -59,16 +59,31 @@ export async function deleteExport(id: string, fileName: string) {
 const docPath = (id: string) => path.join(projectDir(id), "project.json");
 
 export async function readProject(id: string): Promise<ProjectDoc | null> {
+  const file = docPath(id);
+  let raw: string;
   try {
-    return JSON.parse(await readFile(docPath(id), "utf8")) as ProjectDoc;
+    raw = await readFile(file, "utf8");
   } catch {
+    return null;
+  }
+  try {
+    return JSON.parse(raw) as ProjectDoc;
+  } catch (err) {
+    console.error(`Corrupt project doc ${file}:`, err);
+  }
+  try {
+    const doc = JSON.parse(await readFile(`${file}.bak`, "utf8")) as ProjectDoc;
+    await writeJsonAtomic(file, doc);
+    return doc;
+  } catch (err) {
+    console.error(`Could not recover ${file} from backup:`, err);
     return null;
   }
 }
 
 export async function writeProject(id: string, doc: ProjectDoc) {
   doc.updatedAt = Date.now();
-  await writeFile(docPath(id), JSON.stringify(doc, null, 2));
+  await writeJsonAtomic(docPath(id), doc);
 }
 
 export async function createProject(name: string): Promise<ProjectSummary> {
@@ -86,7 +101,7 @@ export async function createProject(name: string): Promise<ProjectSummary> {
     audioClips: [],
     overlays: [],
   };
-  await writeFile(docPath(id), JSON.stringify(doc, null, 2));
+  await writeJsonAtomic(docPath(id), doc);
   return summarize(id, doc);
 }
 

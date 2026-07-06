@@ -4,7 +4,7 @@ import path from "node:path";
 import { cutDataRoot } from "./dataDir";
 import { assertLocalRuntime } from "./local-only";
 import { mediaPath as projectMediaPath, readProject } from "./projects";
-import { exists, uniqueName } from "./util";
+import { exists, uniqueName, writeJsonAtomic } from "./util";
 
 /** The shared library: reusable media that lives outside any project. */
 export const LIBRARY_ROOT = path.join(cutDataRoot(), "library");
@@ -35,9 +35,23 @@ export function libMediaPath(fileName: string) {
 
 async function readIndex(): Promise<LibraryIndex> {
   assertLocalRuntime();
+  let raw: string;
   try {
-    return JSON.parse(await readFile(INDEX, "utf8")) as LibraryIndex;
+    raw = await readFile(INDEX, "utf8");
   } catch {
+    return { assets: [] };
+  }
+  try {
+    return JSON.parse(raw) as LibraryIndex;
+  } catch (err) {
+    console.error(`Corrupt library index ${INDEX}:`, err);
+  }
+  try {
+    const idx = JSON.parse(await readFile(`${INDEX}.bak`, "utf8")) as LibraryIndex;
+    await writeIndex(idx);
+    return idx;
+  } catch (err) {
+    console.error(`Could not recover ${INDEX} from backup:`, err);
     return { assets: [] };
   }
 }
@@ -45,7 +59,7 @@ async function readIndex(): Promise<LibraryIndex> {
 async function writeIndex(idx: LibraryIndex) {
   assertLocalRuntime();
   await mkdir(LIB_MEDIA, { recursive: true });
-  await writeFile(INDEX, JSON.stringify(idx, null, 2));
+  await writeJsonAtomic(INDEX, idx);
 }
 
 export async function listLibrary(): Promise<LibraryAsset[]> {
@@ -59,12 +73,18 @@ const AUDIO_RE = /\.(mp3|m4a|aac|wav|ogg|flac)$/i;
 function ffprobe(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     const p = spawn("ffprobe", ["-v", "error", ...args]);
+    const timer = setTimeout(() => p.kill("SIGKILL"), 30_000);
     let out = "";
     p.stdout.on("data", (d) => (out += d));
-    p.on("error", reject);
-    p.on("close", (code) =>
-      code === 0 ? resolve(out.trim()) : reject(new Error("Could not read this media file."))
-    );
+    p.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    p.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve(out.trim());
+      else reject(new Error("Could not read this media file."));
+    });
   });
 }
 

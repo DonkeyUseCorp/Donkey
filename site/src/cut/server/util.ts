@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access, constants, stat } from "node:fs/promises";
+import { access, constants, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 /** Does a file/dir exist? (stat, coerced to a boolean.) */
@@ -8,6 +8,25 @@ export async function exists(p: string) {
     () => true,
     () => false
   );
+}
+
+/**
+ * Atomically write `value` as pretty JSON to `filePath`, keeping a `.bak`
+ * mirror for corruption recovery. Two invariants make recovery safe by
+ * construction:
+ *  - The temp name is unique per write, so concurrent writers to the same path
+ *    each rename their own temp in (last writer wins) instead of racing on one
+ *    shared temp and having the loser's rename hit ENOENT.
+ *  - `.bak` is written from the very bytes we are committing — never copied
+ *    from the on-disk file. So a corrupt file can never overwrite a good backup
+ *    (the failure mode when recovery re-saves a doc recovered *from* the .bak).
+ */
+export async function writeJsonAtomic(filePath: string, value: unknown) {
+  const json = JSON.stringify(value, null, 2);
+  const tmp = `${filePath}.${crypto.randomUUID().slice(0, 8)}.tmp`;
+  await writeFile(tmp, json);
+  await writeFile(`${filePath}.bak`, json).catch(() => {});
+  await rename(tmp, filePath);
 }
 
 /** First executable *file* named `name` on PATH, or null. Directories carry the
@@ -46,6 +65,23 @@ export const num = (n: number) => (Math.round(n * 1000) / 1000).toFixed(3);
 /** Round to hundredths (cue/timeline times). */
 export const round = (n: number) => Math.round(n * 100) / 100;
 
+/** An ffmpeg atempo chain reaching `speed`. A single atempo spans only
+ * 0.5–2.0×, so factors are chained to cover the full 0.25–4× range. */
+export function atempoChain(speed: number) {
+  const parts: string[] = [];
+  let s = speed;
+  while (s > 2) {
+    parts.push("atempo=2.0");
+    s /= 2;
+  }
+  while (s < 0.5) {
+    parts.push("atempo=0.5");
+    s *= 2;
+  }
+  parts.push(`atempo=${num(s)}`);
+  return parts.join(",");
+}
+
 /**
  * Whether a media file carries a stream of the given kind ("a" audio /
  * "v" video). Resolves false only when ffprobe reports no such stream; a
@@ -66,13 +102,22 @@ export function hasStream(
       file,
     ]);
     let out = "";
+    // A probe that never returns is a probe failure, not "no stream".
+    const timer = setTimeout(() => {
+      p.kill("SIGKILL");
+      onProbeError?.(new Error(`ffprobe timed out for ${file}`));
+      resolve(false);
+    }, 30_000);
+    timer.unref();
     p.stdout.on("data", (d) => (out += d));
     p.on("close", (code) => {
+      clearTimeout(timer);
       // A non-zero exit means the probe itself failed, not "no stream".
       if (code !== 0) onProbeError?.(new Error(`ffprobe exited ${code} for ${file}`));
       resolve(out.trim().length > 0);
     });
     p.on("error", (err) => {
+      clearTimeout(timer);
       onProbeError?.(err);
       resolve(false);
     });
