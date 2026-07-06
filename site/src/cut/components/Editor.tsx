@@ -5,10 +5,13 @@ import Link from "next/link";
 import { Clapperboard, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/cut/lib/api";
+import { renderPreviewProxy } from "@/cut/lib/exportClient";
+import { useExport } from "@/cut/lib/exportStore";
 import { enrichAsset, importFileToProject } from "@/cut/lib/media";
 import { serializeDoc, totalDuration, useEditor } from "@/cut/lib/store";
 import { AiPanel } from "./AiPanel";
 import { ExportDialog } from "./ExportDialog";
+import { ExportStatus } from "./ExportStatus";
 import { Inspector } from "./Inspector";
 import { Preview } from "./Preview";
 import { SidePanel } from "./SidePanel";
@@ -21,6 +24,9 @@ export function Editor({ projectId }: { projectId: string }) {
   const dropActive = useEditor((s) => s.dropActive);
   const exportOpen = useEditor((s) => s.exportOpen);
   const aiOpen = useEditor((s) => s.aiOpen);
+  // The inspector only earns its column when something is selected; otherwise it
+  // is an empty white panel, so collapse it and let the preview take the space.
+  const hasInspector = useEditor((s) => s.selection != null);
   const [importing, setImporting] = useState(0);
   const dragDepth = useRef(0);
 
@@ -32,6 +38,66 @@ export function Editor({ projectId }: { projectId: string }) {
       .then(() => {
         for (const asset of useEditor.getState().assets) void enrichAsset(asset);
       });
+    // Rejoin an export that's still rendering (e.g. after a reload).
+    void useExport.getState().reconnect(projectId);
+  }, [projectId]);
+
+  // Keep the project card's hover proxy fresh: rebuild it a few seconds after
+  // the cut settles. Best-effort and single-flight; skips when there's no cut.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let rendering = false;
+    const render = async () => {
+      const s = useEditor.getState();
+      if (rendering || !s.loaded || s.projectId !== projectId || s.clips.length === 0) return;
+      rendering = true;
+      try {
+        await renderPreviewProxy(
+          projectId,
+          {
+            assets: s.assets,
+            clips: s.clips,
+            audioClips: s.audioClips,
+            overlays: s.overlays,
+            subtitles: s.subtitles,
+          },
+          s.aspect
+        );
+      } finally {
+        rendering = false;
+      }
+    };
+    let last: {
+      clips: unknown;
+      audioClips: unknown;
+      overlays: unknown;
+      subtitles: unknown;
+      aspect: string;
+    } | null = null;
+    const unsub = useEditor.subscribe((s) => {
+      if (!s.loaded || s.projectId !== projectId) return;
+      const changed =
+        last !== null &&
+        (s.clips !== last.clips ||
+          s.audioClips !== last.audioClips ||
+          s.overlays !== last.overlays ||
+          s.subtitles !== last.subtitles ||
+          s.aspect !== last.aspect);
+      last = {
+        clips: s.clips,
+        audioClips: s.audioClips,
+        overlays: s.overlays,
+        subtitles: s.subtitles,
+        aspect: s.aspect,
+      };
+      if (!changed) return; // first tick just primes the baseline
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => void render(), 8000);
+    });
+    return () => {
+      unsub();
+      if (timer) clearTimeout(timer);
+    };
   }, [projectId]);
 
   // Autosave: debounce document changes into PUT /api/cut/projects/<id>.
@@ -79,6 +145,9 @@ export function Editor({ projectId }: { projectId: string }) {
         s.publish.tags !== last.publish?.tags ||
         s.publish.soundTitle !== last.publish?.soundTitle ||
         s.publish.handle !== last.publish?.handle ||
+        s.notes.text !== last.notes?.text ||
+        s.notes.publishedAt !== last.notes?.publishedAt ||
+        s.notes.links.join("") !== (last.notes?.links ?? []).join("") ||
         s.projectName !== lastName;
       if (!changed) return;
       last = serializeDoc(s);
@@ -232,18 +301,23 @@ export function Editor({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div className="flex h-screen min-w-[900px] select-none overflow-hidden">
+    <div className="flex h-screen min-w-[900px] overflow-hidden">
       <div className="grid min-w-0 flex-1 grid-rows-[46px_minmax(0,1fr)_auto]">
         <TopBar />
-        <div className="grid min-h-0 grid-cols-[auto_minmax(0,1fr)_272px]">
+        <div
+          className={`grid min-h-0 ${
+            hasInspector ? "grid-cols-[auto_minmax(0,1fr)_272px]" : "grid-cols-[auto_minmax(0,1fr)]"
+          }`}
+        >
           <SidePanel projectId={projectId} onImport={importFiles} importing={importing > 0} />
           <Preview />
-          <Inspector />
+          {hasInspector && <Inspector />}
         </div>
         <Timeline />
       </div>
       {aiOpen && <AiPanel onClose={() => useEditor.getState().setAiOpen(false)} />}
       {exportOpen && <ExportDialog />}
+      <ExportStatus />
       {dropActive && (
         <div className="fixed inset-0 z-60 grid place-items-center bg-background/70 backdrop-blur-md">
           <div className="pointer-events-none flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-[#0a84ff] bg-[#0a84ff]/10 px-12 py-9 text-[#0a84ff]">

@@ -2,7 +2,7 @@
 
 import { apiFetch, apiUrl } from "./api";
 import { clipSpeed, getClipSpans, totalDuration } from "./store";
-import { cueOverlay } from "./subtitles";
+import { captionStyle, cueOverlay } from "./subtitles";
 import { renderOverlayPng } from "./textRender";
 import { FRAME } from "./types";
 import type { Aspect, AudioClip, MediaAsset, SubtitlesBlock, TextOverlay, VideoClip } from "./types";
@@ -79,11 +79,26 @@ export async function revealExport(projectId: string, file: string) {
   );
 }
 
-/** Delete a rendered export from the project folder. */
+/** Delete a rendered export from the project folder. Throws on failure so the
+ * UI can stay truthful instead of optimistically dropping a file that's still
+ * on disk (which is why deleted exports used to reappear on the next refresh). */
 export async function deleteExport(projectId: string, file: string) {
-  await apiFetch(`/api/cut/projects/${projectId}/exports/${encodeURIComponent(file)}`, {
-    method: "DELETE",
-  });
+  const res = await apiFetch(
+    `/api/cut/projects/${projectId}/exports/${encodeURIComponent(file)}`,
+    { method: "DELETE" }
+  );
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? "Could not delete the export.");
+  }
+}
+
+export interface ExportDoc {
+  assets: MediaAsset[];
+  clips: VideoClip[];
+  audioClips: AudioClip[];
+  overlays: TextOverlay[];
+  subtitles: SubtitlesBlock;
 }
 
 export interface ExportHandle {
@@ -91,15 +106,114 @@ export interface ExportHandle {
   done: Promise<{ outName: string }>;
 }
 
+/** Build the export FormData from the cut. Media already lives in the project
+ * folder — the spec references it by file name; only overlay PNGs travel with
+ * the request. Shared by full exports and the low-res hover proxy. */
+async function buildExportForm(
+  projectId: string,
+  doc: ExportDoc,
+  settings: ExportSettings,
+  target: "export" | "preview"
+): Promise<FormData> {
+  const spans = getClipSpans(doc.clips, doc.assets);
+  if (spans.length === 0) throw new Error("Add a video to the timeline first.");
+  const duration = totalDuration(doc.clips);
+  const form = new FormData();
+  const assetById = new Map(doc.assets.map((a) => [a.id, a]));
+
+  const clips = spans.map((sp) => ({
+    file: sp.asset.fileName,
+    in: sp.clip.in,
+    out: sp.clip.out,
+    muted: sp.clip.muted,
+    fit: sp.clip.fit ?? "fit",
+    panX: sp.clip.panX ?? 0,
+    panY: sp.clip.panY ?? 0,
+    speed: clipSpeed(sp.clip),
+    transition: sp.transitionOut,
+  }));
+
+  const audio = doc.audioClips
+    .filter((a) => a.start < duration && assetById.has(a.assetId))
+    .map((a) => ({
+      file: assetById.get(a.assetId)!.fileName,
+      in: a.in,
+      out: a.out,
+      start: a.start,
+      volume: a.volume,
+      fadeIn: a.fadeIn ?? 0,
+      fadeOut: a.fadeOut ?? 0,
+      speed: a.speed,
+    }));
+
+  const overlays: { file: string; start: number; end: number }[] = [];
+  for (let i = 0; i < doc.overlays.length; i++) {
+    const o = doc.overlays[i];
+    if (o.start >= duration || !o.text.trim()) continue;
+    const png = await renderOverlayPng(o, settings.width, settings.height);
+    const key = `overlay_${i}.png`;
+    form.append(key, png, key);
+    overlays.push({ file: key, start: o.start, end: Math.min(o.end, duration) });
+  }
+
+  if (doc.subtitles.showOnVideo) {
+    const capStyle = captionStyle(doc.subtitles.style);
+    for (let i = 0; i < doc.subtitles.cues.length; i++) {
+      const cue = doc.subtitles.cues[i];
+      if (cue.start >= duration || !cue.text.trim()) continue;
+      const png = await renderOverlayPng(
+        cueOverlay(cue, capStyle, i === 0),
+        settings.width,
+        settings.height
+      );
+      const key = `sub_${i}.png`;
+      form.append(key, png, key);
+      overlays.push({ file: key, start: cue.start, end: Math.min(cue.end, duration) });
+    }
+  }
+
+  form.append(
+    "spec",
+    JSON.stringify({ projectId, target, ...settings, duration, clips, audio, overlays })
+  );
+  return form;
+}
+
+/** Poll an export job to completion, reporting progress. Returns the file name. */
+export async function pollExport(
+  jobId: string,
+  onProgress: (stage: string, ratio: number) => void,
+  isCanceled: () => boolean = () => false
+): Promise<string> {
+  for (;;) {
+    if (isCanceled()) throw new Error("Export canceled.");
+    await new Promise((r) => setTimeout(r, 400));
+    const st = await apiFetch(`/api/cut/export/${jobId}`);
+    const status = (await st.json()) as {
+      status: string;
+      progress: number;
+      error?: string;
+      outName?: string;
+    };
+    if (status.status === "error") throw new Error(status.error ?? "Export failed.");
+    onProgress("Rendering", status.progress);
+    if (status.status === "done") return status.outName ?? "export.mp4";
+  }
+}
+
+/** Trigger a browser download of a finished export by job id. */
+export function downloadExport(jobId: string, outName: string) {
+  const a = document.createElement("a");
+  a.href = apiUrl(`/api/cut/export/${jobId}/file`);
+  a.download = outName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 export function startExport(
   projectId: string,
-  doc: {
-    assets: MediaAsset[];
-    clips: VideoClip[];
-    audioClips: AudioClip[];
-    overlays: TextOverlay[];
-    subtitles: SubtitlesBlock;
-  },
+  doc: ExportDoc,
   settings: ExportSettings,
   onProgress: (stage: string, ratio: number) => void
 ): ExportHandle {
@@ -107,102 +221,17 @@ export function startExport(
   let canceled = false;
 
   const done = (async () => {
-    const spans = getClipSpans(doc.clips, doc.assets);
-    if (spans.length === 0) throw new Error("Add a video to the timeline first.");
-    const duration = totalDuration(doc.clips);
-
     onProgress("Preparing", 0);
-    const form = new FormData();
-    const assetById = new Map(doc.assets.map((a) => [a.id, a]));
-
-    // Media already lives in the project folder — the spec references it by
-    // file name; only overlay PNGs travel with the request.
-    const clips = spans.map((sp) => ({
-      file: sp.asset.fileName,
-      in: sp.clip.in,
-      out: sp.clip.out,
-      muted: sp.clip.muted,
-      fit: sp.clip.fit ?? "fit",
-      panX: sp.clip.panX ?? 0,
-      panY: sp.clip.panY ?? 0,
-      speed: clipSpeed(sp.clip),
-      // The already-clamped dissolve overlap into the next clip.
-      transition: sp.transitionOut,
-    }));
-
-    const audio = doc.audioClips
-      .filter((a) => a.start < duration && assetById.has(a.assetId))
-      .map((a) => ({
-        file: assetById.get(a.assetId)!.fileName,
-        in: a.in,
-        out: a.out,
-        start: a.start,
-        volume: a.volume,
-        fadeIn: a.fadeIn ?? 0,
-        fadeOut: a.fadeOut ?? 0,
-        speed: a.speed,
-      }));
-
-    const overlays: { file: string; start: number; end: number }[] = [];
-    for (let i = 0; i < doc.overlays.length; i++) {
-      const o = doc.overlays[i];
-      if (o.start >= duration || !o.text.trim()) continue;
-      const png = await renderOverlayPng(o, settings.width, settings.height);
-      const key = `overlay_${i}.png`;
-      form.append(key, png, key);
-      overlays.push({ file: key, start: o.start, end: Math.min(o.end, duration) });
-    }
-
-    // Subtitles burn in through the same overlay pipeline. When there are no
-    // cues (no speech was found) nothing is added to the video.
-    if (doc.subtitles.showOnVideo) {
-      for (let i = 0; i < doc.subtitles.cues.length; i++) {
-        const cue = doc.subtitles.cues[i];
-        if (cue.start >= duration || !cue.text.trim()) continue;
-        const png = await renderOverlayPng(cueOverlay(cue), settings.width, settings.height);
-        const key = `sub_${i}.png`;
-        form.append(key, png, key);
-        overlays.push({ file: key, start: cue.start, end: Math.min(cue.end, duration) });
-      }
-    }
-
-    form.append(
-      "spec",
-      JSON.stringify({ projectId, ...settings, duration, clips, audio, overlays })
-    );
-
+    const form = await buildExportForm(projectId, doc, settings, "export");
     onProgress("Starting encoder", 0);
     const res = await apiFetch("/api/cut/export", { method: "POST", body: form });
     const body = (await res.json()) as { id?: string; error?: string };
     if (!res.ok || !body.id) throw new Error(body.error ?? "Export failed to start.");
     jobId = body.id;
 
-    let outName = "export.mp4";
-    for (;;) {
-      if (canceled) throw new Error("Export canceled.");
-      await new Promise((r) => setTimeout(r, 400));
-      const st = await apiFetch(`/api/cut/export/${jobId}`);
-      const status = (await st.json()) as {
-        status: string;
-        progress: number;
-        error?: string;
-        outName?: string;
-      };
-      if (status.status === "error") throw new Error(status.error ?? "Export failed.");
-      onProgress("Rendering", status.progress);
-      if (status.status === "done") {
-        outName = status.outName ?? outName;
-        break;
-      }
-    }
-
+    const outName = await pollExport(jobId, onProgress, () => canceled);
     onProgress("Done", 1);
-    const a = document.createElement("a");
-    a.href = apiUrl(`/api/cut/export/${jobId}/file`);
-    a.download = outName;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    downloadExport(jobId, outName);
     return { outName };
   })();
 
@@ -213,4 +242,23 @@ export function startExport(
       if (jobId) void apiFetch(`/api/cut/export/${jobId}`, { method: "DELETE" });
     },
   };
+}
+
+/** Low-res proxy of the actual edit for the project card's hover preview.
+ * Renders through the same pipeline (overlays and all), writing the project's
+ * preview.mp4. Best-effort: silently no-ops if a slot is busy or there's no
+ * footage yet. */
+export async function renderPreviewProxy(projectId: string, doc: ExportDoc, aspect: Aspect) {
+  const [width, height] = aspect === "16:9" ? [640, 360] : [360, 640];
+  const settings: ExportSettings = { width, height, fps: 24, crf: 30, preset: "veryfast" };
+  let form: FormData;
+  try {
+    form = await buildExportForm(projectId, doc, settings, "preview");
+  } catch {
+    return; // no clips yet
+  }
+  const res = await apiFetch("/api/cut/export", { method: "POST", body: form });
+  const body = (await res.json().catch(() => ({}))) as { id?: string };
+  if (!res.ok || !body.id) return; // a slot was busy; try again later
+  await pollExport(body.id, () => {}).catch(() => {});
 }

@@ -4,11 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { assertLocalRuntime } from "./local-only";
 import { createJobRegistry } from "./jobRegistry";
-import { exportsDir, mediaPath, readProject } from "./projects";
+import { exportsDir, mediaPath, projectDir, readProject } from "./projects";
 import { atempoChain, hasStream, num } from "./util";
 
 export interface ExportSpec {
   projectId: string;
+  /** "preview" renders the low-res hover proxy into the project's preview.mp4
+   * instead of a stamped file in exports/. */
+  target?: "export" | "preview";
   width: number;
   height: number;
   fps: number;
@@ -44,6 +47,7 @@ export interface ExportSpec {
 
 export interface Job {
   id: string;
+  projectId: string;
   status: "running" | "done" | "error";
   progress: number; // 0..1
   error?: string;
@@ -60,6 +64,20 @@ const { jobs, runningCount, retire } = createJobRegistry<Job>("__veditorJobs");
 
 export function getJob(id: string) {
   return jobs.get(id);
+}
+
+/** Running and recently-settled export jobs for a project, so a client that
+ * reopened (or reloaded) can reconnect to an export still in flight. */
+export function listJobsForProject(projectId: string) {
+  return [...jobs.values()]
+    .filter((j) => j.projectId === projectId)
+    .map((j) => ({
+      id: j.id,
+      status: j.status,
+      progress: j.progress,
+      outName: j.outName,
+      error: j.error,
+    }));
 }
 
 export function cancelJob(id: string) {
@@ -85,6 +103,7 @@ export async function createJob(form: FormData): Promise<Job> {
   if (runningCount() >= MAX_RUNNING) {
     const job: Job = {
       id,
+      projectId: spec.projectId,
       status: "error",
       progress: 0,
       tmpDir: "",
@@ -97,12 +116,14 @@ export async function createJob(form: FormData): Promise<Job> {
     retire(job);
     return job;
   }
-  const outDir = exportsDir(spec.projectId);
+  const preview = spec.target === "preview";
+  const outDir = preview ? projectDir(spec.projectId) : exportsDir(spec.projectId);
   // Include the unique job id so two exports in the same second can't collide
   // on the same output path (which would clobber the first render).
-  const outName = `export-${stamp()}-${id}.mp4`;
+  const outName = preview ? "preview.mp4" : `export-${stamp()}-${id}.mp4`;
   const job: Job = {
     id,
+    projectId: spec.projectId,
     status: "running",
     progress: 0,
     tmpDir: "",

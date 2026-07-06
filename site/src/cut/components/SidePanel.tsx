@@ -26,8 +26,10 @@ import {
   addLibraryAssetToProject,
   deleteFromLibrary,
   fetchLibrary,
+  moveLibraryAsset,
   saveAssetToLibrary,
   type LibraryAsset,
+  type LibraryFolder,
 } from "@/cut/lib/library";
 import { CAPTION_LIMIT, normalizeTags } from "@/cut/lib/publish";
 import { useEditor } from "@/cut/lib/store";
@@ -182,11 +184,15 @@ function MediaPanel({
     setDeletingExport(null);
     try {
       await deleteExport(projectId, it.file);
-      setExports((prev) => prev.filter((e) => e.file !== it.file));
-      if (preview?.file === it.file) setPreview(null);
     } catch {
-      // Leave the list as-is on failure; it mirrors what's on disk.
+      // Fall through and re-read the folder so the list mirrors disk truth
+      // (a failed delete stays visible rather than reappearing later).
     }
+    const list = await apiFetch(`/api/cut/projects/${projectId}/exports`)
+      .then((r) => (r.ok ? (r.json() as Promise<ExportItem[]>) : []))
+      .catch(() => [] as ExportItem[]);
+    setExports(list);
+    if (preview && !list.some((e) => e.file === preview.file)) setPreview(null);
   };
 
   return (
@@ -466,10 +472,20 @@ function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string 
 
 function LibraryPanel({ projectId }: { projectId: string }) {
   const [assets, setAssets] = useState<LibraryAsset[] | null>(null);
+  const [folders, setFolders] = useState<LibraryFolder[]>([]);
+  const [activeFolder, setActiveFolder] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<LibraryAsset | null>(null);
 
+  const reload = () =>
+    fetchLibrary()
+      .then((d) => {
+        setAssets(d.assets);
+        setFolders(d.folders);
+      })
+      .catch(() => setAssets([]));
+
   useEffect(() => {
-    void fetchLibrary().then(setAssets).catch(() => setAssets([]));
+    void reload();
   }, []);
 
   const remove = async () => {
@@ -481,28 +497,57 @@ function LibraryPanel({ projectId }: { projectId: string }) {
       await deleteFromLibrary(id);
     } catch {
       // Server delete failed; pull a fresh list so the UI stays truthful.
-      void fetchLibrary().then(setAssets).catch(() => {});
+      void reload();
     }
   };
+
+  const move = async (assetId: string, folderId: string | null) => {
+    setAssets((prev) => (prev ?? []).map((a) => (a.id === assetId ? { ...a, folderId } : a)));
+    await moveLibraryAsset(assetId, folderId).catch(() => void reload());
+  };
+
+  const shown = (assets ?? []).filter((a) =>
+    activeFolder === null ? true : (a.folderId ?? null) === activeFolder
+  );
 
   return (
     <>
       <PanelHead title="Library" />
-      <p className="px-4 pb-3 text-[11.5px] leading-relaxed text-muted-foreground">
-        Reusable clips & music. Click to add a copy to this project.
+      <p className="px-4 pb-2 text-[11.5px] leading-relaxed text-muted-foreground">
+        Reusable clips & music. Drag onto the timeline, or press + to add a copy.
       </p>
+      {folders.length > 0 && (
+        <div className="flex gap-1.5 overflow-x-auto px-3.5 pb-2.5">
+          {[{ id: null as string | null, name: "All" }, ...folders].map((f) => (
+            <button
+              key={f.id ?? "all"}
+              className={cn(
+                "shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors",
+                activeFolder === f.id
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              )}
+              onClick={() => setActiveFolder(f.id)}
+            >
+              {f.name}
+            </button>
+          ))}
+        </div>
+      )}
       {assets === null ? (
         <div className="grid flex-1 place-items-center text-muted-foreground">
           <Loader2 className="size-4 animate-spin" />
         </div>
-      ) : assets.length === 0 ? null : (
+      ) : shown.length === 0 ? null : (
         <div className="grid grid-cols-2 content-start gap-2.5 overflow-y-auto px-3.5 pb-3.5">
-          {assets.map((a) => (
+          {shown.map((a) => (
             <LibraryCard
               key={a.id}
               asset={a}
+              folders={folders}
               onUse={() => void addLibraryAssetToProject(projectId, a)}
               onDelete={() => setDeleting(a)}
+              onMove={(folderId) => void move(a.id, folderId)}
             />
           ))}
         </div>
@@ -557,6 +602,8 @@ function CopyChip({ text, label }: { text: string; label: string }) {
 function PublishPanel() {
   const publish = useEditor((s) => s.publish);
   const setPublish = useEditor((s) => s.setPublish);
+  const notes = useEditor((s) => s.notes);
+  const setNotes = useEditor((s) => s.setNotes);
   const tagsLine = normalizeTags(publish.tags);
   const combined = [publish.caption.trim(), tagsLine].filter(Boolean).join("\n\n");
   const count = combined.length;
@@ -621,6 +668,31 @@ function PublishPanel() {
             TikTok names uploads “original sound – you”. You can rename the
             sound once after posting — paste this then.
           </p>
+        </div>
+
+        <div className="flex flex-col gap-1.5 border-t border-border pt-4">
+          <span className={field}>Notes</span>
+          <label className="flex items-center justify-between gap-2 text-[12px] text-muted-foreground">
+            Published
+            <input
+              type="date"
+              className="notes-date rounded-lg border border-input bg-transparent px-2 py-1 text-[12px] outline-none focus:border-ring"
+              value={notes.publishedAt}
+              onChange={(e) => setNotes({ publishedAt: e.target.value })}
+            />
+          </label>
+          <textarea
+            className="notes-links min-h-[54px] w-full resize-y rounded-lg border border-input bg-transparent px-2.5 py-2 font-mono text-[11.5px] leading-relaxed outline-none focus:border-ring"
+            placeholder={"Links, one per line\nhttps://tiktok.com/…"}
+            value={notes.links.join("\n")}
+            onChange={(e) => setNotes({ links: e.target.value.split("\n") })}
+          />
+          <textarea
+            className="notes-text min-h-[70px] w-full resize-y rounded-lg border border-input bg-transparent px-2.5 py-2 text-[12.5px] leading-relaxed outline-none focus:border-ring"
+            placeholder="Anything worth remembering about this cut…"
+            value={notes.text}
+            onChange={(e) => setNotes({ text: e.target.value })}
+          />
         </div>
 
         <div className="mt-1 flex flex-col gap-2">
