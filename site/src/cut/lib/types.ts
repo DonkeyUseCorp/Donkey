@@ -140,6 +140,8 @@ export interface SubtitlesBlock {
   showOnTimeline: boolean;
   locale?: string;
   generatedAt?: number;
+  /** Caption look preset; absent = the plain "clean" subtitle style. */
+  style?: "clean" | "hook" | "punchy";
 }
 
 export const emptySubtitles = (): SubtitlesBlock => ({
@@ -191,6 +193,21 @@ export interface ProjectDoc {
     soundTitle?: string;
     handle?: string;
   };
+  /** Free-form notes for the maker: published date, source links, reminders. */
+  notes?: {
+    text?: string;
+    publishedAt?: string; // ISO date (yyyy-mm-dd)
+    links?: string[];
+  };
+  /** Which project folder this belongs to (null/absent = ungrouped). */
+  folderId?: string | null;
+}
+
+/** A named group of projects on the home screen. */
+export interface ProjectFolder {
+  id: string;
+  name: string;
+  createdAt: number;
 }
 
 export interface ProjectSummary {
@@ -201,8 +218,16 @@ export interface ProjectSummary {
   duration: number;
   clipCount: number;
   assetCount: number;
-  /** Media file used for the card poster / hover preview. */
+  /** Media file used for the card poster / hover fallback. */
   previewFile?: string;
+  /** Source time (seconds) of the poster frame — the first clip's trim-in. */
+  previewStart?: number;
+  /** Whether a rendered proxy of the edit exists to play on hover. */
+  hasPreview?: boolean;
+  /** Folder this project is filed under (null = ungrouped). */
+  folderId?: string | null;
+  /** Total bytes on disk (media + exports + proxy), for cleanup decisions. */
+  sizeBytes?: number;
 }
 
 export const mediaUrl = (projectId: string, fileName: string) =>

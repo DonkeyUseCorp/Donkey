@@ -16,6 +16,7 @@ import type {
 } from "./types";
 import { apiFetch } from "./api";
 import { emptySubtitles, mediaUrl, SPEED_MAX, SPEED_MIN, TRANSITION_MAX } from "./types";
+import { readTextStyle } from "./textStyle";
 import { loadUiState, saveUiState } from "./uiState";
 
 const uid = () => crypto.randomUUID().slice(0, 8);
@@ -69,6 +70,8 @@ interface EditorState {
   skimTime: number | null;
   /** TikTok publishing metadata (caption, hashtags, sound title). */
   publish: { caption: string; tags: string; soundTitle: string; handle: string };
+  /** Free-form maker notes: published date, source links, reminders. */
+  notes: { text: string; publishedAt: string; links: string[] };
   /** Subtitles: cues + visibility, persisted with the project. */
   subtitles: SubtitlesBlock;
   subtitleStatus: SubtitleStatus;
@@ -115,9 +118,13 @@ interface EditorState {
   splitAtPlayhead: (at?: number) => void;
   setSkimTime: (t: number | null) => void;
   setPublish: (patch: Partial<{ caption: string; tags: string; soundTitle: string; handle: string }>) => void;
+  setNotes: (patch: Partial<{ text: string; publishedAt: string; links: string[] }>) => void;
   /** Kick off (and poll) an on-device transcription of the current cut. */
   generateSubtitles: () => Promise<void>;
-  setSubtitlesView: (patch: Partial<Pick<SubtitlesBlock, "showOnVideo" | "showOnTimeline" | "locale">>) => void;
+  /** Transcribe (if needed) then rewrite the cues into social captions in the
+   * given style, one-to-one so cue timings are preserved. */
+  generateCaptions: (style: "clean" | "hook" | "punchy") => Promise<void>;
+  setSubtitlesView: (patch: Partial<Pick<SubtitlesBlock, "showOnVideo" | "showOnTimeline" | "locale" | "style">>) => void;
   /** Commit a cue's edited text (empty text deletes the cue). */
   setCueText: (id: string, text: string) => void;
   /** Split a cue at a character offset — at real word timings when known. */
@@ -235,6 +242,7 @@ export const useEditor = create<EditorState>((set, get) => {
     timelineH: TIMELINE_H_DEFAULT,
     skimTime: null,
     publish: { caption: "", tags: "", soundTitle: "", handle: "" },
+    notes: { text: "", publishedAt: "", links: [] },
     subtitles: emptySubtitles(),
     subtitleStatus: "idle",
     subtitleError: null,
@@ -292,6 +300,11 @@ export const useEditor = create<EditorState>((set, get) => {
             tags: doc.publish?.tags ?? "",
             soundTitle: doc.publish?.soundTitle ?? "",
             handle: doc.publish?.handle ?? "",
+          },
+          notes: {
+            text: doc.notes?.text ?? "",
+            publishedAt: doc.notes?.publishedAt ?? "",
+            links: doc.notes?.links ?? [],
           },
           subtitles: doc.subtitles ?? emptySubtitles(),
           subtitleStatus: (doc.subtitles?.cues.length ?? 0) > 0 ? "ready" : "idle",
@@ -414,6 +427,9 @@ export const useEditor = create<EditorState>((set, get) => {
       const t = get().currentTime;
       const total = totalDuration(get().clips);
       const start = Math.min(t, Math.max(0, total - 0.5));
+      // Seed the visual style from the last-used title so repeated titles in a
+      // project share one look; fall back to the built-in defaults.
+      const remembered = readTextStyle();
       const overlay: TextOverlay = {
         id: uid(),
         text: "Your text",
@@ -421,12 +437,15 @@ export const useEditor = create<EditorState>((set, get) => {
         end: Math.min(start + 3, Math.max(total, start + 3)),
         x: 0.5,
         y: 0.42,
-        size: 88,
-        font: "sf",
-        weight: 700,
-        color: "#FFFFFF",
-        shadow: true,
-        plate: false,
+        size: remembered.size ?? 88,
+        font: remembered.font ?? "sf",
+        weight: remembered.weight ?? 700,
+        color: remembered.color ?? "#FFFFFF",
+        shadow: remembered.shadow ?? true,
+        plate: remembered.plate ?? false,
+        plateColor: remembered.plateColor,
+        plateOpacity: remembered.plateOpacity,
+        plateRadius: remembered.plateRadius,
         lane: 0,
       };
       set((s) => ({
@@ -673,6 +692,7 @@ export const useEditor = create<EditorState>((set, get) => {
       if (get().skimTime !== t) set({ skimTime: t });
     },
     setPublish: (patch) => set((s) => ({ publish: { ...s.publish, ...patch } })),
+    setNotes: (patch) => set((s) => ({ notes: { ...s.notes, ...patch } })),
 
     generateSubtitles: async () => {
       const s = get();
@@ -752,6 +772,61 @@ export const useEditor = create<EditorState>((set, get) => {
         if (get().projectId !== projectId) return;
         set({
           subtitleStatus: "error",
+          subtitleError: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+
+    generateCaptions: async (style) => {
+      const s = get();
+      if (!s.projectId || s.subtitleStatus === "running") return;
+      // Need cues first — transcribe if the cut hasn't been captioned yet.
+      if (s.subtitles.cues.length === 0) {
+        await s.generateSubtitles();
+        if (get().subtitles.cues.length === 0) return; // no speech, or an error
+      }
+      const projectId = get().projectId;
+      // Apply the look right away for instant feedback, then rewrite the text.
+      set((cur) => ({
+        subtitles: { ...cur.subtitles, style },
+        subtitleStatus: "running",
+        subtitleError: null,
+      }));
+      const cues = get().subtitles.cues;
+      try {
+        const res = await apiFetch("/api/cut/ai/captions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            style,
+            cues: cues.map((c) => ({ start: c.start, end: c.end, text: c.text })),
+          }),
+        });
+        const body = (await res.json()) as { texts?: string[]; error?: string };
+        if (get().projectId !== projectId) return;
+        push();
+        if (res.ok && Array.isArray(body.texts) && body.texts.length === cues.length) {
+          const texts = body.texts;
+          set((cur) => ({
+            subtitles: {
+              ...cur.subtitles,
+              style,
+              // Rewriting the text drops per-word timings (they no longer match),
+              // but the cue's own start/end are untouched.
+              cues: cur.subtitles.cues.map((c, i) =>
+                texts[i] && texts[i] !== c.text ? { ...c, text: texts[i], words: undefined } : c
+              ),
+            },
+            subtitleStatus: "ready",
+          }));
+        } else {
+          // The style still applied; leave the text as-is.
+          set({ subtitleStatus: "ready" });
+        }
+      } catch (err) {
+        if (get().projectId !== projectId) return;
+        set({
+          subtitleStatus: "ready",
           subtitleError: err instanceof Error ? err.message : String(err),
         });
       }
@@ -1018,6 +1093,7 @@ export function serializeDoc(s: {
   overlays: TextOverlay[];
   aspect: Aspect;
   publish: { caption: string; tags: string; soundTitle: string; handle: string };
+  notes: { text: string; publishedAt: string; links: string[] };
   subtitles: SubtitlesBlock;
 }): Partial<ProjectDoc> {
   const assets: StoredAsset[] = s.assets.map(
@@ -1040,6 +1116,7 @@ export function serializeDoc(s: {
     aspect: s.aspect,
     subtitles: s.subtitles,
     publish: { ...s.publish },
+    notes: { ...s.notes, links: [...s.notes.links] },
   };
 }
 
