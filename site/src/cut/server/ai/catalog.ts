@@ -176,6 +176,12 @@ export const AI_TOOLS: AiToolDef[] = [
     inputSchema: obj({ locale: str("BCP-47 locale like en-US (default en-US)") }),
   },
   {
+    name: "captions_generate",
+    description:
+      "Transcribe (if needed) then rewrite the captions into punchy social-video captions — short lines that fit inside the video frame (they may wrap onto two lines but never overflow), a few emoji, a curiosity-hook opener. style: clean | hook | punchy (default hook). Cue timings are preserved.",
+    inputSchema: obj({ style: str("Caption style: clean, hook, or punchy") }),
+  },
+  {
     name: "subtitles_set_view",
     description: "Toggle subtitles on the video (preview + export burn-in) and/or the timeline cue track.",
     inputSchema: obj({ showOnVideo: bool("Captions on the video"), showOnTimeline: bool("Cue track on the timeline") }),
@@ -302,7 +308,7 @@ Titles burn into the export exactly as previewed.`,
 
   "audio-and-subtitles": `# Audio & subtitles
 Soundtrack clips: volume 0..1.5, fadeIn/fadeOut seconds (max half the clip), start = timeline position, in/out = trim inside the source. Fades render with ffmpeg afade on export.
-Subtitles: subtitles_generate transcribes the current cut fully on-device (Apple speech, macOS 26). Cues are caption-sized (≈38 chars). If no speech exists, no cues are created and nothing renders on the video — never add captions to a speechless video.
+Subtitles: subtitles_generate transcribes the current cut fully on-device (Apple speech, macOS 26). Cues are caption-sized (≈38 chars). If no speech exists, no cues are created and nothing renders on the video — never add captions to a speechless video. captions_generate goes further: it rewrites those cues into punchy social captions (emoji, curiosity-hook opener) in a chosen style (clean/hook/punchy), keeping timings — use it when the ask is social/TikTok captions rather than a plain transcript.
 Editing: update_cue (text or retime), delete_cue. In the panel, Return splits a caption at the cursor onto real word timings; hand-edited text drops its word timings.
 subtitles_set_view: showOnVideo (preview + export burn-in), showOnTimeline (amber cue track).
 Caption style is fixed: bold white SF, translucent plate, bottom-center (y≈0.8).`,

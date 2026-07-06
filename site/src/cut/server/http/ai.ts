@@ -11,6 +11,7 @@ import {
   unregisterSession,
   type UIChunkWriter,
 } from "../ai/bridge";
+import { rewriteCaptions } from "../ai/captions";
 import { AI_SKILL_INDEX, AI_SKILLS, AI_TOOLS, systemPrompt } from "../ai/catalog";
 import { AI_MODELS } from "../ai/models";
 
@@ -283,6 +284,27 @@ const mcpText = (value: unknown) => ({
 
 /** The AI assistant: chat streaming, provider probing, and the MCP bridge. */
 export const aiApi = {
+  /** Rewrite subtitle cues into punchy social captions (one-to-one, timings
+   * preserved). Falls back to the originals on any failure. */
+  async captions(req: Request) {
+    try {
+      const { cues, style } = (await req.json()) as {
+        cues?: { start: number; end: number; text: string }[];
+        style?: string;
+      };
+      if (!Array.isArray(cues) || cues.length === 0) {
+        return Response.json({ error: "No cues to rewrite." }, { status: 400 });
+      }
+      const texts = await rewriteCaptions(cues, typeof style === "string" ? style : "clean");
+      return Response.json({ texts });
+    } catch (e) {
+      return Response.json(
+        { error: e instanceof Error ? e.message : "Could not write captions." },
+        { status: 500 }
+      );
+    }
+  },
+
   async chat(req: Request) {
     const body = (await req.json()) as ChatBody;
     const base = new URL(req.url).origin;

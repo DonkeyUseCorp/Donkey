@@ -1,10 +1,10 @@
 "use client";
 
 import { memo, useEffect, useRef, useState } from "react";
-import { AlertCircle, Captions, ChevronDown, Loader2, RefreshCw } from "lucide-react";
+import { AlertCircle, Captions, ChevronDown, Loader2, RefreshCw, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { fmtCueTime } from "@/cut/lib/subtitles";
+import { CAPTION_STYLES, fmtCueTime } from "@/cut/lib/subtitles";
 import { TIMELINE_H_MIN, useEditor } from "@/cut/lib/store";
 import type { SubtitleCue } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
@@ -32,13 +32,21 @@ export function SubtitlesPanel() {
   const error = useEditor((s) => s.subtitleError);
   const hasCues = subtitles.cues.length > 0;
 
+  const style = subtitles.style ?? "clean";
+
+  const growTimeline = () => {
+    const cur = useEditor.getState();
+    if (cur.subtitles.cues.length > 0 && cur.timelineH < TIMELINE_H_WITH_SUBS)
+      cur.setTimelineH(TIMELINE_H_WITH_SUBS);
+  };
+
   const generate = () => {
+    void useEditor.getState().generateSubtitles().then(growTimeline);
+  };
+
+  const captions = () => {
     const s = useEditor.getState();
-    void s.generateSubtitles().then(() => {
-      const cur = useEditor.getState();
-      if (cur.subtitles.cues.length > 0 && cur.timelineH < TIMELINE_H_WITH_SUBS)
-        cur.setTimelineH(TIMELINE_H_WITH_SUBS);
-    });
+    void s.generateCaptions(s.subtitles.style ?? "hook").then(growTimeline);
   };
 
   return (
@@ -65,11 +73,11 @@ export function SubtitlesPanel() {
       </div>
 
       {!hasCues ? (
-        <EmptyState status={status} error={error} onGenerate={generate} />
+        <EmptyState status={status} error={error} onGenerate={generate} onCaptions={captions} />
       ) : (
         <>
           <Transcript cues={subtitles.cues} />
-          <div className="flex shrink-0 flex-col gap-2 border-t border-border px-4 py-3">
+          <div className="flex shrink-0 flex-col gap-2.5 border-t border-border px-4 py-3">
             <label className="flex items-center justify-between text-xs font-medium">
               Show
               <Switch
@@ -82,6 +90,45 @@ export function SubtitlesPanel() {
                 }}
               />
             </label>
+
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
+                Caption style
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {Object.values(CAPTION_STYLES).map((cs) => (
+                  <button
+                    key={cs.id}
+                    className={cn(
+                      "rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                      style === cs.id
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border text-muted-foreground hover:text-foreground"
+                    )}
+                    onClick={() => useEditor.getState().setSubtitlesView({ style: cs.id })}
+                  >
+                    {cs.label}
+                  </button>
+                ))}
+              </div>
+              <Button
+                variant="outline"
+                className="sub-social w-full"
+                disabled={status === "running"}
+                onClick={captions}
+              >
+                {status === "running" ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <Sparkles data-icon="inline-start" />
+                )}
+                Rewrite for social
+              </Button>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                Punchier lines, a curiosity hook, and a few emoji — timings stay put.
+              </p>
+            </div>
+
             {status === "running" && (
               <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
                 <Loader2 className="size-3 animate-spin" /> Re-transcribing on this Mac…
@@ -101,10 +148,12 @@ function EmptyState({
   status,
   error,
   onGenerate,
+  onCaptions,
 }: {
   status: string;
   error: string | null;
   onGenerate: () => void;
+  onCaptions: () => void;
 }) {
   const locale = useEditor((s) => s.subtitles.locale ?? "en-US");
 
@@ -163,6 +212,12 @@ function EmptyState({
         <Captions data-icon="inline-start" />
         {status === "empty" || status === "error" ? "Try again" : "Generate subtitles"}
       </Button>
+      {status !== "empty" && (
+        <Button variant="outline" className="sub-social w-full" onClick={onCaptions}>
+          <Sparkles data-icon="inline-start" />
+          Social captions
+        </Button>
+      )}
     </div>
   );
 }

@@ -239,6 +239,28 @@ export async function runAiTool(
       };
     }
 
+    case "captions_generate": {
+      const raw = typeof input.style === "string" ? input.style : "hook";
+      const style = (["clean", "hook", "punchy"].includes(raw) ? raw : "hook") as
+        | "clean"
+        | "hook"
+        | "punchy";
+      await s.generateCaptions(style);
+      const cur = useEditor.getState();
+      if (cur.subtitleStatus === "error")
+        throw new ToolError(cur.subtitleError ?? "Captions failed.");
+      if (cur.subtitles.cues.length > 0 && cur.timelineH < 276) cur.setTimelineH(276);
+      return {
+        status: cur.subtitleStatus,
+        cues: cur.subtitles.cues.length,
+        style: cur.subtitles.style,
+        note:
+          cur.subtitleStatus === "empty"
+            ? "No speech found — no captions were added to the video."
+            : undefined,
+      };
+    }
+
     case "subtitles_set_view": {
       const patch: { showOnVideo?: boolean; showOnTimeline?: boolean } = {};
       if (typeof input.showOnVideo === "boolean") patch.showOnVideo = input.showOnVideo;
