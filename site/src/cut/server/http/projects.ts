@@ -1,7 +1,9 @@
+import { execFile } from "node:child_process";
 import type { ProjectDoc } from "@/cut/lib/types";
 import { makeFreezeFrame } from "../frames";
 import {
   createProject,
+  deleteExport,
   deleteProject,
   exportPath,
   listExports,
@@ -13,6 +15,7 @@ import {
 } from "../projects";
 import { serveFileRange } from "../serveFile";
 import { createTranscribeJob, getTranscribeJob, type TranscribeSpec } from "../transcribe";
+import { exists } from "../util";
 
 const err = (message: string, status: number) => Response.json({ error: message }, { status });
 const caught = (e: unknown, fallback: string, status = 500) =>
@@ -121,6 +124,35 @@ export const projectsApi = {
       return new Response("Bad request.", { status: 400 });
     }
     return serveFileRange(p, req, { contentType: "video/mp4" });
+  },
+
+  /** Reveal a rendered export in Finder (Cut runs on the user's own Mac). */
+  async revealExport(_req: Request, { id, file }: { id: string; file: string }) {
+    let p: string;
+    try {
+      p = exportPath(id, decodeURIComponent(file));
+    } catch {
+      return err("Bad request.", 400);
+    }
+    if (!(await exists(p))) return err("Export not found.", 404);
+    try {
+      await new Promise<void>((resolve, reject) =>
+        execFile("open", ["-R", p], (e) => (e ? reject(e) : resolve()))
+      );
+      return Response.json({ ok: true });
+    } catch (e) {
+      return caught(e, "Could not reveal the file.");
+    }
+  },
+
+  /** Delete a rendered export from the project folder. */
+  async removeExport(_req: Request, { id, file }: { id: string; file: string }) {
+    try {
+      await deleteExport(id, decodeURIComponent(file));
+      return Response.json({ ok: true });
+    } catch (e) {
+      return caught(e, "Could not delete the export.");
+    }
   },
 
   /** Start a background transcription of the current cut. */

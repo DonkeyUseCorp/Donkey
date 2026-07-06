@@ -51,6 +51,11 @@ export async function listExports(id: string) {
     .sort((a, b) => b.mtime - a.mtime);
 }
 
+/** Remove one rendered export from the project folder. */
+export async function deleteExport(id: string, fileName: string) {
+  await rm(exportPath(id, fileName), { force: true });
+}
+
 const docPath = (id: string) => path.join(projectDir(id), "project.json");
 
 export async function readProject(id: string): Promise<ProjectDoc | null> {

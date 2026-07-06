@@ -7,6 +7,7 @@ import {
   Camera,
   Check,
   Copy,
+  FolderOpen,
   Heart,
   MessageCircle,
   MoreHorizontal,
@@ -21,6 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { revealExport } from "@/cut/lib/exportClient";
 import { CAPTION_LIMIT, normalizeTags } from "@/cut/lib/publish";
 import { useEditor } from "@/cut/lib/store";
 import { cn } from "@/lib/utils";
@@ -31,9 +33,10 @@ export interface ExportItem {
   mtime: number;
 }
 
-type Platform = "tiktok" | "instagram" | "youtube";
+type Platform = "original" | "tiktok" | "instagram" | "youtube";
 
 const PLATFORMS: { id: Platform; label: string }[] = [
+  { id: "original", label: "Original" },
   { id: "tiktok", label: "TikTok" },
   { id: "instagram", label: "Instagram" },
   { id: "youtube", label: "YouTube" },
@@ -54,7 +57,7 @@ export function PlatformPreviewDialog({
 }) {
   const publish = useEditor((s) => s.publish);
   const setPublish = useEditor((s) => s.setPublish);
-  const [platform, setPlatform] = useState<Platform>("tiktok");
+  const [platform, setPlatform] = useState<Platform>("original");
   const [muted, setMuted] = useState(true);
   const [copied, setCopied] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -91,9 +94,15 @@ export function PlatformPreviewDialog({
         <div className="flex w-[300px] shrink-0 flex-col gap-3.5 overflow-y-auto border-r border-border p-4">
           <div>
             <div className="text-sm font-semibold tracking-tight">Post preview</div>
-            <div className="mt-0.5 truncate font-mono text-[10.5px] text-muted-foreground">
-              {item.file}
-            </div>
+            <button
+              type="button"
+              onClick={() => void revealExport(projectId, item.file).catch(() => {})}
+              title="Show in Finder"
+              className="reveal-export mt-0.5 flex w-full items-center gap-1 font-mono text-[10.5px] text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <FolderOpen className="size-3 shrink-0" />
+              <span className="truncate">{item.file}</span>
+            </button>
           </div>
 
           <div className="flex flex-col gap-1.5">
@@ -207,16 +216,25 @@ export function PlatformPreviewDialog({
             <video
               ref={videoRef}
               src={url}
-              className="absolute inset-0 size-full object-cover"
+              className={cn(
+                "absolute inset-0 size-full",
+                // "Original" shows the true exported frame, uncropped; the
+                // platform mocks fill the phone the way each app would.
+                platform === "original" ? "object-contain" : "object-cover"
+              )}
               autoPlay
               loop
               muted={muted}
               playsInline
               onClick={() => setMuted((m) => !m)}
             />
-            {/* legibility gradients */}
-            <div className="pointer-events-none absolute inset-x-0 top-0 h-20 bg-gradient-to-b from-black/50 to-transparent" />
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-44 bg-gradient-to-t from-black/70 via-black/25 to-transparent" />
+            {/* legibility gradients — only under platform chrome */}
+            {platform !== "original" && (
+              <>
+                <div className="pointer-events-none absolute inset-x-0 top-0 h-20 bg-gradient-to-b from-black/50 to-transparent" />
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 h-44 bg-gradient-to-t from-black/70 via-black/25 to-transparent" />
+              </>
+            )}
 
             <button
               className="absolute top-3.5 left-3.5 z-20 grid size-7 place-items-center rounded-full bg-black/40 text-white"

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Captions, Check, Circle, ClipboardList, Copy, Film, FolderOpen, FolderPlus, Loader2, Mic, Music, Play, Plus, Trash2, Upload, Video } from "lucide-react";
+import { Captions, Check, Circle, ClipboardList, Copy, Film, FolderOpen, FolderPlus, Loader2, Mic, Music, Plus, Trash2, Upload, Video } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { apiFetch, apiUrl } from "@/cut/lib/api";
 import { clearAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
+import { deleteExport, revealExport } from "@/cut/lib/exportClient";
 import {
   addLibraryAssetToProject,
   deleteFromLibrary,
@@ -160,6 +161,7 @@ function MediaPanel({
   const inputRef = useRef<HTMLInputElement>(null);
   const [exports, setExports] = useState<ExportItem[]>([]);
   const [preview, setPreview] = useState<ExportItem | null>(null);
+  const [deletingExport, setDeletingExport] = useState<ExportItem | null>(null);
 
   // Refresh the list on open and every time the export dialog closes.
   useEffect(() => {
@@ -173,6 +175,19 @@ function MediaPanel({
       alive = false;
     };
   }, [projectId, exportOpen]);
+
+  const removeExport = async () => {
+    const it = deletingExport;
+    if (!it) return;
+    setDeletingExport(null);
+    try {
+      await deleteExport(projectId, it.file);
+      setExports((prev) => prev.filter((e) => e.file !== it.file));
+      if (preview?.file === it.file) setPreview(null);
+    } catch {
+      // Leave the list as-is on failure; it mirrors what's on disk.
+    }
+  };
 
   return (
     <>
@@ -219,41 +234,62 @@ function MediaPanel({
 
         {exports.length > 0 && (
           <div className="mt-5 px-3.5">
-            <div className="mb-2 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
-              Exports
-            </div>
+            <div className="mb-2 text-[13px] font-semibold tracking-tight">Exports</div>
             <div className="flex flex-col gap-1.5">
               {exports.map((it) => (
-                <button
+                <div
                   key={it.file}
-                  className="export-row flex w-full items-center gap-2.5 rounded-lg border border-border p-1.5 text-left transition-colors hover:border-input hover:bg-muted/50"
-                  title="Preview as a post"
-                  onClick={() => setPreview(it)}
+                  className="export-row group flex w-full items-center gap-2.5 rounded-lg border border-border p-1.5 transition-colors hover:border-input hover:bg-muted/50"
                 >
-                  <video
-                    muted
-                    playsInline
-                    preload="metadata"
-                    src={`${apiUrl(`/api/cut/projects/${projectId}/exports/${encodeURIComponent(it.file)}`)}#t=0.1`}
-                    className="h-11 w-[25px] shrink-0 rounded-[4px] bg-black object-cover"
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[11.5px] font-medium">
-                      {new Date(it.mtime).toLocaleString([], {
-                        month: "short",
-                        day: "numeric",
-                        hour: "numeric",
-                        minute: "2-digit",
-                      })}
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                    title="Preview as a post"
+                    onClick={() => setPreview(it)}
+                  >
+                    <video
+                      muted
+                      playsInline
+                      preload="metadata"
+                      src={`${apiUrl(`/api/cut/projects/${projectId}/exports/${encodeURIComponent(it.file)}`)}#t=0.1`}
+                      className="h-11 w-[25px] shrink-0 rounded-[4px] bg-black object-cover"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[11.5px] font-medium">
+                        {new Date(it.mtime).toLocaleString([], {
+                          month: "short",
+                          day: "numeric",
+                          hour: "numeric",
+                          minute: "2-digit",
+                        })}
+                      </span>
+                      <span className="block text-[10.5px] text-muted-foreground">
+                        {(it.size / (1024 * 1024)).toFixed(1)} MB · MP4
+                      </span>
                     </span>
-                    <span className="block text-[10.5px] text-muted-foreground">
-                      {(it.size / (1024 * 1024)).toFixed(1)} MB · MP4
-                    </span>
-                  </span>
-                  <span className="mr-1 flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                    <Play className="size-2.5" /> Play
-                  </span>
-                </button>
+                  </button>
+                  <div className="flex shrink-0 items-center gap-0.5 pr-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label="Show in Finder"
+                      title="Show in Finder"
+                      onClick={() => void revealExport(projectId, it.file).catch(() => {})}
+                    >
+                      <FolderOpen />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label="Delete export"
+                      title="Delete export"
+                      className="text-muted-foreground hover:text-destructive"
+                      onClick={() => setDeletingExport(it)}
+                    >
+                      <Trash2 />
+                    </Button>
+                  </div>
+                </div>
               ))}
             </div>
           </div>
@@ -266,6 +302,30 @@ function MediaPanel({
           onClose={() => setPreview(null)}
         />
       )}
+
+      <AlertDialog open={!!deletingExport} onOpenChange={(o) => !o && setDeletingExport(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this export?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The rendered file leaves the project’s exports folder. Your cut is untouched — you
+              can export it again anytime.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive/10 text-destructive hover:bg-destructive/20"
+              onClick={(e) => {
+                e.preventDefault();
+                void removeExport();
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
