@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, FolderCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,7 +10,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { EXPORT_PRESETS, presetSettings, startExport, type ExportHandle } from "@/cut/lib/exportClient";
+import {
+  EXPORT_PRESETS,
+  originalSettings,
+  presetSettings,
+  startExport,
+  type ExportHandle,
+} from "@/cut/lib/exportClient";
 import { useEditor } from "@/cut/lib/store";
 import { cn } from "@/lib/utils";
 
@@ -23,7 +29,28 @@ type Phase =
 export function ExportDialog() {
   const setExportOpen = useEditor((s) => s.setExportOpen);
   const aspect = useEditor((s) => s.aspect);
-  const [presetId, setPresetId] = useState<string>(EXPORT_PRESETS[0].id);
+  const clips = useEditor((s) => s.clips);
+  const assets = useEditor((s) => s.assets);
+  // "Original" leads: sized from the footage on the timeline, so it is always
+  // the highest option. The fixed presets follow, flipped to the aspect.
+  const presets = useMemo(
+    () => [
+      {
+        id: "original",
+        label: "Original · matches source",
+        detail: "H.264 · best quality",
+        settings: originalSettings(aspect, clips, assets),
+      },
+      ...EXPORT_PRESETS.map((p) => ({
+        id: p.id,
+        label: p.label,
+        detail: p.detail,
+        settings: presetSettings(p, aspect),
+      })),
+    ],
+    [aspect, clips, assets]
+  );
+  const [presetId, setPresetId] = useState("original");
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const handleRef = useRef<ExportHandle | null>(null);
 
@@ -35,9 +62,9 @@ export function ExportDialog() {
   };
 
   const run = () => {
-    const preset = EXPORT_PRESETS.find((p) => p.id === presetId) ?? EXPORT_PRESETS[0];
     const s = useEditor.getState();
     if (!s.projectId) return;
+    const settings = (presets.find((p) => p.id === presetId) ?? presets[0]).settings;
     const handle = startExport(
       s.projectId,
       {
@@ -47,7 +74,7 @@ export function ExportDialog() {
         overlays: s.overlays,
         subtitles: s.subtitles,
       },
-      presetSettings(preset, s.aspect),
+      settings,
       (stage, ratio) => setPhase({ kind: "running", stage, ratio })
     );
     handleRef.current = handle;
@@ -68,9 +95,7 @@ export function ExportDialog() {
         {phase.kind === "idle" && (
           <>
             <div className="flex flex-col gap-2" role="radiogroup" aria-label="Export preset">
-              {EXPORT_PRESETS.map((p) => {
-                const dims = presetSettings(p, aspect);
-                return (
+              {presets.map((p) => (
                 <button
                   key={p.id}
                   role="radio"
@@ -83,11 +108,10 @@ export function ExportDialog() {
                 >
                   <span className="text-sm font-medium">{p.label}</span>
                   <span className="text-xs text-muted-foreground">
-                    {dims.width} × {dims.height} · {p.detail}
+                    {p.settings.width} × {p.settings.height} · {p.detail}
                   </span>
                 </button>
-                );
-              })}
+              ))}
             </div>
             <DialogFooter>
               <Button className="w-full" onClick={run}>

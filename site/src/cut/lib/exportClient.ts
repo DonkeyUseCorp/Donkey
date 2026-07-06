@@ -4,6 +4,7 @@ import { apiFetch, apiUrl } from "./api";
 import { getClipSpans, totalDuration } from "./store";
 import { cueOverlay } from "./subtitles";
 import { renderOverlayPng } from "./textRender";
+import { FRAME } from "./types";
 import type { Aspect, AudioClip, MediaAsset, SubtitlesBlock, TextOverlay, VideoClip } from "./types";
 
 export interface ExportSettings {
@@ -44,6 +45,45 @@ export function presetSettings(
   return aspect === "16:9"
     ? { width: height, height: width, ...rest }
     : { width, height, ...rest };
+}
+
+/**
+ * "Original": the highest resolution the timeline's own footage justifies,
+ * along the project aspect. It scales the 1080p base by the sharpest source
+ * clip — never below the base (so it is always the highest option), never
+ * above 4K, and never upscaled past the source. Unknown source sizes fall
+ * back to the base.
+ */
+export function originalSettings(
+  aspect: Aspect,
+  clips: VideoClip[],
+  assets: MediaAsset[]
+): ExportSettings {
+  const base = FRAME[aspect];
+  const srcLong = Math.max(
+    0,
+    ...getClipSpans(clips, assets).map((sp) =>
+      Math.max(sp.asset.width ?? 0, sp.asset.height ?? 0)
+    )
+  );
+  const k = Math.min(2, Math.max(1, srcLong / Math.max(base.w, base.h) || 1));
+  const even = (n: number) => 2 * Math.round((n * k) / 2);
+  return { width: even(base.w), height: even(base.h), fps: 30, crf: 19, preset: "medium" };
+}
+
+/** Reveal a rendered export in Finder (local engine only). */
+export async function revealExport(projectId: string, file: string) {
+  await apiFetch(
+    `/api/cut/projects/${projectId}/exports/${encodeURIComponent(file)}/reveal`,
+    { method: "POST" }
+  );
+}
+
+/** Delete a rendered export from the project folder. */
+export async function deleteExport(projectId: string, file: string) {
+  await apiFetch(`/api/cut/projects/${projectId}/exports/${encodeURIComponent(file)}`, {
+    method: "DELETE",
+  });
 }
 
 export interface ExportHandle {
