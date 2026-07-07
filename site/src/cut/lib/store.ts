@@ -120,8 +120,9 @@ interface EditorState {
   updateClipTransient: (id: string, patch: Partial<VideoClip>) => void;
   updateAudioTransient: (id: string, patch: Partial<AudioClip>) => void;
   moveClip: (id: string, toIndex: number) => void;
-  /** Add a video asset as a full-frame overlay on the next free upper track. */
-  addOverlayClipFromAsset: (assetId: string, start?: number) => void;
+  /** Add a video asset as a full-frame overlay clip. Without `track` it lands on
+   * a new top track; pass a track to drop it onto an existing upper track. */
+  addOverlayClipFromAsset: (assetId: string, start?: number, track?: number) => void;
   updateOverlayClip: (id: string, patch: Partial<OverlayClip>) => void;
   updateOverlayClipTransient: (id: string, patch: Partial<OverlayClip>) => void;
   /** iMovie "Detach Audio": lift the selected clip's sound onto the
@@ -570,16 +571,17 @@ export const useEditor = create<EditorState>((set, get) => {
       set({ clips: next });
     },
 
-    addOverlayClipFromAsset: (assetId, start) => {
+    addOverlayClipFromAsset: (assetId, start, track) => {
       const asset = get().assets.find((a) => a.id === assetId);
       if (!asset || asset.type !== "video") return;
       push();
-      // Land on the next free track above the highest existing overlay.
-      const track = Math.max(0, ...get().overlayClips.map((c) => c.track)) + 1;
+      // Land on the requested upper track, or the next free one above the
+      // highest existing overlay when none is given (a brand-new top track).
+      const nextFree = Math.max(0, ...get().overlayClips.map((c) => c.track)) + 1;
       const clip: OverlayClip = {
         id: uid(),
         assetId,
-        track,
+        track: track && track >= 1 ? track : nextFree,
         start: Math.max(0, start ?? get().currentTime),
         in: 0,
         out: asset.duration,

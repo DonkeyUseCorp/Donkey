@@ -39,8 +39,12 @@ const PAD_SIDE = 20;
 /** Visual gutter between adjacent clips (iMovie); time math stays exact. */
 const CLIP_GAP = 4;
 
+// A high-contrast selected state: a bright blue ring drawn both inside and
+// (crucially) *outside* the box, so it stays visible on top of a clip's
+// filmstrip thumbnails, plus a halo and a raised stacking order so selected
+// items read clearly against their neighbours.
 const SELECTED_SHADOW =
-  "shadow-[inset_0_0_0_2px_#0a84ff,0_0_12px_rgba(10,132,255,0.25)]";
+  "z-10 shadow-[inset_0_0_0_2px_#0a84ff,0_0_0_2px_#0a84ff,0_2px_11px_rgba(10,132,255,0.6)]";
 
 const trimHandle =
   "tl-trim absolute top-0 bottom-0 z-3 w-[10px] cursor-ew-resize after:absolute after:top-1/2 after:left-[3px] after:h-[calc(100%-10px)] after:w-1 after:-translate-y-1/2 after:rounded-full after:bg-white after:opacity-0 after:shadow-[0_0_0_1px_rgba(0,0,0,0.35)] after:transition-opacity group-hover:after:opacity-90 hover:after:opacity-100";
@@ -117,6 +121,12 @@ export function Timeline() {
   // Insertion preview while dragging a media asset onto the video track:
   // `index` is the span it lands before (spans.length = end), `len` its length.
   const [assetDrop, setAssetDrop] = useState<{ index: number; len: number } | null>(null);
+  // Kind of media currently being dragged over the timeline (drives the
+  // "drop for a new track" lane) and the pending overlay-track drop preview.
+  const [dropType, setDropType] = useState<"video" | "audio" | null>(null);
+  const [overlayDrop, setOverlayDrop] = useState<
+    { track: number | "new"; t: number; len: number } | null
+  >(null);
   const dragInfo = useMemo<ClipDrag | null>(() => {
     if (!clipDrag) return null;
     const from = spans.findIndex((sp) => sp.clip.id === clipDrag.id);
@@ -319,6 +329,58 @@ export function Timeline() {
     }
   };
 
+  // The video being dragged, whether it comes from project media or the library.
+  const draggedVideo = (e: React.DragEvent): { duration: number } | null => {
+    if (hasLibraryDrag(e)) {
+      const lib = draggingLibrary();
+      return lib && lib.type === "video" ? { duration: lib.duration } : null;
+    }
+    const id = draggingAssetId();
+    const asset = id ? useEditor.getState().assets.find((a) => a.id === id) : null;
+    return asset && asset.type === "video" ? { duration: asset.duration } : null;
+  };
+
+  // Drop targets for the upper (overlay) tracks: dragging a video onto an
+  // existing lane adds it there; onto the "new track" lane stacks a fresh one.
+  // Works the same for project media and library clips.
+  const overlayDropHandlers = (track: number | "new") => ({
+    onDragOver: (e: React.DragEvent) => {
+      const vid = draggedVideo(e);
+      if (!vid) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = "copy";
+      setAssetDrop(null);
+      setOverlayDrop({ track, t: Math.max(0, timeAt(e.clientX)), len: vid.duration });
+    },
+    onDragLeave: (e: React.DragEvent) => {
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOverlayDrop(null);
+    },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const t = Math.max(0, timeAt(e.clientX));
+      const target = track === "new" ? undefined : track;
+      setOverlayDrop(null);
+      setDropType(null);
+      const lib = draggingLibrary();
+      const libId = draggedLibraryId(e);
+      const projectId = useEditor.getState().projectId;
+      clearAssetDrag();
+      if (libId && lib && lib.type === "video" && projectId) {
+        void importLibraryAsset(projectId, lib)
+          .then((asset) => useEditor.getState().addOverlayClipFromAsset(asset.id, t, target))
+          .catch(() => {});
+        return;
+      }
+      const id = draggedAssetId(e);
+      const asset = id ? useEditor.getState().assets.find((a) => a.id === id) : null;
+      if (id && asset?.type === "video") {
+        useEditor.getState().addOverlayClipFromAsset(id, t, target);
+      }
+    },
+  });
+
   // Drag the panel's top border to resize; the border itself stays as-is,
   // only an invisible grab strip sits on top of it.
   const resize = (e: React.PointerEvent) => {
@@ -354,6 +416,7 @@ export function Timeline() {
           type = asset?.type;
           duration = asset?.duration ?? 0;
         }
+        setDropType(type ?? null);
         if (type !== "video" || !duration) {
           setAssetDrop(null);
           return;
@@ -364,10 +427,16 @@ export function Timeline() {
         );
       }}
       onDragLeave={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setAssetDrop(null);
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+          setAssetDrop(null);
+          setOverlayDrop(null);
+          setDropType(null);
+        }
       }}
       onDrop={(e) => {
         setAssetDrop(null);
+        setOverlayDrop(null);
+        setDropType(null);
         const t = Math.max(0, timeAt(e.clientX));
 
         // A library asset must be copied into the project before it can land.
@@ -447,12 +516,32 @@ export function Timeline() {
           >
           <Ruler pps={pps} width={contentW} onScrub={scrub} />
 
+          {/* Drop a video here to stack it on a brand-new upper track. Appears
+              only while a video is being dragged, like adding a new text lane. */}
+          {dropType === "video" && (
+            <div
+              className={cn(
+                "relative mt-1.5 flex items-center justify-center rounded-lg border-[1.5px] border-dashed transition-colors",
+                overlayDrop?.track === "new"
+                  ? "border-[#0a84ff] bg-[#0a84ff]/10 text-[#0a84ff]"
+                  : "border-input text-muted-foreground"
+              )}
+              style={{ height: OVERLAY_H }}
+              {...overlayDropHandlers("new")}
+            >
+              <span className="pointer-events-none flex items-center gap-1.5 text-[11px] font-medium">
+                <Plus className="size-3.5" /> Drop here for a new track
+              </span>
+            </div>
+          )}
+
           {overlayTracks.map((track) => (
             <div
               key={`ov-${track}`}
               className="relative mt-1.5"
               style={{ height: OVERLAY_H }}
               onPointerDown={deselectIfSelf}
+              {...overlayDropHandlers(track)}
             >
               {overlayClips
                 .filter((c) => c.track === track)
@@ -465,6 +554,16 @@ export function Timeline() {
                     selected={selKeys.has(`overlayClip:${c.id}`)}
                   />
                 ))}
+              {overlayDrop && overlayDrop.track === track && (
+                <div
+                  className="pointer-events-none absolute top-0.5 rounded-lg border-[1.5px] border-dashed border-[#0a84ff]/70 bg-[#0a84ff]/10"
+                  style={{
+                    left: overlayDrop.t * pps,
+                    width: Math.max(10, overlayDrop.len * pps - CLIP_GAP),
+                    height: OVERLAY_H - 4,
+                  }}
+                />
+              )}
             </div>
           ))}
 
@@ -746,7 +845,7 @@ function Ruler({
   const count = Math.ceil(width / (step * pps));
   const ticks = Array.from({ length: count }, (_, i) => i * step);
   return (
-    <div className="relative h-[26px] cursor-ew-resize border-b border-border" onPointerDown={onScrub}>
+    <div className="relative h-[26px] cursor-ew-resize" onPointerDown={onScrub}>
       {ticks.map((t) => (
         <div
           key={t}
@@ -758,6 +857,12 @@ function Ruler({
           </span>
         </div>
       ))}
+      {/* The ruler baseline bleeds past the content's side padding so it runs
+          flush to both window edges, matching the full-width toolbar divider. */}
+      <div
+        className="pointer-events-none absolute bottom-0 h-px bg-border"
+        style={{ left: -PAD_SIDE, right: -PAD_SIDE }}
+      />
     </div>
   );
 }
@@ -977,6 +1082,11 @@ function ClipView({
             />
           ))}
         </div>
+        {selected && (
+          // A blue wash over the whole clip so a multi-selection reads at a
+          // glance, not just from the thin border.
+          <div className="pointer-events-none absolute inset-0 z-[1] bg-[#0a84ff]/25" />
+        )}
         {hidPx > 0 && (
           <div
             className="tl-trim-hidden pointer-events-none absolute inset-y-0 left-0 z-2 border-r border-white/70 bg-black/55"
@@ -1195,6 +1305,24 @@ function OverlayClipView({
 }) {
   const w = Math.max(10, overlayLen(clip) * pps);
 
+  // Same filmstrip as a base clip so an overlay reads as a video, not a
+  // featureless bar — sampled across the clip's trimmed span.
+  const filmstrip = useMemo(() => {
+    if (!asset?.thumbs?.length || !asset.thumbStep) return [];
+    const aspect = (asset.width ?? 16) / Math.max(1, asset.height ?? 9);
+    const imgW = Math.max(24, Math.round((OVERLAY_H - 4) * aspect));
+    const count = Math.min(120, Math.ceil(w / imgW));
+    const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
+    return Array.from({ length: count }, (_, k) => {
+      const at = clip.in + ((k * imgW + imgW / 2) / pps) * speed;
+      const idx = Math.min(
+        asset.thumbs!.length - 1,
+        Math.max(0, Math.floor(at / asset.thumbStep!))
+      );
+      return { src: asset.thumbs![idx], left: k * imgW, width: imgW };
+    });
+  }, [asset, clip.in, clip.speed, w, pps]);
+
   if (!asset) return null;
 
   const onBody = (e: React.PointerEvent) => {
@@ -1247,25 +1375,34 @@ function OverlayClipView({
   return (
     <div
       className={cn(
-        "tl-overlay-clip group absolute top-0.5 cursor-grab overflow-hidden rounded-[7px] bg-gradient-to-b from-violet-500 to-violet-600 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.1)]",
+        "tl-overlay-clip group absolute top-0.5 cursor-grab overflow-hidden rounded-[7px] bg-neutral-200 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]",
         selected && SELECTED_SHADOW,
         clip.hidden && "opacity-40 grayscale"
       )}
       style={{ left: clip.start * pps, width: w, height: OVERLAY_H - 4 }}
       onPointerDown={onBody}
     >
-      {asset.thumbs?.[0] && (
-        <img
-          src={asset.thumbs[0]}
-          alt=""
-          className="pointer-events-none absolute inset-0 size-full object-cover opacity-30"
-        />
+      <div className="tl-filmstrip pointer-events-none absolute inset-0">
+        {filmstrip.map((f, k) => (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            key={k}
+            src={f.src}
+            alt=""
+            draggable={false}
+            className="absolute top-0 h-full object-cover"
+            style={{ left: f.left, width: f.width }}
+          />
+        ))}
+      </div>
+      {selected && (
+        <div className="pointer-events-none absolute inset-0 z-[1] bg-[#0a84ff]/25" />
       )}
-      <span className="pointer-events-none absolute top-[3px] left-2 flex items-center gap-1 text-[9.5px] whitespace-nowrap text-white/90 [text-shadow:0_1px_2px_rgba(0,0,0,0.35)]">
+      <span className="pointer-events-none absolute top-[3px] left-1.5 z-2 flex items-center gap-1 rounded-[4px] bg-black/45 px-1 py-px text-[9px] whitespace-nowrap text-white [text-shadow:0_1px_2px_rgba(0,0,0,0.4)]">
         {clip.muted && <VolumeX className="size-2.5" />}
         {asset.name}
       </span>
-      <span className="pointer-events-none absolute bottom-[3px] left-2 rounded-sm bg-black/30 px-1 text-[8.5px] font-medium text-white/85">
+      <span className="pointer-events-none absolute bottom-[3px] left-1.5 z-2 rounded-[4px] bg-[#0a84ff] px-1 text-[8.5px] font-semibold text-white">
         {label}
       </span>
       <span className={cn(trimHandle, "tl-trim-l left-0")} onPointerDown={onTrimLeft} />
