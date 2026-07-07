@@ -28,27 +28,33 @@ export async function importFromUrl(url: string): Promise<LibraryAsset> {
   if (active >= MAX_ACTIVE) {
     throw new Error("Too many downloads in progress. Try again in a moment.");
   }
+  // Count the slot around the whole operation. mkdtemp is inside the try so a
+  // failure there still releases the slot (else a rejection would leak it and,
+  // after MAX_ACTIVE failures, brick URL import until restart).
   active++;
-  const tmp = await mkdtemp(path.join(os.tmpdir(), "cut-dl-"));
   try {
-    const meta = await runYtDlp(url.trim(), tmp);
-    // Pick the largest media file left behind (the merged output).
-    const names = (await readdir(tmp)).filter((f) => MEDIA_EXT.test(f));
-    if (names.length === 0) throw new Error("Nothing downloadable was found at that URL.");
-    const sized = await Promise.all(
-      names.map(async (n) => ({ n, size: (await stat(path.join(tmp, n))).size }))
-    );
-    const file = sized.sort((a, b) => b.size - a.size)[0].n;
-    const title = (meta.title || "Imported clip").slice(0, 120);
-    return await addDownloaded(path.join(tmp, file), title, {
-      url: meta.webpage_url || url.trim(),
-      title: meta.title,
-      uploader: meta.uploader,
-      uploadDate: meta.upload_date,
-    });
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "cut-dl-"));
+    try {
+      const meta = await runYtDlp(url.trim(), tmp);
+      // Pick the largest media file left behind (the merged output).
+      const names = (await readdir(tmp)).filter((f) => MEDIA_EXT.test(f));
+      if (names.length === 0) throw new Error("Nothing downloadable was found at that URL.");
+      const sized = await Promise.all(
+        names.map(async (n) => ({ n, size: (await stat(path.join(tmp, n))).size }))
+      );
+      const file = sized.sort((a, b) => b.size - a.size)[0].n;
+      const title = (meta.title || "Imported clip").slice(0, 120);
+      return await addDownloaded(path.join(tmp, file), title, {
+        url: meta.webpage_url || url.trim(),
+        title: meta.title,
+        uploader: meta.uploader,
+        uploadDate: meta.upload_date,
+      });
+    } finally {
+      void rm(tmp, { recursive: true, force: true });
+    }
   } finally {
     active--;
-    void rm(tmp, { recursive: true, force: true });
   }
 }
 
