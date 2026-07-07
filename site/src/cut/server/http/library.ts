@@ -3,14 +3,19 @@ import {
   addUpload,
   createFolder,
   deleteFolder,
+  deleteTemplate,
   ensureLibraryThumb,
   libMediaPath,
   listFolders,
   listLibrary,
+  listTemplates,
   moveAsset,
   removeAsset,
   renameFolder,
+  saveTemplate,
   useInProject,
+  useTemplate,
+  type TemplateInput,
 } from "../library";
 import { serveFileRange } from "../serveFile";
 import { importFromUrl } from "../urlImport";
@@ -22,8 +27,41 @@ const caught = (e: unknown, fallback: string) =>
 /** The shared library: reusable media outside any project. */
 export const libraryApi = {
   async list() {
-    const [assets, folders] = await Promise.all([listLibrary(), listFolders()]);
-    return Response.json({ assets, folders });
+    const [assets, folders, templates] = await Promise.all([
+      listLibrary(),
+      listFolders(),
+      listTemplates(),
+    ]);
+    return Response.json({ assets, folders, templates });
+  },
+
+  /** Save a timeline selection as a by-reference template. */
+  async saveTemplate(req: Request) {
+    try {
+      const { projectId, ...input } = (await req.json()) as { projectId: string } & TemplateInput;
+      return Response.json(await saveTemplate(projectId, input));
+    } catch (e) {
+      return caught(e, "Could not save the template.");
+    }
+  },
+
+  /** Materialize a template into a project (copies its media in). */
+  async useTemplate(req: Request, { id }: { id: string }) {
+    try {
+      const { projectId } = (await req.json()) as { projectId: string };
+      return Response.json(await useTemplate(id, projectId));
+    } catch (e) {
+      return caught(e, "Could not add the template.");
+    }
+  },
+
+  async removeTemplate(_req: Request, { id }: { id: string }) {
+    try {
+      await deleteTemplate(id);
+      return Response.json({ ok: true });
+    } catch (e) {
+      return caught(e, "Could not delete the template.");
+    }
   },
 
   /** A sharp, cached still for a library video. */

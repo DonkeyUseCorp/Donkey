@@ -2,7 +2,7 @@
 
 import { apiFetch, apiUrl } from "./api";
 import { useEditor } from "./store";
-import type { MediaAsset } from "./types";
+import type { LibraryTemplate, MediaAsset, TemplateMedia, TemplateSaveInput } from "./types";
 import { mediaUrl } from "./types";
 
 export interface LibrarySource {
@@ -34,6 +34,7 @@ export interface LibraryFolder {
 export interface LibraryData {
   assets: LibraryAsset[];
   folders: LibraryFolder[];
+  templates: LibraryTemplate[];
 }
 
 export const libraryMediaUrl = (fileName: string) =>
@@ -146,6 +147,60 @@ export async function addLibraryAssetToProject(
   if (asset.type === "video") s.addClipFromAsset(asset.id);
   else s.addAudioFromAsset(asset.id);
   return asset;
+}
+
+/** Save the current timeline selection as a by-reference template. */
+export async function saveTemplate(
+  projectId: string,
+  input: TemplateSaveInput
+): Promise<LibraryTemplate> {
+  const res = await apiFetch("/api/cut/library/templates", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ projectId, ...input }),
+  });
+  const body = (await res.json()) as LibraryTemplate & { error?: string };
+  if (!res.ok) throw new Error(body.error ?? "Could not save the template.");
+  return body;
+}
+
+export async function deleteTemplate(id: string): Promise<void> {
+  const res = await apiFetch(`/api/cut/library/templates/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Could not delete the template.");
+}
+
+/** Copy a template's media into the open project and re-materialize its clips,
+ * overlays, and captions at the playhead — everything editable, nothing baked. */
+export async function addTemplateToProject(
+  projectId: string,
+  template: LibraryTemplate
+): Promise<void> {
+  const res = await apiFetch(`/api/cut/library/templates/${template.id}/use`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ projectId }),
+  });
+  const body = (await res.json()) as { media?: TemplateMedia[]; error?: string };
+  if (!res.ok || !body.media) throw new Error(body.error ?? "Could not add the template.");
+
+  const s = useEditor.getState();
+  // Each returned media file (in template.media order) becomes a project asset;
+  // the layer/audio media indices resolve against this array.
+  const assetIds = body.media.map((m) => {
+    const asset: MediaAsset = {
+      id: crypto.randomUUID().slice(0, 8),
+      fileName: m.fileName,
+      name: m.name,
+      type: m.type,
+      duration: m.duration,
+      width: m.width,
+      height: m.height,
+      url: mediaUrl(projectId, m.fileName),
+    };
+    s.addAsset(asset);
+    return asset.id;
+  });
+  s.insertTemplate(template, assetIds, useEditor.getState().currentTime);
 }
 
 /** Copy a project asset into the shared library for reuse. */

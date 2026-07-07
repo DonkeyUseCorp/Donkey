@@ -5,6 +5,7 @@ import type {
   Aspect,
   AudioClip,
   ClipSpan,
+  LibraryTemplate,
   MediaAsset,
   OverlayClip,
   ProjectDoc,
@@ -12,6 +13,10 @@ import type {
   StoredAsset,
   SubtitleCue,
   SubtitlesBlock,
+  TemplateAudio,
+  TemplateLayer,
+  TemplateMedia,
+  TemplateSaveInput,
   TextOverlay,
   VideoClip,
 } from "./types";
@@ -142,6 +147,15 @@ interface EditorState {
   updateCueTransient: (id: string, patch: Partial<SubtitleCue>) => void;
   sortCues: () => void;
   deleteSelection: () => void;
+  /** Timeline window [start, end) spanned by the current selection, or null if
+   * nothing selectable is chosen. */
+  selectionRange: () => { start: number; end: number } | null;
+  /** Build a by-reference template from the current selection (media + the edit
+   * that arranges it, rebased to 0), or null if nothing usable is selected. */
+  selectionTemplate: () => TemplateSaveInput | null;
+  /** Re-materialize a template into the project at `offset` seconds. `assetIds`
+   * maps each `template.media` index to a freshly-added project asset id. */
+  insertTemplate: (template: LibraryTemplate, assetIds: string[], offset: number) => void;
   select: (sel: Selection) => void;
   /** ⌘/⇧-click: add the item to the selection (or remove it if already in),
    * making it the new primary. */
@@ -694,6 +708,176 @@ export const useEditor = create<EditorState>((set, get) => {
         },
         selection: null,
         multiSelection: [],
+      }));
+    },
+
+    selectionRange: () => {
+      const s = get();
+      const sels = (s.multiSelection.length ? s.multiSelection : s.selection ? [s.selection] : [])
+        .filter((x): x is NonNullable<Selection> => !!x);
+      if (sels.length === 0) return null;
+      const spans = getClipSpans(s.clips, s.assets);
+      let start = Infinity;
+      let end = -Infinity;
+      const add = (a: number, b: number) => {
+        start = Math.min(start, a);
+        end = Math.max(end, b);
+      };
+      for (const sel of sels) {
+        if (sel.kind === "clip") {
+          const sp = spans.find((x) => x.clip.id === sel.id);
+          if (sp) add(sp.start, sp.start + sp.len);
+        } else if (sel.kind === "overlayClip") {
+          const c = s.overlayClips.find((x) => x.id === sel.id);
+          if (c) {
+            const sp = c.speed && c.speed > 0 ? c.speed : 1;
+            add(c.start, c.start + Math.max(0.1, (c.out - c.in) / sp));
+          }
+        } else if (sel.kind === "audio") {
+          const c = s.audioClips.find((x) => x.id === sel.id);
+          if (c) add(c.start, c.start + clipLen(c));
+        } else if (sel.kind === "text") {
+          const o = s.overlays.find((x) => x.id === sel.id);
+          if (o) add(o.start, o.end);
+        } else if (sel.kind === "cue") {
+          const c = s.subtitles.cues.find((x) => x.id === sel.id);
+          if (c) add(c.start, c.end);
+        }
+      }
+      return Number.isFinite(start) && end > start ? { start, end } : null;
+    },
+
+    selectionTemplate: () => {
+      const s = get();
+      const sels = (s.multiSelection.length ? s.multiSelection : s.selection ? [s.selection] : [])
+        .filter((x): x is NonNullable<Selection> => !!x);
+      if (sels.length === 0) return null;
+      const range = get().selectionRange();
+      const start0 = range ? range.start : 0;
+      const spans = getClipSpans(s.clips, s.assets);
+
+      // Media is referenced by array index; each source is listed once.
+      const media: TemplateMedia[] = [];
+      const indexByAsset = new Map<string, number>();
+      const mediaFor = (assetId: string): number | null => {
+        const cached = indexByAsset.get(assetId);
+        if (cached != null) return cached;
+        const a = s.assets.find((x) => x.id === assetId);
+        if (!a) return null;
+        const i = media.length;
+        media.push({ fileName: a.fileName, name: a.name, type: a.type, duration: a.duration, width: a.width, height: a.height });
+        indexByAsset.set(assetId, i);
+        return i;
+      };
+
+      const layers: TemplateLayer[] = [];
+      const audio: TemplateAudio[] = [];
+      const texts: TextOverlay[] = [];
+      const cues: SubtitleCue[] = [];
+      for (const sel of sels) {
+        if (sel.kind === "clip") {
+          const sp = spans.find((x) => x.clip.id === sel.id);
+          if (!sp) continue;
+          const mi = mediaFor(sp.clip.assetId);
+          if (mi == null) continue;
+          // Base-track clips re-materialize onto the base track (onBase), so a
+          // template stands up its own video instead of an empty base.
+          layers.push({ media: mi, start: sp.start - start0, in: sp.clip.in, out: sp.clip.out, frame: sp.clip.frame, fit: sp.clip.fit, muted: sp.clip.muted, speed: sp.clip.speed, track: 1, onBase: true });
+        } else if (sel.kind === "overlayClip") {
+          const c = s.overlayClips.find((x) => x.id === sel.id);
+          if (!c) continue;
+          const mi = mediaFor(c.assetId);
+          if (mi == null) continue;
+          layers.push({ media: mi, start: c.start - start0, in: c.in, out: c.out, frame: c.frame, fit: c.fit, muted: c.muted, speed: c.speed, track: c.track + 1 });
+        } else if (sel.kind === "audio") {
+          const c = s.audioClips.find((x) => x.id === sel.id);
+          if (!c) continue;
+          const mi = mediaFor(c.assetId);
+          if (mi == null) continue;
+          audio.push({ media: mi, start: c.start - start0, in: c.in, out: c.out, volume: c.volume, fadeIn: c.fadeIn, fadeOut: c.fadeOut, speed: c.speed });
+        } else if (sel.kind === "text") {
+          const o = s.overlays.find((x) => x.id === sel.id);
+          if (o) texts.push({ ...o, start: o.start - start0, end: o.end - start0 });
+        } else if (sel.kind === "cue") {
+          const c = s.subtitles.cues.find((x) => x.id === sel.id);
+          if (c) cues.push({ ...c, start: c.start - start0, end: c.end - start0 });
+        }
+      }
+      if (media.length === 0 && texts.length === 0 && cues.length === 0) return null;
+      const duration = range
+        ? range.end - range.start
+        : Math.max(0.1, ...texts.map((t) => t.end), ...cues.map((c) => c.end));
+      return { name: "Template", duration, media, layers, audio, texts, cues };
+    },
+
+    insertTemplate: (template, assetIds, offset) => {
+      push();
+      const usable = template.layers.filter((l) => assetIds[l.media]);
+      const baseLayers = usable.filter((l) => l.onBase);
+      const overlayLayers = usable.filter((l) => !l.onBase);
+      // Base clips append (magnetic) at the end of the current base track; the
+      // free-positioned parts (overlays, audio, captions) shift to line up with
+      // that segment. A template with no base clips drops in at the playhead.
+      const shift = baseLayers.length ? totalDuration(get().clips) : Math.max(0, offset);
+      const newClips: VideoClip[] = [...baseLayers]
+        .sort((a, b) => a.start - b.start)
+        .map((l) => ({
+          id: uid(),
+          assetId: assetIds[l.media],
+          in: l.in,
+          out: l.out,
+          muted: l.muted,
+          ...(l.frame ? { frame: l.frame } : {}),
+          ...(l.fit ? { fit: l.fit } : {}),
+          ...(l.speed ? { speed: l.speed } : {}),
+        }));
+      const baseTrack = Math.max(0, ...get().overlayClips.map((c) => c.track));
+      const newOverlays: OverlayClip[] = overlayLayers.map((l) => ({
+        id: uid(),
+        assetId: assetIds[l.media],
+        track: baseTrack + l.track,
+        start: l.start + shift,
+        in: l.in,
+        out: l.out,
+        muted: l.muted,
+        ...(l.frame ? { frame: l.frame } : {}),
+        ...(l.fit ? { fit: l.fit } : {}),
+        ...(l.speed ? { speed: l.speed } : {}),
+      }));
+      const newAudio: AudioClip[] = template.audio
+        .filter((a) => assetIds[a.media])
+        .map((a) => ({
+          id: uid(),
+          assetId: assetIds[a.media],
+          start: a.start + shift,
+          in: a.in,
+          out: a.out,
+          volume: a.volume,
+          ...(a.fadeIn ? { fadeIn: a.fadeIn } : {}),
+          ...(a.fadeOut ? { fadeOut: a.fadeOut } : {}),
+          ...(a.speed ? { speed: a.speed } : {}),
+        }));
+      const newTexts: TextOverlay[] = template.texts.map((o) => ({
+        ...o,
+        id: uid(),
+        start: o.start + shift,
+        end: o.end + shift,
+      }));
+      const newCues: SubtitleCue[] = template.cues.map((c) => ({
+        ...c,
+        id: uid(),
+        start: c.start + shift,
+        end: c.end + shift,
+      }));
+      set((s) => ({
+        clips: [...s.clips, ...newClips],
+        overlayClips: [...s.overlayClips, ...newOverlays],
+        audioClips: [...s.audioClips, ...newAudio],
+        overlays: [...s.overlays, ...newTexts],
+        subtitles: {
+          ...s.subtitles,
+          cues: [...s.subtitles.cues, ...newCues].sort((a, b) => a.start - b.start),
+        },
       }));
     },
 

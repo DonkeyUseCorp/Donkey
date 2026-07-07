@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AudioLines, Blend, EllipsisVertical, Pause, Play, Plus, Scissors, SkipBack, Trash2, Type, VolumeX } from "lucide-react";
+import { AudioLines, Blend, Check, EllipsisVertical, FolderPlus, Loader2, Pause, Play, Plus, Scissors, SkipBack, Trash2, Type, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -19,7 +19,7 @@ import {
   hasAssetDrag,
   hasLibraryDrag,
 } from "@/cut/lib/assetDrag";
-import { importLibraryAsset } from "@/cut/lib/library";
+import { importLibraryAsset, saveTemplate } from "@/cut/lib/library";
 import { startDrag } from "@/cut/lib/drag";
 import { ensurePeaks } from "@/cut/lib/media";
 import { clipLen, clipSpeed, getClipSpans, TIMELINE_H_MAX, totalDuration, useEditor } from "@/cut/lib/store";
@@ -419,6 +419,7 @@ export function Timeline() {
         >
           <Trash2 /> {multiSelection.length > 1 ? `Delete ${multiSelection.length}` : "Delete"}
         </Button>
+        <SaveSelectionButton />
 
         <Transport total={total} />
 
@@ -639,6 +640,50 @@ function HoverLine({
       className="tl-hover-line pointer-events-none absolute top-0 bottom-2 z-6 w-px bg-foreground/30"
       style={{ transform: `translateX(${skimTime * pps}px)` }}
     />
+  );
+}
+
+/**
+ * Saves the current multi-selection as a by-reference library template — the
+ * source media plus the edit that arranges it, never a flattened video. Re-adding
+ * it from the library re-materializes editable clips, overlays, and captions.
+ */
+function SaveSelectionButton() {
+  const multiSelection = useEditor((s) => s.multiSelection);
+  const [state, setState] = useState<"idle" | "saving" | "done">("idle");
+  if (multiSelection.length === 0) return null;
+
+  const save = async () => {
+    const s = useEditor.getState();
+    const input = s.selectionTemplate();
+    if (!s.projectId || !input) return;
+    setState("saving");
+    try {
+      await saveTemplate(s.projectId, input);
+      setState("done");
+      setTimeout(() => setState("idle"), 1800);
+    } catch {
+      setState("idle");
+    }
+  };
+
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      title="Save the selection as a reusable template (kept by reference)"
+      disabled={state === "saving"}
+      onClick={save}
+    >
+      {state === "saving" ? (
+        <Loader2 className="animate-spin" />
+      ) : state === "done" ? (
+        <Check />
+      ) : (
+        <FolderPlus />
+      )}
+      {state === "done" ? "Saved" : "Save template"}
+    </Button>
   );
 }
 

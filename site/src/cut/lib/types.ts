@@ -164,6 +164,58 @@ export interface AudioClip {
   speed?: number;
 }
 
+/**
+ * A reusable timeline selection saved *by reference* — the source media plus
+ * the edit that arranges it, never a flattened video. `layers`/`audio` point at
+ * `media` by array index. Adding it to a project copies the media in and
+ * re-materializes editable clips, overlays, and captions.
+ */
+export interface TemplateMedia {
+  fileName: string;
+  name: string;
+  type: AssetType;
+  duration: number;
+  width?: number;
+  height?: number;
+}
+export interface TemplateLayer {
+  media: number; // index into `media`
+  start: number;
+  in: number;
+  out: number;
+  frame?: FrameRect;
+  fit?: "fit" | "fill";
+  muted: boolean;
+  speed?: number;
+  track: number;
+  /** Came from the base (magnetic) track — re-materializes onto it, not an
+   * overlay track, so a template stands up its own base video. */
+  onBase?: boolean;
+}
+export interface TemplateAudio {
+  media: number;
+  start: number;
+  in: number;
+  out: number;
+  volume: number;
+  fadeIn?: number;
+  fadeOut?: number;
+  speed?: number;
+}
+export interface LibraryTemplate {
+  id: string;
+  name: string;
+  addedAt: number;
+  duration: number;
+  media: TemplateMedia[];
+  layers: TemplateLayer[];
+  audio: TemplateAudio[];
+  texts: TextOverlay[];
+  cues: SubtitleCue[];
+}
+/** What the client sends to save a selection (media are project file names). */
+export type TemplateSaveInput = Omit<LibraryTemplate, "id" | "addedAt">;
+
 export type FontId = "sf" | "serif" | "rounded" | "mono" | "impact";
 
 export interface FontDef {

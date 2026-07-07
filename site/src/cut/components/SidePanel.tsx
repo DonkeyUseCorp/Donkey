@@ -24,13 +24,16 @@ import { clearAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
 import { deleteExport, revealExport } from "@/cut/lib/exportClient";
 import {
   addLibraryAssetToProject,
+  addTemplateToProject,
   deleteFromLibrary,
+  deleteTemplate,
   fetchLibrary,
   moveLibraryAsset,
   saveAssetToLibrary,
   type LibraryAsset,
   type LibraryFolder,
 } from "@/cut/lib/library";
+import type { LibraryTemplate } from "@/cut/lib/types";
 import { CAPTION_LIMIT, normalizeTags } from "@/cut/lib/publish";
 import { useEditor } from "@/cut/lib/store";
 import { formatTime } from "@/cut/lib/time";
@@ -488,6 +491,7 @@ function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string 
 function LibraryPanel({ projectId }: { projectId: string }) {
   const [assets, setAssets] = useState<LibraryAsset[] | null>(null);
   const [folders, setFolders] = useState<LibraryFolder[]>([]);
+  const [templates, setTemplates] = useState<LibraryTemplate[]>([]);
   const [activeFolder, setActiveFolder] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<LibraryAsset | null>(null);
 
@@ -496,8 +500,14 @@ function LibraryPanel({ projectId }: { projectId: string }) {
       .then((d) => {
         setAssets(d.assets);
         setFolders(d.folders);
+        setTemplates(d.templates);
       })
       .catch(() => setAssets([]));
+
+  const removeTemplate = async (id: string) => {
+    setTemplates((prev) => prev.filter((t) => t.id !== id));
+    await deleteTemplate(id).catch(() => void reload());
+  };
 
   useEffect(() => {
     void reload();
@@ -531,6 +541,41 @@ function LibraryPanel({ projectId }: { projectId: string }) {
       <p className="px-4 pb-2 text-[11.5px] leading-relaxed text-muted-foreground">
         Reusable clips & music. Drag onto the timeline, or press + to add a copy.
       </p>
+      {templates.length > 0 && (
+        <div className="px-3.5 pb-3">
+          <div className="mb-1.5 text-[11px] font-semibold text-muted-foreground">Templates</div>
+          <div className="flex flex-col gap-1.5">
+            {templates.map((t) => (
+              <div
+                key={t.id}
+                className="group flex items-center gap-2 rounded-lg border border-border bg-background px-2.5 py-1.5"
+              >
+                <Layers className="size-3.5 shrink-0 text-violet-500" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[12px] font-medium">{t.name}</div>
+                  <div className="text-[10.5px] text-muted-foreground">
+                    {formatTime(t.duration)} · {t.media.length + t.layers.length + t.audio.length} parts
+                  </div>
+                </div>
+                <button
+                  title="Add to this project"
+                  className="grid size-6 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground hover:brightness-110"
+                  onClick={() => void addTemplateToProject(projectId, t)}
+                >
+                  <Plus className="size-3.5" />
+                </button>
+                <button
+                  title="Delete template"
+                  className="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
+                  onClick={() => void removeTemplate(t.id)}
+                >
+                  <Trash2 className="size-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {folders.length > 0 && (
         <div className="flex gap-1.5 overflow-x-auto px-3.5 pb-2.5">
           {[{ id: null as string | null, name: "All" }, ...folders].map((f) => (

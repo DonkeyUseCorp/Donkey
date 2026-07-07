@@ -39,9 +39,60 @@ export interface LibraryFolder {
   createdAt: number;
 }
 
+/**
+ * A saved timeline selection kept *by reference*: the source media plus the
+ * edit that arranges it (trims, layout regions, overlays, captions), never a
+ * flattened video. Re-adding it copies the media into the project and
+ * re-materializes editable clips. Its media files live privately in the library
+ * (not as loose assets), so a template stays whole even if the project it came
+ * from is deleted. `layers`/`audio` reference `media` by array index.
+ */
+export interface TemplateMedia {
+  fileName: string; // private copy inside the library media folder
+  name: string;
+  type: "video" | "audio";
+  duration: number;
+  width?: number;
+  height?: number;
+}
+export interface TemplateLayer {
+  media: number; // index into template.media
+  start: number;
+  in: number;
+  out: number;
+  frame?: { x: number; y: number; w: number; h: number };
+  fit?: "fit" | "fill";
+  muted: boolean;
+  speed?: number;
+  track: number;
+  onBase?: boolean; // re-materializes onto the base track rather than an overlay
+}
+export interface TemplateAudio {
+  media: number;
+  start: number;
+  in: number;
+  out: number;
+  volume: number;
+  fadeIn?: number;
+  fadeOut?: number;
+  speed?: number;
+}
+export interface LibraryTemplate {
+  id: string;
+  name: string;
+  addedAt: number;
+  duration: number;
+  media: TemplateMedia[];
+  layers: TemplateLayer[];
+  audio: TemplateAudio[];
+  texts: unknown[]; // opaque TextOverlay[] round-tripped for the client
+  cues: unknown[]; // opaque SubtitleCue[]
+}
+
 interface LibraryIndex {
   assets: LibraryAsset[];
   folders?: LibraryFolder[];
+  templates?: LibraryTemplate[];
 }
 
 export function libMediaPath(fileName: string) {
@@ -334,4 +385,81 @@ export async function moveAsset(assetId: string, folderId: string | null) {
   }
   asset.folderId = folderId;
   await writeIndex(idx);
+}
+
+// --- Templates: reusable selections saved by reference (see LibraryTemplate). ---
+
+/** What the client sends to save a selection: source media (project files) plus
+ * the edit that arranges them, referencing media by array index. */
+export interface TemplateInput {
+  name: string;
+  duration: number;
+  media: { fileName: string; name: string; type: "video" | "audio"; duration: number; width?: number; height?: number }[];
+  layers: TemplateLayer[];
+  audio: TemplateAudio[];
+  texts: unknown[];
+  cues: unknown[];
+}
+
+export async function listTemplates(): Promise<LibraryTemplate[]> {
+  const idx = await readIndex();
+  return (idx.templates ?? []).slice().sort((a, b) => b.addedAt - a.addedAt);
+}
+
+/** Save a selection as a template: copy each source into the library privately
+ * and store the edit that references it. */
+export async function saveTemplate(projectId: string, input: TemplateInput): Promise<LibraryTemplate> {
+  if (!(await readProject(projectId))) throw new Error("Project not found.");
+  if (!input.media?.length && !input.texts?.length && !input.cues?.length) {
+    throw new Error("Nothing to save.");
+  }
+  await mkdir(LIB_MEDIA, { recursive: true });
+  const media: TemplateMedia[] = [];
+  for (const m of input.media) {
+    const src = projectMediaPath(projectId, m.fileName);
+    if (!(await exists(src))) throw new Error("Media file not found in project.");
+    const dest = await freeName(m.fileName);
+    await copyFile(src, libMediaPath(dest));
+    media.push({ fileName: dest, name: m.name, type: m.type, duration: m.duration, width: m.width, height: m.height });
+  }
+  const template: LibraryTemplate = {
+    id: crypto.randomUUID().slice(0, 8),
+    name: (input.name || "Template").trim().slice(0, 80),
+    addedAt: Date.now(),
+    duration: input.duration,
+    media,
+    layers: input.layers ?? [],
+    audio: input.audio ?? [],
+    texts: input.texts ?? [],
+    cues: input.cues ?? [],
+  };
+  const idx = await readIndex();
+  idx.templates = [...(idx.templates ?? []), template];
+  await writeIndex(idx);
+  return template;
+}
+
+/** Materialize a template into a project: copy its media in and hand the client
+ * the project file names (in template media order) plus the stored edit. */
+export async function useTemplate(templateId: string, projectId: string) {
+  if (!(await readProject(projectId))) throw new Error("Project not found.");
+  const idx = await readIndex();
+  const template = (idx.templates ?? []).find((x) => x.id === templateId);
+  if (!template) throw new Error("Template not found.");
+  const media: TemplateMedia[] = [];
+  for (const m of template.media) {
+    const dest = await uniqueName(m.fileName, (n) => projectMediaPath(projectId, n));
+    await copyFile(libMediaPath(m.fileName), projectMediaPath(projectId, dest));
+    media.push({ ...m, fileName: dest });
+  }
+  return { template, media };
+}
+
+export async function deleteTemplate(id: string) {
+  const idx = await readIndex();
+  const template = (idx.templates ?? []).find((x) => x.id === id);
+  idx.templates = (idx.templates ?? []).filter((x) => x.id !== id);
+  await writeIndex(idx);
+  // The media copies are private to this template, so removing them is safe.
+  for (const m of template?.media ?? []) await rm(libMediaPath(m.fileName), { force: true });
 }
