@@ -538,9 +538,6 @@ function LibraryPanel({ projectId }: { projectId: string }) {
   return (
     <>
       <PanelHead title="Library" />
-      <p className="px-4 pb-2 text-[11.5px] leading-relaxed text-muted-foreground">
-        Reusable clips & music. Drag onto the timeline, or press + to add a copy.
-      </p>
       {templates.length > 0 && (
         <div className="px-3.5 pb-3">
           <div className="mb-1.5 text-[11px] font-semibold text-muted-foreground">Templates</div>

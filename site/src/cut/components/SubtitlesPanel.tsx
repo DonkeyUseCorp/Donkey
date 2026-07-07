@@ -188,10 +188,6 @@ function EmptyState({
         <div className="flex flex-col items-center gap-1 pt-4 pb-1 text-center">
           <Captions className="mb-1 size-6 text-muted-foreground" />
           <p className="text-[13px] font-semibold">Subtitles from your audio</p>
-          <p className="text-[11.5px] leading-relaxed text-muted-foreground">
-            Transcribed with Apple speech recognition, entirely on this Mac —
-            your audio never leaves it.
-          </p>
         </div>
       )}
       <div className="relative">
@@ -208,12 +204,21 @@ function EmptyState({
         </select>
         <ChevronDown className="pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2 text-muted-foreground" />
       </div>
-      <Button className="sub-generate w-full" onClick={onGenerate}>
+      <Button
+        className="sub-generate w-full"
+        onClick={onGenerate}
+        title="Transcribe your audio into plain captions, word for word"
+      >
         <Captions data-icon="inline-start" />
         {status === "empty" || status === "error" ? "Try again" : "Generate subtitles"}
       </Button>
       {status !== "empty" && (
-        <Button variant="outline" className="sub-social w-full" onClick={onCaptions}>
+        <Button
+          variant="outline"
+          className="sub-social w-full"
+          onClick={onCaptions}
+          title="Rewrite the captions for social — tighter lines, emoji, and a stronger hook"
+        >
           <Sparkles data-icon="inline-start" />
           Social captions
         </Button>

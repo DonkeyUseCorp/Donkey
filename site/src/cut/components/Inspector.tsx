@@ -206,31 +206,30 @@ function LayoutButtons({
   rect: FrameRect;
   onPick: (frame: FrameRect | undefined, fit: "fit" | "fill") => void;
 }) {
-  const current = regionLabel(rect);
+  const currentId =
+    (Object.keys(LAYOUTS) as LayoutId[]).find((id) => LAYOUTS[id].label === regionLabel(rect)) ??
+    "full";
   return (
-    <div className="flex flex-col gap-1.5 py-1">
+    <div className="flex items-center justify-between gap-2 py-1">
       <span className="text-[11.5px] font-medium text-muted-foreground">Layout</span>
-      <div className="grid grid-cols-3 gap-1">
-        {(Object.keys(LAYOUTS) as LayoutId[]).map((id) => {
-          const L = LAYOUTS[id];
-          const active = current === L.label;
-          return (
-            <button
-              key={id}
-              aria-pressed={active}
-              className={cn(
-                "rounded-md border px-2 py-1 text-[11px] font-medium transition-colors",
-                active
-                  ? "border-violet-500 bg-violet-500/10 text-foreground"
-                  : "border-input text-muted-foreground hover:text-foreground"
-              )}
-              onClick={() => onPick(id === "full" ? undefined : { ...L.rect }, L.fit)}
-            >
-              {L.label}
-            </button>
-          );
-        })}
-      </div>
+      <Select
+        value={currentId}
+        onValueChange={(id) => {
+          const L = LAYOUTS[id as LayoutId];
+          onPick(id === "full" ? undefined : { ...L.rect }, L.fit);
+        }}
+      >
+        <SelectTrigger className="h-8 w-36 text-[12px]">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {(Object.keys(LAYOUTS) as LayoutId[]).map((id) => (
+            <SelectItem key={id} value={id} className="text-[12px]">
+              {LAYOUTS[id].label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 }

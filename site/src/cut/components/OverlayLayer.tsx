@@ -33,7 +33,12 @@ export function OverlayLayer({ stageWidth }: { stageWidth: number }) {
       {overlays.map((o) => {
         const selected = selection?.kind === "text" && selection.id === o.id;
         const inRange = t >= o.start && t <= o.end;
-        if (!inRange && !selected) return null;
+        // While hover-scrubbing (paused, skimmer active) the preview must show the
+        // exact frame under the skimmer — a selected but out-of-frame title can't
+        // leak into a frame it isn't part of. Off the skimmer, a selected title
+        // stays visible (ghosted) so it can still be positioned and edited.
+        const scrubbing = !playing && skimTime !== null;
+        if (!inRange && (scrubbing || !selected)) return null;
         return (
           <OverlayItem
             key={o.id}
