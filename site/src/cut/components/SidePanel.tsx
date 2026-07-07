@@ -526,7 +526,7 @@ function LibraryPanel({ projectId }: { projectId: string }) {
     <>
       <PanelHead title="Library" />
       {templates.length > 0 && (
-        <div className="px-3.5 pb-3">
+        <div className="shrink-0 px-3.5 pb-3">
           <div className="mb-1.5 text-[11px] font-semibold text-muted-foreground">Templates</div>
           <div className="flex flex-col gap-1.5">
             {templates.map((t) => (
@@ -561,7 +561,7 @@ function LibraryPanel({ projectId }: { projectId: string }) {
         </div>
       )}
       {folders.length > 0 && (
-        <div className="flex gap-1.5 overflow-x-auto px-3.5 pb-2.5">
+        <div className="flex shrink-0 gap-1.5 overflow-x-auto px-3.5 pb-2.5">
           {[{ id: null as string | null, name: "All" }, ...folders].map((f) => (
             <button
               key={f.id ?? "all"}
@@ -583,7 +583,7 @@ function LibraryPanel({ projectId }: { projectId: string }) {
           <Loader2 className="size-4 animate-spin" />
         </div>
       ) : shown.length === 0 ? null : (
-        <div className="grid grid-cols-2 content-start gap-2.5 overflow-y-auto px-3.5 pb-3.5">
+        <div className="grid min-h-0 flex-1 grid-cols-2 content-start gap-2.5 overflow-y-auto px-3.5 pb-3.5">
           {shown.map((a) => (
             <LibraryCard
               key={a.id}
