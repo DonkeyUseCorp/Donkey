@@ -338,11 +338,6 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
           rect={rectOf(clip)}
           onPick={(frame, fit) => updateClip(clip.id, { frame, fit })}
         />
-        <p className="mt-2.5 text-[11.5px] leading-relaxed text-muted-foreground">
-          {isFullRect(rectOf(clip))
-            ? "Put this clip in half the frame (Top/Bottom or Left/Right) and drop another video on an overlay track to play two at once."
-            : "Sharing the frame — drag the box in the preview to move or resize it. Pick Full to fill the frame again."}
-        </p>
       </div>
     </>
   );

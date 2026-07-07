@@ -369,9 +369,7 @@ export function ProjectsHome() {
         </div>
       ) : shown.length === 0 ? (
         <div className="grid place-items-center py-16 text-center text-sm text-muted-foreground">
-          {openFolder === null
-            ? "Every project lives in a folder. Open one above."
-            : "This folder is empty. Drag projects onto it to fill it."}
+          {openFolder === null ? "No projects yet." : "Empty folder."}
         </div>
       ) : view === "gallery" ? (
         <Marquee
