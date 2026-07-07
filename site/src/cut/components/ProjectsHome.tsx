@@ -7,7 +7,6 @@ import {
   Copy,
   Film,
   Folder,
-  FolderPlus,
   LayoutGrid,
   List,
   Loader2,
@@ -16,7 +15,6 @@ import {
   Plus,
   Trash2,
   Unplug,
-  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -48,16 +46,13 @@ import { apiFetch, apiUrl } from "@/cut/lib/api";
 import { formatTime } from "@/cut/lib/time";
 import { mediaUrl, type ProjectFolder, type ProjectSummary } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
+import { buildDragGhost, FolderCrumb, FolderShelf, Marquee } from "./desktopFolders";
 
 type View = "gallery" | "list";
 
+// A dragged selection is carried as a JSON array of project ids, so one drag can
+// move a whole marquee-selected collection into a folder.
 const PROJECT_MIME = "application/x-cut-project";
-
-function formatBytes(n: number): string {
-  if (n <= 0) return "0 MB";
-  const mb = n / (1024 * 1024);
-  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
-}
 
 function formatDate(ts: number) {
   const d = new Date(ts);
@@ -77,7 +72,8 @@ export function ProjectsHome() {
   const router = useRouter();
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [folders, setFolders] = useState<ProjectFolder[]>([]);
-  const [activeFolder, setActiveFolder] = useState<string | null>(null);
+  const [openFolder, setOpenFolder] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [view, setView] = useState<View>("gallery");
   const [createOpen, setCreateOpen] = useState(false);
   const [renaming, setRenaming] = useState<ProjectSummary | null>(null);
@@ -122,7 +118,6 @@ export function ProjectsHome() {
     if (res.ok) {
       const f = (await res.json()) as ProjectFolder;
       setFolders((prev) => [...prev, f]);
-      setActiveFolder(f.id);
     }
   };
 
@@ -138,18 +133,30 @@ export function ProjectsHome() {
   const deleteFolder = async (id: string) => {
     setFolders((prev) => prev.filter((f) => f.id !== id));
     setProjects((prev) => (prev ?? []).map((p) => (p.folderId === id ? { ...p, folderId: null } : p)));
-    if (activeFolder === id) setActiveFolder(null);
+    if (openFolder === id) setOpenFolder(null);
     await apiFetch(`/api/cut/projects/folders/${id}`, { method: "DELETE" }).catch(() => void refresh());
   };
 
-  const moveProject = async (id: string, folderId: string | null) => {
-    setProjects((prev) => (prev ?? []).map((p) => (p.id === id ? { ...p, folderId } : p)));
-    await apiFetch(`/api/cut/projects/${id}/move`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ folderId }),
-    }).catch(() => void refresh());
-  };
+  // Move a collection of projects into a folder (or out to the root, folderId
+  // null). Optimistic; reconciles from disk on any failure.
+  const moveProjects = useCallback(
+    async (ids: string[], folderId: string | null) => {
+      if (ids.length === 0) return;
+      const idset = new Set(ids);
+      setProjects((prev) => (prev ?? []).map((p) => (idset.has(p.id) ? { ...p, folderId } : p)));
+      setSelected(new Set());
+      await Promise.all(
+        ids.map((id) =>
+          apiFetch(`/api/cut/projects/${id}/move`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ folderId }),
+          })
+        )
+      ).catch(() => void refresh());
+    },
+    [refresh]
+  );
 
   useEffect(() => {
     void refresh();
@@ -216,50 +223,93 @@ export function ProjectsHome() {
     }
   };
 
-  const shown = (projects ?? []).filter((p) =>
-    activeFolder === null ? true : (p.folderId ?? null) === activeFolder
-  );
+  const all = projects ?? [];
+  const shown = all.filter((p) => (p.folderId ?? null) === openFolder);
+  const openFolderName = folders.find((f) => f.id === openFolder)?.name;
+  const hasContent = all.length > 0 || folders.length > 0;
+
+  // Begin a project drag. Dragging a member of the current selection carries the
+  // whole selection; dragging anything else drags (and selects) just that item.
+  const onProjectDragStart = (e: React.DragEvent, p: ProjectSummary) => {
+    const ids = selected.has(p.id) && selected.size > 0 ? Array.from(selected) : [p.id];
+    if (!selected.has(p.id)) setSelected(new Set([p.id]));
+    e.dataTransfer.setData(PROJECT_MIME, JSON.stringify(ids));
+    e.dataTransfer.effectAllowed = "move";
+    const ghost = buildDragGhost(ids.length, ids.length > 1 ? `${ids.length} projects` : p.name);
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, 18, 16);
+    setTimeout(() => ghost.remove(), 0);
+  };
+
+  const toggleSelect = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   return (
     <div className="mx-auto w-full max-w-6xl px-10 py-9">
-      {!engineDown && projects && projects.length > 0 && (
+      {!engineDown && projects && hasContent && (
         <div className="mb-5 flex items-center justify-between">
-          <h1 className="text-lg font-semibold tracking-tight">Recent videos</h1>
-          <div className="flex rounded-lg border border-border bg-card p-0.5">
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Gallery view"
-              aria-pressed={view === "gallery"}
-              className={cn(view === "gallery" && "bg-muted text-foreground")}
-              onClick={() => switchView("gallery")}
-            >
-              <LayoutGrid />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="List view"
-              aria-pressed={view === "list"}
-              className={cn(view === "list" && "bg-muted text-foreground")}
-              onClick={() => switchView("list")}
-            >
-              <List />
-            </Button>
-          </div>
+          {openFolder === null ? (
+            <h1 className="text-lg font-semibold tracking-tight">Recent videos</h1>
+          ) : (
+            <FolderCrumb
+              root="Projects"
+              name={openFolderName ?? "Folder"}
+              mime={PROJECT_MIME}
+              onBack={() => {
+                setSelected(new Set());
+                setOpenFolder(null);
+              }}
+              onDropOut={(ids) => void moveProjects(ids, null)}
+            />
+          )}
+          {projects.length > 0 && (
+            <div className="flex rounded-lg border border-border bg-card p-0.5">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Gallery view"
+                aria-pressed={view === "gallery"}
+                className={cn(view === "gallery" && "bg-muted text-foreground")}
+                onClick={() => switchView("gallery")}
+              >
+                <LayoutGrid />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="List view"
+                aria-pressed={view === "list"}
+                className={cn(view === "list" && "bg-muted text-foreground")}
+                onClick={() => switchView("list")}
+              >
+                <List />
+              </Button>
+            </div>
+          )}
         </div>
       )}
 
-      {!engineDown && projects && (projects.length > 0 || folders.length > 0) && (
-        <ProjectFolderBar
+      {!engineDown && projects && openFolder === null && hasContent && (
+        <FolderShelf
           folders={folders}
-          active={activeFolder}
-          projects={projects}
-          onSelect={setActiveFolder}
+          mime={PROJECT_MIME}
+          statOf={(id) => {
+            const items = all.filter((p) => (p.folderId ?? null) === id);
+            return { count: items.length, size: items.reduce((n, p) => n + (p.sizeBytes ?? 0), 0) };
+          }}
+          onOpen={(id) => {
+            setSelected(new Set());
+            setOpenFolder(id);
+          }}
           onCreate={createFolder}
           onRename={renameFolder}
           onDelete={deleteFolder}
-          onDropProject={(pid, fid) => void moveProject(pid, fid)}
+          onDropIds={(ids, fid) => void moveProjects(ids, fid)}
         />
       )}
 
@@ -298,7 +348,7 @@ export function ProjectsHome() {
         <div className="grid place-items-center py-24 text-muted-foreground">
           <Loader2 className="size-5 animate-spin" />
         </div>
-      ) : projects.length === 0 ? (
+      ) : !hasContent ? (
         <div className="grid min-h-[60vh] place-items-center">
           <div className="flex flex-col items-center gap-4 text-center">
             <div className="grid size-14 place-items-center rounded-2xl bg-muted">
@@ -317,18 +367,41 @@ export function ProjectsHome() {
             </Button>
           </div>
         </div>
+      ) : shown.length === 0 ? (
+        <div className="grid place-items-center py-16 text-center text-sm text-muted-foreground">
+          {openFolder === null
+            ? "Every project lives in a folder. Open one above."
+            : "This folder is empty. Drag projects onto it to fill it."}
+        </div>
       ) : view === "gallery" ? (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-5">
+        <Marquee
+          className="grid min-h-[42vh] grid-cols-[repeat(auto-fill,minmax(190px,1fr))] content-start gap-5"
+          selected={selected}
+          setSelected={setSelected}
+        >
           {shown.map((p) => (
             <div
               key={p.id}
+              data-sel-id={p.id}
               className="group cursor-pointer"
               draggable
-              onDragStart={(e) => e.dataTransfer.setData(PROJECT_MIME, p.id)}
-              onClick={() => router.push(`/p/${p.id}`)}
+              onDragStart={(e) => onProjectDragStart(e, p)}
+              onClick={(e) => {
+                if (e.shiftKey || e.metaKey) {
+                  e.preventDefault();
+                  toggleSelect(p.id);
+                  return;
+                }
+                router.push(`/p/${p.id}`);
+              }}
             >
               {/* Vertical 9:16 tile — the project is mobile video, show it that way. */}
-              <div className="relative grid aspect-[9/16] place-items-center overflow-hidden rounded-2xl border border-border bg-muted transition-shadow group-hover:shadow-[0_6px_28px_rgba(0,0,0,0.12)]">
+              <div
+                className={cn(
+                  "relative grid aspect-[9/16] place-items-center overflow-hidden rounded-2xl border bg-muted transition-shadow group-hover:shadow-[0_6px_28px_rgba(0,0,0,0.12)]",
+                  selected.has(p.id) ? "border-primary ring-2 ring-primary" : "border-border"
+                )}
+              >
                 <CardPreview project={p} />
                 <span className="absolute top-2 left-2 max-w-[70%] truncate rounded-lg bg-black/55 px-2 py-1 text-[11px] font-medium text-white backdrop-blur-sm">
                   {p.name}
@@ -345,7 +418,7 @@ export function ProjectsHome() {
                     setRenaming(p);
                   }}
                   onDuplicate={() => void duplicate(p)}
-                  onMove={(folderId) => void moveProject(p.id, folderId)}
+                  onMove={(folderId) => void moveProjects([p.id], folderId)}
                   onDelete={() => setDeleting(p)}
                 />
               </div>
@@ -355,7 +428,7 @@ export function ProjectsHome() {
               </div>
             </div>
           ))}
-        </div>
+        </Marquee>
       ) : (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
           <div className="grid grid-cols-[1fr_90px_70px_110px_40px] items-center gap-3 border-b border-border bg-muted/50 px-4 py-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
@@ -368,10 +441,21 @@ export function ProjectsHome() {
           {shown.map((p) => (
             <div
               key={p.id}
-              className="group grid cursor-pointer grid-cols-[1fr_90px_70px_110px_40px] items-center gap-3 border-b border-border px-4 py-2.5 text-sm last:border-b-0 hover:bg-muted/50"
+              data-sel-id={p.id}
+              className={cn(
+                "group grid cursor-pointer grid-cols-[1fr_90px_70px_110px_40px] items-center gap-3 border-b border-border px-4 py-2.5 text-sm last:border-b-0 hover:bg-muted/50",
+                selected.has(p.id) && "bg-primary/10 hover:bg-primary/15"
+              )}
               draggable
-              onDragStart={(e) => e.dataTransfer.setData(PROJECT_MIME, p.id)}
-              onClick={() => router.push(`/p/${p.id}`)}
+              onDragStart={(e) => onProjectDragStart(e, p)}
+              onClick={(e) => {
+                if (e.shiftKey || e.metaKey) {
+                  e.preventDefault();
+                  toggleSelect(p.id);
+                  return;
+                }
+                router.push(`/p/${p.id}`);
+              }}
             >
               <span className="flex min-w-0 items-center gap-2.5">
                 <Film className="size-4 shrink-0 text-muted-foreground" />
@@ -392,7 +476,7 @@ export function ProjectsHome() {
                   setRenaming(p);
                 }}
                 onDuplicate={() => void duplicate(p)}
-                onMove={(folderId) => void moveProject(p.id, folderId)}
+                onMove={(folderId) => void moveProjects([p.id], folderId)}
                 onDelete={() => setDeleting(p)}
               />
             </div>
@@ -578,192 +662,5 @@ function ProjectMenu({
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
-  );
-}
-
-/** The folder rail on the projects home: All + each folder with its project
- * count and total size, drop targets for dragged projects, and inline
- * create / rename / delete. */
-function ProjectFolderBar({
-  folders,
-  active,
-  projects,
-  onSelect,
-  onCreate,
-  onRename,
-  onDelete,
-  onDropProject,
-}: {
-  folders: ProjectFolder[];
-  active: string | null;
-  projects: ProjectSummary[] | null;
-  onSelect: (id: string | null) => void;
-  onCreate: (name: string) => void | Promise<void>;
-  onRename: (id: string, name: string) => void | Promise<void>;
-  onDelete: (id: string) => void | Promise<void>;
-  onDropProject: (projectId: string, folderId: string | null) => void;
-}) {
-  const [creating, setCreating] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
-  const [over, setOver] = useState<string | "all" | null>(null);
-
-  const list = projects ?? [];
-  const stat = (folderId: string | null) => {
-    const items = list.filter((p) => (p.folderId ?? null) === folderId);
-    const size = items.reduce((n, p) => n + (p.sizeBytes ?? 0), 0);
-    return { count: items.length, size };
-  };
-  const total = { count: list.length, size: list.reduce((n, p) => n + (p.sizeBytes ?? 0), 0) };
-
-  const dropHandlers = (folderId: string | null, key: string) => ({
-    onDragOver: (e: React.DragEvent) => {
-      if (!Array.from(e.dataTransfer.types).includes(PROJECT_MIME)) return;
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
-      setOver(key);
-    },
-    onDragLeave: () => setOver((o) => (o === key ? null : o)),
-    onDrop: (e: React.DragEvent) => {
-      const id = e.dataTransfer.getData(PROJECT_MIME);
-      setOver(null);
-      if (id) {
-        e.preventDefault();
-        onDropProject(id, folderId);
-      }
-    },
-  });
-
-  const chipClass = (selected: boolean, isOver: boolean) =>
-    cn(
-      "flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-      isOver
-        ? "border-primary bg-primary/20 text-primary"
-        : selected
-          ? "border-primary bg-primary/10 text-primary"
-          : "border-border text-muted-foreground hover:text-foreground"
-    );
-
-  return (
-    <div className="mb-5 flex flex-wrap items-center gap-2">
-      <button
-        className={chipClass(active === null, over === "all")}
-        onClick={() => onSelect(null)}
-        {...dropHandlers(null, "all")}
-      >
-        All
-        <span className="tabular-nums opacity-60">
-          {total.count} · {formatBytes(total.size)}
-        </span>
-      </button>
-
-      {folders.map((f) => {
-        const s = stat(f.id);
-        return editingId === f.id ? (
-          <span key={f.id} className="flex items-center gap-1">
-            <Input
-              autoFocus
-              value={draft}
-              className="h-7 w-32 text-xs"
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && draft.trim()) {
-                  void onRename(f.id, draft.trim());
-                  setEditingId(null);
-                } else if (e.key === "Escape") setEditingId(null);
-              }}
-            />
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={() => {
-                if (draft.trim()) void onRename(f.id, draft.trim());
-                setEditingId(null);
-              }}
-            >
-              <Check />
-            </Button>
-          </span>
-        ) : (
-          <span key={f.id} className="group/pf flex items-center gap-0.5">
-            <button
-              className={chipClass(active === f.id, over === f.id)}
-              onClick={() => onSelect(f.id)}
-              onDoubleClick={() => {
-                setDraft(f.name);
-                setEditingId(f.id);
-              }}
-              {...dropHandlers(f.id, f.id)}
-            >
-              <Folder className="size-3" />
-              {f.name}
-              <span className="tabular-nums opacity-60">
-                {s.count} · {formatBytes(s.size)}
-              </span>
-            </button>
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Folder options"
-                    className="size-6 text-muted-foreground opacity-0 group-hover/pf:opacity-100"
-                  />
-                }
-              >
-                <MoreHorizontal className="size-3.5" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
-                <DropdownMenuItem
-                  onClick={() => {
-                    setDraft(f.name);
-                    setEditingId(f.id);
-                  }}
-                >
-                  <Pencil /> Rename
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem variant="destructive" onClick={() => void onDelete(f.id)}>
-                  <Trash2 /> Delete folder
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </span>
-        );
-      })}
-
-      {creating ? (
-        <span className="flex items-center gap-1">
-          <Input
-            autoFocus
-            value={draft}
-            placeholder="Folder name"
-            className="h-7 w-32 text-xs"
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && draft.trim()) {
-                void onCreate(draft.trim());
-                setDraft("");
-                setCreating(false);
-              } else if (e.key === "Escape") setCreating(false);
-            }}
-          />
-          <Button size="icon-sm" variant="ghost" onClick={() => setCreating(false)}>
-            <X />
-          </Button>
-        </span>
-      ) : (
-        <button
-          className="flex shrink-0 items-center gap-1 rounded-full border border-dashed border-border px-3 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-          onClick={() => {
-            setDraft("");
-            setCreating(true);
-          }}
-        >
-          <FolderPlus className="size-3.5" /> New folder
-        </button>
-      )}
-    </div>
   );
 }
