@@ -106,7 +106,10 @@ export function Marquee({
   );
 
   const onPointerDown = (e: React.PointerEvent) => {
-    if (e.button !== 0 || e.target !== e.currentTarget) return;
+    // Start a rubber-band from any empty pixel of the canvas. Only a press that
+    // lands on a card (draggable, marked data-sel-id) is left alone so the card
+    // can drag; everything else — gaps, margins, the open area below — sweeps.
+    if (e.button !== 0 || (e.target as HTMLElement).closest("[data-sel-id]")) return;
     const startX = e.clientX;
     const startY = e.clientY;
     const additive = e.shiftKey || e.metaKey;
@@ -142,11 +145,11 @@ export function Marquee({
   };
 
   return (
-    <div ref={ref} className={className} onPointerDown={onPointerDown}>
-      {children}
+    <div ref={ref} className="relative min-h-[68vh] flex-1" onPointerDown={onPointerDown}>
+      <div className={className}>{children}</div>
       {rect && (
         <div
-          className="pointer-events-none fixed z-50 rounded-[3px] border border-primary/70 bg-primary/15"
+          className="pointer-events-none fixed z-50 rounded-[3px] border-2 border-[#0a84ff]"
           style={{ left: rect.left, top: rect.top, width: rect.width, height: rect.height }}
         />
       )}
