@@ -138,8 +138,9 @@ function loadAudioDuration(url: string): Promise<number> {
   });
 }
 
-// Filmstrip frames render at 60 CSS px tall — capture at 2× for Retina.
-const THUMB_H = 120;
+// Filmstrip frames render at 60 CSS px tall — capture at 3× so they stay sharp
+// on Retina (and when a tall timeline scales the row up).
+const THUMB_H = 180;
 
 async function makeThumbs(url: string, duration: number) {
   const v = await loadVideoMeta(url);
@@ -158,7 +159,7 @@ async function makeThumbs(url: string, duration: number) {
     const t = Math.min(duration - 0.05, (i + 0.5) * thumbStep);
     await seekTo(v, Math.max(0, t));
     ctx.drawImage(v, 0, 0, w, THUMB_H);
-    thumbs.push(canvas.toDataURL("image/jpeg", 0.85));
+    thumbs.push(canvas.toDataURL("image/jpeg", 0.92));
   }
   v.removeAttribute("src");
   v.load();
