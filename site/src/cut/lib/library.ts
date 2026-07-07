@@ -1,6 +1,7 @@
 "use client";
 
 import { apiFetch, apiUrl } from "./api";
+import { enrichAsset } from "./media";
 import { useEditor } from "./store";
 import type { LibraryTemplate, MediaAsset, TemplateMedia, TemplateSaveInput } from "./types";
 import { mediaUrl } from "./types";
@@ -39,10 +40,6 @@ export interface LibraryData {
 
 export const libraryMediaUrl = (fileName: string) =>
   apiUrl(`/api/cut/library/media/${encodeURIComponent(fileName)}`);
-
-/** A sharp, server-generated poster for a library video. */
-export const libraryThumbUrl = (id: string) =>
-  apiUrl(`/api/cut/library/thumb/${encodeURIComponent(id)}`);
 
 export async function fetchLibrary(): Promise<LibraryData> {
   const res = await apiFetch("/api/cut/library");
@@ -134,6 +131,9 @@ export async function importLibraryAsset(
     url: mediaUrl(projectId, body.fileName),
   };
   useEditor.getState().addAsset(asset);
+  // Generate filmstrip thumbnails / waveform peaks so the clip renders like any
+  // other on the timeline (project uploads get this via the editor on add).
+  void enrichAsset(asset);
   return asset;
 }
 

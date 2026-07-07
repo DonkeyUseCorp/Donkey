@@ -9,7 +9,6 @@ import { exists, uniqueName, writeJsonAtomic } from "./util";
 /** The shared library: reusable media that lives outside any project. */
 export const LIBRARY_ROOT = path.join(cutDataRoot(), "library");
 const LIB_MEDIA = path.join(LIBRARY_ROOT, "media");
-const LIB_THUMBS = path.join(LIBRARY_ROOT, "thumbs");
 const INDEX = path.join(LIBRARY_ROOT, "library.json");
 
 /** Where a URL-imported asset came from, kept as notes on the asset. */
@@ -102,13 +101,6 @@ export function libMediaPath(fileName: string) {
   return path.join(LIB_MEDIA, safe);
 }
 
-export function libThumbPath(id: string) {
-  assertLocalRuntime();
-  const safe = id.replace(/[^a-zA-Z0-9_-]/g, "");
-  if (!safe) throw new Error("Invalid id.");
-  return path.join(LIB_THUMBS, `${safe}.jpg`);
-}
-
 async function readIndex(): Promise<LibraryIndex> {
   assertLocalRuntime();
   let raw: string;
@@ -186,54 +178,6 @@ async function probe(filePath: string) {
   return { duration: Number.isFinite(duration) ? duration : 0, width, height };
 }
 
-function ffmpeg(args: string[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const p = spawn("ffmpeg", args);
-    const timer = setTimeout(() => p.kill("SIGKILL"), 30_000);
-    let err = "";
-    p.stderr.on("data", (d) => (err = (err + d.toString()).slice(-1000)));
-    p.on("error", reject);
-    p.on("close", (code) => {
-      clearTimeout(timer);
-      code === 0
-        ? resolve()
-        : reject(new Error(err.split("\n").slice(-2).join("\n") || "ffmpeg failed."));
-    });
-  });
-}
-
-// Concurrent thumbnail requests for the same asset share one ffmpeg run.
-const thumbInFlight = new Map<string, Promise<string | null>>();
-
-/** A sharp still for a library video, generated with ffmpeg and cached to disk.
- * Audio assets have none. Returns the jpg path, or null when unavailable. */
-export async function ensureLibraryThumb(id: string): Promise<string | null> {
-  const asset = await getAsset(id);
-  if (!asset || asset.type !== "video") return null;
-  const dest = libThumbPath(id);
-  if (await exists(dest)) return dest;
-  const running = thumbInFlight.get(id);
-  if (running) return running;
-  const job = (async () => {
-    try {
-      await mkdir(LIB_THUMBS, { recursive: true });
-      // A frame a beat in avoids black leading frames; scale down but stay sharp.
-      const at = Math.min(1, Math.max(0.1, (asset.duration || 2) / 10));
-      await ffmpeg([
-        "-y", "-ss", at.toFixed(2), "-i", libMediaPath(asset.fileName),
-        "-frames:v", "1", "-vf", "scale='min(640,iw)':-2", "-q:v", "3", dest,
-      ]);
-      return dest;
-    } catch {
-      return null;
-    } finally {
-      thumbInFlight.delete(id);
-    }
-  })();
-  thumbInFlight.set(id, job);
-  return job;
-}
-
 async function freeName(original: string) {
   const base = path.basename(original).replace(/[^\w.\-() ]+/g, "_").slice(-80);
   return uniqueName(base, libMediaPath);
@@ -267,8 +211,6 @@ export async function register(
   const idx = await readIndex();
   idx.assets.push(asset);
   await writeIndex(idx);
-  // Warm the thumbnail so the tile paints without waiting on the serve path.
-  void ensureLibraryThumb(asset.id).catch(() => {});
   return asset;
 }
 
@@ -329,7 +271,6 @@ export async function removeAsset(id: string) {
   idx.assets = idx.assets.filter((a) => a.id !== id);
   await writeIndex(idx);
   await rm(libMediaPath(asset.fileName), { force: true });
-  await rm(libThumbPath(id), { force: true });
 }
 
 export function getAsset(id: string) {

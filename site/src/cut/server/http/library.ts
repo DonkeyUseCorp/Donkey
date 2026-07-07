@@ -4,7 +4,6 @@ import {
   createFolder,
   deleteFolder,
   deleteTemplate,
-  ensureLibraryThumb,
   libMediaPath,
   listFolders,
   listLibrary,
@@ -61,17 +60,6 @@ export const libraryApi = {
       return Response.json({ ok: true });
     } catch (e) {
       return caught(e, "Could not delete the template.");
-    }
-  },
-
-  /** A sharp, cached still for a library video. */
-  async serveThumb(req: Request, { id }: { id: string }) {
-    try {
-      const p = await ensureLibraryThumb(decodeURIComponent(id));
-      if (!p) return new Response("No thumbnail.", { status: 404 });
-      return serveFileRange(p, req);
-    } catch {
-      return new Response("No thumbnail.", { status: 404 });
     }
   },
 
