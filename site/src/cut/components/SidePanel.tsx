@@ -425,19 +425,6 @@ function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string 
           >
             <Plus className="size-3" />
           </span>
-          {asset.type === "video" && (
-            <span
-              role="button"
-              title="Add as an overlay track (PiP / composite)"
-              className="grid size-5 scale-75 cursor-pointer place-items-center rounded-full bg-violet-600 text-white transition-transform group-hover:scale-100 hover:brightness-110"
-              onClick={(e) => {
-                e.stopPropagation();
-                useEditor.getState().addOverlayClipFromAsset(asset.id);
-              }}
-            >
-              <Layers className="size-3" />
-            </span>
-          )}
         </span>
         <span className="absolute top-1 right-1 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
           <span

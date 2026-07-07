@@ -23,14 +23,43 @@ import { importLibraryAsset, saveTemplate } from "@/cut/lib/library";
 import { startDrag } from "@/cut/lib/drag";
 import { ensurePeaks } from "@/cut/lib/media";
 import { clipLen, clipSpeed, getClipSpans, TIMELINE_H_MAX, totalDuration, useEditor } from "@/cut/lib/store";
+import type { VideoTrackPlacement } from "@/cut/lib/store";
 import { formatTime, formatTimecode } from "@/cut/lib/time";
-import { rectOf, regionLabel } from "@/cut/lib/types";
 import type { AudioClip, ClipSpan, MediaAsset, OverlayClip, SubtitleCue, TextOverlay } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
 
 const VIDEO_H = 64;
-const OVERLAY_H = 44;
+const OVERLAY_H = VIDEO_H; // upper video tracks match the base row height
 const AUDIO_H = 44;
+
+/** Where a dragged video clip can land. Re-exported name for the store's
+ * placement union (existing track / base row / newly-inserted track). */
+type TrackTarget = VideoTrackPlacement;
+
+/** Encode/decode a placement in a row's `data-drop` attribute. */
+function placementAttr(place: TrackTarget): string {
+  return place.kind === "base"
+    ? "base"
+    : place.kind === "track"
+      ? `track:${place.track}`
+      : `insert:${place.level}`;
+}
+function parsePlacement(raw: string): TrackTarget | null {
+  if (raw === "base") return { kind: "base" };
+  const [k, n] = raw.split(":");
+  if (k === "track") return { kind: "track", track: Number(n) };
+  if (k === "insert") return { kind: "insert", level: Number(n) };
+  return null;
+}
+/** Two placements point at the same drop. */
+function samePlacement(a: TrackTarget | null, b: TrackTarget | null): boolean {
+  if (!a || !b || a.kind !== b.kind) return false;
+  return a.kind === "track"
+    ? a.track === (b as { track: number }).track
+    : a.kind === "insert"
+      ? a.level === (b as { level: number }).level
+      : true;
+}
 const TEXT_H = 28;
 const SUB_H = 22;
 const PAD_END = 320;
@@ -121,12 +150,16 @@ export function Timeline() {
   // Insertion preview while dragging a media asset onto the video track:
   // `index` is the span it lands before (spans.length = end), `len` its length.
   const [assetDrop, setAssetDrop] = useState<{ index: number; len: number } | null>(null);
-  // Kind of media currently being dragged over the timeline (drives the
-  // "drop for a new track" lane) and the pending overlay-track drop preview.
+  // Kind of external media being dragged over the timeline (audio vs video).
   const [dropType, setDropType] = useState<"video" | "audio" | null>(null);
+  // A video clip is being dragged (internal or external): reveals the
+  // between-track insertion zones so a drop can open a brand-new track anywhere.
+  const [videoDragging, setVideoDragging] = useState(false);
+  // The pending drop preview: which track/gap, at what time, for how long.
   const [overlayDrop, setOverlayDrop] = useState<
-    { track: number | "new"; t: number; len: number } | null
+    { target: TrackTarget; t: number; len: number } | null
   >(null);
+  const insertMode = videoDragging || dropType === "video";
   const dragInfo = useMemo<ClipDrag | null>(() => {
     if (!clipDrag) return null;
     const from = spans.findIndex((sp) => sp.clip.id === clipDrag.id);
@@ -149,6 +182,52 @@ export function Timeline() {
     const from = sp.findIndex((x) => x.clip.id === id);
     if (from >= 0) s.moveClip(id, dropIndex(sp, from, dx / s.pxPerSec));
   }, []);
+
+  // Which drop the cursor is over: an upper track, the base row, or a gap
+  // between/above/below tracks that would open a new one. Hit-test live via
+  // elementFromPoint — rows and gap zones carry a `data-drop` placement.
+  const resolveDropTrack = useCallback((clientX: number, clientY: number): TrackTarget => {
+    const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+    const zone = el?.closest<HTMLElement>("[data-drop]");
+    const parsed = zone ? parsePlacement(zone.dataset.drop!) : null;
+    if (parsed) return parsed;
+    // Above every row → a new top track.
+    const first = innerRef.current?.querySelector<HTMLElement>("[data-drop]");
+    if (first && clientY < first.getBoundingClientRect().top) {
+      const top = Math.max(0, ...useEditor.getState().overlayClips.map((c) => c.track));
+      return { kind: "insert", level: top + 1 };
+    }
+    return { kind: "base" };
+  }, []);
+
+  // Drive the drop preview while a clip is dragged across tracks: highlight the
+  // target track, base slot, or a between-track insertion line.
+  const previewCross = useCallback((target: TrackTarget | null, start = 0, len = 0) => {
+    if (target === null) return setOverlayDrop(null);
+    setClipDrag(null);
+    setOverlayDrop({ target, t: start, len });
+  }, []);
+
+  // Releasing a base clip anywhere but the base row lifts it out onto that track
+  // (or a new one); the base row itself is a plain reorder (via onClipDrop).
+  const onBaseCrossDrop = useCallback(
+    (id: string, target: TrackTarget, start: number) => {
+      previewCross(null);
+      if (target.kind === "base") return;
+      useEditor.getState().dropVideoClip({ kind: "base", id }, target, start);
+    },
+    [previewCross]
+  );
+
+  // Releasing an overlay clip anywhere: another track, a new inserted track, or
+  // down into the base row.
+  const onOverlayCrossDrop = useCallback(
+    (id: string, target: TrackTarget, start: number) => {
+      previewCross(null);
+      useEditor.getState().dropVideoClip({ kind: "overlay", id }, target, start);
+    },
+    [previewCross]
+  );
 
   // Title tracks: overlays carry a `lane`; used lanes compact to contiguous
   // display rows, so empty tracks disappear on their own.
@@ -340,10 +419,10 @@ export function Timeline() {
     return asset && asset.type === "video" ? { duration: asset.duration } : null;
   };
 
-  // Drop targets for the upper (overlay) tracks: dragging a video onto an
-  // existing lane adds it there; onto the "new track" lane stacks a fresh one.
+  // Drop targets for the upper tracks and between-track gaps: dragging a video
+  // onto a lane adds it there; onto a gap opens a fresh track at that z-level.
   // Works the same for project media and library clips.
-  const overlayDropHandlers = (track: number | "new") => ({
+  const overlayDropHandlers = (place: TrackTarget) => ({
     onDragOver: (e: React.DragEvent) => {
       const vid = draggedVideo(e);
       if (!vid) return;
@@ -351,7 +430,8 @@ export function Timeline() {
       e.stopPropagation();
       e.dataTransfer.dropEffect = "copy";
       setAssetDrop(null);
-      setOverlayDrop({ track, t: Math.max(0, timeAt(e.clientX)), len: vid.duration });
+      setDropType("video"); // keep the insertion zones lit however the drag entered
+      setOverlayDrop({ target: place, t: Math.max(0, timeAt(e.clientX)), len: vid.duration });
     },
     onDragLeave: (e: React.DragEvent) => {
       if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOverlayDrop(null);
@@ -360,7 +440,6 @@ export function Timeline() {
       e.preventDefault();
       e.stopPropagation();
       const t = Math.max(0, timeAt(e.clientX));
-      const target = track === "new" ? undefined : track;
       setOverlayDrop(null);
       setDropType(null);
       const lib = draggingLibrary();
@@ -369,14 +448,14 @@ export function Timeline() {
       clearAssetDrag();
       if (libId && lib && lib.type === "video" && projectId) {
         void importLibraryAsset(projectId, lib)
-          .then((asset) => useEditor.getState().addOverlayClipFromAsset(asset.id, t, target))
+          .then((asset) => useEditor.getState().addVideoFromAsset(asset.id, place, t))
           .catch(() => {});
         return;
       }
       const id = draggedAssetId(e);
       const asset = id ? useEditor.getState().assets.find((a) => a.id === id) : null;
       if (id && asset?.type === "video") {
-        useEditor.getState().addOverlayClipFromAsset(id, t, target);
+        useEditor.getState().addVideoFromAsset(id, place, t);
       }
     },
   });
@@ -391,6 +470,27 @@ export function Timeline() {
         useEditor.getState().setTimelineH(Math.min(max, h0 - dy));
       },
     });
+  };
+
+  // A thin drop line in the gap above a track row: dropping here opens a brand
+  // new track at z-level `level`. Straddles the gap so a drop near a row edge
+  // inserts, while the row's middle still lands on that track.
+  const insertZone = (level: number) => {
+    const active = samePlacement(overlayDrop?.target ?? null, { kind: "insert", level });
+    return (
+      <div
+        data-drop={`insert:${level}`}
+        className="absolute inset-x-0 -top-[9px] z-20 flex h-[18px] items-center"
+        {...overlayDropHandlers({ kind: "insert", level })}
+      >
+        <div
+          className={cn(
+            "h-[3px] w-full rounded-full transition-colors",
+            active ? "bg-[#0a84ff]" : "bg-[#0a84ff]/25"
+          )}
+        />
+      </div>
+    );
   };
 
   return (
@@ -516,33 +616,16 @@ export function Timeline() {
           >
           <Ruler pps={pps} width={contentW} onScrub={scrub} />
 
-          {/* Drop a video here to stack it on a brand-new upper track. Appears
-              only while a video is being dragged, like adding a new text lane. */}
-          {dropType === "video" && (
-            <div
-              className={cn(
-                "relative mt-1.5 flex items-center justify-center rounded-lg border-[1.5px] border-dashed transition-colors",
-                overlayDrop?.track === "new"
-                  ? "border-[#0a84ff] bg-[#0a84ff]/10 text-[#0a84ff]"
-                  : "border-input text-muted-foreground"
-              )}
-              style={{ height: OVERLAY_H }}
-              {...overlayDropHandlers("new")}
-            >
-              <span className="pointer-events-none flex items-center gap-1.5 text-[11px] font-medium">
-                <Plus className="size-3.5" /> Drop here for a new track
-              </span>
-            </div>
-          )}
-
           {overlayTracks.map((track) => (
             <div
               key={`ov-${track}`}
               className="relative mt-1.5"
               style={{ height: OVERLAY_H }}
+              data-drop={placementAttr({ kind: "track", track })}
               onPointerDown={deselectIfSelf}
-              {...overlayDropHandlers(track)}
+              {...overlayDropHandlers({ kind: "track", track })}
             >
+              {insertMode && insertZone(track + 1)}
               {overlayClips
                 .filter((c) => c.track === track)
                 .map((c) => (
@@ -552,14 +635,18 @@ export function Timeline() {
                     asset={assets.find((x) => x.id === c.assetId)}
                     pps={pps}
                     selected={selKeys.has(`overlayClip:${c.id}`)}
+                    resolveTarget={resolveDropTrack}
+                    onCrossMove={previewCross}
+                    onCrossDrop={onOverlayCrossDrop}
+                    onDragActive={setVideoDragging}
                   />
                 ))}
-              {overlayDrop && overlayDrop.track === track && (
+              {samePlacement(overlayDrop?.target ?? null, { kind: "track", track }) && (
                 <div
                   className="pointer-events-none absolute top-0.5 rounded-lg border-[1.5px] border-dashed border-[#0a84ff]/70 bg-[#0a84ff]/10"
                   style={{
-                    left: overlayDrop.t * pps,
-                    width: Math.max(10, overlayDrop.len * pps - CLIP_GAP),
+                    left: overlayDrop!.t * pps,
+                    width: Math.max(10, overlayDrop!.len * pps - CLIP_GAP),
                     height: OVERLAY_H - 4,
                   }}
                 />
@@ -567,11 +654,27 @@ export function Timeline() {
             </div>
           ))}
 
-          <div className="relative mt-1.5" style={{ height: VIDEO_H }} onPointerDown={deselectIfSelf}>
+          <div
+            className="relative mt-1.5"
+            style={{ height: VIDEO_H }}
+            data-drop="base"
+            onPointerDown={deselectIfSelf}
+          >
+            {insertMode && insertZone(1)}
             {spans.length === 0 && (
               <div className="pointer-events-none sticky left-0 flex h-full w-[calc(100vw-40px)] max-w-[900px] items-center justify-center gap-1.5 rounded-xl border-[1.5px] border-dashed border-input text-xs font-medium text-muted-foreground">
                 <Plus className="size-3.5" /> Add media to this project
               </div>
+            )}
+            {samePlacement(overlayDrop?.target ?? null, { kind: "base" }) && (
+              <div
+                className="pointer-events-none absolute top-0.5 rounded-lg border-[1.5px] border-dashed border-[#0a84ff]/70 bg-[#0a84ff]/10"
+                style={{
+                  left: overlayDrop!.t * pps,
+                  width: Math.max(10, overlayDrop!.len * pps - CLIP_GAP),
+                  height: VIDEO_H - 4,
+                }}
+              />
             )}
             {dragInfo && (
               <div
@@ -608,6 +711,10 @@ export function Timeline() {
                 scrollRef={scrollRef}
                 onDrag={onClipDrag}
                 onDrop={onClipDrop}
+                resolveTarget={resolveDropTrack}
+                onCrossMove={previewCross}
+                onCrossDrop={onBaseCrossDrop}
+                onDragActive={setVideoDragging}
               />
             ))}
             {/* Cross-dissolve markers sit over the overlap between two clips. */}
@@ -915,6 +1022,10 @@ function ClipView({
   scrollRef,
   onDrag,
   onDrop,
+  resolveTarget,
+  onCrossMove,
+  onCrossDrop,
+  onDragActive,
 }: {
   span: ClipSpan;
   index: number;
@@ -928,6 +1039,14 @@ function ClipView({
   scrollRef: React.RefObject<HTMLDivElement | null>;
   onDrag: (id: string, dx: number, dy: number) => void;
   onDrop: (id: string, dx: number | null) => void;
+  /** Which drop the given screen point is over (track / base / insert gap). */
+  resolveTarget: (clientX: number, clientY: number) => TrackTarget;
+  /** Preview a cross-track drop (null clears it). */
+  onCrossMove: (target: TrackTarget | null, start?: number, len?: number) => void;
+  /** Commit a cross-track drop of this clip at `start`. */
+  onCrossDrop: (id: string, target: TrackTarget, start: number) => void;
+  /** Toggle the between-track insertion zones while this clip is dragging. */
+  onDragActive: (active: boolean) => void;
 }) {
   // Left-trim keeps the box and its frames pinned: the handle sweeps through
   // the clip and the leading area dims as "hidden"; release collapses it.
@@ -987,9 +1106,12 @@ function ClipView({
     const sc0 = el?.scrollLeft ?? 0;
     let effDx = 0;
     let live = false;
+    let target: TrackTarget = { kind: "base" };
+    let dropStart = span.start;
     startDrag(e, {
       onMove: (dx, dy, ev) => {
         if (!live && Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+        if (!live) onDragActive(true);
         live = true;
         if (el) {
           const r = el.getBoundingClientRect();
@@ -997,9 +1119,22 @@ function ClipView({
           else if (ev.clientX < r.left + 36) el.scrollLeft -= 14;
         }
         effDx = dx + ((el?.scrollLeft ?? sc0) - sc0);
-        onDrag(clip.id, effDx, Math.max(-26, Math.min(14, dy)));
+        dropStart = Math.max(0, span.start + effDx / pps);
+        // On the base row it's a reorder; over an upper track or a gap it lifts.
+        target = resolveTarget(ev.clientX, ev.clientY);
+        if (target.kind === "base") {
+          onCrossMove(null);
+          onDrag(clip.id, effDx, Math.max(-26, Math.min(14, dy)));
+        } else {
+          onCrossMove(target, dropStart, span.len);
+        }
       },
-      onUp: () => onDrop(clip.id, live ? effDx : null),
+      onUp: () => {
+        onDragActive(false);
+        if (!live) return onDrop(clip.id, null);
+        if (target.kind === "base") onDrop(clip.id, effDx);
+        else onCrossDrop(clip.id, target, dropStart);
+      },
     });
   };
 
@@ -1297,11 +1432,19 @@ function OverlayClipView({
   asset,
   pps,
   selected,
+  resolveTarget,
+  onCrossMove,
+  onCrossDrop,
+  onDragActive,
 }: {
   clip: OverlayClip;
   asset: MediaAsset | undefined;
   pps: number;
   selected: boolean;
+  resolveTarget: (clientX: number, clientY: number) => TrackTarget;
+  onCrossMove: (target: TrackTarget | null, start?: number, len?: number) => void;
+  onCrossDrop: (id: string, target: TrackTarget, start: number) => void;
+  onDragActive: (active: boolean) => void;
 }) {
   const w = Math.max(10, overlayLen(clip) * pps);
 
@@ -1333,11 +1476,30 @@ function OverlayClipView({
     const s = useEditor.getState();
     s.select({ kind: "overlayClip", id: clip.id });
     s.seek(clip.start + (e.clientX - e.currentTarget.getBoundingClientRect().left) / pps);
-    s.pushHistory();
     const start0 = clip.start;
+    let live = false;
+    let target: TrackTarget = { kind: "track", track: clip.track };
+    let dropStart = clip.start;
     startDrag(e, {
-      onMove: (dx) =>
-        s.updateOverlayClipTransient(clip.id, { start: Math.max(0, start0 + dx / pps) }),
+      onMove: (dx, dy, ev) => {
+        if (!live && Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+        if (!live) {
+          s.pushHistory();
+          onDragActive(true);
+        }
+        live = true;
+        dropStart = Math.max(0, start0 + dx / pps);
+        s.updateOverlayClipTransient(clip.id, { start: dropStart });
+        target = resolveTarget(ev.clientX, ev.clientY);
+        // Staying on its own track is a plain slide; anything else previews a move.
+        if (samePlacement(target, { kind: "track", track: clip.track })) onCrossMove(null);
+        else onCrossMove(target, dropStart, overlayLen(clip));
+      },
+      onUp: () => {
+        onDragActive(false);
+        onCrossMove(null);
+        if (live) onCrossDrop(clip.id, target, dropStart);
+      },
     });
   };
 
@@ -1370,12 +1532,10 @@ function OverlayClipView({
     });
   };
 
-  const label = regionLabel(rectOf(clip));
-
   return (
     <div
       className={cn(
-        "tl-overlay-clip group absolute top-0.5 cursor-grab overflow-hidden rounded-[7px] bg-neutral-200 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]",
+        "tl-overlay-clip group absolute top-0.5 cursor-grab overflow-hidden rounded-lg bg-neutral-200 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]",
         selected && SELECTED_SHADOW,
         clip.hidden && "opacity-40 grayscale"
       )}
@@ -1398,13 +1558,19 @@ function OverlayClipView({
       {selected && (
         <div className="pointer-events-none absolute inset-0 z-[1] bg-[#0a84ff]/25" />
       )}
-      <span className="pointer-events-none absolute top-[3px] left-1.5 z-2 flex items-center gap-1 rounded-[4px] bg-black/45 px-1 py-px text-[9px] whitespace-nowrap text-white [text-shadow:0_1px_2px_rgba(0,0,0,0.4)]">
-        {clip.muted && <VolumeX className="size-2.5" />}
-        {asset.name}
-      </span>
-      <span className="pointer-events-none absolute bottom-[3px] left-1.5 z-2 rounded-[4px] bg-[#0a84ff] px-1 text-[8.5px] font-semibold text-white">
-        {label}
-      </span>
+      {clip.muted && (
+        <span className="tl-mute-chip absolute bottom-1 left-1 z-2 grid size-[18px] place-items-center rounded-[5px] bg-black/70 text-white" title="Muted">
+          <VolumeX className="size-3" />
+        </span>
+      )}
+      {(clip.speed ?? 1) !== 1 && (
+        <span
+          className="tl-speed-chip absolute right-1.5 bottom-1 z-2 rounded-[5px] bg-black/70 px-1 py-px font-mono text-[9.5px] tabular-nums text-white"
+          title={`${clip.speed}× speed`}
+        >
+          {+(clip.speed ?? 1).toFixed(2)}×
+        </span>
+      )}
       <span className={cn(trimHandle, "tl-trim-l left-0")} onPointerDown={onTrimLeft} />
       <span className={cn(trimHandle, "tl-trim-r right-0")} onPointerDown={onTrimRight} />
     </div>

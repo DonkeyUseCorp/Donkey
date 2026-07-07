@@ -29,6 +29,22 @@ const uid = () => crypto.randomUUID().slice(0, 8);
 
 const MIN_LEN = 0.1;
 
+/** Where a video clip lands when dropped: an existing upper track, the magnetic
+ * base row, or a brand-new track inserted at z-level `level` (every upper track
+ * at or above it shifts up one to make room). Upper-track numbers are 1-based,
+ * higher = closer to the top; `level` = maxTrack+1 is a new top track. */
+export type VideoTrackPlacement =
+  | { kind: "track"; track: number }
+  | { kind: "base" }
+  | { kind: "insert"; level: number };
+
+/** Open a slot for an inserted track: every upper track at or above `level`
+ * shifts up one. A no-op for non-insert placements. */
+const shiftTracksUp = (clips: OverlayClip[], place: VideoTrackPlacement): OverlayClip[] =>
+  place.kind === "insert"
+    ? clips.map((c) => (c.track >= place.level ? { ...c, track: c.track + 1 } : c))
+    : clips;
+
 /** A single-item selection: the primary that drives the Inspector plus the
  * one-element multiSelection that bulk actions (delete, copy) and the timeline
  * highlight read. Every mutation that selects its own result funnels through
@@ -120,9 +136,17 @@ interface EditorState {
   updateClipTransient: (id: string, patch: Partial<VideoClip>) => void;
   updateAudioTransient: (id: string, patch: Partial<AudioClip>) => void;
   moveClip: (id: string, toIndex: number) => void;
-  /** Add a video asset as a full-frame overlay clip. Without `track` it lands on
-   * a new top track; pass a track to drop it onto an existing upper track. */
-  addOverlayClipFromAsset: (assetId: string, start?: number, track?: number) => void;
+  /** Add a video asset to the timeline at a placement: an upper track, the base
+   * row, or a freshly inserted track. Used by media / library drops. */
+  addVideoFromAsset: (assetId: string, place: VideoTrackPlacement, start: number) => void;
+  /** Move an existing clip (base or upper) to a placement, preserving its
+   * trim/region/speed. Inserting a track renumbers the ones above it; dropping on
+   * the base row converts it back to a magnetic clip. Owns its own history. */
+  dropVideoClip: (
+    source: { kind: "base" | "overlay"; id: string },
+    place: VideoTrackPlacement,
+    start: number
+  ) => void;
   updateOverlayClip: (id: string, patch: Partial<OverlayClip>) => void;
   updateOverlayClipTransient: (id: string, patch: Partial<OverlayClip>) => void;
   /** iMovie "Detach Audio": lift the selected clip's sound onto the
@@ -571,27 +595,101 @@ export const useEditor = create<EditorState>((set, get) => {
       set({ clips: next });
     },
 
-    addOverlayClipFromAsset: (assetId, start, track) => {
+    addVideoFromAsset: (assetId, place, start) => {
       const asset = get().assets.find((a) => a.id === assetId);
       if (!asset || asset.type !== "video") return;
       push();
-      // Land on the requested upper track, or the next free one above the
-      // highest existing overlay when none is given (a brand-new top track).
-      const nextFree = Math.max(0, ...get().overlayClips.map((c) => c.track)) + 1;
-      const clip: OverlayClip = {
+      if (place.kind === "base") {
+        const v: VideoClip = { id: uid(), assetId, in: 0, out: asset.duration, muted: false };
+        set((s) => {
+          const spans = getClipSpans(s.clips, s.assets);
+          const at = spans.filter((sp) => sp.start + sp.len / 2 <= start).length;
+          const clips = [...s.clips];
+          clips.splice(Math.max(0, Math.min(at, clips.length)), 0, v);
+          return { clips, ...sole({ kind: "clip", id: v.id }) };
+        });
+        return;
+      }
+      // Full-frame by default: covers the base ("topmost plays"); the inspector
+      // regions it (split half / corner PiP).
+      const track = place.kind === "insert" ? place.level : place.track;
+      const ov: OverlayClip = {
         id: uid(),
         assetId,
-        track: track && track >= 1 ? track : nextFree,
-        start: Math.max(0, start ?? get().currentTime),
+        track,
+        start: Math.max(0, start),
         in: 0,
         out: asset.duration,
         muted: false,
-        // Full-frame by default: covers the base ("topmost plays"). A layout
-        // preset in the inspector regions it (split half / corner PiP).
       };
       set((s) => ({
-        overlayClips: [...s.overlayClips, clip],
-        ...sole({ kind: "overlayClip", id: clip.id }),
+        overlayClips: [...shiftTracksUp(s.overlayClips, place), ov],
+        ...sole({ kind: "overlayClip", id: ov.id }),
+      }));
+    },
+
+    dropVideoClip: (source, place, start) => {
+      const s = get();
+      const src =
+        source.kind === "base"
+          ? s.clips.find((c) => c.id === source.id)
+          : s.overlayClips.find((c) => c.id === source.id);
+      if (!src) return;
+      // Overlay source already snapshotted history on drag-start (it live-moved);
+      // a base source hasn't been mutated yet, so snapshot now.
+      if (source.kind === "base") push();
+      const v = {
+        assetId: src.assetId,
+        in: src.in,
+        out: src.out,
+        muted: src.muted,
+        hidden: src.hidden,
+        frame: src.frame,
+        fit: src.fit,
+        speed: src.speed,
+      };
+
+      if (place.kind === "base") {
+        if (source.kind === "base") return; // base reorder is handled by moveClip
+        const clip: VideoClip = { id: uid(), ...v };
+        set((st) => {
+          const spans = getClipSpans(st.clips, st.assets);
+          const at = spans.filter((sp) => sp.start + sp.len / 2 <= start).length;
+          const clips = [...st.clips];
+          clips.splice(Math.max(0, Math.min(at, clips.length)), 0, clip);
+          return {
+            clips,
+            overlayClips: st.overlayClips.filter((c) => c.id !== source.id),
+            ...sole({ kind: "clip", id: clip.id }),
+          };
+        });
+        return;
+      }
+
+      const track = place.kind === "insert" ? place.level : place.track;
+      if (source.kind === "overlay") {
+        set((st) => {
+          const shifted =
+            place.kind === "insert"
+              ? st.overlayClips.map((c) =>
+                  c.id !== source.id && c.track >= place.level ? { ...c, track: c.track + 1 } : c
+                )
+              : st.overlayClips;
+          return {
+            overlayClips: shifted.map((c) =>
+              c.id === source.id ? { ...c, track, start: Math.max(0, start) } : c
+            ),
+            ...sole({ kind: "overlayClip", id: source.id }),
+          };
+        });
+        return;
+      }
+
+      const ov: OverlayClip = { id: uid(), ...v, track, start: Math.max(0, start) };
+      set((st) => ({
+        clips: st.clips.filter((c) => c.id !== source.id),
+        overlayClips: [...shiftTracksUp(st.overlayClips, place), ov],
+        ...sole({ kind: "overlayClip", id: ov.id }),
       }));
     },
 
@@ -652,6 +750,28 @@ export const useEditor = create<EditorState>((set, get) => {
           });
           return;
         }
+      }
+
+      // An overlay clip selected: slice it in place, like the base track.
+      if (selection?.kind === "overlayClip") {
+        const c = get().overlayClips.find((x) => x.id === selection.id);
+        if (c) {
+          const sp = c.speed && c.speed > 0 ? c.speed : 1;
+          const eff = (c.out - c.in) / sp;
+          if (t > c.start + 0.05 && t < c.start + eff - 0.05) {
+            push();
+            const cutIn = c.in + (t - c.start) * sp;
+            const left: OverlayClip = { ...c, out: cutIn };
+            const right: OverlayClip = { ...c, id: uid(), start: t, in: cutIn };
+            set((s) => {
+              const idx = s.overlayClips.findIndex((x) => x.id === c.id);
+              const next = [...s.overlayClips];
+              next.splice(idx, 1, left, right);
+              return { overlayClips: next, ...sole({ kind: "overlayClip", id: right.id }) };
+            });
+          }
+        }
+        return;
       }
 
       const spans = getClipSpans(clips, assets);
