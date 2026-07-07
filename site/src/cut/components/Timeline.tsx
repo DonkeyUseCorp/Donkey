@@ -1539,7 +1539,7 @@ function OverlayClipView({
         selected && SELECTED_SHADOW,
         clip.hidden && "opacity-40 grayscale"
       )}
-      style={{ left: clip.start * pps, width: w, height: OVERLAY_H - 4 }}
+      style={{ left: clip.start * pps, width: Math.max(10, w - CLIP_GAP), height: OVERLAY_H - 4 }}
       onPointerDown={onBody}
     >
       <div className="tl-filmstrip pointer-events-none absolute inset-0">
