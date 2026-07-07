@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { usePlayback } from "@/cut/hooks/usePlayback";
 import { startDrag } from "@/cut/lib/drag";
 import { getClipSpans, useEditor } from "@/cut/lib/store";
-import { FRAME, type Aspect, type ClipSpan, type MediaAsset, type VideoClip } from "@/cut/lib/types";
+import { FRAME, isFullRect, rectOf, type Aspect, type ClipSpan, type FrameRect, type MediaAsset, type VideoClip } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
 import { OverlayLayer, SubtitleLayer } from "./OverlayLayer";
 
@@ -19,7 +19,9 @@ function pannableSpan(s: {
   const span =
     spans.find((sp) => s.currentTime >= sp.start && sp.start + sp.len > s.currentTime) ??
     spans[spans.length - 1];
-  if (!span || span.clip.fit !== "fill") return null;
+  // Pan only makes sense for a full-frame fill clip; a regioned clip is moved
+  // with its own preview handle instead.
+  if (!span || span.clip.fit !== "fill" || !isFullRect(rectOf(span.clip))) return null;
   const { width, height } = span.asset;
   if (!width || !height) return null;
   const frame = FRAME[s.aspect];
@@ -104,10 +106,89 @@ export function Preview() {
           }}
         >
           <canvas ref={canvasRef} width={frame.w} height={frame.h} className="block size-full" />
+          <OverlayPipHandle stage={stage} />
           <SubtitleLayer stageWidth={stage.w} />
           <OverlayLayer stageWidth={stage.w} />
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * Direct-manipulation handle for the selected video layer's frame region: drag
+ * the box to reposition, drag the corner to resize (both update the clip's
+ * `frame` rect). Works for a regioned base clip (split-screen half) or an
+ * overlay clip, and only while that clip is live under the playhead so it lines
+ * up with the compositor. A full-frame layer needs no handle.
+ */
+function OverlayPipHandle({ stage }: { stage: { w: number; h: number } }) {
+  const selection = useEditor((s) => s.selection);
+  const overlayClips = useEditor((s) => s.overlayClips);
+  const clips = useEditor((s) => s.clips);
+  const assets = useEditor((s) => s.assets);
+  const currentTime = useEditor((s) => s.currentTime);
+
+  // Resolve the selected, live, regioned layer plus how to patch its rect.
+  let rect: FrameRect | null = null;
+  let apply: ((frame: FrameRect) => void) | null = null;
+  if (selection?.kind === "overlayClip") {
+    const clip = overlayClips.find((c) => c.id === selection.id);
+    if (clip && !clip.hidden) {
+      const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
+      const len = Math.max(0.1, (clip.out - clip.in) / speed);
+      if (currentTime >= clip.start && currentTime < clip.start + len) {
+        rect = rectOf(clip);
+        apply = (frame) => useEditor.getState().updateOverlayClipTransient(clip.id, { frame });
+      }
+    }
+  } else if (selection?.kind === "clip") {
+    const sp = getClipSpans(clips, assets).find((x) => x.clip.id === selection.id);
+    if (sp && !sp.clip.hidden && currentTime >= sp.start && currentTime < sp.start + sp.len) {
+      rect = rectOf(sp.clip);
+      apply = (frame) => useEditor.getState().updateClipTransient(sp.clip.id, { frame });
+    }
+  }
+  if (!rect || !apply || isFullRect(rect)) return null;
+  const r = rect;
+  const patch = apply;
+
+  const onMove = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    useEditor.getState().pushHistory();
+    startDrag(e, {
+      onMove: (dx, dy) =>
+        patch({
+          ...r,
+          x: Math.max(0, Math.min(1 - r.w, r.x + dx / stage.w)),
+          y: Math.max(0, Math.min(1 - r.h, r.y + dy / stage.h)),
+        }),
+    });
+  };
+
+  const onResize = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    useEditor.getState().pushHistory();
+    startDrag(e, {
+      onMove: (dx, dy) =>
+        patch({
+          ...r,
+          w: Math.max(0.1, Math.min(1 - r.x, r.w + dx / stage.w)),
+          h: Math.max(0.1, Math.min(1 - r.y, r.h + dy / stage.h)),
+        }),
+    });
+  };
+
+  return (
+    <div
+      className="absolute cursor-move rounded-[3px] shadow-[inset_0_0_0_2px_#a855f7]"
+      style={{ left: r.x * stage.w, top: r.y * stage.h, width: r.w * stage.w, height: r.h * stage.h }}
+      onPointerDown={onMove}
+    >
+      <span
+        className="absolute -right-1.5 -bottom-1.5 size-3 cursor-nwse-resize rounded-full bg-violet-500 shadow-[0_0_0_2px_white]"
+        onPointerDown={onResize}
+      />
+    </div>
   );
 }

@@ -23,13 +23,30 @@ export interface ExportSpec {
     in: number;
     out: number;
     muted: boolean;
-    /** "fit" letterboxes (default); "fill" covers the frame and crops. */
+    /** "fit" letterboxes (default); "fill" covers the region and crops. */
     fit?: "fit" | "fill";
-    panX?: number; // crop-window pan -1..1 (fill mode)
+    panX?: number; // crop-window pan -1..1 (fill mode, full frame)
     panY?: number;
+    /** Region of the frame this clip fills; absent = full frame. */
+    frame?: { x: number; y: number; w: number; h: number };
     speed?: number; // playback rate, default 1
     /** Cross-dissolve into the next clip, in timeline seconds (overlap). */
     transition?: number;
+    /** Hidden clips keep their slot but render black + silent. */
+    hidden?: boolean;
+  }[];
+  /** Upper video tracks composited over the base, bottom track first. */
+  overlayVideos?: {
+    file: string;
+    in: number;
+    out: number;
+    start: number; // timeline position, seconds
+    track: number;
+    /** Region of the frame this overlay fills; absent = full frame. */
+    frame?: { x: number; y: number; w: number; h: number };
+    fit?: "fit" | "fill";
+    muted: boolean;
+    speed?: number;
   }[];
   audio: {
     file: string;
@@ -48,6 +65,9 @@ export interface ExportSpec {
 export interface Job {
   id: string;
   projectId: string;
+  /** "preview" is the internal hover-proxy render; only "export" jobs are
+   * surfaced to the client for reconnect/download. */
+  target: "export" | "preview";
   status: "running" | "done" | "error";
   progress: number; // 0..1
   error?: string;
@@ -70,7 +90,7 @@ export function getJob(id: string) {
  * reopened (or reloaded) can reconnect to an export still in flight. */
 export function listJobsForProject(projectId: string) {
   return [...jobs.values()]
-    .filter((j) => j.projectId === projectId)
+    .filter((j) => j.projectId === projectId && j.target !== "preview")
     .map((j) => ({
       id: j.id,
       status: j.status,
@@ -100,10 +120,12 @@ export async function createJob(form: FormData): Promise<Job> {
   assertLocalRuntime();
   const spec = JSON.parse(String(form.get("spec"))) as ExportSpec;
   const id = crypto.randomUUID().slice(0, 12);
+  const preview = spec.target === "preview";
   if (runningCount() >= MAX_RUNNING) {
     const job: Job = {
       id,
       projectId: spec.projectId,
+      target: preview ? "preview" : "export",
       status: "error",
       progress: 0,
       tmpDir: "",
@@ -116,25 +138,28 @@ export async function createJob(form: FormData): Promise<Job> {
     retire(job);
     return job;
   }
-  const preview = spec.target === "preview";
-  const outDir = preview ? projectDir(spec.projectId) : exportsDir(spec.projectId);
   // Include the unique job id so two exports in the same second can't collide
   // on the same output path (which would clobber the first render).
   const outName = preview ? "preview.mp4" : `export-${stamp()}-${id}.mp4`;
+  const outPath = path.join(
+    preview ? projectDir(spec.projectId) : exportsDir(spec.projectId),
+    outName
+  );
   const job: Job = {
     id,
     projectId: spec.projectId,
+    target: preview ? "preview" : "export",
     status: "running",
     progress: 0,
     tmpDir: "",
-    outPath: path.join(outDir, outName),
+    outPath,
     outName,
     log: [],
   };
   jobs.set(id, job); // reserve the concurrency slot before the first await
 
   try {
-    await mkdir(outDir, { recursive: true });
+    await mkdir(path.dirname(outPath), { recursive: true });
     job.tmpDir = await mkdtemp(path.join(os.tmpdir(), "veditor-"));
     if (!(await readProject(spec.projectId))) throw new Error("Project not found.");
     // Overlay PNGs are rendered in the browser and uploaded with the spec.
@@ -174,15 +199,37 @@ function clipRate(c: ExportSpec["clips"][number]) {
   return c.speed && c.speed > 0 ? c.speed : 1;
 }
 
+/** A clip's frame region in even pixels, or null when it fills the whole frame
+ * (the common case, which keeps the plain full-frame filter path). */
+function regionPx(
+  frame: { x: number; y: number; w: number; h: number } | undefined,
+  W: number,
+  H: number
+) {
+  if (!frame) return null;
+  const even = (n: number) => 2 * Math.round(n / 2);
+  const rw = Math.min(W, Math.max(2, even(frame.w * W)));
+  const rh = Math.min(H, Math.max(2, even(frame.h * H)));
+  // Clamp the origin so rx+rw ≤ W and ry+rh ≤ H — independent even-rounding can
+  // otherwise push an edge-touching region a pixel past the frame, which makes
+  // the pad filter reject the input ("not within the padded area") and aborts
+  // the whole export.
+  const rx = Math.max(0, Math.min(even(frame.x * W), W - rw));
+  const ry = Math.max(0, Math.min(even(frame.y * H), H - rh));
+  if (rx <= 0 && ry <= 0 && rw >= W && rh >= H) return null;
+  return { rx, ry, rw, rh };
+}
+
 
 async function runExport(job: Job, spec: ExportSpec) {
   if (spec.clips.length === 0) throw new Error("Nothing to export.");
   const { width: W, height: H, fps } = spec;
 
+  const overlayVideos = spec.overlayVideos ?? [];
   // One ffmpeg input per distinct media file (from the project folder),
   // plus one per uploaded overlay PNG.
   const mediaFiles = [
-    ...new Set([...spec.clips, ...spec.audio].map((c) => c.file)),
+    ...new Set([...spec.clips, ...spec.audio, ...overlayVideos].map((c) => c.file)),
   ];
   const audioPresence = new Map<string, boolean>();
   const videoPresence = new Map<string, boolean>();
@@ -225,27 +272,41 @@ async function runExport(job: Job, spec: ExportSpec) {
     const idx = inputIndex.get(c.file)!;
     const speed = clipRate(c);
     const dur = clipDur(c);
-    if (videoPresence.get(c.file)) {
-      const frame =
-        c.fit === "fill"
-          ? // Cover the frame, then crop; the pan chooses the visible window.
-            `scale=${W}:${H}:force_original_aspect_ratio=increase,` +
-            `crop=${W}:${H}:(iw-ow)*${num(0.5 + Math.max(-1, Math.min(1, c.panX ?? 0)) / 2)}` +
-            `:(ih-oh)*${num(0.5 + Math.max(-1, Math.min(1, c.panY ?? 0)) / 2)}`
-          : `scale=${W}:${H}:force_original_aspect_ratio=decrease,` +
-            `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=black`;
+    if (videoPresence.get(c.file) && !c.hidden) {
+      const region = regionPx(c.frame, W, H);
+      let frame: string;
+      if (region) {
+        // A regioned base clip (split-screen half) scales into its rect, then
+        // pads out to the full frame with black around it.
+        const { rx, ry, rw, rh } = region;
+        frame =
+          c.fit === "fill"
+            ? `scale=${rw}:${rh}:force_original_aspect_ratio=increase,crop=${rw}:${rh},` +
+              `pad=${W}:${H}:${rx}:${ry}:color=black`
+            : `scale=${rw}:${rh}:force_original_aspect_ratio=decrease:force_divisible_by=2,` +
+              `pad=${W}:${H}:${rx}+(${rw}-iw)/2:${ry}+(${rh}-ih)/2:color=black`;
+      } else {
+        frame =
+          c.fit === "fill"
+            ? // Cover the frame, then crop; the pan chooses the visible window.
+              `scale=${W}:${H}:force_original_aspect_ratio=increase,` +
+              `crop=${W}:${H}:(iw-ow)*${num(0.5 + Math.max(-1, Math.min(1, c.panX ?? 0)) / 2)}` +
+              `:(ih-oh)*${num(0.5 + Math.max(-1, Math.min(1, c.panY ?? 0)) / 2)}`
+            : `scale=${W}:${H}:force_original_aspect_ratio=decrease,` +
+              `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=black`;
+      }
       // setpts/speed rescales the clip's duration on the timeline.
       filters.push(
         `[${idx}:v]trim=${num(c.in)}:${num(c.out)},setpts=(PTS-STARTPTS)/${num(speed)},` +
           `fps=${fps},${frame},setsar=1,format=yuv420p[v${j}]`
       );
     } else {
-      // No video stream in this file: keep the cut alive with black frames.
+      // No video stream, or a hidden clip: keep the slot as black frames.
       filters.push(
         `color=c=black:s=${W}x${H}:r=${fps},trim=0:${num(dur)},setpts=PTS-STARTPTS,format=yuv420p[v${j}]`
       );
     }
-    if (!c.muted && audioPresence.get(c.file)) {
+    if (!c.muted && !c.hidden && audioPresence.get(c.file)) {
       const tempo = speed !== 1 ? `${atempoChain(speed)},` : "";
       filters.push(
         `[${idx}:a]atrim=${num(c.in)}:${num(c.out)},asetpts=PTS-STARTPTS,${tempo}` +
@@ -286,8 +347,65 @@ async function runExport(job: Job, spec: ExportSpec) {
     aAcc = aOut;
   }
 
-  // Burn in text overlays, each windowed to its timeline range.
+  // Composite the upper video tracks (bottom track first) over the base. A
+  // full-frame clip covers the base; a regioned one shares the frame (split
+  // half) or floats small (PiP). Overlay audio (unless muted) mixes in below.
   let vLabel = vAcc;
+  const overlaySoundLabels: string[] = [];
+  [...overlayVideos]
+    .sort((a, b) => a.track - b.track)
+    .forEach((oc, k) => {
+      if (!videoPresence.get(oc.file)) return;
+      const idx = inputIndex.get(oc.file)!;
+      const ospeed = oc.speed && oc.speed > 0 ? oc.speed : 1;
+      const olen = Math.max(0.1, (oc.out - oc.in) / ospeed);
+      const end = Math.min(oc.start + olen, spec.duration);
+      const region = regionPx(oc.frame, W, H);
+      // A full-frame overlay covers; a region either covers-and-crops ("fill")
+      // or is contained and centered in its rect ("fit"), letting the base show
+      // around it (picture-in-picture).
+      const cover = oc.fit === "fill" || (oc.fit == null && !region);
+      let framing: string;
+      let pos: string;
+      if (!region) {
+        // "fit" stays transparent and centered so the base shows through the
+        // margins (matching the preview); black-padding it would occlude the
+        // base. "fill" covers and crops.
+        framing = cover
+          ? `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}`
+          : `scale=${W}:${H}:force_original_aspect_ratio=decrease:force_divisible_by=2`;
+        pos = cover ? "0:0" : `x=(${W}-w)/2:y=(${H}-h)/2`;
+      } else {
+        const { rx, ry, rw, rh } = region;
+        framing = cover
+          ? `scale=${rw}:${rh}:force_original_aspect_ratio=increase,crop=${rw}:${rh}`
+          : `scale=${rw}:${rh}:force_original_aspect_ratio=decrease:force_divisible_by=2`;
+        pos = cover ? `${rx}:${ry}` : `x=${rx}+(${rw}-w)/2:y=${ry}+(${rh}-h)/2`;
+      }
+      const seg = `ovv${k}`;
+      // tpad delays the clip to its timeline start without a leading-frame stall.
+      filters.push(
+        `[${idx}:v]trim=${num(oc.in)}:${num(oc.out)},setpts=(PTS-STARTPTS)/${num(ospeed)},` +
+          `fps=${fps},${framing},setsar=1,format=yuv420p,tpad=start_duration=${num(oc.start)}[${seg}]`
+      );
+      const next = `vovv${k}`;
+      filters.push(
+        `[${vLabel}][${seg}]overlay=${pos}:enable='between(t,${num(oc.start)},${num(end)})':eof_action=pass[${next}]`
+      );
+      vLabel = next;
+      if (!oc.muted && audioPresence.get(oc.file)) {
+        const tempo = ospeed !== 1 ? `${atempoChain(ospeed)},` : "";
+        const delayMs = Math.max(0, Math.round(oc.start * 1000));
+        const lab = `ovs${k}`;
+        filters.push(
+          `[${idx}:a]atrim=${num(oc.in)}:${num(oc.out)},asetpts=PTS-STARTPTS,${tempo}` +
+            `aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,adelay=${delayMs}:all=1[${lab}]`
+        );
+        overlaySoundLabels.push(lab);
+      }
+    });
+
+  // Burn in text overlays, each windowed to its timeline range.
   spec.overlays.forEach((o, k) => {
     const idx = inputIndex.get(o.file)!;
     const next = `vov${k}`;
@@ -323,10 +441,11 @@ async function runExport(job: Job, spec: ExportSpec) {
   });
 
   let aLabel = aAcc;
-  if (soundLabels.length > 0) {
-    const mixIn = [aAcc, ...soundLabels].map((l) => `[${l}]`).join("");
+  const extraSound = [...soundLabels, ...overlaySoundLabels];
+  if (extraSound.length > 0) {
+    const mixIn = [aAcc, ...extraSound].map((l) => `[${l}]`).join("");
     filters.push(
-      `${mixIn}amix=inputs=${soundLabels.length + 1}:duration=first:dropout_transition=0:normalize=0[amix]`
+      `${mixIn}amix=inputs=${extraSound.length + 1}:duration=first:dropout_transition=0:normalize=0[amix]`
     );
     aLabel = "amix";
   }

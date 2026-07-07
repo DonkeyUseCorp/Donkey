@@ -2,7 +2,8 @@
 
 import { useEffect, type RefObject } from "react";
 import { clipSpeed, getClipSpans, totalDuration, useEditor } from "@/cut/lib/store";
-import type { ClipSpan, MediaAsset, VideoClip } from "@/cut/lib/types";
+import { isFullRect, rectOf } from "@/cut/lib/types";
+import type { ClipSpan, FrameRect, MediaAsset, OverlayClip, VideoClip } from "@/cut/lib/types";
 
 // The canvas backing store is the full frame resolution (1080×1920 or
 // 1920×1080, set by Preview from the project aspect) so the preview stays
@@ -17,6 +18,9 @@ import type { ClipSpan, MediaAsset, VideoClip } from "@/cut/lib/types";
  */
 class Engine {
   private videoEls = new Map<string, HTMLVideoElement>();
+  // One element per overlay clip (keyed by clip id, not asset) so the same
+  // source can appear on two tracks at once.
+  private overlayEls = new Map<string, HTMLVideoElement>();
   private audioEls = new Map<string, HTMLAudioElement>();
   private raf = 0;
   private activeClipId: string | null = null;
@@ -35,8 +39,14 @@ class Engine {
       el.removeAttribute("src");
       el.load();
     }
+    for (const el of this.overlayEls.values()) {
+      el.pause();
+      el.removeAttribute("src");
+      el.load();
+    }
     for (const el of this.audioEls.values()) el.pause();
     this.videoEls.clear();
+    this.overlayEls.clear();
     this.audioEls.clear();
   }
 
@@ -86,6 +96,40 @@ class Engine {
     }
   }
 
+  /** Draw a video element into a sub-region of the frame. "fill" covers the
+   * region and crops the overflow (clipped to the rect); "fit" contains the
+   * whole picture inside it, centered. */
+  private drawIntoRect(el: HTMLVideoElement, rect: FrameRect, fill: boolean, alpha: number) {
+    const ctx = this.canvas.getContext("2d");
+    if (!ctx) return;
+    const W = this.canvas.width;
+    const H = this.canvas.height;
+    const rx = rect.x * W;
+    const ry = rect.y * H;
+    const rw = rect.w * W;
+    const rh = rect.h * H;
+    const sc = fill
+      ? Math.max(rw / el.videoWidth, rh / el.videoHeight)
+      : Math.min(rw / el.videoWidth, rh / el.videoHeight);
+    const dw = el.videoWidth * sc;
+    const dh = el.videoHeight * sc;
+    const dx = rx + (rw - dw) / 2;
+    const dy = ry + (rh - dh) / 2;
+    const prevAlpha = ctx.globalAlpha;
+    ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+    if (fill) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(rx, ry, rw, rh);
+      ctx.clip();
+      ctx.drawImage(el, dx, dy, dw, dh);
+      ctx.restore();
+    } else {
+      ctx.drawImage(el, dx, dy, dw, dh);
+    }
+    ctx.globalAlpha = prevAlpha;
+  }
+
   private drawLayer(el: HTMLVideoElement | null, clip: VideoClip | undefined, clear: boolean, alpha: number) {
     const ctx = this.canvas.getContext("2d");
     if (!ctx) return;
@@ -98,12 +142,25 @@ class Engine {
       }
       return;
     }
+    // A hidden clip keeps its slot but renders as black — nothing plays there.
+    if (clip?.hidden) {
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, W, H);
+      return;
+    }
     // Mid-seek the element has no decodable frame; keep the previous frame
     // on the canvas instead of strobing black (matters while skimming).
     if (el.readyState < 2 || !el.videoWidth) return;
     if (clear) {
       ctx.fillStyle = "#000";
       ctx.fillRect(0, 0, W, H);
+    }
+    // A regioned base clip (split-screen half) draws into its rect over the
+    // black frame; the full-frame path below keeps the pan-crop behavior.
+    const rect = rectOf(clip ?? {});
+    if (!isFullRect(rect)) {
+      this.drawIntoRect(el, rect, clip?.fit === "fill", alpha);
+      return;
     }
     const fill = clip?.fit === "fill";
     const scale = fill
@@ -130,7 +187,8 @@ class Engine {
    * is live at time `t`, draw that next clip over it at ramping opacity — a
    * true A·(1−α)+B·α blend. Returns the master element (the playback clock). */
   private composite(masterSpan: ClipSpan, spans: ClipSpan[], t: number, play: boolean) {
-    const masterEl = this.prepare(masterSpan, t, play, masterSpan.clip.muted);
+    // A hidden clip is silent as well as black.
+    const masterEl = this.prepare(masterSpan, t, play, masterSpan.clip.muted || !!masterSpan.clip.hidden);
     this.activeClipId = masterSpan.clip.id;
     const keep = new Set([masterSpan.asset.id]);
     const next = spans[spans.indexOf(masterSpan) + 1];
@@ -149,6 +207,66 @@ class Engine {
     return masterEl;
   }
 
+  private overlayVideoFor(clip: OverlayClip, asset: MediaAsset) {
+    let el = this.overlayEls.get(clip.id);
+    if (!el) {
+      el = document.createElement("video");
+      el.playsInline = true;
+      el.preload = "auto";
+      el.crossOrigin = "anonymous";
+      el.muted = true; // overlay audio is mixed on export, not previewed here
+      el.src = asset.url;
+      this.overlayEls.set(clip.id, el);
+    }
+    return el;
+  }
+
+  /** Composite the upper (overlay) tracks over the base, bottom track first.
+   * A full-frame clip covers the base ("topmost showing clip plays"); a
+   * regioned one shares the frame (split half) or floats small (PiP). */
+  private drawOverlays(t: number, play: boolean) {
+    const ctx = this.canvas.getContext("2d");
+    if (!ctx) return;
+    const s = useEditor.getState();
+    const active = new Set<string>();
+    const clips = [...s.overlayClips].sort((a, b) => a.track - b.track);
+    for (const c of clips) {
+      if (c.hidden) continue;
+      const asset = s.assets.find((a) => a.id === c.assetId);
+      if (!asset) continue;
+      const speed = c.speed && c.speed > 0 ? c.speed : 1;
+      const len = Math.max(0.1, (c.out - c.in) / speed);
+      if (t < c.start || t >= c.start + len) continue;
+      active.add(c.id);
+      const el = this.overlayVideoFor(c, asset);
+      if (el.playbackRate !== speed) el.playbackRate = speed;
+      const target = c.in + Math.max(0, t - c.start) * speed;
+      const tol = play ? 0.34 : 0.05;
+      if (Math.abs(el.currentTime - target) > tol && !el.seeking) el.currentTime = target;
+      if (play) {
+        if (el.paused && el.readyState >= 2) void el.play().catch(() => {});
+      } else if (!el.paused) {
+        el.pause();
+      }
+      if (el.readyState < 2 || !el.videoWidth) continue;
+      const rect = rectOf(c);
+      // A full-frame overlay covers the base; a regioned one shares the frame
+      // (split half) or floats small (PiP). "fit" contains, "fill" crops.
+      const cover = c.fit === "fill" || (c.fit == null && isFullRect(rect));
+      this.drawIntoRect(el, rect, cover, 1);
+    }
+    // Pause inactive elements; drop those whose clip is gone.
+    for (const [id, el] of this.overlayEls) {
+      if (active.has(id)) continue;
+      if (!el.paused) el.pause();
+      if (!s.overlayClips.some((c) => c.id === id)) {
+        el.removeAttribute("src");
+        el.load();
+        this.overlayEls.delete(id);
+      }
+    }
+  }
+
   private syncSoundtrack(t: number, playing: boolean) {
     const s = useEditor.getState();
     const live = new Set<string>();
@@ -165,7 +283,8 @@ class Engine {
       // Detached audio can carry its video clip's rate; footprint is (out-in)/speed.
       const speed = a.speed && a.speed > 0 ? a.speed : 1;
       const len = Math.max(0.1, (a.out - a.in) / speed);
-      const active = playing && t >= a.start && t < a.start + len;
+      // A hidden clip is muted from the mix — keep its element but never play it.
+      const active = playing && !a.hidden && t >= a.start && t < a.start + len;
       if (active) {
         // Fade envelope: linear ramps at either end of the clip.
         const rel = t - a.start;
@@ -218,6 +337,7 @@ class Engine {
         spans.find((sp) => pt >= sp.start && pt < sp.start + sp.len) ??
         spans[spans.length - 1];
       this.composite(span, spans, Math.min(pt, span.start + span.len), false);
+      this.drawOverlays(pt, false);
       this.syncSoundtrack(t, false);
       return;
     }
@@ -263,6 +383,7 @@ class Engine {
       }
     }
 
+    this.drawOverlays(t, true);
     useEditor.setState({ currentTime: t });
     this.syncSoundtrack(t, true);
   }

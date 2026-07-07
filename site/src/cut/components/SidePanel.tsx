@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Captions, Check, Circle, ClipboardList, Copy, Film, FolderOpen, FolderPlus, Loader2, Mic, Music, Plus, Trash2, Upload, Video } from "lucide-react";
+import { Captions, Check, Circle, ClipboardList, Copy, Film, FolderOpen, FolderPlus, Layers, Loader2, Mic, Music, Plus, Trash2, Upload, Video } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -410,16 +410,31 @@ function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string 
         <span className="absolute right-1 bottom-1 rounded-[5px] bg-black/65 px-1 py-px font-mono text-[9.5px] text-white tabular-nums">
           {formatTime(asset.duration)}
         </span>
-        <span
-          role="button"
-          title="Add to timeline"
-          className="absolute top-1 left-1 grid size-5 scale-75 cursor-pointer place-items-center rounded-full bg-primary text-primary-foreground opacity-0 transition-all group-hover:scale-100 group-hover:opacity-100 hover:brightness-110"
-          onClick={(e) => {
-            e.stopPropagation();
-            add();
-          }}
-        >
-          <Plus className="size-3" />
+        <span className="absolute top-1 left-1 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+          <span
+            role="button"
+            title="Add to timeline"
+            className="grid size-5 scale-75 cursor-pointer place-items-center rounded-full bg-primary text-primary-foreground transition-transform group-hover:scale-100 hover:brightness-110"
+            onClick={(e) => {
+              e.stopPropagation();
+              add();
+            }}
+          >
+            <Plus className="size-3" />
+          </span>
+          {asset.type === "video" && (
+            <span
+              role="button"
+              title="Add as an overlay track (PiP / composite)"
+              className="grid size-5 scale-75 cursor-pointer place-items-center rounded-full bg-violet-600 text-white transition-transform group-hover:scale-100 hover:brightness-110"
+              onClick={(e) => {
+                e.stopPropagation();
+                useEditor.getState().addOverlayClipFromAsset(asset.id);
+              }}
+            >
+              <Layers className="size-3" />
+            </span>
+          )}
         </span>
         <span className="absolute top-1 right-1 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
           <span

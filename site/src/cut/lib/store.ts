@@ -6,6 +6,7 @@ import type {
   AudioClip,
   ClipSpan,
   MediaAsset,
+  OverlayClip,
   ProjectDoc,
   Selection,
   StoredAsset,
@@ -36,6 +37,7 @@ export const TIMELINE_H_MAX = 600;
 interface DocSnapshot {
   clips: VideoClip[];
   audioClips: AudioClip[];
+  overlayClips: OverlayClip[];
   overlays: TextOverlay[];
   subtitles: SubtitlesBlock;
 }
@@ -54,6 +56,8 @@ interface EditorState {
   assets: MediaAsset[];
   clips: VideoClip[];
   audioClips: AudioClip[];
+  /** Upper video tracks composited over the base track. */
+  overlayClips: OverlayClip[];
   overlays: TextOverlay[];
   /** Output frame (9:16 vertical or 16:9 widescreen), persisted per project. */
   aspect: Aspect;
@@ -111,6 +115,10 @@ interface EditorState {
   updateClipTransient: (id: string, patch: Partial<VideoClip>) => void;
   updateAudioTransient: (id: string, patch: Partial<AudioClip>) => void;
   moveClip: (id: string, toIndex: number) => void;
+  /** Add a video asset as a full-frame overlay on the next free upper track. */
+  addOverlayClipFromAsset: (assetId: string, start?: number) => void;
+  updateOverlayClip: (id: string, patch: Partial<OverlayClip>) => void;
+  updateOverlayClipTransient: (id: string, patch: Partial<OverlayClip>) => void;
   /** iMovie "Detach Audio": lift the selected clip's sound onto the
    * soundtrack track (and mute the clip) so it can be cut independently. */
   detachAudio: () => void;
@@ -189,10 +197,11 @@ let clipboard: ClipboardItem[] = [];
 
 export const useEditor = create<EditorState>((set, get) => {
   const snapshot = (): DocSnapshot => {
-    const { clips, audioClips, overlays, subtitles } = get();
+    const { clips, audioClips, overlayClips, overlays, subtitles } = get();
     return {
       clips: clips.map((c) => ({ ...c })),
       audioClips: audioClips.map((c) => ({ ...c })),
+      overlayClips: overlayClips.map((c) => ({ ...c })),
       overlays: overlays.map((o) => ({ ...o })),
       subtitles: {
         ...subtitles,
@@ -232,6 +241,7 @@ export const useEditor = create<EditorState>((set, get) => {
     assets: [],
     clips: [],
     audioClips: [],
+    overlayClips: [],
     overlays: [],
     aspect: "9:16",
     selection: null,
@@ -262,6 +272,7 @@ export const useEditor = create<EditorState>((set, get) => {
         assets: [],
         clips: [],
         audioClips: [],
+        overlayClips: [],
         overlays: [],
         aspect: "9:16",
         selection: null,
@@ -286,6 +297,7 @@ export const useEditor = create<EditorState>((set, get) => {
           assets,
           clips: doc.clips,
           audioClips: doc.audioClips,
+          overlayClips: doc.overlayClips ?? [],
           overlays: doc.overlays,
           aspect: doc.aspect ?? "9:16",
           // View state lives in IndexedDB; doc.ui covers projects saved
@@ -544,6 +556,39 @@ export const useEditor = create<EditorState>((set, get) => {
       set({ clips: next });
     },
 
+    addOverlayClipFromAsset: (assetId, start) => {
+      const asset = get().assets.find((a) => a.id === assetId);
+      if (!asset || asset.type !== "video") return;
+      push();
+      // Land on the next free track above the highest existing overlay.
+      const track = Math.max(0, ...get().overlayClips.map((c) => c.track)) + 1;
+      const clip: OverlayClip = {
+        id: uid(),
+        assetId,
+        track,
+        start: Math.max(0, start ?? get().currentTime),
+        in: 0,
+        out: asset.duration,
+        muted: false,
+        // Full-frame by default: covers the base ("topmost plays"). A layout
+        // preset in the inspector regions it (split half / corner PiP).
+      };
+      set((s) => ({
+        overlayClips: [...s.overlayClips, clip],
+        ...sole({ kind: "overlayClip", id: clip.id }),
+      }));
+    },
+
+    updateOverlayClip: (id, patch) => {
+      push();
+      get().updateOverlayClipTransient(id, patch);
+    },
+
+    updateOverlayClipTransient: (id, patch) =>
+      set((s) => ({
+        overlayClips: s.overlayClips.map((c) => (c.id === id ? { ...c, ...patch } : c)),
+      })),
+
     detachAudio: () => {
       const { clips, assets, selection } = get();
       if (selection?.kind !== "clip") return;
@@ -630,6 +675,7 @@ export const useEditor = create<EditorState>((set, get) => {
         );
       const clipIds = idsOf("clip");
       const audioIds = idsOf("audio");
+      const overlayClipIds = idsOf("overlayClip");
       const textIds = idsOf("text");
       const cueIds = idsOf("cue");
       // Removing video clips shortens the track; ripple later titles/captions
@@ -640,6 +686,7 @@ export const useEditor = create<EditorState>((set, get) => {
       set((s) => ({
         clips: s.clips.filter((c) => !clipIds.has(c.id)),
         audioClips: s.audioClips.filter((c) => !audioIds.has(c.id)),
+        overlayClips: s.overlayClips.filter((c) => !overlayClipIds.has(c.id)),
         overlays: s.overlays.filter((o) => !textIds.has(o.id)).map(bump),
         subtitles: {
           ...s.subtitles,
@@ -806,16 +853,20 @@ export const useEditor = create<EditorState>((set, get) => {
         if (get().projectId !== projectId) return;
         push();
         if (res.ok && Array.isArray(body.texts) && body.texts.length === cues.length) {
-          const texts = body.texts;
+          // Key the rewrite to the cue ids it was generated from, so an edit
+          // that reordered/split cues mid-request can't apply text by a stale
+          // index onto the wrong cue.
+          const byId = new Map(cues.map((c, i) => [c.id, body.texts![i]]));
           set((cur) => ({
             subtitles: {
               ...cur.subtitles,
               style,
               // Rewriting the text drops per-word timings (they no longer match),
               // but the cue's own start/end are untouched.
-              cues: cur.subtitles.cues.map((c, i) =>
-                texts[i] && texts[i] !== c.text ? { ...c, text: texts[i], words: undefined } : c
-              ),
+              cues: cur.subtitles.cues.map((c) => {
+                const t = byId.get(c.id);
+                return t && t !== c.text ? { ...c, text: t, words: undefined } : c;
+              }),
             },
             subtitleStatus: "ready",
           }));
@@ -1078,6 +1129,7 @@ useEditor.subscribe((s, prev) => {
   if (
     s.clips !== prev.clips ||
     s.audioClips !== prev.audioClips ||
+    s.overlayClips !== prev.overlayClips ||
     s.overlays !== prev.overlays ||
     s.subtitles !== prev.subtitles
   )
@@ -1090,6 +1142,7 @@ export function serializeDoc(s: {
   assets: MediaAsset[];
   clips: VideoClip[];
   audioClips: AudioClip[];
+  overlayClips: OverlayClip[];
   overlays: TextOverlay[];
   aspect: Aspect;
   publish: { caption: string; tags: string; soundTitle: string; handle: string };
@@ -1112,6 +1165,7 @@ export function serializeDoc(s: {
     assets,
     clips: s.clips,
     audioClips: s.audioClips,
+    overlayClips: s.overlayClips,
     overlays: s.overlays,
     aspect: s.aspect,
     subtitles: s.subtitles,

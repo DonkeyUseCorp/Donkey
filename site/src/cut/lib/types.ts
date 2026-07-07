@@ -36,6 +36,59 @@ export interface MediaAsset extends StoredAsset {
   peaks?: number[];
 }
 
+/**
+ * A layout region inside the output frame, as fractions with a top-left origin
+ * (x,y = top-left corner; w,h = size). Absent on a clip means it fills the
+ * whole frame. Regions let two videos share one frame — split top/bottom or
+ * side by side — or place one small (picture-in-picture).
+ */
+export interface FrameRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export const FULL_FRAME: FrameRect = { x: 0, y: 0, w: 1, h: 1 };
+
+/** A clip's effective region: its own `frame`, or the full frame if unset. */
+export function rectOf(clip: { frame?: FrameRect }): FrameRect {
+  return clip.frame ?? FULL_FRAME;
+}
+
+/** Whether a region covers the whole frame (so it needs no special layout). */
+export function isFullRect(r: FrameRect): boolean {
+  return r.x <= 0.001 && r.y <= 0.001 && r.w >= 0.999 && r.h >= 0.999;
+}
+
+/** One-click layouts for arranging a video layer in the frame. `fit` is the
+ * sensible default meeting for that shape: halves cover their region, a corner
+ * is contained so the whole picture shows. */
+export const LAYOUTS = {
+  full: { label: "Full", rect: FULL_FRAME, fit: "fit" as const },
+  top: { label: "Top", rect: { x: 0, y: 0, w: 1, h: 0.5 }, fit: "fill" as const },
+  bottom: { label: "Bottom", rect: { x: 0, y: 0.5, w: 1, h: 0.5 }, fit: "fill" as const },
+  left: { label: "Left", rect: { x: 0, y: 0, w: 0.5, h: 1 }, fit: "fill" as const },
+  right: { label: "Right", rect: { x: 0.5, y: 0, w: 0.5, h: 1 }, fit: "fill" as const },
+  corner: { label: "PiP", rect: { x: 0.62, y: 0.62, w: 0.34, h: 0.34 }, fit: "fit" as const },
+} as const;
+
+export type LayoutId = keyof typeof LAYOUTS;
+
+/** A short human label for a region: a named layout if it matches one, else
+ * "Full" or "PiP". Used on timeline bars and the inspector. */
+export function regionLabel(r: FrameRect): string {
+  if (isFullRect(r)) return LAYOUTS.full.label;
+  for (const key of ["top", "bottom", "left", "right"] as const) {
+    const q = LAYOUTS[key].rect;
+    const near = (a: number, b: number) => Math.abs(a - b) < 0.02;
+    if (near(q.x, r.x) && near(q.y, r.y) && near(q.w, r.w) && near(q.h, r.h)) {
+      return LAYOUTS[key].label;
+    }
+  }
+  return "PiP";
+}
+
 /** A clip on the magnetic video track. Order in the array is timeline order. */
 export interface VideoClip {
   id: string;
@@ -43,9 +96,12 @@ export interface VideoClip {
   in: number; // trim-in inside the source, seconds
   out: number; // trim-out inside the source, seconds
   muted: boolean;
-  /** How the clip meets the 9:16 frame: letterboxed ("fit", default) or
-   * scaled to cover it ("fill", cropping the overflow). */
+  /** How the clip meets its region: letterboxed ("fit", default) or scaled to
+   * cover it ("fill", cropping the overflow). */
   fit?: "fit" | "fill";
+  /** The region of the frame this clip occupies; absent = full frame. Lets the
+   * base video share the frame with an overlay (e.g. sit in the top half). */
+  frame?: FrameRect;
   /** Crop-window pan in fill mode, -1..1 per axis (0 = centered): which part
    * of the oversized video stays visible. */
   panX?: number;
@@ -56,6 +112,32 @@ export interface VideoClip {
   /** Cross-dissolve into the next clip, in timeline seconds (absent/0 = hard
    * cut). The two clips overlap by this much, so the cut shortens by it. */
   transition?: number;
+  /** Hidden clips stay on the timeline (grayed) but render as black — excluded
+   * from the played/exported picture without disturbing the layout. */
+  hidden?: boolean;
+}
+
+/**
+ * A clip on an upper video track — free-positioned in time (like the
+ * soundtrack) and composited over the base track. `track` 1 sits just above the
+ * base; higher tracks sit closer to the top and win where they overlap. A
+ * full-frame overlay covers the base ("topmost showing clip plays"); a regioned
+ * one shares the frame (split-screen half) or floats small (picture-in-picture).
+ */
+export interface OverlayClip {
+  id: string;
+  assetId: string;
+  track: number; // 1-based; higher = closer to the top
+  start: number; // timeline position, seconds
+  in: number;
+  out: number;
+  muted: boolean;
+  hidden?: boolean;
+  /** The region of the frame this overlay occupies; absent = full frame. */
+  frame?: FrameRect;
+  /** How the video meets its region: cover-and-crop ("fill") or contain ("fit"). */
+  fit?: "fit" | "fill";
+  speed?: number;
 }
 
 /** Speed limits — matches the Inspector control and export atempo range. */
@@ -74,6 +156,8 @@ export interface AudioClip {
   volume: number; // 0..1.5
   fadeIn?: number; // seconds, ramp up from the clip start
   fadeOut?: number; // seconds, ramp down into the clip end
+  /** Muted from the final mix but kept on the timeline (grayed). */
+  hidden?: boolean;
   /** Playback rate, default 1 (absent). Set only when audio was detached from
    * a sped-up video clip, so it stays the same length and in sync with the
    * (now muted) picture. The timeline footprint is (out-in)/speed. */
@@ -153,6 +237,7 @@ export const emptySubtitles = (): SubtitlesBlock => ({
 export type Selection =
   | { kind: "clip"; id: string }
   | { kind: "audio"; id: string }
+  | { kind: "overlayClip"; id: string }
   | { kind: "text"; id: string }
   | { kind: "cue"; id: string }
   | null;
@@ -176,6 +261,8 @@ export interface ProjectDoc {
   assets: StoredAsset[];
   clips: VideoClip[];
   audioClips: AudioClip[];
+  /** Upper video tracks composited over the base track (absent in older docs). */
+  overlayClips?: OverlayClip[];
   overlays: TextOverlay[];
   /** Output frame; absent in older projects (which are all 9:16). */
   aspect?: Aspect;

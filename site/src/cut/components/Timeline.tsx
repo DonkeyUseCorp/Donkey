@@ -24,10 +24,12 @@ import { startDrag } from "@/cut/lib/drag";
 import { ensurePeaks } from "@/cut/lib/media";
 import { clipLen, clipSpeed, getClipSpans, TIMELINE_H_MAX, totalDuration, useEditor } from "@/cut/lib/store";
 import { formatTime, formatTimecode } from "@/cut/lib/time";
-import type { AudioClip, ClipSpan, MediaAsset, SubtitleCue, TextOverlay } from "@/cut/lib/types";
+import { rectOf, regionLabel } from "@/cut/lib/types";
+import type { AudioClip, ClipSpan, MediaAsset, OverlayClip, SubtitleCue, TextOverlay } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
 
 const VIDEO_H = 64;
+const OVERLAY_H = 44;
 const AUDIO_H = 44;
 const TEXT_H = 28;
 const SUB_H = 22;
@@ -83,6 +85,7 @@ function videoInsertIndex(spans: ClipSpan[], t: number): number {
 export function Timeline() {
   const clips = useEditor((s) => s.clips);
   const audioClips = useEditor((s) => s.audioClips);
+  const overlayClips = useEditor((s) => s.overlayClips);
   const overlays = useEditor((s) => s.overlays);
   const assets = useEditor((s) => s.assets);
   const pps = useEditor((s) => s.pxPerSec);
@@ -145,6 +148,13 @@ export function Timeline() {
     const rowOf = new Map(used.map((l, i) => [l, i]));
     return { used, rowOf, count: used.length };
   }, [overlays]);
+
+  // Upper video tracks (PiP / composited layers) render above the base row,
+  // highest track at the top. Empty tracks simply don't appear.
+  const overlayTracks = useMemo(
+    () => [...new Set(overlayClips.map((c) => c.track))].sort((a, b) => b - a),
+    [overlayClips]
+  );
 
   const onTextLaneDrag = useCallback(
     (id: string, targetRow: number) => setTextDrag({ id, targetRow }),
@@ -435,6 +445,27 @@ export function Timeline() {
             onPointerDown={deselectIfSelf}
           >
           <Ruler pps={pps} width={contentW} onScrub={scrub} />
+
+          {overlayTracks.map((track) => (
+            <div
+              key={`ov-${track}`}
+              className="relative mt-1.5"
+              style={{ height: OVERLAY_H }}
+              onPointerDown={deselectIfSelf}
+            >
+              {overlayClips
+                .filter((c) => c.track === track)
+                .map((c) => (
+                  <OverlayClipView
+                    key={c.id}
+                    clip={c}
+                    asset={assets.find((x) => x.id === c.assetId)}
+                    pps={pps}
+                    selected={selKeys.has(`overlayClip:${c.id}`)}
+                  />
+                ))}
+            </div>
+          ))}
 
           <div className="relative mt-1.5" style={{ height: VIDEO_H }} onPointerDown={deselectIfSelf}>
             {spans.length === 0 && (
@@ -1087,6 +1118,110 @@ function AudioView({
       )}
       <span className="pointer-events-none absolute top-[3px] left-2 text-[9.5px] whitespace-nowrap text-white/90 [text-shadow:0_1px_2px_rgba(0,0,0,0.35)]">
         {asset.name}
+      </span>
+      <span className={cn(trimHandle, "tl-trim-l left-0")} onPointerDown={onTrimLeft} />
+      <span className={cn(trimHandle, "tl-trim-r right-0")} onPointerDown={onTrimRight} />
+    </div>
+  );
+}
+
+/** Timeline footprint (seconds) of an overlay clip, honoring its speed. */
+function overlayLen(c: OverlayClip) {
+  const src = c.out - c.in;
+  const eff = c.speed && c.speed > 0 ? src / c.speed : src;
+  return Math.max(0.1, eff);
+}
+
+/**
+ * An upper-track video clip: free-positioned by `start` like an audio clip,
+ * draggable and trimmable. Full-frame layers (`scale === 1`) read as a stacked
+ * composite; smaller ones are picture-in-picture. Hidden clips gray out.
+ */
+function OverlayClipView({
+  clip,
+  asset,
+  pps,
+  selected,
+}: {
+  clip: OverlayClip;
+  asset: MediaAsset | undefined;
+  pps: number;
+  selected: boolean;
+}) {
+  const w = Math.max(10, overlayLen(clip) * pps);
+
+  if (!asset) return null;
+
+  const onBody = (e: React.PointerEvent) => {
+    if (e.metaKey || e.shiftKey) {
+      useEditor.getState().toggleSelect({ kind: "overlayClip", id: clip.id });
+      return;
+    }
+    const s = useEditor.getState();
+    s.select({ kind: "overlayClip", id: clip.id });
+    s.seek(clip.start + (e.clientX - e.currentTarget.getBoundingClientRect().left) / pps);
+    s.pushHistory();
+    const start0 = clip.start;
+    startDrag(e, {
+      onMove: (dx) =>
+        s.updateOverlayClipTransient(clip.id, { start: Math.max(0, start0 + dx / pps) }),
+    });
+  };
+
+  const onTrimLeft = (e: React.PointerEvent) => {
+    const s = useEditor.getState();
+    s.select({ kind: "overlayClip", id: clip.id });
+    s.pushHistory();
+    const in0 = clip.in;
+    const start0 = clip.start;
+    startDrag(e, {
+      onMove: (dx) => {
+        let d = dx / pps;
+        d = Math.max(d, -in0, -start0);
+        d = Math.min(d, clip.out - 0.15 - in0);
+        s.updateOverlayClipTransient(clip.id, { in: in0 + d, start: start0 + d });
+      },
+    });
+  };
+
+  const onTrimRight = (e: React.PointerEvent) => {
+    const s = useEditor.getState();
+    s.select({ kind: "overlayClip", id: clip.id });
+    s.pushHistory();
+    const out0 = clip.out;
+    startDrag(e, {
+      onMove: (dx) => {
+        const nout = Math.max(clip.in + 0.15, Math.min(asset.duration, out0 + dx / pps));
+        s.updateOverlayClipTransient(clip.id, { out: nout });
+      },
+    });
+  };
+
+  const label = regionLabel(rectOf(clip));
+
+  return (
+    <div
+      className={cn(
+        "tl-overlay-clip group absolute top-0.5 cursor-grab overflow-hidden rounded-[7px] bg-gradient-to-b from-violet-500 to-violet-600 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.1)]",
+        selected && SELECTED_SHADOW,
+        clip.hidden && "opacity-40 grayscale"
+      )}
+      style={{ left: clip.start * pps, width: w, height: OVERLAY_H - 4 }}
+      onPointerDown={onBody}
+    >
+      {asset.thumbs?.[0] && (
+        <img
+          src={asset.thumbs[0]}
+          alt=""
+          className="pointer-events-none absolute inset-0 size-full object-cover opacity-30"
+        />
+      )}
+      <span className="pointer-events-none absolute top-[3px] left-2 flex items-center gap-1 text-[9.5px] whitespace-nowrap text-white/90 [text-shadow:0_1px_2px_rgba(0,0,0,0.35)]">
+        {clip.muted && <VolumeX className="size-2.5" />}
+        {asset.name}
+      </span>
+      <span className="pointer-events-none absolute bottom-[3px] left-2 rounded-sm bg-black/30 px-1 text-[8.5px] font-medium text-white/85">
+        {label}
       </span>
       <span className={cn(trimHandle, "tl-trim-l left-0")} onPointerDown={onTrimLeft} />
       <span className={cn(trimHandle, "tl-trim-r right-0")} onPointerDown={onTrimRight} />

@@ -5,7 +5,15 @@ import { clipSpeed, getClipSpans, totalDuration } from "./store";
 import { captionStyle, cueOverlay } from "./subtitles";
 import { renderOverlayPng } from "./textRender";
 import { FRAME } from "./types";
-import type { Aspect, AudioClip, MediaAsset, SubtitlesBlock, TextOverlay, VideoClip } from "./types";
+import type {
+  Aspect,
+  AudioClip,
+  MediaAsset,
+  OverlayClip,
+  SubtitlesBlock,
+  TextOverlay,
+  VideoClip,
+} from "./types";
 
 export interface ExportSettings {
   width: number;
@@ -97,6 +105,7 @@ export interface ExportDoc {
   assets: MediaAsset[];
   clips: VideoClip[];
   audioClips: AudioClip[];
+  overlayClips: OverlayClip[];
   overlays: TextOverlay[];
   subtitles: SubtitlesBlock;
 }
@@ -129,12 +138,31 @@ async function buildExportForm(
     fit: sp.clip.fit ?? "fit",
     panX: sp.clip.panX ?? 0,
     panY: sp.clip.panY ?? 0,
+    frame: sp.clip.frame,
     speed: clipSpeed(sp.clip),
     transition: sp.transitionOut,
+    hidden: sp.clip.hidden,
   }));
 
+  // Upper video tracks composited over the base; hidden ones are dropped.
+  const overlayVideos = doc.overlayClips
+    .filter((c) => !c.hidden && assetById.has(c.assetId) && c.start < duration)
+    .map((c) => ({
+      file: assetById.get(c.assetId)!.fileName,
+      in: c.in,
+      out: c.out,
+      start: c.start,
+      track: c.track,
+      frame: c.frame,
+      // Pass `fit` through unset so the server's "default full-frame overlay
+      // covers the base" branch fires — normalizing to "fit" here defeated it.
+      fit: c.fit,
+      muted: c.muted,
+      speed: c.speed,
+    }));
+
   const audio = doc.audioClips
-    .filter((a) => a.start < duration && assetById.has(a.assetId))
+    .filter((a) => !a.hidden && a.start < duration && assetById.has(a.assetId))
     .map((a) => ({
       file: assetById.get(a.assetId)!.fileName,
       in: a.in,
@@ -174,7 +202,7 @@ async function buildExportForm(
 
   form.append(
     "spec",
-    JSON.stringify({ projectId, target, ...settings, duration, clips, audio, overlays })
+    JSON.stringify({ projectId, target, ...settings, duration, clips, audio, overlayVideos, overlays })
   );
   return form;
 }

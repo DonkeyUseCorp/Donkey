@@ -24,10 +24,17 @@ import { writeTextStyle } from "@/cut/lib/textStyle";
 import { formatTime } from "@/cut/lib/time";
 import {
   FONTS,
+  isFullRect,
+  LAYOUTS,
+  rectOf,
+  regionLabel,
   SPEED_MAX,
   SPEED_MIN,
   TRANSITION_MAX,
   type AudioClip,
+  type FrameRect,
+  type LayoutId,
+  type OverlayClip,
   type TextOverlay,
   type VideoClip,
 } from "@/cut/lib/types";
@@ -149,6 +156,9 @@ export function Inspector() {
   const overlay = useEditor((s) =>
     selection?.kind === "text" ? s.overlays.find((o) => o.id === selection.id) : undefined
   );
+  const overlayClip = useEditor((s) =>
+    selection?.kind === "overlayClip" ? s.overlayClips.find((c) => c.id === selection.id) : undefined
+  );
 
   return (
     <aside className="flex min-h-0 flex-col overflow-y-auto border-l border-border bg-card">
@@ -156,6 +166,8 @@ export function Inspector() {
         <ClipPanel key={clip.id} clip={clip} />
       ) : audio ? (
         <AudioPanel key={audio.id} clip={audio} />
+      ) : overlayClip ? (
+        <OverlayClipPanel key={overlayClip.id} clip={overlayClip} />
       ) : overlay ? (
         <TextPanel key={overlay.id} overlay={overlay} />
       ) : null}
@@ -183,6 +195,45 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 const Value = ({ children, className }: { children: React.ReactNode; className?: string }) => (
   <span className={cn("font-mono text-[11.5px] tabular-nums", className)}>{children}</span>
 );
+
+/** One-click frame layouts (Full / Top / Bottom / Left / Right / PiP) shared by
+ * the base-clip and overlay-clip panels. Picking one regions the clip so two
+ * videos can share the frame; "Full" clears the region. */
+function LayoutButtons({
+  rect,
+  onPick,
+}: {
+  rect: FrameRect;
+  onPick: (frame: FrameRect | undefined, fit: "fit" | "fill") => void;
+}) {
+  const current = regionLabel(rect);
+  return (
+    <div className="flex flex-col gap-1.5 py-1">
+      <span className="text-[11.5px] font-medium text-muted-foreground">Layout</span>
+      <div className="grid grid-cols-3 gap-1">
+        {(Object.keys(LAYOUTS) as LayoutId[]).map((id) => {
+          const L = LAYOUTS[id];
+          const active = current === L.label;
+          return (
+            <button
+              key={id}
+              aria-pressed={active}
+              className={cn(
+                "rounded-md border px-2 py-1 text-[11px] font-medium transition-colors",
+                active
+                  ? "border-violet-500 bg-violet-500/10 text-foreground"
+                  : "border-input text-muted-foreground hover:text-foreground"
+              )}
+              onClick={() => onPick(id === "full" ? undefined : { ...L.rect }, L.fit)}
+            >
+              {L.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function ClipPanel({ clip }: { clip: VideoClip }) {
   const asset = useEditor((s) => s.assets.find((a) => a.id === clip.assetId));
@@ -249,6 +300,12 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
             onCheckedChange={(v) => updateClip(clip.id, { muted: v })}
           />
         </Row>
+        <Row label="Hide from output">
+          <Switch
+            checked={!!clip.hidden}
+            onCheckedChange={(v) => updateClip(clip.id, { hidden: v })}
+          />
+        </Row>
         <Row label="Framing">
           <div className="clip-framing flex rounded-lg border border-input p-0.5">
             {(["fit", "fill"] as const).map((mode) => (
@@ -278,10 +335,14 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
             </button>
           </Row>
         )}
+        <LayoutButtons
+          rect={rectOf(clip)}
+          onPick={(frame, fit) => updateClip(clip.id, { frame, fit })}
+        />
         <p className="mt-2.5 text-[11.5px] leading-relaxed text-muted-foreground">
-          {clip.fit === "fill"
-            ? "Fill crops the video to cover the frame — drag it in the preview to choose what stays visible."
-            : "Drag the clip edges on the timeline to trim it. Fit letterboxes the whole picture; Fill crops it to cover the frame."}
+          {isFullRect(rectOf(clip))
+            ? "Put this clip in half the frame (Top/Bottom or Left/Right) and drop another video on an overlay track to play two at once."
+            : "Sharing the frame — drag the box in the preview to move or resize it. Pick Full to fill the frame again."}
         </p>
       </div>
     </>
@@ -352,6 +413,85 @@ function AudioPanel({ clip }: { clip: AudioClip }) {
             {(clip.fadeOut ?? 0).toFixed(1)}s
           </Value>
         </Row>
+        <Row label="Hide from output">
+          <Switch
+            checked={!!clip.hidden}
+            onCheckedChange={(v) => useEditor.getState().updateAudio(clip.id, { hidden: v })}
+          />
+        </Row>
+      </div>
+    </>
+  );
+}
+
+function OverlayClipPanel({ clip }: { clip: OverlayClip }) {
+  const asset = useEditor((s) => s.assets.find((a) => a.id === clip.assetId));
+  const update = useEditor((s) => s.updateOverlayClip);
+  const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
+  const len = (clip.out - clip.in) / speed;
+  return (
+    <>
+      <PanelTitle>Overlay clip</PanelTitle>
+      <div className="flex flex-col gap-1 px-3.5 pb-4">
+        <div className="mb-1.5 truncate border-b border-border pb-2.5 text-xs font-medium" title={asset?.name}>
+          {asset?.name}
+        </div>
+        <Row label="Length"><Value>{formatTime(len)}</Value></Row>
+        <Row label="Starts at"><Value>{formatTime(clip.start)}</Value></Row>
+        <Row label="Track">
+          <div className="flex items-center gap-1.5">
+            <Button
+              variant="outline"
+              size="icon-sm"
+              aria-label="Move down a track"
+              disabled={clip.track <= 1}
+              onClick={() => update(clip.id, { track: Math.max(1, clip.track - 1) })}
+            >
+              −
+            </Button>
+            <Value className="w-6 text-center">{clip.track}</Value>
+            <Button
+              variant="outline"
+              size="icon-sm"
+              aria-label="Move up a track"
+              onClick={() => update(clip.id, { track: clip.track + 1 })}
+            >
+              +
+            </Button>
+          </div>
+        </Row>
+        <LayoutButtons
+          rect={rectOf(clip)}
+          onPick={(frame, fit) => update(clip.id, { frame, fit })}
+        />
+        <Row label="Framing">
+          <div className="flex rounded-lg border border-input p-0.5">
+            {(["fit", "fill"] as const).map((mode) => (
+              <button
+                key={mode}
+                className={cn(
+                  "rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-colors",
+                  (clip.fit ?? "fit") === mode
+                    ? "bg-neutral-900 text-white"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+                onClick={() => update(clip.id, { fit: mode })}
+              >
+                {mode === "fit" ? "Fit" : "Fill"}
+              </button>
+            ))}
+          </div>
+        </Row>
+        <Row label="Mute audio">
+          <Switch checked={clip.muted} onCheckedChange={(v) => update(clip.id, { muted: v })} />
+        </Row>
+        <Row label="Hide from output">
+          <Switch checked={!!clip.hidden} onCheckedChange={(v) => update(clip.id, { hidden: v })} />
+        </Row>
+        <p className="mt-2.5 text-[11.5px] leading-relaxed text-muted-foreground">
+          A full-frame overlay covers the tracks below. Give it a half or corner
+          to share the frame; drag the box in the preview to place it.
+        </p>
       </div>
     </>
   );

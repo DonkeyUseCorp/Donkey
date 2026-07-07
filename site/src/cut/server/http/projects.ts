@@ -102,6 +102,7 @@ export const projectsApi = {
         assets: Array.isArray(body.assets) ? body.assets : existing.assets,
         clips: Array.isArray(body.clips) ? body.clips : existing.clips,
         audioClips: Array.isArray(body.audioClips) ? body.audioClips : existing.audioClips,
+        overlayClips: Array.isArray(body.overlayClips) ? body.overlayClips : existing.overlayClips,
         overlays: Array.isArray(body.overlays) ? body.overlays : existing.overlays,
         subtitles:
           body.subtitles && typeof body.subtitles === "object"
