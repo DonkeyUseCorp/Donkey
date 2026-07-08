@@ -265,6 +265,12 @@ export const AI_TOOLS: AiToolDef[] = [
     inputSchema: obj({ aspect: { type: "string", enum: ["9:16", "16:9"], description: "Output aspect" } }, ["aspect"]),
   },
   {
+    name: "set_project_fade",
+    description:
+      "Set the whole video's fade in from black and/or fade out to black, in seconds (0 clears, max 2). Applied to the final picture and mix at the start/end of the cut, independent of which clip sits there.",
+    inputSchema: obj({ fadeIn: num("Fade-in seconds (omit to keep)"), fadeOut: num("Fade-out seconds (omit to keep)") }),
+  },
+  {
     name: "set_project_name",
     description: "Rename the current project.",
     inputSchema: obj({ name: str("New project name") }, ["name"]),

@@ -65,6 +65,8 @@ export function ExportDialog() {
       overlayClips: s.overlayClips,
       overlays: s.overlays,
       subtitles: s.subtitles,
+      fadeIn: s.fadeIn,
+      fadeOut: s.fadeOut,
     }, settings);
   };
 

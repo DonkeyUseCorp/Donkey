@@ -358,6 +358,11 @@ export interface ProjectDoc {
   overlays: TextOverlay[];
   /** Output frame; absent in older projects (which are all 9:16). */
   aspect?: Aspect;
+  /** Whole-video fades, seconds: in from black at the start, out to black at
+   * the end. Applied to the final picture and mix (titles, captions, and
+   * soundtrack fade together), so they survive clip reordering. */
+  fadeIn?: number;
+  fadeOut?: number;
   /** Auto-generated (then hand-edited) subtitles. */
   subtitles?: SubtitlesBlock;
   /** Legacy per-project view metadata — view state now lives in IndexedDB;

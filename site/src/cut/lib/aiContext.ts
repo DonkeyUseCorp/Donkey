@@ -53,6 +53,8 @@ export function buildAiContext(opts?: { fullCues?: boolean }) {
       duration: r(duration),
       aspect: s.aspect,
       frame: s.aspect === "9:16" ? "1080x1920" : "1920x1080",
+      ...(s.fadeIn > 0 ? { fadeIn: r(s.fadeIn) } : {}),
+      ...(s.fadeOut > 0 ? { fadeOut: r(s.fadeOut) } : {}),
     },
     playhead: r(s.currentTime),
     skimmer: s.skimTime === null ? null : r(s.skimTime),

@@ -374,6 +374,17 @@ export async function runAiTool(
       return { aspect: a };
     }
 
+    case "set_project_fade": {
+      if (!isNum(input.fadeIn) && !isNum(input.fadeOut))
+        throw new ToolError("Pass fadeIn and/or fadeOut seconds (0 clears).");
+      s.setProjectFade({
+        ...(isNum(input.fadeIn) ? { fadeIn: input.fadeIn } : {}),
+        ...(isNum(input.fadeOut) ? { fadeOut: input.fadeOut } : {}),
+      });
+      const after = useEditor.getState();
+      return { fadeIn: after.fadeIn, fadeOut: after.fadeOut };
+    }
+
     case "set_project_name": {
       if (typeof input.name !== "string" || !input.name.trim())
         throw new ToolError("name is required.");

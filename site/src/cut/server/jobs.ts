@@ -18,6 +18,10 @@ export interface ExportSpec {
   crf: number;
   preset: string;
   duration: number;
+  /** Whole-video fades, seconds: in from black / out to black, applied to the
+   * final composite and mix after all overlays and soundtrack. */
+  fadeIn?: number;
+  fadeOut?: number;
   clips: {
     file: string;
     in: number;
@@ -610,6 +614,24 @@ async function runExport(job: Job, spec: ExportSpec) {
       `${mixIn}amix=inputs=${extraSound.length + 1}:duration=first:dropout_transition=0:normalize=0[amix]`
     );
     aLabel = "amix";
+  }
+
+  // Whole-video fades on the final composite and mix, so titles, captions,
+  // overlays, and soundtrack all fade together.
+  const fadeIn = Math.max(0, Math.min(spec.fadeIn ?? 0, spec.duration / 2));
+  const fadeOut = Math.max(0, Math.min(spec.fadeOut ?? 0, spec.duration / 2));
+  if (fadeIn > 0.01 || fadeOut > 0.01) {
+    const win = (f: string) =>
+      [
+        ...(fadeIn > 0.01 ? [`${f}=t=in:st=0:d=${num(fadeIn)}`] : []),
+        ...(fadeOut > 0.01
+          ? [`${f}=t=out:st=${num(Math.max(0, spec.duration - fadeOut))}:d=${num(fadeOut)}`]
+          : []),
+      ].join(",");
+    filters.push(`[${vLabel}]${win("fade")}[vfinal]`);
+    vLabel = "vfinal";
+    filters.push(`[${aLabel}]${win("afade")}[afinal]`);
+    aLabel = "afinal";
   }
 
   const enc = await h264Encoder();

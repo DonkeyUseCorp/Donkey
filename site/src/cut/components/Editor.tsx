@@ -61,6 +61,8 @@ export function Editor({ projectId }: { projectId: string }) {
             overlayClips: s.overlayClips,
             overlays: s.overlays,
             subtitles: s.subtitles,
+            fadeIn: s.fadeIn,
+            fadeOut: s.fadeOut,
           },
           s.aspect
         );
@@ -145,6 +147,8 @@ export function Editor({ projectId }: { projectId: string }) {
         s.overlays !== (last.overlays as unknown) ||
         s.subtitles !== (last.subtitles as unknown) ||
         s.aspect !== last.aspect ||
+        s.fadeIn !== (last.fadeIn ?? 0) ||
+        s.fadeOut !== (last.fadeOut ?? 0) ||
         s.assets.length !== last.assets?.length ||
         s.publish.caption !== last.publish?.caption ||
         s.publish.tags !== last.publish?.tags ||

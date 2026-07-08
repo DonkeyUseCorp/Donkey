@@ -305,6 +305,28 @@ class Engine {
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
   }
 
+  /** Whole-video fade gain at time `t`: ramps 0→1 over the project fade-in and
+   * 1→0 over the fade-out at the end of the cut. 1 when neither applies. */
+  private projectFadeGain(t: number, total: number) {
+    const s = useEditor.getState();
+    let g = 1;
+    if (s.fadeIn > 0 && t < s.fadeIn) g = Math.min(g, Math.max(0, t / s.fadeIn));
+    if (s.fadeOut > 0 && t > total - s.fadeOut)
+      g = Math.min(g, Math.max(0, (total - t) / s.fadeOut));
+    return Math.min(1, g);
+  }
+
+  /** The picture side of the project fade: a black veil over the whole frame
+   * (everything drawn this tick — base, tracks, at any time), matching the
+   * export's fade on the final composite. */
+  private drawProjectFade(gain: number) {
+    if (gain >= 1) return;
+    const ctx = this.canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.fillStyle = `rgba(0,0,0,${(1 - Math.max(0, gain)).toFixed(3)})`;
+    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+  }
+
   /** Draw the overlay tracks on one side of the base — `below` (track < 0) or
    * `above` (track > 0) — in z-order (further-back first). A full-frame clip
    * covers what's under it; a regioned one shares the frame, letting lower
@@ -353,7 +375,7 @@ class Engine {
     }
   }
 
-  private syncSoundtrack(t: number, playing: boolean) {
+  private syncSoundtrack(t: number, playing: boolean, fadeGain = 1) {
     const s = useEditor.getState();
     const live = new Set<string>();
     for (const a of s.audioClips) {
@@ -379,7 +401,7 @@ class Engine {
         let gain = 1;
         if (fi > 0 && rel < fi) gain *= rel / fi;
         if (fo > 0 && rel > len - fo) gain *= Math.max(0, (len - rel) / fo);
-        el.volume = Math.max(0, Math.min(1, a.volume * gain));
+        el.volume = Math.max(0, Math.min(1, a.volume * gain * fadeGain));
         if (el.playbackRate !== speed) el.playbackRate = speed;
         const expected = a.in + rel * speed;
         if (Math.abs(el.currentTime - expected) > 0.25) el.currentTime = expected;
@@ -456,6 +478,7 @@ class Engine {
       if (span) this.composite(span, spans, Math.min(pt, span.start + span.len), false);
       else this.pauseExcept(new Set());
       this.drawOverlays(pt, false, "above", active);
+      this.drawProjectFade(this.projectFadeGain(pt, total));
       this.cleanupOverlays(active);
       this.syncSoundtrack(t, false);
       return;
@@ -517,6 +540,7 @@ class Engine {
           useEditor.setState({ playing: false, currentTime: total });
           el.pause();
           this.drawOverlays(t, true, "above", active);
+          this.drawProjectFade(this.projectFadeGain(total, total));
           this.cleanupOverlays(active);
           this.syncSoundtrack(total, false);
           return;
@@ -534,6 +558,7 @@ class Engine {
       if (t >= total - 0.001) {
         useEditor.setState({ playing: false, currentTime: total });
         this.drawOverlays(t, true, "above", active);
+        this.drawProjectFade(this.projectFadeGain(total, total));
         this.cleanupOverlays(active);
         this.syncSoundtrack(total, false);
         return;
@@ -541,9 +566,17 @@ class Engine {
     }
 
     this.drawOverlays(t, true, "above", active);
+    // The whole-video fade veils the finished frame and dims the sound —
+    // the master's element volume (set by composite) and the soundtrack.
+    const fadeGain = this.projectFadeGain(t, total);
+    if (fadeGain < 1 && span) {
+      const mel = this.videoEls.get(span.clip.id);
+      if (mel) mel.volume = Math.min(mel.volume, fadeGain);
+    }
+    this.drawProjectFade(fadeGain);
     this.cleanupOverlays(active);
     useEditor.setState({ currentTime: t });
-    this.syncSoundtrack(t, true);
+    this.syncSoundtrack(t, true, fadeGain);
   }
 }
 

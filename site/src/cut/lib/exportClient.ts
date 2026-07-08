@@ -108,6 +108,10 @@ export interface ExportDoc {
   overlayClips: OverlayClip[];
   overlays: TextOverlay[];
   subtitles: SubtitlesBlock;
+  /** Whole-video fades (seconds): in from black / out to black on the final
+   * composite. */
+  fadeIn?: number;
+  fadeOut?: number;
 }
 
 export interface ExportHandle {
@@ -232,7 +236,18 @@ async function buildExportForm(
 
   form.append(
     "spec",
-    JSON.stringify({ projectId, target, ...settings, duration, clips, audio, overlayVideos, overlays })
+    JSON.stringify({
+      projectId,
+      target,
+      ...settings,
+      duration,
+      fadeIn: doc.fadeIn ?? 0,
+      fadeOut: doc.fadeOut ?? 0,
+      clips,
+      audio,
+      overlayVideos,
+      overlays,
+    })
   );
   return form;
 }

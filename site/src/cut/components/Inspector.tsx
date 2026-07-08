@@ -239,12 +239,18 @@ function LayoutButtons({
 function ClipPanel({ clip }: { clip: VideoClip }) {
   const asset = useEditor((s) => s.assets.find((a) => a.id === clip.assetId));
   const updateClip = useEditor((s) => s.updateClip);
-  // A cross-dissolve dissolves this clip into the next one, so only offer it
-  // when there is a next clip on the track.
+  // A transition hands this clip into the next one, so only offer it when
+  // there is a next clip on the track.
   const hasNext = useEditor((s) => {
     const i = s.clips.findIndex((c) => c.id === clip.id);
     return i >= 0 && i < s.clips.length - 1;
   });
+  // The whole-video fades are project-level but live on the clips that show
+  // them: fade in on the first clip's panel, fade out on the last clip's.
+  const isFirst = useEditor((s) => s.clips[0]?.id === clip.id);
+  const isLast = useEditor((s) => s.clips[s.clips.length - 1]?.id === clip.id);
+  const fadeIn = useEditor((s) => s.fadeIn);
+  const fadeOut = useEditor((s) => s.fadeOut);
   const [speedDraft, setSpeedDraft] = useState<number | null>(null);
   const [xfadeDraft, setXfadeDraft] = useState<number | null>(null);
   const speed = speedDraft ?? clip.speed ?? 1;
@@ -276,6 +282,36 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
           />
           <Value className="w-9 text-right text-muted-foreground">{speed.toFixed(2)}×</Value>
         </Row>
+        {isFirst && (
+          <Row label="Fade in">
+            <Slider
+              className="project-fade-in data-horizontal:w-24"
+              min={0}
+              max={TRANSITION_MAX}
+              step={0.1}
+              value={fadeIn}
+              onValueChange={(v) => useEditor.getState().setProjectFade({ fadeIn: Number(v) })}
+            />
+            <Value className="w-9 text-right text-muted-foreground">
+              {fadeIn < 0.05 ? "Off" : `${fadeIn.toFixed(1)}s`}
+            </Value>
+          </Row>
+        )}
+        {isLast && (
+          <Row label="Fade out">
+            <Slider
+              className="project-fade-out data-horizontal:w-24"
+              min={0}
+              max={TRANSITION_MAX}
+              step={0.1}
+              value={fadeOut}
+              onValueChange={(v) => useEditor.getState().setProjectFade({ fadeOut: Number(v) })}
+            />
+            <Value className="w-9 text-right text-muted-foreground">
+              {fadeOut < 0.05 ? "Off" : `${fadeOut.toFixed(1)}s`}
+            </Value>
+          </Row>
+        )}
         {hasNext && (
           <>
             <Row label="Transition">

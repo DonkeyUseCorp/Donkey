@@ -89,6 +89,10 @@ interface EditorState {
   overlays: TextOverlay[];
   /** Output frame (9:16 vertical or 16:9 widescreen), persisted per project. */
   aspect: Aspect;
+  /** Whole-video fades, seconds (0 = off): in from black at the start, out to
+   * black at the end of the cut. Applied to the final picture and mix. */
+  fadeIn: number;
+  fadeOut: number;
   selection: Selection;
   /** Everything selected, including `selection` (the primary that drives the
    * inspector). Bulk actions — delete, copy — act on this whole set. */
@@ -118,6 +122,9 @@ interface EditorState {
   setSaveState: (s: SaveState) => void;
 
   setAspect: (a: Aspect) => void;
+  /** Set the whole-video fade in/out (seconds; 0 clears). Like the aspect,
+   * project-level settings sit outside the undo history. */
+  setProjectFade: (patch: { fadeIn?: number; fadeOut?: number }) => void;
   addAsset: (asset: MediaAsset) => void;
   updateAsset: (id: string, patch: Partial<MediaAsset>) => void;
   /** Remove a project asset and any clips/audio that reference it. */
@@ -293,6 +300,8 @@ export const useEditor = create<EditorState>((set, get) => {
     overlayClips: [],
     overlays: [],
     aspect: "9:16",
+    fadeIn: 0,
+    fadeOut: 0,
     selection: null,
     multiSelection: [],
     currentTime: 0,
@@ -324,6 +333,8 @@ export const useEditor = create<EditorState>((set, get) => {
         overlayClips: [],
         overlays: [],
         aspect: "9:16",
+        fadeIn: 0,
+        fadeOut: 0,
         selection: null,
         multiSelection: [],
         currentTime: 0,
@@ -349,6 +360,8 @@ export const useEditor = create<EditorState>((set, get) => {
           overlayClips: doc.overlayClips ?? [],
           overlays: doc.overlays,
           aspect: doc.aspect ?? "9:16",
+          fadeIn: doc.fadeIn ?? 0,
+          fadeOut: doc.fadeOut ?? 0,
           // View state lives in IndexedDB; doc.ui covers projects saved
           // before the move.
           pxPerSec: Math.max(12, Math.min(800, ui.pxPerSec ?? doc.ui?.pxPerSec ?? 60)),
@@ -394,6 +407,14 @@ export const useEditor = create<EditorState>((set, get) => {
     },
 
     setAspect: (a) => set({ aspect: a }),
+    setProjectFade: (patch) => {
+      const clamp = (v: number | undefined) =>
+        v === undefined ? undefined : Math.max(0, Math.min(TRANSITION_MAX, v));
+      set((s) => ({
+        fadeIn: clamp(patch.fadeIn) ?? s.fadeIn,
+        fadeOut: clamp(patch.fadeOut) ?? s.fadeOut,
+      }));
+    },
 
     addAsset: (asset) =>
       set((s) => {
@@ -1478,6 +1499,8 @@ export function serializeDoc(s: {
   overlayClips: OverlayClip[];
   overlays: TextOverlay[];
   aspect: Aspect;
+  fadeIn: number;
+  fadeOut: number;
   publish: { caption: string; tags: string; soundTitle: string; handle: string };
   notes: { text: string; publishedAt: string; links: string[] };
   subtitles: SubtitlesBlock;
@@ -1501,6 +1524,8 @@ export function serializeDoc(s: {
     overlayClips: s.overlayClips,
     overlays: s.overlays,
     aspect: s.aspect,
+    ...(s.fadeIn > 0 ? { fadeIn: s.fadeIn } : {}),
+    ...(s.fadeOut > 0 ? { fadeOut: s.fadeOut } : {}),
     subtitles: s.subtitles,
     publish: { ...s.publish },
     notes: { ...s.notes, links: [...s.notes.links] },
