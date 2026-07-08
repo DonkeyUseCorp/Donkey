@@ -11,12 +11,16 @@ import type { ClipSpan, FrameRect, MediaAsset, OverlayClip, VideoClip } from "@/
 // frame, so an aspect switch takes effect seamlessly.
 
 /**
- * Preview engine. One hidden <video> per asset and one <audio> per soundtrack
- * clip; the active clip's video element is the master clock while playing and
- * every frame is composited onto the preview canvas (contain-fit, matching the
- * export's letterboxing).
+ * Preview engine. One hidden <video> per base clip and one <audio> per
+ * soundtrack clip; the active clip's video element is the master clock while
+ * playing and every frame is composited onto the preview canvas (contain-fit,
+ * matching the export's letterboxing).
  */
 class Engine {
+  // Keyed by clip id, not asset id: two trims of the same source get their own
+  // decoders, so a cross-dissolve can show both at once and the incoming clip
+  // warms during the overlap instead of fighting the outgoing one over a single
+  // element's seek head (the black flash between same-source segments).
   private videoEls = new Map<string, HTMLVideoElement>();
   // One element per overlay clip (keyed by clip id, not asset) so the same
   // source can appear on two tracks at once.
@@ -53,15 +57,15 @@ class Engine {
     this.audioEls.clear();
   }
 
-  private videoFor(asset: MediaAsset) {
-    let el = this.videoEls.get(asset.id);
+  private videoFor(clip: VideoClip, asset: MediaAsset) {
+    let el = this.videoEls.get(clip.id);
     if (!el) {
       el = document.createElement("video");
       el.playsInline = true;
       el.preload = "auto";
       el.crossOrigin = "anonymous";
       el.src = asset.url;
-      this.videoEls.set(asset.id, el);
+      this.videoEls.set(clip.id, el);
     }
     return el;
   }
@@ -69,7 +73,7 @@ class Engine {
   /** Seek/rate/play one clip's element toward its frame at timeline time `t`,
    * without touching any other element (the caller pauses stale ones). */
   private prepare(span: ClipSpan, t: number, play: boolean, muted: boolean) {
-    const el = this.videoFor(span.asset);
+    const el = this.videoFor(span.clip, span.asset);
     const speed = clipSpeed(span.clip);
     if (el.playbackRate !== speed) el.playbackRate = speed;
     const target = span.clip.in + Math.max(0, t - span.start) * speed;
@@ -94,8 +98,8 @@ class Engine {
   }
 
   private pauseExcept(keep: Set<string>) {
-    for (const [assetId, el] of this.videoEls) {
-      if (!keep.has(assetId) && !el.paused) el.pause();
+    for (const [clipId, el] of this.videoEls) {
+      if (!keep.has(clipId) && !el.paused) el.pause();
     }
   }
 
@@ -196,16 +200,24 @@ class Engine {
     // A hidden clip is silent as well as black.
     const masterEl = this.prepare(masterSpan, t, play, masterSpan.clip.muted || !!masterSpan.clip.hidden);
     this.activeClipId = masterSpan.clip.id;
-    const keep = new Set([masterSpan.asset.id]);
+    const keep = new Set([masterSpan.clip.id]);
     const next = spans[spans.indexOf(masterSpan) + 1];
     let incEl: HTMLVideoElement | null = null;
     let alpha = 0;
-    // Same asset on both sides shares one <video>, so it can't show two frames
-    // at once — fall back to a hard cut there.
-    if (masterSpan.transitionOut > 0 && next && t >= next.start && next.asset.id !== masterSpan.asset.id) {
+    // Warm the next clip's decoder shortly before its entrance (the dissolve
+    // start, or the hard cut) so it enters with a frame already decoded — a
+    // cold element would sit invisible for the first frames of the fade.
+    if (next && t < next.start && t >= next.start - 1) {
+      this.prepare(next, next.start, false, true);
+      keep.add(next.clip.id);
+    }
+    // Once the incoming footprint starts, dissolve it in over the master. Each
+    // clip owns its element, so the two decode side by side — a true blend even
+    // when they are trims of the same source.
+    if (masterSpan.transitionOut > 0 && next && t >= next.start) {
       alpha = (t - next.start) / masterSpan.transitionOut;
       incEl = this.prepare(next, t, play, true); // the outgoing clip keeps the audio
-      keep.add(next.asset.id);
+      keep.add(next.clip.id);
     }
     this.pauseExcept(keep);
     // No clear here — the tick clears once, then draws the below tracks, so the
@@ -333,6 +345,17 @@ class Engine {
 
     const s = useEditor.getState();
     const spans = getClipSpans(s.clips, s.assets);
+    // Drop decoders for clips that no longer exist (deleted or replaced).
+    if (this.videoEls.size > s.clips.length) {
+      const live = new Set(s.clips.map((c) => c.id));
+      for (const [id, el] of this.videoEls) {
+        if (live.has(id)) continue;
+        el.pause();
+        el.removeAttribute("src");
+        el.load();
+        this.videoEls.delete(id);
+      }
+    }
     // Whole-project length so time past the base (a longer upper/lower track or
     // soundtrack) is still reachable while scrubbing and playing.
     const total = projectDuration(s);
@@ -360,7 +383,7 @@ class Engine {
       if (span) {
         const el = this.prepare(span, Math.min(pt, span.start + span.len), false, true);
         if (el.readyState < 2 || !el.videoWidth) {
-          this.pauseExcept(new Set([span.asset.id]));
+          this.pauseExcept(new Set([span.clip.id]));
           this.syncSoundtrack(t, false);
           return;
         }
@@ -379,6 +402,19 @@ class Engine {
     }
 
     let span = spans.find((sp) => t >= sp.start && t < sp.start + sp.len);
+
+    // A just-started or just-scrubbed clip may still be decoding. Hold the last
+    // painted frame rather than clearing to black — same as the skim path. (At a
+    // dissolve boundary the incoming clip is already warm from the overlap, so
+    // this only bites a genuinely cold first frame.)
+    if (span) {
+      const el = this.prepare(span, t, true, span.clip.muted || !!span.clip.hidden);
+      if (el.readyState < 2 || !el.videoWidth) {
+        this.pauseExcept(new Set([span.clip.id]));
+        this.syncSoundtrack(t, true);
+        return;
+      }
+    }
 
     // Draw the below tracks first (backdrop), then prime the master element
     // (and any dissolve partner) over them and read the clock.
