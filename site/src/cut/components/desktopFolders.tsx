@@ -64,7 +64,7 @@ export function buildDragGhost(count: number, label: string): HTMLElement {
 
 /** Folder tile glyph: the Lucide folder, filled blue. */
 export function FolderGlyph({ className }: { className?: string }) {
-  return <Folder className={cn("fill-[#8cc5ff] text-[#4a9df0]", className)} aria-hidden="true" />;
+  return <Folder className={cn("fill-[#8cc5ff] text-[#8cc5ff]", className)} aria-hidden="true" />;
 }
 
 // Elements a press should not turn into a rubber-band: the cards themselves
@@ -227,8 +227,8 @@ export function FolderShelf<F extends DeskFolder>({
         const s = statOf(f.id);
         const isOver = over === f.id;
         return editingId === f.id ? (
-          <div key={f.id} className="flex w-[116px] flex-col items-center gap-1 pt-1.5">
-            <FolderGlyph className="size-[52px]" />
+          <div key={f.id} className="flex w-[92px] flex-col items-center gap-1 pt-1.5">
+            <FolderGlyph className="size-[40px]" />
             <Input
               autoFocus
               value={draft}
@@ -246,7 +246,7 @@ export function FolderShelf<F extends DeskFolder>({
         ) : (
           <div
             key={f.id}
-            className="group/f relative flex w-[116px] cursor-pointer flex-col items-center rounded-xl px-2 py-1.5 text-center transition-colors hover:bg-muted/60"
+            className="group/f relative flex w-[92px] cursor-pointer flex-col items-center rounded-xl px-2 py-1.5 text-center transition-colors hover:bg-muted/60"
             onClick={() => onOpen(f.id)}
             onDoubleClick={() => {
               setDraft(f.name);
@@ -266,7 +266,7 @@ export function FolderShelf<F extends DeskFolder>({
             }}
           >
             <div className={cn("grid place-items-center transition-transform", isOver && "scale-105")}>
-              <FolderGlyph className={cn("size-[52px] drop-shadow-sm", isOver && "brightness-110")} />
+              <FolderGlyph className={cn("size-[40px] drop-shadow-sm", isOver && "brightness-110")} />
             </div>
             <span className="mt-0.5 line-clamp-2 max-w-full text-xs font-medium leading-tight">
               {f.name}
@@ -309,8 +309,8 @@ export function FolderShelf<F extends DeskFolder>({
       })}
 
       {creating ? (
-        <div className="flex w-[116px] flex-col items-center gap-1 pt-1.5">
-          <FolderGlyph className="size-[52px] opacity-60" />
+        <div className="flex w-[92px] flex-col items-center gap-1 pt-1.5">
+          <FolderGlyph className="size-[40px] opacity-60" />
           <Input
             autoFocus
             value={draft}
@@ -329,14 +329,14 @@ export function FolderShelf<F extends DeskFolder>({
         </div>
       ) : (
         <button
-          className="flex w-[116px] flex-col items-center rounded-xl px-2 py-1.5 text-center text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+          className="flex w-[92px] flex-col items-center rounded-xl px-2 py-1.5 text-center text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
           onClick={() => {
             setDraft("");
             setCreating(true);
           }}
         >
-          <span className="grid h-[46px] w-[68px] place-items-center rounded-lg border-2 border-dashed border-border">
-            <FolderPlus className="size-6" />
+          <span className="grid h-[38px] w-[56px] place-items-center rounded-lg border-2 border-dashed border-border">
+            <FolderPlus className="size-5" />
           </span>
           <span className="mt-0.5 text-xs">New folder</span>
         </button>
