@@ -371,6 +371,9 @@ class Engine {
     let t = Math.min(s.currentTime, total);
 
     if (!s.playing) {
+      // Not advancing: drop the wall-clock stamp so the first playing tick
+      // starts a fresh delta instead of leaping over the paused stretch.
+      this.lastPlayNow = 0;
       // iMovie skimming: while the mouse hovers the timeline, preview the
       // frame under it. The playhead (currentTime) is never touched.
       const pt =
@@ -424,13 +427,20 @@ class Engine {
 
     if (span) {
       let el = this.composite(span, spans, t, true);
-      // The active element is the master clock; source time maps back through
-      // the clip's speed.
+      // The element clock is the truth but it's coarse: currentTime advances in
+      // steps bigger than a frame, and copying it straight to the playhead
+      // makes the indicator stutter and step backward. Advance by wall clock
+      // instead — smooth by construction and never backward — and let the
+      // element clock steer it: the playhead may run at most 60ms ahead of the
+      // clock (a stalled element halts it with the picture) and snaps forward
+      // only when the clock genuinely leads.
+      const now = performance.now();
+      const dt = this.lastPlayNow ? Math.min(0.25, (now - this.lastPlayNow) / 1000) : 0;
       const speed = clipSpeed(span.clip);
       const derived = span.start + (el.currentTime - span.clip.in) / speed;
-      if (Math.abs(derived - t) < 1.5) {
-        t = Math.max(span.start, Math.min(derived, span.start + span.len));
-      }
+      const cand = Math.min(t + dt, derived + 0.06);
+      t = derived - cand > 0.25 ? derived : Math.max(t, cand);
+      t = Math.max(span.start, Math.min(t, span.start + span.len));
       // Clip boundary: hand off to the next clip, or (if the base is done but an
       // upper/lower track runs on) fall through to the wall-clock tail.
       if (el.currentTime >= span.clip.out - 0.02 || el.ended) {
@@ -455,7 +465,7 @@ class Engine {
           return;
         }
       }
-      this.lastPlayNow = performance.now();
+      this.lastPlayNow = now;
     } else {
       // Past the base track but an upper/lower track is still playing: no master
       // element, so advance time by the wall clock and let the overlays follow.
