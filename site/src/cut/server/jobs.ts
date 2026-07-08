@@ -187,6 +187,28 @@ export async function createJob(form: FormData): Promise<Job> {
   return job;
 }
 
+/** The H.264 encoder to use, probed once against the same `ffmpeg` the exports
+ * spawn. Prefer libx264 (CRF + presets) when the build carries it — the dev
+ * Homebrew ffmpeg does. The bundled engine ffmpeg is LGPL (`--disable-gpl`), so
+ * it has no libx264 and `-preset`/`-crf` don't exist there; fall back to the
+ * always-present VideoToolbox hardware H.264 encoder. */
+let h264EncoderCache: Promise<"libx264" | "h264_videotoolbox"> | null = null;
+function h264Encoder(): Promise<"libx264" | "h264_videotoolbox"> {
+  return (h264EncoderCache ??= new Promise((resolve) => {
+    let out = "";
+    const proc = spawn("ffmpeg", ["-hide_banner", "-encoders"]);
+    proc.stdout?.on("data", (c: Buffer) => (out += c.toString()));
+    proc.on("error", () => resolve("h264_videotoolbox"));
+    proc.on("close", () => resolve(/\blibx264\b/.test(out) ? "libx264" : "h264_videotoolbox"));
+  }));
+}
+
+/** VideoToolbox constant quality (1–100, higher = better) from the CRF knob the
+ * presets carry (lower CRF = better). Maps the 19/24/30 tiers to ~66/57/46. */
+function vtQuality(crf: number) {
+  return Math.round(Math.max(35, Math.min(80, 100 - crf * 1.8)));
+}
+
 async function resolveMedia(spec: ExportSpec, file: string) {
   const p = mediaPath(spec.projectId, file);
   const info = await stat(p).catch(() => null);
@@ -471,15 +493,19 @@ async function runExport(job: Job, spec: ExportSpec) {
     aLabel = "amix";
   }
 
+  const enc = await h264Encoder();
+  const videoCodecArgs =
+    enc === "libx264"
+      ? ["-c:v", "libx264", "-preset", spec.preset, "-crf", String(spec.crf)]
+      : ["-c:v", "h264_videotoolbox", "-q:v", String(vtQuality(spec.crf)), "-allow_sw", "1"];
+
   const args = [
     "-y",
     ...inputs,
     "-filter_complex", filters.join(";"),
     "-map", `[${vLabel}]`,
     "-map", `[${aLabel}]`,
-    "-c:v", "libx264",
-    "-preset", spec.preset,
-    "-crf", String(spec.crf),
+    ...videoCodecArgs,
     "-profile:v", "high",
     "-pix_fmt", "yuv420p",
     "-color_range", "tv",
