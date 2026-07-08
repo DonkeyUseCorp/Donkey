@@ -1792,11 +1792,16 @@ function TextBar({
     s.pushHistory();
     const start0 = o.start;
     const lane = o.lane ?? 0;
-    // The left edge grows into the room down to the previous title on this lane
-    // (or the timeline start). `end - 0.2` keeps a minimum width when shrinking.
-    const min = s.overlays
+    // Titles before this one on the same lane, at their original spots. The
+    // edge grows freely into the open gap; past the neighbor it shoves the run
+    // left, closing gap after gap until everything sits flush against 0 — the
+    // hard floor. `end - 0.2` keeps a minimum width when shrinking.
+    const leaders = s.overlays
       .filter((t) => (t.lane ?? 0) === lane && t.id !== o.id && t.end <= start0 + 1e-3)
-      .reduce((m, t) => Math.max(m, t.end), 0);
+      .map((t) => ({ id: t.id, start: t.start, len: t.end - t.start }))
+      .sort((a, b) => a.start - b.start);
+    const prevEnd = leaders.reduce((m, l) => Math.max(m, l.start + l.len), 0);
+    const floor = leaders.reduce((sum, l) => sum + l.len, 0);
     const max = o.end - 0.2;
     const targets = textSnapTargets(s, o.id);
     const tol = SNAP_PX / pps;
@@ -1805,33 +1810,49 @@ function TextBar({
         cancelAnimationFrame(snapRaf.current);
         const desired = Math.min(max, start0 + dx / pps);
         let start: number;
-        if (desired >= min) {
+        if (desired >= prevEnd) {
           // Room to the left: grow freely, snapping to logical times.
           start = desired;
           const hit = ev.metaKey ? null : nearestSnap(start, targets, tol);
-          if (hit !== null && hit >= min && hit <= max) {
+          if (hit !== null && hit >= prevEnd && hit <= max) {
             start = hit;
             onSnap(leftGuide(hit));
           } else onSnap(null);
         } else {
-          // No room: let it drag past with resistance (it snaps back on release).
-          start = Math.max(0, min - rubberBand((min - desired) * pps, LEFT_RUBBER_PX) / pps);
+          // Pushing: past the floor it drags with resistance and snaps back.
+          start =
+            desired >= floor
+              ? desired
+              : Math.max(0, floor - rubberBand((floor - desired) * pps, LEFT_RUBBER_PX) / pps);
           onSnap(null);
         }
-        s.updateOverlayTransient(o.id, { start });
+        // Re-lay the leaders right-to-left from their resting spots: each one
+        // slides only as far as the pushed edge (or the title it now abuts)
+        // forces it, so a retreating drag lets the run flow back.
+        const patches: { id: string; patch: Partial<TextOverlay> }[] = [
+          { id: o.id, patch: { start } },
+        ];
+        let limit = Math.max(start, floor);
+        for (let i = leaders.length - 1; i >= 0; i--) {
+          const l = leaders[i];
+          const end = Math.min(l.start + l.len, limit);
+          patches.push({ id: l.id, patch: { start: end - l.len, end } });
+          limit = end - l.len;
+        }
+        s.updateOverlaysTransient(patches);
       },
       onUp: () => {
         onSnap(null);
-        const from = useEditor.getState().overlays.find((x) => x.id === o.id)?.start ?? min;
-        if (from >= min - 1e-4) return; // settled within the room, nothing to undo
-        // Elastic snap back to the limit.
+        const from = useEditor.getState().overlays.find((x) => x.id === o.id)?.start ?? floor;
+        if (from >= floor - 1e-4) return; // settled within the room, nothing to undo
+        // Elastic snap back to the floor.
         const t0 = performance.now();
         const step = (now: number) => {
           const p = Math.min(1, (now - t0) / 240);
-          const v = from + (min - from) * easeOutBack(p);
+          const v = from + (floor - from) * easeOutBack(p);
           useEditor.getState().updateOverlayTransient(o.id, { start: Math.max(0, v) });
           if (p < 1) snapRaf.current = requestAnimationFrame(step);
-          else useEditor.getState().updateOverlayTransient(o.id, { start: min });
+          else useEditor.getState().updateOverlayTransient(o.id, { start: floor });
         };
         snapRaf.current = requestAnimationFrame(step);
       },
