@@ -70,7 +70,14 @@ export function buildAiContext(opts?: { fullCues?: boolean }) {
       muted: sp.clip.muted,
       framing: sp.clip.fit ?? "fit",
       speed: r(sp.clip.speed ?? 1),
-      ...(sp.transitionOut > 0 ? { crossfadeToNext: r(sp.transitionOut) } : {}),
+      ...((sp.clip.transition ?? 0) > 0 && index < spans.length - 1
+        ? {
+            transitionToNext: {
+              style: sp.clip.transitionStyle ?? "crossfade",
+              seconds: r(sp.clip.transition ?? 0),
+            },
+          }
+        : {}),
       ...(sp.clip.fit === "fill"
         ? { panX: r(sp.clip.panX ?? 0), panY: r(sp.clip.panY ?? 0) }
         : {}),

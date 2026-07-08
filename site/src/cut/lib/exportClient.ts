@@ -142,7 +142,37 @@ async function buildExportForm(
     speed: clipSpeed(sp.clip),
     transition: sp.transitionOut,
     hidden: sp.clip.hidden,
+    headFade: 0,
+    tailFade: 0,
+    headZoom: 0,
+    tailZoom: 0,
   }));
+
+  // Translate each joint's transition style into per-segment ramps so the
+  // server spec stays dumb. Cross zoom rides the crossfade overlap with a zoom
+  // ramp on both sides; edge styles ramp one clip's edge around a hard cut
+  // (their `transition` ships as 0 overlap, so the join stays a plain concat).
+  spans.forEach((sp, i) => {
+    const next = spans[i + 1];
+    if (!next) return;
+    const style = sp.clip.transitionStyle ?? "crossfade";
+    const d = sp.clip.transition ?? 0;
+    if (d <= 0) return;
+    const a = clips[i];
+    const b = clips[i + 1];
+    if (style === "crosszoom" && sp.transitionOut > 0) {
+      a.tailZoom = sp.transitionOut;
+      b.headZoom = sp.transitionOut;
+    } else if (style === "fadeout") {
+      a.tailFade = Math.min(d, sp.len);
+    } else if (style === "zoomin") {
+      a.tailZoom = Math.min(d, sp.len);
+    } else if (style === "fadein") {
+      b.headFade = Math.min(d, next.len);
+    } else if (style === "zoomout") {
+      b.headZoom = Math.min(d, next.len);
+    }
+  });
 
   // Upper video tracks composited over the base; hidden ones are dropped.
   const overlayVideos = doc.overlayClips

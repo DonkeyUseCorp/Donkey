@@ -24,18 +24,20 @@ import { writeTextStyle } from "@/cut/lib/textStyle";
 import { formatTime } from "@/cut/lib/time";
 import {
   FONTS,
-  isFullRect,
   LAYOUTS,
   rectOf,
   regionLabel,
   SPEED_MAX,
   SPEED_MIN,
   TRANSITION_MAX,
+  TRANSITION_STYLE_IDS,
+  TRANSITION_STYLE_LABELS,
   type AudioClip,
   type FrameRect,
   type LayoutId,
   type OverlayClip,
   type TextOverlay,
+  type TransitionStyle,
   type VideoClip,
 } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
@@ -275,23 +277,48 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
           <Value className="w-9 text-right text-muted-foreground">{speed.toFixed(2)}×</Value>
         </Row>
         {hasNext && (
-          <Row label="Crossfade">
-            <Slider
-              className="clip-xfade data-horizontal:w-24"
-              min={0}
-              max={TRANSITION_MAX}
-              step={0.1}
-              value={xfade}
-              onValueChange={(v) => setXfadeDraft(Number(v))}
-              onValueCommitted={() => {
-                if (xfadeDraft != null) useEditor.getState().setClipTransition(clip.id, xfadeDraft);
-                setXfadeDraft(null);
-              }}
-            />
-            <Value className="w-9 text-right text-muted-foreground">
-              {xfade < 0.05 ? "Off" : `${xfade.toFixed(1)}s`}
-            </Value>
-          </Row>
+          <>
+            <Row label="Transition">
+              <Select
+                value={clip.transitionStyle ?? "crossfade"}
+                onValueChange={(v) =>
+                  // Picking a style with the length still at zero turns the
+                  // transition on at a sensible default.
+                  useEditor
+                    .getState()
+                    .setClipTransition(clip.id, xfade >= 0.05 ? xfade : 0.5, v as TransitionStyle)
+                }
+              >
+                <SelectTrigger className="clip-transition-style h-7 w-[8.5rem] text-[12px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {TRANSITION_STYLE_IDS.map((id) => (
+                    <SelectItem key={id} value={id} className="text-[12px]">
+                      {TRANSITION_STYLE_LABELS[id]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Row>
+            <Row label="Length">
+              <Slider
+                className="clip-xfade data-horizontal:w-24"
+                min={0}
+                max={TRANSITION_MAX}
+                step={0.1}
+                value={xfade}
+                onValueChange={(v) => setXfadeDraft(Number(v))}
+                onValueCommitted={() => {
+                  if (xfadeDraft != null) useEditor.getState().setClipTransition(clip.id, xfadeDraft);
+                  setXfadeDraft(null);
+                }}
+              />
+              <Value className="w-9 text-right text-muted-foreground">
+                {xfade < 0.05 ? "Off" : `${xfade.toFixed(1)}s`}
+              </Value>
+            </Row>
+          </>
         )}
         <Row label="Mute audio">
           <Switch

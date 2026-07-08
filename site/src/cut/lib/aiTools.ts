@@ -4,7 +4,7 @@ import { apiFetch } from "./api";
 import { enrichAsset, ensurePeaks } from "./media";
 import { getClipSpans, TIMELINE_H_MAX, TIMELINE_H_MIN, totalDuration, useEditor } from "./store";
 import { buildAiContext } from "./aiContext";
-import { FRAME, mediaUrl, type FontId, type MediaAsset } from "./types";
+import { FRAME, mediaUrl, TRANSITION_STYLE_IDS, type FontId, type MediaAsset, type TransitionStyle } from "./types";
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -347,11 +347,16 @@ export async function runAiTool(
     case "set_transition": {
       const clip = requireItem(s.clips, input.clipId, "video clip");
       if (s.clips.findIndex((c) => c.id === clip.id) === s.clips.length - 1)
-        throw new ToolError("The last clip has no next clip to dissolve into.");
-      if (!isNum(input.seconds)) throw new ToolError("seconds is required (0 clears the crossfade).");
-      s.setClipTransition(clip.id, input.seconds);
+        throw new ToolError("The last clip has no next clip to transition into.");
+      if (!isNum(input.seconds)) throw new ToolError("seconds is required (0 clears the transition).");
+      let style: TransitionStyle | undefined;
+      if (input.style !== undefined) {
+        style = TRANSITION_STYLE_IDS.find((x) => x === input.style);
+        if (!style) throw new ToolError(`Unknown style. Use one of: ${TRANSITION_STYLE_IDS.join(", ")}.`);
+      }
+      s.setClipTransition(clip.id, input.seconds, style);
       const next = useEditor.getState().clips.find((c) => c.id === clip.id)!;
-      return { id: next.id, transition: next.transition ?? 0 };
+      return { id: next.id, transition: next.transition ?? 0, style: next.transitionStyle ?? "crossfade" };
     }
 
     case "merge_cue": {

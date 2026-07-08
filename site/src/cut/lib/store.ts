@@ -18,10 +18,11 @@ import type {
   TemplateMedia,
   TemplateSaveInput,
   TextOverlay,
+  TransitionStyle,
   VideoClip,
 } from "./types";
 import { apiFetch } from "./api";
-import { emptySubtitles, mediaUrl, SPEED_MAX, SPEED_MIN, TRANSITION_MAX } from "./types";
+import { emptySubtitles, isCrossStyle, mediaUrl, SPEED_MAX, SPEED_MIN, TRANSITION_MAX } from "./types";
 import { readTextStyle } from "./textStyle";
 import { loadUiState, saveUiState } from "./uiState";
 
@@ -133,8 +134,9 @@ interface EditorState {
   /** Set a clip's playback rate (0.25–4). The clip's timeline footprint
    * changes, so later titles/captions ripple to stay in sync. */
   setClipSpeed: (id: string, speed: number) => void;
-  /** Set the cross-dissolve into the next clip (seconds; 0 clears it). */
-  setClipTransition: (id: string, seconds: number) => void;
+  /** Set the transition into the next clip (seconds; 0 clears it), optionally
+   * changing its style; omitting the style keeps the clip's current one. */
+  setClipTransition: (id: string, seconds: number, style?: TransitionStyle) => void;
   updateAudio: (id: string, patch: Partial<AudioClip>) => void;
   updateOverlay: (id: string, patch: Partial<TextOverlay>) => void;
   /** Live-drag updates that should not create undo entries. */
@@ -548,19 +550,27 @@ export const useEditor = create<EditorState>((set, get) => {
       get().rippleShift(editEnd, newLen - oldLen);
     },
 
-    setClipTransition: (id, seconds) => {
+    setClipTransition: (id, seconds, style) => {
       const s = get();
       const idx = s.clips.findIndex((c) => c.id === id);
       if (idx < 0) return;
       const clip = s.clips[idx];
       const next = s.clips[idx + 1];
       const value = Math.max(0, Math.min(TRANSITION_MAX, seconds));
+      const newStyle = value > 0 ? (style ?? clip.transitionStyle ?? "crossfade") : undefined;
       const oldOverlap = transitionOverlap(clip, next);
-      const newOverlap = transitionOverlap({ ...clip, transition: value }, next);
+      const newOverlap = transitionOverlap(
+        { ...clip, transition: value, transitionStyle: newStyle },
+        next
+      );
       const span = getClipSpans(s.clips, s.assets).find((sp) => sp.clip.id === id);
       const editEnd = (span?.start ?? 0) + (span?.len ?? clipLen(clip));
       push();
-      get().updateClipTransient(id, { transition: value || undefined });
+      get().updateClipTransient(id, {
+        transition: value || undefined,
+        // "crossfade" is the default — store it as absence to keep docs lean.
+        transitionStyle: newStyle === "crossfade" ? undefined : newStyle,
+      });
       get().rippleShift(editEnd, oldOverlap - newOverlap);
     },
 
@@ -801,7 +811,7 @@ export const useEditor = create<EditorState>((set, get) => {
       const cutAt = span.clip.in + (t - span.start) * clipSpeed(span.clip);
       // The left half hard-cuts into the right; the right keeps the original
       // dissolve into whatever came after.
-      const left: VideoClip = { ...span.clip, out: cutAt, transition: undefined };
+      const left: VideoClip = { ...span.clip, out: cutAt, transition: undefined, transitionStyle: undefined };
       const right: VideoClip = { ...span.clip, id: uid(), in: cutAt };
       set((s) => {
         const idx = s.clips.findIndex((c) => c.id === span.clip.id);
@@ -1511,12 +1521,14 @@ export function clipLen(c: VideoClip | AudioClip) {
   return Math.max(MIN_LEN, eff);
 }
 
-/** Cross-dissolve overlap (timeline seconds) between a clip and its successor,
- * clamped so it can never swallow either clip whole. 0 when there is no next
- * clip or no transition set. */
+/** Overlap (timeline seconds) between a clip and its successor, clamped so it
+ * can never swallow either clip whole. 0 when there is no next clip, no
+ * transition set, or the style is an edge style (those ramp one clip's edge
+ * around a hard cut instead of overlapping). */
 export function transitionOverlap(a: VideoClip, b: VideoClip | undefined): number {
   const d = a.transition ?? 0;
   if (!b || d <= 0) return 0;
+  if (!isCrossStyle(a.transitionStyle ?? "crossfade")) return 0;
   return Math.min(d, clipLen(a) * 0.9, clipLen(b) * 0.9);
 }
 

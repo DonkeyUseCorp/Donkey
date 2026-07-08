@@ -242,8 +242,16 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "set_transition",
     description:
-      "Set a cross-dissolve from this clip into the next one, in seconds (0 clears it, max 2). The two clips overlap by that much, so the cut shortens. Only valid when a next clip exists.",
-    inputSchema: obj({ clipId: str("Video clip id (the clip the dissolve starts from)"), seconds: num("Dissolve length in seconds, 0–2 (0 = hard cut)") }, ["clipId", "seconds"]),
+      "Set the transition from this clip into the next one, in seconds (0 clears it, max 2). crossfade/crosszoom overlap the two clips so the cut shortens; fadeout/zoomin ramp the outgoing tail and fadein/zoomout the incoming head around a hard cut. Only valid when a next clip exists.",
+    inputSchema: obj({
+      clipId: str("Video clip id (the clip the transition starts from)"),
+      seconds: num("Transition length in seconds, 0–2 (0 = hard cut)"),
+      style: {
+        type: "string",
+        enum: ["crossfade", "crosszoom", "zoomin", "zoomout", "fadein", "fadeout"],
+        description: "Transition look (default crossfade)",
+      },
+    }, ["clipId", "seconds"]),
   },
   {
     name: "merge_cue",
@@ -291,7 +299,7 @@ Times are in seconds on the shared timeline. The playhead is currentTime; a skim
 - Video track is magnetic: clips are ordered by index; there are no gaps. move_clip reorders. A clip's timeline length is (out-in)/speed; total duration = the sum of those minus any cross-dissolve overlaps.
 - trim_clip changes in/out inside the source media. in >= 0, out <= source duration, out-in >= 0.1.
 - set_speed sets a clip's playback rate (0.25–4×); it changes the clip's timeline length, and later titles/captions ripple to stay in sync.
-- set_transition adds a cross-dissolve from a clip into the next one (0–2s). The clips overlap by that duration, so the cut gets shorter; splitting or deleting clears the affected dissolve.
+- set_transition joins a clip into the next one (0–2s): crossfade/crosszoom overlap the clips (the cut shortens); fadein/fadeout/zoomin/zoomout ramp one side of a hard cut. Splitting or deleting clears the affected transition.
 - split_at cuts the clip under that time into two clips at the exact frame. With a soundtrack clip selected it splits that instead.
 - delete_item removes items; the video track closes the gap automatically. The user can multi-select (⌘/⇧-click) and delete several at once.
 - detach_audio lifts a video clip's sound to the soundtrack track (and mutes the clip) so audio can be cut independently of video.

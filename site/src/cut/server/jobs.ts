@@ -32,6 +32,13 @@ export interface ExportSpec {
     speed?: number; // playback rate, default 1
     /** Cross-dissolve into the next clip, in timeline seconds (overlap). */
     transition?: number;
+    /** Edge-transition ramps, timeline seconds from this segment's head/tail:
+     * fades to/from black and zoom pushes. Cross zoom arrives as a tailZoom on
+     * one clip plus a headZoom on the next, riding the crossfade overlap. */
+    headFade?: number;
+    tailFade?: number;
+    headZoom?: number;
+    tailZoom?: number;
     /** Hidden clips keep their slot but render black + silent. */
     hidden?: boolean;
   }[];
@@ -221,6 +228,9 @@ function clipRate(c: ExportSpec["clips"][number]) {
   return c.speed && c.speed > 0 ? c.speed : 1;
 }
 
+/** Peak scale of zoom transitions — matches TRANSITION_ZOOM in lib/types.ts. */
+const TRANSITION_ZOOM = 1.18;
+
 /** A clip's frame region in even pixels, or null when it fills the whole frame
  * (the common case, which keeps the plain full-frame filter path). */
 function regionPx(
@@ -356,6 +366,11 @@ async function runExport(job: Job, spec: ExportSpec) {
     const idx = inputIndex.get(c.file)!;
     const speed = clipRate(c);
     const dur = clipDur(c);
+    // Edge-transition ramps, clamped so head+tail never overrun the segment.
+    const hz = Math.max(0, Math.min(c.headZoom ?? 0, dur));
+    const tz = Math.max(0, Math.min(c.tailZoom ?? 0, dur - hz));
+    const hf = Math.max(0, Math.min(c.headFade ?? 0, dur));
+    const tf = Math.max(0, Math.min(c.tailFade ?? 0, dur - hf));
     if (videoPresence.get(c.file) && !c.hidden) {
       const region = regionPx(c.frame, W, H);
       let frame: string;
@@ -380,10 +395,56 @@ async function runExport(job: Job, spec: ExportSpec) {
               `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=${padColor}`;
       }
       // setpts/speed rescales the clip's duration on the timeline.
-      filters.push(
+      const core =
         `[${idx}:v]trim=${num(c.in)}:${num(c.out)},setpts=(PTS-STARTPTS)/${num(speed)},` +
-          `fps=${fps},${frame},setsar=1,format=${baseFmt}[v${j}]`
-      );
+        `fps=${fps},${frame},setsar=1,format=${baseFmt}`;
+      const fades =
+        (hf > 0.01 ? `,fade=t=in:st=0:d=${num(hf)}` : "") +
+        (tf > 0.01 ? `,fade=t=out:st=${num(Math.max(0, dur - tf))}:d=${num(tf)}` : "");
+      if (hz > 0.01 || tz > 0.01) {
+        // Zoom ramp on the touched slice only: split the segment, run zoompan
+        // over the head/tail window, and concat back — the per-frame zoom
+        // stays confined to the short transition window. A head ramp settles
+        // TRANSITION_ZOOM→1 (zoom out), a tail ramp pushes 1→TRANSITION_ZOOM
+        // (zoom in); zoompan clamps z below 1 itself, so the plain arithmetic
+        // needs no guards.
+        const ramp = (side: "head" | "tail", secs: number) => {
+          const frames = Math.max(1, Math.round(secs * fps) - 1);
+          const k = num(TRANSITION_ZOOM - 1);
+          const z =
+            side === "tail"
+              ? `1+${k}*in/${frames}`
+              : `${num(TRANSITION_ZOOM)}-${k}*in/${frames}`;
+          return (
+            `zoompan=z=${z}:x=iw/2-(iw/zoom/2):y=ih/2-(ih/zoom/2)` +
+            `:d=1:s=${W}x${H}:fps=${fps},setsar=1,format=${baseFmt}`
+          );
+        };
+        const slices: { from: number; to: number; fx?: string }[] = [];
+        if (hz > 0.01) slices.push({ from: 0, to: hz, fx: ramp("head", hz) });
+        const mid0 = hz > 0.01 ? hz : 0;
+        const mid1 = tz > 0.01 ? dur - tz : dur;
+        if (mid1 - mid0 > 0.01) slices.push({ from: mid0, to: mid1 });
+        if (tz > 0.01) slices.push({ from: dur - tz, to: dur, fx: ramp("tail", tz) });
+        if (slices.length === 1) {
+          filters.push(`${core},${slices[0].fx}${fades}[v${j}]`);
+        } else {
+          filters.push(`${core},split=${slices.length}${slices.map((_, k) => `[vs${j}_${k}]`).join("")}`);
+          slices.forEach((sl, k) => {
+            filters.push(
+              `[vs${j}_${k}]trim=${num(sl.from)}:${num(sl.to)},setpts=PTS-STARTPTS` +
+                (sl.fx ? `,${sl.fx}` : "") +
+                `[vp${j}_${k}]`
+            );
+          });
+          filters.push(
+            slices.map((_, k) => `[vp${j}_${k}]`).join("") +
+              `concat=n=${slices.length}:v=1:a=0${fades}[v${j}]`
+          );
+        }
+      } else {
+        filters.push(`${core}${fades}[v${j}]`);
+      }
     } else {
       // No video stream, or a hidden clip: keep the slot transparent (so a below
       // track shows) when one exists, otherwise plain black.
@@ -394,10 +455,14 @@ async function runExport(job: Job, spec: ExportSpec) {
     }
     if (!c.muted && !c.hidden && audioPresence.get(c.file)) {
       const tempo = speed !== 1 ? `${atempoChain(speed)},` : "";
+      // The picture's fade edges carry the sound with them; zoom edges don't.
+      const afades =
+        (hf > 0.01 ? `,afade=t=in:st=0:d=${num(hf)}` : "") +
+        (tf > 0.01 ? `,afade=t=out:st=${num(Math.max(0, dur - tf))}:d=${num(tf)}` : "");
       filters.push(
         `[${idx}:a]atrim=${num(c.in)}:${num(c.out)},asetpts=PTS-STARTPTS,${tempo}` +
           `aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,` +
-          `apad=whole_dur=${num(dur)},atrim=0:${num(dur)}[a${j}]`
+          `apad=whole_dur=${num(dur)},atrim=0:${num(dur)}${afades}[a${j}]`
       );
     } else {
       filters.push(

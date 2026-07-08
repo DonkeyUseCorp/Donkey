@@ -109,9 +109,12 @@ export interface VideoClip {
   /** Playback rate, default 1 (absent). The source (out-in) seconds play in
    * (out-in)/speed timeline seconds, so >1 is faster and shorter. */
   speed?: number;
-  /** Cross-dissolve into the next clip, in timeline seconds (absent/0 = hard
-   * cut). The two clips overlap by this much, so the cut shortens by it. */
+  /** Transition into the next clip, in timeline seconds (absent/0 = hard cut).
+   * Cross styles overlap the two clips by this much (the cut shortens); edge
+   * styles ramp one clip's edge over this window around a hard cut. */
   transition?: number;
+  /** Look of that transition; absent = "crossfade". */
+  transitionStyle?: TransitionStyle;
   /** Hidden clips stay on the timeline (grayed) but render as black — excluded
    * from the played/exported picture without disturbing the layout. */
   hidden?: boolean;
@@ -143,8 +146,45 @@ export interface OverlayClip {
 /** Speed limits — matches the Inspector control and export atempo range. */
 export const SPEED_MIN = 0.25;
 export const SPEED_MAX = 4;
-/** Longest cross-dissolve offered; also clamps against the clips it joins. */
+/** Longest transition offered; also clamps against the clips it joins. */
 export const TRANSITION_MAX = 2;
+
+/** How a clip hands off to the next one. Cross styles overlap the two clips;
+ * edge styles ramp one side of a hard cut — the outgoing tail (fadeout,
+ * zoomin) or the incoming head (fadein, zoomout). */
+export type TransitionStyle =
+  | "crossfade"
+  | "crosszoom"
+  | "zoomin"
+  | "zoomout"
+  | "fadein"
+  | "fadeout";
+
+export const TRANSITION_STYLE_IDS: TransitionStyle[] = [
+  "crossfade",
+  "crosszoom",
+  "zoomin",
+  "zoomout",
+  "fadein",
+  "fadeout",
+];
+
+export const TRANSITION_STYLE_LABELS: Record<TransitionStyle, string> = {
+  crossfade: "Cross fade",
+  crosszoom: "Cross zoom",
+  zoomin: "Zoom in",
+  zoomout: "Zoom out",
+  fadein: "Fade in",
+  fadeout: "Fade out",
+};
+
+/** Cross styles overlap the clips they join; edge styles never do. */
+export function isCrossStyle(style: TransitionStyle): boolean {
+  return style === "crossfade" || style === "crosszoom";
+}
+
+/** Peak scale the zoom transitions push into (preview and export). */
+export const TRANSITION_ZOOM = 1.18;
 
 /** A clip on the free-form soundtrack track. */
 export interface AudioClip {

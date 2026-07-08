@@ -2,7 +2,7 @@
 
 import { useEffect, type RefObject } from "react";
 import { clipSpeed, getClipSpans, projectDuration, useEditor } from "@/cut/lib/store";
-import { isFullRect, rectOf } from "@/cut/lib/types";
+import { isFullRect, rectOf, TRANSITION_ZOOM } from "@/cut/lib/types";
 import type { ClipSpan, FrameRect, MediaAsset, OverlayClip, VideoClip } from "@/cut/lib/types";
 
 // The canvas backing store is the full frame resolution (1080×1920 or
@@ -105,8 +105,9 @@ class Engine {
 
   /** Draw a video element into a sub-region of the frame. "fill" covers the
    * region and crops the overflow (clipped to the rect); "fit" contains the
-   * whole picture inside it, centered. */
-  private drawIntoRect(el: HTMLVideoElement, rect: FrameRect, fill: boolean, alpha: number) {
+   * whole picture inside it, centered. `zoom` scales the picture around the
+   * region's center (zoom transitions), clipping the overflow to the rect. */
+  private drawIntoRect(el: HTMLVideoElement, rect: FrameRect, fill: boolean, alpha: number, zoom = 1) {
     const ctx = this.canvas.getContext("2d");
     if (!ctx) return;
     const W = this.canvas.width;
@@ -115,16 +116,17 @@ class Engine {
     const ry = rect.y * H;
     const rw = rect.w * W;
     const rh = rect.h * H;
-    const sc = fill
-      ? Math.max(rw / el.videoWidth, rh / el.videoHeight)
-      : Math.min(rw / el.videoWidth, rh / el.videoHeight);
+    const sc =
+      (fill
+        ? Math.max(rw / el.videoWidth, rh / el.videoHeight)
+        : Math.min(rw / el.videoWidth, rh / el.videoHeight)) * zoom;
     const dw = el.videoWidth * sc;
     const dh = el.videoHeight * sc;
     const dx = rx + (rw - dw) / 2;
     const dy = ry + (rh - dh) / 2;
     const prevAlpha = ctx.globalAlpha;
     ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
-    if (fill) {
+    if (fill || zoom > 1) {
       ctx.save();
       ctx.beginPath();
       ctx.rect(rx, ry, rw, rh);
@@ -137,7 +139,7 @@ class Engine {
     ctx.globalAlpha = prevAlpha;
   }
 
-  private drawLayer(el: HTMLVideoElement | null, clip: VideoClip | undefined, clear: boolean, alpha: number) {
+  private drawLayer(el: HTMLVideoElement | null, clip: VideoClip | undefined, clear: boolean, alpha: number, zoom = 1) {
     const ctx = this.canvas.getContext("2d");
     if (!ctx) return;
     const W = this.canvas.width;
@@ -169,13 +171,14 @@ class Engine {
     // black frame; the full-frame path below keeps the pan-crop behavior.
     const rect = rectOf(clip ?? {});
     if (!isFullRect(rect)) {
-      this.drawIntoRect(el, rect, clip?.fit === "fill", alpha);
+      this.drawIntoRect(el, rect, clip?.fit === "fill", alpha, zoom);
       return;
     }
     const fill = clip?.fit === "fill";
-    const scale = fill
-      ? Math.max(W / el.videoWidth, H / el.videoHeight)
-      : Math.min(W / el.videoWidth, H / el.videoHeight);
+    const scale =
+      (fill
+        ? Math.max(W / el.videoWidth, H / el.videoHeight)
+        : Math.min(W / el.videoWidth, H / el.videoHeight)) * zoom;
     const dw = el.videoWidth * scale;
     const dh = el.videoHeight * scale;
     let dx = (W - dw) / 2;
@@ -193,17 +196,26 @@ class Engine {
     ctx.globalAlpha = prevAlpha;
   }
 
-  /** Draw `masterSpan` full-frame, and if a cross-dissolve into the next span
-   * is live at time `t`, draw that next clip over it at ramping opacity — a
-   * true A·(1−α)+B·α blend. Returns the master element (the playback clock). */
+  /** Draw `masterSpan` full-frame, plus any transition live at time `t`: a
+   * cross style blends (and for cross zoom, scales) the next clip over it — a
+   * true A·(1−α)+B·α blend — while an edge style fades or zooms the master's
+   * own edge around a hard cut. Returns the master element (the playback
+   * clock). */
   private composite(masterSpan: ClipSpan, spans: ClipSpan[], t: number, play: boolean) {
     // A hidden clip is silent as well as black.
     const masterEl = this.prepare(masterSpan, t, play, masterSpan.clip.muted || !!masterSpan.clip.hidden);
     this.activeClipId = masterSpan.clip.id;
     const keep = new Set([masterSpan.clip.id]);
-    const next = spans[spans.indexOf(masterSpan) + 1];
+    const idx = spans.indexOf(masterSpan);
+    const next = spans[idx + 1];
+    const prev = spans[idx - 1];
+    const style = masterSpan.clip.transitionStyle ?? "crossfade";
     let incEl: HTMLVideoElement | null = null;
     let alpha = 0;
+    let masterZoom = 1;
+    let incZoom = 1;
+    let black = 0; // fade-to-black veil over the base, 0..1
+    let gain = 1; // master audio follows the picture through a fade edge
     // Warm the next clip's decoder shortly before its entrance (the dissolve
     // start, or the hard cut) so it enters with a frame already decoded — a
     // cold element would sit invisible for the first frames of the fade.
@@ -211,19 +223,64 @@ class Engine {
       this.prepare(next, next.start, false, true);
       keep.add(next.clip.id);
     }
-    // Once the incoming footprint starts, dissolve it in over the master. Each
-    // clip owns its element, so the two decode side by side — a true blend even
-    // when they are trims of the same source.
+    // Cross styles: once the incoming footprint starts, blend it in over the
+    // master. Each clip owns its element, so the two decode side by side — a
+    // true blend even when they are trims of the same source.
     if (masterSpan.transitionOut > 0 && next && t >= next.start) {
-      alpha = (t - next.start) / masterSpan.transitionOut;
+      const p = Math.min(1, (t - next.start) / masterSpan.transitionOut);
+      alpha = p;
       incEl = this.prepare(next, t, play, true); // the outgoing clip keeps the audio
       keep.add(next.clip.id);
+      if (style === "crosszoom") {
+        // The outgoing picture pushes in while the incoming one settles back.
+        masterZoom = 1 + (TRANSITION_ZOOM - 1) * p;
+        incZoom = TRANSITION_ZOOM - (TRANSITION_ZOOM - 1) * p;
+      }
     }
+    // Edge style on this clip's own tail (fade out / zoom in).
+    if (next && (style === "fadeout" || style === "zoomin")) {
+      const d = Math.min(masterSpan.clip.transition ?? 0, masterSpan.len);
+      const left = masterSpan.start + masterSpan.len - t;
+      if (d > 0 && left < d) {
+        const p = 1 - left / d;
+        if (style === "fadeout") {
+          black = Math.max(black, p);
+          gain = Math.min(gain, 1 - p);
+        } else {
+          masterZoom = 1 + (TRANSITION_ZOOM - 1) * p;
+        }
+      }
+    }
+    // Edge style the previous clip set on this clip's head (fade in / zoom out).
+    const prevStyle = prev?.clip.transitionStyle ?? "crossfade";
+    if (prev && prev.transitionOut === 0 && (prevStyle === "fadein" || prevStyle === "zoomout")) {
+      const d = Math.min(prev.clip.transition ?? 0, masterSpan.len);
+      const rel = t - masterSpan.start;
+      if (d > 0 && rel < d) {
+        const p = rel / d;
+        if (prevStyle === "fadein") {
+          black = Math.max(black, 1 - p);
+          gain = Math.min(gain, p);
+        } else {
+          masterZoom = TRANSITION_ZOOM - (TRANSITION_ZOOM - 1) * p;
+        }
+      }
+    }
+    masterEl.volume = Math.max(0, Math.min(1, gain));
     this.pauseExcept(keep);
     // No clear here — the tick clears once, then draws the below tracks, so the
     // base composites over them (a regioned base leaves them showing).
-    this.drawLayer(masterEl, masterSpan.clip, false, 1);
-    if (incEl) this.drawLayer(incEl, next!.clip, false, alpha);
+    this.drawLayer(masterEl, masterSpan.clip, false, 1, masterZoom);
+    if (incEl) this.drawLayer(incEl, next!.clip, false, alpha, incZoom);
+    if (black > 0) {
+      // Veil the base like the export's fade-to-black; tracks drawn after
+      // (above the base) stay lit.
+      const ctx = this.canvas.getContext("2d");
+      if (ctx) {
+        ctx.fillStyle = `rgba(0,0,0,${Math.min(1, black).toFixed(3)})`;
+        ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+      }
+    }
     return masterEl;
   }
 

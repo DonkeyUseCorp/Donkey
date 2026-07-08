@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AudioLines, Blend, Check, EllipsisVertical, FolderPlus, Loader2, Pause, Play, Plus, Scissors, SkipBack, Trash2, Type, VolumeX } from "lucide-react";
+import { AudioLines, Blend, Check, EllipsisVertical, Expand, FolderPlus, Loader2, Pause, Play, Plus, Scissors, SkipBack, Sunrise, Sunset, Trash2, Type, VolumeX, ZoomIn, ZoomOut, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -25,8 +25,18 @@ import { ensurePeaks } from "@/cut/lib/media";
 import { clipLen, clipSpeed, getClipSpans, projectDuration, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
 import type { VideoTrackPlacement } from "@/cut/lib/store";
 import { formatTime, formatTimecode } from "@/cut/lib/time";
-import type { AudioClip, ClipSpan, MediaAsset, OverlayClip, SubtitleCue, TextOverlay } from "@/cut/lib/types";
+import { TRANSITION_STYLE_LABELS } from "@/cut/lib/types";
+import type { AudioClip, ClipSpan, MediaAsset, OverlayClip, SubtitleCue, TextOverlay, TransitionStyle } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
+
+const TRANSITION_ICONS: Record<TransitionStyle, LucideIcon> = {
+  crossfade: Blend,
+  crosszoom: Expand,
+  zoomin: ZoomIn,
+  zoomout: ZoomOut,
+  fadein: Sunrise,
+  fadeout: Sunset,
+};
 
 const VIDEO_H = 64;
 const OVERLAY_H = VIDEO_H; // upper video tracks match the base row height
@@ -741,11 +751,16 @@ export function Timeline() {
                 onDragActive={setVideoDragging}
               />
             ))}
-            {/* Dissolve badge, floating in the gutter where the two clips meet
-                (the overlap midpoint), vertically centered on the clip row. */}
+            {/* Transition badge, floating in the gutter where the two clips
+                meet (the overlap midpoint; a hard cut for edge styles),
+                vertically centered on the clip row. */}
             {!clipDrag &&
-              spans.map((span) =>
-                span.transitionOut > 0 ? (
+              spans.map((span, i) => {
+                const d = span.clip.transition ?? 0;
+                if (!spans[i + 1] || d <= 0) return null;
+                const style = span.clip.transitionStyle ?? "crossfade";
+                const Icon = TRANSITION_ICONS[style];
+                return (
                   <div
                     key={`xf-${span.clip.id}`}
                     // Above SELECTED_SHADOW's z-10: the badge marks the joint even
@@ -757,12 +772,12 @@ export function Timeline() {
                       width: 16,
                       height: 16,
                     }}
-                    title={`Cross-dissolve ${span.transitionOut.toFixed(1)}s`}
+                    title={`${TRANSITION_STYLE_LABELS[style]} ${d.toFixed(1)}s`}
                   >
-                    <Blend className="size-2.5" />
+                    <Icon className="size-2.5" />
                   </div>
-                ) : null
-              )}
+                );
+              })}
           </div>
 
           {belowTracks.map((track) => (
