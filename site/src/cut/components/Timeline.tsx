@@ -743,7 +743,9 @@ export function Timeline() {
                 span.transitionOut > 0 ? (
                   <div
                     key={`xf-${span.clip.id}`}
-                    className="tl-xfade pointer-events-none absolute z-6 flex -translate-x-1/2 items-center justify-center rounded-full bg-[#0a84ff] text-white shadow-[0_0_0_2px_rgba(255,255,255,0.9)]"
+                    // Above SELECTED_SHADOW's z-10: the badge marks the joint even
+                    // when a selected clip's ring runs under it.
+                    className="tl-xfade pointer-events-none absolute z-11 flex -translate-x-1/2 items-center justify-center rounded-full bg-[#0a84ff] text-white shadow-[0_0_0_2px_rgba(255,255,255,0.9)]"
                     style={{
                       left: (span.start + span.len - span.transitionOut / 2) * pps - CLIP_GAP / 2,
                       top: 2 + (VIDEO_H - 4) / 2 - 8,
