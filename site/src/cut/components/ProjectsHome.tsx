@@ -254,7 +254,7 @@ export function ProjectsHome() {
       {!engineDown && projects && hasContent && (
         <div className="mb-5 flex items-center justify-between">
           {openFolder === null ? (
-            <h1 className="text-lg font-semibold tracking-tight">Recent videos</h1>
+            <div />
           ) : (
             <FolderCrumb
               root="Projects"
@@ -367,11 +367,7 @@ export function ProjectsHome() {
             </Button>
           </div>
         </div>
-      ) : shown.length === 0 ? (
-        <div className="grid place-items-center py-16 text-center text-sm text-muted-foreground">
-          {openFolder === null ? "No projects yet." : "Empty folder."}
-        </div>
-      ) : view === "gallery" ? (
+      ) : shown.length === 0 ? null : view === "gallery" ? (
         <Marquee
           className="grid min-h-[42vh] grid-cols-[repeat(auto-fill,minmax(190px,1fr))] content-start gap-5"
           selected={selected}

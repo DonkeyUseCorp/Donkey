@@ -166,12 +166,7 @@ export function LibraryView() {
   return (
     <div className="mx-auto w-full max-w-6xl px-10 py-9">
       <div className="mb-5 flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-lg font-semibold tracking-tight">Library</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            Clips and music you can drop into any project.
-          </p>
-        </div>
+        <h1 className="text-lg font-semibold tracking-tight">Library</h1>
         <Button onClick={() => { setUrlError(null); setAddOpen(true); }}>
           <Upload data-icon="inline-start" /> Add media
         </Button>
@@ -254,11 +249,7 @@ export function LibraryView() {
             </p>
           </div>
         </button>
-      ) : shown.length === 0 && uploading === 0 ? (
-        <div className="grid place-items-center py-16 text-center text-sm text-muted-foreground">
-          {openFolder === null ? "No media yet." : "Empty folder."}
-        </div>
-      ) : (
+      ) : shown.length === 0 && uploading === 0 ? null : (
         <Marquee
           className="grid min-h-[40vh] grid-cols-[repeat(auto-fill,minmax(160px,1fr))] content-start gap-4"
           selected={selected}
