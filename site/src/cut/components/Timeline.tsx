@@ -721,6 +721,7 @@ export function Timeline() {
                 key={span.clip.id}
                 span={span}
                 index={i}
+                prevOverlap={spans[i - 1]?.transitionOut ?? 0}
                 pps={pps}
                 selected={selKeys.has(`clip:${span.clip.id}`)}
                 drag={dragInfo}
@@ -735,22 +736,24 @@ export function Timeline() {
                 onDragActive={setVideoDragging}
               />
             ))}
-            {/* Cross-dissolve markers sit over the overlap between two clips. */}
+            {/* The cross-dissolve overlap, drawn as a transition block sitting in
+                the seam the two inset clips leave for it, badge centered. */}
             {!clipDrag &&
               spans.map((span) =>
                 span.transitionOut > 0 ? (
                   <div
                     key={`xf-${span.clip.id}`}
-                    className="tl-xfade pointer-events-none absolute z-6 flex -translate-x-1/2 items-center justify-center rounded-full bg-[#0a84ff] text-white shadow-[0_0_0_2px_rgba(255,255,255,0.9)]"
+                    className="tl-xfade pointer-events-none absolute top-0.5 z-6 flex items-center justify-center rounded-md bg-[#0a84ff]/15 ring-1 ring-inset ring-[#0a84ff]/40"
                     style={{
-                      left: (span.start + span.len - span.transitionOut / 2) * pps,
-                      top: (VIDEO_H - 4) / 2 - 8,
-                      width: 16,
-                      height: 16,
+                      left: (span.start + span.len - span.transitionOut) * pps,
+                      width: Math.max(4, span.transitionOut * pps),
+                      height: VIDEO_H - 4,
                     }}
                     title={`Cross-dissolve ${span.transitionOut.toFixed(1)}s`}
                   >
-                    <Blend className="size-2.5" />
+                    <span className="grid size-4 place-items-center rounded-full bg-[#0a84ff] text-white shadow-[0_0_0_2px_rgba(255,255,255,0.9)]">
+                      <Blend className="size-2.5" />
+                    </span>
                   </div>
                 ) : null
               )}
@@ -1077,6 +1080,7 @@ function Playhead({
 function ClipView({
   span,
   index,
+  prevOverlap,
   pps,
   selected,
   drag,
@@ -1092,6 +1096,10 @@ function ClipView({
 }: {
   span: ClipSpan;
   index: number;
+  /** Cross-dissolve overlap of the previous clip into this one, timeline
+   * seconds — the room the incoming transition block claims on this clip's
+   * left. This clip's own `span.transitionOut` claims the right. */
+  prevOverlap: number;
   pps: number;
   selected: boolean;
   drag: ClipDrag | null;
@@ -1116,13 +1124,27 @@ function ClipView({
   const [trim, setTrim] = useState<{ side: "l"; in0: number } | { side: "r" } | null>(null);
   const { clip, asset } = span;
   const speed = clipSpeed(clip);
-  const w = span.len * pps;
-  const left = span.start * pps;
+  // A cross-dissolve overlaps two clips; render that overlap as a transition
+  // block *between* them by insetting each clip's box by its share (left = the
+  // incoming dissolve from the previous clip, right = this clip's own dissolve
+  // into the next). Hard-cut neighbours keep the plain CLIP_GAP gutter. An
+  // active trim drops the insets so the handle sweeps the clip's true extent;
+  // the filmstrip start backs up by exactly the pixels the box gains, so the
+  // frames stay pinned through the reveal.
+  const leftXf = trim ? 0 : prevOverlap;
+  const rightXf = trim ? 0 : span.transitionOut;
+  const visStart = span.start + leftXf;
+  const visLen = Math.max(0, span.len - leftXf - rightXf);
+  const w = visLen * pps;
+  const left = visStart * pps;
   const trimL = trim?.side === "l" ? trim : null;
   const stripIn = trimL ? Math.min(clip.in, trimL.in0) : clip.in;
   // Source seconds → timeline px goes through the clip's speed.
   const hidPx = trimL ? Math.max(0, ((clip.in - trimL.in0) / speed) * pps) : 0;
   const boxW = trimL ? ((clip.out - stripIn) / speed) * pps : w;
+  // Frames start where the box does: skip the source seconds the left dissolve
+  // consumed so the filmstrip stays aligned under the inset edge.
+  const filmIn = stripIn + leftXf * speed;
   const isDragged = drag?.id === clip.id;
   // Neighbors part to make room for the open slot.
   const reorderShift =
@@ -1146,14 +1168,14 @@ function ClipView({
     const imgW = Math.max(26, Math.round((VIDEO_H - 4) * aspect));
     const count = Math.min(120, Math.ceil(boxW / imgW));
     return Array.from({ length: count }, (_, k) => {
-      const timeAt = stripIn + ((k * imgW + imgW / 2) / pps) * speed;
+      const timeAt = filmIn + ((k * imgW + imgW / 2) / pps) * speed;
       const idx = Math.min(
         asset.thumbs!.length - 1,
         Math.max(0, Math.floor(timeAt / asset.thumbStep!))
       );
       return { src: asset.thumbs![idx], left: k * imgW, width: imgW };
     });
-  }, [asset, stripIn, boxW, pps, speed]);
+  }, [asset, filmIn, boxW, pps, speed]);
 
   const onBody = (e: React.PointerEvent) => {
     if (e.metaKey || e.shiftKey) {
@@ -1164,7 +1186,7 @@ function ClipView({
     s.select({ kind: "clip", id: clip.id });
     // Clicking anywhere on the timeline moves the playhead — clips included.
     const rect = e.currentTarget.getBoundingClientRect();
-    s.seek(span.start + (e.clientX - rect.left) / pps);
+    s.seek(visStart + (e.clientX - rect.left) / pps);
     const el = scrollRef.current;
     const sc0 = el?.scrollLeft ?? 0;
     let effDx = 0;
