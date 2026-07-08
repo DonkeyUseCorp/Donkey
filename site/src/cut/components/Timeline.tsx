@@ -736,24 +736,23 @@ export function Timeline() {
                 onDragActive={setVideoDragging}
               />
             ))}
-            {/* The cross-dissolve overlap, drawn as a transition block sitting in
-                the seam the two inset clips leave for it, badge centered. */}
+            {/* Dissolve badge, floating in the gutter where the two clips meet
+                (the overlap midpoint), vertically centered on the clip row. */}
             {!clipDrag &&
               spans.map((span) =>
                 span.transitionOut > 0 ? (
                   <div
                     key={`xf-${span.clip.id}`}
-                    className="tl-xfade pointer-events-none absolute top-0.5 z-6 flex items-center justify-center rounded-md bg-[#0a84ff]/15 ring-1 ring-inset ring-[#0a84ff]/40"
+                    className="tl-xfade pointer-events-none absolute z-6 flex -translate-x-1/2 items-center justify-center rounded-full bg-[#0a84ff] text-white shadow-[0_0_0_2px_rgba(255,255,255,0.9)]"
                     style={{
-                      left: (span.start + span.len - span.transitionOut) * pps,
-                      width: Math.max(4, span.transitionOut * pps),
-                      height: VIDEO_H - 4,
+                      left: (span.start + span.len - span.transitionOut / 2) * pps - CLIP_GAP / 2,
+                      top: 2 + (VIDEO_H - 4) / 2 - 8,
+                      width: 16,
+                      height: 16,
                     }}
                     title={`Cross-dissolve ${span.transitionOut.toFixed(1)}s`}
                   >
-                    <span className="grid size-4 place-items-center rounded-full bg-[#0a84ff] text-white shadow-[0_0_0_2px_rgba(255,255,255,0.9)]">
-                      <Blend className="size-2.5" />
-                    </span>
+                    <Blend className="size-2.5" />
                   </div>
                 ) : null
               )}
@@ -1124,15 +1123,14 @@ function ClipView({
   const [trim, setTrim] = useState<{ side: "l"; in0: number } | { side: "r" } | null>(null);
   const { clip, asset } = span;
   const speed = clipSpeed(clip);
-  // A cross-dissolve overlaps two clips; render that overlap as a transition
-  // block *between* them by insetting each clip's box by its share (left = the
-  // incoming dissolve from the previous clip, right = this clip's own dissolve
-  // into the next). Hard-cut neighbours keep the plain CLIP_GAP gutter. An
-  // active trim drops the insets so the handle sweeps the clip's true extent;
-  // the filmstrip start backs up by exactly the pixels the box gains, so the
-  // frames stay pinned through the reveal.
-  const leftXf = trim ? 0 : prevOverlap;
-  const rightXf = trim ? 0 : span.transitionOut;
+  // A cross-dissolve overlaps two clips; inset each box by half the overlap so
+  // the pair meets at the overlap midpoint with the same CLIP_GAP gutter as a
+  // hard cut (the dissolve badge floats in that gap). An active trim drops the
+  // insets so the handle sweeps the clip's true extent; the filmstrip start
+  // backs up by exactly the pixels the box gains, so the frames stay pinned
+  // through the reveal.
+  const leftXf = trim ? 0 : prevOverlap / 2;
+  const rightXf = trim ? 0 : span.transitionOut / 2;
   const visStart = span.start + leftXf;
   const visLen = Math.max(0, span.len - leftXf - rightXf);
   const w = visLen * pps;
