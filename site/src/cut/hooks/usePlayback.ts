@@ -353,6 +353,18 @@ class Engine {
       const pt =
         s.skimTime !== null ? Math.max(0, Math.min(s.skimTime, total - 0.001)) : t;
       const span = spans.find((sp) => pt >= sp.start && pt < sp.start + sp.len);
+      // Prime the base element (create it, issue any seek) before repainting.
+      // A cold element or an unbuffered seek has no decodable frame yet, and
+      // clearing to black now — before the seek resolves — is what makes fast
+      // scrubbing strobe. Hold the last painted frame until a real frame lands.
+      if (span) {
+        const el = this.prepare(span, Math.min(pt, span.start + span.len), false, true);
+        if (el.readyState < 2 || !el.videoWidth) {
+          this.pauseExcept(new Set([span.asset.id]));
+          this.syncSoundtrack(t, false);
+          return;
+        }
+      }
       const active = new Set<string>();
       this.clearCanvas();
       this.drawOverlays(pt, false, "below", active);
