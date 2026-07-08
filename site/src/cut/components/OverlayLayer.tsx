@@ -113,17 +113,24 @@ export function OverlayLayer({ stageWidth }: { stageWidth: number }) {
 
   const clearGuides = useCallback(() => setGuides({ v: [], h: [] }), []);
 
+  // The selected title and whether the playhead sits inside it. Selecting a
+  // title off the playhead (e.g. focusing its text in the panel) edits it in
+  // isolation: it shows alone so it never stacks over whatever title is live.
+  // Not while scrubbing — the skimmer must still show the exact frame's titles.
+  const scrubbing = !playing && skimTime !== null;
+  const sel = selection?.kind === "text" ? overlays.find((o) => o.id === selection.id) : undefined;
+  const isolate = !!sel && !scrubbing && !(t >= sel.start && t <= sel.end);
+
   return (
     <div className="pointer-events-none absolute inset-0">
       {overlays.map((o) => {
-        const selected = selection?.kind === "text" && selection.id === o.id;
+        const selected = sel?.id === o.id;
         const inRange = t >= o.start && t <= o.end;
         // While hover-scrubbing (paused, skimmer active) the preview must show the
         // exact frame under the skimmer — a selected but out-of-frame title can't
         // leak into a frame it isn't part of. Off the skimmer, a selected title
-        // stays visible (ghosted) so it can still be positioned and edited.
-        const scrubbing = !playing && skimTime !== null;
-        if (!inRange && (scrubbing || !selected)) return null;
+        // that sits off the playhead is shown alone (isolate) for editing.
+        if (isolate ? !selected : !inRange && (scrubbing || !selected)) return null;
         return (
           <OverlayItem
             key={o.id}
