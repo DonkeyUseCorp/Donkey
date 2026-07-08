@@ -161,8 +161,8 @@ export function Timeline() {
   const [overlayDrop, setOverlayDrop] = useState<
     { target: TrackTarget; t: number; len: number } | null
   >(null);
-  // Timeline seconds a title-resize edge has snapped to, for the guide line.
-  const [snapT, setSnapT] = useState<number | null>(null);
+  // Stage-x pixel a snapped title edge sits at, for the guide line (null = off).
+  const [snapX, setSnapX] = useState<number | null>(null);
   const insertMode = videoDragging || dropType === "video";
   const dragInfo = useMemo<ClipDrag | null>(() => {
     if (!clipDrag) return null;
@@ -829,7 +829,7 @@ export function Timeline() {
                     selected={selKeys.has(`text:${o.id}`)}
                     onLaneDrag={onTextLaneDrag}
                     onLaneDrop={onTextLaneDrop}
-                    onSnap={setSnapT}
+                    onSnap={setSnapX}
                   />
                 );
               })}
@@ -853,10 +853,10 @@ export function Timeline() {
             </div>
           )}
 
-            {snapT !== null && (
+            {snapX !== null && (
               <div
                 className="pointer-events-none absolute top-0 bottom-0 z-20 w-px bg-[#ff2d55]"
-                style={{ left: snapT * pps }}
+                style={{ left: snapX }}
               />
             )}
             <HoverLine scrollRef={scrollRef} innerRef={innerRef} pps={pps} />
@@ -1451,7 +1451,7 @@ function AudioView({
         "tl-audio-clip group absolute top-0.5 cursor-grab overflow-hidden rounded-[7px] bg-gradient-to-b from-emerald-500 to-emerald-600 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.1)]",
         selected && SELECTED_SHADOW
       )}
-      style={{ left: clip.start * pps, width: w, height: AUDIO_H - 4 }}
+      style={{ left: clip.start * pps, width: Math.max(10, w - CLIP_GAP), height: AUDIO_H - 4 }}
       onPointerDown={onBody}
     >
       <canvas ref={canvasRef} className="pointer-events-none absolute inset-x-0 inset-y-1" />
@@ -1689,9 +1689,16 @@ function TextBar({
   selected: boolean;
   onLaneDrag: (id: string, targetRow: number) => void;
   onLaneDrop: (id: string, targetRow: number) => void;
-  onSnap: (t: number | null) => void;
+  /** Paint (or clear) the snap guide at this stage-x pixel. */
+  onSnap: (x: number | null) => void;
 }) {
   const w = Math.max(8, (o.end - o.start) * pps);
+
+  // A snapped edge draws its guide where the bar is actually rendered: a left
+  // edge at the time itself, a right edge inset by the CLIP_GAP gutter, so the
+  // line hugs the clip's visible right edge instead of the next clip's start.
+  const leftGuide = (t: number) => t * pps;
+  const rightGuide = (t: number) => t * pps - CLIP_GAP;
 
   const onBody = (e: React.PointerEvent) => {
     if (e.metaKey || e.shiftKey) {
@@ -1703,10 +1710,27 @@ function TextBar({
     s.pushHistory();
     const start0 = o.start;
     const len = o.end - o.start;
+    const targets = textSnapTargets(s, o.id);
+    const tol = SNAP_PX / pps;
     let targetRow = baseRow;
     startDrag(e, {
-      onMove: (dx, dy) => {
-        const start = Math.max(0, start0 + dx / pps);
+      onMove: (dx, dy, ev) => {
+        let start = Math.max(0, start0 + dx / pps);
+        // Snap whichever edge of the moving title lands nearest a logical time.
+        let guide: number | null = null;
+        if (!ev.metaKey) {
+          const end = start + len;
+          let best = { d: tol, start, px: null as number | null };
+          for (const T of targets) {
+            if (Math.abs(start - T) < best.d) best = { d: Math.abs(start - T), start: T, px: leftGuide(T) };
+            if (Math.abs(end - T) < best.d) best = { d: Math.abs(end - T), start: T - len, px: rightGuide(T) };
+          }
+          if (best.px !== null) {
+            start = Math.max(0, best.start);
+            guide = best.px;
+          }
+        }
+        onSnap(guide);
         s.updateOverlayTransient(o.id, { start, end: start + len });
         // Vertical drag retracks the title; one row past the end opens a new one.
         const next = Math.min(laneCount, Math.max(0, baseRow + Math.round(dy / TEXT_H)));
@@ -1715,7 +1739,10 @@ function TextBar({
           onLaneDrag(o.id, targetRow);
         }
       },
-      onUp: () => onLaneDrop(o.id, targetRow),
+      onUp: () => {
+        onSnap(null);
+        onLaneDrop(o.id, targetRow);
+      },
     });
   };
 
@@ -1738,7 +1765,7 @@ function TextBar({
         const hit = ev.metaKey ? null : nearestSnap(start, targets, tol);
         if (hit !== null && hit >= min && hit <= max) {
           start = hit;
-          onSnap(hit);
+          onSnap(leftGuide(hit));
         } else onSnap(null);
         s.updateOverlayTransient(o.id, { start });
       },
@@ -1767,7 +1794,7 @@ function TextBar({
         const hit = ev.metaKey ? null : nearestSnap(end, targets, tol);
         if (hit !== null && hit > o.start + 0.2) {
           end = hit;
-          onSnap(end);
+          onSnap(rightGuide(end));
         } else onSnap(null);
         // Ripple: extending past the next title shoves the whole run right by
         // the overflow (their gaps preserved); pulling back lets them return.
@@ -1789,7 +1816,7 @@ function TextBar({
         "tl-text-bar group absolute flex cursor-grab items-center overflow-hidden rounded-md bg-gradient-to-b from-purple-500 to-purple-600 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.1)]",
         selected && SELECTED_SHADOW
       )}
-      style={{ left: o.start * pps, top: top + 2, width: w, height: TEXT_H - 6 }}
+      style={{ left: o.start * pps, top: top + 2, width: Math.max(8, w - CLIP_GAP), height: TEXT_H - 6 }}
       onPointerDown={onBody}
     >
       <span className="pointer-events-none truncate px-2 text-[10.5px] font-medium text-white">
@@ -1860,7 +1887,7 @@ function SubBar({ cue, pps, selected }: { cue: SubtitleCue; pps: number; selecte
         "tl-sub-bar group absolute top-px flex cursor-grab items-center overflow-hidden rounded-[5px] bg-gradient-to-b from-amber-300 to-amber-400 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]",
         selected && SELECTED_SHADOW
       )}
-      style={{ left: cue.start * pps, width: w, height: SUB_H - 4 }}
+      style={{ left: cue.start * pps, width: Math.max(8, w - CLIP_GAP), height: SUB_H - 4 }}
       title={cue.text}
       onPointerDown={onBody}
     >
