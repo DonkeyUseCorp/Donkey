@@ -25,10 +25,13 @@ import { deleteExport, revealExport } from "@/cut/lib/exportClient";
 import {
   addLibraryAssetToProject,
   addTemplateToProject,
+  createLibraryFolder,
   deleteFromLibrary,
+  deleteLibraryFolder,
   deleteTemplate,
   fetchLibrary,
   moveLibraryAsset,
+  renameLibraryFolder,
   saveAssetToLibrary,
   type LibraryAsset,
   type LibraryFolder,
@@ -39,7 +42,11 @@ import { useEditor } from "@/cut/lib/store";
 import { formatTime } from "@/cut/lib/time";
 import type { MediaAsset } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
+import { buildDragGhost, FolderCrumb, FolderShelf } from "./desktopFolders";
 import { LibraryCard } from "./LibraryView";
+
+// Drag a library clip onto a folder tile to file it (side panel, single card).
+const LIBRARY_MOVE_MIME = "application/x-cut-library-move";
 import { PlatformPreviewDialog, type ExportItem } from "./PlatformPreview";
 import { RecordDialog, type RecordMode } from "./RecordDialog";
 import { SubtitlesPanel } from "./SubtitlesPanel";
@@ -479,7 +486,7 @@ function LibraryPanel({ projectId }: { projectId: string }) {
   const [assets, setAssets] = useState<LibraryAsset[] | null>(null);
   const [folders, setFolders] = useState<LibraryFolder[]>([]);
   const [templates, setTemplates] = useState<LibraryTemplate[]>([]);
-  const [activeFolder, setActiveFolder] = useState<string | null>(null);
+  const [openFolder, setOpenFolder] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<LibraryAsset | null>(null);
 
   const reload = () =>
@@ -518,9 +525,20 @@ function LibraryPanel({ projectId }: { projectId: string }) {
     await moveLibraryAsset(assetId, folderId).catch(() => void reload());
   };
 
-  const shown = (assets ?? []).filter((a) =>
-    activeFolder === null ? true : (a.folderId ?? null) === activeFolder
-  );
+  // Let a clip be dragged onto a folder tile to file it (alongside the timeline
+  // drag payload the card already sets).
+  const onCardDragExtra = (e: React.DragEvent, a: LibraryAsset) => {
+    e.dataTransfer.setData(LIBRARY_MOVE_MIME, JSON.stringify([a.id]));
+    e.dataTransfer.effectAllowed = "copyMove";
+    const ghost = buildDragGhost(1, a.name);
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, 18, 16);
+    setTimeout(() => ghost.remove(), 0);
+  };
+
+  const all = assets ?? [];
+  const shown = all.filter((a) => (a.folderId ?? null) === openFolder);
+  const openFolderName = folders.find((f) => f.id === openFolder)?.name;
 
   return (
     <>
@@ -560,24 +578,43 @@ function LibraryPanel({ projectId }: { projectId: string }) {
           </div>
         </div>
       )}
-      {folders.length > 0 && (
-        <div className="flex shrink-0 gap-1.5 overflow-x-auto px-3.5 pb-2.5">
-          {[{ id: null as string | null, name: "All" }, ...folders].map((f) => (
-            <button
-              key={f.id ?? "all"}
-              className={cn(
-                "shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors",
-                activeFolder === f.id
-                  ? "border-primary bg-primary/10 text-primary"
-                  : "border-border text-muted-foreground hover:text-foreground"
-              )}
-              onClick={() => setActiveFolder(f.id)}
-            >
-              {f.name}
-            </button>
-          ))}
+      {openFolder !== null ? (
+        <div className="shrink-0 px-3.5 pb-2.5">
+          <FolderCrumb
+            root="Library"
+            name={openFolderName ?? "Folder"}
+            mime={LIBRARY_MOVE_MIME}
+            onBack={() => setOpenFolder(null)}
+            onDropOut={(ids) => ids.forEach((id) => void move(id, null))}
+          />
         </div>
-      )}
+      ) : all.length > 0 || folders.length > 0 ? (
+        <div className="shrink-0 px-3.5">
+          <FolderShelf
+            folders={folders}
+            mime={LIBRARY_MOVE_MIME}
+            statOf={(id) => ({ count: all.filter((a) => (a.folderId ?? null) === id).length })}
+            onOpen={(id) => setOpenFolder(id)}
+            onCreate={async (name) => {
+              const f = await createLibraryFolder(name);
+              setFolders((prev) => [...prev, f]);
+            }}
+            onRename={async (id, name) => {
+              setFolders((prev) => prev.map((f) => (f.id === id ? { ...f, name } : f)));
+              await renameLibraryFolder(id, name).catch(() => void reload());
+            }}
+            onDelete={async (id) => {
+              setFolders((prev) => prev.filter((f) => f.id !== id));
+              setAssets((prev) =>
+                (prev ?? []).map((a) => (a.folderId === id ? { ...a, folderId: null } : a))
+              );
+              if (openFolder === id) setOpenFolder(null);
+              await deleteLibraryFolder(id).catch(() => void reload());
+            }}
+            onDropIds={(ids, fid) => ids.forEach((id) => void move(id, fid))}
+          />
+        </div>
+      ) : null}
       {assets === null ? (
         <div className="grid flex-1 place-items-center text-muted-foreground">
           <Loader2 className="size-4 animate-spin" />
@@ -592,6 +629,7 @@ function LibraryPanel({ projectId }: { projectId: string }) {
               onUse={() => void addLibraryAssetToProject(projectId, a)}
               onDelete={() => setDeleting(a)}
               onMove={(folderId) => void move(a.id, folderId)}
+              onDragStartExtra={(e) => onCardDragExtra(e, a)}
             />
           ))}
         </div>
