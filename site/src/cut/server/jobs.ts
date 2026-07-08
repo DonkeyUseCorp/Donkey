@@ -242,6 +242,60 @@ function regionPx(
   return { rx, ry, rw, rh };
 }
 
+/**
+ * Spawn ffmpeg for one pass, tracking `job.proc` so a cancel kills the live
+ * process, bounding silence with the stall watchdog, and (when `onProgress` is
+ * given) reporting the `time=` cursor from stderr. Rejects with a readable
+ * message on a non-zero exit or a missing binary. Shared by the encode pass and
+ * the rotation-strip remux.
+ */
+function runFfmpeg(
+  job: Job,
+  args: string[],
+  onProgress?: (seconds: number) => void
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const proc = spawn("ffmpeg", args);
+    job.proc = proc;
+    // Stall watchdog: legit exports can run long, so bound silence, not total
+    // time — kill only if ffmpeg emits nothing for STALL_MS.
+    const STALL_MS = 120_000;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    const bump = () => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => {
+        proc.kill("SIGKILL");
+        reject(new Error("Export stalled — no ffmpeg output for 120s."));
+      }, STALL_MS);
+      watchdog.unref();
+    };
+    bump();
+    proc.stderr.on("data", (chunk: Buffer) => {
+      bump();
+      const text = chunk.toString();
+      job.log.push(text);
+      if (job.log.length > 200) job.log.shift();
+      if (onProgress) {
+        const m = /time=(\d+):(\d+):([\d.]+)/.exec(text);
+        if (m) onProgress(Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]));
+      }
+    });
+    proc.on("error", (err) => {
+      clearTimeout(watchdog);
+      reject(
+        err.message.includes("ENOENT")
+          ? new Error("ffmpeg was not found. Install it with: brew install ffmpeg")
+          : err
+      );
+    });
+    proc.on("close", (code) => {
+      clearTimeout(watchdog);
+      if (code === 0) resolve();
+      else if (job.error) reject(new Error(job.error));
+      else reject(new Error(`ffmpeg exited with code ${code}.\n${job.log.slice(-8).join("")}`));
+    });
+  });
+}
 
 async function runExport(job: Job, spec: ExportSpec) {
   if (spec.clips.length === 0) throw new Error("Nothing to export.");
@@ -499,66 +553,48 @@ async function runExport(job: Job, spec: ExportSpec) {
       ? ["-c:v", "libx264", "-preset", spec.preset, "-crf", String(spec.crf)]
       : ["-c:v", "h264_videotoolbox", "-q:v", String(vtQuality(spec.crf)), "-allow_sw", "1"];
 
-  const args = [
-    "-y",
-    ...inputs,
-    "-filter_complex", filters.join(";"),
-    "-map", `[${vLabel}]`,
-    "-map", `[${aLabel}]`,
-    ...videoCodecArgs,
-    "-profile:v", "high",
-    "-pix_fmt", "yuv420p",
-    "-color_range", "tv",
-    "-colorspace", "bt709",
-    "-c:a", "aac",
-    "-b:a", "192k",
-    "-movflags", "+faststart",
-    "-t", num(spec.duration),
-    job.outPath,
-  ];
+  // Encode into the tmp dir, then re-emit the container to strip a stray output
+  // rotation flag (see the strip pass below). Keeping the encode intermediate
+  // lets the second pass own faststart.
+  const encodePath = path.join(job.tmpDir, "encode.mp4");
+  await runFfmpeg(
+    job,
+    [
+      "-y",
+      ...inputs,
+      "-filter_complex", filters.join(";"),
+      "-map", `[${vLabel}]`,
+      "-map", `[${aLabel}]`,
+      ...videoCodecArgs,
+      "-profile:v", "high",
+      "-pix_fmt", "yuv420p",
+      "-color_range", "tv",
+      "-colorspace", "bt709",
+      "-c:a", "aac",
+      "-b:a", "192k",
+      "-t", num(spec.duration),
+      encodePath,
+    ],
+    (t) => (job.progress = Math.min(0.99, t / Math.max(0.1, spec.duration)))
+  );
 
-  await new Promise<void>((resolve, reject) => {
-    const proc = spawn("ffmpeg", args);
-    job.proc = proc;
-    // Stall watchdog: legit exports can run long, so bound silence, not total
-    // time — kill only if ffmpeg emits nothing for STALL_MS.
-    const STALL_MS = 120_000;
-    let watchdog: ReturnType<typeof setTimeout> | undefined;
-    const bump = () => {
-      clearTimeout(watchdog);
-      watchdog = setTimeout(() => {
-        proc.kill("SIGKILL");
-        reject(new Error("Export stalled — no ffmpeg output for 120s."));
-      }, STALL_MS);
-      watchdog.unref();
-    };
-    bump();
-    proc.stderr.on("data", (chunk: Buffer) => {
-      bump();
-      const text = chunk.toString();
-      job.log.push(text);
-      if (job.log.length > 200) job.log.shift();
-      const m = /time=(\d+):(\d+):([\d.]+)/.exec(text);
-      if (m) {
-        const t = Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
-        job.progress = Math.min(0.99, t / Math.max(0.1, spec.duration));
-      }
-    });
-    proc.on("error", (err) => {
-      clearTimeout(watchdog);
-      reject(
-        err.message.includes("ENOENT")
-          ? new Error("ffmpeg was not found. Install it with: brew install ffmpeg")
-          : err
-      );
-    });
-    proc.on("close", (code) => {
-      clearTimeout(watchdog);
-      if (code === 0) resolve();
-      else if (job.error) reject(new Error(job.error));
-      else reject(new Error(`ffmpeg exited with code ${code}.\n${job.log.slice(-8).join("")}`));
-    });
-  });
+  // ffmpeg's autorotation already baked each source's display matrix into the
+  // pixels, so the encode's frames are upright. But for a complex filtergraph it
+  // ALSO copies the first input's display-matrix side data onto the output
+  // stream — so a phone (portrait) source lands as a correct 1080×1920 file
+  // tagged with a stray 90° rotation, and players re-rotate it into a sideways
+  // "desktop" frame. `-display_rotation 0` overrides that matrix to identity; a
+  // stream copy re-emits the (already correct) pixels and audio unchanged and
+  // writes the faststart-optimized final file.
+  await runFfmpeg(job, [
+    "-y",
+    "-display_rotation", "0",
+    "-i", encodePath,
+    "-map", "0",
+    "-c", "copy",
+    "-movflags", "+faststart",
+    job.outPath,
+  ]);
 
   job.progress = 1;
   job.status = "done";
