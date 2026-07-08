@@ -69,6 +69,8 @@ const PAD_SIDE = 20;
 const CLIP_GAP = 4;
 /** Pull a resized title edge to a logical time within this many screen px. */
 const SNAP_PX = 6;
+/** How far (px) the left edge can rubber-band past its limit before snapping back. */
+const LEFT_RUBBER_PX = 32;
 
 // A high-contrast selected state: a bright blue ring drawn both inside and
 // (crucially) *outside* the box, so it stays visible on top of a clip's
@@ -1670,6 +1672,18 @@ function nearestSnap(t: number, targets: number[], tol: number): number | null {
   return best;
 }
 
+/** Ease that overshoots the target then settles — the elastic snap-back feel. */
+function easeOutBack(p: number): number {
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+  return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2);
+}
+
+/** Damp an overshoot in px so it gives but resists, saturating near `max`. */
+function rubberBand(overPx: number, max: number): number {
+  return max * (1 - Math.exp(-Math.max(0, overPx) / max));
+}
+
 function TextBar({
   overlay: o,
   pps,
@@ -1693,6 +1707,8 @@ function TextBar({
   onSnap: (x: number | null) => void;
 }) {
   const w = Math.max(8, (o.end - o.start) * pps);
+  // In-flight elastic snap-back for the left edge; cancelled by any new grab.
+  const snapRaf = useRef(0);
 
   // A snapped edge draws its guide where the bar is actually rendered: a left
   // edge at the time itself, a right edge inset by the CLIP_GAP gutter, so the
@@ -1747,12 +1763,14 @@ function TextBar({
   };
 
   const onTrimLeft = (e: React.PointerEvent) => {
+    cancelAnimationFrame(snapRaf.current);
     const s = useEditor.getState();
     s.select({ kind: "text", id: o.id });
     s.pushHistory();
     const start0 = o.start;
     const lane = o.lane ?? 0;
-    // Don't let the left edge cross the previous title on this lane.
+    // The left edge grows into the room down to the previous title on this lane
+    // (or the timeline start). `end - 0.2` keeps a minimum width when shrinking.
     const min = s.overlays
       .filter((t) => (t.lane ?? 0) === lane && t.id !== o.id && t.end <= start0 + 1e-3)
       .reduce((m, t) => Math.max(m, t.end), 0);
@@ -1761,15 +1779,39 @@ function TextBar({
     const tol = SNAP_PX / pps;
     startDrag(e, {
       onMove: (dx, _dy, ev) => {
-        let start = Math.max(min, Math.min(max, start0 + dx / pps));
-        const hit = ev.metaKey ? null : nearestSnap(start, targets, tol);
-        if (hit !== null && hit >= min && hit <= max) {
-          start = hit;
-          onSnap(leftGuide(hit));
-        } else onSnap(null);
+        cancelAnimationFrame(snapRaf.current);
+        const desired = Math.min(max, start0 + dx / pps);
+        let start: number;
+        if (desired >= min) {
+          // Room to the left: grow freely, snapping to logical times.
+          start = desired;
+          const hit = ev.metaKey ? null : nearestSnap(start, targets, tol);
+          if (hit !== null && hit >= min && hit <= max) {
+            start = hit;
+            onSnap(leftGuide(hit));
+          } else onSnap(null);
+        } else {
+          // No room: let it drag past with resistance (it snaps back on release).
+          start = Math.max(0, min - rubberBand((min - desired) * pps, LEFT_RUBBER_PX) / pps);
+          onSnap(null);
+        }
         s.updateOverlayTransient(o.id, { start });
       },
-      onUp: () => onSnap(null),
+      onUp: () => {
+        onSnap(null);
+        const from = useEditor.getState().overlays.find((x) => x.id === o.id)?.start ?? min;
+        if (from >= min - 1e-4) return; // settled within the room, nothing to undo
+        // Elastic snap back to the limit.
+        const t0 = performance.now();
+        const step = (now: number) => {
+          const p = Math.min(1, (now - t0) / 240);
+          const v = from + (min - from) * easeOutBack(p);
+          useEditor.getState().updateOverlayTransient(o.id, { start: Math.max(0, v) });
+          if (p < 1) snapRaf.current = requestAnimationFrame(step);
+          else useEditor.getState().updateOverlayTransient(o.id, { start: min });
+        };
+        snapRaf.current = requestAnimationFrame(step);
+      },
     });
   };
 
