@@ -45,8 +45,10 @@ export function ExportDialog() {
   );
   const [presetId, setPresetId] = useState("original");
 
-  // Closing never cancels a running render — it keeps going in the background
-  // and the status chip tracks it. A finished/failed export is cleared on close.
+  // Closing never cancels a running render — clicking outside (or Esc) just
+  // dismisses the dialog and the render keeps going in the background, tracked
+  // by the status chip. Only Cancel stops it. A finished/failed export is
+  // cleared on close.
   const close = () => {
     if (useExport.getState().status !== "running") useExport.getState().dismiss();
     setExportOpen(false);
@@ -114,17 +116,21 @@ export function ExportDialog() {
               <span>{stage}</span>
               <span className="font-mono tabular-nums">{Math.round(ratio * 100)}%</span>
             </div>
-            <DialogFooter className="mt-4">
+            <p className="mt-3 text-center text-xs text-muted-foreground">
+              Rendering in the background — you can keep editing. Close this to
+              hide it; it keeps going.
+            </p>
+            <DialogFooter className="mt-4 w-full">
               <Button
                 variant="ghost"
+                className="w-full"
                 onClick={() => {
                   useExport.getState().cancel();
                   setExportOpen(false);
                 }}
               >
-                Cancel
+                Cancel export
               </Button>
-              <Button onClick={() => setExportOpen(false)}>Continue in background</Button>
             </DialogFooter>
           </div>
         )}
