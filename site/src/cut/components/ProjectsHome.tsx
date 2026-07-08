@@ -254,7 +254,7 @@ export function ProjectsHome() {
       {!engineDown && projects && hasContent && (
         <div className="mb-5 flex items-center justify-between">
           {openFolder === null ? (
-            <div />
+            <h1 className="text-lg font-semibold tracking-tight">Projects</h1>
           ) : (
             <FolderCrumb
               root="Projects"
