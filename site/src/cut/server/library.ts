@@ -130,6 +130,25 @@ async function writeIndex(idx: LibraryIndex) {
   await writeJsonAtomic(INDEX, idx);
 }
 
+// Serialize read-modify-write cycles on the shared index. Without this, moving
+// several assets at once (concurrent requests) would each read the index, change
+// one asset, and write the whole file back — clobbering each other's changes.
+// Each mutation reads the freshly-written state, applies its change, and writes.
+let indexLock: Promise<unknown> = Promise.resolve();
+async function mutateIndex<T>(fn: (idx: LibraryIndex) => T | Promise<T>): Promise<T> {
+  const run = indexLock.then(async () => {
+    const idx = await readIndex();
+    const result = await fn(idx);
+    await writeIndex(idx);
+    return result;
+  });
+  indexLock = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
 export async function listLibrary(): Promise<LibraryAsset[]> {
   const idx = await readIndex();
   return idx.assets.sort((a, b) => b.addedAt - a.addedAt);
@@ -208,9 +227,9 @@ export async function register(
     folderId: null,
     ...(source ? { source } : {}),
   };
-  const idx = await readIndex();
-  idx.assets.push(asset);
-  await writeIndex(idx);
+  await mutateIndex((idx) => {
+    idx.assets.push(asset);
+  });
   return asset;
 }
 
@@ -265,12 +284,13 @@ export async function useInProject(assetId: string, projectId: string): Promise<
 }
 
 export async function removeAsset(id: string) {
-  const idx = await readIndex();
-  const asset = idx.assets.find((a) => a.id === id);
-  if (!asset) throw new Error("Library asset not found.");
-  idx.assets = idx.assets.filter((a) => a.id !== id);
-  await writeIndex(idx);
-  await rm(libMediaPath(asset.fileName), { force: true });
+  const fileName = await mutateIndex((idx) => {
+    const asset = idx.assets.find((a) => a.id === id);
+    if (!asset) throw new Error("Library asset not found.");
+    idx.assets = idx.assets.filter((a) => a.id !== id);
+    return asset.fileName;
+  });
+  await rm(libMediaPath(fileName), { force: true });
 }
 
 export function getAsset(id: string) {
@@ -292,40 +312,40 @@ export async function createFolder(name: string): Promise<LibraryFolder> {
     name: trimmed.slice(0, 80),
     createdAt: Date.now(),
   };
-  const idx = await readIndex();
-  idx.folders = [...(idx.folders ?? []), folder];
-  await writeIndex(idx);
+  await mutateIndex((idx) => {
+    idx.folders = [...(idx.folders ?? []), folder];
+  });
   return folder;
 }
 
 export async function renameFolder(id: string, name: string): Promise<LibraryFolder> {
   const trimmed = name.trim();
   if (!trimmed) throw new Error("Folder name required.");
-  const idx = await readIndex();
-  const folder = (idx.folders ?? []).find((f) => f.id === id);
-  if (!folder) throw new Error("Folder not found.");
-  folder.name = trimmed.slice(0, 80);
-  await writeIndex(idx);
-  return folder;
+  return mutateIndex((idx) => {
+    const folder = (idx.folders ?? []).find((f) => f.id === id);
+    if (!folder) throw new Error("Folder not found.");
+    folder.name = trimmed.slice(0, 80);
+    return folder;
+  });
 }
 
 export async function deleteFolder(id: string) {
-  const idx = await readIndex();
-  idx.folders = (idx.folders ?? []).filter((f) => f.id !== id);
-  // Assets in the folder fall back to ungrouped rather than vanishing.
-  for (const a of idx.assets) if (a.folderId === id) a.folderId = null;
-  await writeIndex(idx);
+  await mutateIndex((idx) => {
+    idx.folders = (idx.folders ?? []).filter((f) => f.id !== id);
+    // Assets in the folder fall back to ungrouped rather than vanishing.
+    for (const a of idx.assets) if (a.folderId === id) a.folderId = null;
+  });
 }
 
 export async function moveAsset(assetId: string, folderId: string | null) {
-  const idx = await readIndex();
-  const asset = idx.assets.find((a) => a.id === assetId);
-  if (!asset) throw new Error("Library asset not found.");
-  if (folderId && !(idx.folders ?? []).some((f) => f.id === folderId)) {
-    throw new Error("Folder not found.");
-  }
-  asset.folderId = folderId;
-  await writeIndex(idx);
+  await mutateIndex((idx) => {
+    const asset = idx.assets.find((a) => a.id === assetId);
+    if (!asset) throw new Error("Library asset not found.");
+    if (folderId && !(idx.folders ?? []).some((f) => f.id === folderId)) {
+      throw new Error("Folder not found.");
+    }
+    asset.folderId = folderId;
+  });
 }
 
 // --- Templates: reusable selections saved by reference (see LibraryTemplate). ---
@@ -374,9 +394,9 @@ export async function saveTemplate(projectId: string, input: TemplateInput): Pro
     texts: input.texts ?? [],
     cues: input.cues ?? [],
   };
-  const idx = await readIndex();
-  idx.templates = [...(idx.templates ?? []), template];
-  await writeIndex(idx);
+  await mutateIndex((idx) => {
+    idx.templates = [...(idx.templates ?? []), template];
+  });
   return template;
 }
 
@@ -397,10 +417,11 @@ export async function useTemplate(templateId: string, projectId: string) {
 }
 
 export async function deleteTemplate(id: string) {
-  const idx = await readIndex();
-  const template = (idx.templates ?? []).find((x) => x.id === id);
-  idx.templates = (idx.templates ?? []).filter((x) => x.id !== id);
-  await writeIndex(idx);
+  const template = await mutateIndex((idx) => {
+    const t = (idx.templates ?? []).find((x) => x.id === id);
+    idx.templates = (idx.templates ?? []).filter((x) => x.id !== id);
+    return t;
+  });
   // The media copies are private to this template, so removing them is safe.
   for (const m of template?.media ?? []) await rm(libMediaPath(m.fileName), { force: true });
 }
