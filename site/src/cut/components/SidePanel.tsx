@@ -22,6 +22,7 @@ import {
 import { apiFetch, apiUrl } from "@/cut/lib/api";
 import { clearAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
 import { deleteExport, revealExport } from "@/cut/lib/exportClient";
+import { useExport } from "@/cut/lib/exportStore";
 import {
   addLibraryAssetToProject,
   addTemplateToProject,
@@ -170,12 +171,17 @@ function MediaPanel({
 }) {
   const assets = useEditor((s) => s.assets);
   const exportOpen = useEditor((s) => s.exportOpen);
+  // A render that finishes in the background (dialog closed) drops a new file in
+  // the exports folder; re-read the list when it lands so it shows without a
+  // manual refresh.
+  const exportStatus = useExport((s) => s.status);
   const inputRef = useRef<HTMLInputElement>(null);
   const [exports, setExports] = useState<ExportItem[]>([]);
   const [preview, setPreview] = useState<ExportItem | null>(null);
   const [deletingExport, setDeletingExport] = useState<ExportItem | null>(null);
 
-  // Refresh the list on open and every time the export dialog closes.
+  // Refresh the list on open, when the export dialog closes, and when a
+  // background render settles (done/error).
   useEffect(() => {
     if (exportOpen) return;
     let alive = true;
@@ -186,7 +192,7 @@ function MediaPanel({
     return () => {
       alive = false;
     };
-  }, [projectId, exportOpen]);
+  }, [projectId, exportOpen, exportStatus]);
 
   const removeExport = async () => {
     const it = deletingExport;
