@@ -226,6 +226,14 @@ async function runExport(job: Job, spec: ExportSpec) {
   const { width: W, height: H, fps } = spec;
 
   const overlayVideos = spec.overlayVideos ?? [];
+  // Tracks below the base (negative) form a backdrop it draws over; tracks above
+  // (positive) sit on top. A below track means the base must carry alpha where
+  // it's regioned so the backdrop shows through its margins.
+  const belowVideos = overlayVideos.filter((o) => o.track < 0).sort((a, b) => a.track - b.track);
+  const aboveVideos = overlayVideos.filter((o) => o.track > 0).sort((a, b) => a.track - b.track);
+  const hasBelow = belowVideos.length > 0;
+  const baseFmt = hasBelow ? "yuva420p" : "yuv420p";
+  const padColor = hasBelow ? "black@0.0" : "black";
   // One ffmpeg input per distinct media file (from the project folder),
   // plus one per uploaded overlay PNG.
   const mediaFiles = [
@@ -282,9 +290,9 @@ async function runExport(job: Job, spec: ExportSpec) {
         frame =
           c.fit === "fill"
             ? `scale=${rw}:${rh}:force_original_aspect_ratio=increase,crop=${rw}:${rh},` +
-              `pad=${W}:${H}:${rx}:${ry}:color=black`
+              `pad=${W}:${H}:${rx}:${ry}:color=${padColor}`
             : `scale=${rw}:${rh}:force_original_aspect_ratio=decrease:force_divisible_by=2,` +
-              `pad=${W}:${H}:${rx}+(${rw}-iw)/2:${ry}+(${rh}-ih)/2:color=black`;
+              `pad=${W}:${H}:${rx}+(${rw}-iw)/2:${ry}+(${rh}-ih)/2:color=${padColor}`;
       } else {
         frame =
           c.fit === "fill"
@@ -293,17 +301,19 @@ async function runExport(job: Job, spec: ExportSpec) {
               `crop=${W}:${H}:(iw-ow)*${num(0.5 + Math.max(-1, Math.min(1, c.panX ?? 0)) / 2)}` +
               `:(ih-oh)*${num(0.5 + Math.max(-1, Math.min(1, c.panY ?? 0)) / 2)}`
             : `scale=${W}:${H}:force_original_aspect_ratio=decrease,` +
-              `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=black`;
+              `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=${padColor}`;
       }
       // setpts/speed rescales the clip's duration on the timeline.
       filters.push(
         `[${idx}:v]trim=${num(c.in)}:${num(c.out)},setpts=(PTS-STARTPTS)/${num(speed)},` +
-          `fps=${fps},${frame},setsar=1,format=yuv420p[v${j}]`
+          `fps=${fps},${frame},setsar=1,format=${baseFmt}[v${j}]`
       );
     } else {
-      // No video stream, or a hidden clip: keep the slot as black frames.
+      // No video stream, or a hidden clip: keep the slot transparent (so a below
+      // track shows) when one exists, otherwise plain black.
+      const slot = hasBelow ? "black@0.0" : "black";
       filters.push(
-        `color=c=black:s=${W}x${H}:r=${fps},trim=0:${num(dur)},setpts=PTS-STARTPTS,format=yuv420p[v${j}]`
+        `color=c=${slot}:s=${W}x${H}:r=${fps},trim=0:${num(dur)},setpts=PTS-STARTPTS,format=${baseFmt}[v${j}]`
       );
     }
     if (!c.muted && !c.hidden && audioPresence.get(c.file)) {
@@ -347,63 +357,74 @@ async function runExport(job: Job, spec: ExportSpec) {
     aAcc = aOut;
   }
 
-  // Composite the upper video tracks (bottom track first) over the base. A
-  // full-frame clip covers the base; a regioned one shares the frame (split
-  // half) or floats small (PiP). Overlay audio (unless muted) mixes in below.
-  let vLabel = vAcc;
+  // Composite the video stack bottom→top: below-base tracks form a backdrop the
+  // base draws over (a regioned base leaves them showing), then the above-base
+  // tracks sit on top. A full-frame layer covers; a regioned one shares the frame
+  // (split half) or floats (PiP). Overlay audio (unless muted) mixes in below.
   const overlaySoundLabels: string[] = [];
-  [...overlayVideos]
-    .sort((a, b) => a.track - b.track)
-    .forEach((oc, k) => {
-      if (!videoPresence.get(oc.file)) return;
-      const idx = inputIndex.get(oc.file)!;
-      const ospeed = oc.speed && oc.speed > 0 ? oc.speed : 1;
-      const olen = Math.max(0.1, (oc.out - oc.in) / ospeed);
-      const end = Math.min(oc.start + olen, spec.duration);
-      const region = regionPx(oc.frame, W, H);
-      // A full-frame overlay covers; a region either covers-and-crops ("fill")
-      // or is contained and centered in its rect ("fit"), letting the base show
-      // around it (picture-in-picture).
-      const cover = oc.fit === "fill" || (oc.fit == null && !region);
-      let framing: string;
-      let pos: string;
-      if (!region) {
-        // "fit" stays transparent and centered so the base shows through the
-        // margins (matching the preview); black-padding it would occlude the
-        // base. "fill" covers and crops.
-        framing = cover
-          ? `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}`
-          : `scale=${W}:${H}:force_original_aspect_ratio=decrease:force_divisible_by=2`;
-        pos = cover ? "0:0" : `x=(${W}-w)/2:y=(${H}-h)/2`;
-      } else {
-        const { rx, ry, rw, rh } = region;
-        framing = cover
-          ? `scale=${rw}:${rh}:force_original_aspect_ratio=increase,crop=${rw}:${rh}`
-          : `scale=${rw}:${rh}:force_original_aspect_ratio=decrease:force_divisible_by=2`;
-        pos = cover ? `${rx}:${ry}` : `x=${rx}+(${rw}-w)/2:y=${ry}+(${rh}-h)/2`;
-      }
-      const seg = `ovv${k}`;
-      // tpad delays the clip to its timeline start without a leading-frame stall.
+  let ovk = 0;
+  // Overlay one track clip onto `onto`, returning the new label; also queues its
+  // audio. Reused for the below backdrop and the above-base stack.
+  const addOverlay = (oc: (typeof overlayVideos)[number], onto: string): string => {
+    if (!videoPresence.get(oc.file)) return onto;
+    const idx = inputIndex.get(oc.file)!;
+    const ospeed = oc.speed && oc.speed > 0 ? oc.speed : 1;
+    const olen = Math.max(0.1, (oc.out - oc.in) / ospeed);
+    const end = Math.min(oc.start + olen, spec.duration);
+    const region = regionPx(oc.frame, W, H);
+    const cover = oc.fit === "fill" || (oc.fit == null && !region);
+    let framing: string;
+    let pos: string;
+    if (!region) {
+      framing = cover
+        ? `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}`
+        : `scale=${W}:${H}:force_original_aspect_ratio=decrease:force_divisible_by=2`;
+      pos = cover ? "0:0" : `x=(${W}-w)/2:y=(${H}-h)/2`;
+    } else {
+      const { rx, ry, rw, rh } = region;
+      framing = cover
+        ? `scale=${rw}:${rh}:force_original_aspect_ratio=increase,crop=${rw}:${rh}`
+        : `scale=${rw}:${rh}:force_original_aspect_ratio=decrease:force_divisible_by=2`;
+      pos = cover ? `${rx}:${ry}` : `x=${rx}+(${rw}-w)/2:y=${ry}+(${rh}-h)/2`;
+    }
+    const k = ovk++;
+    const seg = `ovv${k}`;
+    // tpad delays the clip to its timeline start without a leading-frame stall.
+    filters.push(
+      `[${idx}:v]trim=${num(oc.in)}:${num(oc.out)},setpts=(PTS-STARTPTS)/${num(ospeed)},` +
+        `fps=${fps},${framing},setsar=1,format=yuv420p,tpad=start_duration=${num(oc.start)}[${seg}]`
+    );
+    const next = `vovv${k}`;
+    filters.push(
+      `[${onto}][${seg}]overlay=${pos}:enable='between(t,${num(oc.start)},${num(end)})':eof_action=pass[${next}]`
+    );
+    if (!oc.muted && audioPresence.get(oc.file)) {
+      const tempo = ospeed !== 1 ? `${atempoChain(ospeed)},` : "";
+      const delayMs = Math.max(0, Math.round(oc.start * 1000));
+      const lab = `ovs${k}`;
       filters.push(
-        `[${idx}:v]trim=${num(oc.in)}:${num(oc.out)},setpts=(PTS-STARTPTS)/${num(ospeed)},` +
-          `fps=${fps},${framing},setsar=1,format=yuv420p,tpad=start_duration=${num(oc.start)}[${seg}]`
+        `[${idx}:a]atrim=${num(oc.in)}:${num(oc.out)},asetpts=PTS-STARTPTS,${tempo}` +
+          `aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,adelay=${delayMs}:all=1[${lab}]`
       );
-      const next = `vovv${k}`;
-      filters.push(
-        `[${vLabel}][${seg}]overlay=${pos}:enable='between(t,${num(oc.start)},${num(end)})':eof_action=pass[${next}]`
-      );
-      vLabel = next;
-      if (!oc.muted && audioPresence.get(oc.file)) {
-        const tempo = ospeed !== 1 ? `${atempoChain(ospeed)},` : "";
-        const delayMs = Math.max(0, Math.round(oc.start * 1000));
-        const lab = `ovs${k}`;
-        filters.push(
-          `[${idx}:a]atrim=${num(oc.in)}:${num(oc.out)},asetpts=PTS-STARTPTS,${tempo}` +
-            `aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,adelay=${delayMs}:all=1[${lab}]`
-        );
-        overlaySoundLabels.push(lab);
-      }
-    });
+      overlaySoundLabels.push(lab);
+    }
+    return next;
+  };
+
+  let vLabel = vAcc;
+  if (hasBelow) {
+    // Backdrop = black + the below-base tracks; the alpha-carrying base draws
+    // over it (regioned margins reveal the backdrop), then flatten for encoding.
+    filters.push(
+      `color=c=black:s=${W}x${H}:r=${fps},trim=0:${num(spec.duration)},setpts=PTS-STARTPTS,format=yuva420p[below0]`
+    );
+    let belowLabel = "below0";
+    for (const oc of belowVideos) belowLabel = addOverlay(oc, belowLabel);
+    filters.push(`[${belowLabel}][${vAcc}]overlay=0:0[basecomp]`);
+    filters.push(`[basecomp]format=yuv420p[baseflat]`);
+    vLabel = "baseflat";
+  }
+  for (const oc of aboveVideos) vLabel = addOverlay(oc, vLabel);
 
   // Burn in text overlays, each windowed to its timeline range.
   spec.overlays.forEach((o, k) => {

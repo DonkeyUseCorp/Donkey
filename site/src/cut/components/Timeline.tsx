@@ -22,7 +22,7 @@ import {
 import { importLibraryAsset, saveTemplate } from "@/cut/lib/library";
 import { startDrag } from "@/cut/lib/drag";
 import { ensurePeaks } from "@/cut/lib/media";
-import { clipLen, clipSpeed, getClipSpans, TIMELINE_H_MAX, totalDuration, useEditor } from "@/cut/lib/store";
+import { clipLen, clipSpeed, getClipSpans, projectDuration, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
 import type { VideoTrackPlacement } from "@/cut/lib/store";
 import { formatTime, formatTimecode } from "@/cut/lib/time";
 import type { AudioClip, ClipSpan, MediaAsset, OverlayClip, SubtitleCue, TextOverlay } from "@/cut/lib/types";
@@ -139,7 +139,7 @@ export function Timeline() {
   );
 
   const spans = useMemo(() => getClipSpans(clips, assets), [clips, assets]);
-  const total = totalDuration(clips);
+  const total = projectDuration({ clips, overlayClips, audioClips });
   // Fill the viewport at minimum so a wide window never leaves the ruler/tracks
   // cut off; grow past it once the content is longer.
   const contentW = Math.max(total * pps + PAD_END, viewportW - PAD_SIDE * 2, 600);
@@ -191,11 +191,14 @@ export function Timeline() {
     const zone = el?.closest<HTMLElement>("[data-drop]");
     const parsed = zone ? parsePlacement(zone.dataset.drop!) : null;
     if (parsed) return parsed;
-    // Above every row → a new top track.
-    const first = innerRef.current?.querySelector<HTMLElement>("[data-drop]");
-    if (first && clientY < first.getBoundingClientRect().top) {
-      const top = Math.max(0, ...useEditor.getState().overlayClips.map((c) => c.track));
-      return { kind: "insert", level: top + 1 };
+    // Past the ends of the stack → a new track beyond the last one.
+    const rows = innerRef.current?.querySelectorAll<HTMLElement>("[data-drop]");
+    const tracks = useEditor.getState().overlayClips.map((c) => c.track);
+    if (rows && rows.length) {
+      if (clientY < rows[0].getBoundingClientRect().top)
+        return { kind: "insert", level: Math.max(0, ...tracks) + 1 };
+      if (clientY > rows[rows.length - 1].getBoundingClientRect().bottom)
+        return { kind: "insert", level: Math.min(0, ...tracks) - 1 };
     }
     return { kind: "base" };
   }, []);
@@ -238,10 +241,15 @@ export function Timeline() {
     return { used, rowOf, count: used.length };
   }, [overlays]);
 
-  // Upper video tracks (PiP / composited layers) render above the base row,
-  // highest track at the top. Empty tracks simply don't appear.
-  const overlayTracks = useMemo(
-    () => [...new Set(overlayClips.map((c) => c.track))].sort((a, b) => b - a),
+  // Video tracks either side of the base: positive tracks (PiP / composited
+  // layers) render above the base, negative ones below it as a backdrop. Both
+  // list highest-first (nearest the base at the inner edge); empty tracks vanish.
+  const aboveTracks = useMemo(
+    () => [...new Set(overlayClips.map((c) => c.track).filter((n) => n > 0))].sort((a, b) => b - a),
+    [overlayClips]
+  );
+  const belowTracks = useMemo(
+    () => [...new Set(overlayClips.map((c) => c.track).filter((n) => n < 0))].sort((a, b) => b - a),
     [overlayClips]
   );
 
@@ -318,7 +326,7 @@ export function Timeline() {
 
   const fit = useCallback(() => {
     const el = scrollRef.current;
-    const dur = totalDuration(useEditor.getState().clips);
+    const dur = projectDuration(useEditor.getState());
     if (!el || dur <= 0) return;
     zoomTo((el.clientWidth - 60) / dur, 0, PAD_SIDE);
   }, [zoomTo]);
@@ -384,7 +392,7 @@ export function Timeline() {
         s.seek(0);
       } else if (e.key === "End") {
         e.preventDefault();
-        s.seek(totalDuration(s.clips));
+        s.seek(projectDuration(s));
       }
     };
     window.addEventListener("keydown", onKey);
@@ -472,15 +480,18 @@ export function Timeline() {
     });
   };
 
-  // A thin drop line in the gap above a track row: dropping here opens a brand
-  // new track at z-level `level`. Straddles the gap so a drop near a row edge
-  // inserts, while the row's middle still lands on that track.
-  const insertZone = (level: number) => {
+  // A thin drop line in the gap above (or below) a track row: dropping here opens
+  // a brand new track at z-level `level`. Straddles the gap so a drop near a row
+  // edge inserts, while the row's middle still lands on that track.
+  const insertZone = (level: number, side: "top" | "bottom" = "top") => {
     const active = samePlacement(overlayDrop?.target ?? null, { kind: "insert", level });
     return (
       <div
         data-drop={`insert:${level}`}
-        className="absolute inset-x-0 -top-[9px] z-20 flex h-[18px] items-center"
+        className={cn(
+          "absolute inset-x-0 z-20 flex h-[18px] items-center",
+          side === "top" ? "-top-[9px]" : "-bottom-[9px]"
+        )}
         {...overlayDropHandlers({ kind: "insert", level })}
       >
         <div
@@ -616,7 +627,7 @@ export function Timeline() {
           >
           <Ruler pps={pps} width={contentW} onScrub={scrub} />
 
-          {overlayTracks.map((track) => (
+          {aboveTracks.map((track) => (
             <div
               key={`ov-${track}`}
               className="relative mt-1.5"
@@ -661,6 +672,7 @@ export function Timeline() {
             onPointerDown={deselectIfSelf}
           >
             {insertMode && insertZone(1)}
+            {insertMode && insertZone(-1, "bottom")}
             {spans.length === 0 && (
               <div className="pointer-events-none sticky left-0 flex h-full w-[calc(100vw-40px)] max-w-[900px] items-center justify-center gap-1.5 rounded-xl border-[1.5px] border-dashed border-input text-xs font-medium text-muted-foreground">
                 <Plus className="size-3.5" /> Add media to this project
@@ -737,6 +749,44 @@ export function Timeline() {
                 ) : null
               )}
           </div>
+
+          {belowTracks.map((track) => (
+            <div
+              key={`ov-${track}`}
+              className="relative mt-1.5"
+              style={{ height: OVERLAY_H }}
+              data-drop={placementAttr({ kind: "track", track })}
+              onPointerDown={deselectIfSelf}
+              {...overlayDropHandlers({ kind: "track", track })}
+            >
+              {insertMode && insertZone(track - 1, "bottom")}
+              {overlayClips
+                .filter((c) => c.track === track)
+                .map((c) => (
+                  <OverlayClipView
+                    key={c.id}
+                    clip={c}
+                    asset={assets.find((x) => x.id === c.assetId)}
+                    pps={pps}
+                    selected={selKeys.has(`overlayClip:${c.id}`)}
+                    resolveTarget={resolveDropTrack}
+                    onCrossMove={previewCross}
+                    onCrossDrop={onOverlayCrossDrop}
+                    onDragActive={setVideoDragging}
+                  />
+                ))}
+              {samePlacement(overlayDrop?.target ?? null, { kind: "track", track }) && (
+                <div
+                  className="pointer-events-none absolute top-0.5 rounded-lg border-[1.5px] border-dashed border-[#0a84ff]/70 bg-[#0a84ff]/10"
+                  style={{
+                    left: overlayDrop!.t * pps,
+                    width: Math.max(10, overlayDrop!.len * pps - CLIP_GAP),
+                    height: OVERLAY_H - 4,
+                  }}
+                />
+              )}
+            </div>
+          ))}
 
           {audioClips.length > 0 && (
             <div className="relative mt-1.5" style={{ height: AUDIO_H }} onPointerDown={deselectIfSelf}>
@@ -843,7 +893,7 @@ function HoverLine({
   if (skimTime === null) return null;
   return (
     <div
-      className="tl-hover-line pointer-events-none absolute top-0 bottom-2 z-6 w-px bg-foreground/30"
+      className="tl-hover-line pointer-events-none absolute top-0 bottom-2 z-30 w-px bg-foreground/30"
       style={{ transform: `translateX(${skimTime * pps}px)` }}
     />
   );
@@ -998,7 +1048,7 @@ function Playhead({
 
   return (
     <div
-      className="pointer-events-none absolute top-0 bottom-2 left-0 z-8 w-[1.5px] bg-[#0a84ff] shadow-[0_0_8px_rgba(10,132,255,0.6)]"
+      className="pointer-events-none absolute top-0 bottom-2 left-0 z-30 w-[1.5px] bg-[#0a84ff] shadow-[0_0_8px_rgba(10,132,255,0.6)]"
       style={{ transform: `translateX(${x}px)` }}
     >
       <div

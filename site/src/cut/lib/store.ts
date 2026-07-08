@@ -29,21 +29,27 @@ const uid = () => crypto.randomUUID().slice(0, 8);
 
 const MIN_LEN = 0.1;
 
-/** Where a video clip lands when dropped: an existing upper track, the magnetic
- * base row, or a brand-new track inserted at z-level `level` (every upper track
- * at or above it shifts up one to make room). Upper-track numbers are 1-based,
- * higher = closer to the top; `level` = maxTrack+1 is a new top track. */
+/** Where a video clip lands when dropped: an existing track, the magnetic base
+ * row, or a brand-new track inserted at z-level `level`. Track numbers are
+ * signed: positive tracks sit above the base (higher = closer to the top),
+ * negative tracks sit below it (more negative = further behind), base is 0.
+ * Inserting shifts the tracks past `level` (up for positive, down for negative)
+ * to open the slot. */
 export type VideoTrackPlacement =
   | { kind: "track"; track: number }
   | { kind: "base" }
   | { kind: "insert"; level: number };
 
-/** Open a slot for an inserted track: every upper track at or above `level`
- * shifts up one. A no-op for non-insert placements. */
+/** Open a slot at `level`, moving other clips out of the way: above the base
+ * (level > 0) shifts tracks at/above it up; below the base (level < 0) shifts
+ * tracks at/below it down. `exclude` is the clip being placed (left untouched). */
+function openInsertSlot(clips: OverlayClip[], level: number, exclude?: string): OverlayClip[] {
+  return level > 0
+    ? clips.map((c) => (c.id !== exclude && c.track >= level ? { ...c, track: c.track + 1 } : c))
+    : clips.map((c) => (c.id !== exclude && c.track <= level ? { ...c, track: c.track - 1 } : c));
+}
 const shiftTracksUp = (clips: OverlayClip[], place: VideoTrackPlacement): OverlayClip[] =>
-  place.kind === "insert"
-    ? clips.map((c) => (c.track >= place.level ? { ...c, track: c.track + 1 } : c))
-    : clips;
+  place.kind === "insert" ? openInsertSlot(clips, place.level) : clips;
 
 /** A single-item selection: the primary that drives the Inspector plus the
  * one-element multiSelection that bulk actions (delete, copy) and the timeline
@@ -671,9 +677,7 @@ export const useEditor = create<EditorState>((set, get) => {
         set((st) => {
           const shifted =
             place.kind === "insert"
-              ? st.overlayClips.map((c) =>
-                  c.id !== source.id && c.track >= place.level ? { ...c, track: c.track + 1 } : c
-                )
+              ? openInsertSlot(st.overlayClips, place.level, source.id)
               : st.overlayClips;
           return {
             overlayClips: shifted.map((c) =>
@@ -1036,7 +1040,7 @@ export const useEditor = create<EditorState>((set, get) => {
     },
 
     seek: (t) => {
-      const total = totalDuration(get().clips);
+      const total = projectDuration(get());
       set({ currentTime: Math.max(0, Math.min(total, t)) });
     },
 
@@ -1532,6 +1536,24 @@ export function totalDuration(clips: VideoClip[]) {
     t += clipLen(clips[i]) - transitionOverlap(clips[i], clips[i + 1]);
   }
   return Math.max(0, t);
+}
+
+/** The playable length of the whole project: the base track plus anything that
+ * runs past it on an upper/lower video track or the soundtrack. Drives the
+ * timeline extent, the seek clamp, and export length so content beyond the base
+ * is reachable. */
+export function projectDuration(s: {
+  clips: VideoClip[];
+  overlayClips: OverlayClip[];
+  audioClips: AudioClip[];
+}): number {
+  let end = totalDuration(s.clips);
+  for (const c of s.overlayClips) {
+    const sp = c.speed && c.speed > 0 ? c.speed : 1;
+    end = Math.max(end, c.start + Math.max(0.1, (c.out - c.in) / sp));
+  }
+  for (const a of s.audioClips) end = Math.max(end, a.start + clipLen(a));
+  return Math.max(0, end);
 }
 
 /**

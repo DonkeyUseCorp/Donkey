@@ -432,28 +432,6 @@ function OverlayClipPanel({ clip }: { clip: OverlayClip }) {
         </div>
         <Row label="Length"><Value>{formatTime(len)}</Value></Row>
         <Row label="Starts at"><Value>{formatTime(clip.start)}</Value></Row>
-        <Row label="Track">
-          <div className="flex items-center gap-1.5">
-            <Button
-              variant="outline"
-              size="icon-sm"
-              aria-label="Move down a track"
-              disabled={clip.track <= 1}
-              onClick={() => update(clip.id, { track: Math.max(1, clip.track - 1) })}
-            >
-              −
-            </Button>
-            <Value className="w-6 text-center">{clip.track}</Value>
-            <Button
-              variant="outline"
-              size="icon-sm"
-              aria-label="Move up a track"
-              onClick={() => update(clip.id, { track: clip.track + 1 })}
-            >
-              +
-            </Button>
-          </div>
-        </Row>
         <LayoutButtons
           rect={rectOf(clip)}
           onPick={(frame, fit) => update(clip.id, { frame, fit })}
@@ -482,10 +460,6 @@ function OverlayClipPanel({ clip }: { clip: OverlayClip }) {
         <Row label="Hide from output">
           <Switch checked={!!clip.hidden} onCheckedChange={(v) => update(clip.id, { hidden: v })} />
         </Row>
-        <p className="mt-2.5 text-[11.5px] leading-relaxed text-muted-foreground">
-          A full-frame overlay covers the tracks below. Give it a half or corner
-          to share the frame; drag the box in the preview to place it.
-        </p>
       </div>
     </>
   );

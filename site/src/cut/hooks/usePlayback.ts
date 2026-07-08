@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, type RefObject } from "react";
-import { clipSpeed, getClipSpans, totalDuration, useEditor } from "@/cut/lib/store";
+import { clipSpeed, getClipSpans, projectDuration, useEditor } from "@/cut/lib/store";
 import { isFullRect, rectOf } from "@/cut/lib/types";
 import type { ClipSpan, FrameRect, MediaAsset, OverlayClip, VideoClip } from "@/cut/lib/types";
 
@@ -25,6 +25,9 @@ class Engine {
   private raf = 0;
   private activeClipId: string | null = null;
   private disposed = false;
+  // Wall-clock stamp for advancing time past the base track, where there is no
+  // base video element to act as the master clock.
+  private lastPlayNow = 0;
 
   constructor(private canvas: HTMLCanvasElement) {
     this.tick = this.tick.bind(this);
@@ -142,10 +145,13 @@ class Engine {
       }
       return;
     }
-    // A hidden clip keeps its slot but renders as black — nothing plays there.
+    // A hidden clip plays nothing: fill black only if we own the clear,
+    // otherwise leave whatever is beneath (a below track) showing.
     if (clip?.hidden) {
-      ctx.fillStyle = "#000";
-      ctx.fillRect(0, 0, W, H);
+      if (clear) {
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, W, H);
+      }
       return;
     }
     // Mid-seek the element has no decodable frame; keep the previous frame
@@ -202,7 +208,9 @@ class Engine {
       keep.add(next.asset.id);
     }
     this.pauseExcept(keep);
-    this.drawLayer(masterEl, masterSpan.clip, true, 1);
+    // No clear here — the tick clears once, then draws the below tracks, so the
+    // base composites over them (a regioned base leaves them showing).
+    this.drawLayer(masterEl, masterSpan.clip, false, 1);
     if (incEl) this.drawLayer(incEl, next!.clip, false, alpha);
     return masterEl;
   }
@@ -221,15 +229,22 @@ class Engine {
     return el;
   }
 
-  /** Composite the upper (overlay) tracks over the base, bottom track first.
-   * A full-frame clip covers the base ("topmost showing clip plays"); a
-   * regioned one shares the frame (split half) or floats small (PiP). */
-  private drawOverlays(t: number, play: boolean) {
+  private clearCanvas() {
     const ctx = this.canvas.getContext("2d");
     if (!ctx) return;
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+  }
+
+  /** Draw the overlay tracks on one side of the base — `below` (track < 0) or
+   * `above` (track > 0) — in z-order (further-back first). A full-frame clip
+   * covers what's under it; a regioned one shares the frame, letting lower
+   * tracks show in its margins. Collects the clips it touched into `active`. */
+  private drawOverlays(t: number, play: boolean, side: "below" | "above", active: Set<string>) {
     const s = useEditor.getState();
-    const active = new Set<string>();
-    const clips = [...s.overlayClips].sort((a, b) => a.track - b.track);
+    const clips = s.overlayClips
+      .filter((c) => (side === "below" ? c.track < 0 : c.track > 0))
+      .sort((a, b) => a.track - b.track);
     for (const c of clips) {
       if (c.hidden) continue;
       const asset = s.assets.find((a) => a.id === c.assetId);
@@ -250,12 +265,14 @@ class Engine {
       }
       if (el.readyState < 2 || !el.videoWidth) continue;
       const rect = rectOf(c);
-      // A full-frame overlay covers the base; a regioned one shares the frame
-      // (split half) or floats small (PiP). "fit" contains, "fill" crops.
       const cover = c.fit === "fill" || (c.fit == null && isFullRect(rect));
       this.drawIntoRect(el, rect, cover, 1);
     }
-    // Pause inactive elements; drop those whose clip is gone.
+  }
+
+  /** Pause overlay elements not drawn this frame; drop those whose clip is gone. */
+  private cleanupOverlays(active: Set<string>) {
+    const s = useEditor.getState();
     for (const [id, el] of this.overlayEls) {
       if (active.has(id)) continue;
       if (!el.paused) el.pause();
@@ -316,7 +333,9 @@ class Engine {
 
     const s = useEditor.getState();
     const spans = getClipSpans(s.clips, s.assets);
-    const total = totalDuration(s.clips);
+    // Whole-project length so time past the base (a longer upper/lower track or
+    // soundtrack) is still reachable while scrubbing and playing.
+    const total = projectDuration(s);
 
     if (spans.length === 0) {
       this.pauseExcept(new Set());
@@ -333,57 +352,81 @@ class Engine {
       // frame under it. The playhead (currentTime) is never touched.
       const pt =
         s.skimTime !== null ? Math.max(0, Math.min(s.skimTime, total - 0.001)) : t;
-      const span =
-        spans.find((sp) => pt >= sp.start && pt < sp.start + sp.len) ??
-        spans[spans.length - 1];
-      this.composite(span, spans, Math.min(pt, span.start + span.len), false);
-      this.drawOverlays(pt, false);
+      const span = spans.find((sp) => pt >= sp.start && pt < sp.start + sp.len);
+      const active = new Set<string>();
+      this.clearCanvas();
+      this.drawOverlays(pt, false, "below", active);
+      // Past the base track there is no base frame — just the backdrop and the
+      // upper/lower tracks that are still running at `pt`.
+      if (span) this.composite(span, spans, Math.min(pt, span.start + span.len), false);
+      else this.pauseExcept(new Set());
+      this.drawOverlays(pt, false, "above", active);
+      this.cleanupOverlays(active);
       this.syncSoundtrack(t, false);
       return;
     }
 
     let span = spans.find((sp) => t >= sp.start && t < sp.start + sp.len);
-    if (!span) {
-      // Reached the end of the last clip.
-      useEditor.setState({ playing: false, currentTime: total });
+
+    // Draw the below tracks first (backdrop), then prime the master element
+    // (and any dissolve partner) over them and read the clock.
+    const active = new Set<string>();
+    this.clearCanvas();
+    this.drawOverlays(t, true, "below", active);
+
+    if (span) {
+      let el = this.composite(span, spans, t, true);
+      // The active element is the master clock; source time maps back through
+      // the clip's speed.
+      const speed = clipSpeed(span.clip);
+      const derived = span.start + (el.currentTime - span.clip.in) / speed;
+      if (Math.abs(derived - t) < 1.5) {
+        t = Math.max(span.start, Math.min(derived, span.start + span.len));
+      }
+      // Clip boundary: hand off to the next clip, or (if the base is done but an
+      // upper/lower track runs on) fall through to the wall-clock tail.
+      if (el.currentTime >= span.clip.out - 0.02 || el.ended) {
+        const idx = spans.indexOf(span);
+        const next = spans[idx + 1];
+        if (next) {
+          // Jump past the finished clip's whole footprint (including any
+          // cross-dissolve overlap), not back to next.start — which still sits
+          // inside the outgoing clip's footprint, so find() would re-pick the
+          // clip we just finished and playback would ping-pong across the
+          // dissolve forever.
+          t = Math.max(next.start + 0.0001, span.start + span.len);
+          span = next;
+          el = this.composite(next, spans, t, true);
+        } else if (t >= total - 0.001) {
+          // Base and every other track finished.
+          useEditor.setState({ playing: false, currentTime: total });
+          el.pause();
+          this.drawOverlays(t, true, "above", active);
+          this.cleanupOverlays(active);
+          this.syncSoundtrack(total, false);
+          return;
+        }
+      }
+      this.lastPlayNow = performance.now();
+    } else {
+      // Past the base track but an upper/lower track is still playing: no master
+      // element, so advance time by the wall clock and let the overlays follow.
       this.pauseExcept(new Set());
-      this.syncSoundtrack(total, false);
-      return;
-    }
-
-    // Prime the master element (and any dissolve partner) and read the clock.
-    let el = this.composite(span, spans, t, true);
-
-    // The active element is the master clock; source time maps back through
-    // the clip's speed.
-    const speed = clipSpeed(span.clip);
-    const derived = span.start + (el.currentTime - span.clip.in) / speed;
-    if (Math.abs(derived - t) < 1.5) {
-      t = Math.max(span.start, Math.min(derived, span.start + span.len));
-    }
-
-    // Clip boundary: hand off to the next clip (or finish).
-    if (el.currentTime >= span.clip.out - 0.02 || el.ended) {
-      const idx = spans.indexOf(span);
-      const next = spans[idx + 1];
-      if (next) {
-        // Jump past the finished clip's whole footprint (including any
-        // cross-dissolve overlap), not back to next.start — which still sits
-        // inside the outgoing clip's footprint, so find() would re-pick the
-        // clip we just finished and playback would ping-pong across the
-        // dissolve forever.
-        t = Math.max(next.start + 0.0001, span.start + span.len);
-        span = next;
-        el = this.composite(next, spans, t, true);
-      } else {
+      const now = performance.now();
+      const dt = this.lastPlayNow ? Math.min(0.25, (now - this.lastPlayNow) / 1000) : 0;
+      this.lastPlayNow = now;
+      t = t + dt;
+      if (t >= total - 0.001) {
         useEditor.setState({ playing: false, currentTime: total });
-        el.pause();
+        this.drawOverlays(t, true, "above", active);
+        this.cleanupOverlays(active);
         this.syncSoundtrack(total, false);
         return;
       }
     }
 
-    this.drawOverlays(t, true);
+    this.drawOverlays(t, true, "above", active);
+    this.cleanupOverlays(active);
     useEditor.setState({ currentTime: t });
     this.syncSoundtrack(t, true);
   }

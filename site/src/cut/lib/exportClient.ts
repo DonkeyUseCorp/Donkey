@@ -1,7 +1,7 @@
 "use client";
 
 import { apiFetch, apiUrl } from "./api";
-import { clipSpeed, getClipSpans, totalDuration } from "./store";
+import { clipSpeed, getClipSpans, projectDuration } from "./store";
 import { captionStyle, cueOverlay } from "./subtitles";
 import { renderOverlayPng } from "./textRender";
 import { FRAME } from "./types";
@@ -126,7 +126,7 @@ async function buildExportForm(
 ): Promise<FormData> {
   const spans = getClipSpans(doc.clips, doc.assets);
   if (spans.length === 0) throw new Error("Add a video to the timeline first.");
-  const duration = totalDuration(doc.clips);
+  const duration = projectDuration(doc);
   const form = new FormData();
   const assetById = new Map(doc.assets.map((a) => [a.id, a]));
 

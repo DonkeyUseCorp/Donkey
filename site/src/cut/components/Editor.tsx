@@ -8,7 +8,7 @@ import { apiFetch } from "@/cut/lib/api";
 import { renderPreviewProxy } from "@/cut/lib/exportClient";
 import { useExport } from "@/cut/lib/exportStore";
 import { enrichAsset, importFileToProject } from "@/cut/lib/media";
-import { serializeDoc, totalDuration, useEditor } from "@/cut/lib/store";
+import { projectDuration, serializeDoc, useEditor } from "@/cut/lib/store";
 import { AiPanel } from "./AiPanel";
 import { ExportDialog } from "./ExportDialog";
 import { ExportStatus } from "./ExportStatus";
@@ -245,7 +245,7 @@ export function Editor({ projectId }: { projectId: string }) {
 
       if (e.code === "Space" && !controlFocused) {
         e.preventDefault();
-        if (!s.playing && s.currentTime >= totalDuration(s.clips) - 0.01) s.seek(0);
+        if (!s.playing && s.currentTime >= projectDuration(s) - 0.01) s.seek(0);
         s.setPlaying(!s.playing);
       } else if (e.key === "Backspace" || e.key === "Delete") {
         e.preventDefault();
