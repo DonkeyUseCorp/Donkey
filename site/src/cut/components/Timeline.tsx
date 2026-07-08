@@ -93,6 +93,14 @@ interface ClipDrag {
   gapStart: number; // open slot position, seconds
 }
 
+interface TextDrag {
+  id: string;
+  targetRow: number; // hovered display row (one past the end = new track)
+  ghostX: number; // ghost left in px — follows the pointer
+  slotStart: number; // resolved landing start, seconds
+  len: number; // dragged title length, seconds
+}
+
 /**
  * Insertion index for a dragged clip (iMovie): the edge leading the drag
  * direction opens a slot once it crosses a neighbor's midpoint.
@@ -240,7 +248,7 @@ export function Timeline() {
 
   // Title tracks: overlays carry a `lane`; used lanes compact to contiguous
   // display rows, so empty tracks disappear on their own.
-  const [textDrag, setTextDrag] = useState<{ id: string; targetRow: number } | null>(null);
+  const [textDrag, setTextDrag] = useState<TextDrag | null>(null);
   const overlayLanes = useMemo(() => {
     const used = [...new Set(overlays.map((o) => o.lane ?? 0))].sort((a, b) => a - b);
     const rowOf = new Map(used.map((l, i) => [l, i]));
@@ -259,10 +267,7 @@ export function Timeline() {
     [overlayClips]
   );
 
-  const onTextLaneDrag = useCallback(
-    (id: string, targetRow: number) => setTextDrag({ id, targetRow }),
-    []
-  );
+  const onTextDrag = useCallback((d: TextDrag | null) => setTextDrag(d), []);
   const onTextLaneDrop = useCallback((id: string, targetRow: number) => {
     setTextDrag(null);
     const s = useEditor.getState();
@@ -821,6 +826,17 @@ export function Timeline() {
               }}
               onPointerDown={deselectIfSelf}
             >
+              {textDrag && (
+                <div
+                  className="tl-text-drop-slot pointer-events-none absolute rounded-md bg-purple-500/10 shadow-[inset_0_0_0_1.5px_rgba(168,85,247,0.5)] transition-[left] duration-150 ease-out"
+                  style={{
+                    left: textDrag.slotStart * pps,
+                    top: textDrag.targetRow * TEXT_H + 2,
+                    width: Math.max(8, textDrag.len * pps - CLIP_GAP),
+                    height: TEXT_H - 6,
+                  }}
+                />
+              )}
               {overlays.map((o) => {
                 const baseRow = overlayLanes.rowOf.get(o.lane ?? 0) ?? 0;
                 const row = textDrag?.id === o.id ? textDrag.targetRow : baseRow;
@@ -833,7 +849,9 @@ export function Timeline() {
                     baseRow={baseRow}
                     laneCount={overlayLanes.count}
                     selected={selKeys.has(`text:${o.id}`)}
-                    onLaneDrag={onTextLaneDrag}
+                    drag={textDrag?.id === o.id ? textDrag : null}
+                    parting={textDrag !== null && textDrag.id !== o.id}
+                    onDrag={onTextDrag}
                     onLaneDrop={onTextLaneDrop}
                     onSnap={setSnapX}
                   />
@@ -1714,7 +1732,9 @@ function TextBar({
   baseRow,
   laneCount,
   selected,
-  onLaneDrag,
+  drag,
+  parting,
+  onDrag,
   onLaneDrop,
   onSnap,
 }: {
@@ -1724,7 +1744,12 @@ function TextBar({
   baseRow: number;
   laneCount: number;
   selected: boolean;
-  onLaneDrag: (id: string, targetRow: number) => void;
+  /** This bar's live drag when it is the one being carried (ghost mode). */
+  drag: TextDrag | null;
+  /** Another title is dragging: animate this bar's shifts as it parts. */
+  parting: boolean;
+  /** Publish (or clear) the in-flight drag so the slot and lanes track it. */
+  onDrag: (d: TextDrag | null) => void;
   onLaneDrop: (id: string, targetRow: number) => void;
   /** Paint (or clear) the snap guide at this stage-x pixel. */
   onSnap: (x: number | null) => void;
@@ -1751,11 +1776,28 @@ function TextBar({
     const len = o.end - o.start;
     const targets = textSnapTargets(s, o.id);
     const tol = SNAP_PX / pps;
+    // Everyone else's resting spot, captured once: each move re-lays the lane
+    // from these, so a retreating drag lets parted neighbors flow back.
+    const rest = s.overlays
+      .filter((t) => t.id !== o.id)
+      .map((t) => ({ id: t.id, lane: t.lane ?? 0, start: t.start, len: t.end - t.start }));
+    const usedLanes = [...new Set([...rest.map((r) => r.lane), o.lane ?? 0])].sort(
+      (a, b) => a - b
+    );
     let targetRow = baseRow;
+    let slotStart = start0;
+    let live = false;
     startDrag(e, {
       onMove: (dx, dy, ev) => {
-        let start = Math.max(0, start0 + dx / pps);
+        if (!live && Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+        live = true;
+        // Vertical drag retracks the title; one row past the end opens a new one.
+        targetRow = Math.min(laneCount, Math.max(0, baseRow + Math.round(dy / TEXT_H)));
+        // A brand-new row has no neighbors to part.
+        const lane = targetRow < usedLanes.length ? usedLanes[targetRow] : Infinity;
+        const ds = Math.max(0, start0 + dx / pps);
         // Snap whichever edge of the moving title lands nearest a logical time.
+        let start = ds;
         let guide: number | null = null;
         if (!ev.metaKey) {
           const end = start + len;
@@ -1769,17 +1811,30 @@ function TextBar({
             guide = best.px;
           }
         }
+        // Same-lane neighbors part around the slot like video clips: ones whose
+        // midpoint sits left of the ghost's center keep their spot (the slot
+        // lands after them), the rest slide right as a run to make room.
+        const others = rest.filter((r) => r.lane === lane).sort((a, b) => a.start - b.start);
+        const center = ds + len / 2;
+        const before = others.filter((r) => r.start + r.len / 2 <= center);
+        const after = others.filter((r) => r.start + r.len / 2 > center);
+        const clamped = Math.max(start, ...before.map((b) => b.start + b.len));
+        if (clamped !== start) guide = null;
+        slotStart = clamped;
+        const delta = after.length ? Math.max(0, clamped + len - after[0].start) : 0;
+        const pushed = new Set(after.map((a) => a.id));
         onSnap(guide);
-        s.updateOverlayTransient(o.id, { start, end: start + len });
-        // Vertical drag retracks the title; one row past the end opens a new one.
-        const next = Math.min(laneCount, Math.max(0, baseRow + Math.round(dy / TEXT_H)));
-        if (next !== targetRow) {
-          targetRow = next;
-          onLaneDrag(o.id, targetRow);
-        }
+        s.updateOverlaysTransient(
+          rest.map((r) => {
+            const push = r.lane === lane && pushed.has(r.id) ? delta : 0;
+            return { id: r.id, patch: { start: r.start + push, end: r.start + r.len + push } };
+          })
+        );
+        onDrag({ id: o.id, targetRow, ghostX: ds * pps, slotStart: clamped, len });
       },
-      onUp: () => {
+      onUp: (_dx, _dy, moved) => {
         onSnap(null);
+        if (moved) s.updateOverlayTransient(o.id, { start: slotStart, end: slotStart + len });
         onLaneDrop(o.id, targetRow);
       },
     });
@@ -1900,9 +1955,19 @@ function TextBar({
     <div
       className={cn(
         "tl-text-bar group absolute flex cursor-grab items-center overflow-hidden rounded-md bg-gradient-to-b from-purple-500 to-purple-600 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.1)]",
-        selected && SELECTED_SHADOW
+        selected && SELECTED_SHADOW,
+        drag
+          ? "tl-text-ghost pointer-events-none cursor-grabbing opacity-80 shadow-2xl"
+          : parting && "transition-[left] duration-150 ease-out"
       )}
-      style={{ left: o.start * pps, top: top + 2, width: Math.max(8, w - CLIP_GAP), height: TEXT_H - 6 }}
+      style={{
+        left: drag ? drag.ghostX : o.start * pps,
+        top: top + 2,
+        width: Math.max(8, w - CLIP_GAP),
+        height: TEXT_H - 6,
+        // Inline so it beats SELECTED_SHADOW's z-10 class on the same element.
+        zIndex: drag ? 20 : undefined,
+      }}
       onPointerDown={onBody}
     >
       <span className="pointer-events-none truncate px-2 text-[10.5px] font-medium text-white">
