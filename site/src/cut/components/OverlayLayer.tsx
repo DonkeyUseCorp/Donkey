@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { startDrag } from "@/cut/lib/drag";
 import { useEditor } from "@/cut/lib/store";
 import { captionStyle, cueAt, cueOverlay } from "@/cut/lib/subtitles";
@@ -19,14 +19,99 @@ import { cn } from "@/lib/utils";
 const PLATE_PADDING = `${PLATE_PAD_Y}em ${PLATE_PAD_X}em`;
 const PLATE_RADIUS_EM = `${PLATE_RADIUS}em`;
 
+/** Snap when a title edge/center lands within this many stage px of a line. */
+const SNAP_PX = 6;
+/** Safe-area inset (fraction of the frame) offered as margin snap lines. */
+const CANVAS_MARGIN = 0.05;
+
+/** Active alignment guides, as stage-pixel positions. */
+interface Guides {
+  v: number[]; // vertical lines (x)
+  h: number[]; // horizontal lines (y)
+}
+
 export function OverlayLayer({ stageWidth }: { stageWidth: number }) {
   const overlays = useEditor((s) => s.overlays);
   const currentTime = useEditor((s) => s.currentTime);
   const skimTime = useEditor((s) => s.skimTime);
   const playing = useEditor((s) => s.playing);
   const selection = useEditor((s) => s.selection);
+  const aspect = useEditor((s) => s.aspect);
   // Titles preview under the skimmer too (paused only), matching the canvas.
   const t = !playing && skimTime !== null ? skimTime : currentTime;
+
+  // Live box elements per title, so a dragged one can align to the others that
+  // are on screen at the same time.
+  const boxes = useRef<Map<string, HTMLElement>>(new Map());
+  const [guides, setGuides] = useState<Guides>({ v: [], h: [] });
+  const registerBox = useCallback((id: string, el: HTMLElement | null) => {
+    if (el) boxes.current.set(id, el);
+    else boxes.current.delete(id);
+  }, []);
+
+  const stageHeight = (stageWidth * FRAME[aspect].h) / FRAME[aspect].w;
+
+  // Figma-style smart snapping: while dragging a title, pull its left/center/
+  // right edges to the frame edges, safe margins, center line, and the edges
+  // and centers of the other on-screen titles — independently per axis — and
+  // paint the matched guide lines. Hold ⌘/Ctrl to bypass.
+  const snap = useCallback(
+    (id: string, px: number, py: number, ev: PointerEvent): { x: number; y: number } => {
+      const el = boxes.current.get(id);
+      if (!el || ev.metaKey || ev.ctrlKey) {
+        setGuides({ v: [], h: [] });
+        return { x: px, y: py };
+      }
+      const r = el.getBoundingClientRect();
+      const cx = px * stageWidth;
+      const cy = py * stageHeight;
+      // Frame lines: edges, safe margins, center.
+      const vt = [0, CANVAS_MARGIN * stageWidth, stageWidth / 2, (1 - CANVAS_MARGIN) * stageWidth, stageWidth];
+      const ht = [0, CANVAS_MARGIN * stageHeight, stageHeight / 2, (1 - CANVAS_MARGIN) * stageHeight, stageHeight];
+      // Plus every other on-screen title's edges and center.
+      for (const o of useEditor.getState().overlays) {
+        if (o.id === id) continue;
+        const e = boxes.current.get(o.id);
+        if (!e) continue;
+        const rr = e.getBoundingClientRect();
+        const ox = o.x * stageWidth;
+        const oy = o.y * stageHeight;
+        vt.push(ox - rr.width / 2, ox, ox + rr.width / 2);
+        ht.push(oy - rr.height / 2, oy, oy + rr.height / 2);
+      }
+      // For one axis, snap the closest of {near edge, center, far edge} to the
+      // closest target line, returning the shifted center and the matched line.
+      const pick = (anchors: number[], offsets: number[], targets: number[]) => {
+        let best = { d: SNAP_PX + 1, center: NaN, line: NaN };
+        anchors.forEach((a, i) => {
+          for (const T of targets) {
+            const d = Math.abs(a - T);
+            if (d < best.d) best = { d, center: T - offsets[i], line: T };
+          }
+        });
+        return best;
+      };
+      const bx = pick([cx - r.width / 2, cx, cx + r.width / 2], [-r.width / 2, 0, r.width / 2], vt);
+      const by = pick([cy - r.height / 2, cy, cy + r.height / 2], [-r.height / 2, 0, r.height / 2], ht);
+      const v: number[] = [];
+      const h: number[] = [];
+      let outX = px;
+      let outY = py;
+      if (!Number.isNaN(bx.center)) {
+        outX = bx.center / stageWidth;
+        v.push(bx.line);
+      }
+      if (!Number.isNaN(by.center)) {
+        outY = by.center / stageHeight;
+        h.push(by.line);
+      }
+      setGuides({ v, h });
+      return { x: outX, y: outY };
+    },
+    [stageWidth, stageHeight]
+  );
+
+  const clearGuides = useCallback(() => setGuides({ v: [], h: [] }), []);
 
   return (
     <div className="pointer-events-none absolute inset-0">
@@ -46,9 +131,26 @@ export function OverlayLayer({ stageWidth }: { stageWidth: number }) {
             selected={selected}
             ghost={!inRange && !selected}
             stageWidth={stageWidth}
+            registerBox={registerBox}
+            snap={snap}
+            onSnapEnd={clearGuides}
           />
         );
       })}
+      {guides.v.map((x, i) => (
+        <div
+          key={`v${i}`}
+          className="pointer-events-none absolute top-0 bottom-0 z-10 w-px bg-[#ff2d55]"
+          style={{ left: x }}
+        />
+      ))}
+      {guides.h.map((y, i) => (
+        <div
+          key={`h${i}`}
+          className="pointer-events-none absolute right-0 left-0 z-10 h-px bg-[#ff2d55]"
+          style={{ top: y }}
+        />
+      ))}
     </div>
   );
 }
@@ -109,11 +211,17 @@ function OverlayItem({
   selected,
   ghost,
   stageWidth,
+  registerBox,
+  snap,
+  onSnapEnd,
 }: {
   overlay: TextOverlay;
   selected: boolean;
   ghost: boolean;
   stageWidth: number;
+  registerBox: (id: string, el: HTMLElement | null) => void;
+  snap: (id: string, x: number, y: number, ev: PointerEvent) => { x: number; y: number };
+  onSnapEnd: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const editRef = useRef<HTMLDivElement>(null);
@@ -121,6 +229,12 @@ function OverlayItem({
   const frame = useEditor((s) => FRAME[s.aspect]);
   const scale = stageWidth / frame.w;
   const stageHeight = (stageWidth * frame.h) / frame.w;
+
+  // Publish this title's box so a sibling drag can align to it.
+  useEffect(() => {
+    registerBox(o.id, boxRef.current);
+    return () => registerBox(o.id, null);
+  }, [o.id, registerBox]);
 
   useEffect(() => {
     if (editing && editRef.current) {
@@ -189,12 +303,14 @@ function OverlayItem({
         s.pushHistory();
         const { x, y } = o;
         startDrag(e, {
-          onMove: (dx, dy) => {
+          onMove: (dx, dy, ev) => {
+            const p = snap(o.id, x + dx / stageWidth, y + dy / stageHeight, ev);
             s.updateOverlayTransient(o.id, {
-              x: Math.min(0.98, Math.max(0.02, x + dx / stageWidth)),
-              y: Math.min(0.98, Math.max(0.02, y + dy / stageHeight)),
+              x: Math.min(0.98, Math.max(0.02, p.x)),
+              y: Math.min(0.98, Math.max(0.02, p.y)),
             });
           },
+          onUp: onSnapEnd,
         });
       }}
       onDoubleClick={() => setEditing(true)}
