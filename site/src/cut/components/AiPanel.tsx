@@ -106,7 +106,7 @@ const PROVIDER_LABEL: Record<string, string> = {
 const SUGGESTIONS = [
   "What's in this video?",
   "Make my title punchier",
-  "Add subtitles",
+  "Add social captions",
   "Write a TikTok caption",
 ];
 

@@ -73,7 +73,7 @@ export function SubtitlesPanel() {
       </div>
 
       {!hasCues ? (
-        <EmptyState status={status} error={error} onGenerate={generate} onCaptions={captions} />
+        <EmptyState status={status} error={error} onGenerate={generate} />
       ) : (
         <>
           <Transcript cues={subtitles.cues} />
@@ -148,12 +148,10 @@ function EmptyState({
   status,
   error,
   onGenerate,
-  onCaptions,
 }: {
   status: string;
   error: string | null;
   onGenerate: () => void;
-  onCaptions: () => void;
 }) {
   const locale = useEditor((s) => s.subtitles.locale ?? "en-US");
 
@@ -212,17 +210,6 @@ function EmptyState({
         <Captions data-icon="inline-start" />
         {status === "empty" || status === "error" ? "Try again" : "Generate subtitles"}
       </Button>
-      {status !== "empty" && (
-        <Button
-          variant="outline"
-          className="sub-social w-full"
-          onClick={onCaptions}
-          title="Rewrite the captions for social — tighter lines, emoji, and a stronger hook"
-        >
-          <Sparkles data-icon="inline-start" />
-          Social captions
-        </Button>
-      )}
     </div>
   );
 }
