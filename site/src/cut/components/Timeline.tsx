@@ -1667,8 +1667,9 @@ function OverlayClipView({
 function textSnapTargets(s: ReturnType<typeof useEditor.getState>, selfId: string): number[] {
   const pts = new Set<number>([0]);
   for (const sp of getClipSpans(s.clips, s.assets)) {
-    pts.add(sp.start);
-    pts.add(sp.start + sp.len);
+    // The visible joint: a dissolved pair meets at the overlap midpoint (where
+    // the clip boxes are inset to), a hard cut at the footprint end.
+    pts.add(sp.start + sp.len - sp.transitionOut / 2);
   }
   pts.add(projectDuration(s));
   pts.add(s.currentTime);
