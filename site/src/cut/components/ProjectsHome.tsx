@@ -397,7 +397,7 @@ export function ProjectsHome() {
               <div
                 className={cn(
                   "relative grid aspect-[9/16] place-items-center overflow-hidden rounded-2xl border bg-muted transition-shadow group-hover:shadow-[0_6px_28px_rgba(0,0,0,0.12)]",
-                  selected.has(p.id) ? "border-primary ring-2 ring-primary" : "border-border"
+                  selected.has(p.id) ? "border-[#0a84ff] ring-2 ring-[#0a84ff]" : "border-border"
                 )}
               >
                 <CardPreview project={p} />
@@ -442,7 +442,7 @@ export function ProjectsHome() {
               data-sel-id={p.id}
               className={cn(
                 "group grid cursor-pointer grid-cols-[1fr_90px_70px_110px_40px] items-center gap-3 border-b border-border px-4 py-2.5 text-sm last:border-b-0 hover:bg-muted/50",
-                selected.has(p.id) && "bg-primary/10 hover:bg-primary/15"
+                selected.has(p.id) && "bg-[#0a84ff]/10 hover:bg-[#0a84ff]/15"
               )}
               draggable
               onDragStart={(e) => onProjectDragStart(e, p)}

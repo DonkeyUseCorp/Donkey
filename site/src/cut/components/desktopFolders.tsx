@@ -1,7 +1,7 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { FolderPlus, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Folder, FolderPlus, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -62,33 +62,21 @@ export function buildDragGhost(count: number, label: string): HTMLElement {
   return el;
 }
 
-/** The macOS-style folder illustration used for folder tiles. */
+/** Folder tile glyph: the Lucide folder, filled blue. */
 export function FolderGlyph({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 80 64" className={className} aria-hidden="true">
-      <defs>
-        <linearGradient id="cf-front" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#7cc0ff" />
-          <stop offset="1" stopColor="#4a9df0" />
-        </linearGradient>
-        <linearGradient id="cf-back" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#69b3f8" />
-          <stop offset="1" stopColor="#5aa6f4" />
-        </linearGradient>
-      </defs>
-      <path d="M6 15c0-2.2 1.8-4 4-4h18l6 6h32c2.2 0 4 1.8 4 4v7H6z" fill="url(#cf-back)" />
-      <path
-        d="M4 25c0-2.3 1.9-4.2 4.2-4.2h63.6c2.3 0 4.2 1.9 4.2 4.2v29c0 2.3-1.9 4.2-4.2 4.2H8.2C5.9 58.2 4 56.3 4 54z"
-        fill="url(#cf-front)"
-      />
-      <path d="M9 21.6h58c1.5 0 2.9.8 3.6 2H5.4c.7-1.2 2.1-2 3.6-2z" fill="#ffffff" opacity="0.45" />
-    </svg>
-  );
+  return <Folder className={cn("fill-[#8cc5ff] text-[#4a9df0]", className)} aria-hidden="true" />;
 }
 
-/** Rubber-band selection over a grid, like a desktop: press-drag on empty canvas
- * to sweep a rectangle, and every tile (marked `data-sel-id`) it touches is
- * selected. A plain click on the canvas clears; ⇧/⌘ keeps the prior selection. */
+// Elements a press should not turn into a rubber-band: the cards themselves
+// (they drag), folder tiles / breadcrumbs, and any interactive control.
+const MARQUEE_SKIP =
+  "[data-sel-id],[data-no-marquee],button,a,input,textarea,select,[role='button'],[role='menuitem'],[contenteditable='true']";
+
+/** Rubber-band selection like a desktop: press-drag on empty space to sweep a
+ * rectangle, and every tile (marked `data-sel-id`) it touches is selected. Armed
+ * off the whole `<main>` arena — so it starts anywhere in the content area, not
+ * just over the grid — while the left sidebar is left alone. ⇧/⌘ keeps the prior
+ * selection; a plain click on empty space clears it. */
 export function Marquee({
   className,
   selected,
@@ -101,51 +89,56 @@ export function Marquee({
   children: React.ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
   const [rect, setRect] = useState<{ left: number; top: number; width: number; height: number } | null>(
     null
   );
 
-  const onPointerDown = (e: React.PointerEvent) => {
-    // Start a rubber-band from any empty pixel of the canvas. Only a press that
-    // lands on a card (draggable, marked data-sel-id) is left alone so the card
-    // can drag; everything else — gaps, margins, the open area below — sweeps.
-    if (e.button !== 0 || (e.target as HTMLElement).closest("[data-sel-id]")) return;
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const additive = e.shiftKey || e.metaKey;
-    const base = new Set(additive ? selected : []);
-    let moved = false;
+  useEffect(() => {
+    const arena = ref.current?.closest("main") ?? ref.current?.parentElement;
+    if (!arena) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.button !== 0 || (e.target as HTMLElement).closest(MARQUEE_SKIP)) return;
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const additive = e.shiftKey || e.metaKey;
+      const base = new Set(additive ? selectedRef.current : []);
+      let moved = false;
 
-    const onMove = (ev: PointerEvent) => {
-      if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 4) return;
-      moved = true;
-      const r = {
-        left: Math.min(startX, ev.clientX),
-        top: Math.min(startY, ev.clientY),
-        width: Math.abs(ev.clientX - startX),
-        height: Math.abs(ev.clientY - startY),
+      const onMove = (ev: PointerEvent) => {
+        if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 4) return;
+        moved = true;
+        const r = {
+          left: Math.min(startX, ev.clientX),
+          top: Math.min(startY, ev.clientY),
+          width: Math.abs(ev.clientX - startX),
+          height: Math.abs(ev.clientY - startY),
+        };
+        setRect(r);
+        const hit = new Set(base);
+        ref.current?.querySelectorAll<HTMLElement>("[data-sel-id]").forEach((el) => {
+          const b = el.getBoundingClientRect();
+          const overlaps =
+            b.left < r.left + r.width && b.right > r.left && b.top < r.top + r.height && b.bottom > r.top;
+          if (overlaps) hit.add(el.dataset.selId!);
+        });
+        setSelected(hit);
       };
-      setRect(r);
-      const hit = new Set(base);
-      ref.current?.querySelectorAll<HTMLElement>("[data-sel-id]").forEach((el) => {
-        const b = el.getBoundingClientRect();
-        const overlaps =
-          b.left < r.left + r.width && b.right > r.left && b.top < r.top + r.height && b.bottom > r.top;
-        if (overlaps) hit.add(el.dataset.selId!);
-      });
-      setSelected(hit);
+      const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        if (!moved && !additive) setSelected(new Set());
+        setRect(null);
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp, { once: true });
     };
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      if (!moved && !additive) setSelected(new Set());
-      setRect(null);
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp, { once: true });
-  };
+    arena.addEventListener("pointerdown", onPointerDown);
+    return () => arena.removeEventListener("pointerdown", onPointerDown);
+  }, [setSelected]);
 
   return (
-    <div ref={ref} className="relative min-h-[68vh] flex-1" onPointerDown={onPointerDown}>
+    <div ref={ref} className="relative min-h-[68vh] flex-1">
       <div className={className}>{children}</div>
       {rect && (
         <div
@@ -174,7 +167,7 @@ export function FolderCrumb({
 }) {
   const [over, setOver] = useState(false);
   return (
-    <div className="flex items-center gap-2 text-lg font-semibold tracking-tight">
+    <div className="flex items-center gap-2 text-lg font-semibold tracking-tight" data-no-marquee>
       <button
         className={cn(
           "rounded-md px-1.5 py-0.5 text-muted-foreground transition-colors hover:text-foreground",
@@ -229,13 +222,13 @@ export function FolderShelf<F extends DeskFolder>({
   const [over, setOver] = useState<string | null>(null);
 
   return (
-    <div className="mb-7 flex flex-wrap gap-2">
+    <div className="mb-7 flex flex-wrap gap-2" data-no-marquee>
       {folders.map((f) => {
         const s = statOf(f.id);
         const isOver = over === f.id;
         return editingId === f.id ? (
           <div key={f.id} className="flex w-[116px] flex-col items-center gap-1 pt-1.5">
-            <FolderGlyph className="w-[68px]" />
+            <FolderGlyph className="size-[52px]" />
             <Input
               autoFocus
               value={draft}
@@ -273,7 +266,7 @@ export function FolderShelf<F extends DeskFolder>({
             }}
           >
             <div className={cn("grid place-items-center transition-transform", isOver && "scale-105")}>
-              <FolderGlyph className={cn("w-[68px] drop-shadow-sm", isOver && "brightness-110")} />
+              <FolderGlyph className={cn("size-[52px] drop-shadow-sm", isOver && "brightness-110")} />
             </div>
             <span className="mt-0.5 line-clamp-2 max-w-full text-xs font-medium leading-tight">
               {f.name}
@@ -317,7 +310,7 @@ export function FolderShelf<F extends DeskFolder>({
 
       {creating ? (
         <div className="flex w-[116px] flex-col items-center gap-1 pt-1.5">
-          <FolderGlyph className="w-[68px] opacity-60" />
+          <FolderGlyph className="size-[52px] opacity-60" />
           <Input
             autoFocus
             value={draft}

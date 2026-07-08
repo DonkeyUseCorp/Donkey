@@ -398,7 +398,7 @@ export function LibraryCard({
       <div
         className={cn(
           "relative aspect-square cursor-grab overflow-hidden rounded-xl border bg-muted transition-shadow group-hover:shadow-[0_4px_20px_rgba(0,0,0,0.1)] active:cursor-grabbing",
-          selected ? "border-primary ring-2 ring-primary" : "border-border"
+          selected ? "border-[#0a84ff] ring-2 ring-[#0a84ff]" : "border-border"
         )}
       >
         {a.type === "video" ? (
