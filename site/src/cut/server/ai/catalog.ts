@@ -302,10 +302,10 @@ Everything autosaves to the project folder. Undo/redo is unlimited (⌘Z / ⇧�
 Times are in seconds on the shared timeline. The playhead is currentTime; a skimmer previews under the mouse without moving the playhead.`,
 
   "timeline-editing": `# Timeline editing
-- Video track is magnetic: clips are ordered by index; there are no gaps. move_clip reorders. A clip's timeline length is (out-in)/speed; total duration = the sum of those minus any cross-dissolve overlaps.
+- Video track is magnetic: clips are ordered by index; there are no gaps. move_clip reorders. A clip's timeline length is (out-in)/speed; total duration = the sum of those minus any cross-style transition overlaps.
 - trim_clip changes in/out inside the source media. in >= 0, out <= source duration, out-in >= 0.1.
 - set_speed sets a clip's playback rate (0.25–4×); it changes the clip's timeline length, and later titles/captions ripple to stay in sync.
-- set_transition joins a clip into the next one (0–2s): crossfade/crosszoom overlap the clips (the cut shortens); fadein/fadeout/zoomin/zoomout ramp one side of a hard cut. Splitting or deleting clears the affected transition.
+- set_transition joins a clip into the next one (0–2s, six styles) — read the transitions-and-fades skill before styling cuts. Splitting or deleting clears the affected transition.
 - split_at cuts the clip under that time into two clips at the exact frame. With a soundtrack clip selected it splits that instead.
 - delete_item removes items; the video track closes the gap automatically. The user can multi-select (⌘/⇧-click) and delete several at once.
 - detach_audio lifts a video clip's sound to the soundtrack track (and mutes the clip) so audio can be cut independently of video.
@@ -313,6 +313,20 @@ Times are in seconds on the shared timeline. The playhead is currentTime; a skim
 - set_framing: per-clip Fit (letterbox) vs Fill (crop to cover the project frame). In Fill, panX/panY position the crop window; the user can also drag the video directly in the preview. The control lives in the Inspector under "Framing" when a video clip is selected. Landscape footage usually wants fill + a pan that keeps the subject.
 - The user can copy/paste any selected segment (video, audio, title) with ⌘C/⌘V; pastes land at the playhead.
 - Zoom: set_view pxPerSec (12..800) or fit. The timeline panel height: set_view timelineH (170..600).`,
+
+  "transitions-and-fades": `# Transitions & fades
+Three fade-like features exist; route the ask to the right one:
+- set_transition: a styled join between one video clip and the next.
+- set_project_fade: the whole video fades in from black at the start and/or out to black at the end — picture and full mix (titles, captions, soundtrack). Survives clip reordering. For "fade in the video", "fade to black at the end", use this. Shown as "Fade in"/"Fade out" on the first/last clip's Inspector panel.
+- update_audio fadeIn/fadeOut: audio-only ramps on one soundtrack clip ("fade the music out").
+
+set_transition(clipId, seconds, style): clipId is the leading clip of the joint; 0 clears, max 2s. Styles:
+- crossfade (default): A blends into B. Overlaps the clips, so the cut shortens by the duration.
+- crosszoom: the blend plus a zoom punch — A pushes in (1→1.18×) while B settles back. Also overlaps.
+- zoomin: A's tail zooms in across a hard cut (duration unchanged). zoomout: B's head settles from zoomed to normal.
+- fadeout: A's tail fades to black (its audio too), then a hard cut. fadein: B's head fades up from black.
+Picking for a vibe: "smooth/dissolve" → crossfade; "punchy/energetic/zoom" → crosszoom; "dramatic pause/scene change" → fadeout 0.5–0.8s; between clips 0.4–0.8s reads well, 1s+ is slow and cuts total duration for cross styles.
+UI: select a clip → Inspector "Transition" (style) + "Length"; a blue badge marks each styled joint on the timeline. Preview and export render the same look.`,
 
   "titles": `# Titles (text overlays)
 Each overlay: text, start/end (seconds visible), x/y center (fractions 0..1 of the project frame), size (frame px; the design short side is 1080), font (sf=SF Pro, serif=New York, rounded, mono, impact), weight (400/700), color (any CSS color), shadow (bool), plate (translucent dark plate behind the text).
