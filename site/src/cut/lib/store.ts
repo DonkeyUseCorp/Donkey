@@ -139,6 +139,8 @@ interface EditorState {
   updateOverlay: (id: string, patch: Partial<TextOverlay>) => void;
   /** Live-drag updates that should not create undo entries. */
   updateOverlayTransient: (id: string, patch: Partial<TextOverlay>) => void;
+  /** Patch several titles in one commit (ripple resize pushes a whole lane). */
+  updateOverlaysTransient: (patches: { id: string; patch: Partial<TextOverlay> }[]) => void;
   updateClipTransient: (id: string, patch: Partial<VideoClip>) => void;
   updateAudioTransient: (id: string, patch: Partial<AudioClip>) => void;
   moveClip: (id: string, toIndex: number) => void;
@@ -575,6 +577,17 @@ export const useEditor = create<EditorState>((set, get) => {
       set((s) => ({
         overlays: s.overlays.map((o) => (o.id === id ? { ...o, ...patch } : o)),
       })),
+
+    updateOverlaysTransient: (patches) =>
+      set((s) => {
+        const byId = new Map(patches.map((p) => [p.id, p.patch]));
+        return {
+          overlays: s.overlays.map((o) => {
+            const patch = byId.get(o.id);
+            return patch ? { ...o, ...patch } : o;
+          }),
+        };
+      }),
 
     updateClipTransient: (id, patch) =>
       set((s) => ({

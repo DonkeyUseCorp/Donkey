@@ -67,6 +67,8 @@ const PAD_END = 320;
 const PAD_SIDE = 20;
 /** Visual gutter between adjacent clips (iMovie); time math stays exact. */
 const CLIP_GAP = 4;
+/** Pull a resized title edge to a logical time within this many screen px. */
+const SNAP_PX = 6;
 
 // A high-contrast selected state: a bright blue ring drawn both inside and
 // (crucially) *outside* the box, so it stays visible on top of a clip's
@@ -159,6 +161,8 @@ export function Timeline() {
   const [overlayDrop, setOverlayDrop] = useState<
     { target: TrackTarget; t: number; len: number } | null
   >(null);
+  // Timeline seconds a title-resize edge has snapped to, for the guide line.
+  const [snapT, setSnapT] = useState<number | null>(null);
   const insertMode = videoDragging || dropType === "video";
   const dragInfo = useMemo<ClipDrag | null>(() => {
     if (!clipDrag) return null;
@@ -825,6 +829,7 @@ export function Timeline() {
                     selected={selKeys.has(`text:${o.id}`)}
                     onLaneDrag={onTextLaneDrag}
                     onLaneDrop={onTextLaneDrop}
+                    onSnap={setSnapT}
                   />
                 );
               })}
@@ -848,6 +853,12 @@ export function Timeline() {
             </div>
           )}
 
+            {snapT !== null && (
+              <div
+                className="pointer-events-none absolute top-0 bottom-0 z-20 w-px bg-[#ff2d55]"
+                style={{ left: snapT * pps }}
+              />
+            )}
             <HoverLine scrollRef={scrollRef} innerRef={innerRef} pps={pps} />
             <Playhead pps={pps} scrollRef={scrollRef} onScrub={scrub} />
           </div>
@@ -1627,6 +1638,38 @@ function OverlayClipView({
   );
 }
 
+/** Logical times a title edge can snap to: the timeline start, the video's cut
+ * points and end, the playhead, and the other titles' edges (self excluded). */
+function textSnapTargets(s: ReturnType<typeof useEditor.getState>, selfId: string): number[] {
+  const pts = new Set<number>([0]);
+  for (const sp of getClipSpans(s.clips, s.assets)) {
+    pts.add(sp.start);
+    pts.add(sp.start + sp.len);
+  }
+  pts.add(projectDuration(s));
+  pts.add(s.currentTime);
+  for (const o of s.overlays) {
+    if (o.id === selfId) continue;
+    pts.add(o.start);
+    pts.add(o.end);
+  }
+  return [...pts];
+}
+
+/** The nearest snap target within `tol` seconds, or null. */
+function nearestSnap(t: number, targets: number[], tol: number): number | null {
+  let best: number | null = null;
+  let bd = tol;
+  for (const T of targets) {
+    const d = Math.abs(t - T);
+    if (d <= bd) {
+      bd = d;
+      best = T;
+    }
+  }
+  return best;
+}
+
 function TextBar({
   overlay: o,
   pps,
@@ -1636,6 +1679,7 @@ function TextBar({
   selected,
   onLaneDrag,
   onLaneDrop,
+  onSnap,
 }: {
   overlay: TextOverlay;
   pps: number;
@@ -1645,6 +1689,7 @@ function TextBar({
   selected: boolean;
   onLaneDrag: (id: string, targetRow: number) => void;
   onLaneDrop: (id: string, targetRow: number) => void;
+  onSnap: (t: number | null) => void;
 }) {
   const w = Math.max(8, (o.end - o.start) * pps);
 
@@ -1679,11 +1724,25 @@ function TextBar({
     s.select({ kind: "text", id: o.id });
     s.pushHistory();
     const start0 = o.start;
+    const lane = o.lane ?? 0;
+    // Don't let the left edge cross the previous title on this lane.
+    const min = s.overlays
+      .filter((t) => (t.lane ?? 0) === lane && t.id !== o.id && t.end <= start0 + 1e-3)
+      .reduce((m, t) => Math.max(m, t.end), 0);
+    const max = o.end - 0.2;
+    const targets = textSnapTargets(s, o.id);
+    const tol = SNAP_PX / pps;
     startDrag(e, {
-      onMove: (dx) => {
-        const start = Math.min(o.end - 0.2, Math.max(0, start0 + dx / pps));
+      onMove: (dx, _dy, ev) => {
+        let start = Math.max(min, Math.min(max, start0 + dx / pps));
+        const hit = ev.metaKey ? null : nearestSnap(start, targets, tol);
+        if (hit !== null && hit >= min && hit <= max) {
+          start = hit;
+          onSnap(hit);
+        } else onSnap(null);
         s.updateOverlayTransient(o.id, { start });
       },
+      onUp: () => onSnap(null),
     });
   };
 
@@ -1692,11 +1751,35 @@ function TextBar({
     s.select({ kind: "text", id: o.id });
     s.pushHistory();
     const end0 = o.end;
+    const lane = o.lane ?? 0;
+    // Titles that sit after this one on the same lane, at their original spots.
+    // Extending the edge past the first of them pushes the whole run right.
+    const followers = s.overlays
+      .filter((t) => (t.lane ?? 0) === lane && t.id !== o.id && t.start >= o.start)
+      .map((t) => ({ id: t.id, start: t.start, len: t.end - t.start }))
+      .sort((a, b) => a.start - b.start);
+    const nextStart = followers.length ? followers[0].start : Infinity;
+    const targets = textSnapTargets(s, o.id);
+    const tol = SNAP_PX / pps;
     startDrag(e, {
-      onMove: (dx) => {
-        const end = Math.max(o.start + 0.2, end0 + dx / pps);
-        s.updateOverlayTransient(o.id, { end });
+      onMove: (dx, _dy, ev) => {
+        let end = Math.max(o.start + 0.2, end0 + dx / pps);
+        const hit = ev.metaKey ? null : nearestSnap(end, targets, tol);
+        if (hit !== null && hit > o.start + 0.2) {
+          end = hit;
+          onSnap(end);
+        } else onSnap(null);
+        // Ripple: extending past the next title shoves the whole run right by
+        // the overflow (their gaps preserved); pulling back lets them return.
+        const delta = Math.max(0, end - nextStart);
+        const patches: { id: string; patch: Partial<TextOverlay> }[] = [
+          { id: o.id, patch: { end } },
+        ];
+        for (const f of followers)
+          patches.push({ id: f.id, patch: { start: f.start + delta, end: f.start + delta + f.len } });
+        s.updateOverlaysTransient(patches);
       },
+      onUp: () => onSnap(null),
     });
   };
 
