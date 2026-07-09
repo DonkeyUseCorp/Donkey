@@ -2,7 +2,7 @@
 
 import { useEffect, type RefObject } from "react";
 import { clipSpeed, getClipSpans, projectDuration, useEditor } from "@/cut/lib/store";
-import { isFullRect, rectOf, TRANSITION_ZOOM } from "@/cut/lib/types";
+import { isFullRect, projectFadeSeconds, rectOf, TRANSITION_ZOOM } from "@/cut/lib/types";
 import type { ClipSpan, FrameRect, MediaAsset, OverlayClip, VideoClip } from "@/cut/lib/types";
 
 // The canvas backing store is the full frame resolution (1080×1920 or
@@ -272,15 +272,10 @@ class Engine {
     // base composites over them (a regioned base leaves them showing).
     this.drawLayer(masterEl, masterSpan.clip, false, 1, masterZoom);
     if (incEl) this.drawLayer(incEl, next!.clip, false, alpha, incZoom);
-    if (black > 0) {
-      // Veil the base like the export's fade-to-black; tracks drawn after
-      // (above the base) stay lit.
-      const ctx = this.canvas.getContext("2d");
-      if (ctx) {
-        ctx.fillStyle = `rgba(0,0,0,${Math.min(1, black).toFixed(3)})`;
-        ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-      }
-    }
+    // Veil only the base's own footprint, like the export's per-clip fade
+    // filter: a regioned base darkens inside its rect while a below track shows
+    // through the margins; tracks drawn after (above the base) stay lit.
+    if (black > 0) this.fillBlackVeil(black, rectOf(masterSpan.clip));
     return masterEl;
   }
 
@@ -309,22 +304,33 @@ class Engine {
    * 1→0 over the fade-out at the end of the cut. 1 when neither applies. */
   private projectFadeGain(t: number, total: number) {
     const s = useEditor.getState();
+    const fadeIn = projectFadeSeconds(s.fadeIn, total);
+    const fadeOut = projectFadeSeconds(s.fadeOut, total);
     let g = 1;
-    if (s.fadeIn > 0 && t < s.fadeIn) g = Math.min(g, Math.max(0, t / s.fadeIn));
-    if (s.fadeOut > 0 && t > total - s.fadeOut)
-      g = Math.min(g, Math.max(0, (total - t) / s.fadeOut));
+    if (fadeIn > 0 && t < fadeIn) g = Math.min(g, Math.max(0, t / fadeIn));
+    if (fadeOut > 0 && t > total - fadeOut) g = Math.min(g, Math.max(0, (total - t) / fadeOut));
     return Math.min(1, g);
+  }
+
+  /** Paint an `amount` (0..1) black veil — over the whole frame, or clipped to
+   * `rect` for a per-clip fade. Shared by the edge-transition fade and the
+   * whole-video project fade so the two can never drift apart. */
+  private fillBlackVeil(amount: number, rect?: FrameRect) {
+    if (amount <= 0) return;
+    const ctx = this.canvas.getContext("2d");
+    if (!ctx) return;
+    const W = this.canvas.width;
+    const H = this.canvas.height;
+    ctx.fillStyle = `rgba(0,0,0,${Math.min(1, amount).toFixed(3)})`;
+    if (rect) ctx.fillRect(rect.x * W, rect.y * H, rect.w * W, rect.h * H);
+    else ctx.fillRect(0, 0, W, H);
   }
 
   /** The picture side of the project fade: a black veil over the whole frame
    * (everything drawn this tick — base, tracks, at any time), matching the
    * export's fade on the final composite. */
   private drawProjectFade(gain: number) {
-    if (gain >= 1) return;
-    const ctx = this.canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.fillStyle = `rgba(0,0,0,${(1 - Math.max(0, gain)).toFixed(3)})`;
-    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    this.fillBlackVeil(1 - gain);
   }
 
   /** Draw the overlay tracks on one side of the base — `below` (track < 0) or

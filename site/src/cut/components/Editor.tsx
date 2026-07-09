@@ -77,6 +77,8 @@ export function Editor({ projectId }: { projectId: string }) {
       overlays: unknown;
       subtitles: unknown;
       aspect: string;
+      fadeIn: number;
+      fadeOut: number;
     } | null = null;
     const unsub = useEditor.subscribe((s) => {
       if (!s.loaded || s.projectId !== projectId) return;
@@ -87,7 +89,9 @@ export function Editor({ projectId }: { projectId: string }) {
           s.overlayClips !== last.overlayClips ||
           s.overlays !== last.overlays ||
           s.subtitles !== last.subtitles ||
-          s.aspect !== last.aspect);
+          s.aspect !== last.aspect ||
+          s.fadeIn !== last.fadeIn ||
+          s.fadeOut !== last.fadeOut);
       last = {
         clips: s.clips,
         audioClips: s.audioClips,
@@ -95,6 +99,8 @@ export function Editor({ projectId }: { projectId: string }) {
         overlays: s.overlays,
         subtitles: s.subtitles,
         aspect: s.aspect,
+        fadeIn: s.fadeIn,
+        fadeOut: s.fadeOut,
       };
       if (!changed) return; // first tick just primes the baseline
       if (timer) clearTimeout(timer);

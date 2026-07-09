@@ -6,6 +6,7 @@ import { assertLocalRuntime } from "./local-only";
 import { createJobRegistry } from "./jobRegistry";
 import { exportsDir, mediaPath, projectDir, readProject } from "./projects";
 import { atempoChain, hasStream, num } from "./util";
+import { projectFadeSeconds, TRANSITION_ZOOM } from "../lib/types";
 
 export interface ExportSpec {
   projectId: string;
@@ -231,9 +232,6 @@ async function resolveMedia(spec: ExportSpec, file: string) {
 function clipRate(c: ExportSpec["clips"][number]) {
   return c.speed && c.speed > 0 ? c.speed : 1;
 }
-
-/** Peak scale of zoom transitions — matches TRANSITION_ZOOM in lib/types.ts. */
-const TRANSITION_ZOOM = 1.18;
 
 /** A clip's frame region in even pixels, or null when it fills the whole frame
  * (the common case, which keeps the plain full-frame filter path). */
@@ -618,8 +616,8 @@ async function runExport(job: Job, spec: ExportSpec) {
 
   // Whole-video fades on the final composite and mix, so titles, captions,
   // overlays, and soundtrack all fade together.
-  const fadeIn = Math.max(0, Math.min(spec.fadeIn ?? 0, spec.duration / 2));
-  const fadeOut = Math.max(0, Math.min(spec.fadeOut ?? 0, spec.duration / 2));
+  const fadeIn = projectFadeSeconds(spec.fadeIn, spec.duration);
+  const fadeOut = projectFadeSeconds(spec.fadeOut, spec.duration);
   if (fadeIn > 0.01 || fadeOut > 0.01) {
     const win = (f: string) =>
       [

@@ -149,6 +149,14 @@ export const SPEED_MAX = 4;
 /** Longest transition offered; also clamps against the clips it joins. */
 export const TRANSITION_MAX = 2;
 
+/** Effective whole-video fade length: the stored seconds, capped at half the
+ * project so a fade-in and fade-out never overlap. The one clamp preview and
+ * export both apply, so a short project fades identically in the editor and the
+ * rendered file. */
+export function projectFadeSeconds(fade: number | undefined, duration: number): number {
+  return Math.max(0, Math.min(fade ?? 0, duration / 2));
+}
+
 /** How a clip hands off to the next one. Cross styles overlap the two clips;
  * edge styles ramp one side of a hard cut — the outgoing tail (fadeout,
  * zoomin) or the incoming head (fadein, zoomout). */

@@ -1,8 +1,25 @@
 "use client";
 
 import { getClipSpans, totalDuration, useEditor } from "./store";
+import { isCrossStyle, type ClipSpan } from "./types";
 
 const r = (n: number) => Math.round(n * 100) / 100;
+
+/** The transition this clip applies into the next one, clamped the same way the
+ * preview and export are: a cross dissolve to its overlap, an edge fade/zoom to
+ * the clip it ramps. Null when there's no transition or no next clip. */
+function transitionToNext(sp: ClipSpan, index: number, spans: ClipSpan[]) {
+  const seconds = sp.clip.transition ?? 0;
+  if (seconds <= 0 || index >= spans.length - 1) return null;
+  const style = sp.clip.transitionStyle ?? "crossfade";
+  const next = spans[index + 1];
+  const applied = isCrossStyle(style)
+    ? sp.transitionOut
+    : style === "fadein" || style === "zoomout"
+      ? Math.min(seconds, next.len) // edge style ramps the next clip's head
+      : Math.min(seconds, sp.len); // edge style ramps this clip's tail
+  return { style, seconds: r(applied) };
+}
 
 /**
  * Compact JSON snapshot of everything the assistant should know: the cut,
@@ -72,14 +89,10 @@ export function buildAiContext(opts?: { fullCues?: boolean }) {
       muted: sp.clip.muted,
       framing: sp.clip.fit ?? "fit",
       speed: r(sp.clip.speed ?? 1),
-      ...((sp.clip.transition ?? 0) > 0 && index < spans.length - 1
-        ? {
-            transitionToNext: {
-              style: sp.clip.transitionStyle ?? "crossfade",
-              seconds: r(sp.clip.transition ?? 0),
-            },
-          }
-        : {}),
+      ...(() => {
+        const t = transitionToNext(sp, index, spans);
+        return t ? { transitionToNext: t } : {};
+      })(),
       ...(sp.clip.fit === "fill"
         ? { panX: r(sp.clip.panX ?? 0), panY: r(sp.clip.panY ?? 0) }
         : {}),
