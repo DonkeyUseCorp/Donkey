@@ -1,8 +1,8 @@
 # Cut
 
-Cut (publicly "Donkey Cut") is a standalone, free video editor. The hosted domain `cut.donkeyuse.com` serves only its client bundle — every page is client-rendered — and the page does all real work against the Cut engine: a local server the Donkey Mac app ships and supervises on the user's own Mac. The engine uses local disk, the app's bundled ffmpeg, on-device speech, and the user's own Claude/Codex CLI logins. Cut shares Donkey's hosting and distribution only — it does not touch Donkey's accounts, credits, sign-in, database, or hosted models.
+Cut (publicly "Donkey Cut") is a standalone, free video editor. The hosted domain `cut.donkeyuse.com` serves only its client bundle — every page is client-rendered — and the page does all real work against the Cut engine: a local server the Donkey Mac app ships and supervises on the user's own Mac. The engine uses local disk, the app's bundled ffmpeg, on-device speech, and the user's own Claude/Codex CLI logins. Editing is account-free. The one signed-in feature is AI generation — images, video, and voiceovers: the page posts to Donkey's hosted inference routes with the user's Donkey session and credits (same-origin on the cut hosts — the auth cookie rides the registrable domain), and the result lands back in the project through the engine like any other media.
 
-**The one rule:** Cut's server side runs only on the user's Mac. On a hosted deploy every Cut API answers 404 before any handler runs, so the unauthenticated routes are unreachable there and nothing can execute off-Mac — including any path to Donkey's production models, which Cut has none of. Don't wrap Cut's API routes in the Donkey auth helper, reach for Prisma, or bill against credits to "harden" them; local-only is the design.
+**The one rule:** Cut's server side runs only on the user's Mac. On a hosted deploy every Cut API answers 404 before any handler runs, so the unauthenticated routes are unreachable there and nothing can execute off-Mac — the engine has no path to Donkey's production models; the page reaches them only through Donkey's own authenticated inference APIs. Don't wrap Cut's API routes in the Donkey auth helper, reach for Prisma, or bill against credits to "harden" them; local-only is the design for everything the engine does.
 
 ## How it works
 
@@ -36,10 +36,10 @@ Because a GUI-spawned process inherits a bare PATH, the engine rebuilds it: tool
 
 | Concern | Donkey | Cut |
 | --- | --- | --- |
-| Sign-in | Required account | None |
-| Billing | Credits | Free |
+| Sign-in | Required account | None for editing; AI generation needs one |
+| Billing | Credits | Free; AI generation spends credits |
 | Storage | Database | Local disk |
-| Model access | Hosted routes | The user's own CLI logins |
+| Model access | Hosted routes | CLI logins; AI generation uses Donkey's hosted routes (signed in) |
 | Distribution | The Mac app | Rides the same app |
 
 The only shared code runs one way: Cut uses a few site UI utilities, and the engine rides the app's process-environment helpers. Nothing in the Donkey product imports Cut, and Cut adds no database models.
@@ -53,6 +53,7 @@ Missing tools disable the matching feature; they never affect the rest of the si
 | Encode, probe, thumbnails | the app's bundled `ffmpeg`/`ffprobe` |
 | Transcription / subtitles | prebuilt `cut-stt` shipped beside the engine binary (the plain dev server falls back to compiling it) |
 | AI assistant | the user's own `claude` and `codex` CLI logins |
+| AI generation (image / video / voiceover) | a Donkey sign-in and credits (the one hosted feature) |
 | Projects, library, exports | writable local disk (Application Support when run as the engine) |
 
 ## Where it lives
