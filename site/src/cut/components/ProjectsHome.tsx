@@ -457,6 +457,17 @@ export function ProjectsHome() {
           selected={selected}
           setSelected={setSelected}
         >
+          <button
+            type="button"
+            data-no-marquee
+            aria-label="New project"
+            onClick={() => void newProjectHere()}
+            className="group/new flex flex-col"
+          >
+            <span className="grid aspect-[9/16] place-items-center rounded-2xl border-2 border-dashed border-border text-muted-foreground transition-colors group-hover/new:border-[#0a84ff] group-hover/new:bg-[#0a84ff]/5 group-hover/new:text-[#0a84ff]">
+              <Plus className="size-8" />
+            </span>
+          </button>
           {shown.map((p) => (
             <div
               key={p.id}
@@ -506,17 +517,6 @@ export function ProjectsHome() {
               </div>
             </div>
           ))}
-          <button
-            type="button"
-            data-no-marquee
-            aria-label="New project"
-            onClick={() => void newProjectHere()}
-            className="group/new flex flex-col"
-          >
-            <span className="grid aspect-[9/16] place-items-center rounded-2xl border-2 border-dashed border-border text-muted-foreground transition-colors group-hover/new:border-[#0a84ff] group-hover/new:bg-[#0a84ff]/5 group-hover/new:text-[#0a84ff]">
-              <Plus className="size-8" />
-            </span>
-          </button>
         </Marquee>
       ) : (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
