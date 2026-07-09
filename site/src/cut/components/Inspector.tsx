@@ -216,6 +216,7 @@ function LayoutButtons({
       <span className="text-[11.5px] font-medium text-muted-foreground">Layout</span>
       <Select
         value={currentId}
+        items={Object.fromEntries((Object.keys(LAYOUTS) as LayoutId[]).map((id) => [id, LAYOUTS[id].label]))}
         onValueChange={(id) => {
           const L = LAYOUTS[id as LayoutId];
           onPick(id === "full" ? undefined : { ...L.rect }, L.fit);
@@ -317,6 +318,7 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
             <Row label="Transition">
               <Select
                 value={clip.transitionStyle ?? "crossfade"}
+                items={TRANSITION_STYLE_LABELS}
                 onValueChange={(v) =>
                   // Picking a style with the length still at zero turns the
                   // transition on at a sensible default.
