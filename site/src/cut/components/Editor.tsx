@@ -8,25 +8,28 @@ import { apiFetch } from "@/cut/lib/api";
 import { renderPreviewProxy } from "@/cut/lib/exportClient";
 import { useExport } from "@/cut/lib/exportStore";
 import { enrichAsset, importFileToProject } from "@/cut/lib/media";
-import { projectDuration, serializeDoc, useEditor } from "@/cut/lib/store";
+import { backTarget, useCutBase } from "@/cut/lib/nav";
+import { getClipSpans, projectDuration, serializeDoc, useEditor } from "@/cut/lib/store";
 import { AiPanel } from "./AiPanel";
 import { ExportDialog } from "./ExportDialog";
 import { ExportStatus } from "./ExportStatus";
 import { Inspector } from "./Inspector";
 import { Preview } from "./Preview";
 import { SidePanel } from "./SidePanel";
-import { Timeline } from "./Timeline";
+import { Timeline, videoInsertIndex } from "./Timeline";
 import { TopBar } from "./TopBar";
 
-export function Editor({ projectId }: { projectId: string }) {
+export function Editor({ projectId, from }: { projectId: string; from?: string | null }) {
+  const back = backTarget(useCutBase(), from);
   const loaded = useEditor((s) => s.loaded);
   const loadError = useEditor((s) => s.loadError);
   const dropActive = useEditor((s) => s.dropActive);
   const exportOpen = useEditor((s) => s.exportOpen);
   const aiOpen = useEditor((s) => s.aiOpen);
-  // The inspector only earns its column when something is selected; otherwise it
-  // is an empty white panel, so collapse it and let the preview take the space.
-  const hasInspector = useEditor((s) => s.selection != null);
+  // The inspector only earns its column when the selection has a panel to
+  // show; otherwise (nothing selected, or a subtitle cue) it is an empty white
+  // panel, so collapse it and let the preview take the space.
+  const hasInspector = useEditor((s) => s.selection != null && s.selection.kind !== "cue");
   const [importing, setImporting] = useState(0);
   const dragDepth = useRef(0);
 
@@ -178,7 +181,7 @@ export function Editor({ projectId }: { projectId: string }) {
   }, [projectId]);
 
   const importFiles = useCallback(
-    async (files: FileList | File[]) => {
+    async (files: FileList | File[], at?: number | null) => {
       const list = Array.from(files);
       setImporting((n) => n + list.length);
       for (const file of list) {
@@ -187,8 +190,23 @@ export function Editor({ projectId }: { projectId: string }) {
           if (!asset) continue;
           const s = useEditor.getState();
           s.addAsset(asset);
-          if (asset.type === "video") s.addClipFromAsset(asset.id);
-          else s.addAudioFromAsset(asset.id, 0);
+          if (asset.type === "video") {
+            // A drop on the timeline inserts at the pointer's slot; anywhere
+            // else appends at the end.
+            if (at == null) {
+              s.addClipFromAsset(asset.id);
+            } else {
+              const spans = getClipSpans(s.clips, s.assets);
+              const spanIndex = videoInsertIndex(spans, at);
+              const clipsIndex =
+                spanIndex < spans.length
+                  ? s.clips.findIndex((c) => c.id === spans[spanIndex].clip.id)
+                  : s.clips.length;
+              s.addClipFromAsset(asset.id, clipsIndex);
+            }
+          } else {
+            s.addAudioFromAsset(asset.id, at ?? 0);
+          }
           void enrichAsset(asset);
         } catch (err) {
           console.error(`Import failed for ${file.name}:`, err);
@@ -216,12 +234,25 @@ export function Editor({ projectId }: { projectId: string }) {
       dragDepth.current = Math.max(0, dragDepth.current - 1);
       if (dragDepth.current === 0) useEditor.getState().setDropActive(false);
     };
+    // Time under the pointer when the drop lands on the timeline's tracks,
+    // else null. Geometric, because the drop veil overlays the whole window
+    // and would swallow any target-based check.
+    const timelineDropTime = (e: DragEvent): number | null => {
+      const scroll = document.querySelector(".tl-scroll");
+      const inner = document.querySelector(".tl-content");
+      if (!scroll || !inner) return null;
+      const r = scroll.getBoundingClientRect();
+      if (e.clientY < r.top || e.clientY > r.bottom || e.clientX < r.left || e.clientX > r.right)
+        return null;
+      const t = (e.clientX - inner.getBoundingClientRect().left) / useEditor.getState().pxPerSec;
+      return Math.max(0, t);
+    };
     const drop = (e: DragEvent) => {
       if (!e.dataTransfer?.files.length) return;
       e.preventDefault();
       dragDepth.current = 0;
       useEditor.getState().setDropActive(false);
-      void importFiles(e.dataTransfer.files);
+      void importFiles(e.dataTransfer.files, timelineDropTime(e));
     };
     window.addEventListener("dragenter", enter);
     window.addEventListener("dragover", over);
@@ -300,7 +331,7 @@ export function Editor({ projectId }: { projectId: string }) {
           <Button
             variant="outline"
             nativeButton={false}
-            render={<Link href="/">Back to projects</Link>}
+            render={<Link href={back.href}>Back to {back.tab}</Link>}
           />
         </div>
       </div>
@@ -318,7 +349,7 @@ export function Editor({ projectId }: { projectId: string }) {
   return (
     <div className="flex h-screen min-w-[900px] overflow-hidden">
       <div className="grid min-w-0 flex-1 grid-rows-[46px_minmax(0,1fr)_auto]">
-        <TopBar />
+        <TopBar onImport={importFiles} from={from} />
         <div
           className={`grid min-h-0 ${
             hasInspector ? "grid-cols-[auto_minmax(0,1fr)_272px]" : "grid-cols-[auto_minmax(0,1fr)]"

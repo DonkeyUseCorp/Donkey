@@ -2,10 +2,67 @@
 
 import { apiFetch } from "./api";
 import { useEditor } from "./store";
-import type { MediaAsset } from "./types";
+import type { AudioClip, MediaAsset, ProjectSummary, StoredAsset, VideoClip } from "./types";
 import { mediaUrl } from "./types";
 
 const uid = () => crypto.randomUUID().slice(0, 8);
+
+/** True when a dropped OS file is something Cut can turn into a project. */
+export function isMediaFile(file: File) {
+  return (
+    file.type.startsWith("video/") ||
+    file.type.startsWith("audio/") ||
+    isVideoFile(file) ||
+    isAudioFile(file)
+  );
+}
+
+/** Create a fresh project seeded from a single desktop file: upload the media,
+ * lay it on the timeline, and persist — no editor round-trip. Returns the new
+ * project's id, or null if the file isn't video/audio. */
+export async function createProjectFromFile(
+  file: File,
+  folderId: string | null
+): Promise<string | null> {
+  if (!isMediaFile(file)) return null;
+  const name = file.name.replace(/\.[^./]+$/, "") || "Untitled";
+  const res = await apiFetch("/api/cut/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, folderId }),
+  });
+  const project = (await res.json()) as ProjectSummary;
+
+  const asset = await importFileToProject(project.id, file);
+  // Media the engine rejects leaves an empty project rather than a dangling id.
+  if (!asset) return project.id;
+
+  const stored: StoredAsset = {
+    id: asset.id,
+    fileName: asset.fileName,
+    name: asset.name,
+    type: asset.type,
+    duration: asset.duration,
+    ...(asset.width !== undefined ? { width: asset.width } : {}),
+    ...(asset.height !== undefined ? { height: asset.height } : {}),
+  };
+  const doc: Partial<{ assets: StoredAsset[]; clips: VideoClip[]; audioClips: AudioClip[] }> = {
+    assets: [stored],
+  };
+  if (asset.type === "video") {
+    doc.clips = [{ id: uid(), assetId: asset.id, in: 0, out: asset.duration, muted: false }];
+  } else {
+    doc.audioClips = [
+      { id: uid(), assetId: asset.id, start: 0, in: 0, out: asset.duration, volume: 1 },
+    ];
+  }
+  await apiFetch(`/api/cut/projects/${project.id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(doc),
+  });
+  return project.id;
+}
 
 export function isVideoFile(file: File) {
   return file.type.startsWith("video/") || /\.(mp4|mov|m4v|webm|mkv)$/i.test(file.name);
@@ -69,6 +126,32 @@ export async function importFileToProject(
   return asset;
 }
 
+/** Build a runtime asset for a media file the engine already wrote into the
+ * project folder (freeze frames, AI generations) — probe metadata, no upload. */
+export async function assetFromProjectFile(
+  projectId: string,
+  fileName: string,
+  name: string
+): Promise<MediaAsset> {
+  const url = mediaUrl(projectId, fileName);
+  const v = await loadVideoMeta(url);
+  const asset: MediaAsset = {
+    id: uid(),
+    fileName,
+    name,
+    type: "video",
+    duration: v.duration,
+    url,
+  };
+  if (v.videoWidth === 0) {
+    asset.type = "audio";
+  } else {
+    asset.width = v.videoWidth;
+    asset.height = v.videoHeight;
+  }
+  return asset;
+}
+
 /** Generate filmstrip thumbnails / waveform peaks and merge them into the
  * store. Safe to call repeatedly; skips assets that are already enriched. */
 export async function enrichAsset(asset: MediaAsset) {
@@ -128,7 +211,7 @@ function loadVideoMeta(url: string): Promise<HTMLVideoElement> {
   });
 }
 
-function loadAudioDuration(url: string): Promise<number> {
+export function loadAudioDuration(url: string): Promise<number> {
   return new Promise((resolve, reject) => {
     const a = new Audio();
     a.preload = "metadata";

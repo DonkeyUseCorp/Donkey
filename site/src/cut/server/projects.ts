@@ -91,11 +91,17 @@ export async function writeProject(id: string, doc: ProjectDoc) {
   await writeJsonAtomic(docPath(id), doc);
 }
 
-export async function createProject(name: string): Promise<ProjectSummary> {
+export async function createProject(
+  name: string,
+  folderId: string | null = null
+): Promise<ProjectSummary> {
   const id = crypto.randomUUID().slice(0, 10);
   await mkdir(mediaDir(id), { recursive: true });
   await mkdir(exportsDir(id), { recursive: true });
   const now = Date.now();
+  // A folder that no longer exists just falls back to the root.
+  const folder =
+    folderId && (await readFolders()).some((f) => f.id === folderId) ? folderId : null;
   const doc: ProjectDoc = {
     version: 1,
     name: name.trim() || "Untitled",
@@ -105,6 +111,7 @@ export async function createProject(name: string): Promise<ProjectSummary> {
     clips: [],
     audioClips: [],
     overlays: [],
+    ...(folder ? { folderId: folder } : {}),
   };
   await writeJsonAtomic(docPath(id), doc);
   return summarize(id, doc);

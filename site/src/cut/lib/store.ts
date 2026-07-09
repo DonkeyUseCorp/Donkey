@@ -25,6 +25,7 @@ import { apiFetch } from "./api";
 import { emptySubtitles, isCrossStyle, mediaUrl, SPEED_MAX, SPEED_MIN, TRANSITION_MAX } from "./types";
 import { readTextStyle } from "./textStyle";
 import { loadUiState, saveUiState } from "./uiState";
+import { captureTimelineFrames } from "./visualFrames";
 
 const uid = () => crypto.randomUUID().slice(0, 8);
 
@@ -132,7 +133,10 @@ interface EditorState {
   /** Add a video clip from an asset. With `index`, insert at that position on
    * the magnetic video track; otherwise append. */
   addClipFromAsset: (assetId: string, index?: number) => void;
-  addAudioFromAsset: (assetId: string, start?: number) => void;
+  /** Add a soundtrack clip from an audio asset at `start` (default: the
+   * playhead). `opts.duck` marks it a voiceover that lowers everything else
+   * to that gain while it plays. */
+  addAudioFromAsset: (assetId: string, start?: number, opts?: { duck?: number }) => void;
   addOverlay: () => void;
   /** Move a title to a title track (row); lanes are renumbered to stay
    * contiguous, so empty tracks collapse and a past-the-end lane adds one. */
@@ -176,10 +180,13 @@ interface EditorState {
   setNotes: (patch: Partial<{ text: string; publishedAt: string; links: string[] }>) => void;
   /** Kick off (and poll) an on-device transcription of the current cut. */
   generateSubtitles: () => Promise<void>;
+  /** Caption the cut from its picture alone (no audio needed): sample frames
+   * along the timeline and have the AI write timed narration cues. */
+  generateVisualSubtitles: () => Promise<void>;
   /** Transcribe (if needed) then rewrite the cues into social captions in the
    * given style, one-to-one so cue timings are preserved. */
   generateCaptions: (style: "clean" | "hook" | "punchy") => Promise<void>;
-  setSubtitlesView: (patch: Partial<Pick<SubtitlesBlock, "showOnVideo" | "showOnTimeline" | "locale" | "style">>) => void;
+  setSubtitlesView: (patch: Partial<Pick<SubtitlesBlock, "showOnVideo" | "showOnTimeline" | "locale" | "style" | "x" | "y" | "wordHighlight" | "accentMode" | "accentColor">>) => void;
   /** Commit a cue's edited text (empty text deletes the cue). */
   setCueText: (id: string, text: string) => void;
   /** Split a cue at a character offset — at real word timings when known. */
@@ -187,6 +194,10 @@ interface EditorState {
   mergeCueIntoPrev: (id: string) => void;
   deleteCue: (id: string) => void;
   updateCueTransient: (id: string, patch: Partial<SubtitleCue>) => void;
+  /** Re-time listed cues to a generated voiceover: set each cue's [start, end]
+   * and spread its words across the new span (the AI voice paces differently
+   * from the original recording, so the word highlighter would otherwise drift). */
+  retimeCues: (entries: { id: string; start: number; end: number }[]) => void;
   sortCues: () => void;
   deleteSelection: () => void;
   /** Timeline window [start, end) spanned by the current selection, or null if
@@ -486,7 +497,7 @@ export const useEditor = create<EditorState>((set, get) => {
       });
     },
 
-    addAudioFromAsset: (assetId, start) => {
+    addAudioFromAsset: (assetId, start, opts) => {
       const asset = get().assets.find((a) => a.id === assetId);
       if (!asset || asset.type !== "audio") return;
       push();
@@ -497,6 +508,9 @@ export const useEditor = create<EditorState>((set, get) => {
         in: 0,
         out: asset.duration,
         volume: 1,
+        ...(opts?.duck !== undefined && opts.duck < 1
+          ? { duck: Math.max(0, opts.duck) }
+          : {}),
       };
       set((s) => ({
         audioClips: [...s.audioClips, clip],
@@ -964,7 +978,7 @@ export const useEditor = create<EditorState>((set, get) => {
           if (!c) continue;
           const mi = mediaFor(c.assetId);
           if (mi == null) continue;
-          audio.push({ media: mi, start: c.start - start0, in: c.in, out: c.out, volume: c.volume, fadeIn: c.fadeIn, fadeOut: c.fadeOut, speed: c.speed });
+          audio.push({ media: mi, start: c.start - start0, in: c.in, out: c.out, volume: c.volume, fadeIn: c.fadeIn, fadeOut: c.fadeOut, speed: c.speed, duck: c.duck });
         } else if (sel.kind === "text") {
           const o = s.overlays.find((x) => x.id === sel.id);
           if (o) texts.push({ ...o, start: o.start - start0, end: o.end - start0 });
@@ -1026,6 +1040,7 @@ export const useEditor = create<EditorState>((set, get) => {
           ...(a.fadeIn ? { fadeIn: a.fadeIn } : {}),
           ...(a.fadeOut ? { fadeOut: a.fadeOut } : {}),
           ...(a.speed ? { speed: a.speed } : {}),
+          ...(a.duck !== undefined && a.duck < 1 ? { duck: a.duck } : {}),
         }));
       const newTexts: TextOverlay[] = template.texts.map((o) => ({
         ...o,
@@ -1169,6 +1184,53 @@ export const useEditor = create<EditorState>((set, get) => {
             return;
           }
         }
+      } catch (err) {
+        if (get().projectId !== projectId) return;
+        set({
+          subtitleStatus: "error",
+          subtitleError: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+
+    generateVisualSubtitles: async () => {
+      const s = get();
+      if (!s.projectId || s.subtitleStatus === "running") return;
+      const projectId = s.projectId;
+      const spans = getClipSpans(s.clips, s.assets);
+      if (spans.length === 0) {
+        set({ subtitleStatus: "error", subtitleError: "Add a video to the timeline first." });
+        return;
+      }
+      const duration = totalDuration(s.clips);
+      set({ subtitleStatus: "running", subtitleError: null });
+      try {
+        const frames = await captureTimelineFrames(spans);
+        if (frames.length === 0) throw new Error("Could not read any frames from the cut.");
+        const res = await apiFetch("/api/cut/ai/visual-subtitles", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ frames, duration, locale: s.subtitles.locale ?? "en-US" }),
+        });
+        const body = (await res.json()) as {
+          cues?: { start: number; end: number; text: string }[];
+          error?: string;
+        };
+        if (!res.ok || !Array.isArray(body.cues)) {
+          throw new Error(body.error ?? "Captioning failed.");
+        }
+        if (get().projectId !== projectId) return; // switched projects mid-run
+        const cues: SubtitleCue[] = body.cues.map((c) => ({
+          id: uid(),
+          start: c.start,
+          end: c.end,
+          text: c.text,
+        }));
+        push();
+        set((cur) => ({
+          subtitles: { ...cur.subtitles, cues, generatedAt: Date.now() },
+          subtitleStatus: cues.length > 0 ? "ready" : "empty",
+        }));
       } catch (err) {
         if (get().projectId !== projectId) return;
         set({
@@ -1356,6 +1418,25 @@ export const useEditor = create<EditorState>((set, get) => {
         },
       })),
 
+    retimeCues: (entries) => {
+      if (entries.length === 0) return;
+      const byId = new Map(entries.map((e) => [e.id, e]));
+      if (!get().subtitles.cues.some((c) => byId.has(c.id))) return;
+      push();
+      set((s) => ({
+        subtitles: {
+          ...s.subtitles,
+          cues: s.subtitles.cues.map((c) => {
+            const e = byId.get(c.id);
+            if (!e) return c;
+            const start = e.start;
+            const end = Math.max(start + 0.05, e.end);
+            return { ...c, start, end, words: spreadWordsEvenly(c.text, start, end) };
+          }),
+        },
+      }));
+    },
+
     sortCues: () =>
       set((s) => ({
         subtitles: {
@@ -1506,7 +1587,7 @@ export function serializeDoc(s: {
   subtitles: SubtitlesBlock;
 }): Partial<ProjectDoc> {
   const assets: StoredAsset[] = s.assets.map(
-    ({ id, fileName, name, type, duration, width, height }) => ({
+    ({ id, fileName, name, type, duration, width, height, origin }) => ({
       id,
       fileName,
       name,
@@ -1514,6 +1595,7 @@ export function serializeDoc(s: {
       duration,
       ...(width !== undefined ? { width } : {}),
       ...(height !== undefined ? { height } : {}),
+      ...(origin !== undefined ? { origin } : {}),
     })
   );
   return {
@@ -1524,8 +1606,8 @@ export function serializeDoc(s: {
     overlayClips: s.overlayClips,
     overlays: s.overlays,
     aspect: s.aspect,
-    ...(s.fadeIn > 0 ? { fadeIn: s.fadeIn } : {}),
-    ...(s.fadeOut > 0 ? { fadeOut: s.fadeOut } : {}),
+    fadeIn: s.fadeIn,
+    fadeOut: s.fadeOut,
     subtitles: s.subtitles,
     publish: { ...s.publish },
     notes: { ...s.notes, links: [...s.notes.links] },
@@ -1616,6 +1698,28 @@ export function projectDuration(s: {
  * moves by that clip's shift; one over a removed gap collapses to the join;
  * one past everything shifts by the whole-timeline length change.
  */
+/** Spread a cue's words across [start, end], each word's slice proportional to
+ * its length. Used when re-timing captions to a generated voiceover, which
+ * carries no per-word timestamps of its own. */
+function spreadWordsEvenly(
+  text: string,
+  start: number,
+  end: number,
+): { t0: number; t1: number; w: string }[] | undefined {
+  const parts = text.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return undefined;
+  const lengths = parts.map((w) => Math.max(1, w.length));
+  const total = lengths.reduce((a, b) => a + b, 0);
+  const span = Math.max(0, end - start);
+  let acc = 0;
+  return parts.map((w, i) => {
+    const t0 = start + (acc / total) * span;
+    acc += lengths[i];
+    const t1 = start + (acc / total) * span;
+    return { t0, t1, w };
+  });
+}
+
 function makeRipple(oldClips: VideoClip[], newClips: VideoClip[], assets: MediaAsset[]) {
   const newStart = new Map(getClipSpans(newClips, assets).map((sp) => [sp.clip.id, sp.start]));
   const totalDelta = totalDuration(newClips) - totalDuration(oldClips);

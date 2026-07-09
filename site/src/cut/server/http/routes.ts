@@ -38,6 +38,7 @@ export const CUT_ROUTES: CutRoute[] = [
   { method: "POST", path: "/api/cut/projects/:id/exports/:file/reveal", handler: (req, p) => projectsApi.revealExport(req, { id: p.id, file: p.file }) },
   { method: "POST", path: "/api/cut/projects/:id/transcribe", handler: (req, p) => projectsApi.transcribeStart(req, { id: p.id }) },
   { method: "GET", path: "/api/cut/projects/:id/transcribe", handler: (req, p) => projectsApi.transcribePoll(req, { id: p.id }) },
+  { method: "POST", path: "/api/cut/projects/:id/still", handler: (req, p) => projectsApi.importStill(req, { id: p.id }) },
   { method: "POST", path: "/api/cut/projects/:id/freeze", handler: (req, p) => projectsApi.freeze(req, { id: p.id }) },
   { method: "POST", path: "/api/cut/projects/:id/duplicate", handler: (req, p) => projectsApi.duplicate(req, { id: p.id }) },
   { method: "GET", path: "/api/cut/projects/:id/preview", handler: (req, p) => projectsApi.servePreview(req, { id: p.id }) },
@@ -65,6 +66,7 @@ export const CUT_ROUTES: CutRoute[] = [
 
   { method: "POST", path: "/api/cut/ai/chat", handler: (req) => aiApi.chat(req) },
   { method: "POST", path: "/api/cut/ai/captions", handler: (req) => aiApi.captions(req) },
+  { method: "POST", path: "/api/cut/ai/visual-subtitles", handler: (req) => aiApi.visualSubtitles(req) },
   { method: "GET", path: "/api/cut/ai/models", handler: () => aiApi.models() },
   { method: "GET", path: "/api/cut/ai/proxy", handler: (req) => aiApi.proxyCatalog(req) },
   { method: "POST", path: "/api/cut/ai/proxy", handler: (req) => aiApi.proxyCall(req) },

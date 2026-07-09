@@ -137,7 +137,7 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "update_audio",
     description:
-      "Update a soundtrack clip: volume (0..1.5), fadeIn/fadeOut seconds, start position, or in/out trim.",
+      "Update a soundtrack clip: volume (0..1.5), fadeIn/fadeOut seconds, start position, in/out trim, or duck. `duck` is voiceover ducking — while this clip plays, ALL other audio (video-clip sound and other music) drops to that gain (0..1); pass 1 to clear ducking. Use it to make a voiceover sit over quieter music.",
     inputSchema: obj({
       id: str("Soundtrack clip id"),
       volume: num("0..1.5"),
@@ -146,6 +146,7 @@ export const AI_TOOLS: AiToolDef[] = [
       start: num("Timeline start s"),
       in: num("Source in s"),
       out: num("Source out s"),
+      duck: num("Duck other audio to this gain while this clip plays, 0..1 (1 clears ducking)"),
     }, ["id"]),
   },
   {
@@ -170,6 +171,28 @@ export const AI_TOOLS: AiToolDef[] = [
     }),
   },
   {
+    name: "generate_image",
+    description:
+      "Generate an AI image from a text prompt (Donkey's hosted image model) and add it to the project as a still clip, composed for the project's aspect. Use for B-roll, cover frames, or backgrounds the user doesn't have footage for. Returns when the image has landed. By default it also drops the still onto the timeline; pass add_to_timeline:false to only put it in Media. Needs the user signed in to Donkey (spends their credits).",
+    inputSchema: obj({
+      prompt: str("What to depict — be specific about subject, style, and lighting"),
+      add_to_timeline: bool("Insert the still on the video track (default true)"),
+      index: num("Insert position on the video track (default: end; 0 = first/cover)"),
+    }, ["prompt"]),
+  },
+  {
+    name: "generate_video",
+    description:
+      "Generate an AI video clip from a text prompt (Donkey's hosted Veo model), framed for the project's aspect. Use for B-roll or shots the user doesn't have footage for. This renders remotely and takes a minute or two, so the tool RETURNS IMMEDIATELY — the clip appears in Media (and on the timeline by default) when it finishes; watch the Video panel. Tell the user it's rendering. Pass add_to_timeline:false to only put it in Media. Needs the user signed in to Donkey (spends their credits).",
+    inputSchema: obj({
+      prompt: str("The shot to generate — describe motion, subject, and mood"),
+      tier: { type: "string", enum: ["fast", "high"], description: "fast = quicker/cheaper (default), high = best quality" },
+      duration_seconds: num("Clip length 4–8 seconds (default 8)"),
+      add_to_timeline: bool("Insert the clip on the video track (default true)"),
+      index: num("Insert position on the video track (default: end)"),
+    }, ["prompt"]),
+  },
+  {
     name: "subtitles_generate",
     description:
       "Transcribe the cut on-device (Apple speech) and create subtitle captions. Runs in the background; returns when finished. If no speech is found, no subtitles are added.",
@@ -180,6 +203,40 @@ export const AI_TOOLS: AiToolDef[] = [
     description:
       "Transcribe (if needed) then rewrite the captions into punchy social-video captions — short lines that fit inside the video frame (they may wrap onto two lines but never overflow), a few emoji, a curiosity-hook opener. style: clean | hook | punchy (default hook). Cue timings are preserved.",
     inputSchema: obj({ style: str("Caption style: clean, hook, or punchy") }),
+  },
+  {
+    name: "subtitles_from_visuals",
+    description:
+      "Caption a cut that has NO usable speech by watching sampled frames and writing timed narration captions (uses the user's Claude login to look at the frames). Use this instead of subtitles_generate when the video is silent b-roll, music-only, or otherwise has nothing to transcribe. Runs in the background; returns when finished.",
+    inputSchema: obj({ locale: str("BCP-47 locale like en-US (default en-US)") }),
+  },
+  {
+    name: "list_voices",
+    description:
+      "List the AI voices available for voiceover (Gemini's prebuilt set; each has a one-word character like Warm, Upbeat, Gravelly). Call this when the user asks for a specific kind of voice so you can pass the right voice id to voiceover_generate or read_subtitles_aloud.",
+    inputSchema: obj({}),
+  },
+  {
+    name: "voiceover_generate",
+    description:
+      "Generate a spoken AI voiceover from a script (Donkey's hosted speech model) and drop it on the soundtrack at the playhead (or `start`). Use for 'add a voiceover', 'narrate this', 'read this script aloud'. Pick a `voice` id from list_voices, or omit for a good default. `direction` steers delivery in natural language; the script itself may carry inline tags like [whispers] or [excited]. `duck` lowers all other audio to that gain while the voice plays (0..1; ~0.3–0.5 is typical, 1 = don't duck). Needs the user signed in to Donkey (spends their credits).",
+    inputSchema: obj({
+      script: str("What the voice should say"),
+      voice: str("Voice id from list_voices (optional; a sensible default is chosen)"),
+      direction: str("Delivery instruction, e.g. 'Say warmly, like an old friend' (optional)"),
+      duck: num("Lower other audio to this gain while the voice plays, 0..1 (default 0.4; 1 = no ducking)"),
+      start: num("Timeline start in seconds (default: the playhead)"),
+    }, ["script"]),
+  },
+  {
+    name: "read_subtitles_aloud",
+    description:
+      "Speak the existing subtitle cues as an AI voiceover (Donkey's hosted speech model) — each line placed at its own cue time — and add it to the soundtrack. Turns captions into narration. Requires subtitles to exist first (generate them if needed). `duck` lowers other audio under the voice (0..1). Needs the user signed in to Donkey (spends their credits).",
+    inputSchema: obj({
+      voice: str("Voice id from list_voices (optional)"),
+      direction: str("Delivery instruction, e.g. 'Narrate briskly, documentary style' (optional)"),
+      duck: num("Lower other audio to this gain while the voice plays, 0..1 (default 0.4)"),
+    }),
   },
   {
     name: "subtitles_set_view",
@@ -294,7 +351,7 @@ export const AI_TOOLS: AiToolDef[] = [
 export const AI_SKILLS: Record<string, string> = {
   "editor-overview": `# Cut editor overview
 Cut is a local, project-based short-video editor. Each project has an output aspect — 9:16 vertical (1080×1920, TikTok/Reels/Shorts) or 16:9 widescreen (1920×1080, YouTube) — switchable from the pill in the top bar; the current one is in editor_state project.aspect. Layout:
-- Left icon rail tabs: Media (project files + Exports list), Library (shared reusable assets), Record (camera/mic), Text (title presets), Subtitles (transcript editor), Publish (caption/tags/sound metadata).
+- Left icon rail tabs: Media (project files + Exports list), Library (shared reusable assets), Video (generate AI video), Image (generate AI images), Audio (AI voiceover + audio files), Text (title presets), Subtitles (transcript editor), Publish (caption/tags/sound metadata). Camera/mic recording lives in the top bar next to the aspect picker; recordings land in Media.
 - Center: the video preview canvas (composited at the project's frame size) with draggable text overlays and subtitle captions.
 - Right: the Inspector — its content follows the selection (video clip, soundtrack clip, or title).
 - Bottom: the timeline (resizable by dragging its top border). Tracks top-to-bottom: video (magnetic, clips snap end-to-end), soundtrack (free-positioned green clips), titles (purple bars), subtitles (amber cue bars, when enabled).
@@ -334,12 +391,23 @@ Inspector shows these when a title is selected. The color row has fixed swatches
 Good TikTok titles: short punchy lines, high contrast (white/yellow + shadow or plate), size 72–110, keep inside the middle 80% of the frame (x 0.1..0.9, y 0.1..0.9), avoid the caption band (y≈0.8) when subtitles are on.
 Titles burn into the export exactly as previewed.`,
 
-  "audio-and-subtitles": `# Audio & subtitles
+  "audio-and-subtitles": `# Audio, voiceover & subtitles
 Soundtrack clips: volume 0..1.5, fadeIn/fadeOut seconds (max half the clip), start = timeline position, in/out = trim inside the source. Fades render with ffmpeg afade on export.
-Subtitles: subtitles_generate transcribes the current cut fully on-device (Apple speech, macOS 26). Cues are caption-sized (≈38 chars). If no speech exists, no cues are created and nothing renders on the video — never add captions to a speechless video. captions_generate goes further: it rewrites those cues into punchy social captions (emoji, curiosity-hook opener) in a chosen style (clean/hook/punchy), keeping timings — use it when the ask is social/TikTok captions rather than a plain transcript.
-Editing: update_cue (text or retime), delete_cue. In the panel, Return splits a caption at the cursor onto real word timings; hand-edited text drops its word timings.
+Ducking: a soundtrack clip's \`duck\` (0..1, via update_audio) lowers ALL other audio — video-clip sound and other music — to that gain while the clip plays; 1 clears it. Voiceovers set this so narration sits over quieter music. It applies in both the preview and the export.
+Voiceover (Donkey's hosted speech model — signed in, spends credits, like image/video generation):
+- voiceover_generate(script, voice?, direction?, duck?, start?): synthesizes the script and drops it on the soundtrack at the playhead (or start). Defaults to a 0.4 duck so it sits over other audio. Voices are Gemini's prebuilt set — list_voices returns them (id + one-word character like Warm, Upbeat, Gravelly); omit voice for a good default. \`direction\` steers delivery in natural language ("Say warmly, like an old friend"); the script itself can carry inline tags like [whispers], [excited], [laughs].
+- read_subtitles_aloud(voice?, direction?, duck?): speaks the existing subtitle cues, each line at its own cue time — captions become narration. Needs cues first.
+Subtitles: subtitles_generate transcribes the cut's audio on-device (Apple speech, macOS 26); cues are caption-sized (≈38 chars). subtitles_from_visuals is the fallback for a cut with NO speech — it watches sampled frames (via the user's Claude login) and writes timed narration captions of what's on screen. So: speech present → subtitles_generate; silent/music-only footage the user wants captioned → subtitles_from_visuals. Never fabricate a spoken transcript.
+captions_generate rewrites existing cues into punchy social captions (emoji, curiosity-hook opener) in a style (clean/hook/punchy), keeping timings — use it when the ask is social/TikTok captions rather than a plain transcript.
+Editing: update_cue (text or retime), delete_cue, merge_cue. In the panel, Return splits a caption at the cursor onto real word timings; hand-edited text drops its word timings.
 subtitles_set_view: showOnVideo (preview + export burn-in), showOnTimeline (amber cue track).
-Caption style is fixed: bold white SF, translucent plate, bottom-center (y≈0.8).`,
+Caption look: the Subtitles panel offers 10 visual presets (clean, hook, punchy, minimal, editorial, typewriter, block, highlight, bubble, neon), a per-word karaoke highlight with accent overrides, and the caption block drags to a new spot in the preview. No tool sets the look — direct the user to the panel. captions_generate's clean/hook/punchy choice shapes the caption text it writes; the visual preset is separate.`,
+
+  "ai-generation": `# AI image & video generation
+Cut can generate media the user doesn't have footage for, through Donkey's hosted models (generation — images, video, voiceovers — is the signed-in, credit-spending feature; everything else is local and free). Both land the result in the project's Media and, by default, drop it on the timeline.
+- generate_image(prompt, add_to_timeline?, index?): a hosted image model renders the prompt; the image is baked into an 8s still clip framed for the project aspect. Great for a cover/hook frame (index 0), a background, or a b-roll still. Slower footage the user lacks → generate it rather than asking them to find it.
+- generate_video(prompt, tier?, duration_seconds?, add_to_timeline?, index?): a hosted Veo model renders a short clip (4–8s) with audio, framed for the project aspect. tier "fast" (default) is quicker/cheaper, "high" is best quality. This takes a minute or two, so the tool returns right away and the clip appears in Media (and on the timeline by default) when it finishes — tell the user it's rendering. Don't call it again for the same shot while one is in flight.
+Both compose for editor_state project.aspect, so set the aspect first if the user wants a different frame. If either fails with a sign-in or credits message, relay that plainly — generation needs the user signed in to Donkey with credits; it is not a local fallback. Write vivid, specific prompts (subject, style, lighting, motion); the user's request is usually shorthand, so flesh it out.`,
 
   "publish-and-export": `# Publish & export
 Publish tab fields (set_publish): caption (TikTok limit 4,000 chars INCLUDING tags/emoji; hook in the first line), tags (3–5 focused tags recommended; stored space-separated, rendered as #tags), soundTitle (TikTok lets you rename the sound once after posting), handle (shown as @handle in platform previews).
@@ -358,7 +426,9 @@ Rules:
 - All edits are undoable (unlimited undo), so prefer doing over asking. Only ask when the request is genuinely ambiguous.
 - Times are seconds. The frame is the project's aspect: 1080×1920 (9:16) or 1920×1080 (16:9) — see project.aspect in editor_state.
 - Read list_skills / read_skill before working in an area you're unsure about — they document every setting.
-- Never add subtitles to a video without speech; never invent transcript content.
+- Don't transcribe a video with no speech. If the user wants captions on silent footage, use subtitles_from_visuals (it narrates what's on screen). Never invent a spoken transcript.
+- Voiceovers duck other audio by default so they stay audible. Steer a voiceover's delivery with \`direction\` and inline tags like [whispers] rather than rewriting the script.
+- generate_image / generate_video / voiceover_generate / read_subtitles_aloud make media through hosted models (spends the user's Donkey credits, needs sign-in). Default to adding the result to the timeline; write a rich, specific prompt from their shorthand. generate_video takes a minute or two.
 - capture_frame shows you the actual rendered frame when visual judgment matters.`;
 }
 

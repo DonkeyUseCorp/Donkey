@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AudioLines, Blend, Check, EllipsisVertical, Expand, FolderPlus, Loader2, Pause, Play, Plus, Scissors, SkipBack, Sunrise, Sunset, Trash2, Type, VolumeX, ZoomIn, ZoomOut, type LucideIcon } from "lucide-react";
+import { AudioLines, Blend, Check, EllipsisVertical, Expand, Eye, EyeOff, FolderPlus, Loader2, Pause, Play, Plus, Scissors, SkipBack, Sunrise, Sunset, Trash2, Type, VolumeX, ZoomIn, ZoomOut, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -131,8 +131,9 @@ function dropIndex(spans: ClipSpan[], from: number, dxSec: number): number {
 }
 
 /** Insertion slot for a new clip dropped at time `t`: it lands before the
- * first span whose midpoint is past `t` (spans.length = at the very end). */
-function videoInsertIndex(spans: ClipSpan[], t: number): number {
+ * first span whose midpoint is past `t` (spans.length = at the very end).
+ * Exported for the Editor's OS-file drops onto the timeline. */
+export function videoInsertIndex(spans: ClipSpan[], t: number): number {
   for (let k = 0; k < spans.length; k++) if (t < spans[k].start + spans[k].len / 2) return k;
   return spans.length;
 }
@@ -1306,6 +1307,7 @@ function ClipView({
         className={cn(
           "tl-clip group absolute top-0.5 cursor-grab overflow-hidden rounded-lg bg-neutral-200 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]",
           selected && SELECTED_SHADOW,
+          clip.hidden && "opacity-40 grayscale",
           isDragged
             ? "tl-clip-ghost pointer-events-none z-7 cursor-grabbing opacity-80 shadow-2xl"
             : parting && "transition-transform duration-150 ease-out"
@@ -1361,12 +1363,17 @@ function ClipView({
         )}
         {(clip.speed ?? 1) !== 1 && (
           <span
-            className="tl-speed-chip absolute right-1.5 bottom-1 z-2 rounded-[5px] bg-black/70 px-1 py-px font-mono text-[9.5px] tabular-nums text-white"
+            className="tl-speed-chip absolute right-[30px] bottom-1 z-2 rounded-[5px] bg-black/70 px-1 py-px font-mono text-[9.5px] tabular-nums text-white"
             title={`${clip.speed}× speed`}
           >
             {+(clip.speed ?? 1).toFixed(2)}×
           </span>
         )}
+        <HideChip
+          hidden={!!clip.hidden}
+          className="bottom-1 right-2"
+          onToggle={() => useEditor.getState().updateClip(clip.id, { hidden: !clip.hidden })}
+        />
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
@@ -1415,6 +1422,35 @@ function ClipView({
         </div>
       )}
     </>
+  );
+}
+
+/** Hover chip that toggles a clip out of the played/exported output ("disable").
+ * Stays visible while the clip is hidden so re-enabling is one click. */
+function HideChip({
+  hidden,
+  onToggle,
+  className,
+}: {
+  hidden: boolean;
+  onToggle: () => void;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      title={hidden ? "Enable clip" : "Disable clip"}
+      aria-label={hidden ? "Enable clip" : "Disable clip"}
+      className={cn(
+        "tl-hide-chip absolute z-4 grid size-[18px] place-items-center rounded-[5px] bg-black/55 text-white transition-opacity hover:bg-black/75",
+        hidden ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+        className
+      )}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={onToggle}
+    >
+      {hidden ? <EyeOff className="size-3" /> : <Eye className="size-3" />}
+    </button>
   );
 }
 
@@ -1506,7 +1542,8 @@ function AudioView({
     <div
       className={cn(
         "tl-audio-clip group absolute top-0.5 cursor-grab overflow-hidden rounded-[7px] bg-gradient-to-b from-emerald-500 to-emerald-600 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.1)]",
-        selected && SELECTED_SHADOW
+        selected && SELECTED_SHADOW,
+        clip.hidden && "opacity-40 grayscale"
       )}
       style={{ left: clip.start * pps, width: Math.max(10, w - CLIP_GAP), height: AUDIO_H - 4 }}
       onPointerDown={onBody}
@@ -1527,6 +1564,11 @@ function AudioView({
       <span className="pointer-events-none absolute top-[3px] left-2 text-[9.5px] whitespace-nowrap text-white/90 [text-shadow:0_1px_2px_rgba(0,0,0,0.35)]">
         {asset.name}
       </span>
+      <HideChip
+        hidden={!!clip.hidden}
+        className="top-[3px] right-1.5"
+        onToggle={() => useEditor.getState().updateAudio(clip.id, { hidden: !clip.hidden })}
+      />
       <span className={cn(trimHandle, "tl-trim-l left-0")} onPointerDown={onTrimLeft} />
       <span className={cn(trimHandle, "tl-trim-r right-0")} onPointerDown={onTrimRight} />
     </div>
@@ -1683,12 +1725,17 @@ function OverlayClipView({
       )}
       {(clip.speed ?? 1) !== 1 && (
         <span
-          className="tl-speed-chip absolute right-1.5 bottom-1 z-2 rounded-[5px] bg-black/70 px-1 py-px font-mono text-[9.5px] tabular-nums text-white"
+          className="tl-speed-chip absolute right-[30px] bottom-1 z-2 rounded-[5px] bg-black/70 px-1 py-px font-mono text-[9.5px] tabular-nums text-white"
           title={`${clip.speed}× speed`}
         >
           {+(clip.speed ?? 1).toFixed(2)}×
         </span>
       )}
+      <HideChip
+        hidden={!!clip.hidden}
+        className="bottom-1 right-2"
+        onToggle={() => useEditor.getState().updateOverlayClip(clip.id, { hidden: !clip.hidden })}
+      />
       <span className={cn(trimHandle, "tl-trim-l left-0")} onPointerDown={onTrimLeft} />
       <span className={cn(trimHandle, "tl-trim-r right-0")} onPointerDown={onTrimRight} />
     </div>

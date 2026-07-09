@@ -3,7 +3,21 @@
 import { useEffect, type RefObject } from "react";
 import { clipSpeed, getClipSpans, projectDuration, useEditor } from "@/cut/lib/store";
 import { isFullRect, projectFadeSeconds, rectOf, TRANSITION_ZOOM } from "@/cut/lib/types";
-import type { ClipSpan, FrameRect, MediaAsset, OverlayClip, VideoClip } from "@/cut/lib/types";
+import type { AudioClip, ClipSpan, FrameRect, MediaAsset, OverlayClip, VideoClip } from "@/cut/lib/types";
+
+/** The gain everything else drops to at time `t` while a ducking voiceover
+ * clip is audible: the lowest `duck` among the clips live then, 1 when none
+ * (mirrors the export's timeline-windowed volume filters). */
+function duckGainAt(audioClips: AudioClip[], t: number): number {
+  let g = 1;
+  for (const a of audioClips) {
+    if (a.hidden || a.duck === undefined || a.duck >= 1) continue;
+    const speed = a.speed && a.speed > 0 ? a.speed : 1;
+    const len = Math.max(0.1, (a.out - a.in) / speed);
+    if (t >= a.start && t < a.start + len) g = Math.min(g, Math.max(0, a.duck));
+  }
+  return g;
+}
 
 // The canvas backing store is the full frame resolution (1080×1920 or
 // 1920×1080, set by Preview from the project aspect) so the preview stays
@@ -266,7 +280,10 @@ class Engine {
         }
       }
     }
-    masterEl.volume = Math.max(0, Math.min(1, gain));
+    // A live voiceover ducks the base clip's sound under it. The clip's own
+    // volume rides on top (the element clamps at 1; export honors up to 1.5).
+    const duck = duckGainAt(useEditor.getState().audioClips, t);
+    masterEl.volume = Math.max(0, Math.min(1, gain * duck * (masterSpan.clip.volume ?? 1)));
     this.pauseExcept(keep);
     // No clear here — the tick clears once, then draws the below tracks, so the
     // base composites over them (a regioned base leaves them showing).
@@ -407,7 +424,10 @@ class Engine {
         let gain = 1;
         if (fi > 0 && rel < fi) gain *= rel / fi;
         if (fo > 0 && rel > len - fo) gain *= Math.max(0, (len - rel) / fo);
-        el.volume = Math.max(0, Math.min(1, a.volume * gain * fadeGain));
+        // A live voiceover ducks the other soundtrack clips (music) too;
+        // ducking clips never duck each other.
+        const dg = a.duck !== undefined && a.duck < 1 ? 1 : duckGainAt(s.audioClips, t);
+        el.volume = Math.max(0, Math.min(1, a.volume * gain * dg * fadeGain));
         if (el.playbackRate !== speed) el.playbackRate = speed;
         const expected = a.in + rel * speed;
         if (Math.abs(el.currentTime - expected) > 0.25) el.currentTime = expected;

@@ -1,10 +1,15 @@
 "use client";
 
 import { apiFetch } from "./api";
+import { useGenerate } from "./generate";
 import { enrichAsset, ensurePeaks } from "./media";
 import { getClipSpans, TIMELINE_H_MAX, TIMELINE_H_MIN, totalDuration, useEditor } from "./store";
 import { buildAiContext } from "./aiContext";
-import { FRAME, mediaUrl, TRANSITION_STYLE_IDS, type FontId, type MediaAsset, type TransitionStyle } from "./types";
+import { resolveVoice, synthesizeSpeech, SPEECH_VOICES } from "./tts";
+import { DUCK_DEFAULT, generateSubtitlesReadout } from "./voiceover";
+import { FRAME, mediaUrl, TRANSITION_STYLE_IDS, type AudioClip, type FontId, type MediaAsset, type TransitionStyle } from "./types";
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -146,19 +151,22 @@ export async function runAiTool(
       const a = requireItem(s.audioClips, input.id, "soundtrack clip");
       const aSpeed = a.speed && a.speed > 0 ? a.speed : 1;
       const len = (a.out - a.in) / aSpeed;
-      const patch: Record<string, number> = {};
+      const patch: Partial<AudioClip> = {};
       if (isNum(input.volume)) patch.volume = clamp(input.volume, 0, 1.5);
       if (isNum(input.fadeIn)) patch.fadeIn = clamp(input.fadeIn, 0, len / 2);
       if (isNum(input.fadeOut)) patch.fadeOut = clamp(input.fadeOut, 0, len / 2);
       if (isNum(input.start)) patch.start = Math.max(0, input.start);
       if (isNum(input.in)) patch.in = Math.max(0, input.in);
       if (isNum(input.out)) patch.out = input.out;
+      // duck >= 1 clears ducking (undefined); below 1 sets the gain.
+      if (isNum(input.duck)) patch.duck = input.duck >= 1 ? undefined : clamp(input.duck, 0, 1);
       if (isNum(patch.in ?? NaN) || isNum(patch.out ?? NaN)) {
         const nIn = patch.in ?? a.in;
         const nOut = patch.out ?? a.out;
         if (nOut - nIn < 0.1) throw new ToolError("Audio clip must stay at least 0.1s long.");
       }
-      if (Object.keys(patch).length === 0) throw new ToolError("Nothing to change.");
+      if (!("duck" in patch) && Object.keys(patch).length === 0)
+        throw new ToolError("Nothing to change.");
       s.updateAudio(a.id, patch);
       return { id: a.id, ...patch };
     }
@@ -220,6 +228,69 @@ export async function runAiTool(
       };
     }
 
+    case "generate_image": {
+      const projectId = s.projectId;
+      if (!projectId) throw new ToolError("No project open.");
+      const prompt = String(input.prompt ?? "").trim();
+      if (!prompt) throw new ToolError("A prompt is required.");
+
+      // Hosted image generation is synchronous and quick, so wait it out and
+      // place the still — it lands in Media (and the panel job list) either way.
+      const job = await useGenerate.getState().generateImage(projectId, prompt);
+      if (job.status !== "done" || !job.assetId) {
+        throw new ToolError(job.error ?? "Image generation failed.");
+      }
+      const cur = useEditor.getState();
+      const asset = cur.assets.find((a) => a.id === job.assetId);
+      if (!asset) throw new ToolError("The generated image did not land in the project.");
+      const placed = maybeAddGeneratedClip(asset.id, input);
+      return {
+        assetId: asset.id,
+        name: asset.name,
+        kind: "image",
+        duration: Math.round(asset.duration * 100) / 100,
+        addedToTimeline: placed.added,
+        clipId: placed.clipId,
+        index: placed.index,
+      };
+    }
+
+    case "generate_video": {
+      const projectId = s.projectId;
+      if (!projectId) throw new ToolError("No project open.");
+      const prompt = String(input.prompt ?? "").trim();
+      if (!prompt) throw new ToolError("A prompt is required.");
+      const gen = useGenerate.getState();
+      // The render is fire-and-forget below, so a signed-out user must be
+      // caught here — an unprobed session (null) resolves before we claim
+      // success. Deeper errors surface in the panel's job list.
+      const signedIn = gen.signedIn ?? (await gen.probeNow());
+      if (!signedIn) throw new ToolError("Sign in to Donkey to generate video.");
+
+      // Veo renders can outrun the assistant tool bridge's 2-minute cap, so
+      // don't block: start the job and place the clip when it lands.
+      const addToTimeline = input.add_to_timeline !== false;
+      const promptedIndex = isNum(input.index) ? Math.round(input.index) : undefined;
+      void gen.generateVideo(projectId, prompt, {
+        tier: input.tier === "high" ? "high" : "fast",
+        durationSeconds: isNum(input.duration_seconds)
+          ? clamp(Math.round(input.duration_seconds), 4, 8)
+          : undefined,
+        onDone: addToTimeline
+          ? (asset) => maybeAddGeneratedClip(asset.id, { index: promptedIndex })
+          : undefined,
+      });
+      return {
+        kind: "video",
+        started: true,
+        addToTimeline,
+        note:
+          "Rendering with Veo — it lands in Media" +
+          (addToTimeline ? " and on the timeline" : "") +
+          " in a minute or two. Track it in the Video panel.",
+      };
+    }
+
     case "subtitles_generate": {
       if (typeof input.locale === "string" && input.locale) {
         s.setSubtitlesView({ locale: input.locale });
@@ -258,6 +329,62 @@ export async function runAiTool(
           cur.subtitleStatus === "empty"
             ? "No speech found — no captions were added to the video."
             : undefined,
+      };
+    }
+
+    case "subtitles_from_visuals": {
+      if (typeof input.locale === "string" && input.locale)
+        s.setSubtitlesView({ locale: input.locale });
+      await s.generateVisualSubtitles();
+      const cur = useEditor.getState();
+      if (cur.subtitleStatus === "error")
+        throw new ToolError(cur.subtitleError ?? "Visual captioning failed.");
+      if (cur.subtitles.cues.length > 0 && cur.timelineH < 276) cur.setTimelineH(276);
+      return { status: cur.subtitleStatus, cues: cur.subtitles.cues.length };
+    }
+
+    case "list_voices": {
+      // Gemini's prebuilt voice catalog is fixed and ships hardcoded.
+      return {
+        voices: SPEECH_VOICES.map((v) => ({ id: v.id, style: v.style })),
+        total: SPEECH_VOICES.length,
+      };
+    }
+
+    case "voiceover_generate": {
+      if (typeof input.script !== "string" || !input.script.trim())
+        throw new ToolError("script is required.");
+      const start = isNum(input.start) ? Math.max(0, input.start) : s.currentTime;
+      const lead = input.script.trim().split(/\s+/).slice(0, 4).join(" ");
+      return synthesizeAndPlace(
+        [{ text: input.script, at: 0 }],
+        `AI voice — ${lead}`,
+        start,
+        input
+      );
+    }
+
+    case "read_subtitles_aloud": {
+      if (!s.subtitles.cues.some((c) => c.text.trim()))
+        throw new ToolError("No subtitles to read — generate subtitles first.");
+      const voice = resolveVoice(typeof input.voice === "string" ? input.voice : undefined);
+      // The shared readout also re-times the cues to the generated voice's
+      // pace, keeping the word highlighter in step.
+      const out = await generateSubtitlesReadout(voice, {
+        direction:
+          typeof input.direction === "string" && input.direction.trim()
+            ? input.direction.trim()
+            : undefined,
+        duck: isNum(input.duck) ? clamp(input.duck, 0, 1) : undefined,
+      });
+      const sel = useEditor.getState().selection;
+      return {
+        audioClipId: sel?.kind === "audio" ? sel.id : null,
+        voice,
+        start: round2(out.start),
+        duration: round2(out.asset.duration),
+        duck: out.duck,
+        lines: out.lines,
       };
     }
 
@@ -397,10 +524,69 @@ export async function runAiTool(
   }
 }
 
+/** Synthesize speech segments with hosted Gemini voices (the user's Donkey
+ * sign-in and credits), register the media, and drop one soundtrack clip
+ * (voiceovers duck other audio by default). Shared by voiceover_generate and
+ * read_subtitles_aloud. */
+async function synthesizeAndPlace(
+  segments: { text: string; at: number }[],
+  name: string,
+  start: number,
+  input: Record<string, unknown>
+) {
+  const projectId = useEditor.getState().projectId;
+  if (!projectId) throw new ToolError("No project open.");
+  const voice = resolveVoice(typeof input.voice === "string" ? input.voice : undefined);
+  const direction =
+    typeof input.direction === "string" && input.direction.trim()
+      ? input.direction.trim()
+      : undefined;
+  const duck = isNum(input.duck) ? clamp(input.duck, 0, 1) : DUCK_DEFAULT;
+  const { asset, offset } = await synthesizeSpeech(projectId, segments, {
+    voice,
+    direction,
+    name,
+  });
+  const cur = useEditor.getState();
+  cur.addAsset(asset);
+  // A single script lands at `start`; a multi-line readout is pre-offset to its
+  // first cue, so it lands at that offset.
+  const at = segments.length === 1 ? start : offset;
+  cur.addAudioFromAsset(asset.id, at, { duck: duck < 1 ? duck : undefined });
+  void enrichAsset(asset);
+  const sel = useEditor.getState().selection;
+  return {
+    audioClipId: sel?.kind === "audio" ? sel.id : null,
+    voice,
+    start: round2(at),
+    duration: round2(asset.duration),
+    duck: duck < 1 ? duck : null,
+  };
+}
+
 function requireItem<T extends { id: string }>(pool: T[], id: unknown, label: string): T {
   const item = pool.find((x) => x.id === String(id ?? ""));
   if (!item) throw new ToolError(`No ${label} with id ${String(id)}. Call get_state for current ids.`);
   return item;
+}
+
+/** Append a generated asset to the video track (default) at an optional index.
+ * Shared by generate_image (inline) and generate_video (on the render's
+ * completion). Respects add_to_timeline:false. */
+function maybeAddGeneratedClip(
+  assetId: string,
+  input: { add_to_timeline?: unknown; index?: unknown }
+): { added: boolean; clipId: string | null; index: number | null } {
+  if (input.add_to_timeline === false) return { added: false, clipId: null, index: null };
+  const s = useEditor.getState();
+  if (!s.assets.some((a) => a.id === assetId)) return { added: false, clipId: null, index: null };
+  s.addClipFromAsset(assetId); // lands at the end, selected
+  const sel = useEditor.getState().selection;
+  const clipId = sel?.kind === "clip" ? sel.id : null;
+  const count = useEditor.getState().clips.length;
+  const index = isNum(input.index) ? clamp(Math.round(input.index), 0, count - 1) : count - 1;
+  if (clipId && index !== count - 1) s.moveClip(clipId, index);
+  return { added: true, clipId, index };
 }
 
 function titlePatch(input: Record<string, unknown>) {

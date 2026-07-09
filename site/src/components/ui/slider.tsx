@@ -10,11 +10,18 @@ function Slider({
   max = 100,
   ...props
 }: SliderPrimitive.Root.Props) {
+  // One thumb per actual value. A scalar renders exactly one thumb — a phantom
+  // second thumb has no backing value, so Base UI ignores any rail click that
+  // lands closest to it (the click resolves to a thumb index out of range).
   const _values = Array.isArray(value)
     ? value
-    : Array.isArray(defaultValue)
-      ? defaultValue
-      : [min, max]
+    : value !== undefined
+      ? [value]
+      : Array.isArray(defaultValue)
+        ? defaultValue
+        : defaultValue !== undefined
+          ? [defaultValue]
+          : [min]
 
   return (
     <SliderPrimitive.Root
@@ -27,7 +34,7 @@ function Slider({
       thumbAlignment="edge"
       {...props}
     >
-      <SliderPrimitive.Control className="relative flex w-full touch-none items-center select-none data-disabled:opacity-50 data-vertical:h-full data-vertical:min-h-40 data-vertical:w-auto data-vertical:flex-col">
+      <SliderPrimitive.Control className="relative flex w-full cursor-pointer touch-none items-center select-none data-horizontal:py-2 data-disabled:opacity-50 data-vertical:h-full data-vertical:min-h-40 data-vertical:w-auto data-vertical:flex-col data-vertical:px-2">
         <SliderPrimitive.Track
           data-slot="slider-track"
           className="relative grow overflow-hidden rounded-full bg-muted select-none data-horizontal:h-1 data-horizontal:w-full data-vertical:h-full data-vertical:w-1"

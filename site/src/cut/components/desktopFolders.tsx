@@ -206,6 +206,7 @@ export function FolderShelf<F extends DeskFolder>({
   onRename,
   onDelete,
   onDropIds,
+  onDropFiles,
 }: {
   folders: F[];
   statOf: (id: string) => { count: number; size?: number };
@@ -215,7 +216,14 @@ export function FolderShelf<F extends DeskFolder>({
   onRename: (id: string, name: string) => void | Promise<void>;
   onDelete: (id: string) => void | Promise<void>;
   onDropIds: (ids: string[], folderId: string) => void;
+  /** Desktop files dropped onto a folder tile — dropped straight into it. */
+  onDropFiles?: (files: FileList, folderId: string) => void;
 }) {
+  // A folder tile accepts both an internal selection (its MIME) and, when the
+  // host wires it up, OS files dragged from the desktop.
+  const dragTypes = (e: React.DragEvent) => Array.from(e.dataTransfer.types);
+  const accepts = (e: React.DragEvent) =>
+    dragTypes(e).includes(mime) || (!!onDropFiles && dragTypes(e).includes("Files"));
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -253,15 +261,23 @@ export function FolderShelf<F extends DeskFolder>({
               setEditingId(f.id);
             }}
             onDragOver={(e) => {
-              if (!Array.from(e.dataTransfer.types).includes(mime)) return;
+              if (!accepts(e)) return;
               e.preventDefault();
-              e.dataTransfer.dropEffect = "move";
+              e.dataTransfer.dropEffect = dragTypes(e).includes(mime) ? "move" : "copy";
               setOver(f.id);
             }}
             onDragLeave={() => setOver((o) => (o === f.id ? null : o))}
             onDrop={(e) => {
+              if (!accepts(e)) return;
               e.preventDefault();
               setOver(null);
+              // Files land in this folder; stop the drop bubbling to the page's
+              // catch-all so it isn't also imported at the current level.
+              if (onDropFiles && dragTypes(e).includes("Files") && e.dataTransfer.files.length) {
+                e.stopPropagation();
+                onDropFiles(e.dataTransfer.files, f.id);
+                return;
+              }
               onDropIds(readDragIds(e, mime), f.id);
             }}
           >

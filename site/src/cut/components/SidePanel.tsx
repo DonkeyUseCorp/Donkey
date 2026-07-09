@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Captions, Check, Circle, ClipboardList, Copy, Film, FolderOpen, FolderPlus, Layers, Loader2, Mic, Music, Plus, Trash2, Upload, Video } from "lucide-react";
+import { Fragment, useEffect, useRef, useState } from "react";
+import { Captions, Check, Clapperboard, ClipboardList, Copy, Film, FolderOpen, FolderPlus, Image as ImageIcon, Layers, Loader2, Music, Plus, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -13,12 +13,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { apiFetch, apiUrl } from "@/cut/lib/api";
 import { clearAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
 import { deleteExport, revealExport } from "@/cut/lib/exportClient";
@@ -41,23 +35,27 @@ import type { LibraryTemplate } from "@/cut/lib/types";
 import { CAPTION_LIMIT, normalizeTags } from "@/cut/lib/publish";
 import { useEditor } from "@/cut/lib/store";
 import { formatTime } from "@/cut/lib/time";
+import { useLocalPref } from "@/cut/lib/uiState";
 import type { MediaAsset } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
+import { AudioPanel } from "./AudioPanel";
 import { buildDragGhost, FolderCrumb, FolderShelf } from "./desktopFolders";
+import { GenerateImagePanel, GenerateVideoPanel } from "./GeneratePanel";
 import { LibraryCard } from "./LibraryView";
 
 // Drag a library clip onto a folder tile to file it (side panel, single card).
 const LIBRARY_MOVE_MIME = "application/x-cut-library-move";
 import { PlatformPreviewDialog, type ExportItem } from "./PlatformPreview";
-import { RecordDialog, type RecordMode } from "./RecordDialog";
 import { SubtitlesPanel } from "./SubtitlesPanel";
 
-type Tab = "media" | "library" | "record" | "subtitles" | "publish";
+type Tab = "media" | "video" | "image" | "library" | "audio" | "subtitles" | "publish";
 
 const TABS: { id: Tab; label: string; icon: typeof Film }[] = [
-  { id: "media", label: "Media", icon: Film },
+  { id: "media", label: "Media", icon: Clapperboard },
   { id: "library", label: "Library", icon: FolderOpen },
-  { id: "record", label: "Record", icon: Circle },
+  { id: "video", label: "Video", icon: Film },
+  { id: "image", label: "Image", icon: ImageIcon },
+  { id: "audio", label: "Audio", icon: Music },
   { id: "subtitles", label: "Subtitles", icon: Captions },
   { id: "publish", label: "Details", icon: ClipboardList },
 ];
@@ -71,8 +69,9 @@ export function SidePanel({
   onImport: (files: FileList | File[]) => void;
   importing: boolean;
 }) {
-  const [tab, setTab] = useState<Tab>("media");
-  const [recordMode, setRecordMode] = useState<RecordMode | null>(null);
+  const [tab, setTab] = useLocalPref<Tab>("cut-side-tab", "media", (v) =>
+    TABS.some((t) => t.id === v)
+  );
 
   return (
     <div className="flex min-h-0 border-r border-border bg-card">
@@ -97,37 +96,20 @@ export function SidePanel({
             </>
           );
 
-          if (id === "record") {
-            return (
-              <DropdownMenu key={id}>
-                <DropdownMenuTrigger render={<button className={tileClass} />}>
-                  {inner}
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  align="start"
-                  side="right"
-                  style={{ width: "12rem" }}
-                >
-                  <DropdownMenuItem onClick={() => setRecordMode("camera")}>
-                    <Video /> Record camera
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setRecordMode("audio")}>
-                    <Mic /> Record audio
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            );
-          }
-
           return (
-            <button
-              key={id}
-              className={tileClass}
-              aria-pressed={tab === id}
-              onClick={() => setTab(id)}
-            >
-              {inner}
-            </button>
+            <Fragment key={id}>
+              {/* Soft breaks between the file tabs, the AI-generate tabs, and the finishing tabs. */}
+              {(id === "video" || id === "subtitles") && (
+                <div aria-hidden className="my-1 h-px w-8 bg-border" />
+              )}
+              <button
+                className={tileClass}
+                aria-pressed={tab === id}
+                onClick={() => setTab(id)}
+              >
+                {inner}
+              </button>
+            </Fragment>
           );
         })}
       </div>
@@ -136,17 +118,13 @@ export function SidePanel({
         {tab === "media" && (
           <MediaPanel projectId={projectId} onImport={onImport} importing={importing} />
         )}
+        {tab === "video" && <GenerateVideoPanel projectId={projectId} />}
+        {tab === "image" && <GenerateImagePanel projectId={projectId} />}
         {tab === "library" && <LibraryPanel projectId={projectId} />}
+        {tab === "audio" && <AudioPanel projectId={projectId} importing={importing} />}
         {tab === "subtitles" && <SubtitlesPanel />}
         {tab === "publish" && <PublishPanel />}
       </div>
-      {recordMode && (
-        <RecordDialog
-          mode={recordMode}
-          onClose={() => setRecordMode(null)}
-          onUse={(file) => onImport([file])}
-        />
-      )}
     </div>
   );
 }
@@ -492,7 +470,11 @@ function LibraryPanel({ projectId }: { projectId: string }) {
   const [assets, setAssets] = useState<LibraryAsset[] | null>(null);
   const [folders, setFolders] = useState<LibraryFolder[]>([]);
   const [templates, setTemplates] = useState<LibraryTemplate[]>([]);
-  const [openFolder, setOpenFolder] = useState<string | null>(null);
+  const [openFolder, setOpenFolder] = useLocalPref<string | null>(
+    "cut-library-folder",
+    null,
+    (v) => v === null || typeof v === "string"
+  );
   const [deleting, setDeleting] = useState<LibraryAsset | null>(null);
 
   const reload = () =>
@@ -503,6 +485,12 @@ function LibraryPanel({ projectId }: { projectId: string }) {
         setTemplates(d.templates);
       })
       .catch(() => setAssets([]));
+
+  // A remembered folder can vanish between sessions; drop back to the root.
+  useEffect(() => {
+    if (assets !== null && openFolder !== null && !folders.some((f) => f.id === openFolder))
+      setOpenFolder(null);
+  }, [assets, folders, openFolder, setOpenFolder]);
 
   const removeTemplate = async (id: string) => {
     setTemplates((prev) => prev.filter((t) => t.id !== id));

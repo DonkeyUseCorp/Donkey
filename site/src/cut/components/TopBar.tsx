@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Check, ChevronDown, ChevronLeft, Loader2, Monitor, Smartphone, Sparkles, Upload } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, Loader2, Mic, Monitor, Smartphone, Sparkles, Upload, Video } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -10,17 +10,27 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { backTarget, useCutBase } from "@/cut/lib/nav";
 import { useEditor } from "@/cut/lib/store";
 import { ASPECT_LABEL, type Aspect } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
+import { RecordDialog, type RecordMode } from "./RecordDialog";
 
-export function TopBar() {
+export function TopBar({
+  onImport,
+  from,
+}: {
+  onImport: (files: File[]) => void;
+  from?: string | null;
+}) {
+  const back = backTarget(useCutBase(), from);
   const hasClips = useEditor((s) => s.clips.length > 0);
   const aspect = useEditor((s) => s.aspect);
   const projectName = useEditor((s) => s.projectName);
   const saveState = useEditor((s) => s.saveState);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const [recordMode, setRecordMode] = useState<RecordMode | null>(null);
 
   const commitName = () => {
     setEditing(false);
@@ -30,7 +40,7 @@ export function TopBar() {
 
   return (
     <header className="relative flex items-center justify-between border-b border-border bg-card pr-3 pl-2">
-      <div className="absolute left-1/2 -translate-x-1/2">
+      <div className="absolute left-1/2 flex -translate-x-1/2 items-center gap-2">
         <DropdownMenu>
           <DropdownMenuTrigger className="aspect-switch flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground shadow-xs transition-colors hover:text-foreground">
             {aspect === "9:16" ? <Smartphone className="size-3.5" /> : <Monitor className="size-3.5" />}
@@ -52,14 +62,36 @@ export function TopBar() {
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
+        <DropdownMenu>
+          <DropdownMenuTrigger className="record-switch flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground shadow-xs transition-colors hover:text-foreground">
+            <span className="size-2 rounded-full bg-red-500" aria-hidden />
+            Record
+            <ChevronDown className="size-3" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" style={{ width: "12rem" }}>
+            <DropdownMenuItem onClick={() => setRecordMode("camera")}>
+              <Video /> Record camera
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setRecordMode("audio")}>
+              <Mic /> Record audio
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
+      {recordMode && (
+        <RecordDialog
+          mode={recordMode}
+          onClose={() => setRecordMode(null)}
+          onUse={(file) => onImport([file])}
+        />
+      )}
       <div className="flex min-w-0 items-center gap-1">
         <Button
           variant="ghost"
           size="icon-sm"
-          aria-label="Back to projects"
+          aria-label={`Back to ${back.tab}`}
           nativeButton={false}
-          render={<Link href="/" />}
+          render={<Link href={back.href} />}
         >
           <ChevronLeft />
         </Button>

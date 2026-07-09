@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Bold, Smile } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,7 +18,8 @@ import {
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { useEditor } from "@/cut/lib/store";
+import { getClipSpans, useEditor } from "@/cut/lib/store";
+import { GenerateSubtitlesAudio } from "@/cut/components/VoicePicker";
 import { PLATE_COLOR, PLATE_OPACITY, PLATE_RADIUS } from "@/cut/lib/textRender";
 import { writeTextStyle } from "@/cut/lib/textStyle";
 import { formatTime } from "@/cut/lib/time";
@@ -254,6 +255,50 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
   const fadeOut = useEditor((s) => s.fadeOut);
   const [speedDraft, setSpeedDraft] = useState<number | null>(null);
   const [xfadeDraft, setXfadeDraft] = useState<number | null>(null);
+  const [volumeDraft, setVolumeDraft] = useState<number | null>(null);
+  const volume = volumeDraft ?? clip.volume ?? 1;
+  // Subtitle cues overlapping this clip's timeline span, for the per-clip
+  // readout. Selected as a joined string so the reference stays stable while
+  // the playhead ticks through the same store.
+  const clipCueIdsKey = useEditor((s) => {
+    const sp = getClipSpans(s.clips, s.assets).find((x) => x.clip.id === clip.id);
+    if (!sp) return "";
+    return s.subtitles.cues
+      .filter((c) => c.text.trim() && c.end > sp.start && c.start < sp.start + sp.len)
+      .map((c) => c.id)
+      .join("\n");
+  });
+  const clipCueIds = useMemo(
+    () => (clipCueIdsKey ? clipCueIdsKey.split("\n") : []),
+    [clipCueIdsKey]
+  );
+  // Generated voiceover clips overlapping this clip's span — the "Generated
+  // audio" slider drives them all, so clip sound and voiceover balance from one
+  // panel. Same joined-string trick as the cue ids for reference stability.
+  const [genVolDraft, setGenVolDraft] = useState<number | null>(null);
+  const genCk = useSliderCheckpoint();
+  const genAudioKey = useEditor((s) => {
+    const sp = getClipSpans(s.clips, s.assets).find((x) => x.clip.id === clip.id);
+    if (!sp) return "";
+    const voiceAssets = new Set(
+      s.assets.filter((a) => a.origin === "voiceover").map((a) => a.id)
+    );
+    return s.audioClips
+      .filter((a) => {
+        const len = (a.out - a.in) / (a.speed && a.speed > 0 ? a.speed : 1);
+        return (
+          voiceAssets.has(a.assetId) && a.start < sp.start + sp.len && a.start + len > sp.start
+        );
+      })
+      .map((a) => a.id)
+      .join("\n");
+  });
+  const genAudioIds = useMemo(() => (genAudioKey ? genAudioKey.split("\n") : []), [genAudioKey]);
+  const genVolStore = useEditor((s) => {
+    const first = s.audioClips.find((a) => a.id === genAudioIds[0]);
+    return first ? first.volume : 1;
+  });
+  const genVol = genVolDraft ?? genVolStore;
   const speed = speedDraft ?? clip.speed ?? 1;
   const xfade = xfadeDraft ?? clip.transition ?? 0;
   const speedLen = (clip.out - clip.in) / (speed > 0 ? speed : 1);
@@ -358,12 +403,37 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
             </Row>
           </>
         )}
+
+        {/* Audio */}
+        <div className="my-1.5 h-px bg-border" />
+        <Row label="Clip volume">
+          <Slider
+            className="clip-volume data-horizontal:w-24"
+            min={0}
+            max={1.5}
+            step={0.05}
+            value={volume}
+            onValueChange={(v) => setVolumeDraft(Number(v))}
+            onValueCommitted={() => {
+              if (volumeDraft != null) {
+                updateClip(clip.id, { volume: volumeDraft === 1 ? undefined : volumeDraft });
+              }
+              setVolumeDraft(null);
+            }}
+          />
+          <Value className="w-9 text-right text-muted-foreground">
+            {Math.round(volume * 100)}%
+          </Value>
+        </Row>
         <Row label="Mute audio">
           <Switch
             checked={clip.muted}
             onCheckedChange={(v) => updateClip(clip.id, { muted: v })}
           />
         </Row>
+
+        {/* Picture */}
+        <div className="my-1.5 h-px bg-border" />
         <Row label="Hide from output">
           <Switch
             checked={!!clip.hidden}
@@ -403,6 +473,33 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
           rect={rectOf(clip)}
           onPick={(frame, fit) => updateClip(clip.id, { frame, fit })}
         />
+        <div className="mt-2 flex flex-col gap-1 border-t border-border pt-3">
+          <GenerateSubtitlesAudio cueIds={clipCueIds} label="Generate audio for clip" />
+          {genAudioIds.length > 0 && (
+            <Row label="Volume">
+              <Slider
+                className="clip-gen-volume data-horizontal:w-24"
+                min={0}
+                max={1.5}
+                step={0.05}
+                value={genVol}
+                onValueChange={(v) => {
+                  genCk.begin();
+                  setGenVolDraft(Number(v));
+                  const s = useEditor.getState();
+                  genAudioIds.forEach((id) => s.updateAudioTransient(id, { volume: Number(v) }));
+                }}
+                onValueCommitted={() => {
+                  genCk.end();
+                  setGenVolDraft(null);
+                }}
+              />
+              <Value className="w-9 text-right text-muted-foreground">
+                {Math.round(genVol * 100)}%
+              </Value>
+            </Row>
+          )}
+        </div>
       </div>
     </>
   );
@@ -472,6 +569,28 @@ function AudioPanel({ clip }: { clip: AudioClip }) {
             {(clip.fadeOut ?? 0).toFixed(1)}s
           </Value>
         </Row>
+        <Row label="Duck others">
+          <Slider
+            className="duck-slider data-horizontal:w-24"
+            min={0}
+            max={1}
+            step={0.05}
+            value={clip.duck ?? 1}
+            onValueChange={(v) => {
+              const n = Number(v);
+              setAudio({ duck: n < 0.999 ? n : undefined });
+            }}
+            onValueCommitted={ck.end}
+          />
+          <Value className="w-9 text-right text-muted-foreground">
+            {clip.duck === undefined ? "Off" : `${Math.round(clip.duck * 100)}%`}
+          </Value>
+        </Row>
+        {clip.duck !== undefined && (
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            While this clip plays, everything else drops to {Math.round(clip.duck * 100)}% volume.
+          </p>
+        )}
         <Row label="Hide from output">
           <Switch
             checked={!!clip.hidden}

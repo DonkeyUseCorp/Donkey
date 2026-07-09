@@ -1,0 +1,223 @@
+"use client";
+
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { Captions, ChevronDown, Loader2, Pause, Play } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { creditsUrl, signInUrl, useSignedIn } from "@/cut/lib/generate";
+import { useEditor } from "@/cut/lib/store";
+import { NoCreditsError, resolveVoice, speechSampleUrl, SPEECH_VOICES } from "@/cut/lib/tts";
+import { generateSubtitlesReadout } from "@/cut/lib/voiceover";
+
+const VOICE_KEY = "cut-tts-voice";
+
+// One shared speaker-voice preference for every surface that generates audio
+// (Audio tab, Subtitles tab, clip settings). Module-level so all mounted
+// pickers stay in sync; persisted so it survives reloads.
+let currentVoice: string | null = null;
+const listeners = new Set<() => void>();
+
+function readVoice(): string {
+  if (currentVoice === null) {
+    currentVoice = resolveVoice(
+      typeof window === "undefined" ? undefined : (localStorage.getItem(VOICE_KEY) ?? undefined)
+    );
+  }
+  return currentVoice;
+}
+
+function writeVoice(id: string) {
+  currentVoice = resolveVoice(id);
+  try {
+    localStorage.setItem(VOICE_KEY, currentVoice);
+  } catch {
+    // Preference only.
+  }
+  listeners.forEach((l) => l());
+}
+
+function subscribe(l: () => void) {
+  listeners.add(l);
+  return () => listeners.delete(l);
+}
+
+/** The shared speaker voice; every generation surface reads this. */
+export function useSpeakerVoice(): string {
+  return useSyncExternalStore(subscribe, readVoice, () => resolveVoice(undefined));
+}
+
+/**
+ * Speaker-voice row: a play button that samples the voice plus the voice
+ * select. Drop it into any surface that generates speech — they all share one
+ * persisted voice choice.
+ */
+export function VoicePicker({
+  onError,
+  title = "Speaker voice",
+}: {
+  onError?: (e: unknown) => void;
+  title?: string;
+}) {
+  const voice = useSpeakerVoice();
+  const signedOut = useSignedIn() === false;
+  const [sampling, setSampling] = useState<null | "loading" | "playing">(null);
+  const sampler = useRef<HTMLAudioElement | null>(null);
+  const sampleSeq = useRef(0);
+
+  useEffect(
+    () => () => {
+      sampler.current?.pause();
+    },
+    []
+  );
+
+  const sample = () => {
+    const el = (sampler.current ??= new Audio());
+    if (sampling) {
+      sampleSeq.current++;
+      el.pause();
+      setSampling(null);
+      return;
+    }
+    const seq = ++sampleSeq.current;
+    setSampling("loading");
+    speechSampleUrl(voice)
+      .then((url) => {
+        if (seq !== sampleSeq.current) return;
+        el.src = url;
+        el.onended = () => setSampling(null);
+        el.onerror = () => setSampling(null);
+        setSampling("playing");
+        return el.play();
+      })
+      .catch((e: unknown) => {
+        if (seq !== sampleSeq.current) return;
+        setSampling(null);
+        onError?.(e);
+      });
+  };
+
+  return (
+    <div className="voice-picker flex flex-col gap-1.5">
+      <span className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
+        {title}
+      </span>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          className="voice-sample grid size-8 shrink-0 place-items-center rounded-full bg-muted text-foreground transition-colors hover:bg-muted/70 disabled:opacity-40"
+          title="Hear this voice"
+          aria-label="Hear this voice"
+          disabled={signedOut}
+          onClick={sample}
+        >
+          {sampling === "loading" ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : sampling === "playing" ? (
+            <Pause className="size-3.5" />
+          ) : (
+            <Play className="size-3.5" />
+          )}
+        </button>
+        <div className="relative min-w-0 flex-1">
+          <select
+            className="voice-select w-full appearance-none truncate rounded-lg border border-input bg-transparent py-2 pr-8 pl-2.5 text-[12.5px] outline-none focus:border-ring"
+            value={voice}
+            onChange={(e) => writeVoice(e.target.value)}
+          >
+            {SPEECH_VOICES.map((v) => (
+              <option key={v.id} value={v.id}>
+                {v.id} · {v.style}
+              </option>
+            ))}
+          </select>
+          <ChevronDown className="pointer-events-none absolute top-1/2 right-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Self-contained "voice the subtitles" block: the voice picker plus a generate
+ * button and its error line. `cueIds` scopes the readout (e.g. the cues inside
+ * one clip); absent = every cue.
+ */
+export function GenerateSubtitlesAudio({
+  cueIds,
+  label = "Generate audio for subtitles",
+}: {
+  cueIds?: string[];
+  label?: string;
+}) {
+  const voice = useSpeakerVoice();
+  const signedOut = useSignedIn() === false;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<{ text: string; credits?: boolean } | null>(null);
+  const wanted = cueIds && new Set(cueIds);
+  const cueCount = useEditor(
+    (s) => s.subtitles.cues.filter((c) => c.text.trim() && (!wanted || wanted.has(c.id))).length
+  );
+
+  const generate = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await generateSubtitlesReadout(voice, { cueIds });
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? { text: e.message, credits: e instanceof NoCreditsError }
+          : { text: "Voice generation failed." }
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="subtitles-audio flex flex-col gap-2.5">
+      <VoicePicker
+        title="Generated audio"
+        onError={(e) => setError({ text: e instanceof Error ? e.message : "Could not play the sample.", credits: e instanceof NoCreditsError })}
+      />
+      <Button
+        variant="outline"
+        className="voice-readout w-full"
+        disabled={cueCount === 0 || busy || signedOut}
+        title={cueCount === 0 ? "Generate subtitles first" : "Voice the subtitle text and drop it on the soundtrack"}
+        onClick={() => void generate()}
+      >
+        {busy ? <Loader2 className="animate-spin" /> : <Captions data-icon="inline-start" />}
+        {label}
+      </Button>
+      {signedOut ? (
+        <p className="voice-signin text-[11px] leading-relaxed text-muted-foreground">
+          Voiceovers run on your Donkey account.{" "}
+          <a className="font-medium text-blue-600 hover:underline dark:text-blue-400" href={signInUrl()}>
+            Sign in
+          </a>{" "}
+          to continue.
+        </p>
+      ) : (
+        error && (
+          <p className="voice-error text-[11px] leading-relaxed text-red-600">
+            {error.text}
+            {error.credits && (
+              <>
+                {" "}
+                <a
+                  className="font-medium underline hover:no-underline"
+                  href={creditsUrl()}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Add credits
+                </a>
+              </>
+            )}
+          </p>
+        )
+      )}
+    </div>
+  );
+}

@@ -14,17 +14,19 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { apiFetch } from "@/cut/lib/api";
+import { homeHref, projectHref, tabForPath, useCutBase, type CutTab } from "@/cut/lib/nav";
 import type { ProjectSummary } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
 
-const NAV = [
-  { href: "/", label: "Projects", icon: Clapperboard },
-  { href: "/library", label: "Library", icon: FolderOpen },
+const NAV: { tab: CutTab; label: string; icon: typeof Clapperboard }[] = [
+  { tab: "projects", label: "Projects", icon: Clapperboard },
+  { tab: "library", label: "Library", icon: FolderOpen },
 ];
 
 export function AppSidebar() {
   const pathname = usePathname();
   const router = useRouter();
+  const base = useCutBase();
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -38,7 +40,7 @@ export function AppSidebar() {
         body: JSON.stringify({ name: name.trim() || "Untitled" }),
       });
       const project = (await res.json()) as ProjectSummary;
-      router.push(`/p/${project.id}`);
+      router.push(projectHref(base, project.id, tabForPath(pathname)));
     } finally {
       setBusy(false);
     }
@@ -70,11 +72,12 @@ export function AppSidebar() {
       </Button>
 
       <nav className="flex flex-col gap-0.5">
-        {NAV.map(({ href, label, icon: Icon }) => {
+        {NAV.map(({ tab, label, icon: Icon }) => {
+          const href = homeHref(base, tab);
           const active = pathname === href;
           return (
             <Link
-              key={href}
+              key={tab}
               href={href}
               className={cn(
                 "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
@@ -87,10 +90,6 @@ export function AppSidebar() {
           );
         })}
       </nav>
-      <div className="mt-auto px-2.5 text-[11px] leading-relaxed text-muted-foreground/70">
-        Everything stays on this Mac.
-      </div>
-
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>

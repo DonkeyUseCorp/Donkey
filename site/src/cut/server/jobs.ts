@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { assertLocalRuntime } from "./local-only";
@@ -28,6 +28,8 @@ export interface ExportSpec {
     in: number;
     out: number;
     muted: boolean;
+    /** Gain on the clip's own audio, 0..1.5; absent = 1 (unchanged). */
+    volume?: number;
     /** "fit" letterboxes (default); "fill" covers the region and crops. */
     fit?: "fit" | "fill";
     panX?: number; // crop-window pan -1..1 (fill mode, full frame)
@@ -70,8 +72,15 @@ export interface ExportSpec {
     fadeOut?: number;
     /** Playback rate (detached-audio clips inherit their video clip's speed). */
     speed?: number;
+    /** Voiceover ducking: while this clip plays, every other sound drops to
+     * this gain (0..1). Ducking clips never duck each other. */
+    duck?: number;
   }[];
   overlays: { file: string; start: number; end: number }[];
+  /** Burned-in subtitle stills, non-overlapping and chronological. Kept apart
+   * from `overlays` (titles may overlap each other): these render as one
+   * concat-demuxer slideshow, so karaoke word windows don't multiply inputs. */
+  captions?: { file: string; start: number; end: number }[];
 }
 
 export interface Job {
@@ -122,10 +131,33 @@ export function cancelJob(id: string) {
   }
 }
 
-function stamp() {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+/** Export file named after the project, with a " 2", " 3"… suffix when the
+ * name is already taken by a file on disk or an export still in flight. */
+async function exportName(projectId: string, projectName: string) {
+  const base =
+    projectName.replace(/[/\\:*?"<>|]/g, "").trim().slice(0, 60) || "export";
+  const taken = new Set(
+    await readdir(exportsDir(projectId)).catch(() => [] as string[])
+  );
+  for (const j of jobs.values()) {
+    if (j.projectId === projectId && j.outName) taken.add(j.outName);
+  }
+  for (let n = 1; ; n++) {
+    const candidate = n === 1 ? `${base}.mp4` : `${base} ${n}.mp4`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
+// Names resolve one job at a time: exportName only sees a competing job once
+// its outName is assigned, so two jobs racing through their first awaits could
+// otherwise both claim "<Project>.mp4" and overwrite each other's render.
+let namingQueue: Promise<unknown> = Promise.resolve();
+function claimExportName(job: Job, projectName: string): Promise<void> {
+  const claim = namingQueue.then(async () => {
+    job.outName = await exportName(job.projectId, projectName);
+  });
+  namingQueue = claim.catch(() => {});
+  return claim;
 }
 
 export async function createJob(form: FormData): Promise<Job> {
@@ -150,13 +182,6 @@ export async function createJob(form: FormData): Promise<Job> {
     retire(job);
     return job;
   }
-  // Include the unique job id so two exports in the same second can't collide
-  // on the same output path (which would clobber the first render).
-  const outName = preview ? "preview.mp4" : `export-${stamp()}-${id}.mp4`;
-  const outPath = path.join(
-    preview ? projectDir(spec.projectId) : exportsDir(spec.projectId),
-    outName
-  );
   const job: Job = {
     id,
     projectId: spec.projectId,
@@ -164,16 +189,23 @@ export async function createJob(form: FormData): Promise<Job> {
     status: "running",
     progress: 0,
     tmpDir: "",
-    outPath,
-    outName,
+    outPath: "",
+    outName: "",
     log: [],
   };
   jobs.set(id, job); // reserve the concurrency slot before the first await
 
   try {
-    await mkdir(path.dirname(outPath), { recursive: true });
+    const doc = await readProject(spec.projectId);
+    if (!doc) throw new Error("Project not found.");
+    if (preview) job.outName = "preview.mp4";
+    else await claimExportName(job, doc.name);
+    job.outPath = path.join(
+      preview ? projectDir(spec.projectId) : exportsDir(spec.projectId),
+      job.outName
+    );
+    await mkdir(path.dirname(job.outPath), { recursive: true });
     job.tmpDir = await mkdtemp(path.join(os.tmpdir(), "veditor-"));
-    if (!(await readProject(spec.projectId))) throw new Error("Project not found.");
     // Overlay PNGs are rendered in the browser and uploaded with the spec.
     for (const [key, value] of form.entries()) {
       if (value instanceof File && key !== "spec") {
@@ -331,11 +363,14 @@ async function runExport(job: Job, spec: ExportSpec) {
   const videoPresence = new Map<string, boolean>();
   const inputs: string[] = [];
   const inputIndex = new Map<string, number>();
+  // Counted explicitly: the concat input below carries extra flags, so the
+  // args array is not a clean ["-i", path] pair per input.
+  let nInputs = 0;
   // Resolve paths in order first so ffmpeg input indices stay deterministic,
   // then probe every file's streams concurrently.
   const paths = await Promise.all(mediaFiles.map((f) => resolveMedia(spec, f)));
   mediaFiles.forEach((f, i) => {
-    inputIndex.set(f, inputs.length / 2);
+    inputIndex.set(f, nInputs++);
     inputs.push("-i", paths[i]);
   });
   await Promise.all(
@@ -353,8 +388,38 @@ async function runExport(job: Job, spec: ExportSpec) {
     })
   );
   for (const o of spec.overlays) {
-    inputIndex.set(o.file, inputs.length / 2);
+    inputIndex.set(o.file, nInputs++);
     inputs.push("-i", path.join(job.tmpDir, path.basename(o.file)));
+  }
+
+  // One concat-demuxer input for all subtitle stills: cues never overlap, so
+  // they play as a slideshow with transparent filler ("sub_blank.png", uploaded
+  // with the stills) covering the gaps.
+  let captionsIdx: number | null = null;
+  const captions = (spec.captions ?? [])
+    .filter((c) => c.end > c.start)
+    .sort((a, b) => a.start - b.start);
+  if (captions.length > 0) {
+    const blank = path.join(job.tmpDir, "sub_blank.png");
+    const lines = ["ffconcat version 1.0"];
+    let cursor = 0;
+    for (const c of captions) {
+      const from = Math.max(c.start, cursor);
+      if (c.end - from < 1e-3) continue;
+      if (from - cursor > 1e-3) lines.push(`file '${blank}'`, `duration ${num(from - cursor)}`);
+      lines.push(
+        `file '${path.join(job.tmpDir, path.basename(c.file))}'`,
+        `duration ${num(c.end - from)}`
+      );
+      cursor = c.end;
+    }
+    if (spec.duration - cursor > 1e-3) {
+      lines.push(`file '${blank}'`, `duration ${num(spec.duration - cursor)}`);
+    }
+    const list = path.join(job.tmpDir, "captions.ffconcat");
+    await writeFile(list, lines.join("\n") + "\n");
+    captionsIdx = nInputs++;
+    inputs.push("-f", "concat", "-safe", "0", "-i", list);
   }
 
   const filters: string[] = [];
@@ -457,13 +522,14 @@ async function runExport(job: Job, spec: ExportSpec) {
     }
     if (!c.muted && !c.hidden && audioPresence.get(c.file)) {
       const tempo = speed !== 1 ? `${atempoChain(speed)},` : "";
+      const vol = (c.volume ?? 1) !== 1 ? `volume=${num(c.volume ?? 1)},` : "";
       // The picture's fade edges carry the sound with them; zoom edges don't.
       const afades =
         (hf > 0.01 ? `,afade=t=in:st=0:d=${num(hf)}` : "") +
         (tf > 0.01 ? `,afade=t=out:st=${num(Math.max(0, dur - tf))}:d=${num(tf)}` : "");
       filters.push(
         `[${idx}:a]atrim=${num(c.in)}:${num(c.out)},asetpts=PTS-STARTPTS,${tempo}` +
-          `aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,` +
+          `aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,${vol}` +
           `apad=whole_dur=${num(dur)},atrim=0:${num(dur)}${afades}[a${j}]`
       );
     } else {
@@ -569,15 +635,66 @@ async function runExport(job: Job, spec: ExportSpec) {
   }
   for (const oc of aboveVideos) vLabel = addOverlay(oc, vLabel);
 
-  // Burn in text overlays, each windowed to its timeline range.
+  // Burn in text overlays, each windowed to its timeline range. Half-open so
+  // back-to-back overlays sharing a boundary never composite on the same frame.
   spec.overlays.forEach((o, k) => {
     const idx = inputIndex.get(o.file)!;
     const next = `vov${k}`;
     filters.push(
-      `[${vLabel}][${idx}:v]overlay=0:0:enable='between(t,${num(o.start)},${num(o.end)})'[${next}]`
+      `[${vLabel}][${idx}:v]overlay=0:0:enable='gte(t,${num(o.start)})*lt(t,${num(o.end)})'[${next}]`
     );
     vLabel = next;
   });
+
+  // Subtitle stills ride one concat-demuxer slideshow (transparent filler in
+  // the gaps), so a karaoke cut with hundreds of word windows still costs a
+  // single ffmpeg input instead of one per still.
+  if (captionsIdx !== null) {
+    filters.push(`[${captionsIdx}:v]fps=${fps},format=yuva420p,setsar=1[caps]`);
+    filters.push(`[${vLabel}][caps]overlay=0:0:eof_action=pass[vcaps]`);
+    vLabel = "vcaps";
+  }
+
+  // Voiceover ducking: while a ducking clip plays, every other sound drops to
+  // its gain. The windows are timeline seconds, so the volume automation must
+  // run on timeline-aligned streams — the joined clip audio, and each other
+  // sound *after* its adelay.
+  const duckWindows = spec.audio
+    .filter((a) => a.duck !== undefined && a.duck < 1)
+    .map((a) => {
+      const speed = a.speed && a.speed > 0 ? a.speed : 1;
+      const len = Math.max(0.1, (a.out - a.in) / speed);
+      return { from: a.start, to: a.start + len, gain: Math.max(0, a.duck!) };
+    });
+  // Flatten to non-overlapping segments at the lowest covering gain: chained
+  // volume filters multiply, so overlapping voiceovers would otherwise duck
+  // deeper than the preview (which takes the minimum).
+  const duckSegments = (() => {
+    const cuts = [...new Set(duckWindows.flatMap((w) => [w.from, w.to]))].sort((a, b) => a - b);
+    const segs: { from: number; to: number; gain: number }[] = [];
+    for (let i = 0; i + 1 < cuts.length; i++) {
+      const [from, to] = [cuts[i], cuts[i + 1]];
+      const covering = duckWindows.filter((w) => w.from < to && w.to > from);
+      if (covering.length === 0) continue;
+      const gain = Math.min(...covering.map((w) => w.gain));
+      const prev = segs[segs.length - 1];
+      if (prev && prev.to === from && prev.gain === gain) prev.to = to;
+      else segs.push({ from, to, gain });
+    }
+    return segs;
+  })();
+  let duckSeq = 0;
+  const duckOthers = (label: string): string => {
+    if (duckSegments.length === 0) return label;
+    // Half-open windows: between() includes both ends, so adjacent segments
+    // would both fire (and multiply) on the exact boundary frame.
+    const chain = duckSegments
+      .map((w) => `volume=enable='gte(t,${num(w.from)})*lt(t,${num(w.to)})':volume=${num(w.gain)}`)
+      .join(",");
+    const out = `dk${duckSeq++}`;
+    filters.push(`[${label}]${chain}[${out}]`);
+    return out;
+  };
 
   // Soundtrack clips: trim, gain, shift into place, mix with clip audio.
   const soundLabels: string[] = [];
@@ -601,13 +718,15 @@ async function runExport(job: Job, spec: ExportSpec) {
         (fades.length ? fades.join(",") + "," : "") +
         `adelay=${delayMs}:all=1[snd${k}]`
     );
-    soundLabels.push(`snd${k}`);
+    // Music and other non-voiceover sound ducks under the voiceovers.
+    soundLabels.push(a.duck !== undefined && a.duck < 1 ? `snd${k}` : duckOthers(`snd${k}`));
   });
 
-  let aLabel = aAcc;
-  const extraSound = [...soundLabels, ...overlaySoundLabels];
+  // The joined clip audio and overlay-video audio duck too.
+  let aLabel = duckOthers(aAcc);
+  const extraSound = [...soundLabels, ...overlaySoundLabels.map(duckOthers)];
   if (extraSound.length > 0) {
-    const mixIn = [aAcc, ...extraSound].map((l) => `[${l}]`).join("");
+    const mixIn = [aLabel, ...extraSound].map((l) => `[${l}]`).join("");
     filters.push(
       `${mixIn}amix=inputs=${extraSound.length + 1}:duration=first:dropout_transition=0:normalize=0[amix]`
     );

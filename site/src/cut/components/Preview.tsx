@@ -6,7 +6,7 @@ import { startDrag } from "@/cut/lib/drag";
 import { getClipSpans, useEditor } from "@/cut/lib/store";
 import { FRAME, isFullRect, rectOf, type Aspect, type ClipSpan, type FrameRect, type MediaAsset, type VideoClip } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
-import { OverlayLayer, SubtitleLayer } from "./OverlayLayer";
+import { OverlayLayer } from "./OverlayLayer";
 
 /** The clip under the playhead, when it overflows the frame in fill mode. */
 function pannableSpan(s: {
@@ -107,7 +107,6 @@ export function Preview() {
         >
           <canvas ref={canvasRef} width={frame.w} height={frame.h} className="block size-full" />
           <OverlayPipHandle stage={stage} />
-          <SubtitleLayer stageWidth={stage.w} />
           <OverlayLayer stageWidth={stage.w} />
         </div>
       </div>

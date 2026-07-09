@@ -1,6 +1,9 @@
 import { execFile } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { ProjectDoc } from "@/cut/lib/types";
-import { makeFreezeFrame } from "../frames";
+import { makeFreezeFrame, makeStillClip } from "../frames";
 import {
   createProject,
   createProjectFolder,
@@ -78,8 +81,11 @@ export const projectsApi = {
 
   async create(req: Request) {
     try {
-      const { name } = (await req.json()) as { name?: string };
-      return Response.json(await createProject(name ?? "Untitled"));
+      const { name, folderId } = (await req.json()) as {
+        name?: string;
+        folderId?: string | null;
+      };
+      return Response.json(await createProject(name ?? "Untitled", folderId ?? null));
     } catch (e) {
       return caught(e, "Could not create project.");
     }
@@ -104,6 +110,9 @@ export const projectsApi = {
         audioClips: Array.isArray(body.audioClips) ? body.audioClips : existing.audioClips,
         overlayClips: Array.isArray(body.overlayClips) ? body.overlayClips : existing.overlayClips,
         overlays: Array.isArray(body.overlays) ? body.overlays : existing.overlays,
+        aspect: body.aspect === "9:16" || body.aspect === "16:9" ? body.aspect : existing.aspect,
+        fadeIn: typeof body.fadeIn === "number" ? body.fadeIn : existing.fadeIn,
+        fadeOut: typeof body.fadeOut === "number" ? body.fadeOut : existing.fadeOut,
         subtitles:
           body.subtitles && typeof body.subtitles === "object"
             ? body.subtitles
@@ -254,6 +263,37 @@ export const projectsApi = {
       error: job.error,
       cues: job.status === "done" ? job.cues : undefined,
     });
+  },
+
+  /** Bake an uploaded still image into a video clip in the project's media
+   * folder (AI-generated images arrive here after hosted generation). */
+  async importStill(req: Request, { id }: { id: string }) {
+    try {
+      if (!(await readProject(id))) return err("Project not found.", 404);
+      const form = await req.formData();
+      const file = form.get("file");
+      if (!(file instanceof File)) return err("No image in upload.", 400);
+      const nameField = form.get("name");
+      const name = typeof nameField === "string" && nameField.trim() ? nameField.trim() : file.name;
+      const slug =
+        name
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 40) || "still";
+      const tmp = await mkdtemp(path.join(os.tmpdir(), "cut-still-"));
+      try {
+        const src = path.join(tmp, path.basename(file.name).replace(/[^\w.-]+/g, "_") || "image.png");
+        await writeFile(src, Buffer.from(await file.arrayBuffer()));
+        // 8s of still footage — room to trim like any other clip.
+        const made = await makeStillClip(id, src, 8, `ai-${slug}`);
+        return Response.json({ id: crypto.randomUUID().slice(0, 8), type: "video", name, ...made });
+      } finally {
+        void rm(tmp, { recursive: true, force: true });
+      }
+    } catch (e) {
+      return caught(e, "Could not import the image.");
+    }
   },
 
   /** Render a freeze-frame still clip from a media file's frame. */

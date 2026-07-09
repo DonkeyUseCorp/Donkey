@@ -43,6 +43,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { apiFetch, apiUrl } from "@/cut/lib/api";
+import { createProjectFromFile, isMediaFile } from "@/cut/lib/media";
+import { projectHref, useCutBase } from "@/cut/lib/nav";
 import { formatTime } from "@/cut/lib/time";
 import { mediaUrl, type ProjectFolder, type ProjectSummary } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
@@ -70,6 +72,7 @@ function formatDate(ts: number) {
 
 export function ProjectsHome() {
   const router = useRouter();
+  const base = useCutBase();
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [folders, setFolders] = useState<ProjectFolder[]>([]);
   const [openFolder, setOpenFolder] = useState<string | null>(null);
@@ -81,6 +84,12 @@ export function ProjectsHome() {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [engineDown, setEngineDown] = useState(false);
+  // A count of desktop files still uploading into fresh projects, plus whether an
+  // OS-file drag is hovering the surface (a depth counter tames enter/leave noise
+  // as the cursor crosses child tiles).
+  const [importing, setImporting] = useState(0);
+  const [fileOver, setFileOver] = useState(false);
+  const dragDepth = useRef(0);
 
   useEffect(() => {
     const saved = localStorage.getItem("cut-projects-view");
@@ -176,14 +185,47 @@ export function ProjectsHome() {
       const res = await apiFetch("/api/cut/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim() || "Untitled" }),
+        body: JSON.stringify({ name: name.trim() || "Untitled", folderId: openFolder }),
       });
       const project = (await res.json()) as ProjectSummary;
-      router.push(`/p/${project.id}`);
+      router.push(projectHref(base, project.id, "projects"));
     } finally {
       setBusy(false);
     }
   };
+
+  // Make a new project in the folder that's open (root when none), then jump
+  // straight into it — no naming step.
+  const newProjectHere = async (folderId: string | null = openFolder) => {
+    const res = await apiFetch("/api/cut/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Untitled", folderId }),
+    });
+    const project = (await res.json()) as ProjectSummary;
+    router.push(projectHref(base, project.id, "projects"));
+  };
+
+  // Turn a batch of desktop files into projects filed under `folderId`. Each
+  // becomes its own project and pops into the grid the moment it's ready.
+  const importFilesAsProjects = useCallback(
+    async (files: FileList | File[], folderId: string | null) => {
+      const media = Array.from(files).filter(isMediaFile);
+      if (media.length === 0) return;
+      setImporting((n) => n + media.length);
+      for (const file of media) {
+        try {
+          await createProjectFromFile(file, folderId);
+        } catch {
+          // A file the engine can't ingest is skipped; the rest still land.
+        } finally {
+          setImporting((n) => n - 1);
+        }
+        await refresh();
+      }
+    },
+    [refresh]
+  );
 
   const rename = async () => {
     if (!renaming) return;
@@ -249,8 +291,49 @@ export function ProjectsHome() {
       return next;
     });
 
+  // Only OS-file drags are drop targets here; internal project drags carry
+  // PROJECT_MIME and are handled by the folder tiles and breadcrumb instead.
+  const isFileDrag = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
+
   return (
-    <div className="mx-auto w-full max-w-6xl px-10 py-9">
+    <div
+      className={cn(
+        "relative mx-auto w-full max-w-6xl px-10 py-9",
+        fileOver &&
+          "rounded-3xl outline-2 outline-dashed outline-offset-[-10px] outline-[#0a84ff]/60"
+      )}
+      onDragEnter={(e) => {
+        if (engineDown || !isFileDrag(e)) return;
+        e.preventDefault();
+        dragDepth.current += 1;
+        setFileOver(true);
+      }}
+      onDragOver={(e) => {
+        if (engineDown || !isFileDrag(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      }}
+      onDragLeave={(e) => {
+        if (!isFileDrag(e)) return;
+        dragDepth.current -= 1;
+        if (dragDepth.current <= 0) {
+          dragDepth.current = 0;
+          setFileOver(false);
+        }
+      }}
+      onDrop={(e) => {
+        if (engineDown || !isFileDrag(e)) return;
+        e.preventDefault();
+        dragDepth.current = 0;
+        setFileOver(false);
+        void importFilesAsProjects(e.dataTransfer.files, openFolder);
+      }}
+    >
+      {importing > 0 && (
+        <div className="pointer-events-none fixed right-6 bottom-6 z-50 grid size-11 place-items-center rounded-full bg-foreground/90 text-background shadow-lg">
+          <Loader2 className="size-5 animate-spin" />
+        </div>
+      )}
       {!engineDown && projects && hasContent && (
         <div className="mb-5 flex items-center justify-between">
           {openFolder === null ? (
@@ -310,6 +393,7 @@ export function ProjectsHome() {
           onRename={renameFolder}
           onDelete={deleteFolder}
           onDropIds={(ids, fid) => void moveProjects(ids, fid)}
+          onDropFiles={(files, fid) => void importFilesAsProjects(files, fid)}
         />
       )}
 
@@ -367,7 +451,7 @@ export function ProjectsHome() {
             </Button>
           </div>
         </div>
-      ) : shown.length === 0 ? null : view === "gallery" ? (
+      ) : view === "gallery" ? (
         <Marquee
           className="grid min-h-[42vh] grid-cols-[repeat(auto-fill,minmax(190px,1fr))] content-start gap-5"
           selected={selected}
@@ -386,7 +470,7 @@ export function ProjectsHome() {
                   toggleSelect(p.id);
                   return;
                 }
-                router.push(`/p/${p.id}`);
+                router.push(projectHref(base, p.id, "projects"));
               }}
             >
               {/* Vertical 9:16 tile — the project is mobile video, show it that way. */}
@@ -422,6 +506,17 @@ export function ProjectsHome() {
               </div>
             </div>
           ))}
+          <button
+            type="button"
+            data-no-marquee
+            aria-label="New project"
+            onClick={() => void newProjectHere()}
+            className="group/new flex flex-col"
+          >
+            <span className="grid aspect-[9/16] place-items-center rounded-2xl border-2 border-dashed border-border text-muted-foreground transition-colors group-hover/new:border-[#0a84ff] group-hover/new:bg-[#0a84ff]/5 group-hover/new:text-[#0a84ff]">
+              <Plus className="size-8" />
+            </span>
+          </button>
         </Marquee>
       ) : (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
@@ -448,7 +543,7 @@ export function ProjectsHome() {
                   toggleSelect(p.id);
                   return;
                 }
-                router.push(`/p/${p.id}`);
+                router.push(projectHref(base, p.id, "projects"));
               }}
             >
               <span className="flex min-w-0 items-center gap-2.5">
@@ -475,6 +570,14 @@ export function ProjectsHome() {
               />
             </div>
           ))}
+          <button
+            type="button"
+            data-no-marquee
+            onClick={() => void newProjectHere()}
+            className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+          >
+            <Plus className="size-4" /> New project
+          </button>
         </div>
       )}
 

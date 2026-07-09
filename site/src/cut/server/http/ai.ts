@@ -12,6 +12,7 @@ import {
   type UIChunkWriter,
 } from "../ai/bridge";
 import { rewriteCaptions } from "../ai/captions";
+import { writeVisualCues, type VisualFrame } from "../ai/visualSubtitles";
 import { AI_SKILL_INDEX, AI_SKILLS, AI_TOOLS, systemPrompt } from "../ai/catalog";
 import { AI_MODELS } from "../ai/models";
 
@@ -300,6 +301,28 @@ export const aiApi = {
     } catch (e) {
       return Response.json(
         { error: e instanceof Error ? e.message : "Could not write captions." },
+        { status: 500 }
+      );
+    }
+  },
+
+  /** Write subtitle cues from sampled frames — for cuts with no usable audio.
+   * Runs through the user's own Claude login, like the captions rewrite. */
+  async visualSubtitles(req: Request) {
+    try {
+      const { frames, duration, locale } = (await req.json()) as {
+        frames?: VisualFrame[];
+        duration?: number;
+        locale?: string;
+      };
+      if (!Array.isArray(frames) || frames.length === 0 || typeof duration !== "number") {
+        return Response.json({ error: "frames and duration are required." }, { status: 400 });
+      }
+      const cues = await writeVisualCues(frames, duration, typeof locale === "string" ? locale : undefined);
+      return Response.json({ cues });
+    } catch (e) {
+      return Response.json(
+        { error: e instanceof Error ? e.message : "Could not caption the visuals." },
         { status: 500 }
       );
     }

@@ -125,7 +125,7 @@ export function buildAiContext(opts?: { fullCues?: boolean }) {
 }
 
 function describeAudio(
-  a: { assetId: string; start: number; in: number; out: number; volume: number; fadeIn?: number; fadeOut?: number; speed?: number },
+  a: { assetId: string; start: number; in: number; out: number; volume: number; fadeIn?: number; fadeOut?: number; speed?: number; duck?: number },
   assets: Map<string, { name: string }>
 ) {
   const speed = a.speed && a.speed > 0 ? a.speed : 1;
@@ -139,6 +139,8 @@ function describeAudio(
     fadeIn: r(a.fadeIn ?? 0),
     fadeOut: r(a.fadeOut ?? 0),
     ...(speed !== 1 ? { speed: r(speed) } : {}),
+    // A voiceover: while it plays, other audio ducks to this gain.
+    ...(a.duck !== undefined ? { duck: r(a.duck) } : {}),
   };
 }
 

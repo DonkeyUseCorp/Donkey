@@ -106,9 +106,10 @@ const PROVIDER_LABEL: Record<string, string> = {
 const SUGGESTIONS = [
   "What's in this video?",
   "Add transitions between clips",
-  "Make my title punchier",
-  "Add social captions",
-  "Write a TikTok caption",
+  "Improve my title",
+  "Watch and create subtitles",
+  "Rewrite subtitles for social",
+  "Write my post caption + tags",
 ];
 
 /** Chat provider bucket for a model id. */

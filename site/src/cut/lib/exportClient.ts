@@ -2,7 +2,7 @@
 
 import { apiFetch, apiUrl } from "./api";
 import { clipSpeed, getClipSpans, projectDuration } from "./store";
-import { captionStyle, cueOverlay } from "./subtitles";
+import { captionStyle, cueOverlay, cueWordWindows } from "./subtitles";
 import { renderOverlayPng } from "./textRender";
 import { FRAME } from "./types";
 import type {
@@ -139,6 +139,7 @@ async function buildExportForm(
     in: sp.clip.in,
     out: sp.clip.out,
     muted: sp.clip.muted,
+    volume: sp.clip.volume ?? 1,
     fit: sp.clip.fit ?? "fit",
     panX: sp.clip.panX ?? 0,
     panY: sp.clip.panY ?? 0,
@@ -206,6 +207,7 @@ async function buildExportForm(
       fadeIn: a.fadeIn ?? 0,
       fadeOut: a.fadeOut ?? 0,
       speed: a.speed,
+      duck: a.duck,
     }));
 
   const overlays: { file: string; start: number; end: number }[] = [];
@@ -218,19 +220,41 @@ async function buildExportForm(
     overlays.push({ file: key, start: o.start, end: Math.min(o.end, duration) });
   }
 
+  // Subtitle stills travel in their own spec lane: the server plays them as
+  // one concat-demuxer slideshow (with a transparent filler frame for gaps),
+  // so karaoke word windows don't each become an ffmpeg input.
+  const captions: { file: string; start: number; end: number }[] = [];
   if (doc.subtitles.showOnVideo) {
     const capStyle = captionStyle(doc.subtitles.style);
     for (let i = 0; i < doc.subtitles.cues.length; i++) {
       const cue = doc.subtitles.cues[i];
       if (cue.start >= duration || !cue.text.trim()) continue;
-      const png = await renderOverlayPng(
-        cueOverlay(cue, capStyle, i === 0),
-        settings.width,
-        settings.height
+      // Karaoke burns one frame per word window (the spoken word accented);
+      // otherwise the whole cue is a single still.
+      const windows = doc.subtitles.wordHighlight
+        ? cueWordWindows(cue)
+        : [{ start: cue.start, end: cue.end }];
+      for (let wi = 0; wi < windows.length; wi++) {
+        const win = windows[wi];
+        if (win.start >= duration) break;
+        const png = await renderOverlayPng(
+          cueOverlay(cue, capStyle, i === 0, doc.subtitles, doc.subtitles.wordHighlight ? wi : undefined),
+          settings.width,
+          settings.height
+        );
+        const key = windows.length > 1 ? `sub_${i}_${wi}.png` : `sub_${i}.png`;
+        form.append(key, png, key);
+        captions.push({ file: key, start: win.start, end: Math.min(win.end, duration) });
+      }
+    }
+    if (captions.length > 0) {
+      const blank = document.createElement("canvas");
+      blank.width = settings.width;
+      blank.height = settings.height;
+      const png = await new Promise<Blob>((resolve, reject) =>
+        blank.toBlob((b) => (b ? resolve(b) : reject(new Error("Could not render captions."))), "image/png")
       );
-      const key = `sub_${i}.png`;
-      form.append(key, png, key);
-      overlays.push({ file: key, start: cue.start, end: Math.min(cue.end, duration) });
+      form.append("sub_blank.png", png, "sub_blank.png");
     }
   }
 
@@ -247,6 +271,7 @@ async function buildExportForm(
       audio,
       overlayVideos,
       overlays,
+      captions,
     })
   );
   return form;

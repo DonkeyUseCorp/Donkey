@@ -24,6 +24,8 @@ export interface StoredAsset {
   duration: number; // seconds
   width?: number;
   height?: number;
+  /** Set on assets Cut generated itself (AI voiceovers); absent on imports. */
+  origin?: "voiceover";
 }
 
 /** Runtime asset: stored fields plus derived/browser-only data. */
@@ -96,6 +98,8 @@ export interface VideoClip {
   in: number; // trim-in inside the source, seconds
   out: number; // trim-out inside the source, seconds
   muted: boolean;
+  /** Gain on the clip's own audio, 0..1.5; absent = 1 (unchanged). */
+  volume?: number;
   /** How the clip meets its region: letterboxed ("fit", default) or scaled to
    * cover it ("fill", cropping the overflow). */
   fit?: "fit" | "fill";
@@ -210,6 +214,10 @@ export interface AudioClip {
    * a sped-up video clip, so it stays the same length and in sync with the
    * (now muted) picture. The timeline footprint is (out-in)/speed. */
   speed?: number;
+  /** Voiceover ducking: while this clip is audible, every other sound (clip
+   * audio and other soundtrack clips) drops to this gain, 0..1. Absent = no
+   * ducking. Ducking clips never duck each other. */
+  duck?: number;
 }
 
 /**
@@ -249,6 +257,7 @@ export interface TemplateAudio {
   fadeIn?: number;
   fadeOut?: number;
   speed?: number;
+  duck?: number;
 }
 export interface LibraryTemplate {
   id: string;
@@ -302,7 +311,18 @@ export interface TextOverlay {
   /** Which title track (row) this sits on, 0-based. Tracks are kept
    * contiguous: empty ones collapse and dragging past the last adds one. */
   lane?: number;
+  /** Karaoke burn-in: index of the display word (whitespace-split across all
+   * lines) drawn per the accent treatment — recolored, underlined, or on an
+   * accent box with a contrast text color. */
+  highlightWord?: number;
+  highlightColor?: string;
+  highlightMode?: WordAccentMode;
+  highlightText?: string;
 }
+
+/** How the spoken word lights up in karaoke mode: accent color only, accent
+ * color plus underline, or an accent box behind the word. */
+export type WordAccentMode = "color" | "underline" | "box";
 
 /** One subtitle caption, timed against the timeline (not the source files). */
 export interface SubtitleCue {
@@ -316,6 +336,19 @@ export interface SubtitleCue {
   words?: { t0: number; t1: number; w: string }[];
 }
 
+/** Caption look preset ids; the presets themselves live in lib/subtitles.ts. */
+export type CaptionStyleId =
+  | "clean"
+  | "hook"
+  | "punchy"
+  | "minimal"
+  | "editorial"
+  | "typewriter"
+  | "block"
+  | "highlight"
+  | "bubble"
+  | "neon";
+
 export interface SubtitlesBlock {
   cues: SubtitleCue[];
   /** Render captions on the preview and burn them into exports. */
@@ -325,7 +358,17 @@ export interface SubtitlesBlock {
   locale?: string;
   generatedAt?: number;
   /** Caption look preset; absent = the plain "clean" subtitle style. */
-  style?: "clean" | "hook" | "punchy";
+  style?: CaptionStyleId;
+  /** Caption anchor as frame fractions, applied to every cue. Absent = the
+   * style preset's spot (low center). Dragging the caption in the preview sets it. */
+  x?: number;
+  y?: number;
+  /** Karaoke mode: each word lights up as it is spoken, in the preview and
+   * the export burn-in. */
+  wordHighlight?: boolean;
+  /** Word treatment overrides; absent = the caption style's defaults. */
+  accentMode?: WordAccentMode;
+  accentColor?: string;
 }
 
 export const emptySubtitles = (): SubtitlesBlock => ({

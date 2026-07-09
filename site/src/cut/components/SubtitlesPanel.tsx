@@ -1,12 +1,14 @@
 "use client";
 
-import { memo, useEffect, useRef, useState } from "react";
-import { AlertCircle, Captions, ChevronDown, Loader2, RefreshCw, Sparkles } from "lucide-react";
+import React, { memo, useEffect, useRef, useState } from "react";
+import { AlertCircle, Captions, ChevronDown, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { CAPTION_STYLES, fmtCueTime } from "@/cut/lib/subtitles";
+import { GenerateSubtitlesAudio } from "@/cut/components/VoicePicker";
+import { CAPTION_STYLES, captionStyle, fmtCueTime, karaokeLook } from "@/cut/lib/subtitles";
 import { TIMELINE_H_MIN, useEditor } from "@/cut/lib/store";
-import type { SubtitleCue } from "@/cut/lib/types";
+import { PLATE_PAD_X, PLATE_PAD_Y, PLATE_RADIUS, plateFill } from "@/cut/lib/textRender";
+import { fontStack, type SubtitleCue, type WordAccentMode } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
 
 const LOCALES = [
@@ -31,8 +33,7 @@ export function SubtitlesPanel() {
   const status = useEditor((s) => s.subtitleStatus);
   const error = useEditor((s) => s.subtitleError);
   const hasCues = subtitles.cues.length > 0;
-
-  const style = subtitles.style ?? "clean";
+  const [tab, setTab] = useState<"content" | "styles" | "settings">("content");
 
   const growTimeline = () => {
     const cur = useEditor.getState();
@@ -44,103 +45,243 @@ export function SubtitlesPanel() {
     void useEditor.getState().generateSubtitles().then(growTimeline);
   };
 
-  const captions = () => {
-    const s = useEditor.getState();
-    void s.generateCaptions(s.subtitles.style ?? "hook").then(growTimeline);
-  };
-
   return (
     <>
       <div className="flex h-12 shrink-0 items-center justify-between pr-2.5 pl-4">
-        <span className="text-sm font-semibold tracking-tight">Subtitles</span>
-        {hasCues && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="sub-regenerate"
-            title="Transcribe the cut again (replaces these captions — undoable)"
-            disabled={status === "running"}
-            onClick={generate}
-          >
-            {status === "running" ? (
-              <Loader2 className="animate-spin" />
-            ) : (
-              <RefreshCw />
-            )}
-            Regenerate
-          </Button>
+        {hasCues ? (
+          <div className="sub-tabs flex items-center gap-3.5">
+            {(
+              [
+                ["content", "Content"],
+                ["styles", "Styles"],
+                ["settings", "Settings"],
+              ] as const
+            ).map(([id, label], i) => (
+              <React.Fragment key={id}>
+                {i > 0 && <span aria-hidden className="h-4 w-px bg-border" />}
+                <button
+                  className={cn(
+                    "text-sm font-semibold tracking-tight transition-colors",
+                    tab === id ? "text-foreground" : "text-muted-foreground/60 hover:text-foreground"
+                  )}
+                  aria-pressed={tab === id}
+                  onClick={() => setTab(id)}
+                >
+                  {label}
+                </button>
+              </React.Fragment>
+            ))}
+          </div>
+        ) : (
+          <span className="text-sm font-semibold tracking-tight">Subtitles</span>
         )}
       </div>
 
       {!hasCues ? (
         <EmptyState status={status} error={error} onGenerate={generate} />
-      ) : (
+      ) : tab === "content" ? (
         <>
+          <div className="shrink-0 px-1.5">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="sub-regenerate"
+              title="Transcribe the cut again (replaces these captions — undoable)"
+              disabled={status === "running"}
+              onClick={generate}
+            >
+              {status === "running" ? (
+                <Loader2 className="animate-spin" />
+              ) : (
+                <RefreshCw />
+              )}
+              Regenerate
+            </Button>
+          </div>
           <Transcript cues={subtitles.cues} />
-          <div className="flex shrink-0 flex-col gap-2.5 border-t border-border px-4 py-3">
-            <label className="flex items-center justify-between text-xs font-medium">
-              Show
-              <Switch
-                className="sub-show"
-                checked={subtitles.showOnVideo || subtitles.showOnTimeline}
-                onCheckedChange={(v) => {
-                  const s = useEditor.getState();
-                  s.setSubtitlesView({ showOnVideo: v, showOnTimeline: v });
-                  if (v && s.timelineH < TIMELINE_H_WITH_SUBS) s.setTimelineH(TIMELINE_H_WITH_SUBS);
-                }}
-              />
-            </label>
+          <div className="shrink-0 border-t border-border px-3.5 py-3">
+            <GenerateSubtitlesAudio />
+          </div>
+          {status === "error" && error && (
+            <p className="sub-error shrink-0 border-t border-border px-4 py-2.5 text-[11px] leading-relaxed text-red-600">
+              {error}
+            </p>
+          )}
+        </>
+      ) : tab === "styles" ? (
+        <StylesTab />
+      ) : (
+        <SettingsTab />
+      )}
+    </>
+  );
+}
 
-            <div className="flex flex-col gap-1.5">
-              <span className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
-                Caption style
-              </span>
-              <div className="flex flex-wrap gap-1.5">
-                {Object.values(CAPTION_STYLES).map((cs) => (
-                  <button
-                    key={cs.id}
-                    className={cn(
-                      "rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
-                      style === cs.id
-                        ? "border-primary bg-primary/10 text-primary"
-                        : "border-border text-muted-foreground hover:text-foreground"
-                    )}
-                    onClick={() => useEditor.getState().setSubtitlesView({ style: cs.id })}
-                  >
-                    {cs.label}
-                  </button>
-                ))}
-              </div>
-              <Button
-                variant="outline"
-                className="sub-social w-full"
-                disabled={status === "running"}
-                onClick={captions}
-              >
-                {status === "running" ? (
-                  <Loader2 className="animate-spin" />
-                ) : (
-                  <Sparkles data-icon="inline-start" />
-                )}
-                Rewrite for social
-              </Button>
-              <p className="text-[11px] leading-relaxed text-muted-foreground">
-                Punchier lines, a curiosity hook, and a few emoji — timings stay put.
-              </p>
+/** Accent colors offered for the spoken word. */
+const ACCENTS = ["#FFE94A", "#FFFFFF", "#FF375F", "#0A84FF", "#30D158"];
+
+const ACCENT_MODES: { id: WordAccentMode; label: string }[] = [
+  { id: "color", label: "Color" },
+  { id: "underline", label: "Underline" },
+  { id: "box", label: "Highlight" },
+];
+
+/** The Settings tab: caption visibility, the karaoke word highlight with its
+ * treatment and color, and position reset for a dragged caption. */
+function SettingsTab() {
+  const subtitles = useEditor((s) => s.subtitles);
+  const moved = subtitles.x !== undefined || subtitles.y !== undefined;
+  // Effective word treatment: the caption style's defaults with the user's
+  // overrides on top, so the controls always show what's on the video.
+  const look = karaokeLook(captionStyle(subtitles.style), subtitles);
+
+  return (
+    <div className="sub-settings flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-4 py-3">
+      <label className="flex min-h-8 items-center justify-between text-xs font-medium">
+        Show
+        <Switch
+          className="sub-show"
+          checked={subtitles.showOnVideo || subtitles.showOnTimeline}
+          onCheckedChange={(v) => {
+            const s = useEditor.getState();
+            s.setSubtitlesView({ showOnVideo: v, showOnTimeline: v });
+            if (v && s.timelineH < TIMELINE_H_WITH_SUBS) s.setTimelineH(TIMELINE_H_WITH_SUBS);
+          }}
+        />
+      </label>
+      <label className="flex min-h-8 items-center justify-between text-xs font-medium">
+        Highlight spoken word
+        <Switch
+          className="sub-word-highlight"
+          checked={!!subtitles.wordHighlight}
+          onCheckedChange={(v) =>
+            useEditor.getState().setSubtitlesView({ wordHighlight: v || undefined })
+          }
+        />
+      </label>
+      {subtitles.wordHighlight && (
+        <>
+          <div className="flex min-h-8 items-center justify-between text-xs font-medium">
+            Word style
+            <div className="sub-accent-mode flex rounded-lg border border-input p-0.5">
+              {ACCENT_MODES.map((m) => (
+                <button
+                  key={m.id}
+                  className={cn(
+                    "rounded-md px-2 py-1 text-[11.5px] font-medium transition-colors",
+                    look.mode === m.id
+                      ? "bg-neutral-900 text-white"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                  aria-pressed={look.mode === m.id}
+                  onClick={() => useEditor.getState().setSubtitlesView({ accentMode: m.id })}
+                >
+                  {m.label}
+                </button>
+              ))}
             </div>
-
-            {status === "running" && (
-              <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                <Loader2 className="size-3 animate-spin" /> Re-transcribing on this Mac…
-              </p>
-            )}
-            {status === "error" && error && (
-              <p className="sub-error text-[11px] leading-relaxed text-red-600">{error}</p>
-            )}
+          </div>
+          <div className="flex min-h-8 items-center justify-between text-xs font-medium">
+            Word color
+            <div className="sub-accent-color flex items-center gap-1.5">
+              {ACCENTS.map((c) => (
+                <button
+                  key={c}
+                  title={c}
+                  aria-label={`Word color ${c}`}
+                  className={cn(
+                    "size-5 rounded-full border border-black/15 transition-transform hover:scale-110",
+                    look.color.toUpperCase() === c.toUpperCase() &&
+                      "ring-2 ring-primary ring-offset-2 ring-offset-card"
+                  )}
+                  style={{ background: c }}
+                  onClick={() => useEditor.getState().setSubtitlesView({ accentColor: c })}
+                />
+              ))}
+              <label
+                title="Custom color"
+                className="relative size-5 cursor-pointer rounded-full border border-black/15 bg-[conic-gradient(from_0deg,#f43f5e,#f59e0b,#84cc16,#06b6d4,#6366f1,#d946ef,#f43f5e)] transition-transform hover:scale-110"
+              >
+                <span className="absolute inset-1 rounded-full bg-card" />
+                <span className="absolute inset-[5px] rounded-full" style={{ background: look.color }} />
+                <input
+                  type="color"
+                  aria-label="Pick a custom word color"
+                  className="absolute inset-0 size-full cursor-pointer opacity-0"
+                  value={/^#[0-9a-fA-F]{6}$/.test(look.color) ? look.color : "#ffffff"}
+                  onChange={(e) =>
+                    useEditor.getState().setSubtitlesView({ accentColor: e.target.value })
+                  }
+                />
+              </label>
+            </div>
           </div>
         </>
       )}
-    </>
+      <div className="flex min-h-8 items-center justify-between text-xs font-medium">
+        Position
+        <Button
+          variant="outline"
+          size="sm"
+          className="sub-position-reset"
+          disabled={!moved}
+          onClick={() => useEditor.getState().setSubtitlesView({ x: undefined, y: undefined })}
+        >
+          Reset
+        </Button>
+      </div>
+      <p className="sub-position-hint -mt-1 text-[11px] leading-relaxed text-muted-foreground">
+        Drag the caption on the video to reposition every subtitle.
+      </p>
+    </div>
+  );
+}
+
+/** The Styles tab: the caption style list, each option rendered as a live
+ * preview of that look. */
+function StylesTab() {
+  const subtitles = useEditor((s) => s.subtitles);
+  const style = subtitles.style ?? "clean";
+
+  return (
+    <div className="sub-styles flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-4 py-3">
+      <div className="flex flex-col gap-1.5">
+        {Object.values(CAPTION_STYLES).map((cs) => (
+          <button
+            key={cs.id}
+            className={cn(
+              "sub-style rounded-lg p-1 text-left transition-colors",
+              style === cs.id ? "bg-primary/10 ring-1 ring-primary" : "hover:bg-muted"
+            )}
+            aria-pressed={style === cs.id}
+            onClick={() => useEditor.getState().setSubtitlesView({ style: cs.id })}
+          >
+            <div className="grid h-12 place-items-center overflow-hidden rounded-md">
+              <span
+                className="whitespace-nowrap"
+                style={{
+                  fontSize: cs.size * 0.48,
+                  fontFamily: fontStack(cs.font),
+                  fontWeight: cs.weight,
+                  color: cs.color,
+                  // Heavier than the on-video shadow so white captions stay
+                  // legible against the light panel.
+                  textShadow: cs.shadow
+                    ? "0 0 2px rgba(0,0,0,0.75), 0 1px 4px rgba(0,0,0,0.6)"
+                    : undefined,
+                  background: cs.plate ? plateFill(cs) : undefined,
+                  padding: cs.plate ? `${PLATE_PAD_Y}em ${PLATE_PAD_X}em` : undefined,
+                  borderRadius: cs.plate ? `${PLATE_RADIUS}em` : undefined,
+                }}
+              >
+                Your caption
+              </span>
+            </div>
+            <div className="px-1 pt-1 pb-0.5 text-[11px] font-medium">{cs.label}</div>
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -180,12 +321,6 @@ function EmptyState({
         <div className="sub-error flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2.5 text-[11.5px] leading-relaxed text-red-700">
           <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
           {error}
-        </div>
-      )}
-      {status !== "empty" && (
-        <div className="flex flex-col items-center gap-1 pt-4 pb-1 text-center">
-          <Captions className="mb-1 size-6 text-muted-foreground" />
-          <p className="text-[13px] font-semibold">Subtitles from your audio</p>
         </div>
       )}
       <div className="relative">

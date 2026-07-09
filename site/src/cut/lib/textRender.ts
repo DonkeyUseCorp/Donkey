@@ -71,9 +71,49 @@ export async function renderOverlayPng(
   }
 
   ctx.fillStyle = overlay.color;
+  // Karaoke: draw word by word so the spoken word gets the accent color and an
+  // underline; the word index counts across all lines.
+  let k = 0;
   lines.forEach((line, i) => {
     const y = cy - totalH / 2 + lineH * (i + 0.5);
-    ctx.fillText(line, cx, y);
+    if (overlay.highlightWord === undefined) {
+      ctx.fillText(line, cx, y);
+      return;
+    }
+    const words = line.split(" ").filter(Boolean);
+    const spaceW = ctx.measureText(" ").width;
+    const widths = words.map((w) => ctx.measureText(w).width);
+    const lineW = widths.reduce((a, b) => a + b, 0) + spaceW * (words.length - 1);
+    let x = cx - lineW / 2;
+    ctx.textAlign = "left";
+    words.forEach((w, wi) => {
+      const active = k === overlay.highlightWord;
+      if (active && overlay.highlightMode === "box") {
+        // Accent box behind the word, contrast text on top — drawn with the
+        // shadow off so the box and its word stay crisp.
+        const pad = 0.12 * fpx;
+        const prevShadow = ctx.shadowColor;
+        ctx.shadowColor = "transparent";
+        ctx.fillStyle = overlay.highlightColor ?? "#FFE94A";
+        ctx.beginPath();
+        ctx.roundRect(x - pad, y - fpx * 0.5 - pad, widths[wi] + pad * 2, fpx + pad * 2, 0.18 * fpx);
+        ctx.fill();
+        ctx.fillStyle = overlay.highlightText ?? "#111114";
+        ctx.fillText(w, x, y);
+        ctx.shadowColor = prevShadow;
+      } else if (active) {
+        ctx.fillStyle = overlay.highlightColor ?? "#FFE94A";
+        ctx.fillText(w, x, y);
+        if (overlay.highlightMode !== "color")
+          ctx.fillRect(x, y + fpx * 0.42, widths[wi], Math.max(2 * scale, fpx * 0.07));
+      } else {
+        ctx.fillStyle = overlay.color;
+        ctx.fillText(w, x, y);
+      }
+      x += widths[wi] + spaceW;
+      k++;
+    });
+    ctx.textAlign = "center";
   });
 
   return new Promise((resolve, reject) =>

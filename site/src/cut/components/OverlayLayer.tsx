@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { startDrag } from "@/cut/lib/drag";
 import { useEditor } from "@/cut/lib/store";
-import { captionStyle, cueAt, cueOverlay } from "@/cut/lib/subtitles";
+import { captionStyle, cueAt, cueOverlay, cueWordWindows, karaokeLook } from "@/cut/lib/subtitles";
 import {
   LINE_HEIGHT,
   PLATE_PAD_X,
@@ -30,6 +30,10 @@ interface Guides {
   h: number[]; // horizontal lines (y)
 }
 
+/** The subtitle caption's key in the shared snap-box registry. Overlay ids are
+ * uids, so this can't collide. */
+const SUBTITLE_BOX_ID = "subtitle-caption";
+
 export function OverlayLayer({ stageWidth }: { stageWidth: number }) {
   const overlays = useEditor((s) => s.overlays);
   const currentTime = useEditor((s) => s.currentTime);
@@ -40,8 +44,9 @@ export function OverlayLayer({ stageWidth }: { stageWidth: number }) {
   // Titles preview under the skimmer too (paused only), matching the canvas.
   const t = !playing && skimTime !== null ? skimTime : currentTime;
 
-  // Live box elements per title, so a dragged one can align to the others that
-  // are on screen at the same time.
+  const rootRef = useRef<HTMLDivElement>(null);
+  // Live box elements per on-screen item (titles and the subtitle caption), so
+  // a dragged one can align to the others that are on screen at the same time.
   const boxes = useRef<Map<string, HTMLElement>>(new Map());
   const [guides, setGuides] = useState<Guides>({ v: [], h: [] });
   const registerBox = useCallback((id: string, el: HTMLElement | null) => {
@@ -51,14 +56,15 @@ export function OverlayLayer({ stageWidth }: { stageWidth: number }) {
 
   const stageHeight = (stageWidth * FRAME[aspect].h) / FRAME[aspect].w;
 
-  // Figma-style smart snapping: while dragging a title, pull its left/center/
+  // Figma-style smart snapping: while dragging an item, pull its left/center/
   // right edges to the frame edges, safe margins, center line, and the edges
-  // and centers of the other on-screen titles — independently per axis — and
+  // and centers of the other on-screen items — independently per axis — and
   // paint the matched guide lines. Hold ⌘/Ctrl to bypass.
   const snap = useCallback(
     (id: string, px: number, py: number, ev: PointerEvent): { x: number; y: number } => {
       const el = boxes.current.get(id);
-      if (!el || ev.metaKey || ev.ctrlKey) {
+      const root = rootRef.current;
+      if (!el || !root || ev.metaKey || ev.ctrlKey) {
         setGuides({ v: [], h: [] });
         return { x: px, y: py };
       }
@@ -68,16 +74,16 @@ export function OverlayLayer({ stageWidth }: { stageWidth: number }) {
       // Frame lines: edges, safe margins, center.
       const vt = [0, CANVAS_MARGIN * stageWidth, stageWidth / 2, (1 - CANVAS_MARGIN) * stageWidth, stageWidth];
       const ht = [0, CANVAS_MARGIN * stageHeight, stageHeight / 2, (1 - CANVAS_MARGIN) * stageHeight, stageHeight];
-      // Plus every other on-screen title's edges and center.
-      for (const o of useEditor.getState().overlays) {
-        if (o.id === id) continue;
-        const e = boxes.current.get(o.id);
-        if (!e) continue;
+      // Plus every other on-screen box's edges and center (titles and the
+      // subtitle caption alike), read from its rect in stage space.
+      const rootRect = root.getBoundingClientRect();
+      for (const [bid, e] of boxes.current) {
+        if (bid === id) continue;
         const rr = e.getBoundingClientRect();
-        const ox = o.x * stageWidth;
-        const oy = o.y * stageHeight;
-        vt.push(ox - rr.width / 2, ox, ox + rr.width / 2);
-        ht.push(oy - rr.height / 2, oy, oy + rr.height / 2);
+        const left = rr.left - rootRect.left;
+        const top = rr.top - rootRect.top;
+        vt.push(left, left + rr.width / 2, left + rr.width);
+        ht.push(top, top + rr.height / 2, top + rr.height);
       }
       // For one axis, snap the closest of {near edge, center, far edge} to the
       // closest target line, returning the shifted center and the matched line.
@@ -122,7 +128,14 @@ export function OverlayLayer({ stageWidth }: { stageWidth: number }) {
   const isolate = !!sel && !scrubbing && !(t >= sel.start && t <= sel.end);
 
   return (
-    <div className="pointer-events-none absolute inset-0">
+    <div ref={rootRef} className="pointer-events-none absolute inset-0">
+      <SubtitleCaption
+        stageWidth={stageWidth}
+        stageHeight={stageHeight}
+        registerBox={registerBox}
+        snap={snap}
+        onSnapEnd={clearGuides}
+      />
       {overlays.map((o) => {
         const selected = sel?.id === o.id;
         const inRange = t >= o.start && t <= o.end;
@@ -163,8 +176,23 @@ export function OverlayLayer({ stageWidth }: { stageWidth: number }) {
 }
 
 /** The active subtitle cue, rendered exactly like the export burn-in.
- * Nothing renders when subtitles are hidden or there is no cue (no speech). */
-export function SubtitleLayer({ stageWidth }: { stageWidth: number }) {
+ * Nothing renders when subtitles are hidden or there is no cue (no speech).
+ * Dragging the caption moves every cue — the position is one project-wide
+ * anchor, not per-cue — and rides the same smart snapping and guide lines as
+ * titles. */
+function SubtitleCaption({
+  stageWidth,
+  stageHeight,
+  registerBox,
+  snap,
+  onSnapEnd,
+}: {
+  stageWidth: number;
+  stageHeight: number;
+  registerBox: (id: string, el: HTMLElement | null) => void;
+  snap: (id: string, x: number, y: number, ev: PointerEvent) => { x: number; y: number };
+  onSnapEnd: () => void;
+}) {
   const subtitles = useEditor((s) => s.subtitles);
   const currentTime = useEditor((s) => s.currentTime);
   const skimTime = useEditor((s) => s.skimTime);
@@ -178,37 +206,91 @@ export function SubtitleLayer({ stageWidth }: { stageWidth: number }) {
 
   // Captions ride the same style/opener logic as the export burn-in, so the
   // preview and the rendered file match exactly.
-  const ov = cueOverlay(
-    cue,
-    captionStyle(subtitles.style),
-    cue.id === subtitles.cues[0]?.id
-  );
+  const style = captionStyle(subtitles.style);
+  const ov = cueOverlay(cue, style, cue.id === subtitles.cues[0]?.id, subtitles);
+  // Karaoke: the word under the playhead lights up as it is spoken.
+  const wordIndex = subtitles.wordHighlight
+    ? cueWordWindows(cue).findIndex((w) => t >= w.start && t < w.end)
+    : -1;
+  // The spoken word's treatment follows the style (with user overrides): an
+  // accent box (drawn with box-shadow spread so the line never reflows), the
+  // accent color alone, or accent color + underline.
+  const look = karaokeLook(style, subtitles);
+  const activeStyle: CSSProperties =
+    look.mode === "box"
+      ? {
+          color: look.text,
+          background: look.color,
+          boxShadow: `0 0 0 0.12em ${look.color}`,
+          borderRadius: "0.18em",
+          textShadow: "none",
+        }
+      : look.mode === "color"
+        ? { color: look.color }
+        : {
+            color: look.color,
+            textDecoration: "underline",
+            textDecorationThickness: "0.07em",
+            textUnderlineOffset: "0.14em",
+          };
   const scale = stageWidth / FRAME[aspect].w;
   return (
-    <div className="pointer-events-none absolute inset-0">
-      <div
-        className="sub-caption absolute -translate-x-1/2 -translate-y-1/2 text-center whitespace-pre-wrap"
-        style={{
-          left: `${ov.x * 100}%`,
-          top: `${ov.y * 100}%`,
-          // Hard cap at the safe area so a caption can never spill past the
-          // frame edge, even if a line slips past the wrap estimate.
-          maxWidth: `${0.9 * stageWidth}px`,
-          fontSize: ov.size * scale,
-          fontFamily: fontStack(ov.font),
-          fontWeight: ov.weight,
-          lineHeight: LINE_HEIGHT,
-          color: ov.color,
-          textShadow: ov.shadow
-            ? `0 ${SHADOW.offsetY * scale}px ${SHADOW.blur * scale}px ${SHADOW.color}`
-            : undefined,
-          background: ov.plate ? plateFill(ov) : undefined,
-          padding: ov.plate ? PLATE_PADDING : undefined,
-          borderRadius: ov.plate ? PLATE_RADIUS_EM : undefined,
-        }}
-      >
-        {ov.text}
-      </div>
+    <div
+      ref={(el) => registerBox(SUBTITLE_BOX_ID, el)}
+      className="sub-caption pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2 cursor-grab text-center whitespace-pre-wrap active:cursor-grabbing"
+      onPointerDown={(e) => {
+        const s = useEditor.getState();
+        s.pushHistory();
+        const { x: x0, y: y0 } = ov;
+        startDrag(e, {
+          onMove: (dx, dy, ev) => {
+            const p = snap(SUBTITLE_BOX_ID, x0 + dx / stageWidth, y0 + dy / stageHeight, ev);
+            useEditor.getState().setSubtitlesView({
+              x: Math.min(0.98, Math.max(0.02, p.x)),
+              y: Math.min(0.98, Math.max(0.02, p.y)),
+            });
+          },
+          onUp: onSnapEnd,
+        });
+      }}
+      style={{
+        left: `${ov.x * 100}%`,
+        top: `${ov.y * 100}%`,
+        // Hard cap at the safe area so a caption can never spill past the
+        // frame edge, even if a line slips past the wrap estimate.
+        maxWidth: `${0.9 * stageWidth}px`,
+        fontSize: ov.size * scale,
+        fontFamily: fontStack(ov.font),
+        fontWeight: ov.weight,
+        lineHeight: LINE_HEIGHT,
+        color: ov.color,
+        textShadow: ov.shadow
+          ? `0 ${SHADOW.offsetY * scale}px ${SHADOW.blur * scale}px ${SHADOW.color}`
+          : undefined,
+        background: ov.plate ? plateFill(ov) : undefined,
+        padding: ov.plate ? PLATE_PADDING : undefined,
+        borderRadius: ov.plate ? PLATE_RADIUS_EM : undefined,
+      }}
+    >
+      {wordIndex < 0
+        ? ov.text
+        : (() => {
+            let k = 0;
+            return ov.text.split("\n").map((line, li) => (
+              <span key={li} className="block">
+                {line.split(" ").map((w, wi) => {
+                  const active = k === wordIndex;
+                  k++;
+                  return (
+                    <span key={wi}>
+                      {wi > 0 && " "}
+                      <span style={active ? activeStyle : undefined}>{w}</span>
+                    </span>
+                  );
+                })}
+              </span>
+            ));
+          })()}
     </div>
   );
 }
