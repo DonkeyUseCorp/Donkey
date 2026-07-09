@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { allowedOrigin, corsHeaders, preflightHeaders } from "@/cut/server/cors";
+import { isCutHost } from "@/cut/lib/hosts";
 
 // Cut (the video editor, publicly "Donkey Cut") is served on the
 // cut.donkeyuse.com subdomain, but its routes live under /cut in this single
@@ -8,12 +9,12 @@ import { allowedOrigin, corsHeaders, preflightHeaders } from "@/cut/server/cors"
 // Cut's root-relative links (/, /library, /p/[id]) resolve to its routes, while
 // the apex host keeps serving Donkey.
 //
+// Local dev is not a Cut host: the editor is opened at localhost:3000/cut/… so
+// its session cookie is same-origin, and its links carry the "/cut" base
+// directly (see src/cut/lib/nav.tsx), needing no rewrite.
+//
 // This file must live in src/ (next to app/) and use the Next 16 `proxy` name;
 // a root-level middleware.ts is not loaded when the app is under src/.
-//
-// Local dev: add nothing to /etc/hosts — `cut.localhost` already resolves to
-// 127.0.0.1, so http://cut.localhost:3000/ exercises this path.
-const CUT_HOSTS = new Set(["cut.donkeyuse.com", "cut.localhost"]);
 
 // Cut's server APIs are local-only (see src/cut/server/local-only.ts): the
 // hosted deploy serves only Cut's client bundle, and that page drives the
@@ -52,8 +53,7 @@ export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
   if (isCutApi(pathname)) return cutApi(req);
 
-  const host = (req.headers.get("host") ?? "").split(":")[0];
-  if (!CUT_HOSTS.has(host)) return NextResponse.next();
+  if (!isCutHost(req.headers.get("host"))) return NextResponse.next();
 
   if (pathname.startsWith("/cut") || pathname.startsWith("/api")) {
     return NextResponse.next();

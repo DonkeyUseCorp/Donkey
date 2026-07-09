@@ -5,8 +5,8 @@ import type {
 } from "@/lib/inference/schemas";
 import type { z } from "zod";
 
-export type InferenceModality = "text" | "image" | "video" | "audio" | "music";
-export type AssetGenerationKind = "image" | "video" | "music";
+export type InferenceModality = "text" | "image" | "video" | "audio" | "music" | "speech";
+export type AssetGenerationKind = "image" | "video" | "music" | "speech";
 export type GenerationStatus =
   | "pending"
   | "in_progress"

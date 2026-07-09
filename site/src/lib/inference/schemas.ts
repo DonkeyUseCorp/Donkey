@@ -11,9 +11,10 @@ export const inferenceModalitySchema = z.enum([
   "video",
   "audio",
   "music",
+  "speech",
 ]);
 
-export const assetGenerationKindSchema = z.enum(["image", "video", "music"]);
+export const assetGenerationKindSchema = z.enum(["image", "video", "music", "speech"]);
 
 export const modelsQuerySchema = z.object({
   output_modalities: z.string().optional(),
@@ -128,7 +129,7 @@ export function parseRequestedModalities(value: string | null) {
   }
 
   if (value === "all") {
-    return ["text", "image", "video", "audio", "music"] as const;
+    return ["text", "image", "video", "audio", "music", "speech"] as const;
   }
 
   return value

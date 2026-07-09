@@ -8,8 +8,10 @@ import {
 } from "@/lib/inference/elevenlabs-models";
 import {
   geminiModels,
+  geminiTtsModels,
   veoModels,
   type GeminiModel,
+  type GeminiTtsModel,
   type VeoModel,
 } from "@/lib/inference/gemini-models";
 import { openaiModels, type OpenAIRunModel } from "@/lib/inference/openai-models";
@@ -50,6 +52,10 @@ export function providerCreditPricing(
   // Veo video ids are hardcoded (gemini-models.ts); each is priced per clip below.
   if (normalizedProvider === "veo") {
     return veoCreditPricing(normalizedModel);
+  }
+  // Gemini TTS ids are hardcoded (gemini-models.ts); speech bills per second of audio.
+  if (normalizedProvider === "gemini-tts") {
+    return geminiTtsCreditPricing(normalizedModel);
   }
   if (normalizedProvider === "elevenlabs") {
     return elevenLabsCreditPricing(normalizedModel);
@@ -288,6 +294,17 @@ const veoModelPricing: Record<VeoModel, ProviderCreditPricing> = {
 
 function veoCreditPricing(model: string): ProviderCreditPricing | undefined {
   return veoModelPricing[model as VeoModel];
+}
+
+// Generative speech (Gemini TTS) bills by seconds of synthesized audio: audio out runs
+// $20/1M tokens at ~25 tokens per second ≈ $0.0005/s; the tiny text input rides along.
+// The Record is keyed by GeminiTtsModel, so adding a TTS id without a price fails the build.
+const geminiTtsModelPricing: Record<GeminiTtsModel, ProviderCreditPricing> = {
+  [geminiTtsModels.flash]: { durationSecondCostMicros: usdWithMargin("0.0005") },
+};
+
+function geminiTtsCreditPricing(model: string): ProviderCreditPricing | undefined {
+  return geminiTtsModelPricing[model as GeminiTtsModel];
 }
 
 function geminiCreditPricing(model: string): ProviderCreditPricing | undefined {

@@ -10,16 +10,18 @@ const extensionByKind: Record<AssetGenerationKind, RegExp> = {
   image: /\.(png|jpe?g|webp|gif|heic|avif)(\?|#|$)/i,
   video: /\.(mp4|webm|mov|m4v)(\?|#|$)/i,
   music: /\.(mp3|wav|m4a|aac|ogg|flac)(\?|#|$)/i,
+  speech: /\.(mp3|wav|m4a|aac|ogg|flac|pcm)(\?|#|$)/i,
 };
 
 const contentTypeByKind: Record<AssetGenerationKind, string> = {
   image: "image/png",
   video: "video/mp4",
   music: "audio/mpeg",
+  speech: "audio/mpeg",
 };
 
 export function mediaKind(kind: AssetGenerationKind): InferenceModality {
-  return kind === "music" ? "audio" : kind;
+  return kind === "music" || kind === "speech" ? "audio" : kind;
 }
 
 export function extractMediaOutputs(

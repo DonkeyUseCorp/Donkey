@@ -328,8 +328,30 @@ export async function requireInferenceCredits(input: CreditPreflightInput) {
   }
 }
 
+// Prisma raises P2034 when a transaction is aborted by a write conflict or
+// deadlock. A Serializable transaction rolls back entirely on conflict, so
+// nothing partially committed and the whole body is safe to re-run. Concurrent
+// charges against the same credit account (e.g. two generations at once)
+// routinely collide here; retrying transparently avoids surfacing a billing
+// race as a user-facing generation failure.
+async function withWriteConflictRetry<T>(run: () => Promise<T>): Promise<T> {
+  const maxAttempts = 5;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      const isWriteConflict =
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2034";
+      if (!isWriteConflict || attempt >= maxAttempts) {
+        throw error;
+      }
+    }
+  }
+}
+
 export async function recordInferenceUsage(input: InferenceUsageInput) {
-  const recorded = await prisma.$transaction(
+  const recorded = await withWriteConflictRetry(() => prisma.$transaction(
     async (tx): Promise<RecordedInferenceUsage> => {
       const included = input.billingMode === "included";
       // "included" calls never read or charge the balance, so skip the
@@ -422,7 +444,7 @@ export async function recordInferenceUsage(input: InferenceUsageInput) {
     {
       isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
     },
-  );
+  ));
 
   // After a real charge commits, top up the balance via auto-reload if it fell
   // below the user's threshold. Scheduled with next/server `after` so it runs

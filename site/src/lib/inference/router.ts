@@ -1,5 +1,6 @@
 import { createGeminiComputerUseProvider } from "@/lib/inference/adapters/gemini-computer-use";
 import { createGeminiImageAssetProvider } from "@/lib/inference/adapters/gemini-image";
+import { createGeminiSpeechAssetProvider } from "@/lib/inference/adapters/gemini-speech";
 import { createGeminiVideoAssetProvider } from "@/lib/inference/adapters/gemini-video";
 import { createHostedResponsesProvider } from "@/lib/inference/adapters/hosted-responses";
 import {
@@ -153,7 +154,11 @@ export class ProviderRegistry {
     }
 
     const preferredCapabilities =
-      request.kind === "music" ? ["music", "audio"] : [request.kind];
+      request.kind === "music"
+        ? ["music", "audio"]
+        : request.kind === "speech"
+          ? ["speech", "audio"]
+          : [request.kind];
 
     const provider = this.providers.find((candidate) => {
       return (
@@ -216,6 +221,8 @@ export function createProviderRegistry() {
     // Veo serves kind="video"; its distinct provider id keeps async refresh routing from
     // colliding with the synchronous image adapter.
     createGeminiVideoAssetProvider(),
+    // Gemini TTS serves kind="speech" (voiceovers, subtitle read-alouds).
+    createGeminiSpeechAssetProvider(),
     // ElevenLabs audio provider disabled for now (not in use).
     createGeminiComputerUseProvider(),
     createHostedResponsesProvider(),

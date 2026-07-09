@@ -32,6 +32,14 @@ export const veoModels = {
 
 export type VeoModel = (typeof veoModels)[keyof typeof veoModels];
 
+// Generative speech (Gemini TTS): text in, spoken audio out, with prompt-driven
+// style direction and inline audio tags. Bump here when adopting a newer TTS model.
+export const geminiTtsModels = {
+  flash: "gemini-3.1-flash-tts-preview",
+} as const;
+
+export type GeminiTtsModel = (typeof geminiTtsModels)[keyof typeof geminiTtsModels];
+
 // Maps the user-facing speed/quality tier (see the `video` SKILL.md picker) to a
 // Veo model. An unknown/absent tier falls back to `fast` at the call site.
 export const veoTierModels = {

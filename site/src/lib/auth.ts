@@ -15,9 +15,12 @@ export const visionApiKeyPrefix = "dk_live_";
 // redirect_uri is pinned to BETTER_AUTH_URL's host. A sign-in started on one
 // host would set a host-only state cookie there while the callback lands on the
 // other, so better-auth can't find the cookie and rejects it as state_mismatch.
-// Scoping the auth cookies to the registrable host lets them ride across both.
-// Returns undefined for hosts that can't carry a Domain attribute (localhost,
-// bare IPs), so local development keeps working.
+// Scoping the auth cookies to the registrable host lets them ride across both,
+// and across the cut.donkeyuse.com subdomain that serves the editor.
+//
+// Local dev needs none of this: Cut is served from the apex under /cut, so its
+// session cookie is already same-origin. (A Domain=localhost cookie doesn't
+// reach a cut.localhost subdomain in Chrome anyway.)
 function crossSubDomainCookieDomain() {
   const baseURL = process.env.BETTER_AUTH_URL;
   if (!baseURL) return undefined;
@@ -29,11 +32,28 @@ function crossSubDomainCookieDomain() {
     return undefined;
   }
 
-  if (host === "localhost" || host.endsWith(".localhost") || /^[0-9.]+$/.test(host)) {
-    return undefined;
-  }
+  if (/^[0-9.]+$/.test(host)) return undefined;
+  if (host === "localhost" || host.endsWith(".localhost")) return undefined;
 
   return host;
+}
+
+// In production the editor is served from cut.donkeyuse.com, a different origin
+// from the apex where Google's redirect_uri is pinned, so a sign-in that starts
+// on Cut redirects back to that origin — it has to be trusted for the redirect
+// to be honored. Local dev serves Cut under /cut on the apex (same origin), so
+// nothing extra is needed there.
+function cutRedirectOrigins(): string[] {
+  const baseURL = process.env.BETTER_AUTH_URL;
+  if (!baseURL) return [];
+  try {
+    const url = new URL(baseURL);
+    if (url.hostname === "localhost" || url.hostname.endsWith(".localhost")) return [];
+    if (!url.hostname.startsWith("cut.")) url.hostname = `cut.${url.hostname}`;
+    return [url.origin];
+  } catch {
+    return [];
+  }
 }
 
 const cookieDomain = crossSubDomainCookieDomain();
@@ -41,7 +61,7 @@ const cookieDomain = crossSubDomainCookieDomain();
 export const auth = betterAuth({
   baseURL: process.env.BETTER_AUTH_URL,
   secret: process.env.BETTER_AUTH_SECRET,
-  trustedOrigins: macAuthRedirectOrigins(),
+  trustedOrigins: [...macAuthRedirectOrigins(), ...cutRedirectOrigins()],
   // Sessions last a year, and the rolling expiry is refreshed daily on use, so an active user effectively
   // never has to sign in again. The Mac app's native session cookie rides this same lifetime, keeping the
   // desktop signed in long after the handoff.
