@@ -27,4 +27,20 @@ for arch in "${arches[@]}"; do
     src/cut/engine/main.ts \
     --outfile "$out"
   echo "==> built $out ($(du -h "$out" | cut -f1))"
+
+  # The on-device speech tool rides beside the engine binary: the engine puts
+  # its own directory on PATH, so transcription works out of the box and the
+  # tool updates in lockstep with the app.
+  swift_arch="$arch"
+  [ "$swift_arch" = "x64" ] && swift_arch="x86_64"
+  stt="dist/cut-engine/cut-stt-$arch"
+  echo "==> swiftc cut-stt ($arch)"
+  swiftc -O -parse-as-library -target "$swift_arch-apple-macos26" \
+    src/cut/server/native/cut-stt.swift -o "$stt"
 done
+
+# Dev runs the host-arch engine straight out of dist (the dev app symlinks it),
+# so give the speech tool its bare name here for the beside-the-binary lookup.
+if [ -f "dist/cut-engine/cut-stt-$host_arch" ]; then
+  ln -sf "cut-stt-$host_arch" dist/cut-engine/cut-stt
+fi

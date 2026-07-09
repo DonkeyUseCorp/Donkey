@@ -81,13 +81,17 @@ function run(cmd: string, args: string[], notFound?: string, timeoutMs = 600_000
 
 /**
  * The speech engine: Apple's on-device SpeechAnalyzer (macOS 26+), wrapped by
- * a tiny Swift CLI. A prebuilt cut-stt (shipped with the app's bundled tools,
- * on PATH) wins; the dev fallback compiles the source on first use into
- * ~/.cache/cut. Nothing ever leaves the machine.
+ * a tiny Swift CLI. The packaged engine ships cut-stt beside its own binary
+ * (that directory leads PATH) and resolves it exclusively from PATH, so a dev
+ * machine exercises the exact prod lookup; the plain dev server compiles the
+ * source on first use into ~/.cache/cut. Nothing ever leaves the machine.
  */
 async function ensureStt(): Promise<string> {
   const prebuilt = await findOnPath("cut-stt");
   if (prebuilt) return prebuilt;
+  if (process.env.DONKEY_CUT_ENGINE) {
+    throw new Error("The speech tool is missing. Update Donkey to restore transcription.");
+  }
 
   const src = path.join(process.cwd(), "src", "cut", "server", "native", "cut-stt.swift");
   const bin = path.join(os.homedir(), ".cache", "cut", "cut-stt");

@@ -327,10 +327,10 @@ stage_bundled_tools() {
 # app and built here as part of packaging, so one command produces a complete app. Set
 # DONKEY_CUT_ENGINE_BIN to reuse a prebuilt binary (e.g. a cross-arch or cached CI build) instead.
 stage_cut_engine() {
+  local arch
+  arch="$(uname -m)"; [ "$arch" = "x86_64" ] && arch="x64"
   local source_bin="${DONKEY_CUT_ENGINE_BIN:-}"
   if [ -z "$source_bin" ]; then
-    local arch
-    arch="$(uname -m)"; [ "$arch" = "x86_64" ] && arch="x64"
     echo "Building the Donkey Cut engine..."
     bash "$ROOT_DIR/site/scripts/build-cut-engine.sh"
     source_bin="$ROOT_DIR/site/dist/cut-engine/donkey-cut-engine-$arch"
@@ -361,6 +361,23 @@ PLIST
   codesign "${sopts[@]}" "$dest_dir/donkey-cut-engine" >/dev/null 2>&1 || true
   rm -f "$ents"
   echo "Bundled the Donkey Cut engine from $source_bin."
+
+  # The on-device speech tool ships beside the engine binary — the engine puts
+  # its own directory on PATH — so transcription works out of the box and the
+  # tool updates in lockstep with the app. Plain Swift binary: hardened runtime,
+  # no JIT entitlements.
+  local source_stt="${DONKEY_CUT_STT_BIN:-$(dirname "$source_bin")/cut-stt-$arch}"
+  if [ ! -f "$source_stt" ]; then
+    echo "Donkey Cut speech tool not found at $source_stt." >&2
+    exit 1
+  fi
+  cp "$source_stt" "$dest_dir/cut-stt"
+  chmod +x "$dest_dir/cut-stt"
+  local topts=(--force --sign "$APP_SIGN_IDENTITY")
+  [ "$APP_SIGN_IDENTITY" != "-" ] && topts+=(--options runtime --timestamp)
+  [ -n "${DONKEY_SIGN_KEYCHAIN:-}" ] && topts+=(--keychain "$DONKEY_SIGN_KEYCHAIN")
+  codesign "${topts[@]}" "$dest_dir/cut-stt" >/dev/null 2>&1 || true
+  echo "Bundled the Donkey Cut speech tool from $source_stt."
 }
 
 rm -rf "$APP_DIR"

@@ -30,7 +30,7 @@ Every Cut API route is a framework-free handler (web-standard request in, respon
 
 The engine is a single compiled binary built from the site's Cut code and version-locked to the app: the app's dev run script and release packaging build and bundle it automatically (no separate step), and the app stamps its own release version into the engine's environment, so updates ride app releases. The Donkey app spawns it at launch — regardless of sign-in, since Cut is free and standalone — restarts it with backoff if it dies, skips spawning when another engine already answers on the port, and stops it on quit. Its data lives under the user's Application Support; its logs under the user's Logs folder.
 
-Because a GUI-spawned process inherits a bare PATH, the engine rebuilds it: the app's bundled tools first (bundled tool always wins), then the user's login-shell PATH and common install dirs. That is how it finds ffmpeg, the user's `claude` and `codex`, and the prebuilt speech tool.
+Because a GUI-spawned process inherits a bare PATH, the engine rebuilds it: tools shipped beside the engine binary first (they version with the app), then the app's bundled tools (bundled tool always wins), then the user's login-shell PATH and common install dirs. That is how it finds the speech tool, ffmpeg, and the user's `claude` and `codex`.
 
 ## Boundary with Donkey
 
@@ -51,7 +51,7 @@ Missing tools disable the matching feature; they never affect the rest of the si
 | Feature | Needs |
 | --- | --- |
 | Encode, probe, thumbnails | the app's bundled `ffmpeg`/`ffprobe` |
-| Transcription / subtitles | prebuilt `cut-stt` from the bundled tools (dev falls back to compiling it) |
+| Transcription / subtitles | prebuilt `cut-stt` shipped beside the engine binary (the plain dev server falls back to compiling it) |
 | AI assistant | the user's own `claude` and `codex` CLI logins |
 | Projects, library, exports | writable local disk (Application Support when run as the engine) |
 

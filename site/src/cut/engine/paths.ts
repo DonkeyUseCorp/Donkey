@@ -32,9 +32,10 @@ function loginShellPath(): Promise<string | null> {
 
 /**
  * The engine is spawned by an app, not a terminal, so it inherits a bare
- * PATH. Rebuild it: the app's bundled tools first (bundled tool always wins),
- * then the user's login-shell PATH, common install dirs, and whatever was
- * already there.
+ * PATH. Rebuild it: tools shipped beside the engine binary first (they
+ * version with the app), then the app's bundled tools (bundled tool always
+ * wins), then the user's login-shell PATH, common install dirs, and whatever
+ * was already there.
  */
 export async function widenPath(): Promise<void> {
   const parts: string[] = [];
@@ -44,6 +45,7 @@ export async function widenPath(): Promise<void> {
       if (dir && !parts.includes(dir)) parts.push(dir);
     }
   };
+  push(path.dirname(process.execPath));
   push(process.env.DONKEY_CUT_TOOLS_DIR);
   push(await loginShellPath());
   for (const dir of COMMON_BIN_DIRS) push(dir);
