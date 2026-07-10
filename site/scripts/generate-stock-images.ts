@@ -9,9 +9,14 @@
 // image is checked for baked-in letterbox bars (regenerated when found, trimmed
 // as a last resort), cropped to its exact aspect, and written twice: a
 // near-native WebP the lightbox and timeline use, and a small grid thumb.
+//
+// After generation, every image is tagged: a vision pass looks at the finished
+// asset and extracts the searchable keywords (objects, animals, setting) the
+// editor's search box matches. Tags already in the manifest are reused, so
+// re-running only tags new or untagged images.
 
 import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { GoogleGenAI } from "@google/genai";
 import { JWT } from "google-auth-library";
@@ -27,6 +32,7 @@ interface CatalogItem {
 }
 
 const MODEL = process.env.GEMINI_IMAGE_MODEL?.trim() || "gemini-2.5-flash-image";
+const TAG_MODEL = "gemini-2.5-flash";
 const OUT_DIR = path.join(import.meta.dirname, "..", "public", "cut-stock");
 const MANIFEST = path.join(import.meta.dirname, "..", "src", "cut", "lib", "stockManifest.ts");
 const CONCURRENCY = 4;
@@ -248,11 +254,57 @@ async function finalize(image: Buffer, bars: Bars, item: CatalogItem) {
     .then((thumb) => writeFile(path.join(OUT_DIR, `${item.id}.thumb.webp`), thumb));
 }
 
-async function writeManifest(done: Set<string>) {
+/** Vision pass over a finished asset: extracts the concrete, searchable
+ * keywords for what is actually visible — objects (tree, cup, laptop),
+ * animals, people, setting (beach, road, office), and time/weather. */
+async function tagOne(client: GoogleGenAI, item: CatalogItem): Promise<string[]> {
+  const thumb = await readFile(path.join(OUT_DIR, `${item.id}.thumb.webp`));
+  const response = await client.models.generateContent({
+    model: TAG_MODEL,
+    contents: [
+      {
+        role: "user",
+        parts: [
+          { inlineData: { mimeType: "image/webp", data: thumb.toString("base64") } },
+          {
+            text: "List 10-20 search keywords for everything visible in this image: every distinct object (e.g. tree, dog, cup, laptop), animals, people, the setting (e.g. beach, road, office, forest), and time of day or weather if evident. Lowercase, one or two words each. Respond with a JSON array of strings only.",
+          },
+        ],
+      },
+    ],
+    config: { responseMimeType: "application/json" },
+  });
+  const parsed = JSON.parse(response.text ?? "[]") as unknown;
+  if (!Array.isArray(parsed)) throw new Error("tag response is not an array");
+  const tags = parsed
+    .filter((t): t is string => typeof t === "string")
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
+  if (tags.length === 0) throw new Error("no tags in response");
+  return [...new Set(tags)];
+}
+
+/** Tags from the current manifest, keyed by id — reused so re-runs only call
+ * the vision model for new or untagged images. */
+async function existingTags(): Promise<Map<string, string[]>> {
+  const byId = new Map<string, string[]>();
+  try {
+    const { STOCK_IMAGES } = await import("../src/cut/lib/stockManifest");
+    for (const entry of STOCK_IMAGES as { id: string; tags?: string[] }[]) {
+      if (entry.tags?.length) byId.set(entry.id, entry.tags);
+    }
+  } catch {
+    // No manifest yet — every image gets a fresh tagging pass.
+  }
+  return byId;
+}
+
+async function writeManifest(done: Set<string>, tags: Map<string, string[]>) {
   const entries = CATALOG.filter((c) => done.has(c.id)).map((c) => ({
     id: c.id,
     category: c.category,
     prompt: c.prompt,
+    tags: tags.get(c.id) ?? [],
     aspect: c.aspect,
     file: `/cut-stock/${c.id}.webp`,
     thumb: `/cut-stock/${c.id}.thumb.webp`,
@@ -311,7 +363,30 @@ async function main() {
   };
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 
-  await writeManifest(done);
+  const tags = await existingTags();
+  const tagQueue = CATALOG.filter((c) => done.has(c.id) && !tags.has(c.id));
+  console.log(`tagging ${tagQueue.length} images (${tags.size} already tagged)`);
+  const tagWorker = async () => {
+    for (let item = tagQueue.shift(); item; item = tagQueue.shift()) {
+      for (let attempt = 1; ; attempt++) {
+        try {
+          tags.set(item.id, await tagOne(client, item));
+          console.log(`✓ tags ${item.id}: ${tags.get(item.id)!.join(", ")}`);
+          break;
+        } catch (e) {
+          if (attempt >= 2) {
+            failed++;
+            console.error(`✗ tags ${item.id}: ${e instanceof Error ? e.message : e}`);
+            break;
+          }
+          console.warn(`retrying tags ${item.id}…`);
+        }
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: CONCURRENCY }, tagWorker));
+
+  await writeManifest(done, tags);
   console.log(`manifest: ${done.size}/${CATALOG.length} images${failed ? `, ${failed} failed` : ""}`);
   if (failed) process.exitCode = 1;
 }

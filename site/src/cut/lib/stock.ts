@@ -11,6 +11,9 @@ export interface StockImage {
   category: StockCategory;
   /** The generation prompt, saved verbatim — the editable starting point. */
   prompt: string;
+  /** Vision-extracted keywords for the visible content (objects, setting,
+   * subjects) — what the search box matches beyond the prompt text. */
+  tags: string[];
   aspect: StockAspect;
   /** Site-relative full-asset URL (under /cut-stock/) — lightbox, refs, timeline. */
   file: string;

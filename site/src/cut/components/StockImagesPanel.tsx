@@ -45,7 +45,10 @@ export function StockImagesPanel() {
 
   const q = query.trim().toLowerCase();
   const matches = (item: StockImage) =>
-    !q || item.prompt.toLowerCase().includes(q) || item.category.toLowerCase().includes(q);
+    !q ||
+    item.prompt.toLowerCase().includes(q) ||
+    item.category.toLowerCase().includes(q) ||
+    item.tags.some((t) => t.includes(q));
 
   const stock = STOCK_IMAGES.filter(matches);
 
