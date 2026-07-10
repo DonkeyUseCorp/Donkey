@@ -5,7 +5,7 @@ import { Captions, ChevronDown, Languages, Loader2, Pause, Play } from "lucide-r
 import { Button } from "@/components/ui/button";
 import { SectionTitle } from "@/cut/components/SectionTitle";
 import { creditsUrl, signInUrl, useSignedIn } from "@/cut/lib/generate";
-import { useEditor } from "@/cut/lib/store";
+import { useEditor, type EditorState } from "@/cut/lib/store";
 import {
   NoCreditsError,
   resolveLanguage,
@@ -191,16 +191,27 @@ function languageLabel(code: string): string {
   return SPEECH_LANGUAGES.find((l) => l.id === code)?.label ?? code;
 }
 
+/** The cue ids the readout covers: `select`'s scope, or every non-empty cue. */
+function scopedCueIds(s: EditorState, select?: (s: EditorState) => string[]): string[] {
+  return select ? select(s) : s.subtitles.cues.filter((c) => c.text.trim()).map((c) => c.id);
+}
+
 /**
  * Self-contained "voice the subtitles" block: the voice picker plus a generate
- * button and its error line. `cueIds` scopes the readout (e.g. the cues inside
- * one clip); absent = every cue.
+ * button and its error line. `selectCueIds` scopes the readout (e.g. the cues
+ * inside one clip); absent = every cue. When the scope has no cues yet,
+ * Generate transcribes the cut first and then voices the fresh cues.
  */
 export function GenerateSubtitlesAudio({
-  cueIds,
+  selectCueIds,
+  ensureCues,
   label = "Generate audio for subtitles",
 }: {
-  cueIds?: string[];
+  selectCueIds?: (s: EditorState) => string[];
+  /** Makes cues exist when the scope has none, matched to that scope (e.g.
+   * transcribe just the clip); defaults to transcribing the whole cut. Throws
+   * a user-facing error on failure. */
+  ensureCues?: () => Promise<void>;
   label?: string;
 }) {
   const voice = useSpeakerVoice();
@@ -208,16 +219,35 @@ export function GenerateSubtitlesAudio({
   const signedOut = useSignedIn() === false;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ text: string; credits?: boolean } | null>(null);
-  const wanted = cueIds && new Set(cueIds);
-  const cueCount = useEditor(
-    (s) => s.subtitles.cues.filter((c) => c.text.trim() && (!wanted || wanted.has(c.id))).length
-  );
+  const cueCount = useEditor((s) => scopedCueIds(s, selectCueIds).length);
+  const hasVideo = useEditor((s) => s.clips.length > 0);
 
   const generate = async () => {
     setBusy(true);
     setError(null);
     try {
-      await generateSubtitlesReadout(voice, { cueIds, language });
+      if (scopedCueIds(useEditor.getState(), selectCueIds).length === 0) {
+        // Nothing to read yet — transcribe first, then voice the fresh cues.
+        if (ensureCues) {
+          await ensureCues();
+        } else {
+          if (useEditor.getState().subtitleStatus === "running") {
+            throw new Error("Subtitles are still generating — try again in a moment.");
+          }
+          await useEditor.getState().generateSubtitles();
+          const after = useEditor.getState();
+          if (after.subtitleStatus === "error") {
+            throw new Error(after.subtitleError ?? "Transcription failed.");
+          }
+        }
+        if (scopedCueIds(useEditor.getState(), selectCueIds).length === 0) {
+          throw new Error("No speech found to voice.");
+        }
+      }
+      await generateSubtitlesReadout(voice, {
+        cueIds: selectCueIds?.(useEditor.getState()),
+        language,
+      });
     } catch (e) {
       setError(
         e instanceof Error
@@ -236,7 +266,11 @@ export function GenerateSubtitlesAudio({
         // Play previews the subtitle readout itself; Generate commits it. The
         // preview is cached, so committing afterward reuses the same audio.
         sample={{
-          run: () => previewSubtitlesReadout(voice, { cueIds, language }),
+          run: () =>
+            previewSubtitlesReadout(voice, {
+              cueIds: selectCueIds?.(useEditor.getState()),
+              language,
+            }),
           title: "Play the subtitles",
           disabled: cueCount === 0,
         }}
@@ -245,8 +279,14 @@ export function GenerateSubtitlesAudio({
       <Button
         variant="outline"
         className="voice-readout w-full"
-        disabled={cueCount === 0 || busy || signedOut}
-        title={cueCount === 0 ? "Generate subtitles first" : "Voice the subtitle text and drop it on the soundtrack"}
+        disabled={busy || signedOut || (cueCount === 0 && !hasVideo)}
+        title={
+          cueCount === 0
+            ? hasVideo
+              ? "Transcribe the speech, then voice it onto the soundtrack"
+              : "Add a video to the timeline first"
+            : "Voice the subtitle text and drop it on the soundtrack"
+        }
         onClick={() => void generate()}
       >
         {busy ? <Loader2 className="animate-spin" /> : <Captions data-icon="inline-start" />}

@@ -75,7 +75,7 @@ export type SubtitleStatus = "idle" | "running" | "ready" | "empty" | "error";
 
 export type SaveState = "saved" | "dirty" | "saving" | "error";
 
-interface EditorState {
+export interface EditorState {
   projectId: string | null;
   projectName: string;
   loaded: boolean;
@@ -180,6 +180,10 @@ interface EditorState {
   setNotes: (patch: Partial<{ text: string; publishedAt: string; links: string[] }>) => void;
   /** Kick off (and poll) an on-device transcription of the current cut. */
   generateSubtitles: () => Promise<void>;
+  /** Transcribe one clip's own audio (even when muted) and merge its cues into
+   * the subtitles; cues elsewhere on the timeline stay put. Throws a
+   * user-facing error on failure. */
+  generateClipSubtitles: (clipId: string) => Promise<void>;
   /** Caption the cut from its picture alone (no audio needed): sample frames
    * along the timeline and have the AI write timed narration cues. */
   generateVisualSubtitles: () => Promise<void>;
@@ -276,6 +280,29 @@ function nextFreeStart(spans: { start: number; end: number }[], t: number, len: 
     at = sp.end;
   }
   return at;
+}
+
+/** POST a transcribe spec and poll the job to completion. Returns the cues, or
+ * null when the user switches projects mid-run. Throws user-facing errors. */
+async function runTranscription(projectId: string, spec: object): Promise<SubtitleCue[] | null> {
+  const res = await apiFetch(`/api/cut/projects/${projectId}/transcribe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(spec),
+  });
+  const body = await apiJson<{ id?: string }>(res);
+  if (!res.ok || !body.id) throw new Error(body.error ?? "Transcription failed to start.");
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 600));
+    if (useEditor.getState().projectId !== projectId) return null;
+    const st = await apiFetch(`/api/cut/projects/${projectId}/transcribe?job=${body.id}`);
+    if (!st.ok) throw new Error("The transcription job was lost — try again.");
+    const status = (await st.json()) as { status: string; error?: string; cues?: SubtitleCue[] };
+    if (status.status === "error") throw new Error(status.error ?? "Transcription failed.");
+    if (status.status === "done") {
+      return useEditor.getState().projectId === projectId ? (status.cues ?? []) : null;
+    }
+  }
 }
 
 export const useEditor = create<EditorState>((set, get) => {
@@ -1169,49 +1196,86 @@ export const useEditor = create<EditorState>((set, get) => {
       };
       set({ subtitleStatus: "running", subtitleError: null });
       try {
-        const res = await apiFetch(`/api/cut/projects/${projectId}/transcribe`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(spec),
-        });
-        const body = await apiJson<{ id?: string }>(res);
-        if (!res.ok || !body.id) throw new Error(body.error ?? "Transcription failed to start.");
-        for (;;) {
-          await new Promise((r) => setTimeout(r, 600));
-          if (get().projectId !== projectId) return; // switched projects mid-run
-          const st = await apiFetch(`/api/cut/projects/${projectId}/transcribe?job=${body.id}`);
-          if (!st.ok) throw new Error("The transcription job was lost — try again.");
-          const status = (await st.json()) as {
-            status: string;
-            error?: string;
-            cues?: SubtitleCue[];
-          };
-          if (status.status === "error") throw new Error(status.error ?? "Transcription failed.");
-          if (status.status === "done") {
-            if (get().projectId !== projectId) return;
-            const cues = status.cues ?? [];
-            if (cues.length === 0) {
-              // No speech in the audio — leave the video untouched.
-              set((cur) => ({
-                subtitles: { ...cur.subtitles, cues: [], generatedAt: Date.now() },
-                subtitleStatus: "empty",
-              }));
-              return;
-            }
-            push();
-            set((cur) => ({
-              subtitles: { ...cur.subtitles, cues, generatedAt: Date.now() },
-              subtitleStatus: "ready",
-            }));
-            return;
-          }
+        const cues = await runTranscription(projectId, spec);
+        if (cues === null) return; // switched projects mid-run
+        if (cues.length === 0) {
+          // No speech in the audio — leave the video untouched.
+          set((cur) => ({
+            subtitles: { ...cur.subtitles, cues: [], generatedAt: Date.now() },
+            subtitleStatus: "empty",
+          }));
+          return;
         }
+        push();
+        set((cur) => ({
+          subtitles: { ...cur.subtitles, cues, generatedAt: Date.now() },
+          subtitleStatus: "ready",
+        }));
       } catch (err) {
         if (get().projectId !== projectId) return;
         set({
           subtitleStatus: "error",
           subtitleError: err instanceof Error ? err.message : String(err),
         });
+      }
+    },
+
+    generateClipSubtitles: async (clipId) => {
+      const s = get();
+      if (!s.projectId) throw new Error("Open a project first.");
+      if (s.subtitleStatus === "running") {
+        throw new Error("Subtitles are already generating — try again in a moment.");
+      }
+      const projectId = s.projectId;
+      const sp = getClipSpans(s.clips, s.assets).find((x) => x.clip.id === clipId);
+      if (!sp) throw new Error("The clip is no longer on the timeline.");
+      // The clip's own sound, deliberately unmuted: this transcribes what the
+      // clip says even when its timeline audio is muted.
+      const spec = {
+        duration: sp.len,
+        locale: s.subtitles.locale ?? "en-US",
+        clips: [
+          {
+            file: sp.asset.fileName,
+            in: sp.clip.in,
+            out: sp.clip.out,
+            muted: false,
+            speed: clipSpeed(sp.clip),
+            transition: 0,
+          },
+        ],
+        audio: [],
+      };
+      set({ subtitleStatus: "running", subtitleError: null });
+      try {
+        const cues = await runTranscription(projectId, spec);
+        if (cues === null) return; // switched projects mid-run
+        // The job timed cues against the lone clip, so shift them (and their
+        // word timings) onto the clip's timeline span. New cues replace any
+        // that overlapped the clip; the rest of the timeline keeps its cues.
+        const placed = cues.map((c) => ({
+          ...c,
+          start: c.start + sp.start,
+          end: c.end + sp.start,
+          words: c.words?.map((w) => ({ ...w, t0: w.t0 + sp.start, t1: w.t1 + sp.start })),
+        }));
+        if (placed.length > 0) push();
+        set((cur) => {
+          const kept = cur.subtitles.cues.filter(
+            (c) => !(c.end > sp.start && c.start < sp.start + sp.len)
+          );
+          const merged = [...kept, ...placed].sort((a, b) => a.start - b.start);
+          return {
+            subtitles: { ...cur.subtitles, cues: merged, generatedAt: Date.now() },
+            subtitleStatus: merged.length > 0 ? "ready" : "empty",
+          };
+        });
+      } catch (err) {
+        // The clip panel reports the error; just clear the global busy flag.
+        if (get().projectId === projectId) {
+          set({ subtitleStatus: get().subtitles.cues.length > 0 ? "ready" : "idle" });
+        }
+        throw err;
       }
     },
 

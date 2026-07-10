@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bold, Smile } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,7 +18,7 @@ import {
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { getClipSpans, useEditor } from "@/cut/lib/store";
+import { getClipSpans, useEditor, type EditorState } from "@/cut/lib/store";
 import { GenerateSubtitlesAudio } from "@/cut/components/VoicePicker";
 import { PLATE_COLOR, PLATE_OPACITY, PLATE_RADIUS } from "@/cut/lib/textRender";
 import { writeTextStyle } from "@/cut/lib/textStyle";
@@ -258,19 +258,21 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
   const [volumeDraft, setVolumeDraft] = useState<number | null>(null);
   const volume = volumeDraft ?? clip.volume ?? 1;
   // Subtitle cues overlapping this clip's timeline span, for the per-clip
-  // readout. Selected as a joined string so the reference stays stable while
-  // the playhead ticks through the same store.
-  const clipCueIdsKey = useEditor((s) => {
-    const sp = getClipSpans(s.clips, s.assets).find((x) => x.clip.id === clip.id);
-    if (!sp) return "";
-    return s.subtitles.cues
-      .filter((c) => c.text.trim() && c.end > sp.start && c.start < sp.start + sp.len)
-      .map((c) => c.id)
-      .join("\n");
-  });
-  const clipCueIds = useMemo(
-    () => (clipCueIdsKey ? clipCueIdsKey.split("\n") : []),
-    [clipCueIdsKey]
+  // readout. A selector rather than a snapshot so the generate button reads
+  // fresh ids after it auto-transcribes the cut.
+  const selectClipCueIds = useCallback(
+    (s: EditorState) => {
+      const sp = getClipSpans(s.clips, s.assets).find((x) => x.clip.id === clip.id);
+      if (!sp) return [];
+      return s.subtitles.cues
+        .filter((c) => c.text.trim() && c.end > sp.start && c.start < sp.start + sp.len)
+        .map((c) => c.id);
+    },
+    [clip.id]
+  );
+  const ensureClipCues = useCallback(
+    () => useEditor.getState().generateClipSubtitles(clip.id),
+    [clip.id]
   );
   // Generated voiceover clips overlapping this clip's span — the "Generated
   // audio" slider drives them all, so clip sound and voiceover balance from one
@@ -474,7 +476,11 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
           onPick={(frame, fit) => updateClip(clip.id, { frame, fit })}
         />
         <div className="mt-2 flex flex-col gap-1 border-t border-border pt-3">
-          <GenerateSubtitlesAudio cueIds={clipCueIds} label="Generate audio for clip" />
+          <GenerateSubtitlesAudio
+            selectCueIds={selectClipCueIds}
+            ensureCues={ensureClipCues}
+            label="Generate audio for clip"
+          />
           {genAudioIds.length > 0 && (
             <Row label="Volume">
               <Slider
