@@ -153,16 +153,14 @@ export function VoicePicker({
           <ChevronDown className="pointer-events-none absolute top-1/2 right-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
         </div>
       </div>
-      <div className="flex items-center gap-2">
-        <span
-          className="grid size-8 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"
-          title="Spoken language"
-        >
-          <Languages className="size-3.5" />
-        </span>
-        <div className="relative min-w-0 flex-1">
+      <label
+        className="voice-language-field relative ml-10 inline-flex max-w-[calc(100%-2.5rem)] items-center gap-2 self-start rounded-full border border-input py-1 pr-2.5 pl-3 text-muted-foreground transition-colors focus-within:border-ring"
+        title="Spoken language"
+      >
+        <Languages className="size-3.5 shrink-0" />
+        <span className="relative inline-flex min-w-0 items-center">
           <select
-            className="voice-language w-full appearance-none truncate rounded-lg border border-input bg-transparent py-2 pr-8 pl-2.5 text-[12.5px] outline-none focus:border-ring"
+            className="voice-language max-w-full appearance-none truncate bg-transparent pr-5 text-[12.5px] text-foreground outline-none"
             value={language}
             onChange={(e) => languagePref.write(e.target.value)}
           >
@@ -172,9 +170,9 @@ export function VoicePicker({
               </option>
             ))}
           </select>
-          <ChevronDown className="pointer-events-none absolute top-1/2 right-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-        </div>
-      </div>
+          <ChevronDown className="pointer-events-none absolute top-1/2 right-0 size-3.5 -translate-y-1/2" />
+        </span>
+      </label>
       {language !== "auto" && (
         <p className="voice-language-hint text-[11px] leading-relaxed text-muted-foreground">
           {`The voice reads your script as written — write it in ${languageLabel(language)} for ${languageLabel(language)} audio.`}
