@@ -181,7 +181,17 @@ export function LibraryView() {
   return (
     <div className="mx-auto w-full max-w-6xl px-10 py-9">
       <div className="mb-5 flex items-center justify-between gap-4">
-        <h1 className="text-lg font-semibold tracking-tight">Library</h1>
+        {openFolder === null ? (
+          <h1 className="text-lg font-semibold tracking-tight">Library</h1>
+        ) : (
+          <FolderCrumb
+            root="Library"
+            name={openFolderName ?? "Folder"}
+            mime={LIBRARY_MOVE_MIME}
+            onBack={() => gotoFolder(null)}
+            onDropOut={(ids) => void moveAssets(ids, null)}
+          />
+        )}
         <Button onClick={() => { setUrlError(null); setAddOpen(true); }}>
           <Upload data-icon="inline-start" /> Add media
         </Button>
@@ -201,17 +211,7 @@ export function LibraryView() {
         />
       </div>
 
-      {openFolder !== null ? (
-        <div className="mb-5">
-          <FolderCrumb
-            root="Library"
-            name={openFolderName ?? "Folder"}
-            mime={LIBRARY_MOVE_MIME}
-            onBack={() => gotoFolder(null)}
-            onDropOut={(ids) => void moveAssets(ids, null)}
-          />
-        </div>
-      ) : hasContent ? (
+      {openFolder === null && hasContent ? (
         <FolderShelf
           folders={folders}
           mime={LIBRARY_MOVE_MIME}
