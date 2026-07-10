@@ -1,10 +1,11 @@
 "use client";
 
-import { Film, Loader2, Plus, Sparkles, Trash2 } from "lucide-react";
+import { Film, Loader2, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
-import { collectRefs, useRefCandidates, useAssetDrop } from "@/cut/lib/assetRef";
+import { collectRefs, refFromStockVideo, useRefCandidates, useAssetDrop } from "@/cut/lib/assetRef";
 import { signInUrl, useGenerate, useSignedIn, type GenerateJob } from "@/cut/lib/generate";
+import { characterPrompt, stockTitle } from "@/cut/lib/stock";
 import { useEditor } from "@/cut/lib/store";
 import { useLocalPref } from "@/cut/lib/uiState";
 import { useVideoGen } from "@/cut/lib/videoGen";
@@ -31,7 +32,7 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
   const signedIn = useSignedIn();
   const allJobs = useGenerate((s) => s.jobs);
   const jobs = allJobs.filter((j) => j.projectId === projectId && j.kind === "video");
-  const { prompt, refs } = useVideoGen();
+  const { prompt, refs, character } = useVideoGen();
   const candidates = useRefCandidates();
   const { active: dropActive, attachTarget, targetProps } = useAssetDrop((ref) => {
     if (ref.kind !== "audio") useVideoGen.getState().addRef(ref);
@@ -50,9 +51,14 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
   const go = () => {
     const { text, refs: all } = collectRefs(prompt.trim(), refs, candidates, { dropAudio: true });
     if (!text) return;
+    // Character mode: the text is the spoken line — compose it with the
+    // persona, and seed the render with the character's poster frame so the
+    // same person delivers it.
+    const composed = character?.persona ? characterPrompt(character.persona, text) : text;
+    const seedRefs = character ? [refFromStockVideo(character)] : all;
     void useGenerate
       .getState()
-      .generateVideo(projectId, text, { tier, durationSeconds: seconds, refs: all });
+      .generateVideo(projectId, composed, { tier, durationSeconds: seconds, refs: seedRefs });
     useVideoGen.getState().openWith("");
   };
 
@@ -74,6 +80,26 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
             </span>
           </div>
         )}
+        {character && (
+          <div className="gen-character flex shrink-0 items-center gap-2 rounded-lg border border-border p-1.5">
+            {/* eslint-disable-next-line @next/next/no-img-element -- bundled static thumb on a client-only page */}
+            <img
+              src={character.thumb}
+              alt={stockTitle(character.id)}
+              className="size-8 shrink-0 rounded-md object-cover"
+            />
+            <span className="min-w-0 flex-1 truncate text-[12px] font-medium">
+              {stockTitle(character.id)}
+            </span>
+            <button
+              title="Leave character mode"
+              className="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground hover:text-foreground"
+              onClick={() => useVideoGen.getState().clearCharacter()}
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+        )}
         <RefChips
           refs={refs}
           onRemove={(ref) => useVideoGen.getState().removeRef(ref)}
@@ -82,7 +108,11 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
         />
         <MentionTextarea
           className="gen-prompt min-h-[88px] w-full shrink-0 resize-y rounded-lg border border-input bg-transparent px-2.5 py-2 text-[12.5px] leading-relaxed outline-none focus:border-ring"
-          placeholder="A drone shot rising over a foggy coastline at sunrise… Drop media in or type @ to reference it."
+          placeholder={
+            character
+              ? "What should they say?"
+              : "A drone shot rising over a foggy coastline at sunrise… Drop media in or type @ to reference it."
+          }
           value={prompt}
           onChange={(v) => useVideoGen.getState().setPrompt(v)}
           candidates={candidates}
