@@ -73,6 +73,11 @@ credentials.
   402 over quota, 429 rate-limited.
 - Don't wrap a handler in try/catch unless it can recover and return a different
   intentional response. Let unexpected errors surface to the framework.
+- `process.env` holds secrets only: API keys, credentials, and other sensitive
+  deploy values. Configuration — model ids, feature switches, tunables — is
+  code; write the value where it's used. An env-var fallback like
+  `process.env.SOME_MODEL ?? "default"` ships the feature dormant and hides the
+  real value from readers.
 
 ## Database
 
@@ -135,7 +140,7 @@ global endpoint only when `GOOGLE_APPLICATION_CREDENTIALS_JSON` carries a
 `project_id`; without one, the provider is unavailable. Set that JSON as a
 hosted-deploy secret — Google credentials never live in the Mac app.
 
-Model choice stays in code, not environment overrides:
+Model choice is code (see Handler Rules on `process.env`):
 
 | Call | Model |
 |---|---|
