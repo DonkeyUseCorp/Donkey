@@ -1,5 +1,6 @@
 "use client";
 
+import { geminiModels } from "@/lib/inference/gemini-models";
 import { importFileToProject } from "./media";
 import type { MediaAsset } from "./types";
 
@@ -133,6 +134,97 @@ export function resolveVoice(wanted?: string): string {
 }
 
 const CLIENT_ID = "donkey-cut";
+
+/** What a free-text voice direction resolves to once a model has read it. */
+export interface VoiceoverPlan {
+  /** Lines to speak, in order — translated into `language` when the direction
+   * asked to speak in another tongue, otherwise the originals unchanged. */
+  texts: string[];
+  /** Delivery instruction with any "say it in X" language ask removed. */
+  direction?: string;
+  /** BCP-47 code to pin pronunciation: the language the direction named, or the
+   * caller's picked language when it named none. */
+  language?: string;
+}
+
+const PLAN_INSTRUCTIONS = `You prepare a voiceover before a text-to-speech voice reads it.
+
+You get a delivery DIRECTION (free text about how to say it) and the LINES to speak. Decide whether the direction asks for the lines to be spoken in a specific language that differs from the language they are already written in.
+
+Respond with ONLY a JSON object — no prose, no code fences:
+{
+  "language": string | null,  // BCP-47 tag (e.g. "ko-KR", "es-US", "ja-JP") when the direction asks to speak in a language; otherwise null
+  "delivery": string | null,  // the direction with any language request removed (e.g. "warmly"); null if nothing about delivery is left
+  "lines": string[] | null    // the LINES translated into "language", same count and order; null when no translation is needed
+}
+
+Rules:
+- Set "language" only when the direction actually asks to speak in a language ("say it in Korean", "in Spanish", "read this in Japanese").
+- When you set "language", translate every line into it, preserving meaning, tone, punctuation, and inline tags like [whispers]. Keep the same number of lines in the same order.
+- When the direction is only about tone, pace, or energy ("say warmly"), return "language": null and "lines": null and put the whole direction in "delivery".
+- When the direction is empty, return {"language": null, "delivery": null, "lines": null}.`;
+
+/** Read a free-text voice direction for a target language and, when it names
+ * one, translate the lines into it. The direction is natural language ("say it
+ * in Korean, warmly"), so a model — not string matching — decides whether a
+ * language was asked for; the returned plan carries the (possibly translated)
+ * lines, the resolved BCP-47 code, and the direction with the language ask
+ * stripped out. With no direction there is nothing to read, so the inputs pass
+ * through unchanged and no round-trip happens. Any failure falls back to the
+ * inputs so a generation never breaks on the prep step. */
+export async function planVoiceover(
+  texts: string[],
+  opts: { direction?: string; language?: string }
+): Promise<VoiceoverPlan> {
+  const direction = opts.direction?.trim();
+  const passthrough: VoiceoverPlan = { texts, direction, language: opts.language };
+  if (!direction) return passthrough;
+  try {
+    const res = await fetch("/api/inference/responses", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-donkey-client-id": CLIENT_ID },
+      body: JSON.stringify({
+        donkeyProvider: "gemini",
+        model: geminiModels.flash,
+        instructions: PLAN_INSTRUCTIONS,
+        input: [{ role: "user", content: [{ text: JSON.stringify({ direction, lines: texts }) }] }],
+      }),
+    });
+    if (!res.ok) return passthrough;
+    const body = (await res.json()) as { output_text?: string };
+    const plan = parsePlan(body.output_text);
+    if (!plan) return passthrough;
+
+    const language =
+      typeof plan.language === "string" && plan.language.trim()
+        ? resolveLanguage(plan.language)
+        : opts.language;
+    const translated =
+      Array.isArray(plan.lines) && plan.lines.length === texts.length
+        ? plan.lines.filter((l): l is string => typeof l === "string" && l.trim().length > 0)
+        : [];
+    const lines = translated.length === texts.length ? translated : texts;
+    const delivery = typeof plan.delivery === "string" ? plan.delivery.trim() : "";
+    return { texts: lines, direction: delivery || undefined, language };
+  } catch {
+    return passthrough;
+  }
+}
+
+/** Pull the plan JSON out of the model's reply, tolerating a code fence. */
+function parsePlan(
+  text: string | undefined
+): { language?: unknown; delivery?: unknown; lines?: unknown } | null {
+  if (!text) return null;
+  const body = text.trim().replace(/^```(?:json)?\s*|\s*```$/g, "");
+  try {
+    const value = JSON.parse(body);
+    return value && typeof value === "object" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 const MAX_SEGMENTS = 200;
 const MAX_SEGMENT_CHARS = 2000;
 const MAX_TOTAL_CHARS = 20000;
@@ -259,13 +351,9 @@ function assembleWav(clips: PcmClip[], offsets: number[]): Blob {
   return new Blob([header.buffer, data.buffer], { type: "audio/wav" });
 }
 
-/**
- * Synthesize segments into one WAV in the project's media folder. The file's
- * t=0 is the earliest segment, and `offset` is that earliest timeline time —
- * drop one audio clip at `offset` and every line lands on its cue.
- */
 export interface SpeechLayout {
-  /** The input segment's text, so callers can match a line back to its cue. */
+  /** The spoken line's text (translated when the direction asked), so callers
+   * can match a line back to its cue. */
   text: string;
   /** Timeline second this line's audio starts at. */
   at: number;
@@ -273,22 +361,41 @@ export interface SpeechLayout {
   duration: number;
 }
 
-export async function synthesizeSpeech(
-  projectId: string,
+/**
+ * Synthesize segments into one WAV clip. The direction is read for a target
+ * language and the lines translated when asked (planVoiceover), each line is
+ * spoken, and the clips are laid out into a single WAV whose t=0 is the
+ * earliest segment. `offset` is that earliest timeline time; `layout` reports
+ * where each line landed so callers can re-time their cues. This is the shared
+ * core behind every voiceover surface — the timeline asset, the subtitles
+ * readout, and the in-panel preview — so language handling is identical
+ * everywhere.
+ */
+export async function renderSpeechClip(
   segments: SpeechSegment[],
-  opts: { voice: string; direction?: string; language?: string; name?: string }
-): Promise<{ asset: MediaAsset; offset: number; layout: SpeechLayout[] }> {
-  const lines = segments
+  opts: { voice: string; direction?: string; language?: string }
+): Promise<{ blob: Blob; offset: number; layout: SpeechLayout[] }> {
+  const raw = segments
     .map((s) => ({ text: s.text.trim(), at: Math.max(0, s.at) }))
     .filter((s) => s.text);
-  if (lines.length === 0) throw new Error("Nothing to say.");
-  if (lines.length > MAX_SEGMENTS) throw new Error(`At most ${MAX_SEGMENTS} lines at once.`);
-  if (lines.some((s) => s.text.length > MAX_SEGMENT_CHARS)) {
+  if (raw.length === 0) throw new Error("Nothing to say.");
+  if (raw.length > MAX_SEGMENTS) throw new Error(`At most ${MAX_SEGMENTS} lines at once.`);
+  if (raw.some((s) => s.text.length > MAX_SEGMENT_CHARS)) {
     throw new Error(`Each line must stay under ${MAX_SEGMENT_CHARS} characters.`);
   }
-  if (lines.reduce((n, s) => n + s.text.length, 0) > MAX_TOTAL_CHARS) {
+  if (raw.reduce((n, s) => n + s.text.length, 0) > MAX_TOTAL_CHARS) {
     throw new Error(`The script must stay under ${MAX_TOTAL_CHARS} characters.`);
   }
+
+  // The one place a free-text direction becomes speech settings: a model reads
+  // it for a "say it in X" ask and translates the lines when it names a
+  // language, so the voice speaks the translation rather than English with an
+  // accent. No direction → passthrough, no round-trip.
+  const plan = await planVoiceover(
+    raw.map((l) => l.text),
+    { direction: opts.direction, language: opts.language }
+  );
+  const lines = raw.map((l, i) => ({ text: plan.texts[i] ?? l.text, at: l.at }));
 
   const offset = Math.min(...lines.map((s) => s.at));
   const voice = resolveVoice(opts.voice);
@@ -301,13 +408,13 @@ export async function synthesizeSpeech(
       const i = next++;
       try {
         try {
-          clips[i] = await synthesizeSegment(lines[i].text, voice, opts.direction, opts.language);
+          clips[i] = await synthesizeSegment(lines[i].text, voice, plan.direction, plan.language);
         } catch (e) {
           // An empty balance repeats forever — resending only burns the queue.
           if (e instanceof NoCreditsError) throw e;
           // The TTS backend rejects the odd call spuriously; one resend of just
           // this line usually lands and saves the rest of the batch.
-          clips[i] = await synthesizeSegment(lines[i].text, voice, opts.direction, opts.language);
+          clips[i] = await synthesizeSegment(lines[i].text, voice, plan.direction, plan.language);
         }
       } catch (e) {
         // Name the line that failed so a one-bad-cue batch is actionable.
@@ -335,21 +442,42 @@ export async function synthesizeSpeech(
     cursor = at + clips[i].samples.length / clips[i].rate;
   });
 
-  const wav = assembleWav(clips, placed);
-  const name = opts.name?.trim() || "AI voice";
-  const file = new File([wav], `${slug(name)}.wav`, { type: "audio/wav" });
-  const asset = await importFileToProject(projectId, file);
-  if (!asset) throw new Error("Could not save the voiceover into the project.");
-  asset.name = name;
-  asset.origin = "voiceover";
-  // Report where each line's audio actually lands and how long it runs, so a
-  // subtitles readout can re-time its cues to the generated voice (whose pace
-  // differs from the original recording).
+  const blob = assembleWav(clips, placed);
   const layout: SpeechLayout[] = lines.map((l, i) => ({
     text: l.text,
     at: offset + placed[i],
     duration: clips[i].samples.length / clips[i].rate,
   }));
+  return { blob, offset, layout };
+}
+
+/** Save a rendered speech clip into the project's media folder as a voiceover
+ * asset. Split from rendering so a preview can play the same clip without
+ * committing it. */
+export async function speechClipToAsset(
+  projectId: string,
+  blob: Blob,
+  name?: string
+): Promise<MediaAsset> {
+  const label = name?.trim() || "AI voice";
+  const file = new File([blob], `${slug(label)}.wav`, { type: "audio/wav" });
+  const asset = await importFileToProject(projectId, file);
+  if (!asset) throw new Error("Could not save the voiceover into the project.");
+  asset.name = label;
+  asset.origin = "voiceover";
+  return asset;
+}
+
+/** Render the segments and save the result as a project voiceover asset —
+ * render-then-commit in one call, for the surfaces that go straight to the
+ * timeline. */
+export async function synthesizeSpeech(
+  projectId: string,
+  segments: SpeechSegment[],
+  opts: { voice: string; direction?: string; language?: string; name?: string }
+): Promise<{ asset: MediaAsset; offset: number; layout: SpeechLayout[] }> {
+  const { blob, offset, layout } = await renderSpeechClip(segments, opts);
+  const asset = await speechClipToAsset(projectId, blob, opts.name);
   return { asset, offset, layout };
 }
 

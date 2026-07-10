@@ -131,6 +131,8 @@ function VoiceGenerator({ projectId }: { projectId: string }) {
     try {
       const playhead = useEditor.getState().currentTime;
       const lead = text.split(/\s+/).slice(0, 4).join(" ");
+      // synthesizeSpeech reads the direction for a "say it in X" ask and
+      // translates the script into that language before speaking it.
       const { asset } = await synthesizeSpeech(projectId, [{ text, at: 0 }], {
         voice,
         direction,
@@ -160,7 +162,8 @@ function VoiceGenerator({ projectId }: { projectId: string }) {
       <div className="flex flex-col gap-1.5">
         {sectionLabel("Voice direction")}
         <p className="-mt-0.5 text-[11px] leading-snug text-muted-foreground">
-          Optional. Tell the voice how to deliver the lines — its tone, pace, and energy.
+          Optional. Tell the voice how to deliver the lines — its tone, pace, and energy, or ask
+          it to speak in another language.
         </p>
         <div className="relative">
           <textarea

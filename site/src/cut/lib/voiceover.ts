@@ -1,9 +1,74 @@
 import { enrichAsset } from "@/cut/lib/media";
 import { useEditor } from "@/cut/lib/store";
-import { synthesizeSpeech } from "@/cut/lib/tts";
+import { renderSpeechClip, speechClipToAsset, type SpeechLayout } from "@/cut/lib/tts";
 
 /** Default duck: everything else drops to 40% while a voiceover speaks. */
 export const DUCK_DEFAULT = 0.4;
+
+interface ReadoutCue {
+  id: string;
+  text: string;
+  start: number;
+}
+
+/** The cues to voice, in timeline order: all subtitle cues, or just `cueIds`. */
+function readoutCues(cueIds?: string[]): ReadoutCue[] {
+  const wanted = cueIds && new Set(cueIds);
+  return useEditor
+    .getState()
+    .subtitles.cues.filter((c) => c.text.trim() && (!wanted || wanted.has(c.id)))
+    .map((c) => ({ id: c.id, text: c.text, start: c.start }));
+}
+
+// The last rendered readout. Preview and Generate render through here, so a
+// preview the user liked becomes the exact clip that lands on the timeline
+// instead of a second (paid) synthesis. Keyed by everything that changes the
+// audio, so any edit re-renders.
+let cached: { sig: string; blob: Blob; offset: number; layout: SpeechLayout[] } | null = null;
+
+function signature(
+  voice: string,
+  cues: ReadoutCue[],
+  opts?: { direction?: string; language?: string }
+): string {
+  return JSON.stringify([
+    voice,
+    opts?.language ?? "",
+    opts?.direction ?? "",
+    cues.map((c) => [c.text, c.start]),
+  ]);
+}
+
+async function renderReadout(
+  voice: string,
+  cues: ReadoutCue[],
+  opts?: { direction?: string; language?: string }
+) {
+  const sig = signature(voice, cues, opts);
+  if (cached?.sig === sig) return cached;
+  const { blob, offset, layout } = await renderSpeechClip(
+    cues.map((c) => ({ text: c.text, at: c.start })),
+    { voice, direction: opts?.direction, language: opts?.language }
+  );
+  cached = { sig, blob, offset, layout };
+  return cached;
+}
+
+/**
+ * Voice the subtitle cues and return a blob URL to play in-panel — a preview of
+ * exactly what "Generate" will drop on the timeline, without creating an asset.
+ * The render is cached, so committing that same readout afterward reuses this
+ * audio rather than paying to synthesize it twice.
+ */
+export async function previewSubtitlesReadout(
+  voice: string,
+  opts?: { cueIds?: string[]; direction?: string; language?: string }
+): Promise<string> {
+  const cues = readoutCues(opts?.cueIds);
+  if (cues.length === 0) throw new Error("No subtitles to read.");
+  const { blob } = await renderReadout(voice, cues, opts);
+  return URL.createObjectURL(blob);
+}
 
 /**
  * Voice the subtitle cues (all of them, or just `opts.cueIds`) and drop the
@@ -17,18 +82,13 @@ export async function generateSubtitlesReadout(
   voice: string,
   opts?: { cueIds?: string[]; direction?: string; language?: string; duck?: number }
 ) {
-  const s = useEditor.getState();
-  const projectId = s.projectId;
+  const projectId = useEditor.getState().projectId;
   if (!projectId) throw new Error("Open a project first.");
-  const wanted = opts?.cueIds && new Set(opts.cueIds);
-  const cues = s.subtitles.cues.filter((c) => c.text.trim() && (!wanted || wanted.has(c.id)));
+  const cues = readoutCues(opts?.cueIds);
   if (cues.length === 0) throw new Error("No subtitles to read.");
 
-  const { asset, offset, layout } = await synthesizeSpeech(
-    projectId,
-    cues.map((c) => ({ text: c.text, at: c.start })),
-    { voice, direction: opts?.direction, language: opts?.language, name: "Subtitles readout" }
-  );
+  const { blob, offset, layout } = await renderReadout(voice, cues, opts);
+  const asset = await speechClipToAsset(projectId, blob, "Subtitles readout");
   const duck = opts?.duck ?? DUCK_DEFAULT;
   const cur = useEditor.getState();
   cur.addAsset(asset);

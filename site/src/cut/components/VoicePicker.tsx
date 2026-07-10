@@ -13,7 +13,7 @@ import {
   SPEECH_LANGUAGES,
   SPEECH_VOICES,
 } from "@/cut/lib/tts";
-import { generateSubtitlesReadout } from "@/cut/lib/voiceover";
+import { generateSubtitlesReadout, previewSubtitlesReadout } from "@/cut/lib/voiceover";
 
 // Shared speech preferences (speaker voice, spoken language) for every surface
 // that generates audio (Audio tab, Subtitles tab, clip settings). Module-level
@@ -67,14 +67,17 @@ export function useSpeechLanguage(): string {
 /**
  * Speaker-voice row: a play button that samples the voice plus the voice
  * select. Drop it into any surface that generates speech — they all share one
- * persisted voice choice.
+ * persisted voice choice. Pass `sample` to make the play button preview real
+ * content (e.g. the subtitle readout) instead of the canned voice sample.
  */
 export function VoicePicker({
   onError,
   title = "Speaker voice",
+  sample: sampleOverride,
 }: {
   onError?: (e: unknown) => void;
   title?: string;
+  sample?: { run: () => Promise<string>; title?: string; disabled?: boolean };
 }) {
   const voice = useSpeakerVoice();
   const language = useSpeechLanguage();
@@ -90,7 +93,7 @@ export function VoicePicker({
     []
   );
 
-  const sample = () => {
+  const play = () => {
     const el = (sampler.current ??= new Audio());
     if (sampling) {
       sampleSeq.current++;
@@ -100,7 +103,7 @@ export function VoicePicker({
     }
     const seq = ++sampleSeq.current;
     setSampling("loading");
-    speechSampleUrl(voice, language)
+    (sampleOverride?.run ?? (() => speechSampleUrl(voice, language)))()
       .then((url) => {
         if (seq !== sampleSeq.current) return;
         el.src = url;
@@ -116,6 +119,8 @@ export function VoicePicker({
       });
   };
 
+  const sampleTitle = sampleOverride?.title ?? "Hear this voice";
+
   return (
     <div className="voice-picker flex flex-col gap-1.5">
       <span className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
@@ -125,10 +130,10 @@ export function VoicePicker({
         <button
           type="button"
           className="voice-sample grid size-8 shrink-0 place-items-center rounded-full bg-muted text-foreground transition-colors hover:bg-muted/70 disabled:opacity-40"
-          title="Hear this voice"
-          aria-label="Hear this voice"
-          disabled={signedOut}
-          onClick={sample}
+          title={sampleTitle}
+          aria-label={sampleTitle}
+          disabled={signedOut || sampleOverride?.disabled === true}
+          onClick={play}
         >
           {sampling === "loading" ? (
             <Loader2 className="size-3.5 animate-spin" />
@@ -229,7 +234,14 @@ export function GenerateSubtitlesAudio({
     <div className="subtitles-audio flex flex-col gap-2.5">
       <VoicePicker
         title="Generated audio"
-        onError={(e) => setError({ text: e instanceof Error ? e.message : "Could not play the sample.", credits: e instanceof NoCreditsError })}
+        // Play previews the subtitle readout itself; Generate commits it. The
+        // preview is cached, so committing afterward reuses the same audio.
+        sample={{
+          run: () => previewSubtitlesReadout(voice, { cueIds, language }),
+          title: "Play the subtitles",
+          disabled: cueCount === 0,
+        }}
+        onError={(e) => setError({ text: e instanceof Error ? e.message : "Could not play the subtitles.", credits: e instanceof NoCreditsError })}
       />
       <Button
         variant="outline"
