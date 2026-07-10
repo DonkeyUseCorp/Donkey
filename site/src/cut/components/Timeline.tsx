@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AudioLines, Blend, Check, EllipsisVertical, Expand, Eye, EyeOff, FolderPlus, Loader2, Pause, Play, Plus, Scissors, SkipBack, Sunrise, Sunset, Trash2, Type, VolumeX, ZoomIn, ZoomOut, type LucideIcon } from "lucide-react";
+import { AudioLines, Blend, Check, EllipsisVertical, Expand, Eye, EyeOff, FolderPlus, Loader2, Pause, Play, Plus, Scissors, SkipBack, Sunrise, Sunset, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -1444,10 +1444,12 @@ function ClipView({
             {(Math.round(span.len * 10) / 10).toFixed(1)}s
           </span>
         )}
-        {clip.muted && (
-          <span className="tl-mute-chip absolute bottom-1 left-1 z-2 grid size-[18px] place-items-center rounded-[5px] bg-black/70 text-white" title="Muted">
-            <VolumeX className="size-3" />
-          </span>
+        {asset.type === "video" && (
+          <MuteChip
+            muted={clip.muted}
+            className="bottom-1 left-1"
+            onToggle={() => useEditor.getState().updateClip(clip.id, { muted: !clip.muted })}
+          />
         )}
         {(clip.speed ?? 1) !== 1 && (
           <span
@@ -1540,6 +1542,35 @@ function HideChip({
       onClick={onToggle}
     >
       {hidden ? <EyeOff className="size-3" /> : <Eye className="size-3" />}
+    </button>
+  );
+}
+
+/** Hover chip that toggles a clip's own audio. Stays visible while the clip is
+ * muted so unmuting is one click. */
+function MuteChip({
+  muted,
+  onToggle,
+  className,
+}: {
+  muted: boolean;
+  onToggle: () => void;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      title={muted ? "Unmute clip" : "Mute clip"}
+      aria-label={muted ? "Unmute clip" : "Mute clip"}
+      className={cn(
+        "tl-mute-chip absolute z-4 grid size-[18px] place-items-center rounded-[5px] bg-black/55 text-white transition-opacity hover:bg-black/75",
+        muted ? "opacity-100 bg-black/70" : "opacity-0 group-hover:opacity-100",
+        className
+      )}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={onToggle}
+    >
+      {muted ? <VolumeX className="size-3" /> : <Volume2 className="size-3" />}
     </button>
   );
 }
@@ -1822,10 +1853,12 @@ function OverlayClipView({
       {selected && (
         <div className="pointer-events-none absolute inset-0 z-[1] bg-[#0a84ff]/25" />
       )}
-      {clip.muted && (
-        <span className="tl-mute-chip absolute bottom-1 left-1 z-2 grid size-[18px] place-items-center rounded-[5px] bg-black/70 text-white" title="Muted">
-          <VolumeX className="size-3" />
-        </span>
+      {asset.type === "video" && (
+        <MuteChip
+          muted={clip.muted}
+          className="bottom-1 left-1"
+          onToggle={() => useEditor.getState().updateOverlayClip(clip.id, { muted: !clip.muted })}
+        />
       )}
       {(clip.speed ?? 1) !== 1 && (
         <span
