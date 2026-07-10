@@ -398,7 +398,9 @@ export function MentionTextarea({
         aria-hidden
         className={cn(
           className,
-          "pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-transparent"
+          // Keep the border width for identical text metrics, but draw nothing:
+          // only the real textarea should paint a box.
+          "pointer-events-none absolute inset-0 overflow-hidden border-transparent bg-transparent whitespace-pre-wrap break-words text-transparent"
         )}
       >
         {highlightMentions(value, candidates).map((seg, i) =>
@@ -416,7 +418,7 @@ export function MentionTextarea({
       </div>
       <textarea
         ref={taRef}
-        className={cn(className, "relative bg-transparent")}
+        className={cn(className, "relative block bg-transparent")}
         rows={rows}
         placeholder={placeholder}
         value={value}
