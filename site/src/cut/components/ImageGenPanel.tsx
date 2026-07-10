@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import { ChevronDown, Loader2, Maximize2, Sparkles, Trash2 } from "lucide-react";
+import { ChevronDown, Copy, Loader2, Maximize2, Sparkles, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { clearAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
-import { collectRefs, useRefCandidates, useAssetDrop } from "@/cut/lib/assetRef";
+import { collectRefs, mentionToken, useRefCandidates, useAssetDrop } from "@/cut/lib/assetRef";
 import { signInUrl, useGenerate, useSignedIn } from "@/cut/lib/generate";
 import {
   IMAGE_RESOLUTION_LABEL,
@@ -16,7 +17,8 @@ import { useLightbox } from "@/cut/lib/lightbox";
 import { useEditor } from "@/cut/lib/store";
 import type { MediaAsset } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
-import { CopyRefButton, MentionTextarea, RefChips, RefHandlePill } from "./AssetRefs";
+import { MentionTextarea, RefChips, RefHandlePill } from "./AssetRefs";
+import { GeneratedAssetMenu } from "./GeneratedAssetMenu";
 
 // The generate-image panel: an always-on column in the Image tab, sitting left
 // of the stock browser. Clicking a stock tile loads its saved prompt here; the
@@ -188,6 +190,7 @@ export function ImageGenPanel({ projectId }: { projectId: string }) {
               <GeneratedTile
                 key={a.id}
                 asset={a}
+                projectId={projectId}
                 handle={candidates.find((c) => c.scope === "project" && c.id === a.id)?.handle}
               />
             ))}
@@ -243,9 +246,19 @@ function PillSelect<T extends string>({
 }
 
 /** A generated image, shown big: reference it in a prompt by its @handle, drag
- * it onto the timeline or into chat, click to reload its prompt, copy its
- * @reference, or delete it. Its name surfaces on hover so the grid stays clean. */
-function GeneratedTile({ asset, handle }: { asset: MediaAsset; handle?: string }) {
+ * it onto the timeline or into chat, click to reload its prompt, and reach
+ * everything else — expand, copy its @reference, send it to Media or the
+ * library, delete — through the corner "…" menu. Its name surfaces on hover so
+ * the grid stays clean. */
+function GeneratedTile({
+  asset,
+  projectId,
+  handle,
+}: {
+  asset: MediaAsset;
+  projectId: string;
+  handle?: string;
+}) {
   const tileRef = useRef<HTMLDivElement>(null);
   return (
     <div ref={tileRef} className="group relative overflow-hidden rounded-lg">
@@ -286,31 +299,45 @@ function GeneratedTile({ asset, handle }: { asset: MediaAsset; handle?: string }
       <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-2 py-1.5 opacity-0 transition-opacity group-hover:opacity-100">
         <span className="block truncate text-[11px] font-medium text-white">{asset.name}</span>
       </div>
-      <div className="absolute top-1 right-1 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-        <button
-          title="Expand"
-          className="grid size-5 place-items-center rounded-full bg-black/45 text-white hover:bg-black/65"
-          onClick={() =>
-            useLightbox.getState().open({
-              src: asset.url,
-              isVideo: false,
-              name: asset.name,
-              prompt: asset.name,
-              assetId: asset.id,
-            })
-          }
-        >
-          <Maximize2 className="size-3" />
-        </button>
-        <CopyRefButton name={asset.name} />
-        <button
-          title="Delete"
-          className="grid size-5 place-items-center rounded-full bg-black/45 text-white hover:bg-black/65"
-          onClick={() => useEditor.getState().removeAsset(asset.id)}
-        >
-          <Trash2 className="size-3" />
-        </button>
-      </div>
+      <GeneratedAssetMenu
+        asset={asset}
+        projectId={projectId}
+        triggerClassName="absolute top-1 right-1 grid size-5 place-items-center rounded-full bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100 data-popup-open:opacity-100 hover:bg-black/65"
+        before={
+          <>
+            <DropdownMenuItem
+              onClick={() =>
+                useLightbox.getState().open({
+                  src: asset.url,
+                  isVideo: false,
+                  name: asset.name,
+                  prompt: asset.name,
+                  assetId: asset.id,
+                })
+              }
+            >
+              <Maximize2 /> Expand
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() =>
+                void navigator.clipboard
+                  .writeText(handle ? `@${handle}` : mentionToken(asset.name))
+                  .catch(() => {})
+              }
+            >
+              <Copy /> Copy reference
+            </DropdownMenuItem>
+          </>
+        }
+        after={
+          <DropdownMenuItem
+            variant="destructive"
+            onClick={() => useEditor.getState().removeAsset(asset.id)}
+          >
+            <Trash2 /> Delete
+          </DropdownMenuItem>
+        }
+      />
     </div>
   );
 }

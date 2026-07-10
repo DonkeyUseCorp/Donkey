@@ -1,6 +1,6 @@
 "use client";
 
-import { type DragEventHandler, useEffect, useRef, useState } from "react";
+import { type DragEventHandler, type ReactNode, useEffect, useRef, useState } from "react";
 import {
   AudioLines,
   Check,
@@ -40,6 +40,7 @@ import { formatTime } from "@/cut/lib/time";
 import { NoCreditsError, synthesizeSpeech } from "@/cut/lib/tts";
 import { DUCK_DEFAULT } from "@/cut/lib/voiceover";
 import { useSpeakerVoice, useSpeechLanguage, VoicePicker } from "@/cut/components/VoicePicker";
+import { GeneratedAssetMenu } from "@/cut/components/GeneratedAssetMenu";
 import { cn } from "@/lib/utils";
 
 /** Starting points for the direction prompt — picking one fills the input so
@@ -95,7 +96,12 @@ export function AudioPanel({
 
       <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-3.5 pb-4">
         <VoiceGenerator projectId={projectId} />
-        <ProjectAudio importing={importing} onTogglePlay={togglePlay} playingUrl={playingUrl} />
+        <ProjectAudio
+          projectId={projectId}
+          importing={importing}
+          onTogglePlay={togglePlay}
+          playingUrl={playingUrl}
+        />
         <LibraryAudio projectId={projectId} onTogglePlay={togglePlay} playingUrl={playingUrl} />
       </div>
     </>
@@ -360,7 +366,7 @@ function AudioRow({
   playing,
   onTogglePlay,
   onAdd,
-  onDelete,
+  menu,
   onDragStart,
 }: {
   name: string;
@@ -370,7 +376,8 @@ function AudioRow({
   playing: boolean;
   onTogglePlay: (url: string) => void;
   onAdd: () => void;
-  onDelete?: () => void;
+  /** Extra row actions (a "…" dropdown), rendered before the + button. */
+  menu?: ReactNode;
   /** Present when the row can be dragged onto the timeline. */
   onDragStart?: DragEventHandler<HTMLDivElement>;
 }) {
@@ -419,18 +426,8 @@ function AudioRow({
         </div>
         {peaks && peaks.length > 0 && <PeakStrip peaks={peaks} />}
       </div>
-      <div className="absolute inset-y-0 right-0 flex items-center gap-1 rounded-r-lg from-card via-card bg-gradient-to-l to-transparent pr-2 pl-8 opacity-0 transition-opacity group-hover:opacity-100">
-        {onDelete && (
-          <button
-            type="button"
-            title="Remove from project"
-            aria-label="Remove from project"
-            className="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-            onClick={onDelete}
-          >
-            <Trash2 className="size-3.5" />
-          </button>
-        )}
+      <div className="absolute inset-y-0 right-0 flex items-center gap-1 rounded-r-lg from-card via-card bg-gradient-to-l to-transparent pr-2 pl-8 opacity-0 transition-opacity group-hover:opacity-100 has-data-popup-open:opacity-100">
+        {menu}
         <button
           type="button"
           title="Add at the playhead"
@@ -446,10 +443,12 @@ function AudioRow({
 }
 
 function ProjectAudio({
+  projectId,
   importing,
   onTogglePlay,
   playingUrl,
 }: {
+  projectId: string;
   importing: boolean;
   onTogglePlay: (url: string) => void;
   playingUrl: string | null;
@@ -475,7 +474,21 @@ function ProjectAudio({
             playing={playingUrl === a.url}
             onTogglePlay={onTogglePlay}
             onAdd={() => useEditor.getState().addAudioFromAsset(a.id)}
-            onDelete={() => useEditor.getState().removeAsset(a.id)}
+            menu={
+              <GeneratedAssetMenu
+                asset={a}
+                projectId={projectId}
+                triggerClassName="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                after={
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onClick={() => useEditor.getState().removeAsset(a.id)}
+                  >
+                    <Trash2 /> Remove from project
+                  </DropdownMenuItem>
+                }
+              />
+            }
             onDragStart={(e) => setAssetDragData(e, a.id)}
           />
         ))}
