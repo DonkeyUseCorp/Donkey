@@ -38,6 +38,26 @@ function stamp() {
 
 type DeviceOption = { id: string; label: string };
 
+// Remembers the last device pick per kind so reopening the dialog restores it.
+// Chrome keeps deviceIds stable per-origin once permission is granted.
+const STORE_KEY = { videoinput: "cut.record.cameraId", audioinput: "cut.record.micId" };
+function loadDeviceId(kind: "videoinput" | "audioinput"): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(STORE_KEY[kind]);
+  } catch {
+    return null;
+  }
+}
+function saveDeviceId(kind: "videoinput" | "audioinput", id: string | null) {
+  try {
+    if (id) window.localStorage.setItem(STORE_KEY[kind], id);
+    else window.localStorage.removeItem(STORE_KEY[kind]);
+  } catch {
+    // Ignore storage failures (private mode, quota); the pick just won't persist.
+  }
+}
+
 function toOptions(devices: MediaDeviceInfo[], kind: MediaDeviceKind, fallback: string) {
   return devices
     .filter((d) => d.kind === kind && d.deviceId)
@@ -60,9 +80,10 @@ export function RecordDialog({
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
-  // null = browser default; the pills show the device the live stream landed on.
-  const [cameraId, setCameraId] = useState<string | null>(null);
-  const [micId, setMicId] = useState<string | null>(null);
+  // Restore the last pick; null = browser default. The pills show the device
+  // the live stream landed on.
+  const [cameraId, setCameraId] = useState<string | null>(() => loadDeviceId("videoinput"));
+  const [micId, setMicId] = useState<string | null>(() => loadDeviceId("audioinput"));
   const videoRef = useRef<HTMLVideoElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -103,9 +124,12 @@ export function RecordDialog({
       .catch(() => {
         if (canceled) return;
         if (cameraId || micId) {
-          // The picked device failed to start; fall back to the default.
+          // The picked device failed to start; fall back to the default and
+          // forget it so we don't keep restoring a dead device.
           setCameraId(null);
           setMicId(null);
+          saveDeviceId("videoinput", null);
+          saveDeviceId("audioinput", null);
           setNotice("That device could not be started — switched back to the default.");
           return;
         }
@@ -180,10 +204,12 @@ export function RecordDialog({
   const pickCamera = (id: string) => {
     setNotice(null);
     setCameraId(id);
+    saveDeviceId("videoinput", id);
   };
   const pickMic = (id: string) => {
     setNotice(null);
     setMicId(id);
+    saveDeviceId("audioinput", id);
   };
 
   const cameras = toOptions(devices, "videoinput", "Camera");
@@ -217,7 +243,7 @@ export function RecordDialog({
                   <LiveWaveform
                     stream={stream}
                     className={cn(
-                      "absolute inset-x-3 bottom-11 h-8 text-white/80",
+                      "absolute inset-x-0 bottom-11 h-8 text-white/80",
                       recording && "text-red-400"
                     )}
                   />
@@ -345,6 +371,9 @@ function DevicePill({
   );
 }
 
+// RMS below this reads as silence and draws no bar.
+const SILENCE = 0.015;
+
 /** Scrolling level meter fed by the stream's audio track; color follows CSS `color`. */
 function LiveWaveform({ stream, className }: { stream: MediaStream; className?: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -393,10 +422,27 @@ function LiveWaveform({ stream, className }: { stream: MediaStream; className?: 
       if (!g) return;
       g.clearRect(0, 0, width, height);
       g.fillStyle = colorRef.current || getComputedStyle(canvas).color;
+      // Interior silence (a pause between two sounds) gets a thin connecting
+      // line so the waves read as one continuous track; leading/trailing
+      // silence stays empty so the line never dangles into blank space.
+      let first = -1;
+      let last = -1;
       for (let i = 0; i < levels.length; i++) {
-        const h = Math.max(2 * dpr, Math.min(1, levels[i] * 3) * height);
+        if (levels[i] >= SILENCE) {
+          if (first === -1) first = i;
+          last = i;
+        }
+      }
+      const lineH = 2 * dpr;
+      for (let i = 0; i < levels.length; i++) {
         const x = width - (levels.length - i) * step;
-        g.fillRect(x, (height - h) / 2, barWidth, h);
+        if (levels[i] >= SILENCE) {
+          const h = Math.max(lineH, Math.min(1, levels[i] * 3) * height);
+          g.fillRect(x, (height - h) / 2, barWidth, h);
+        } else if (i > first && i < last) {
+          // Fill the full step so adjacent segments join into one line.
+          g.fillRect(x, (height - lineH) / 2, step, lineH);
+        }
       }
     };
     draw();
