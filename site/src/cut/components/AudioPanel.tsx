@@ -5,6 +5,7 @@ import {
   AudioLines,
   Check,
   ChevronDown,
+  Info,
   Loader2,
   Pause,
   Play,
@@ -19,6 +20,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { clearAssetDrag, setAssetDragData, setLibraryDragData } from "@/cut/lib/assetDrag";
 import {
   addLibraryAssetToProject,
@@ -161,11 +168,23 @@ function VoiceGenerator({ projectId }: { projectId: string }) {
       <VoicePicker onError={(e) => fail(e, "Could not play the sample.")} />
 
       <div className="flex flex-col gap-1.5">
-        {sectionLabel("Voice direction")}
-        <p className="-mt-0.5 text-[11px] leading-snug text-muted-foreground">
-          Optional. Tell the voice how to deliver the lines — its tone, pace, and energy, or ask
-          it to speak in another language.
-        </p>
+        <div className="flex items-center gap-1">
+          {sectionLabel("Voice direction")}
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger
+                className="voice-direction-info grid size-4 place-items-center text-muted-foreground transition-colors hover:text-foreground"
+                aria-label="About voice direction"
+              >
+                <Info className="size-3.5" />
+              </TooltipTrigger>
+              <TooltipContent side="right" className="max-w-60">
+                Optional. Tell the voice how to deliver the lines — its tone, pace, and energy, or
+                ask it to speak in another language.
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
         <div className="relative">
           <textarea
             ref={directionInput}
