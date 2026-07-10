@@ -668,7 +668,11 @@ function LibraryPanel({ projectId }: { projectId: string }) {
         <div className="grid flex-1 place-items-center text-muted-foreground">
           <Loader2 className="size-4 animate-spin" />
         </div>
-      ) : shown.length === 0 ? null : (
+      ) : shown.length === 0 ? (
+        <div className="px-3.5 py-6 text-center text-xs text-muted-foreground">
+          {openFolder !== null ? "Empty folder" : "No items"}
+        </div>
+      ) : (
         <div className="grid min-h-0 flex-1 grid-cols-2 content-start gap-2.5 overflow-y-auto px-3.5 pb-3.5">
           {shown.map((a) => (
             <LibraryCard
