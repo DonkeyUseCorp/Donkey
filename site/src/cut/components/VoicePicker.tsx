@@ -158,7 +158,7 @@ export function VoicePicker({
         </div>
       </div>
       <label
-        className="voice-language-field relative ml-10 inline-flex max-w-[calc(100%-2.5rem)] items-center gap-2 self-start rounded-full border border-input py-1 pr-2.5 pl-3 text-muted-foreground transition-colors focus-within:border-ring"
+        className="voice-language-field relative inline-flex max-w-full items-center gap-2 self-end rounded-full border border-input py-1 pr-2.5 pl-3 text-muted-foreground transition-colors focus-within:border-ring"
         title="Spoken language"
       >
         <Languages className="size-3.5 shrink-0" />
