@@ -22,6 +22,7 @@ import { GoogleGenAI } from "@google/genai";
 import { JWT } from "google-auth-library";
 import sharp from "sharp";
 
+import { geminiModels } from "../src/lib/inference/gemini-models";
 import type { StockAspect, StockCategory } from "../src/cut/lib/stock";
 
 interface CatalogItem {
@@ -31,8 +32,8 @@ interface CatalogItem {
   prompt: string;
 }
 
-const MODEL = process.env.GEMINI_IMAGE_MODEL?.trim() || "gemini-2.5-flash-image";
-const TAG_MODEL = "gemini-2.5-flash";
+const MODEL = geminiModels.flashImage;
+const TAG_MODEL = geminiModels.flash;
 const OUT_DIR = path.join(import.meta.dirname, "..", "public", "cut-stock");
 const MANIFEST = path.join(import.meta.dirname, "..", "src", "cut", "lib", "stockManifest.ts");
 const CONCURRENCY = 4;
