@@ -454,11 +454,11 @@ function partFromValue(value: JsonValue): JsonObject {
   }
 
   if (isJsonObject(value.functionCall)) {
-    return { functionCall: value.functionCall };
+    return withThoughtSignature(value, { functionCall: value.functionCall });
   }
 
   if (isJsonObject(value.function_call)) {
-    return { functionCall: value.function_call };
+    return withThoughtSignature(value, { functionCall: value.function_call });
   }
 
   if (value.type === "function_response") {
@@ -484,6 +484,15 @@ function partFromValue(value: JsonValue): JsonObject {
   }
 
   return { text: JSON.stringify(value) };
+}
+
+// A replayed function-call part keeps its Gemini-3 thoughtSignature, which sits
+// beside functionCall on the part (not inside it). Gemini validates the echoed
+// signature, so it must survive the round-trip through the caller's history.
+function withThoughtSignature(source: JsonObject, part: JsonObject): JsonObject {
+  const signature =
+    stringValue(source.thoughtSignature) ?? stringValue(source.thought_signature);
+  return signature ? { ...part, thoughtSignature: signature } : part;
 }
 
 function imagePart(value: JsonObject): JsonObject {
@@ -584,6 +593,12 @@ function functionResponsePart(value: JsonObject): JsonObject {
     name,
     response,
   };
+  // Echo the call id so Gemini pairs this response with its call — required when
+  // a single turn issued parallel calls with the same name.
+  const id = stringValue(value.id);
+  if (id) {
+    functionResponse.id = id;
+  }
   if (screenshotBase64) {
     functionResponse.parts = [
       {
@@ -921,11 +936,21 @@ function functionCallFromPart(part: JsonObject): JsonObject | null {
     return null;
   }
 
-  return {
+  const call: JsonObject = {
     id: stringValue(value.id) ?? `call-${Math.random().toString(36).slice(2)}`,
     name: stringValue(value.name) ?? "unknown_function",
     arguments: isJsonObject(value.args) ? value.args : {},
   };
+  // Gemini 3 attaches a thoughtSignature to each function call and rejects the
+  // follow-up turn unless that exact signature rides back with the replayed
+  // call. It sits on the part beside functionCall — surface it so the caller
+  // that runs the tool loop can send it back.
+  const thoughtSignature =
+    stringValue(part.thoughtSignature) ?? stringValue(part.thought_signature);
+  if (thoughtSignature) {
+    call.thoughtSignature = thoughtSignature;
+  }
+  return call;
 }
 
 function registeredToolTypes(tools: JsonValue | undefined): string[] {

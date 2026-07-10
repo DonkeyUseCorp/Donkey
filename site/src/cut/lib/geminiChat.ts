@@ -60,8 +60,11 @@ async function requestError(res: Response): Promise<string> {
   const body = (await res.json().catch(() => null)) as {
     error?: unknown;
     message?: unknown;
+    details?: { message?: unknown } | null;
   } | null;
-  const message = [body?.message, body?.error].find(
+  // details.message carries the provider's real reason (e.g. the Vertex 400
+  // text); the top-level message is only the generic headline, so prefer it.
+  const message = [body?.details?.message, body?.message, body?.error].find(
     (v): v is string => typeof v === "string" && v.length > 0
   );
   if (res.status === 402) {
@@ -81,16 +84,18 @@ async function execTool(name: string, args: Record<string, unknown>): Promise<un
   return runAiTool(name, args);
 }
 
-/** A tool result as a function_response content part. Screenshots leave the
- * JSON (a data URL inlined as text would blow the token budget) and ride along
- * as an image part instead, so the model actually sees the frame. */
-function functionResponsePart(name: string, output: unknown): Item {
+/** A tool result as a function_response content part. The id pairs it with its
+ * originating call so Gemini matches responses to calls across parallel calls.
+ * Screenshots leave the JSON (a data URL inlined as text would blow the token
+ * budget) and ride along as an image part instead, so the model sees the frame. */
+function functionResponsePart(name: string, output: unknown, id: string): Item {
   if (output && typeof output === "object" && "image" in output) {
     const { image, ...rest } = output as { image?: unknown };
     const match = typeof image === "string" ? /^data:([^;,]+);base64,(.+)$/.exec(image) : null;
     if (match) {
       return {
         type: "function_response",
+        id,
         name,
         response: rest,
         mimeType: match[1],
@@ -102,12 +107,18 @@ function functionResponsePart(name: string, output: unknown): Item {
     output && typeof output === "object" && !Array.isArray(output)
       ? output
       : { result: output ?? null };
-  return { type: "function_response", name, response };
+  return { type: "function_response", id, name, response };
 }
 
 interface ResponseBody {
   output_text?: string;
-  output?: { type?: string; id?: string; name?: string; arguments?: unknown }[];
+  output?: {
+    type?: string;
+    id?: string;
+    name?: string;
+    arguments?: unknown;
+    thoughtSignature?: string;
+  }[];
 }
 
 /** One chat turn: request → (tool round-trips) → reply, streamed as UI chunks. */
@@ -171,18 +182,24 @@ export function streamGeminiChat({
               call.arguments && typeof call.arguments === "object" && !Array.isArray(call.arguments)
                 ? (call.arguments as Record<string, unknown>)
                 : {};
-            assistantParts.push({ functionCall: { name, args } });
+            const toolCallId = call.id ? String(call.id) : crypto.randomUUID().slice(0, 12);
+            // Replay the call with its id and Gemini-3 thought signature. The
+            // signature is mandatory — Gemini 3 rejects the follow-up turn unless
+            // each replayed call carries the exact signature it was issued with —
+            // and the matching id pairs each response to its call.
+            const assistantPart: Item = { functionCall: { id: toolCallId, name, args } };
+            if (call.thoughtSignature) assistantPart.thoughtSignature = call.thoughtSignature;
+            assistantParts.push(assistantPart);
             if (abortSignal?.aborted) return;
-            const toolCallId = String(call.id ?? crypto.randomUUID().slice(0, 12));
             emit({ type: "tool-input-available", toolCallId, toolName: name, input: args });
             try {
               const output = await execTool(name, args);
               emit({ type: "tool-output-available", toolCallId, output: output ?? null });
-              responseParts.push(functionResponsePart(name, output));
+              responseParts.push(functionResponsePart(name, output, toolCallId));
             } catch (err) {
               const errorText = err instanceof Error ? err.message : String(err);
               emit({ type: "tool-output-error", toolCallId, errorText });
-              responseParts.push(functionResponsePart(name, { error: errorText }));
+              responseParts.push(functionResponsePart(name, { error: errorText }, toolCallId));
             }
           }
           input.push({ role: "assistant", content: assistantParts });
