@@ -1,16 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import {
-  ChevronDown,
-  Loader2,
-  Maximize2,
-  Proportions,
-  Scaling,
-  Sparkles,
-  Trash2,
-  type LucideIcon,
-} from "lucide-react";
+import { ChevronDown, Loader2, Maximize2, Sparkles, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { clearAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
 import { collectRefs, useRefCandidates, useAssetDrop } from "@/cut/lib/assetRef";
@@ -35,13 +26,24 @@ import { CopyRefButton, MentionTextarea, RefChips, RefHandlePill } from "./Asset
 // References ride along as input images: drag any image or video in (stock
 // tile, media card, library clip, timeline clip) or mention it by @name.
 
-// A short orientation word keeps the Size pill narrow enough to share a row with
-// Resolution in this column; the icon carries the "aspect" meaning.
-const ASPECT_SHORT: Record<ImageAspect, string> = {
+const ASPECT_WORD: Record<ImageAspect, string> = {
   "16:9": "Landscape",
   "9:16": "Portrait",
   "1:1": "Square",
 };
+
+// The resolution tier fixes the long edge (4K caps at the model's 4096×4096 max);
+// the short edge follows the aspect ratio. So the exact output pixels depend on both
+// controls, which is why the resolution pill shows dimensions for the chosen aspect.
+const RES_LONG_EDGE: Record<ImageResolution, number> = { "1K": 1024, "2K": 2048, "4K": 4096 };
+
+function pixelDims(aspect: ImageAspect, resolution: ImageResolution): string {
+  const edge = RES_LONG_EDGE[resolution];
+  if (aspect === "1:1") return `${edge} × ${edge}`;
+  const [w, h] = aspect === "16:9" ? [16, 9] : [9, 16];
+  const short = Math.round((edge * Math.min(w, h)) / Math.max(w, h) / 2) * 2;
+  return w >= h ? `${edge} × ${short}` : `${short} × ${edge}`;
+}
 
 export function ImageGenPanel({ projectId }: { projectId: string }) {
   const { prompt, aspect, resolution, refs } = useImageGen();
@@ -108,26 +110,28 @@ export function ImageGenPanel({ projectId }: { projectId: string }) {
           />
         </div>
 
-        {/* Size (aspect) and resolution, both as compact pills on one row —
-            matching the audio language picker's style. */}
+        {/* Aspect ratio and resolution pills on one row. Closed pills show the compact
+            technical value (the ratio; the pixel dimensions); the dropdowns spell out
+            the full labels. The resolution's pixels follow the chosen aspect. */}
         <div className="flex shrink-0 items-center gap-2">
           <PillSelect
-            icon={Proportions}
-            title="Image size"
+            title="Aspect ratio"
             value={aspect}
-            options={(Object.keys(ASPECT_SHORT) as ImageAspect[]).map((a) => ({
+            display={aspect}
+            options={(Object.keys(ASPECT_WORD) as ImageAspect[]).map((a) => ({
               value: a,
-              label: ASPECT_SHORT[a],
+              label: `${a} · ${ASPECT_WORD[a]}`,
             }))}
             onChange={(v) => useImageGen.getState().setAspect(v)}
           />
           <PillSelect
-            icon={Scaling}
+            className="min-w-0 flex-1"
             title="Resolution"
             value={resolution}
+            display={pixelDims(aspect, resolution)}
             options={(Object.keys(IMAGE_RESOLUTION_LABEL) as ImageResolution[]).map((r) => ({
               value: r,
-              label: IMAGE_RESOLUTION_LABEL[r],
+              label: pixelDims(aspect, r),
             }))}
             onChange={(v) => useImageGen.getState().setResolution(v)}
           />
@@ -194,42 +198,46 @@ export function ImageGenPanel({ projectId }: { projectId: string }) {
   );
 }
 
-/** A compact rounded pill wrapping a native select — an icon, the value, and a
- * chevron. Mirrors the audio language picker so the generate controls read as
- * one family. Native select keeps the option list keyboard- and OS-friendly. */
+/** A rounded pill wrapping a native select — a compact `display` shows when closed,
+ * while the dropdown lists the fuller option labels (an invisible select overlays the
+ * pill, so it keeps native keyboard/OS behavior). Mirrors the audio language picker's
+ * chrome so the generate controls read as one family. */
 function PillSelect<T extends string>({
-  icon: Icon,
+  className,
   title,
   value,
+  display,
   options,
   onChange,
 }: {
-  icon: LucideIcon;
+  className?: string;
   title: string;
   value: T;
+  display: string;
   options: { value: T; label: string }[];
   onChange: (value: T) => void;
 }) {
   return (
     <label
-      className="relative inline-flex items-center gap-1.5 rounded-full border border-input py-1 pr-2 pl-2.5 text-muted-foreground transition-colors focus-within:border-ring"
+      className={cn(
+        "relative flex items-center rounded-full border border-input py-1.5 pr-2.5 pl-3.5 transition-colors focus-within:border-ring",
+        className
+      )}
       title={title}
     >
-      <Icon className="size-3.5 shrink-0" />
-      <span className="relative inline-flex min-w-0 items-center">
-        <select
-          className="max-w-full appearance-none truncate bg-transparent pr-5 text-[12.5px] text-foreground outline-none"
-          value={value}
-          onChange={(e) => onChange(e.target.value as T)}
-        >
-          {options.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        <ChevronDown className="pointer-events-none absolute top-1/2 right-0 size-3.5 -translate-y-1/2" />
-      </span>
+      <span className="min-w-0 flex-1 truncate text-[12.5px] text-foreground">{display}</span>
+      <ChevronDown className="ml-1 size-3.5 shrink-0 text-muted-foreground" />
+      <select
+        className="absolute inset-0 w-full cursor-pointer appearance-none opacity-0"
+        value={value}
+        onChange={(e) => onChange(e.target.value as T)}
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
     </label>
   );
 }
