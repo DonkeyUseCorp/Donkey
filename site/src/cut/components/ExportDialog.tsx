@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Check, FolderCheck } from "lucide-react";
+import { Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -119,13 +119,14 @@ export function ExportDialog() {
               <span className="font-mono tabular-nums">{Math.round(ratio * 100)}%</span>
             </div>
             <p className="mt-3 text-center text-xs text-muted-foreground">
-              Rendering in the background — you can keep editing. Close this to
-              hide it; it keeps going.
+              Rendering in the background. You can keep editing, or close this to
+              hide it and it keeps going.
             </p>
-            <DialogFooter className="mt-4 w-full">
+            <DialogFooter className="mt-4 w-full sm:justify-center">
               <Button
                 variant="ghost"
-                className="w-full"
+                size="sm"
+                className="text-xs text-muted-foreground"
                 onClick={() => {
                   useExport.getState().cancel();
                   setExportOpen(false);
@@ -142,10 +143,8 @@ export function ExportDialog() {
             <span className="mb-3 grid size-11 place-items-center rounded-full bg-[#30d158] text-[#04180b]">
               <Check className="size-5" />
             </span>
-            <div className="text-[15px] font-semibold">Exported</div>
-            <div className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground">
-              <FolderCheck className="size-3.5" />
-              Saved into the project’s exports folder and downloaded.
+            <div className="text-sm text-muted-foreground">
+              Saved into the project's exports folder and downloaded.
             </div>
             <DialogFooter className="mt-4 w-full">
               <Button className="w-full" onClick={close}>
@@ -158,7 +157,7 @@ export function ExportDialog() {
         {status === "error" && (
           <div>
             <div className="mb-2 text-sm font-medium text-destructive">
-              Export didn’t finish
+              Export didn't finish
             </div>
             <pre className="max-h-36 overflow-auto rounded-lg border border-border bg-background p-2.5 font-mono text-[10.5px] leading-relaxed break-words whitespace-pre-wrap text-muted-foreground select-text">
               {error}
