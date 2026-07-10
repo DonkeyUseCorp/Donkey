@@ -16,15 +16,40 @@ export interface InlineImage {
 const MAX_W = 1280;
 const JPEG_Q = 0.85;
 
+// Vertex image models accept only real image mime types. Read the format from the
+// bytes rather than the transport Content-Type: a media file served as
+// application/octet-stream (or with none) otherwise reaches the model labelled with a
+// mimeType it rejects with INVALID_ARGUMENT.
+function sniffImageMime(base64: string): string | null {
+  let head: string;
+  try {
+    head = atob(base64.slice(0, 24));
+  } catch {
+    return null;
+  }
+  const at = (i: number) => head.charCodeAt(i);
+  if (at(0) === 0x89 && at(1) === 0x50 && at(2) === 0x4e && at(3) === 0x47) return "image/png";
+  if (at(0) === 0xff && at(1) === 0xd8 && at(2) === 0xff) return "image/jpeg";
+  if (at(0) === 0x47 && at(1) === 0x49 && at(2) === 0x46) return "image/gif";
+  if (
+    at(0) === 0x52 && at(1) === 0x49 && at(2) === 0x46 && at(3) === 0x46 &&
+    at(8) === 0x57 && at(9) === 0x45 && at(10) === 0x42 && at(11) === 0x50
+  )
+    return "image/webp";
+  return null;
+}
+
 function splitDataUrl(dataUrl: string): InlineImage {
   const comma = dataUrl.indexOf(",");
-  // Between "data:" and the first ";" (or "," when there are no params). A
-  // typeless data URL ("data:;base64,…", e.g. a fetched blob with no
-  // Content-Type) leaves this empty — fall back so the hosted route, which
-  // rejects an empty mimeType, still gets a usable image part.
-  const header = dataUrl.slice(5, comma);
-  const mimeType = header.split(";")[0] || "image/png";
-  return { data: dataUrl.slice(comma + 1), mimeType };
+  // Between "data:" and the first ";" (or "," when there are no params).
+  const labelled = dataUrl.slice(5, comma).split(";")[0];
+  const data = dataUrl.slice(comma + 1);
+  // Trust the bytes over the label: a data URL may be typeless ("data:;base64,…") or
+  // carry a non-image type (application/octet-stream from a media URL). Sniff the real
+  // format, keeping a valid image/* label, and fall back to png only when unknown.
+  const mimeType =
+    (labelled.startsWith("image/") ? labelled : null) ?? sniffImageMime(data) ?? "image/png";
+  return { data, mimeType };
 }
 
 function blobToInline(blob: Blob): Promise<InlineImage> {
