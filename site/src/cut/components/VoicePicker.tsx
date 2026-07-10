@@ -129,7 +129,7 @@ export function VoicePicker({
       <div className="flex items-center gap-2">
         <button
           type="button"
-          className="voice-sample grid size-8 shrink-0 place-items-center rounded-full bg-muted text-foreground transition-colors hover:bg-muted/70 disabled:opacity-40"
+          className="voice-sample grid size-8 shrink-0 place-items-center rounded-full bg-muted text-foreground transition-colors hover:bg-muted-foreground/20 disabled:opacity-40"
           title={sampleTitle}
           aria-label={sampleTitle}
           disabled={signedOut || sampleOverride?.disabled === true}

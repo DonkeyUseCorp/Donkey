@@ -381,7 +381,7 @@ function AudioRow({
         type="button"
         className={cn(
           "grid size-8 shrink-0 place-items-center rounded-full text-foreground transition-colors",
-          playing ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/70"
+          playing ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted-foreground/20"
         )}
         title={playing ? "Pause" : "Play"}
         aria-label={playing ? "Pause" : "Play"}
