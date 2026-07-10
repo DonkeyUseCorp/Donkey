@@ -1,16 +1,25 @@
 "use client";
 
-import { Film, Loader2, Plus, Sparkles, Trash2, X } from "lucide-react";
+import { useRef } from "react";
+import { Copy, Film, Loader2, Maximize2, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
-import { collectRefs, refFromStockVideo, useRefCandidates, useAssetDrop } from "@/cut/lib/assetRef";
+import { clearAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
+import {
+  collectRefs,
+  mentionToken,
+  refFromStockVideo,
+  useRefCandidates,
+  useAssetDrop,
+} from "@/cut/lib/assetRef";
 import { signInUrl, useGenerate, useSignedIn, type GenerateJob } from "@/cut/lib/generate";
+import { useLightbox } from "@/cut/lib/lightbox";
 import { characterPrompt, stockTitle } from "@/cut/lib/stock";
 import { useEditor } from "@/cut/lib/store";
 import { useLocalPref } from "@/cut/lib/uiState";
 import { useVideoGen } from "@/cut/lib/videoGen";
 import { cn } from "@/lib/utils";
-import { MentionTextarea, RefChips } from "./AssetRefs";
+import { MentionTextarea, RefChips, RefHandlePill } from "./AssetRefs";
 import { GeneratedAssetMenu } from "./GeneratedAssetMenu";
 
 // The generate-video panel: an always-on column in the Video tab, sitting left
@@ -73,53 +82,56 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
         {...targetProps}
         className="relative flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3.5 pb-4"
       >
-        {dropActive && (
-          <div className="pointer-events-none absolute inset-1.5 z-10 grid place-items-center rounded-xl border-2 border-dashed border-[#0a84ff] bg-[#0a84ff]/8">
-            <span className="rounded-full bg-card px-3 py-1 text-[11.5px] font-medium text-[#0a84ff] shadow-sm">
-              Drop to use as reference
-            </span>
-          </div>
-        )}
-        {character && (
-          <div className="gen-character flex shrink-0 items-center gap-2 rounded-lg border border-border p-1.5">
-            {/* eslint-disable-next-line @next/next/no-img-element -- bundled static thumb on a client-only page */}
-            <img
-              src={character.thumb}
-              alt={stockTitle(character.id)}
-              className="size-8 shrink-0 rounded-md object-cover"
-            />
-            <span className="min-w-0 flex-1 truncate text-[12px] font-medium">
-              {stockTitle(character.id)}
-            </span>
-            <button
-              title="Leave character mode"
-              className="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground hover:text-foreground"
-              onClick={() => useVideoGen.getState().clearCharacter()}
-            >
-              <X className="size-3.5" />
-            </button>
-          </div>
-        )}
-        <RefChips
-          refs={refs}
-          onRemove={(ref) => useVideoGen.getState().removeRef(ref)}
-          className="shrink-0"
-          peekSide="bottom"
-        />
-        <MentionTextarea
-          className="gen-prompt min-h-[88px] w-full shrink-0 resize-y rounded-lg border border-input bg-transparent px-2.5 py-2 text-[12.5px] leading-relaxed outline-none focus:border-ring"
-          placeholder={
-            character
-              ? "What should they say?"
-              : "A drone shot rising over a foggy coastline at sunrise… Drop media in or type @ to reference it."
-          }
-          value={prompt}
-          onChange={(v) => useVideoGen.getState().setPrompt(v)}
-          candidates={candidates}
-          submitKey="mod-enter"
-          menuSide="bottom"
-          onSubmit={go}
-        />
+        {/* Composer: the character and attached references ride inside the
+            input box, above the prompt — same shape as the image panel, which
+            also highlights this box while a drag hovers the panel. */}
+        <div
+          className={cn(
+            "flex shrink-0 flex-col rounded-lg border border-input focus-within:border-ring",
+            dropActive && "border-[#0a84ff] ring-2 ring-[#0a84ff]/30 ring-inset"
+          )}
+        >
+          {character && (
+            <div className="gen-character flex items-center gap-2 p-2 pb-0">
+              {/* eslint-disable-next-line @next/next/no-img-element -- bundled static thumb on a client-only page */}
+              <img
+                src={character.thumb}
+                alt={stockTitle(character.id)}
+                className="size-8 shrink-0 rounded-md object-cover"
+              />
+              <span className="min-w-0 flex-1 truncate text-[12px] font-medium">
+                {stockTitle(character.id)}
+              </span>
+              <button
+                title="Leave character mode"
+                className="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground hover:text-foreground"
+                onClick={() => useVideoGen.getState().clearCharacter()}
+              >
+                <X className="size-3.5" />
+              </button>
+            </div>
+          )}
+          <RefChips
+            refs={refs}
+            onRemove={(ref) => useVideoGen.getState().removeRef(ref)}
+            className="p-2 pb-0"
+            peekSide="bottom"
+          />
+          <MentionTextarea
+            className="gen-prompt min-h-[88px] w-full resize-y bg-transparent px-2.5 py-2 text-[12.5px] leading-relaxed outline-none"
+            placeholder={
+              character
+                ? "What should they say?"
+                : "A drone shot rising over a foggy coastline at sunrise… Drop media in or type @ to reference it."
+            }
+            value={prompt}
+            onChange={(v) => useVideoGen.getState().setPrompt(v)}
+            candidates={candidates}
+            submitKey="mod-enter"
+            menuSide="bottom"
+            onSubmit={go}
+          />
+        </div>
 
         <div className="flex shrink-0 items-center justify-between gap-2">
           <div className={segGroup}>
@@ -174,7 +186,13 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
         {jobs.length > 0 && (
           <div className="flex flex-col gap-1.5">
             {jobs.map((j) => (
-              <JobRow key={j.id} job={j} />
+              <JobRow
+                key={j.id}
+                job={j}
+                handle={
+                  candidates.find((c) => c.scope === "project" && c.id === j.assetId)?.handle
+                }
+              />
             ))}
           </div>
         )}
@@ -183,19 +201,18 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
   );
 }
 
-function JobRow({ job }: { job: GenerateJob }) {
+/** A finished render is a full-width tile mirroring the image panel's
+ * generated tiles: hover plays it (with sound), the prompt rides a bottom
+ * gradient, and the actions overlay the corners. In-flight and failed jobs
+ * stay a compact status row. */
+function JobRow({ job, handle }: { job: GenerateJob; handle?: string }) {
   const asset = useEditor((s) => s.assets.find((a) => a.id === job.assetId));
-  return (
-    <div className="gen-job group flex items-center gap-2.5 rounded-lg border border-border p-2">
-      {asset ? (
-        <video
-          muted
-          playsInline
-          preload="metadata"
-          src={`${asset.url}#t=0.1`}
-          className="size-10 shrink-0 rounded-md bg-black object-cover"
-        />
-      ) : (
+  const tileRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  if (job.status !== "done" || !asset) {
+    return (
+      <div className="gen-job group flex items-center gap-2.5 rounded-lg border border-border p-2">
         <span className="grid size-10 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
           {job.status === "running" ? (
             <Loader2 className="size-4 animate-spin" />
@@ -203,42 +220,18 @@ function JobRow({ job }: { job: GenerateJob }) {
             <Film className="size-4" />
           )}
         </span>
-      )}
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[11.5px] font-medium">{job.prompt}</div>
-        <div
-          className={cn(
-            "text-[10.5px] leading-snug break-words",
-            job.status === "error" ? "text-red-600" : "text-muted-foreground"
-          )}
-        >
-          {job.status === "running" && "Rendering…"}
-          {job.status === "done" && "Ready — drag it in or press +"}
-          {job.status === "error" && (job.error ?? "Failed.")}
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[11.5px] font-medium">{job.prompt}</div>
+          <div
+            className={cn(
+              "text-[10.5px] leading-snug break-words",
+              job.status === "error" ? "text-red-600" : "text-muted-foreground"
+            )}
+          >
+            {job.status === "running" ? "Rendering…" : (job.error ?? "Failed.")}
+          </div>
         </div>
-      </div>
-      {job.status === "done" && asset && (
-        <button
-          title="Add to timeline"
-          className="grid size-6 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:brightness-110"
-          onClick={() => useEditor.getState().addClipFromAsset(asset.id)}
-        >
-          <Plus className="size-3.5" />
-        </button>
-      )}
-      {job.status === "done" && asset ? (
-        <GeneratedAssetMenu
-          asset={asset}
-          projectId={job.projectId}
-          triggerClassName="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 data-popup-open:opacity-100 hover:text-foreground"
-          after={
-            <DropdownMenuItem onClick={() => useGenerate.getState().dismiss(job.id)}>
-              <Trash2 /> Dismiss
-            </DropdownMenuItem>
-          }
-        />
-      ) : (
-        job.status !== "running" && (
+        {job.status !== "running" && (
           <button
             title="Dismiss"
             className="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
@@ -246,8 +239,115 @@ function JobRow({ job }: { job: GenerateJob }) {
           >
             <Trash2 className="size-3.5" />
           </button>
-        )
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={tileRef}
+      className="gen-job group relative overflow-hidden rounded-lg"
+      onMouseEnter={() => {
+        const v = videoRef.current;
+        if (!v) return;
+        // Preview with sound; if the browser blocks unmuted autoplay, fall
+        // back to a silent preview.
+        v.muted = false;
+        void v.play().catch(() => {
+          v.muted = true;
+          void v.play().catch(() => {});
+        });
+      }}
+      onMouseLeave={() => {
+        const v = videoRef.current;
+        if (v) {
+          v.pause();
+          v.currentTime = 0.1;
+          v.muted = true;
+        }
+      }}
+    >
+      <button
+        className="block w-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        draggable
+        onDragStart={(e) => {
+          setAssetDragData(e, asset.id);
+          // Drag the rounded tile itself so the ghost keeps the video's corner
+          // radius instead of the browser's square, white-framed default.
+          if (tileRef.current) {
+            const r = tileRef.current.getBoundingClientRect();
+            e.dataTransfer.setDragImage(tileRef.current, e.clientX - r.left, e.clientY - r.top);
+          }
+        }}
+        onDragEnd={clearAssetDrag}
+        onClick={() => useVideoGen.getState().openWith(job.prompt)}
+      >
+        <video
+          ref={videoRef}
+          muted
+          loop
+          playsInline
+          preload="metadata"
+          src={`${asset.url}#t=0.1`}
+          className="aspect-[16/10] w-full bg-black object-cover"
+        />
+      </button>
+      {handle && (
+        <RefHandlePill
+          token={`@${handle}`}
+          className="absolute top-1 left-1 opacity-0 transition-opacity group-hover:opacity-100"
+        />
       )}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-2 py-1.5 opacity-0 transition-opacity group-hover:opacity-100">
+        <span className="block truncate text-[11px] font-medium text-white">{job.prompt}</span>
+      </div>
+      <div className="absolute top-1 right-1 flex gap-1">
+        <button
+          title="Add to timeline"
+          className="grid size-5 place-items-center rounded-full bg-primary text-primary-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:brightness-110"
+          onClick={() => useEditor.getState().addClipFromAsset(asset.id)}
+        >
+          <Plus className="size-3" />
+        </button>
+        <GeneratedAssetMenu
+          asset={asset}
+          projectId={job.projectId}
+          triggerClassName="grid size-5 place-items-center rounded-full bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100 data-popup-open:opacity-100 hover:bg-black/65"
+          before={
+            <>
+              <DropdownMenuItem
+                onClick={() =>
+                  useLightbox.getState().open({
+                    src: asset.url,
+                    isVideo: true,
+                    playable: true,
+                    name: asset.name,
+                    prompt: job.prompt,
+                    assetId: asset.id,
+                  })
+                }
+              >
+                <Maximize2 /> Expand
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() =>
+                  void navigator.clipboard
+                    .writeText(handle ? `@${handle}` : mentionToken(asset.name))
+                    .catch(() => {})
+                }
+              >
+                <Copy /> Copy reference
+              </DropdownMenuItem>
+            </>
+          }
+          after={
+            <DropdownMenuItem onClick={() => useGenerate.getState().dismiss(job.id)}>
+              <Trash2 /> Dismiss
+            </DropdownMenuItem>
+          }
+        />
+      </div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, Music, X } from "lucide-react";
 import {
   highlightMentions,
@@ -92,7 +92,36 @@ function RefPeek({ item, side = "top" }: { item: AssetRef; side?: "top" | "botto
         side === "top" ? "bottom-full mb-1.5" : "top-full mt-1.5"
       )}
     >
-      <RefThumb item={item} className="aspect-square w-full" />
+      {item.kind === "video" ? (
+        <PeekVideo item={item} />
+      ) : (
+        <RefThumb item={item} className="aspect-square w-full" />
+      )}
+    </div>
+  );
+}
+
+/** A video peek plays the clip for as long as the pointer hovers — with sound,
+ * falling back to a silent preview if the browser blocks unmuted autoplay. */
+function PeekVideo({ item }: { item: AssetRef }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.muted = false;
+    void v.play().catch(() => {
+      v.muted = true;
+      void v.play().catch(() => {});
+    });
+  }, []);
+  return (
+    <div className="relative aspect-square w-full border border-border bg-muted">
+      <video ref={videoRef} src={item.url} loop playsInline className="size-full object-cover" />
+      {item.duration !== undefined && (
+        <span className="absolute right-1 bottom-1 rounded-[5px] bg-black/65 px-1 py-px font-mono text-[8.5px] text-white tabular-nums">
+          {formatTime(item.duration)}
+        </span>
+      )}
     </div>
   );
 }
