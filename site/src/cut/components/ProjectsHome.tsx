@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Check,
   Copy,
@@ -44,11 +44,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { apiFetch, apiUrl } from "@/cut/lib/api";
 import { createProjectFromFile, isMediaFile } from "@/cut/lib/media";
-import { projectHref, useCutBase } from "@/cut/lib/nav";
+import { homeHref, projectHref, useCutBase } from "@/cut/lib/nav";
 import { formatTime } from "@/cut/lib/time";
 import { mediaUrl, type ProjectFolder, type ProjectSummary } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
-import { buildDragGhost, FolderCrumb, FolderShelf, Marquee } from "./desktopFolders";
+import { buildDragGhost, FolderCrumb, FolderShelf, formatBytes, Marquee } from "./desktopFolders";
 
 type View = "gallery" | "list";
 
@@ -75,7 +75,9 @@ export function ProjectsHome() {
   const base = useCutBase();
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [folders, setFolders] = useState<ProjectFolder[]>([]);
-  const [openFolder, setOpenFolder] = useState<string | null>(null);
+  // The open folder lives in the URL (?folder=…) so project URLs can point
+  // back into it and the browser's back button steps folder → root.
+  const openFolder = useSearchParams().get("folder");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [view, setView] = useState<View>("gallery");
   const [createOpen, setCreateOpen] = useState(false);
@@ -139,10 +141,17 @@ export function ProjectsHome() {
     }).catch(() => void refresh());
   };
 
+  // Open a folder (or the root, id null) by navigating, so the location is
+  // shareable and back-button friendly.
+  const gotoFolder = (id: string | null) => {
+    setSelected(new Set());
+    router.push(homeHref(base, "projects", id));
+  };
+
   const deleteFolder = async (id: string) => {
     setFolders((prev) => prev.filter((f) => f.id !== id));
     setProjects((prev) => (prev ?? []).map((p) => (p.folderId === id ? { ...p, folderId: null } : p)));
-    if (openFolder === id) setOpenFolder(null);
+    if (openFolder === id) router.replace(homeHref(base, "projects"));
     await apiFetch(`/api/cut/projects/folders/${id}`, { method: "DELETE" }).catch(() => void refresh());
   };
 
@@ -188,7 +197,7 @@ export function ProjectsHome() {
         body: JSON.stringify({ name: name.trim() || "Untitled", folderId: openFolder }),
       });
       const project = (await res.json()) as ProjectSummary;
-      router.push(projectHref(base, project.id, "projects"));
+      router.push(projectHref(base, project.id, "projects", openFolder));
     } finally {
       setBusy(false);
     }
@@ -203,7 +212,7 @@ export function ProjectsHome() {
       body: JSON.stringify({ name: "Untitled", folderId }),
     });
     const project = (await res.json()) as ProjectSummary;
-    router.push(projectHref(base, project.id, "projects"));
+    router.push(projectHref(base, project.id, "projects", folderId));
   };
 
   // Turn a batch of desktop files into projects filed under `folderId`. Each
@@ -343,10 +352,7 @@ export function ProjectsHome() {
               root="Projects"
               name={openFolderName ?? "Folder"}
               mime={PROJECT_MIME}
-              onBack={() => {
-                setSelected(new Set());
-                setOpenFolder(null);
-              }}
+              onBack={() => gotoFolder(null)}
               onDropOut={(ids) => void moveProjects(ids, null)}
             />
           )}
@@ -385,10 +391,7 @@ export function ProjectsHome() {
             const items = all.filter((p) => (p.folderId ?? null) === id);
             return { count: items.length, size: items.reduce((n, p) => n + (p.sizeBytes ?? 0), 0) };
           }}
-          onOpen={(id) => {
-            setSelected(new Set());
-            setOpenFolder(id);
-          }}
+          onOpen={gotoFolder}
           onCreate={createFolder}
           onRename={renameFolder}
           onDelete={deleteFolder}
@@ -481,7 +484,7 @@ export function ProjectsHome() {
                   toggleSelect(p.id);
                   return;
                 }
-                router.push(projectHref(base, p.id, "projects"));
+                router.push(projectHref(base, p.id, "projects", openFolder));
               }}
             >
               {/* Vertical 9:16 tile — the project is mobile video, show it that way. */}
@@ -512,8 +515,7 @@ export function ProjectsHome() {
                 />
               </div>
               <div className="mt-2 px-0.5 text-xs text-muted-foreground">
-                {p.clipCount} {p.clipCount === 1 ? "clip" : "clips"} · edited{" "}
-                {formatDate(p.updatedAt)}
+                {formatBytes(p.sizeBytes ?? 0)} · edited {formatDate(p.updatedAt)}
               </div>
             </div>
           ))}
@@ -523,7 +525,7 @@ export function ProjectsHome() {
           <div className="grid grid-cols-[1fr_90px_70px_110px_40px] items-center gap-3 border-b border-border bg-muted/50 px-4 py-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
             <span>Name</span>
             <span>Length</span>
-            <span>Clips</span>
+            <span>Size</span>
             <span>Edited</span>
             <span />
           </div>
@@ -543,7 +545,7 @@ export function ProjectsHome() {
                   toggleSelect(p.id);
                   return;
                 }
-                router.push(projectHref(base, p.id, "projects"));
+                router.push(projectHref(base, p.id, "projects", openFolder));
               }}
             >
               <span className="flex min-w-0 items-center gap-2.5">
@@ -553,7 +555,9 @@ export function ProjectsHome() {
               <span className="font-mono text-xs text-muted-foreground tabular-nums">
                 {formatTime(p.duration)}
               </span>
-              <span className="text-xs text-muted-foreground">{p.clipCount}</span>
+              <span className="text-xs text-muted-foreground tabular-nums">
+                {formatBytes(p.sizeBytes ?? 0)}
+              </span>
               <span className="text-xs text-muted-foreground">
                 {formatDate(p.updatedAt)}
               </span>

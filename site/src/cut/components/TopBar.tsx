@@ -19,11 +19,13 @@ import { RecordDialog, type RecordMode } from "./RecordDialog";
 export function TopBar({
   onImport,
   from,
+  folder,
 }: {
   onImport: (files: File[]) => void;
   from?: string | null;
+  folder?: string | null;
 }) {
-  const back = backTarget(useCutBase(), from);
+  const back = backTarget(useCutBase(), from, folder);
   const hasClips = useEditor((s) => s.clips.length > 0);
   const aspect = useEditor((s) => s.aspect);
   const projectName = useEditor((s) => s.projectName);

@@ -18,9 +18,12 @@ export function useCutBase(): string {
   return useContext(CutBaseContext);
 }
 
-// The project editor can be reached from either home tab. The origin tab rides
-// along in the project URL (?from=…) so the editor's back button returns to the
-// tab you opened the project from — Projects or Library.
+// The project editor can be reached from either home tab, from inside a
+// folder or not. The origin rides along in the project URL (?from=… and
+// ?folder=…) so the editor's back button returns to the exact place the
+// project was opened from — Projects, Library, or a folder within one. The
+// home pages read ?folder=… as the open folder, which also lets the browser's
+// own back button step folder → root.
 export type CutTab = "projects" | "library";
 
 /** Which home tab a pathname is on (base-agnostic). */
@@ -28,23 +31,36 @@ export function tabForPath(pathname: string): CutTab {
   return pathname.endsWith("/library") ? "library" : "projects";
 }
 
-/** Home tab URL under the given base. Projects is the base root. */
-export function homeHref(base: string, tab: CutTab): string {
-  return tab === "library" ? `${base}/library` : base || "/";
+/** Home tab URL under the given base, optionally inside a folder. Projects is
+ * the base root. */
+export function homeHref(base: string, tab: CutTab, folder?: string | null): string {
+  const root = tab === "library" ? `${base}/library` : base || "/";
+  return folder ? `${root}?folder=${encodeURIComponent(folder)}` : root;
 }
 
-/** Project editor URL that remembers the tab it was opened from. The default
- * tab carries no query so the common URL stays clean. */
-export function projectHref(base: string, id: string, from: CutTab): string {
-  return from === "library" ? `${base}/p/${id}?from=library` : `${base}/p/${id}`;
+/** Project editor URL that remembers the tab (and folder, when open) it was
+ * opened from. The default origin carries no query so the common URL stays
+ * clean. */
+export function projectHref(
+  base: string,
+  id: string,
+  from: CutTab,
+  folder?: string | null
+): string {
+  const params = new URLSearchParams();
+  if (from === "library") params.set("from", "library");
+  if (folder) params.set("folder", folder);
+  const qs = params.toString();
+  return `${base}/p/${id}${qs ? `?${qs}` : ""}`;
 }
 
 /** Where the editor's back button goes, and the tab it is named for. An unknown
  * origin falls back to Projects. */
 export function backTarget(
   base: string,
-  from: string | null | undefined
+  from: string | null | undefined,
+  folder?: string | null
 ): { href: string; tab: CutTab } {
   const tab: CutTab = from === "library" ? "library" : "projects";
-  return { href: homeHref(base, tab), tab };
+  return { href: homeHref(base, tab, folder), tab };
 }
