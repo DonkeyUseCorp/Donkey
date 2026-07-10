@@ -17,6 +17,9 @@ export interface LightboxItem {
   name: string;
   /** The generation prompt, when known. */
   prompt: string;
+  /** Catalog aspect ("16:9" | "9:16" | "1:1"), when known — sizes the dialog
+   * up front so it opens at its final size instead of growing on media load. */
+  aspect?: "16:9" | "9:16" | "1:1";
   /** For a project asset, its id (add straight to the timeline); null for a
    * stock image, which the lightbox bakes into a still first. */
   assetId: string | null;

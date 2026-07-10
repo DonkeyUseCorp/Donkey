@@ -160,7 +160,6 @@ function StockTile({ item }: { item: StockImage }) {
       )}
     >
       <button
-        title={item.prompt}
         className="block w-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
         draggable
         onDragStart={(e) => setRefDragData(e, refFromStock(item))}
@@ -187,6 +186,7 @@ function StockTile({ item }: { item: StockImage }) {
             useLightbox.getState().open({
               src: item.file,
               isVideo: false,
+              aspect: item.aspect,
               name: titleFromId(item.id),
               prompt: item.prompt,
               assetId: null,
