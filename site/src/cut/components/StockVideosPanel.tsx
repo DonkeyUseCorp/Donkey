@@ -17,9 +17,9 @@ import { CopyRefButton, RefHandlePill } from "./AssetRefs";
 // account. Videos the user generates show up in that panel, not here.
 //
 // Two sections: "Talking Characters" (talking-head clips whose prompt ends in
-// an editable spoken line), then the footage grid headed by its category
-// chips. "View all" drills into a section, titled with a breadcrumb; search
-// lives only inside a drilled section and scopes to it.
+// an editable spoken line), then the "Stock Videos" footage grid. "View all"
+// drills into a section, titled with a breadcrumb; search and the footage
+// category chips live only inside a drilled section.
 
 const CHARACTERS = STOCK_VIDEOS.filter((v) => v.category === "Characters");
 const FOOTAGE = STOCK_VIDEOS.filter((v) => v.category !== "Characters");
@@ -72,11 +72,13 @@ export function StockVideosPanel() {
     item.category.toLowerCase().includes(q) ||
     item.tags.some((t) => t.includes(q));
 
-  // The root shows every section unfiltered; the query applies once drilled in.
+  // The root shows every section unfiltered; the query and category chips
+  // apply once drilled in.
   const characters = view === "characters" ? CHARACTERS.filter(matches) : CHARACTERS;
-  const footage = FOOTAGE.filter(
-    (v) => (cat === "all" || v.category === cat) && (view !== "videos" || matches(v))
-  );
+  const footage =
+    view === "videos"
+      ? FOOTAGE.filter((v) => (cat === "all" || v.category === cat) && matches(v))
+      : FOOTAGE;
 
   const chips = (
     <div className="flex min-w-0 flex-wrap gap-1">
@@ -111,10 +113,10 @@ export function StockVideosPanel() {
             </section>
           )}
           <section className="mt-3 shrink-0">
-            <div className="mb-2 flex items-start justify-between gap-2">
-              {chips}
-              {footage.length > SECTION_PREVIEW && <ViewAllButton onClick={() => go("videos")} />}
-            </div>
+            <SectionHead
+              title="Stock Videos"
+              onViewAll={footage.length > SECTION_PREVIEW ? () => go("videos") : undefined}
+            />
             {footage.length > 0 ? (
               <Grid items={footage.slice(0, SECTION_PREVIEW)} />
             ) : (
