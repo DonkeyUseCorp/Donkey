@@ -139,13 +139,33 @@ export function geminiApiError(message: string, error: unknown): InferenceProvid
     return new InferenceProviderError(message, {
       statusCode: status,
       code: "provider_error",
-      details: { status: error.status, message: error.message },
+      details: { status: error.status, message: humanApiMessage(error.message) },
     });
   }
 
   return new InferenceProviderError(message, {
     details: { message: error instanceof Error ? error.message : "Unknown error" },
   });
+}
+
+// Vertex wraps the human reason in a JSON body ({"error":{"message":"…"}}) and the SDK
+// hands the whole blob back as error.message — sometimes behind a "got status: …" prefix.
+// Pull the sentence out so callers surface a clean reason, not raw JSON.
+function humanApiMessage(raw: string): string {
+  const brace = raw.indexOf("{");
+  if (brace >= 0) {
+    try {
+      const parsed = toJsonValue(JSON.parse(raw.slice(brace)));
+      if (isJsonObject(parsed)) {
+        const err = parsed.error;
+        const nested = isJsonObject(err) ? stringValue(err.message) : undefined;
+        return nested ?? stringValue(parsed.message) ?? raw.trim();
+      }
+    } catch {
+      // Not JSON after all — fall through to the raw string.
+    }
+  }
+  return raw.trim();
 }
 
 // The candidate objects of a generateContent response, and the content parts of one candidate. Both

@@ -140,11 +140,20 @@ async function readError(res: Response, fallback: string): Promise<string> {
   const body = (await res.json().catch(() => null)) as {
     error?: unknown;
     message?: unknown;
+    details?: { message?: unknown } | null;
   } | null;
   const message = [body?.message, body?.error].find(
     (v): v is string => typeof v === "string" && v.length > 0
   );
   if (res.status === 402) return message ?? "Not enough Donkey credits — top up to generate.";
+  // The provider tucks the real reason (a safety block, a rejected prompt) under
+  // details.message; the top-level message is only a generic headline. Append it so a
+  // failure explains itself instead of stopping at "…generation failed."
+  const detail =
+    typeof body?.details?.message === "string" && body.details.message.trim()
+      ? body.details.message.trim()
+      : null;
+  if (detail && detail !== message) return message ? `${message} ${detail}` : detail;
   return message ?? fallback;
 }
 
