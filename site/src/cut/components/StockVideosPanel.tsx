@@ -1,45 +1,37 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Maximize2, Search } from "lucide-react";
+import { ChevronRight, Maximize2, Search } from "lucide-react";
 import { clearRefDrag, refFromStockVideo, setRefDragData } from "@/cut/lib/assetRef";
 import { useLightbox } from "@/cut/lib/lightbox";
 import { useRevealEffect, useRevealFlash } from "@/cut/lib/refReveal";
 import { useVideoGen } from "@/cut/lib/videoGen";
-import { STOCK_VIDEO_CATEGORIES, type StockVideo, type StockVideoCategory } from "@/cut/lib/stock";
+import { STOCK_CATEGORIES, stockTitle, type StockCategory, type StockVideo } from "@/cut/lib/stock";
 import { STOCK_VIDEOS } from "@/cut/lib/stockVideoManifest";
-import { formatTime } from "@/cut/lib/time";
 import { cn } from "@/lib/utils";
 import { CopyRefButton, RefHandlePill } from "./AssetRefs";
-
-/** A readable title from a stock id, e.g. "nature-waves" → "Nature Waves". */
-const titleFromId = (id: string) =>
-  id.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
 // The Video tab's reference browser: a searchable catalog of AI-generated stock
 // clips. Every clip carries the prompt that made it — clicking one loads that
 // prompt into the generate panel beside it to edit and render on the user's
 // account. Videos the user generates show up in that panel, not here.
 //
-// "Characters" is the featured section: talking-head clips whose prompt ends in
-// an editable spoken line, shown as a square-tile row above the footage
-// categories (our own take on the pattern).
+// Two sections: "Talking Characters" (talking-head clips whose prompt ends in
+// an editable spoken line), then the footage grid headed by its category
+// chips. "View all" drills into a section, titled with a breadcrumb.
 
-type View = "all" | StockVideoCategory;
+const CHARACTERS = STOCK_VIDEOS.filter((v) => v.category === "Characters");
+const FOOTAGE = STOCK_VIDEOS.filter((v) => v.category !== "Characters");
 
-/** The Characters section reads as "Talking Characters" everywhere it titles. */
-const viewTitle = (view: Exclude<View, "all">) =>
-  view === "Characters" ? "Talking Characters" : view;
-
-// Only categories the catalog actually covers get a chip and a section.
-const CATEGORIES = STOCK_VIDEO_CATEGORIES.filter((c) =>
-  STOCK_VIDEOS.some((v) => v.category === c)
+// Only footage categories the catalog actually covers get a chip.
+const FOOTAGE_CATEGORIES = STOCK_CATEGORIES.filter((c) =>
+  FOOTAGE.some((v) => v.category === c)
 );
 
-// Character tiles drop the duration badge while every character clip is one
-// length; a mixed-length catalog brings it back.
-const CHARACTERS_ONE_LENGTH =
-  new Set(STOCK_VIDEOS.filter((v) => v.category === "Characters").map((v) => v.duration)).size <= 1;
+/** Tiles a section shows at the root before "View all" drills in. */
+const SECTION_PREVIEW = 6;
+
+type View = "root" | "characters" | "videos";
 
 const chip = (active: boolean) =>
   cn(
@@ -48,17 +40,23 @@ const chip = (active: boolean) =>
   );
 
 export function StockVideosPanel() {
-  const [view, setView] = useState<View>("all");
+  const [view, setView] = useState<View>("root");
+  const [cat, setCat] = useState<"all" | StockCategory>("all");
   const [query, setQuery] = useState("");
 
-  // A revealed stock clip may sit behind a category view — open its category
-  // so the tile is on screen to flash.
+  // A revealed stock clip may sit off screen — clear the search and open the
+  // view that has its tile (a drilled section, the matching chip filter).
   useRevealEffect((ref) => {
     if (ref.scope !== "stock") return;
     const item = STOCK_VIDEOS.find((v) => v.id === ref.id);
     if (!item) return;
-    setView(item.category);
     setQuery("");
+    if (item.category === "Characters") {
+      setView(CHARACTERS.indexOf(item) >= SECTION_PREVIEW ? "characters" : "root");
+    } else {
+      setView("videos");
+      setCat(item.category);
+    }
   });
 
   const q = query.trim().toLowerCase();
@@ -68,25 +66,34 @@ export function StockVideosPanel() {
     item.category.toLowerCase().includes(q) ||
     item.tags.some((t) => t.includes(q));
 
-  const stock = STOCK_VIDEOS.filter(matches);
+  const characters = CHARACTERS.filter(matches);
+  const footage = FOOTAGE.filter((v) => (cat === "all" || v.category === cat) && matches(v));
+
+  const chips = (
+    <div className="flex min-w-0 flex-wrap gap-1">
+      <button className={chip(cat === "all")} onClick={() => setCat("all")}>
+        All
+      </button>
+      {FOOTAGE_CATEGORIES.map((c) => (
+        <button key={c} className={chip(cat === c)} onClick={() => setCat(c)}>
+          {c}
+        </button>
+      ))}
+    </div>
+  );
 
   return (
     <>
-      <div className="flex h-12 shrink-0 items-center pr-2.5 pl-2.5">
-        <span className="flex min-w-0 items-center gap-1 text-sm font-semibold tracking-tight">
-          {view !== "all" && (
-            <button
-              title="All stock videos"
-              className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:text-foreground"
-              onClick={() => setView("all")}
-            >
-              <ChevronLeft className="size-4" />
-            </button>
-          )}
-          <span className={cn("truncate", view === "all" && "pl-1.5")}>
-            {view === "all" ? "Stock Videos" : viewTitle(view)}
-          </span>
-        </span>
+      <div className="flex h-12 shrink-0 items-center px-3.5">
+        <label className="flex w-full items-center gap-2 rounded-lg border border-input px-2.5 py-1.5 focus-within:border-ring">
+          <Search className="size-3.5 shrink-0 text-muted-foreground" />
+          <input
+            className="w-full bg-transparent text-[12px] outline-none placeholder:text-muted-foreground"
+            placeholder="Search stock…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </label>
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3.5 pb-4">
@@ -94,56 +101,44 @@ export function StockVideosPanel() {
           <p className="text-[11px] leading-relaxed text-muted-foreground">
             No stock videos are bundled yet.
           </p>
+        ) : view === "root" ? (
+          <>
+            {characters.length > 0 && (
+              <section className="shrink-0">
+                <SectionHead
+                  title="Talking Characters"
+                  onViewAll={
+                    characters.length > SECTION_PREVIEW ? () => setView("characters") : undefined
+                  }
+                />
+                <Grid items={characters.slice(0, SECTION_PREVIEW)} />
+              </section>
+            )}
+            <section className="shrink-0">
+              <div className="mb-2 flex items-start justify-between gap-2">
+                {chips}
+                {footage.length > SECTION_PREVIEW && (
+                  <ViewAllButton onClick={() => setView("videos")} />
+                )}
+              </div>
+              {footage.length > 0 ? (
+                <Grid items={footage.slice(0, SECTION_PREVIEW)} />
+              ) : (
+                characters.length === 0 && <Empty />
+              )}
+            </section>
+          </>
         ) : (
           <>
-            <label className="flex shrink-0 items-center gap-2 rounded-lg border border-input px-2.5 py-1.5 focus-within:border-ring">
-              <Search className="size-3.5 shrink-0 text-muted-foreground" />
-              <input
-                className="w-full bg-transparent text-[12px] outline-none placeholder:text-muted-foreground"
-                placeholder="Search…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-            </label>
-
-            <div className="flex shrink-0 flex-wrap gap-1">
-              <button className={chip(view === "all")} onClick={() => setView("all")}>
-                All
-              </button>
-              {CATEGORIES.map((c) => (
-                <button key={c} className={chip(view === c)} onClick={() => setView(c)}>
-                  {viewTitle(c)}
-                </button>
-              ))}
-            </div>
-
-            {view === "all" ? (
-              <>
-                {CATEGORIES.map((c) => {
-                  const items = stock.filter((v) => v.category === c);
-                  if (items.length === 0) return null;
-                  const shown = c === "Characters" ? 8 : 6;
-                  return (
-                    <section key={c} className="shrink-0">
-                      <SectionHead
-                        title={viewTitle(c)}
-                        onViewAll={items.length > shown ? () => setView(c) : undefined}
-                      />
-                      <CategoryGrid category={c} items={items} limit={shown} />
-                    </section>
-                  );
-                })}
-                {stock.length === 0 && <Empty />}
-              </>
+            <Crumb
+              title={view === "characters" ? "Talking Characters" : "Stock Videos"}
+              onBack={() => setView("root")}
+            />
+            {view === "videos" && chips}
+            {(view === "characters" ? characters : footage).length > 0 ? (
+              <Grid items={view === "characters" ? characters : footage} />
             ) : (
-              (() => {
-                const items = stock.filter((v) => v.category === view);
-                return items.length > 0 ? (
-                  <CategoryGrid category={view} items={items} />
-                ) : (
-                  <Empty />
-                );
-              })()
+              <Empty />
             )}
           </>
         )}
@@ -152,29 +147,15 @@ export function StockVideosPanel() {
   );
 }
 
-/** One category's tile grid — the single place a category's presentation
- * lives: characters render as square face tiles four across, footage as
- * 16:10 tiles two across. */
-function CategoryGrid({
-  category,
-  items,
-  limit,
-}: {
-  category: StockVideoCategory;
-  items: StockVideo[];
-  limit?: number;
-}) {
-  const characters = category === "Characters";
+/** Drilled-section header: a breadcrumb back to the root plus the title. */
+function Crumb({ title, onBack }: { title: string; onBack: () => void }) {
   return (
-    <div className={cn("grid gap-1.5", characters ? "grid-cols-4" : "grid-cols-2")}>
-      {items.slice(0, limit ?? items.length).map((v) => (
-        <StockTile
-          key={v.id}
-          item={v}
-          square={characters}
-          showDuration={!characters || !CHARACTERS_ONE_LENGTH}
-        />
-      ))}
+    <div className="flex shrink-0 items-center gap-1 text-[12px]">
+      <button className="text-muted-foreground transition-colors hover:text-foreground" onClick={onBack}>
+        All
+      </button>
+      <ChevronRight className="size-3 text-muted-foreground" />
+      <span className="font-semibold">{title}</span>
     </div>
   );
 }
@@ -183,31 +164,37 @@ function SectionHead({ title, onViewAll }: { title: string; onViewAll?: () => vo
   return (
     <div className="mb-1.5 flex items-center justify-between">
       <span className="text-[12px] font-semibold">{title}</span>
-      {onViewAll && (
-        <button
-          className="flex items-center gap-0.5 text-[11px] text-muted-foreground hover:text-foreground"
-          onClick={onViewAll}
-        >
-          View all
-          <ChevronRight className="size-3" />
-        </button>
-      )}
+      {onViewAll && <ViewAllButton onClick={onViewAll} />}
     </div>
   );
 }
 
-/** A stock clip: hover plays it, clicking loads its saved prompt into the
- * generate panel, and it drags as a video ref (chat attachment, generation
- * start frame, timeline drop). Character tiles render square, face-first. */
-function StockTile({
-  item,
-  square = false,
-  showDuration = true,
-}: {
-  item: StockVideo;
-  square?: boolean;
-  showDuration?: boolean;
-}) {
+function ViewAllButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      className="flex shrink-0 items-center gap-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+      onClick={onClick}
+    >
+      View all
+      <ChevronRight className="size-3" />
+    </button>
+  );
+}
+
+function Grid({ items }: { items: StockVideo[] }) {
+  return (
+    <div className="grid grid-cols-2 gap-1.5">
+      {items.map((v) => (
+        <StockTile key={v.id} item={v} />
+      ))}
+    </div>
+  );
+}
+
+/** A stock clip: hover plays it, clicking loads it into the generate panel
+ * (footage as an editable prompt, a character as character mode), and it drags
+ * as a video ref (chat attachment, generation start frame, timeline drop). */
+function StockTile({ item }: { item: StockVideo }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const { flash, attachReveal } = useRevealFlash("stock", item.id);
   return (
@@ -234,7 +221,11 @@ function StockTile({
         draggable
         onDragStart={(e) => setRefDragData(e, refFromStockVideo(item))}
         onDragEnd={clearRefDrag}
-        onClick={() => useVideoGen.getState().openWith(item.prompt)}
+        onClick={() =>
+          item.category === "Characters"
+            ? useVideoGen.getState().openCharacter(item)
+            : useVideoGen.getState().openWith(item.prompt)
+        }
       >
         <video
           ref={videoRef}
@@ -244,14 +235,13 @@ function StockTile({
           muted
           loop
           playsInline
-          className={cn("w-full bg-muted object-cover", square ? "aspect-square" : "aspect-[16/10]")}
+          className="aspect-[16/10] w-full bg-muted object-cover"
         />
       </button>
-      {showDuration && (
-        <span className="pointer-events-none absolute right-1 bottom-1 rounded-[5px] bg-black/65 px-1 py-px font-mono text-[9.5px] text-white tabular-nums">
-          {formatTime(item.duration)}
-        </span>
-      )}
+      {/* Clip lengths are single-digit seconds; "8s" reads better than "0:08". */}
+      <span className="pointer-events-none absolute right-1 bottom-1 rounded-[5px] bg-black/65 px-1 py-px font-mono text-[9.5px] text-white tabular-nums">
+        {Math.round(item.duration)}s
+      </span>
       <RefHandlePill
         token={`@${item.id}`}
         className="absolute bottom-1 left-1 opacity-0 transition-opacity group-hover:opacity-100"
@@ -265,7 +255,7 @@ function StockTile({
               src: item.file,
               isVideo: true,
               playable: true,
-              name: titleFromId(item.id),
+              name: stockTitle(item.id),
               prompt: item.prompt,
               assetId: null,
             })

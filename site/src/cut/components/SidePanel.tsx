@@ -147,7 +147,7 @@ export function SidePanel({
               <GenerateVideoPanel projectId={projectId} />
             )}
           </div>
-          {/* Video browses wider: character rows and 16:9 footage need the room. */}
+          {/* Video browses wider: 16:9 clip tiles need the room. */}
           <div
             className={cn(
               "flex min-h-0 shrink-0 flex-col",
