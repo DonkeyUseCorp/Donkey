@@ -8,6 +8,12 @@ import Foundation
 /// version-locked to the app: updates ride app releases, and the stamped version feeds the site's
 /// update nudge.
 ///
+/// The engine's lifetime is strictly tied to this app process. The engine watches the app's pid and
+/// exits when it dies (crash, force-kill, update relaunch), and at launch the supervisor replaces any
+/// engine on the port stamped with a different version — an engine from before either mechanism
+/// existed, or one whose parent-watch has not fired yet. A version-matched engine (another instance
+/// of this same build) and a developer-run "dev" engine are left alone.
+///
 /// Cut is free and standalone, so the engine runs regardless of Donkey sign-in state.
 public final class DonkeyCutEngineSupervisor: @unchecked Sendable {
     /// The port the Cut client probes (see the site's engine discovery).
@@ -52,41 +58,78 @@ public final class DonkeyCutEngineSupervisor: @unchecked Sendable {
         return fileManager.isExecutableFile(atPath: baked.path) ? baked : nil
     }
 
+    /// This app's release version, as stamped into the engine it spawns.
+    private static let appVersion =
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+
     /// Thread-crossing result box for the synchronous health probe.
-    private final class Flag: @unchecked Sendable {
-        var value = false
+    private final class ProbeResult: @unchecked Sendable {
+        var version: String?
     }
 
-    /// True when something on the port already answers as a Cut engine — another app instance or a
-    /// dev server. Don't fight it; check again later.
-    private func portAlreadyServed() -> Bool {
-        guard let url = URL(string: "http://127.0.0.1:\(Self.port)/api/cut/engine/health") else { return false }
+    /// The version a Cut engine already on the port reports, or nil when no Cut engine answers.
+    /// An engine that answers without a version field maps to "" so it reads as a mismatch.
+    private func servedEngineVersion() -> String? {
+        guard let url = URL(string: "http://127.0.0.1:\(Self.port)/api/cut/engine/health") else { return nil }
         var request = URLRequest(url: url)
         request.timeoutInterval = 1.0
         let semaphore = DispatchSemaphore(value: 0)
-        let healthy = Flag()
+        let probe = ProbeResult()
         URLSession.shared.dataTask(with: request) { data, _, _ in
-            if let data, let body = String(data: data, encoding: .utf8), body.contains("donkey-cut") {
-                healthy.value = true
-            }
-            semaphore.signal()
+            defer { semaphore.signal() }
+            guard let data,
+                  let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  payload["engine"] as? String == "donkey-cut"
+            else { return }
+            probe.version = payload["version"] as? String ?? ""
         }.resume()
         semaphore.wait()
-        return healthy.value
+        return probe.version
+    }
+
+    /// SIGTERM (then SIGKILL) whatever is listening on the engine port. Used only after the health
+    /// probe confirmed the listener is a Cut engine from another app build.
+    private static func terminateListeners() {
+        let lsof = Process()
+        lsof.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        lsof.arguments = ["-nP", "-t", "-iTCP:\(port)", "-sTCP:LISTEN"]
+        let pipe = Pipe()
+        lsof.standardOutput = pipe
+        lsof.standardError = FileHandle.nullDevice
+        guard (try? lsof.run()) != nil else { return }
+        lsof.waitUntilExit()
+        let own = ProcessInfo.processInfo.processIdentifier
+        let pids = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .split(whereSeparator: \.isNewline)
+            .compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
+            .filter { $0 != own } ?? []
+        for pid in pids { kill(pid, SIGTERM) }
+        for _ in 0..<20 {
+            if pids.allSatisfy({ kill($0, 0) != 0 }) { return }
+            usleep(100_000)
+        }
+        for pid in pids { kill(pid, SIGKILL) }
     }
 
     private func spawnIfNeeded() {
         guard !stopped, process == nil else { return }
         guard let binary = Self.engineBinary() else { return }
-        if portAlreadyServed() {
+        switch servedEngineVersion() {
+        case Self.appVersion?, "dev"?:
+            // Another instance of this same build, or a developer-run engine: leave it, check later.
             scheduleRespawn(after: 60)
             return
+        case .some:
+            // An engine from another app build. Replace it so engine fixes ship with the update.
+            Self.terminateListeners()
+        case nil:
+            break
         }
 
         var environment = DonkeyCommandBackends.shellEnvironment()
         environment["DONKEY_CUT_ENGINE"] = "1"
-        environment["DONKEY_CUT_VERSION"] =
-            Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        environment["DONKEY_CUT_VERSION"] = Self.appVersion
+        environment["DONKEY_CUT_PARENT_PID"] = String(ProcessInfo.processInfo.processIdentifier)
         if let tools = DonkeyCommandBackends.bundledToolsDirectory {
             environment["DONKEY_CUT_TOOLS_DIR"] = tools.path
         }

@@ -55,7 +55,24 @@ async function writeResponse(
   });
 }
 
+/** The engine never outlives the app that spawned it: a survivor would keep
+ * the port and serve a stale build after an app update. The app passes its
+ * pid; when that process is gone, exit so the new app's spawn takes over. */
+function exitWithParent() {
+  const parent = Number(process.env.DONKEY_CUT_PARENT_PID);
+  if (!Number.isInteger(parent) || parent <= 1) return;
+  setInterval(() => {
+    try {
+      process.kill(parent, 0);
+    } catch {
+      console.log(`parent process ${parent} exited; shutting down`);
+      process.exit(0);
+    }
+  }, 2000);
+}
+
 async function start() {
+  exitWithParent();
   await widenPath();
 
   // The Agent SDK can't resolve its built-in CLI from inside a compiled
