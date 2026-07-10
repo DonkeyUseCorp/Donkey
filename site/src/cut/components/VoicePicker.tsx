@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Captions, ChevronDown, Languages, Loader2, Pause, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SectionTitle } from "@/cut/components/SectionTitle";
 import { creditsUrl, signInUrl, useSignedIn } from "@/cut/lib/generate";
 import { useEditor } from "@/cut/lib/store";
 import {
@@ -123,9 +124,7 @@ export function VoicePicker({
 
   return (
     <div className="voice-picker flex flex-col gap-1.5">
-      <span className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
-        {title}
-      </span>
+      <SectionTitle>{title}</SectionTitle>
       <div className="flex items-center gap-2">
         <button
           type="button"
