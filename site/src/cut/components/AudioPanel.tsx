@@ -167,7 +167,7 @@ function VoiceGenerator({ projectId }: { projectId: string }) {
             ref={directionInput}
             rows={2}
             className="voice-direction min-h-[52px] w-full resize-y rounded-lg border border-input bg-transparent py-2 pr-9 pl-2.5 text-[12.5px] leading-relaxed outline-none focus:border-ring"
-            placeholder="Say warmly, like an old friend (optional)"
+            placeholder="Say warmly, like an old friend"
             value={direction}
             onChange={(e) => setDirection(e.target.value)}
           />
