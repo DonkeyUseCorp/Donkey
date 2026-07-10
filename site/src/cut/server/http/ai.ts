@@ -14,7 +14,6 @@ import {
 import { rewriteCaptions } from "../ai/captions";
 import { writeVisualCues, type VisualFrame } from "../ai/visualSubtitles";
 import { AI_SKILL_INDEX, AI_SKILLS, AI_TOOLS, systemPrompt } from "../ai/catalog";
-import { AI_MODELS } from "../ai/models";
 
 interface ChatBody {
   messages: UIMessage[];
@@ -382,8 +381,9 @@ export const aiApi = {
       value = { claude, codex };
       aiProbe = { at: Date.now(), value };
     }
+    // The model catalog lives in the page (src/cut/lib/aiModels.ts); the
+    // engine only reports which provider CLIs are usable on this Mac.
     return Response.json({
-      models: AI_MODELS,
       providers: {
         claude: { available: value.claude.ok, note: value.claude.note },
         codex: { available: value.codex.ok, note: value.codex.note },

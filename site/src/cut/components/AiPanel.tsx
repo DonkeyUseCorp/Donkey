@@ -50,6 +50,7 @@ import {
 } from "@/cut/lib/assetRef";
 import { signInUrl, useSignedIn } from "@/cut/lib/generate";
 import { streamGeminiChat } from "@/cut/lib/geminiChat";
+import { AI_MODELS } from "@/cut/lib/aiModels";
 import { saveAssetToLibrary } from "@/cut/lib/library";
 import { revealRef } from "@/cut/lib/refReveal";
 import { useEditor } from "@/cut/lib/store";
@@ -60,15 +61,7 @@ import { MentionTextarea, RefChips, RefThumb, RefTokenChip } from "./AssetRefs";
 // the stock catalog. They arrive by drag (media cards, library clips, stock
 // tiles, timeline clips, the preview) or as @name mentions in the message.
 
-interface AiModel {
-  id: string;
-  label: string;
-  provider: "claude" | "codex" | "gemini" | "test";
-  hidden?: boolean;
-}
-
 interface ModelsInfo {
-  models: AiModel[];
   providers: Record<string, { available: boolean; note: string }>;
 }
 
@@ -768,7 +761,7 @@ function ModelSelector({
     }
   });
   const showTest = typeof window !== "undefined" && localStorage.getItem("cut-ai-test") === "1";
-  const models = (info?.models ?? []).filter((m) => !m.hidden || showTest);
+  const models = AI_MODELS.filter((m) => !m.hidden || showTest);
   const groups = ["claude", "codex", "gemini", ...(showTest ? ["test"] : [])].map((p) => ({
     provider: p,
     models: models.filter((m) => m.provider === p),
