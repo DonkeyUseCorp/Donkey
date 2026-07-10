@@ -6,6 +6,7 @@ import {
 } from "@google/genai";
 import type {
   Content,
+  FunctionDeclaration,
   GenerateContentConfig,
   GenerateContentParameters,
   GenerateContentResponse,
@@ -109,8 +110,11 @@ export function createGeminiComputerUseProvider(
   ): Promise<ResponseCreateResult> {
     ensureConfigured(configured);
 
+    // Caller-defined function tools are honored only when the caller explicitly
+    // asked for Gemini; the default Responses route keeps sending them elsewhere.
+    const allowFunctionTools = request.donkeyProvider === geminiProviderID;
     const registeredTools = registeredToolTypes(request.body.tools);
-    if (hasExplicitUnsupportedTools(request.body.tools)) {
+    if (hasExplicitUnsupportedTools(request.body.tools, allowFunctionTools)) {
       throw new InferenceProviderError("Gemini Responses received unsupported tool declarations.", {
         statusCode: 400,
         code: "gemini_tool_unsupported",
@@ -283,7 +287,10 @@ export function createGeminiComputerUseProvider(
     capabilities: ["text", "image"],
     responseProviderIDs: [geminiProviderID],
     canCreateResponse: (request) => {
-      return !hasExplicitUnsupportedTools(request.body.tools);
+      return !hasExplicitUnsupportedTools(
+        request.body.tools,
+        request.donkeyProvider === geminiProviderID,
+      );
     },
     // This adapter renders input_audio/input_video parts (see mediaPart); declare it so the router
     // routes media requests here by capability rather than only because OpenAI declines them.
@@ -354,7 +361,42 @@ function geminiTools(registeredTools: string[], rawTools: JsonValue | undefined)
     });
   }
 
+  const declarations = functionDeclarationsFromTools(rawTools);
+  if (declarations.length > 0) {
+    tools.push({ functionDeclarations: declarations });
+  }
+
   return tools;
+}
+
+// Caller-defined `type: "function"` tools (OpenAI Responses shape: name, description,
+// parameters) become Gemini function declarations. Only explicit gemini requests get
+// this far with function tools; see createResponse.
+function functionDeclarationsFromTools(rawTools: JsonValue | undefined): FunctionDeclaration[] {
+  if (!Array.isArray(rawTools)) {
+    return [];
+  }
+
+  const declarations: FunctionDeclaration[] = [];
+  for (const tool of rawTools) {
+    if (!isJsonObject(tool) || tool.type !== "function") {
+      continue;
+    }
+    const name = stringValue(tool.name);
+    if (!name) {
+      continue;
+    }
+    const declaration: FunctionDeclaration = { name };
+    const description = stringValue(tool.description);
+    if (description) {
+      declaration.description = description;
+    }
+    if (isJsonObject(tool.parameters)) {
+      declaration.parametersJsonSchema = geminiJsonSchema(tool.parameters);
+    }
+    declarations.push(declaration);
+  }
+  return declarations;
 }
 
 function contentsFromInput(input: JsonValue | undefined): Content[] {
@@ -972,6 +1014,7 @@ function chatCompletionBody(
 
 function hasExplicitUnsupportedTools(
   tools: JsonValue | undefined,
+  allowFunctionTools = false,
 ) {
   if (!Array.isArray(tools)) {
     return false;
@@ -980,6 +1023,9 @@ function hasExplicitUnsupportedTools(
   return tools.some((tool) => {
     if (!isJsonObject(tool)) {
       return true;
+    }
+    if (allowFunctionTools && tool.type === "function") {
+      return false;
     }
     return tool.type !== geminiBrowserInteractionToolType &&
       tool.type !== geminiMacDesktopInteractionToolType &&
