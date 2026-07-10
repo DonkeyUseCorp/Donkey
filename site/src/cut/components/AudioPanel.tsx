@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { type DragEventHandler, useEffect, useRef, useState } from "react";
 import {
   AudioLines,
   Check,
@@ -19,6 +19,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { clearAssetDrag, setAssetDragData, setLibraryDragData } from "@/cut/lib/assetDrag";
 import {
   addLibraryAssetToProject,
   fetchLibrary,
@@ -288,6 +289,50 @@ function PeakStrip({ peaks }: { peaks: number[] }) {
   );
 }
 
+/** Off-screen drag image that mirrors an audio clip on the timeline — an
+ * emerald pill with the name and a white waveform — so the drag reads as the
+ * thing that will land, not the panel row. Lives just long enough for the
+ * browser to snapshot it. */
+function buildAudioDragGhost(name: string, width: number, peaks?: number[]): HTMLElement {
+  const height = 40; // AUDIO_H - 4, matching a timeline audio clip.
+  const el = document.createElement("div");
+  el.style.cssText =
+    `position:absolute;top:-1000px;left:-1000px;pointer-events:none;width:${width}px;height:${height}px;` +
+    "border-radius:7px;overflow:hidden;background:linear-gradient(to bottom,#10b981,#059669);" +
+    "box-shadow:inset 0 0 0 1px rgba(0,0,0,0.1),0 10px 26px rgba(0,0,0,0.35);";
+
+  const wave = height - 8;
+  const canvas = document.createElement("canvas");
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(width * dpr);
+  canvas.height = Math.round(wave * dpr);
+  canvas.style.cssText = `position:absolute;left:0;top:4px;width:${width}px;height:${wave}px;`;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    ctx.scale(dpr, dpr);
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    const bars = Math.max(1, Math.floor(width / 3));
+    const n = peaks?.length ?? 0;
+    for (let i = 0; i < bars; i++) {
+      // Use the asset's peaks when we have them; otherwise a gentle stand-in so
+      // the pill still reads as audio.
+      const p = n ? (peaks![Math.min(n - 1, Math.floor((i / bars) * n))] ?? 0) : 0.32 + 0.26 * Math.abs(Math.sin(i / 2));
+      const h = Math.max(1.5, p * (wave - 2));
+      ctx.fillRect(i * 3, (wave - h) / 2, 2, h);
+    }
+  }
+  el.appendChild(canvas);
+
+  const label = document.createElement("span");
+  label.textContent = name;
+  label.style.cssText =
+    "position:absolute;top:3px;left:8px;right:8px;color:rgba(255,255,255,0.9);white-space:nowrap;" +
+    "overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 2px rgba(0,0,0,0.35);" +
+    "font:500 9.5px/1.2 ui-sans-serif,system-ui,sans-serif;";
+  el.appendChild(label);
+  return el;
+}
+
 function AudioRow({
   name,
   duration,
@@ -297,6 +342,7 @@ function AudioRow({
   onTogglePlay,
   onAdd,
   onDelete,
+  onDragStart,
 }: {
   name: string;
   duration: number;
@@ -306,13 +352,35 @@ function AudioRow({
   onTogglePlay: (url: string) => void;
   onAdd: () => void;
   onDelete?: () => void;
+  /** Present when the row can be dragged onto the timeline. */
+  onDragStart?: DragEventHandler<HTMLDivElement>;
 }) {
   return (
-    <div className="audio-row group flex items-center gap-2 rounded-lg border border-border p-1.5 pr-2 transition-colors hover:border-input hover:bg-muted/50">
+    <div
+      className="audio-row group relative flex items-center gap-2 rounded-lg border border-border p-1.5 pr-2 transition-colors hover:border-input hover:bg-muted/50"
+      draggable={!!onDragStart}
+      onDragStart={
+        onDragStart &&
+        ((e) => {
+          onDragStart(e);
+          // Size the ghost to the clip's on-timeline width (duration × zoom),
+          // clamped so a very short or very long clip stays a sane drag image.
+          const width = Math.round(
+            Math.max(44, Math.min(520, duration * useEditor.getState().pxPerSec))
+          );
+          const ghost = buildAudioDragGhost(name, width, peaks);
+          document.body.appendChild(ghost);
+          e.dataTransfer.setDragImage(ghost, Math.min(20, width / 2), 20);
+          setTimeout(() => ghost.remove(), 0);
+        })
+      }
+      onDragEnd={onDragStart ? clearAssetDrag : undefined}
+      title={onDragStart ? "Drag onto the timeline, or click + to add" : undefined}
+    >
       <button
         type="button"
         className={cn(
-          "grid size-8 shrink-0 place-items-center rounded-full transition-colors",
+          "grid size-8 shrink-0 place-items-center rounded-full text-foreground transition-colors",
           playing ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/70"
         )}
         title={playing ? "Pause" : "Play"}
@@ -321,6 +389,8 @@ function AudioRow({
       >
         {playing ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
       </button>
+      {/* The name and waveform run the full width; the trailing controls scrim
+          over the right edge only on hover, so nothing is reserved for them. */}
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-2">
           <span className="truncate text-[11.5px] font-medium">{name}</span>
@@ -330,26 +400,28 @@ function AudioRow({
         </div>
         {peaks && peaks.length > 0 && <PeakStrip peaks={peaks} />}
       </div>
-      {onDelete && (
+      <div className="absolute inset-y-0 right-0 flex items-center gap-1 rounded-r-lg from-card via-card bg-gradient-to-l to-transparent pr-2 pl-8 opacity-0 transition-opacity group-hover:opacity-100">
+        {onDelete && (
+          <button
+            type="button"
+            title="Remove from project"
+            aria-label="Remove from project"
+            className="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+            onClick={onDelete}
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        )}
         <button
           type="button"
-          title="Remove from project"
-          aria-label="Remove from project"
-          className="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive"
-          onClick={onDelete}
+          title="Add at the playhead"
+          aria-label="Add at the playhead"
+          className="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          onClick={onAdd}
         >
-          <Trash2 className="size-3.5" />
+          <Plus className="size-3.5" />
         </button>
-      )}
-      <button
-        type="button"
-        title="Add at the playhead"
-        aria-label="Add at the playhead"
-        className="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-muted hover:text-foreground"
-        onClick={onAdd}
-      >
-        <Plus className="size-3.5" />
-      </button>
+      </div>
     </div>
   );
 }
@@ -385,6 +457,7 @@ function ProjectAudio({
             onTogglePlay={onTogglePlay}
             onAdd={() => useEditor.getState().addAudioFromAsset(a.id)}
             onDelete={() => useEditor.getState().removeAsset(a.id)}
+            onDragStart={(e) => setAssetDragData(e, a.id)}
           />
         ))}
         {importing && (
@@ -430,6 +503,7 @@ function LibraryAudio({
             playing={playingUrl === libraryMediaUrl(a.fileName)}
             onTogglePlay={onTogglePlay}
             onAdd={() => void addLibraryAssetToProject(projectId, a)}
+            onDragStart={(e) => setLibraryDragData(e, a)}
           />
         ))}
       </div>
