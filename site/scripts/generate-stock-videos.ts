@@ -108,6 +108,9 @@ const CATALOG: CatalogItem[] = [
   character("character-finance-coach", "16:9", "a Black man in his 40s in a fitted sweater, a home-office bookshelf and desk lamp blurred behind him", "If you can save ten percent, you can retire early. Here's the math."),
   character("character-nurse-educator", "16:9", "a Filipina woman in her 30s in scrubs with a stethoscope around her neck, a bright clinic room behind her", "Most people take their blood pressure wrong. Watch this."),
   character("character-grandpa-gamer", "16:9", "a cheerful man in his 70s with a white beard, his face lit by shifting RGB keyboard glow in a dim room", "My grandson taught me this game. Now I coach him."),
+  character("character-cafe-hopper", "9:16", "a stylish young Korean woman in her early 20s with wispy curtain bangs, long ash-brown hair, glossy lip tint and gold hoop earrings, walking down a sunny sidewalk toward a corner café with pastel awnings behind her", "I found the prettiest café in the city — come with me before everyone else finds it."),
+  character("character-study-buddy", "9:16", "a young Korean woman in her early 20s with soft bangs and dark hair pinned up in a claw clip, wearing an oversized cream cardigan, a warm desk lamp and stacked notebooks blurred behind her", "It's almost midnight and I have three chapters left — let's finish this together."),
+  character("character-business-lead", "16:9", "a polished Korean woman in her late 20s with sleek shoulder-length black hair and pearl earrings, in a tailored ivory blazer, a bright glass high-rise office blurred behind her", "I've sat through a thousand pitches. The good ones all start the same way."),
 
   // Business
   { id: "business-team-walkthrough", category: "Business", aspect: "16:9", seconds: 6, prompt: clip("a slow tracking shot following a small team walking and talking through a bright modern office, glass walls and plants passing by.") },
