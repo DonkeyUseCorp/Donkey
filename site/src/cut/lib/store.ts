@@ -21,7 +21,7 @@ import type {
   TransitionStyle,
   VideoClip,
 } from "./types";
-import { apiFetch } from "./api";
+import { apiFetch, apiJson } from "./api";
 import { emptySubtitles, isCrossStyle, mediaUrl, SPEED_MAX, SPEED_MIN, TRANSITION_MAX } from "./types";
 import { readTextStyle } from "./textStyle";
 import { loadUiState, saveUiState } from "./uiState";
@@ -1168,7 +1168,7 @@ export const useEditor = create<EditorState>((set, get) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(spec),
         });
-        const body = (await res.json()) as { id?: string; error?: string };
+        const body = await apiJson<{ id?: string }>(res);
         if (!res.ok || !body.id) throw new Error(body.error ?? "Transcription failed to start.");
         for (;;) {
           await new Promise((r) => setTimeout(r, 600));
@@ -1228,10 +1228,9 @@ export const useEditor = create<EditorState>((set, get) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ frames, duration, locale: s.subtitles.locale ?? "en-US" }),
         });
-        const body = (await res.json()) as {
+        const body = await apiJson<{
           cues?: { start: number; end: number; text: string }[];
-          error?: string;
-        };
+        }>(res);
         if (!res.ok || !Array.isArray(body.cues)) {
           throw new Error(body.error ?? "Captioning failed.");
         }
@@ -1281,7 +1280,7 @@ export const useEditor = create<EditorState>((set, get) => {
             cues: cues.map((c) => ({ start: c.start, end: c.end, text: c.text })),
           }),
         });
-        const body = (await res.json()) as { texts?: string[]; error?: string };
+        const body = await apiJson<{ texts?: string[] }>(res);
         if (get().projectId !== projectId) return;
         push();
         if (res.ok && Array.isArray(body.texts) && body.texts.length === cues.length) {

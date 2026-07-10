@@ -1,6 +1,6 @@
 "use client";
 
-import { apiFetch } from "./api";
+import { apiFetch, apiJson } from "./api";
 import { useGenerate } from "./generate";
 import { enrichAsset, ensurePeaks } from "./media";
 import { getClipSpans, TIMELINE_H_MAX, TIMELINE_H_MIN, totalDuration, useEditor } from "./store";
@@ -210,7 +210,7 @@ export async function runAiTool(
           },
         }),
       });
-      const body = (await res.json()) as MediaAsset & { error?: string };
+      const body = await apiJson<MediaAsset>(res);
       if (!res.ok) throw new ToolError(body.error ?? "Could not render the freeze frame.");
       const asset: MediaAsset = { ...body, url: mediaUrl(projectId, body.fileName) };
       const cur = useEditor.getState();

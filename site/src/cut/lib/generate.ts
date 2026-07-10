@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { create } from "zustand";
-import { apiFetch } from "./api";
+import { apiFetch, apiJson } from "./api";
 import type { AssetRef } from "./assetRef";
 import { enrichAsset, importFileToProject } from "./media";
 import { refsToInlineImages } from "./refMedia";
@@ -251,7 +251,7 @@ export const useGenerate = create<GenerateState>((set, get) => {
             method: "POST",
             body: form,
           });
-          const body = (await baked.json()) as MediaAsset & { error?: string };
+          const body = await apiJson<MediaAsset>(baked);
           if (!baked.ok || !body.fileName) {
             throw new Error(body.error ?? "Could not add the image to the project.");
           }

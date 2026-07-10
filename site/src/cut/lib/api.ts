@@ -74,3 +74,23 @@ export async function apiFetch(path: string, init?: RequestInit) {
   const base = await engineReady();
   return fetch(`${base}${path}`, init);
 }
+
+/** JSON body of an engine reply. A reply that never reached a handler is plain
+ * text — a 404/405 from an engine build older than the route, a 403 refusal —
+ * so a non-JSON body folds into an `error` message instead of throwing a
+ * SyntaxError at the caller's parse. The 404/405 case is the hosted page
+ * driving an out-of-date engine: the page updates on deploy, the engine only
+ * when the user updates the Donkey app. */
+export async function apiJson<T>(res: Response): Promise<T & { error?: string }> {
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as T & { error?: string };
+  } catch {
+    const stale = res.status === 404 || res.status === 405;
+    return {
+      error: stale
+        ? "The Donkey app on this Mac doesn't support this yet — update Donkey and try again."
+        : text.trim() || `The engine replied ${res.status}.`,
+    } as T & { error?: string };
+  }
+}

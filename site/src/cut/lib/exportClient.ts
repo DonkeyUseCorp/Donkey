@@ -1,6 +1,6 @@
 "use client";
 
-import { apiFetch, apiUrl } from "./api";
+import { apiFetch, apiJson, apiUrl } from "./api";
 import { clipSpeed, getClipSpans, projectDuration } from "./store";
 import { captionStyle, cueOverlay, cueWordWindows } from "./subtitles";
 import { renderOverlayPng } from "./textRender";
@@ -287,14 +287,13 @@ export async function pollExport(
     if (isCanceled()) throw new Error("Export canceled.");
     await new Promise((r) => setTimeout(r, 400));
     const st = await apiFetch(`/api/cut/export/${jobId}`);
-    const status = (await st.json()) as {
-      status: string;
-      progress: number;
-      error?: string;
+    const status = await apiJson<{
+      status?: string;
+      progress?: number;
       outName?: string;
-    };
-    if (status.status === "error") throw new Error(status.error ?? "Export failed.");
-    onProgress("Rendering", status.progress);
+    }>(st);
+    if (!st.ok || status.status === "error") throw new Error(status.error ?? "Export failed.");
+    onProgress("Rendering", status.progress ?? 0);
     if (status.status === "done") return status.outName ?? "export.mp4";
   }
 }
@@ -323,7 +322,7 @@ export function startExport(
     const form = await buildExportForm(projectId, doc, settings, "export");
     onProgress("Starting encoder", 0);
     const res = await apiFetch("/api/cut/export", { method: "POST", body: form });
-    const body = (await res.json()) as { id?: string; error?: string };
+    const body = await apiJson<{ id?: string }>(res);
     if (!res.ok || !body.id) throw new Error(body.error ?? "Export failed to start.");
     jobId = body.id;
 

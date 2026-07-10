@@ -1,6 +1,6 @@
 "use client";
 
-import { apiFetch, apiUrl } from "./api";
+import { apiFetch, apiJson, apiUrl } from "./api";
 import { enrichAsset } from "./media";
 import { useEditor } from "./store";
 import type { LibraryTemplate, MediaAsset, TemplateMedia, TemplateSaveInput } from "./types";
@@ -53,7 +53,7 @@ export async function importUrlToLibrary(url: string): Promise<LibraryAsset> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url }),
   });
-  const body = (await res.json()) as LibraryAsset & { error?: string };
+  const body = await apiJson<LibraryAsset>(res);
   if (!res.ok) throw new Error(body.error ?? "Could not import that URL.");
   return body;
 }
@@ -64,7 +64,7 @@ export async function createLibraryFolder(name: string): Promise<LibraryFolder> 
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
   });
-  const body = (await res.json()) as LibraryFolder & { error?: string };
+  const body = await apiJson<LibraryFolder>(res);
   if (!res.ok) throw new Error(body.error ?? "Could not create folder.");
   return body;
 }
@@ -96,7 +96,7 @@ export async function uploadToLibrary(file: File): Promise<LibraryAsset> {
   const form = new FormData();
   form.append("file", file, file.name);
   const res = await apiFetch("/api/cut/library", { method: "POST", body: form });
-  const body = (await res.json()) as LibraryAsset & { error?: string };
+  const body = await apiJson<LibraryAsset>(res);
   if (!res.ok) throw new Error(body.error ?? "Upload failed.");
   return body;
 }
@@ -117,7 +117,7 @@ export async function importLibraryAsset(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ assetId: lib.id, projectId }),
   });
-  const body = (await res.json()) as { fileName?: string; error?: string };
+  const body = await apiJson<{ fileName?: string }>(res);
   if (!res.ok || !body.fileName) throw new Error(body.error ?? "Could not add from library.");
 
   const asset: MediaAsset = {
@@ -159,7 +159,7 @@ export async function saveTemplate(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ projectId, ...input }),
   });
-  const body = (await res.json()) as LibraryTemplate & { error?: string };
+  const body = await apiJson<LibraryTemplate>(res);
   if (!res.ok) throw new Error(body.error ?? "Could not save the template.");
   return body;
 }
@@ -180,7 +180,7 @@ export async function addTemplateToProject(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ projectId }),
   });
-  const body = (await res.json()) as { media?: TemplateMedia[]; error?: string };
+  const body = await apiJson<{ media?: TemplateMedia[] }>(res);
   if (!res.ok || !body.media) throw new Error(body.error ?? "Could not add the template.");
 
   const s = useEditor.getState();
@@ -210,7 +210,7 @@ export async function saveAssetToLibrary(projectId: string, asset: MediaAsset) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ projectId, fileName: asset.fileName, name: asset.name }),
   });
-  const body = (await res.json()) as LibraryAsset & { error?: string };
+  const body = await apiJson<LibraryAsset>(res);
   if (!res.ok) throw new Error(body.error ?? "Could not save to library.");
   return body;
 }

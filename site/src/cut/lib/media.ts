@@ -1,6 +1,6 @@
 "use client";
 
-import { apiFetch } from "./api";
+import { apiFetch, apiJson } from "./api";
 import { useEditor } from "./store";
 import type { AudioClip, MediaAsset, ProjectSummary, StoredAsset, VideoClip } from "./types";
 import { mediaUrl } from "./types";
@@ -31,7 +31,8 @@ export async function createProjectFromFile(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, folderId }),
   });
-  const project = (await res.json()) as ProjectSummary;
+  const project = await apiJson<ProjectSummary>(res);
+  if (!res.ok || !project.id) throw new Error(project.error ?? "Could not create the project.");
 
   const asset = await importFileToProject(project.id, file);
   // Media the engine rejects leaves an empty project rather than a dangling id.
@@ -96,7 +97,7 @@ export async function importFileToProject(
     method: "POST",
     body: form,
   });
-  const body = (await res.json()) as { fileName?: string; error?: string };
+  const body = await apiJson<{ fileName?: string }>(res);
   if (!res.ok || !body.fileName) throw new Error(body.error ?? "Upload failed.");
 
   const url = mediaUrl(projectId, body.fileName);
