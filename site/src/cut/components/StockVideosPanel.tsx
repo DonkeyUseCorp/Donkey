@@ -6,7 +6,7 @@ import { clearRefDrag, refFromStockVideo, setRefDragData } from "@/cut/lib/asset
 import { useLightbox } from "@/cut/lib/lightbox";
 import { useRevealEffect, useRevealFlash } from "@/cut/lib/refReveal";
 import { useVideoGen } from "@/cut/lib/videoGen";
-import { STOCK_CATEGORIES, type StockVideo } from "@/cut/lib/stock";
+import { STOCK_VIDEO_CATEGORIES, type StockVideo, type StockVideoCategory } from "@/cut/lib/stock";
 import { STOCK_VIDEOS } from "@/cut/lib/stockVideoManifest";
 import { formatTime } from "@/cut/lib/time";
 import { cn } from "@/lib/utils";
@@ -20,8 +20,26 @@ const titleFromId = (id: string) =>
 // clips. Every clip carries the prompt that made it — clicking one loads that
 // prompt into the generate panel beside it to edit and render on the user's
 // account. Videos the user generates show up in that panel, not here.
+//
+// "Characters" is the featured section: talking-head clips whose prompt ends in
+// an editable spoken line, shown as a square-tile row above the footage
+// categories (our own take on the pattern).
 
-type View = "all" | (typeof STOCK_CATEGORIES)[number];
+type View = "all" | StockVideoCategory;
+
+/** The Characters section reads as "Talking Characters" everywhere it titles. */
+const viewTitle = (view: Exclude<View, "all">) =>
+  view === "Characters" ? "Talking Characters" : view;
+
+// Only categories the catalog actually covers get a chip and a section.
+const CATEGORIES = STOCK_VIDEO_CATEGORIES.filter((c) =>
+  STOCK_VIDEOS.some((v) => v.category === c)
+);
+
+// Character tiles drop the duration badge while every character clip is one
+// length; a mixed-length catalog brings it back.
+const CHARACTERS_ONE_LENGTH =
+  new Set(STOCK_VIDEOS.filter((v) => v.category === "Characters").map((v) => v.duration)).size <= 1;
 
 const chip = (active: boolean) =>
   cn(
@@ -32,9 +50,6 @@ const chip = (active: boolean) =>
 export function StockVideosPanel() {
   const [view, setView] = useState<View>("all");
   const [query, setQuery] = useState("");
-
-  // Only categories the catalog actually covers get a chip.
-  const categories = STOCK_CATEGORIES.filter((c) => STOCK_VIDEOS.some((v) => v.category === c));
 
   // A revealed stock clip may sit behind a category view — open its category
   // so the tile is on screen to flash.
@@ -69,7 +84,7 @@ export function StockVideosPanel() {
             </button>
           )}
           <span className={cn("truncate", view === "all" && "pl-1.5")}>
-            {view === "all" ? "Stock Videos" : view}
+            {view === "all" ? "Stock Videos" : viewTitle(view)}
           </span>
         </span>
       </div>
@@ -95,29 +110,26 @@ export function StockVideosPanel() {
               <button className={chip(view === "all")} onClick={() => setView("all")}>
                 All
               </button>
-              {categories.map((c) => (
+              {CATEGORIES.map((c) => (
                 <button key={c} className={chip(view === c)} onClick={() => setView(c)}>
-                  {c}
+                  {viewTitle(c)}
                 </button>
               ))}
             </div>
 
             {view === "all" ? (
               <>
-                {categories.map((c) => {
+                {CATEGORIES.map((c) => {
                   const items = stock.filter((v) => v.category === c);
                   if (items.length === 0) return null;
+                  const shown = c === "Characters" ? 8 : 6;
                   return (
                     <section key={c} className="shrink-0">
                       <SectionHead
-                        title={c}
-                        onViewAll={items.length > 6 ? () => setView(c) : undefined}
+                        title={viewTitle(c)}
+                        onViewAll={items.length > shown ? () => setView(c) : undefined}
                       />
-                      <div className="grid grid-cols-2 gap-1.5">
-                        {items.slice(0, 6).map((v) => (
-                          <StockTile key={v.id} item={v} />
-                        ))}
-                      </div>
+                      <CategoryGrid category={c} items={items} limit={shown} />
                     </section>
                   );
                 })}
@@ -127,11 +139,7 @@ export function StockVideosPanel() {
               (() => {
                 const items = stock.filter((v) => v.category === view);
                 return items.length > 0 ? (
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {items.map((v) => (
-                      <StockTile key={v.id} item={v} />
-                    ))}
-                  </div>
+                  <CategoryGrid category={view} items={items} />
                 ) : (
                   <Empty />
                 );
@@ -141,6 +149,33 @@ export function StockVideosPanel() {
         )}
       </div>
     </>
+  );
+}
+
+/** One category's tile grid — the single place a category's presentation
+ * lives: characters render as square face tiles four across, footage as
+ * 16:10 tiles two across. */
+function CategoryGrid({
+  category,
+  items,
+  limit,
+}: {
+  category: StockVideoCategory;
+  items: StockVideo[];
+  limit?: number;
+}) {
+  const characters = category === "Characters";
+  return (
+    <div className={cn("grid gap-1.5", characters ? "grid-cols-4" : "grid-cols-2")}>
+      {items.slice(0, limit ?? items.length).map((v) => (
+        <StockTile
+          key={v.id}
+          item={v}
+          square={characters}
+          showDuration={!characters || !CHARACTERS_ONE_LENGTH}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -163,8 +198,16 @@ function SectionHead({ title, onViewAll }: { title: string; onViewAll?: () => vo
 
 /** A stock clip: hover plays it, clicking loads its saved prompt into the
  * generate panel, and it drags as a video ref (chat attachment, generation
- * start frame, timeline drop). */
-function StockTile({ item }: { item: StockVideo }) {
+ * start frame, timeline drop). Character tiles render square, face-first. */
+function StockTile({
+  item,
+  square = false,
+  showDuration = true,
+}: {
+  item: StockVideo;
+  square?: boolean;
+  showDuration?: boolean;
+}) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const { flash, attachReveal } = useRevealFlash("stock", item.id);
   return (
@@ -201,12 +244,14 @@ function StockTile({ item }: { item: StockVideo }) {
           muted
           loop
           playsInline
-          className="aspect-[16/10] w-full bg-muted object-cover"
+          className={cn("w-full bg-muted object-cover", square ? "aspect-square" : "aspect-[16/10]")}
         />
       </button>
-      <span className="pointer-events-none absolute right-1 bottom-1 rounded-[5px] bg-black/65 px-1 py-px font-mono text-[9.5px] text-white tabular-nums">
-        {formatTime(item.duration)}
-      </span>
+      {showDuration && (
+        <span className="pointer-events-none absolute right-1 bottom-1 rounded-[5px] bg-black/65 px-1 py-px font-mono text-[9.5px] text-white tabular-nums">
+          {formatTime(item.duration)}
+        </span>
+      )}
       <RefHandlePill
         token={`@${item.id}`}
         className="absolute bottom-1 left-1 opacity-0 transition-opacity group-hover:opacity-100"

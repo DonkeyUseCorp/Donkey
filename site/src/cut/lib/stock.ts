@@ -28,7 +28,7 @@ export type StockVideoAspect = "16:9" | "9:16";
 
 export interface StockVideo {
   id: string;
-  category: StockCategory;
+  category: StockVideoCategory;
   /** The generation prompt, saved verbatim — the editable starting point. */
   prompt: string;
   /** Vision-extracted keywords for the visible content (objects, setting,
@@ -55,6 +55,12 @@ export const STOCK_CATEGORIES = [
 ] as const;
 
 export type StockCategory = (typeof STOCK_CATEGORIES)[number];
+
+/** Video adds a catalog-only "Characters" section: talking-head clips whose
+ * prompts carry an editable spoken line (Veo generates the dialogue audio). */
+export const STOCK_VIDEO_CATEGORIES = ["Characters", ...STOCK_CATEGORIES] as const;
+
+export type StockVideoCategory = (typeof STOCK_VIDEO_CATEGORIES)[number];
 
 export const STOCK_ASPECT_LABEL: Record<StockAspect, string> = {
   "16:9": "Landscape (16:9)",

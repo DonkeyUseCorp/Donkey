@@ -147,7 +147,13 @@ export function SidePanel({
               <GenerateVideoPanel projectId={projectId} />
             )}
           </div>
-          <div className="flex w-[264px] min-h-0 shrink-0 flex-col">
+          {/* Video browses wider: character rows and 16:9 footage need the room. */}
+          <div
+            className={cn(
+              "flex min-h-0 shrink-0 flex-col",
+              tab === "image" ? "w-[264px]" : "w-[340px]"
+            )}
+          >
             {tab === "image" ? <StockImagesPanel /> : <StockVideosPanel />}
           </div>
         </>

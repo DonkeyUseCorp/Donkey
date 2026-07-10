@@ -23,11 +23,11 @@ import { GoogleGenAI } from "@google/genai";
 import { JWT } from "google-auth-library";
 import sharp from "sharp";
 
-import type { StockCategory, StockVideoAspect } from "../src/cut/lib/stock";
+import type { StockVideoAspect, StockVideoCategory } from "../src/cut/lib/stock";
 
 interface CatalogItem {
   id: string;
-  category: StockCategory;
+  category: StockVideoCategory;
   aspect: StockVideoAspect;
   /** Rendered length; Veo takes 4, 6, or 8 seconds. */
   seconds: 4 | 6 | 8;
@@ -52,7 +52,36 @@ const clip = (subject: string) =>
 const animeClip = (subject: string) =>
   `High-quality anime animation: ${subject} Clean line art, vibrant cel shading, detailed background, smooth motion. No text, no watermarks.`;
 
+// Talking characters: Veo 3.1 renders the spoken line as real dialogue audio.
+// The quoted line is the editable part — clicking a character in the editor
+// loads this prompt into the generate panel so the user swaps in their script.
+const charClip = (person: string, line: string) =>
+  `A talking-head video: ${person}, looking into the camera and speaking naturally with subtle hand gestures. They say: "${line}" Realistic skin texture, soft key lighting, shallow depth of field. No text, no watermarks, no captions.`;
+
+// What must never show up in a stock clip, on the channel Veo actually
+// listens to (plain nouns; the prompt's "no text" line is belt-and-braces).
+const NEGATIVE_PROMPT = "text overlay, captions, subtitles, watermark, logo, timestamp, split screen";
+
+/** Per-clip seed. Veo 3's always-on prompt rewriting keeps renders
+ * non-deterministic, so this narrows re-run variation rather than pinning a
+ * clip — a regenerated file can differ from the shipped one. */
+const seedFromId = (id: string) => {
+  let h = 0;
+  for (const c of id) h = (h * 31 + c.charCodeAt(0)) % 2147483647;
+  return h;
+};
+
 const CATALOG: CatalogItem[] = [
+  // Talking Characters — one editable spoken line each, varied looks and sets.
+  { id: "character-studio-host", category: "Characters", aspect: "16:9", seconds: 8, prompt: charClip("a friendly man in his 30s with short dreadlocks, wearing a mustard crewneck, seated in a podcast studio with a boom mic and acoustic foam panels", "So I tested this for thirty days, and honestly? The results surprised me.") },
+  { id: "character-loft-creator", category: "Characters", aspect: "9:16", seconds: 8, prompt: charClip("a woman in her late 20s with a copper bob and freckles, wearing a white tee, standing in a bright plant-filled loft, casual vlog framing", "Okay, quick story time — because this completely changed how I work.") },
+  { id: "character-office-mentor", category: "Characters", aspect: "16:9", seconds: 8, prompt: charClip("a silver-haired man in his 50s with glasses and a navy blazer, seated at a tidy desk in a corner office with warm afternoon light", "After twenty years in this industry, there's one lesson I keep coming back to.") },
+  { id: "character-kitchen-vlogger", category: "Characters", aspect: "9:16", seconds: 8, prompt: charClip("a cheerful woman in her 40s wearing a linen apron, standing at a marble kitchen counter with fresh herbs and a cutting board", "You only need three ingredients for this — and you probably have them already.") },
+  { id: "character-cafe-analyst", category: "Characters", aspect: "16:9", seconds: 8, prompt: charClip("a young man in his 20s with round glasses and a grey hoodie, sitting by a rainy café window with a laptop and a flat white", "Let's break down what these numbers actually mean.") },
+  { id: "character-outdoor-coach", category: "Characters", aspect: "9:16", seconds: 8, prompt: charClip("an athletic woman in her 30s with a high ponytail, wearing a running jacket, standing on a park trail at golden hour", "Day one is the hardest — here's how to make it stick.") },
+  { id: "character-workshop-maker", category: "Characters", aspect: "16:9", seconds: 8, prompt: charClip("a bearded man in his 40s in a denim work shirt, standing in a woodworking shop with shelves of hand tools behind him", "Most people get this step wrong, so watch closely.") },
+  { id: "character-lounge-storyteller", category: "Characters", aspect: "16:9", seconds: 8, prompt: charClip("an elegant woman in her 60s with silver hair and a burgundy scarf, seated in an armchair by warm lamplight and bookshelves", "Now this — this is a story I've never told anyone.") },
+
   // Business
   { id: "business-team-walkthrough", category: "Business", aspect: "16:9", seconds: 6, prompt: clip("a slow tracking shot following a small team walking and talking through a bright modern office, glass walls and plants passing by.") },
   { id: "business-typing-macro", category: "Business", aspect: "16:9", seconds: 6, prompt: clip("a close-up of hands typing on a laptop at a tidy desk, soft window light, shallow depth of field.") },
@@ -119,6 +148,11 @@ async function generateOne(client: GoogleGenAI, authClient: JWT, item: CatalogIt
       durationSeconds: item.seconds,
       resolution: "720p",
       generateAudio: true,
+      // People appear across the catalog (all of Characters); the safety
+      // setting is explicit.
+      personGeneration: "allow_adult",
+      negativePrompt: NEGATIVE_PROMPT,
+      seed: seedFromId(item.id),
     },
   });
   while (!op.done) {
