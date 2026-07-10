@@ -24,8 +24,9 @@ export interface StoredAsset {
   duration: number; // seconds
   width?: number;
   height?: number;
-  /** Set on assets Cut generated itself (AI voiceovers); absent on imports. */
-  origin?: "voiceover";
+  /** Set on assets Cut generated itself (AI voiceovers, generated images);
+   * absent on imports. */
+  origin?: "voiceover" | "generated";
 }
 
 /** Runtime asset: stored fields plus derived/browser-only data. */

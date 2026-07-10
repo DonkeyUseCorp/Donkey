@@ -287,7 +287,13 @@ export const projectsApi = {
         await writeFile(src, Buffer.from(await file.arrayBuffer()));
         // 8s of still footage — room to trim like any other clip.
         const made = await makeStillClip(id, src, 8, `ai-${slug}`);
-        return Response.json({ id: crypto.randomUUID().slice(0, 8), type: "video", name, ...made });
+        return Response.json({
+          id: crypto.randomUUID().slice(0, 8),
+          type: "video",
+          name,
+          origin: "generated",
+          ...made,
+        });
       } finally {
         void rm(tmp, { recursive: true, force: true });
       }

@@ -14,13 +14,22 @@ import { AiPanel } from "./AiPanel";
 import { ExportDialog } from "./ExportDialog";
 import { ExportStatus } from "./ExportStatus";
 import { Inspector } from "./Inspector";
+import { ImageGenFlyover } from "./ImageGenFlyover";
 import { Preview } from "./Preview";
 import { SidePanel } from "./SidePanel";
 import { Timeline, videoInsertIndex } from "./Timeline";
 import { TopBar } from "./TopBar";
 
-export function Editor({ projectId, from }: { projectId: string; from?: string | null }) {
-  const back = backTarget(useCutBase(), from);
+export function Editor({
+  projectId,
+  from,
+  folder,
+}: {
+  projectId: string;
+  from?: string | null;
+  folder?: string | null;
+}) {
+  const back = backTarget(useCutBase(), from, folder);
   const loaded = useEditor((s) => s.loaded);
   const loadError = useEditor((s) => s.loadError);
   const dropActive = useEditor((s) => s.dropActive);
@@ -349,14 +358,18 @@ export function Editor({ projectId, from }: { projectId: string; from?: string |
   return (
     <div className="flex h-screen min-w-[900px] overflow-hidden">
       <div className="grid min-w-0 flex-1 grid-rows-[46px_minmax(0,1fr)_auto]">
-        <TopBar onImport={importFiles} from={from} />
+        <TopBar onImport={importFiles} from={from} folder={folder} />
         <div
           className={`grid min-h-0 ${
             hasInspector ? "grid-cols-[auto_minmax(0,1fr)_272px]" : "grid-cols-[auto_minmax(0,1fr)]"
           }`}
         >
           <SidePanel projectId={projectId} onImport={importFiles} importing={importing > 0} />
-          <Preview />
+          {/* relative: anchors the generate-image flyover over the canvas column */}
+          <div className="relative grid min-h-0 min-w-0">
+            <Preview />
+            <ImageGenFlyover projectId={projectId} />
+          </div>
           {hasInspector && <Inspector />}
         </div>
         <Timeline />

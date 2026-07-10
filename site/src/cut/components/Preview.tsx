@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePlayback } from "@/cut/hooks/usePlayback";
+import { clearAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
 import { startDrag } from "@/cut/lib/drag";
 import { getClipSpans, useEditor } from "@/cut/lib/store";
 import { FRAME, isFullRect, rectOf, type Aspect, type ClipSpan, type FrameRect, type MediaAsset, type VideoClip } from "@/cut/lib/types";
@@ -105,7 +106,28 @@ export function Preview() {
             }
           }}
         >
-          <canvas ref={canvasRef} width={frame.w} height={frame.h} className="block size-full" />
+          <canvas
+            ref={canvasRef}
+            width={frame.w}
+            height={frame.h}
+            className="block size-full"
+            // Drag the viewport to reference what's on screen: the clip under
+            // the playhead travels as a media drag (timeline placement, chat
+            // attachment, generation reference). Pan on a fill clip wins —
+            // its pointerdown cancels the native drag.
+            draggable
+            onDragStart={(e) => {
+              const s = useEditor.getState();
+              const spans = getClipSpans(s.clips, s.assets);
+              const t = s.currentTime;
+              const span =
+                spans.find((sp) => t >= sp.start && sp.start + sp.len > t) ??
+                spans[spans.length - 1];
+              if (!span) return e.preventDefault();
+              setAssetDragData(e, span.asset.id);
+            }}
+            onDragEnd={clearAssetDrag}
+          />
           <OverlayPipHandle stage={stage} />
           <OverlayLayer stageWidth={stage.w} />
         </div>

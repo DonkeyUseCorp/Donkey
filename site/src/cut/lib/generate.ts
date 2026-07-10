@@ -3,7 +3,9 @@
 import { useEffect } from "react";
 import { create } from "zustand";
 import { apiFetch } from "./api";
+import type { AssetRef } from "./assetRef";
 import { enrichAsset, importFileToProject } from "./media";
+import { refsToInlineImages } from "./refMedia";
 import { useEditor } from "./store";
 import { mediaUrl, type MediaAsset } from "./types";
 
@@ -37,14 +39,23 @@ interface GenerateState {
   probeNow: () => Promise<boolean>;
   /** Kick off a generation. Returns when it settles, resolving to the final
    * job (status "done" with assetId, or "error" with a message) so the AI
-   * assistant can act on the result; the panel just fires and forgets. */
-  generateImage: (projectId: string, prompt: string) => Promise<GenerateJob>;
+   * assistant can act on the result; the panel just fires and forgets.
+   * `refs` are visual references — each uploads as an input image (a stock
+   * image as-is, a video by a captured poster frame). */
+  generateImage: (
+    projectId: string,
+    prompt: string,
+    opts?: { refs?: AssetRef[] }
+  ) => Promise<GenerateJob>;
   generateVideo: (
     projectId: string,
     prompt: string,
     opts?: {
       tier?: "fast" | "high";
       durationSeconds?: number;
+      /** Visual references; Veo takes one input image, so the first ref's
+       * picture seeds the render. */
+      refs?: AssetRef[];
       /** Called once with the landed asset when the render completes and the
        * project is still open — lets the AI place the clip after a background
        * render it couldn't wait out (the assistant tool bridge caps at 2min). */
@@ -116,11 +127,12 @@ interface GenerationResponse {
 }
 
 /** POST one of Donkey's hosted inference routes with the user's session. */
-const hostedPost = (path: string, body: unknown) =>
+export const hostedPost = (path: string, body: unknown, signal?: AbortSignal) =>
   fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-donkey-client-id": CLIENT_ID },
     body: JSON.stringify(body),
+    signal,
   });
 
 async function readError(res: Response, fallback: string): Promise<string> {
@@ -206,18 +218,20 @@ export const useGenerate = create<GenerateState>((set, get) => {
       return probing;
     },
 
-    generateImage: (projectId, prompt) => {
+    generateImage: (projectId, prompt, opts) => {
       const job: GenerateJob = { id: uid(), projectId, kind: "image", prompt, status: "running" };
       set((s) => ({ jobs: [job, ...s.jobs] }));
       return (async () => {
         try {
           const aspect = useEditor.getState().aspect;
+          const images = await refsToInlineImages(opts?.refs ?? []);
           const res = await hostedPost("/api/inference/assets", {
             kind: "image",
             // The image route takes no aspect parameter; steer it in the prompt.
             prompt: `${prompt}\n\nCompose the image in a ${
               aspect === "16:9" ? "16:9 widescreen" : "9:16 vertical"
             } frame.`,
+            ...(images.length > 0 ? { inputs: { images } } : {}),
           });
           if (!res.ok) throw new Error(await readError(res, "Image generation failed."));
           const gen = (await res.json()) as GenerationResponse;
@@ -256,9 +270,13 @@ export const useGenerate = create<GenerateState>((set, get) => {
       set((s) => ({ jobs: [job, ...s.jobs] }));
       return (async () => {
         try {
+          // Veo seeds from a single first-frame image; extra refs would be dropped
+          // silently, so send just the first.
+          const images = await refsToInlineImages((opts?.refs ?? []).slice(0, 1));
           const res = await hostedPost("/api/inference/assets", {
             kind: "video",
             prompt,
+            ...(images.length > 0 ? { inputs: { images } } : {}),
             parameters: {
               tier: opts?.tier === "high" ? "high" : "fast",
               aspectRatio: useEditor.getState().aspect,

@@ -19,6 +19,7 @@ import {
   hasAssetDrag,
   hasLibraryDrag,
 } from "@/cut/lib/assetDrag";
+import { refFromAsset, startPointerRefDrag } from "@/cut/lib/assetRef";
 import { importLibraryAsset, saveTemplate } from "@/cut/lib/library";
 import { startDrag } from "@/cut/lib/drag";
 import { ensurePeaks } from "@/cut/lib/media";
@@ -1227,11 +1228,15 @@ function ClipView({
     let live = false;
     let target: TrackTarget = { kind: "base" };
     let dropStart = span.start;
+    // Dragging a clip out of the timeline can also hand its asset to a
+    // reference drop zone (AI chat, the image/video creators).
+    const refDrag = startPointerRefDrag(refFromAsset(asset));
     startDrag(e, {
       onMove: (dx, dy, ev) => {
         if (!live && Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
         if (!live) onDragActive(true);
         live = true;
+        refDrag.move(ev);
         if (el) {
           const r = el.getBoundingClientRect();
           if (ev.clientX > r.right - 36) el.scrollLeft += 14;
@@ -1250,6 +1255,11 @@ function ClipView({
       },
       onUp: () => {
         onDragActive(false);
+        if (live && refDrag.drop()) {
+          // A zone took the ref; cancel the timeline move.
+          onCrossMove(null);
+          return onDrop(clip.id, null);
+        }
         if (!live) return onDrop(clip.id, null);
         if (target.kind === "base") onDrop(clip.id, effDx);
         else onCrossDrop(clip.id, target, dropStart);
@@ -1503,9 +1513,16 @@ function AudioView({
     s.seek(clip.start + (e.clientX - e.currentTarget.getBoundingClientRect().left) / pps);
     s.pushHistory();
     const start0 = clip.start;
+    const refDrag = startPointerRefDrag(refFromAsset(asset));
     startDrag(e, {
-      onMove: (dx) =>
-        s.updateAudioTransient(clip.id, { start: Math.max(0, start0 + dx / pps) }),
+      onMove: (dx, _dy, ev) => {
+        refDrag.move(ev);
+        s.updateAudioTransient(clip.id, { start: Math.max(0, start0 + dx / pps) });
+      },
+      onUp: () => {
+        // A zone took the ref (e.g. an AI chat attachment); undo the slide.
+        if (refDrag.drop()) s.updateAudioTransient(clip.id, { start: start0 });
+      },
     });
   };
 
@@ -1640,6 +1657,7 @@ function OverlayClipView({
     let live = false;
     let target: TrackTarget = { kind: "track", track: clip.track };
     let dropStart = clip.start;
+    const refDrag = startPointerRefDrag(refFromAsset(asset));
     startDrag(e, {
       onMove: (dx, dy, ev) => {
         if (!live && Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
@@ -1648,6 +1666,7 @@ function OverlayClipView({
           onDragActive(true);
         }
         live = true;
+        refDrag.move(ev);
         dropStart = Math.max(0, start0 + dx / pps);
         s.updateOverlayClipTransient(clip.id, { start: dropStart });
         target = resolveTarget(ev.clientX, ev.clientY);
@@ -1658,6 +1677,11 @@ function OverlayClipView({
       onUp: () => {
         onDragActive(false);
         onCrossMove(null);
+        if (live && refDrag.drop()) {
+          // A zone took the ref; put the clip back where the drag started.
+          s.updateOverlayClipTransient(clip.id, { start: start0 });
+          return;
+        }
         if (live) onCrossDrop(clip.id, target, dropStart);
       },
     });

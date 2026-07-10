@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Check,
   Film,
@@ -52,8 +53,11 @@ import {
   type LibraryAsset,
   type LibraryFolder,
 } from "@/cut/lib/library";
+import { homeHref, useCutBase } from "@/cut/lib/nav";
+import { useRevealFlash } from "@/cut/lib/refReveal";
 import { formatTime } from "@/cut/lib/time";
 import { cn } from "@/lib/utils";
+import { CopyNameLabel } from "./AssetRefs";
 import { buildDragGhost, FolderCrumb, FolderShelf, Marquee } from "./desktopFolders";
 
 // A dragged library selection travels as a JSON array of asset ids, so a whole
@@ -61,9 +65,13 @@ import { buildDragGhost, FolderCrumb, FolderShelf, Marquee } from "./desktopFold
 const LIBRARY_MOVE_MIME = "application/x-cut-library-move";
 
 export function LibraryView() {
+  const router = useRouter();
+  const base = useCutBase();
   const [assets, setAssets] = useState<LibraryAsset[] | null>(null);
   const [folders, setFolders] = useState<LibraryFolder[]>([]);
-  const [openFolder, setOpenFolder] = useState<string | null>(null);
+  // The open folder lives in the URL (?folder=…) so the browser's back button
+  // steps folder → root and the location survives reloads.
+  const openFolder = useSearchParams().get("folder");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [uploading, setUploading] = useState(0);
   const [addOpen, setAddOpen] = useState(false);
@@ -137,6 +145,13 @@ export function LibraryView() {
     }
   };
 
+  // Open a folder (or the root, id null) by navigating, so the location is
+  // shareable and back-button friendly.
+  const gotoFolder = (id: string | null) => {
+    setSelected(new Set());
+    router.push(homeHref(base, "library", id));
+  };
+
   const moveAssets = async (ids: string[], folderId: string | null) => {
     if (ids.length === 0) return;
     const idset = new Set(ids);
@@ -192,10 +207,7 @@ export function LibraryView() {
             root="Library"
             name={openFolderName ?? "Folder"}
             mime={LIBRARY_MOVE_MIME}
-            onBack={() => {
-              setSelected(new Set());
-              setOpenFolder(null);
-            }}
+            onBack={() => gotoFolder(null)}
             onDropOut={(ids) => void moveAssets(ids, null)}
           />
         </div>
@@ -204,10 +216,7 @@ export function LibraryView() {
           folders={folders}
           mime={LIBRARY_MOVE_MIME}
           statOf={(id) => ({ count: all.filter((a) => (a.folderId ?? null) === id).length })}
-          onOpen={(id) => {
-            setSelected(new Set());
-            setOpenFolder(id);
-          }}
+          onOpen={gotoFolder}
           onCreate={async (name) => {
             const f = await createLibraryFolder(name);
             setFolders((prev) => [...prev, f]);
@@ -221,7 +230,7 @@ export function LibraryView() {
             setAssets((prev) =>
               (prev ?? []).map((a) => (a.folderId === id ? { ...a, folderId: null } : a))
             );
-            if (openFolder === id) setOpenFolder(null);
+            if (openFolder === id) router.replace(homeHref(base, "library"));
             await deleteLibraryFolder(id).catch(() => void reload());
           }}
           onDropIds={(ids, fid) => void moveAssets(ids, fid)}
@@ -362,6 +371,7 @@ export function LibraryCard({
   onDragStartExtra?: (e: React.DragEvent) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const { flash, attachReveal } = useRevealFlash("library", a.id);
   // Poster from the video itself so the still matches what plays on hover.
   // An ffmpeg still washes out iPhone HDR (HLG) footage — the browser tone-maps
   // the video correctly, so we render the frame instead of a baked thumbnail.
@@ -369,6 +379,7 @@ export function LibraryCard({
 
   return (
     <div
+      ref={attachReveal}
       data-sel-id={a.id}
       className="group flex flex-col gap-1.5"
       draggable
@@ -389,7 +400,7 @@ export function LibraryCard({
       <div
         className={cn(
           "relative aspect-square cursor-grab overflow-hidden rounded-xl border bg-muted transition-shadow group-hover:shadow-[0_4px_20px_rgba(0,0,0,0.1)] active:cursor-grabbing",
-          selected ? "border-[#0a84ff] ring-2 ring-[#0a84ff]" : "border-border"
+          selected || flash ? "border-[#0a84ff] ring-2 ring-[#0a84ff]" : "border-border"
         )}
       >
         {a.type === "video" ? (
@@ -473,7 +484,7 @@ export function LibraryCard({
           </span>
         )}
       </div>
-      <div className="truncate px-0.5 text-xs text-muted-foreground">{a.name}</div>
+      <CopyNameLabel name={a.name} className="px-0.5 text-xs text-muted-foreground" />
     </div>
   );
 }

@@ -1,7 +1,9 @@
 "use client";
 
 import type React from "react";
+import { clearRefDrag, refFromAsset, refFromLibrary, setRefDragData } from "./assetRef";
 import type { LibraryAsset } from "./library";
+import { useEditor } from "./store";
 
 /** Internal HTML5 drag payload for project media assets. The custom MIME
  * keeps these drags invisible to the window-level OS-file import overlay,
@@ -17,6 +19,11 @@ export function setAssetDragData(e: React.DragEvent, assetId: string) {
   e.dataTransfer.setData(ASSET_MIME, assetId);
   e.dataTransfer.effectAllowed = "copy";
   inFlightAssetId = assetId;
+  // Every media drag also carries the unified asset ref, so reference drop
+  // zones (AI chat, the image/video creators) accept it without knowing the
+  // source surface.
+  const asset = useEditor.getState().assets.find((a) => a.id === assetId);
+  if (asset) setRefDragData(e, refFromAsset(asset));
 }
 
 /** The asset id currently being dragged, readable during `dragover`. */
@@ -35,6 +42,7 @@ export function setLibraryDragData(e: React.DragEvent, asset: LibraryAsset) {
   e.dataTransfer.setData(LIBRARY_MIME, asset.id);
   e.dataTransfer.effectAllowed = "copy";
   inFlightLibrary = asset;
+  setRefDragData(e, refFromLibrary(asset));
 }
 
 export function draggingLibrary(): LibraryAsset | null {
@@ -56,6 +64,7 @@ export function draggedLibraryId(e: React.DragEvent | DragEvent): string | null 
 export function clearAssetDrag() {
   inFlightAssetId = null;
   inFlightLibrary = null;
+  clearRefDrag();
 }
 
 export function draggedAssetId(e: React.DragEvent | DragEvent): string | null {

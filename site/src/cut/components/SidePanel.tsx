@@ -38,9 +38,12 @@ import { formatTime } from "@/cut/lib/time";
 import { useLocalPref } from "@/cut/lib/uiState";
 import type { MediaAsset } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
+import { useRevealEffect, useRevealFlash } from "@/cut/lib/refReveal";
+import { CopyNameLabel } from "./AssetRefs";
 import { AudioPanel } from "./AudioPanel";
 import { buildDragGhost, FolderCrumb, FolderShelf } from "./desktopFolders";
-import { GenerateImagePanel, GenerateVideoPanel } from "./GeneratePanel";
+import { GenerateVideoPanel } from "./GeneratePanel";
+import { StockImagesPanel } from "./StockImagesPanel";
 import { LibraryCard } from "./LibraryView";
 
 // Drag a library clip onto a folder tile to file it (side panel, single card).
@@ -72,6 +75,12 @@ export function SidePanel({
   const [tab, setTab] = useLocalPref<Tab>("cut-side-tab", "media", (v) =>
     TABS.some((t) => t.id === v)
   );
+
+  // Clicking a reference token anywhere jumps here: switch to the tab that
+  // owns the asset; the matching card scrolls into view and flashes.
+  useRevealEffect((ref) => {
+    setTab(ref.scope === "project" ? "media" : ref.scope === "library" ? "library" : "image");
+  });
 
   return (
     <div className="flex min-h-0 border-r border-border bg-card">
@@ -119,7 +128,7 @@ export function SidePanel({
           <MediaPanel projectId={projectId} onImport={onImport} importing={importing} />
         )}
         {tab === "video" && <GenerateVideoPanel projectId={projectId} />}
-        {tab === "image" && <GenerateImagePanel projectId={projectId} />}
+        {tab === "image" && <StockImagesPanel />}
         {tab === "library" && <LibraryPanel projectId={projectId} />}
         {tab === "audio" && <AudioPanel projectId={projectId} importing={importing} />}
         {tab === "subtitles" && <SubtitlesPanel />}
@@ -335,6 +344,7 @@ function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string 
   // Number of timeline items that would be cascade-deleted; null = no prompt.
   const [confirmUses, setConfirmUses] = useState<number | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const { flash, attachReveal } = useRevealFlash("project", asset.id);
 
   const add = () => {
     const s = useEditor.getState();
@@ -368,6 +378,7 @@ function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string 
   return (
     <>
     <div
+      ref={attachReveal}
       className="asset-card group flex flex-col gap-1.5 text-left"
       title="Drag onto the timeline, or click + to add"
       draggable
@@ -384,7 +395,12 @@ function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string 
         }
       }}
     >
-      <div className="relative aspect-square overflow-hidden rounded-lg border border-border bg-muted transition-colors group-hover:border-input">
+      <div
+        className={cn(
+          "relative aspect-square overflow-hidden rounded-lg border border-border bg-muted transition-colors group-hover:border-input",
+          flash && "ring-2 ring-[#0a84ff] ring-offset-1"
+        )}
+      >
         {asset.type === "video" ? (
           // Native first frame as the poster — full-resolution, no blurry thumb.
           <video
@@ -436,7 +452,7 @@ function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string 
           </span>
         </span>
       </div>
-      <div className="truncate text-[11px] text-muted-foreground">{asset.name}</div>
+      <CopyNameLabel name={asset.name} className="text-[11px] text-muted-foreground" />
     </div>
     <AlertDialog open={confirmUses !== null} onOpenChange={(o) => !o && setConfirmUses(null)}>
       <AlertDialogContent>
@@ -491,6 +507,14 @@ function LibraryPanel({ projectId }: { projectId: string }) {
     if (assets !== null && openFolder !== null && !folders.some((f) => f.id === openFolder))
       setOpenFolder(null);
   }, [assets, folders, openFolder, setOpenFolder]);
+
+  // A revealed library asset may sit inside a folder — open it so the card is
+  // on screen to scroll to and flash.
+  useRevealEffect((ref) => {
+    if (ref.scope !== "library") return;
+    const a = (assets ?? []).find((x) => x.id === ref.id);
+    if (a) setOpenFolder(a.folderId ?? null);
+  });
 
   const removeTemplate = async (id: string) => {
     setTemplates((prev) => prev.filter((t) => t.id !== id));

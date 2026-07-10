@@ -1,14 +1,28 @@
 "use client";
 
 import { useState } from "react";
-import { Film, Image as ImageIcon, Loader2, Plus, Sparkles, Trash2 } from "lucide-react";
+import { Film, Loader2, Plus, Sparkles, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  addRefOnce,
+  collectRefs,
+  sameRef,
+  useRefCandidates,
+  useAssetDrop,
+  type AssetRef,
+} from "@/cut/lib/assetRef";
 import { signInUrl, useGenerate, useSignedIn, type GenerateJob } from "@/cut/lib/generate";
 import { useEditor } from "@/cut/lib/store";
 import { useLocalPref } from "@/cut/lib/uiState";
 import { cn } from "@/lib/utils";
+import { MentionTextarea, RefChips } from "./AssetRefs";
 
-type Kind = "image" | "video";
+// AI video generation (Veo). Image generation lives in the stock browser's
+// flyover — see StockImagesPanel / ImageGenFlyover.
+//
+// A visual reference (dragged in or @name-mentioned) seeds the render: Veo
+// takes one input image, so the first reference's picture becomes the start
+// frame.
 
 const chip = (active: boolean) =>
   cn(
@@ -18,19 +32,16 @@ const chip = (active: boolean) =>
       : "border-border text-muted-foreground hover:text-foreground"
   );
 
-export function GenerateImagePanel({ projectId }: { projectId: string }) {
-  return <GeneratePanel projectId={projectId} kind="image" />;
-}
-
 export function GenerateVideoPanel({ projectId }: { projectId: string }) {
-  return <GeneratePanel projectId={projectId} kind="video" />;
-}
-
-function GeneratePanel({ projectId, kind }: { projectId: string; kind: Kind }) {
   const signedIn = useSignedIn();
   const allJobs = useGenerate((s) => s.jobs);
-  const jobs = allJobs.filter((j) => j.projectId === projectId && j.kind === kind);
+  const jobs = allJobs.filter((j) => j.projectId === projectId && j.kind === "video");
   const [prompt, setPrompt] = useState("");
+  const [refs, setRefs] = useState<AssetRef[]>([]);
+  const candidates = useRefCandidates();
+  const { active: dropActive, attachTarget, targetProps } = useAssetDrop((ref) => {
+    if (ref.kind !== "audio") setRefs((prev) => addRefOnce(prev, ref));
+  });
   const [tier, setTier] = useLocalPref<"fast" | "high">(
     "cut-gen-tier",
     "fast",
@@ -43,57 +54,66 @@ function GeneratePanel({ projectId, kind }: { projectId: string; kind: Kind }) {
   );
 
   const go = () => {
-    const p = prompt.trim();
-    if (!p) return;
-    if (kind === "image") void useGenerate.getState().generateImage(projectId, p);
-    else void useGenerate.getState().generateVideo(projectId, p, { tier, durationSeconds: seconds });
+    const { text, refs: all } = collectRefs(prompt.trim(), refs, candidates, { dropAudio: true });
+    if (!text) return;
+    void useGenerate
+      .getState()
+      .generateVideo(projectId, text, { tier, durationSeconds: seconds, refs: all });
     setPrompt("");
+    setRefs([]);
   };
 
   return (
     <>
       <div className="flex h-12 shrink-0 items-center justify-between pr-2.5 pl-4">
-        <span className="text-sm font-semibold tracking-tight">
-          {kind === "image" ? "Image" : "Video"}
-        </span>
+        <span className="text-sm font-semibold tracking-tight">Video</span>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3.5 pb-4">
-        <textarea
-          className="gen-prompt min-h-[88px] w-full shrink-0 resize-y rounded-lg border border-input bg-transparent px-2.5 py-2 text-[12.5px] leading-relaxed outline-none focus:border-ring"
-          placeholder={
-            kind === "image"
-              ? "A neon-lit street market at night, cinematic…"
-              : "A drone shot rising over a foggy coastline at sunrise…"
-          }
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              go();
-            }
-          }}
-        />
-
-        {kind === "video" && (
-          <div className="flex shrink-0 items-center justify-between gap-2">
-            <div className="flex gap-1.5">
-              {[4, 6, 8].map((s) => (
-                <button key={s} className={chip(seconds === s)} onClick={() => setSeconds(s)}>
-                  {s}s
-                </button>
-              ))}
-            </div>
-            <div className="flex gap-1.5">
-              {(["fast", "high"] as const).map((t) => (
-                <button key={t} className={chip(tier === t)} onClick={() => setTier(t)}>
-                  {t === "fast" ? "Fast" : "Best"}
-                </button>
-              ))}
-            </div>
+      <div
+        ref={attachTarget}
+        {...targetProps}
+        className="relative flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3.5 pb-4"
+      >
+        {dropActive && (
+          <div className="pointer-events-none absolute inset-1.5 z-10 grid place-items-center rounded-xl border-2 border-dashed border-[#0a84ff] bg-[#0a84ff]/8">
+            <span className="rounded-full bg-card px-3 py-1 text-[11.5px] font-medium text-[#0a84ff] shadow-sm">
+              Drop to use as reference
+            </span>
           </div>
         )}
+        <RefChips
+          refs={refs}
+          onRemove={(ref) => setRefs((prev) => prev.filter((r) => !sameRef(r, ref)))}
+          className="shrink-0"
+          peekSide="bottom"
+        />
+        <MentionTextarea
+          className="gen-prompt min-h-[88px] w-full shrink-0 resize-y rounded-lg border border-input bg-transparent px-2.5 py-2 text-[12.5px] leading-relaxed outline-none focus:border-ring"
+          placeholder="A drone shot rising over a foggy coastline at sunrise… Drop media in or type @ to reference it."
+          value={prompt}
+          onChange={setPrompt}
+          candidates={candidates}
+          submitKey="mod-enter"
+          menuSide="bottom"
+          onSubmit={go}
+        />
+
+        <div className="flex shrink-0 items-center justify-between gap-2">
+          <div className="flex gap-1.5">
+            {[4, 6, 8].map((s) => (
+              <button key={s} className={chip(seconds === s)} onClick={() => setSeconds(s)}>
+                {s}s
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-1.5">
+            {(["fast", "high"] as const).map((t) => (
+              <button key={t} className={chip(tier === t)} onClick={() => setTier(t)}>
+                {t === "fast" ? "Fast" : "Best"}
+              </button>
+            ))}
+          </div>
+        </div>
 
         <Button
           className="gen-go w-full shrink-0"
@@ -101,7 +121,7 @@ function GeneratePanel({ projectId, kind }: { projectId: string; kind: Kind }) {
           onClick={go}
         >
           <Sparkles data-icon="inline-start" />
-          {kind === "image" ? "Generate image" : "Generate video"}
+          Generate video
         </Button>
 
         {signedIn === false ? (
@@ -114,9 +134,7 @@ function GeneratePanel({ projectId, kind }: { projectId: string; kind: Kind }) {
           </p>
         ) : (
           <p className="shrink-0 text-[11px] leading-relaxed text-muted-foreground">
-            {kind === "image"
-              ? "Lands in Media as an 8s clip — trim it like footage."
-              : "Veo renders take a minute or two — keep editing while it runs."}
+            Veo renders take a minute or two — keep editing while it runs.
           </p>
         )}
 
@@ -134,7 +152,6 @@ function GeneratePanel({ projectId, kind }: { projectId: string; kind: Kind }) {
 
 function JobRow({ job }: { job: GenerateJob }) {
   const asset = useEditor((s) => s.assets.find((a) => a.id === job.assetId));
-  const Icon = job.kind === "image" ? ImageIcon : Film;
   return (
     <div className="gen-job group flex items-center gap-2.5 rounded-lg border border-border p-2">
       {asset ? (
@@ -150,7 +167,7 @@ function JobRow({ job }: { job: GenerateJob }) {
           {job.status === "running" ? (
             <Loader2 className="size-4 animate-spin" />
           ) : (
-            <Icon className="size-4" />
+            <Film className="size-4" />
           )}
         </span>
       )}
@@ -162,8 +179,7 @@ function JobRow({ job }: { job: GenerateJob }) {
             job.status === "error" ? "text-red-600" : "text-muted-foreground"
           )}
         >
-          {job.status === "running" &&
-            (job.kind === "video" ? "Rendering with Veo…" : "Generating…")}
+          {job.status === "running" && "Rendering with Veo…"}
           {job.status === "done" && "In your media"}
           {job.status === "error" && (job.error ?? "Failed.")}
         </div>
