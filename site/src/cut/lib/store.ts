@@ -232,9 +232,10 @@ interface EditorState {
    * step. Used so a whole assistant turn reverts with a single ⌘Z. */
   beginHistoryBatch: () => void;
   endHistoryBatch: () => void;
-  /** Copy the selected clip/audio/title(s) to the timeline clipboard. */
+  /** Copy the selected clip/audio/overlay/title(s) to the timeline clipboard. */
   copySelection: () => boolean;
-  /** Paste the clipboard at the playhead; selects the pasted item(s). */
+  /** Paste the clipboard at the playhead — sliding past anything already on
+   * the target lane — and select the pasted item(s). */
   paste: () => boolean;
 }
 
@@ -259,8 +260,23 @@ let batchDepth = 0;
 type ClipboardItem =
   | { kind: "clip"; item: VideoClip }
   | { kind: "audio"; item: AudioClip }
+  | { kind: "overlayClip"; item: OverlayClip }
   | { kind: "text"; item: TextOverlay };
 let clipboard: ClipboardItem[] = [];
+
+/** Earliest start at/after `t` where a `len`-long item fits between the
+ * occupied `spans` of one lane: each blocker slides the candidate right to its
+ * end until a big-enough gap opens. */
+function nextFreeStart(spans: { start: number; end: number }[], t: number, len: number): number {
+  const sorted = [...spans].sort((a, b) => a.start - b.start);
+  let at = t;
+  for (const sp of sorted) {
+    if (sp.end <= at + 1e-3) continue;
+    if (sp.start >= at + len - 1e-3) break;
+    at = sp.end;
+  }
+  return at;
+}
 
 export const useEditor = create<EditorState>((set, get) => {
   const snapshot = (): DocSnapshot => {
@@ -1478,6 +1494,9 @@ export const useEditor = create<EditorState>((set, get) => {
         } else if (sel?.kind === "audio") {
           const a = s.audioClips.find((x) => x.id === sel.id);
           if (a) items.push({ kind: "audio", item: { ...a } });
+        } else if (sel?.kind === "overlayClip") {
+          const c = s.overlayClips.find((x) => x.id === sel.id);
+          if (c) items.push({ kind: "overlayClip", item: { ...c } });
         } else if (sel?.kind === "text") {
           const o = s.overlays.find((x) => x.id === sel.id);
           if (o) items.push({ kind: "text", item: { ...o } });
@@ -1491,17 +1510,15 @@ export const useEditor = create<EditorState>((set, get) => {
     paste: () => {
       if (clipboard.length === 0) return false;
       const s = get();
-      // Every copied clip/audio's media must still exist in this project.
+      // Every copied clip's media must still exist in this project.
       if (
         clipboard.some(
-          (cb) =>
-            (cb.kind === "clip" || cb.kind === "audio") &&
-            !s.assets.some((a) => a.id === cb.item.assetId)
+          (cb) => cb.kind !== "text" && !s.assets.some((a) => a.id === cb.item.assetId)
         )
       )
         return false;
       push();
-      const t = s.currentTime;
+      const t = Math.max(0, s.currentTime);
       // Video clips insert together, after the clip under the playhead.
       const spans = getClipSpans(s.clips, s.assets);
       let insertAt = s.clips.length;
@@ -1515,8 +1532,12 @@ export const useEditor = create<EditorState>((set, get) => {
       set((cur) => {
         let clips = cur.clips;
         let audioClips = cur.audioClips;
+        let overlayClips = cur.overlayClips;
         let overlays = cur.overlays;
         let at = insertAt;
+        // Free-positioned items aim for the playhead but respect what already
+        // sits on their lane: an occupied spot slides the paste right to the
+        // next gap that fits. Earlier items of this same paste count too.
         for (const cb of clipboard) {
           if (cb.kind === "clip") {
             const clip: VideoClip = { ...cb.item, id: uid() };
@@ -1524,17 +1545,29 @@ export const useEditor = create<EditorState>((set, get) => {
             at++;
             newSel.push({ kind: "clip", id: clip.id });
           } else if (cb.kind === "audio") {
-            const item: AudioClip = { ...cb.item, id: uid(), start: Math.max(0, t) };
+            const taken = audioClips.map((a) => ({ start: a.start, end: a.start + clipLen(a) }));
+            const item: AudioClip = { ...cb.item, id: uid(), start: nextFreeStart(taken, t, clipLen(cb.item)) };
             audioClips = [...audioClips, item];
             newSel.push({ kind: "audio", id: item.id });
+          } else if (cb.kind === "overlayClip") {
+            const taken = overlayClips
+              .filter((c) => c.track === cb.item.track)
+              .map((c) => ({ start: c.start, end: c.start + clipLen(c) }));
+            const item: OverlayClip = { ...cb.item, id: uid(), start: nextFreeStart(taken, t, clipLen(cb.item)) };
+            overlayClips = [...overlayClips, item];
+            newSel.push({ kind: "overlayClip", id: item.id });
           } else {
             const len = Math.max(0.2, cb.item.end - cb.item.start);
-            const item: TextOverlay = { ...cb.item, id: uid(), start: Math.max(0, t), end: Math.max(0, t) + len };
+            const taken = overlays
+              .filter((o) => (o.lane ?? 0) === (cb.item.lane ?? 0))
+              .map((o) => ({ start: o.start, end: o.end }));
+            const start = nextFreeStart(taken, t, len);
+            const item: TextOverlay = { ...cb.item, id: uid(), start, end: start + len };
             overlays = [...overlays, item];
             newSel.push({ kind: "text", id: item.id });
           }
         }
-        return { clips, audioClips, overlays, selection: newSel[newSel.length - 1] ?? null, multiSelection: newSel };
+        return { clips, audioClips, overlayClips, overlays, selection: newSel[newSel.length - 1] ?? null, multiSelection: newSel };
       });
       return true;
     },
