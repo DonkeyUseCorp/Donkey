@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Check, Copy, Loader2, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SectionTitle } from "@/cut/components/SectionTitle";
 import { useLightbox } from "@/cut/lib/lightbox";
 import { importImage, importStockVideo } from "@/cut/lib/media";
 import { useEditor } from "@/cut/lib/store";
@@ -118,9 +119,7 @@ export function Lightbox() {
           {item.prompt && item.prompt !== item.name && (
             <div className="flex flex-col gap-1">
               <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
-                  Prompt
-                </span>
+                <SectionTitle>Prompt</SectionTitle>
                 <button
                   title="Copy prompt"
                   className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"

@@ -13,6 +13,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { SectionTitle } from "@/cut/components/SectionTitle";
 import { apiFetch, apiUrl } from "@/cut/lib/api";
 import { clearAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
 import { deleteExport, revealExport } from "@/cut/lib/exportClient";
@@ -594,7 +595,7 @@ function LibraryPanel({ projectId }: { projectId: string }) {
       <PanelHead title="Library" />
       {templates.length > 0 && (
         <div className="shrink-0 px-3.5 pb-3">
-          <div className="mb-1.5 text-[11px] font-semibold text-muted-foreground">Templates</div>
+          <SectionTitle className="mb-1.5">Templates</SectionTitle>
           <div className="flex flex-col gap-1.5">
             {templates.map((t) => (
               <div
@@ -744,7 +745,6 @@ function PublishPanel() {
   const count = combined.length;
   const [copiedAll, setCopiedAll] = useState(false);
 
-  const field = "text-[11px] font-semibold tracking-wider text-muted-foreground uppercase";
 
   return (
     <>
@@ -752,7 +752,7 @@ function PublishPanel() {
       <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-3.5 pb-4">
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between">
-            <span className={field}>Caption</span>
+            <SectionTitle>Caption</SectionTitle>
             <CopyChip text={publish.caption.trim()} label="caption" />
           </div>
           <textarea
@@ -765,7 +765,7 @@ function PublishPanel() {
 
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between">
-            <span className={field}>Tags</span>
+            <SectionTitle>Tags</SectionTitle>
             <CopyChip text={tagsLine} label="tags" />
           </div>
           <input
@@ -790,7 +790,7 @@ function PublishPanel() {
 
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between">
-            <span className={field}>Sound title</span>
+            <SectionTitle>Sound title</SectionTitle>
             <CopyChip text={publish.soundTitle.trim()} label="sound title" />
           </div>
           <input
@@ -806,7 +806,7 @@ function PublishPanel() {
         </div>
 
         <div className="flex flex-col gap-1.5 border-t border-border pt-4">
-          <span className={field}>Notes</span>
+          <SectionTitle>Notes</SectionTitle>
           <label className="flex items-center justify-between gap-2 text-[12px] text-muted-foreground">
             Published
             <input

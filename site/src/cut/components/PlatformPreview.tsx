@@ -22,6 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SectionTitle } from "@/cut/components/SectionTitle";
 import { revealExport } from "@/cut/lib/exportClient";
 import { CAPTION_LIMIT, normalizeTags } from "@/cut/lib/publish";
 import { useEditor } from "@/cut/lib/store";
@@ -77,7 +78,6 @@ export function PlatformPreviewDialog({
   const sound = publish.soundTitle.trim() || `original sound - ${handle}`;
   const combined = [caption, tagsLine].filter(Boolean).join("\n\n");
 
-  const field = "text-[11px] font-semibold tracking-wider text-muted-foreground uppercase";
   const box =
     "w-full rounded-lg border border-input bg-transparent px-2.5 py-2 text-[12.5px] outline-none focus:border-ring";
 
@@ -106,7 +106,7 @@ export function PlatformPreviewDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <span className={field}>Handle</span>
+            <SectionTitle>Handle</SectionTitle>
             <div className="relative">
               <span className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-[12.5px] text-muted-foreground">
                 @
@@ -121,7 +121,7 @@ export function PlatformPreviewDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <span className={field}>Caption</span>
+            <SectionTitle>Caption</SectionTitle>
             <textarea
               className={cn(box, "min-h-[96px] resize-y leading-relaxed")}
               placeholder="What's happening in this video?"
@@ -131,7 +131,7 @@ export function PlatformPreviewDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <span className={field}>Tags</span>
+            <SectionTitle>Tags</SectionTitle>
             <input
               className={box}
               placeholder="fyp howto cut"
@@ -141,7 +141,7 @@ export function PlatformPreviewDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <span className={field}>Sound title</span>
+            <SectionTitle>Sound title</SectionTitle>
             <input
               className={box}
               placeholder={`original sound - ${handle}`}

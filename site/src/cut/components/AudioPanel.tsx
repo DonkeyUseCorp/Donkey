@@ -13,6 +13,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SectionTitle } from "@/cut/components/SectionTitle";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -91,7 +92,7 @@ export function AudioPanel({
   return (
     <>
       <div className="flex h-12 shrink-0 items-center pl-4">
-        <span className="text-sm font-semibold tracking-tight">Audio</span>
+        <span className="text-sm font-semibold tracking-tight">Generate audio</span>
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-3.5 pb-4">
@@ -105,14 +106,6 @@ export function AudioPanel({
         <LibraryAudio projectId={projectId} onTogglePlay={togglePlay} playingUrl={playingUrl} />
       </div>
     </>
-  );
-}
-
-function sectionLabel(text: string) {
-  return (
-    <span className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
-      {text}
-    </span>
   );
 }
 
@@ -175,7 +168,7 @@ function VoiceGenerator({ projectId }: { projectId: string }) {
 
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center gap-1">
-          {sectionLabel("Voice direction")}
+          <SectionTitle>Voice direction</SectionTitle>
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger
@@ -237,7 +230,7 @@ function VoiceGenerator({ projectId }: { projectId: string }) {
       {/* The script and its generate button stay together so the button's job —
           and why it's disabled until there's a script — is obvious. */}
       <div className="flex flex-col gap-2">
-        {sectionLabel("Script")}
+        <SectionTitle>Script</SectionTitle>
         <textarea
           className="voice-script min-h-[88px] w-full resize-y rounded-lg border border-input bg-transparent px-2.5 py-2 text-[12.5px] leading-relaxed outline-none focus:border-ring"
           placeholder="What should the voice say?"
@@ -457,7 +450,7 @@ function ProjectAudio({
   const audio = assets.filter((a) => a.type === "audio" && a.origin === "voiceover");
   return (
     <div className="flex flex-col gap-1.5">
-      {sectionLabel("Generated audio")}
+      <SectionTitle>Generated audio</SectionTitle>
       {audio.length === 0 && !importing && (
         <p className="text-[11px] leading-relaxed text-muted-foreground">
           No generated audio yet — write a script above and generate one.
@@ -524,7 +517,7 @@ function LibraryAudio({
   if (assets.length === 0) return null;
   return (
     <div className="flex flex-col gap-1.5">
-      {sectionLabel("Library")}
+      <SectionTitle>Library</SectionTitle>
       <div className="flex flex-col gap-1.5">
         {assets.map((a) => (
           <AudioRow

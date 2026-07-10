@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { ChevronDown, Copy, Loader2, Maximize2, Sparkles, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { SectionTitle } from "@/cut/components/SectionTitle";
 import { clearAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
 import { collectRefs, mentionToken, useRefCandidates, useAssetDrop } from "@/cut/lib/assetRef";
 import { signInUrl, useGenerate, useSignedIn } from "@/cut/lib/generate";
@@ -185,7 +186,7 @@ export function ImageGenPanel({ projectId }: { projectId: string }) {
 
         {generated.length > 0 && (
           <div className="flex shrink-0 flex-col gap-1.5">
-            <span className="text-[11px] font-semibold text-muted-foreground">Generated</span>
+            <SectionTitle>Generated</SectionTitle>
             {generated.map((a) => (
               <GeneratedTile
                 key={a.id}
