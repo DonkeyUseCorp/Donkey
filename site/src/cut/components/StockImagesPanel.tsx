@@ -166,7 +166,7 @@ function StockTile({ item }: { item: StockImage }) {
       >
         {/* eslint-disable-next-line @next/next/no-img-element -- bundled static thumbs on a client-only page */}
         <img
-          src={item.file}
+          src={item.thumb}
           alt={item.prompt}
           loading="lazy"
           className="aspect-[16/10] w-full bg-muted object-cover transition-transform group-hover:scale-[1.04]"

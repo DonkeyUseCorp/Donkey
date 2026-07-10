@@ -12,8 +12,10 @@ export interface StockImage {
   /** The generation prompt, saved verbatim — the editable starting point. */
   prompt: string;
   aspect: StockAspect;
-  /** Site-relative image URL (under /cut-stock/). */
+  /** Site-relative full-asset URL (under /cut-stock/) — lightbox, refs, timeline. */
   file: string;
+  /** Small grid thumbnail URL for the browse panel. */
+  thumb: string;
 }
 
 export const STOCK_CATEGORIES = [

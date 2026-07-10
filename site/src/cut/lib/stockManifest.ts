@@ -7,335 +7,383 @@ export const STOCK_IMAGES: StockImage[] = [
     "category": "Business",
     "prompt": "Professional stock photograph: a diverse team in a modern boardroom reviewing charts and documents spread across a large table, mid-discussion. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/business-boardroom.jpg"
+    "file": "/cut-stock/business-boardroom.webp",
+    "thumb": "/cut-stock/business-boardroom.thumb.webp"
   },
   {
     "id": "business-whiteboard",
     "category": "Business",
     "prompt": "Professional stock photograph: a young founder sketching a product flow on a glass whiteboard in a bright startup loft, colleagues watching. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "9:16",
-    "file": "/cut-stock/business-whiteboard.jpg"
+    "file": "/cut-stock/business-whiteboard.webp",
+    "thumb": "/cut-stock/business-whiteboard.thumb.webp"
   },
   {
     "id": "business-handshake",
     "category": "Business",
     "prompt": "Professional stock photograph: a close-up handshake between two professionals in a sunlit office lobby, blurred glass architecture behind. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/business-handshake.jpg"
+    "file": "/cut-stock/business-handshake.webp",
+    "thumb": "/cut-stock/business-handshake.thumb.webp"
   },
   {
     "id": "business-open-office",
     "category": "Business",
     "prompt": "Professional stock photograph: an open-plan office at golden hour, people working at standing desks, warm light streaming through tall windows. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/business-open-office.jpg"
+    "file": "/cut-stock/business-open-office.webp",
+    "thumb": "/cut-stock/business-open-office.thumb.webp"
   },
   {
     "id": "business-presentation",
     "category": "Business",
     "prompt": "Professional stock photograph: a woman presenting quarterly growth charts on a wall screen to an attentive small team in a conference room. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/business-presentation.jpg"
+    "file": "/cut-stock/business-presentation.webp",
+    "thumb": "/cut-stock/business-presentation.thumb.webp"
   },
   {
     "id": "business-desk-flatlay",
     "category": "Business",
     "prompt": "Professional stock photograph: a tidy flat-lay of a laptop, notebook, espresso cup, and phone on a light oak desk, viewed straight down. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "1:1",
-    "file": "/cut-stock/business-desk-flatlay.jpg"
+    "file": "/cut-stock/business-desk-flatlay.webp",
+    "thumb": "/cut-stock/business-desk-flatlay.thumb.webp"
   },
   {
     "id": "nature-misty-valley",
     "category": "Nature",
     "prompt": "Professional stock photograph: a misty mountain valley at sunrise, layered ridgelines fading into soft golden haze. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/nature-misty-valley.jpg"
+    "file": "/cut-stock/nature-misty-valley.webp",
+    "thumb": "/cut-stock/nature-misty-valley.thumb.webp"
   },
   {
     "id": "nature-waterfall",
     "category": "Nature",
     "prompt": "Professional stock photograph: a tropical waterfall pouring into a clear jungle pool, lush ferns and volcanic rock around it. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/nature-waterfall.jpg"
+    "file": "/cut-stock/nature-waterfall.webp",
+    "thumb": "/cut-stock/nature-waterfall.thumb.webp"
   },
   {
     "id": "nature-dunes",
     "category": "Nature",
     "prompt": "Professional stock photograph: rippled sand dunes at dusk, long shadows and a deep orange-to-violet gradient sky. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/nature-dunes.jpg"
+    "file": "/cut-stock/nature-dunes.webp",
+    "thumb": "/cut-stock/nature-dunes.thumb.webp"
   },
   {
     "id": "nature-pine-fog",
     "category": "Nature",
     "prompt": "Professional stock photograph: tall pine trees rising through morning fog, shot upward from the forest floor. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "9:16",
-    "file": "/cut-stock/nature-pine-fog.jpg"
+    "file": "/cut-stock/nature-pine-fog.webp",
+    "thumb": "/cut-stock/nature-pine-fog.thumb.webp"
   },
   {
     "id": "nature-ocean-wave",
     "category": "Nature",
     "prompt": "Professional stock photograph: a turquoise ocean wave curling and catching backlight, spray frozen mid-air. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/nature-ocean-wave.jpg"
+    "file": "/cut-stock/nature-ocean-wave.webp",
+    "thumb": "/cut-stock/nature-ocean-wave.thumb.webp"
   },
   {
     "id": "nature-wildflowers",
     "category": "Nature",
     "prompt": "Professional stock photograph: a macro of wildflowers in a summer meadow, one poppy in crisp focus against a creamy bokeh field. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "1:1",
-    "file": "/cut-stock/nature-wildflowers.jpg"
+    "file": "/cut-stock/nature-wildflowers.webp",
+    "thumb": "/cut-stock/nature-wildflowers.thumb.webp"
   },
   {
     "id": "travel-train-station",
     "category": "Travel",
     "prompt": "Professional stock photograph: two backpackers walking through a grand old train station, a vintage orange train waiting on the platform. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/travel-train-station.jpg"
+    "file": "/cut-stock/travel-train-station.webp",
+    "thumb": "/cut-stock/travel-train-station.thumb.webp"
   },
   {
     "id": "travel-old-town",
     "category": "Travel",
     "prompt": "Professional stock photograph: a narrow cobblestone alley in a European old town, flower boxes on shutters, warm evening lanterns. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "9:16",
-    "file": "/cut-stock/travel-old-town.jpg"
+    "file": "/cut-stock/travel-old-town.webp",
+    "thumb": "/cut-stock/travel-old-town.thumb.webp"
   },
   {
     "id": "travel-airplane-wing",
     "category": "Travel",
     "prompt": "Professional stock photograph: an airplane wing over a sea of sunset clouds, window-seat perspective. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/travel-airplane-wing.jpg"
+    "file": "/cut-stock/travel-airplane-wing.webp",
+    "thumb": "/cut-stock/travel-airplane-wing.thumb.webp"
   },
   {
     "id": "travel-boardwalk",
     "category": "Travel",
     "prompt": "Professional stock photograph: a wooden boardwalk lined with palm trees leading to a white-sand beach and clear shallow water. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/travel-boardwalk.jpg"
+    "file": "/cut-stock/travel-boardwalk.webp",
+    "thumb": "/cut-stock/travel-boardwalk.thumb.webp"
   },
   {
     "id": "travel-balloons",
     "category": "Travel",
     "prompt": "Professional stock photograph: dozens of hot-air balloons drifting over a rocky valley at dawn, soft pastel sky. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/travel-balloons.jpg"
+    "file": "/cut-stock/travel-balloons.webp",
+    "thumb": "/cut-stock/travel-balloons.thumb.webp"
   },
   {
     "id": "travel-flatlay",
     "category": "Travel",
     "prompt": "Professional stock photograph: a flat-lay of a passport, film camera, sunglasses, and a paper map with a marked route, viewed from above. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "1:1",
-    "file": "/cut-stock/travel-flatlay.jpg"
+    "file": "/cut-stock/travel-flatlay.webp",
+    "thumb": "/cut-stock/travel-flatlay.thumb.webp"
   },
   {
     "id": "city-skyline",
     "category": "City",
     "prompt": "Professional stock photograph: a modern city skyline across the water at blue hour, glass towers reflecting the last light. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/city-skyline.jpg"
+    "file": "/cut-stock/city-skyline.webp",
+    "thumb": "/cut-stock/city-skyline.thumb.webp"
   },
   {
     "id": "city-neon-crosswalk",
     "category": "City",
     "prompt": "Professional stock photograph: a rainy neon-lit crosswalk at night, umbrellas and reflections on wet asphalt. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "9:16",
-    "file": "/cut-stock/city-neon-crosswalk.jpg"
+    "file": "/cut-stock/city-neon-crosswalk.webp",
+    "thumb": "/cut-stock/city-neon-crosswalk.thumb.webp"
   },
   {
     "id": "city-rooftop",
     "category": "City",
     "prompt": "Professional stock photograph: a rooftop terrace view over downtown at sunset, string lights in the foreground. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/city-rooftop.jpg"
+    "file": "/cut-stock/city-rooftop.webp",
+    "thumb": "/cut-stock/city-rooftop.thumb.webp"
   },
   {
     "id": "city-subway",
     "category": "City",
     "prompt": "Professional stock photograph: a subway train arriving in motion blur while commuters wait on the platform. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/city-subway.jpg"
+    "file": "/cut-stock/city-subway.webp",
+    "thumb": "/cut-stock/city-subway.thumb.webp"
   },
   {
     "id": "city-cafe-corner",
     "category": "City",
     "prompt": "Professional stock photograph: a sidewalk café on a leafy street corner, bicycles parked outside, morning light. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/city-cafe-corner.jpg"
+    "file": "/cut-stock/city-cafe-corner.webp",
+    "thumb": "/cut-stock/city-cafe-corner.thumb.webp"
   },
   {
     "id": "city-aerial-grid",
     "category": "City",
     "prompt": "Professional stock photograph: a straight-down aerial of a busy city intersection, crosswalk stripes and tiny cars forming a clean grid. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "1:1",
-    "file": "/cut-stock/city-aerial-grid.jpg"
+    "file": "/cut-stock/city-aerial-grid.webp",
+    "thumb": "/cut-stock/city-aerial-grid.thumb.webp"
   },
   {
     "id": "tech-coding",
     "category": "Technology",
     "prompt": "Professional stock photograph: a developer at a dual-monitor setup writing code in a dim room, screen glow on their face. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/tech-coding.jpg"
+    "file": "/cut-stock/tech-coding.webp",
+    "thumb": "/cut-stock/tech-coding.thumb.webp"
   },
   {
     "id": "tech-server-room",
     "category": "Technology",
     "prompt": "Professional stock photograph: a long server-room aisle with racks of blinking status lights fading into the distance. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/tech-server-room.jpg"
+    "file": "/cut-stock/tech-server-room.webp",
+    "thumb": "/cut-stock/tech-server-room.thumb.webp"
   },
   {
     "id": "tech-circuit-macro",
     "category": "Technology",
     "prompt": "Professional stock photograph: a macro of a circuit board, gold traces and a CPU die in sharp focus, shallow depth of field. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "1:1",
-    "file": "/cut-stock/tech-circuit-macro.jpg"
+    "file": "/cut-stock/tech-circuit-macro.webp",
+    "thumb": "/cut-stock/tech-circuit-macro.thumb.webp"
   },
   {
     "id": "tech-robot-arm",
     "category": "Technology",
     "prompt": "Professional stock photograph: an industrial robot arm assembling components on a clean production line, cool white lighting. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/tech-robot-arm.jpg"
+    "file": "/cut-stock/tech-robot-arm.webp",
+    "thumb": "/cut-stock/tech-robot-arm.thumb.webp"
   },
   {
     "id": "tech-vr-headset",
     "category": "Technology",
     "prompt": "Professional stock photograph: a person wearing a VR headset reaching out, lit by soft violet and cyan studio light. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "9:16",
-    "file": "/cut-stock/tech-vr-headset.jpg"
+    "file": "/cut-stock/tech-vr-headset.webp",
+    "thumb": "/cut-stock/tech-vr-headset.thumb.webp"
   },
   {
     "id": "tech-dashboard",
     "category": "Technology",
     "prompt": "Professional stock photograph: a large monitor showing a clean analytics dashboard with charts, a blurred office behind it. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/tech-dashboard.jpg"
+    "file": "/cut-stock/tech-dashboard.webp",
+    "thumb": "/cut-stock/tech-dashboard.thumb.webp"
   },
   {
     "id": "anime-neon-street",
     "category": "Anime",
     "prompt": "High-quality anime illustration: a rain-slicked neon city street at night, a figure with a glowing umbrella walking toward the viewer. Clean line art, vibrant cel shading, detailed background, cinematic composition. No text, no watermarks.",
     "aspect": "9:16",
-    "file": "/cut-stock/anime-neon-street.jpg"
+    "file": "/cut-stock/anime-neon-street.webp",
+    "thumb": "/cut-stock/anime-neon-street.thumb.webp"
   },
   {
     "id": "anime-cherry-blossoms",
     "category": "Anime",
     "prompt": "High-quality anime illustration: a student on a hilltop path under falling cherry blossoms, a town and sea far below. Clean line art, vibrant cel shading, detailed background, cinematic composition. No text, no watermarks.",
     "aspect": "16:9",
-    "file": "/cut-stock/anime-cherry-blossoms.jpg"
+    "file": "/cut-stock/anime-cherry-blossoms.webp",
+    "thumb": "/cut-stock/anime-cherry-blossoms.thumb.webp"
   },
   {
     "id": "anime-mecha",
     "category": "Anime",
     "prompt": "High-quality anime illustration: a giant mecha standing guard over a futuristic city at sunset, clouds parting dramatically. Clean line art, vibrant cel shading, detailed background, cinematic composition. No text, no watermarks.",
     "aspect": "16:9",
-    "file": "/cut-stock/anime-mecha.jpg"
+    "file": "/cut-stock/anime-mecha.webp",
+    "thumb": "/cut-stock/anime-mecha.thumb.webp"
   },
   {
     "id": "anime-ramen-shop",
     "category": "Anime",
     "prompt": "High-quality anime illustration: a cozy late-night ramen shop interior, steam rising from bowls, warm lantern light. Clean line art, vibrant cel shading, detailed background, cinematic composition. No text, no watermarks.",
     "aspect": "16:9",
-    "file": "/cut-stock/anime-ramen-shop.jpg"
+    "file": "/cut-stock/anime-ramen-shop.webp",
+    "thumb": "/cut-stock/anime-ramen-shop.thumb.webp"
   },
   {
     "id": "anime-floating-islands",
     "category": "Anime",
     "prompt": "High-quality anime illustration: a fantasy landscape of floating islands with waterfalls spilling into the sky, airships drifting between them. Clean line art, vibrant cel shading, detailed background, cinematic composition. No text, no watermarks.",
     "aspect": "16:9",
-    "file": "/cut-stock/anime-floating-islands.jpg"
+    "file": "/cut-stock/anime-floating-islands.webp",
+    "thumb": "/cut-stock/anime-floating-islands.thumb.webp"
   },
   {
     "id": "anime-portrait",
     "category": "Anime",
     "prompt": "High-quality anime illustration: a close-up portrait of a silver-haired adventurer with bright green eyes, wind-blown hair, golden-hour light. Clean line art, vibrant cel shading, detailed background, cinematic composition. No text, no watermarks.",
     "aspect": "1:1",
-    "file": "/cut-stock/anime-portrait.jpg"
+    "file": "/cut-stock/anime-portrait.webp",
+    "thumb": "/cut-stock/anime-portrait.thumb.webp"
   },
   {
     "id": "animal-retriever-beach",
     "category": "Animal",
     "prompt": "Professional stock photograph: a golden retriever sprinting along a beach at sunset, sand kicking up, ears flying. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/animal-retriever-beach.jpg"
+    "file": "/cut-stock/animal-retriever-beach.webp",
+    "thumb": "/cut-stock/animal-retriever-beach.thumb.webp"
   },
   {
     "id": "animal-cat-window",
     "category": "Animal",
     "prompt": "Professional stock photograph: a tabby cat sitting in soft window light, dust motes in the sunbeam. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "1:1",
-    "file": "/cut-stock/animal-cat-window.jpg"
+    "file": "/cut-stock/animal-cat-window.webp",
+    "thumb": "/cut-stock/animal-cat-window.thumb.webp"
   },
   {
     "id": "animal-fox-snow",
     "category": "Animal",
     "prompt": "Professional stock photograph: a red fox stepping through fresh snow in a quiet forest, breath visible in the cold air. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/animal-fox-snow.jpg"
+    "file": "/cut-stock/animal-fox-snow.webp",
+    "thumb": "/cut-stock/animal-fox-snow.thumb.webp"
   },
   {
     "id": "animal-macaw",
     "category": "Animal",
     "prompt": "Professional stock photograph: a scarlet macaw perched on a branch, vivid red and blue feathers against deep green jungle bokeh. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "9:16",
-    "file": "/cut-stock/animal-macaw.jpg"
+    "file": "/cut-stock/animal-macaw.webp",
+    "thumb": "/cut-stock/animal-macaw.thumb.webp"
   },
   {
     "id": "animal-elephants",
     "category": "Animal",
     "prompt": "Professional stock photograph: a family of elephants at a watering hole at dusk, golden dust in the air. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/animal-elephants.jpg"
+    "file": "/cut-stock/animal-elephants.webp",
+    "thumb": "/cut-stock/animal-elephants.thumb.webp"
   },
   {
     "id": "animal-horse",
     "category": "Animal",
     "prompt": "Professional stock photograph: a chestnut horse galloping through a misty field at dawn, mane streaming. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/animal-horse.jpg"
+    "file": "/cut-stock/animal-horse.webp",
+    "thumb": "/cut-stock/animal-horse.thumb.webp"
   },
   {
     "id": "food-brunch",
     "category": "Food & Drink",
     "prompt": "Professional stock photograph: a generous brunch spread on a rustic table: pancakes, fruit, coffee, and fresh juice, soft morning light. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/food-brunch.jpg"
+    "file": "/cut-stock/food-brunch.webp",
+    "thumb": "/cut-stock/food-brunch.thumb.webp"
   },
   {
     "id": "food-latte-art",
     "category": "Food & Drink",
     "prompt": "Professional stock photograph: a close-up of latte art in a ceramic cup on a marble counter, steam curling upward. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "1:1",
-    "file": "/cut-stock/food-latte-art.jpg"
+    "file": "/cut-stock/food-latte-art.webp",
+    "thumb": "/cut-stock/food-latte-art.thumb.webp"
   },
   {
     "id": "food-sushi",
     "category": "Food & Drink",
     "prompt": "Professional stock photograph: an elegant sushi platter on dark slate, nigiri and rolls arranged with pickled ginger and wasabi. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/food-sushi.jpg"
+    "file": "/cut-stock/food-sushi.webp",
+    "thumb": "/cut-stock/food-sushi.thumb.webp"
   },
   {
     "id": "food-tacos",
     "category": "Food & Drink",
     "prompt": "Professional stock photograph: three street tacos with charred meat, cilantro, and lime on a paper-lined tray, market lights behind. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/food-tacos.jpg"
+    "file": "/cut-stock/food-tacos.webp",
+    "thumb": "/cut-stock/food-tacos.thumb.webp"
   },
   {
     "id": "food-smoothie-bowl",
     "category": "Food & Drink",
     "prompt": "Professional stock photograph: a vibrant berry smoothie bowl topped with granola, banana, and chia seeds, shot from a high angle. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "9:16",
-    "file": "/cut-stock/food-smoothie-bowl.jpg"
+    "file": "/cut-stock/food-smoothie-bowl.webp",
+    "thumb": "/cut-stock/food-smoothie-bowl.thumb.webp"
   },
   {
     "id": "food-pizza",
     "category": "Food & Drink",
     "prompt": "Professional stock photograph: a wood-fired margherita pizza fresh from the oven, bubbling mozzarella and basil, embers glowing behind. Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.",
     "aspect": "16:9",
-    "file": "/cut-stock/food-pizza.jpg"
+    "file": "/cut-stock/food-pizza.webp",
+    "thumb": "/cut-stock/food-pizza.thumb.webp"
   }
 ];

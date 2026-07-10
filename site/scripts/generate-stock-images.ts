@@ -5,16 +5,17 @@
 //
 //   cd site && ./node_modules/.bin/bun scripts/generate-stock-images.ts
 //
-// Needs GOOGLE_APPLICATION_CREDENTIALS_JSON (bun auto-loads site/.env) and
-// macOS `sips` to compress the raw PNGs into small JPEGs.
+// Needs GOOGLE_APPLICATION_CREDENTIALS_JSON (bun auto-loads site/.env). Each
+// image is checked for baked-in letterbox bars (regenerated when found, trimmed
+// as a last resort), cropped to its exact aspect, and written twice: a
+// near-native WebP the lightbox and timeline use, and a small grid thumb.
 
-import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { GoogleGenAI } from "@google/genai";
 import { JWT } from "google-auth-library";
+import sharp from "sharp";
 
 import type { StockAspect, StockCategory } from "../src/cut/lib/stock";
 
@@ -29,8 +30,16 @@ const MODEL = process.env.GEMINI_IMAGE_MODEL?.trim() || "gemini-2.5-flash-image"
 const OUT_DIR = path.join(import.meta.dirname, "..", "public", "cut-stock");
 const MANIFEST = path.join(import.meta.dirname, "..", "src", "cut", "lib", "stockManifest.ts");
 const CONCURRENCY = 4;
-/** Longest image edge after compression — browse thumbnails, not print assets. */
-const MAX_EDGE = 800;
+
+/** Full-asset dimensions per aspect — just under the model's native output so
+ * the exact-ratio crop only ever shaves edges, never upscales. */
+const FULL_SIZE: Record<StockAspect, [number, number]> = {
+  "16:9": [1280, 720],
+  "9:16": [720, 1280],
+  "1:1": [1024, 1024],
+};
+/** Longest thumb edge — the browse grid renders tiles well under this. */
+const THUMB_EDGE = 512;
 
 const photo = (subject: string) =>
   `Professional stock photograph: ${subject} Natural lighting, shallow depth of field, sharp focus, realistic color grading. No text, no watermarks, no logos.`;
@@ -132,13 +141,14 @@ const aspectHint: Record<StockAspect, string> = {
   "1:1": "1:1 square",
 };
 
-async function generateOne(client: GoogleGenAI, item: CatalogItem): Promise<Buffer> {
-  const contents = [
-    {
-      role: "user",
-      parts: [{ text: `${item.prompt}\n\nCompose the image in a ${aspectHint[item.aspect]} frame.` }],
-    },
-  ];
+async function generateOne(client: GoogleGenAI, item: CatalogItem, antiBar: boolean): Promise<Buffer> {
+  const lines = [item.prompt, `Compose the image in a ${aspectHint[item.aspect]} frame.`];
+  if (antiBar) {
+    lines.push(
+      "The scene must fill the entire frame edge to edge — absolutely no black or white bars, borders, letterboxing, or frames around the image."
+    );
+  }
+  const contents = [{ role: "user", parts: [{ text: lines.join("\n\n") }] }];
   // imageConfig pins the output aspect on models that honor it; the prompt line
   // above steers the rest. Fall back to prompt-only if the field is rejected.
   let response;
@@ -166,10 +176,76 @@ async function generateOne(client: GoogleGenAI, item: CatalogItem): Promise<Buff
   throw new Error("no image in response");
 }
 
-function compress(rawPng: string, outJpg: string) {
-  execFileSync("sips", ["-Z", String(MAX_EDGE), "-s", "format", "jpeg", "-s", "formatOptions", "82", rawPng, "--out", outJpg], {
-    stdio: "ignore",
+interface Bars {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+  width: number;
+  height: number;
+}
+
+/** Measures baked-in letterbox bars: a bar is a run of rows/columns that are
+ * all one solid color — the color of the outermost edge. Anchoring every row
+ * to the edge color keeps gradients (sky, walls) untouched: they drift past
+ * the tolerance within a few rows, a rendered bar never does. */
+async function measureBars(image: Buffer): Promise<Bars> {
+  const { data, info } = await sharp(image).raw().toBuffer({ resolveWithObject: true });
+  const { width, height, channels } = info;
+  const px = (x: number, y: number) => {
+    const i = (y * width + x) * channels;
+    return [data[i], data[i + 1], data[i + 2]] as const;
+  };
+  const isBar = (samples: (readonly [number, number, number])[], ref: readonly [number, number, number]) =>
+    samples.every(([r, g, b]) => Math.abs(r - ref[0]) + Math.abs(g - ref[1]) + Math.abs(b - ref[2]) < 24);
+  const rowSamples = (y: number) => {
+    const step = Math.max(1, Math.floor(width / 64));
+    const out: (readonly [number, number, number])[] = [];
+    for (let x = 0; x < width; x += step) out.push(px(x, y));
+    return out;
+  };
+  const colSamples = (x: number) => {
+    const step = Math.max(1, Math.floor(height / 64));
+    const out: (readonly [number, number, number])[] = [];
+    for (let y = 0; y < height; y += step) out.push(px(x, y));
+    return out;
+  };
+  const topRef = px(Math.floor(width / 2), 0);
+  const bottomRef = px(Math.floor(width / 2), height - 1);
+  const leftRef = px(0, Math.floor(height / 2));
+  const rightRef = px(width - 1, Math.floor(height / 2));
+  let top = 0, bottom = 0, left = 0, right = 0;
+  while (top < height / 3 && isBar(rowSamples(top), topRef)) top++;
+  while (bottom < height / 3 && isBar(rowSamples(height - 1 - bottom), bottomRef)) bottom++;
+  while (left < width / 3 && isBar(colSamples(left), leftRef)) left++;
+  while (right < width / 3 && isBar(colSamples(right), rightRef)) right++;
+  return { top, bottom, left, right, width, height };
+}
+
+const barPixels = (b: Bars) => Math.max(b.top, b.bottom) / b.height + Math.max(b.left, b.right) / b.width;
+const hasBars = (b: Bars) => b.top + b.bottom > b.height * 0.02 || b.left + b.right > b.width * 0.02;
+
+/** Trims measured bars, center-crops to the exact aspect, and writes the full
+ * asset plus the grid thumb as WebP. */
+async function finalize(image: Buffer, bars: Bars, item: CatalogItem) {
+  const [fullW, fullH] = FULL_SIZE[item.aspect];
+  const content = sharp(image).extract({
+    left: bars.left,
+    top: bars.top,
+    width: bars.width - bars.left - bars.right,
+    height: bars.height - bars.top - bars.bottom,
   });
+  const full = await content
+    .resize(fullW, fullH, { fit: "cover" })
+    .webp({ quality: 82, smartSubsample: true })
+    .toBuffer();
+  await writeFile(path.join(OUT_DIR, `${item.id}.webp`), full);
+  const scale = THUMB_EDGE / Math.max(fullW, fullH);
+  await sharp(full)
+    .resize(Math.round(fullW * scale), Math.round(fullH * scale))
+    .webp({ quality: 75, smartSubsample: true })
+    .toBuffer()
+    .then((thumb) => writeFile(path.join(OUT_DIR, `${item.id}.thumb.webp`), thumb));
 }
 
 async function writeManifest(done: Set<string>) {
@@ -178,7 +254,8 @@ async function writeManifest(done: Set<string>) {
     category: c.category,
     prompt: c.prompt,
     aspect: c.aspect,
-    file: `/cut-stock/${c.id}.jpg`,
+    file: `/cut-stock/${c.id}.webp`,
+    thumb: `/cut-stock/${c.id}.thumb.webp`,
   }));
   const body = `// Generated by scripts/generate-stock-images.ts — do not edit by hand.
 import type { StockImage } from "./stock";
@@ -188,13 +265,26 @@ export const STOCK_IMAGES: StockImage[] = ${JSON.stringify(entries, null, 2)};
   await writeFile(MANIFEST, body);
 }
 
+/** Generates until an attempt comes back bar-free (up to three), then falls
+ * back to the least-barred attempt — finalize() trims its bars away. */
+async function produceOne(client: GoogleGenAI, item: CatalogItem) {
+  let best: { image: Buffer; bars: Bars } | null = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const image = await generateOne(client, item, attempt > 1);
+    const bars = await measureBars(image);
+    if (!best || barPixels(bars) < barPixels(best.bars)) best = { image, bars };
+    if (!hasBars(bars)) break;
+    console.warn(`bars on ${item.id} (attempt ${attempt}): t${bars.top} b${bars.bottom} l${bars.left} r${bars.right}`);
+  }
+  if (!best) throw new Error("no image generated");
+  await finalize(best.image, best.bars, item);
+}
+
 async function main() {
   const { client, project } = makeClient();
   await mkdir(OUT_DIR, { recursive: true });
-  const tmp = path.join(os.tmpdir(), `cut-stock-${process.pid}`);
-  await mkdir(tmp, { recursive: true });
 
-  const done = new Set<string>(CATALOG.filter((c) => existsSync(path.join(OUT_DIR, `${c.id}.jpg`))).map((c) => c.id));
+  const done = new Set<string>(CATALOG.filter((c) => existsSync(path.join(OUT_DIR, `${c.id}.webp`))).map((c) => c.id));
   const todo = CATALOG.filter((c) => !done.has(c.id));
   console.log(`model=${MODEL} project=${project} existing=${done.size} generating=${todo.length}`);
 
@@ -204,10 +294,7 @@ async function main() {
     for (let item = queue.shift(); item; item = queue.shift()) {
       for (let attempt = 1; ; attempt++) {
         try {
-          const png = await generateOne(client, item);
-          const raw = path.join(tmp, `${item.id}.png`);
-          await writeFile(raw, png);
-          compress(raw, path.join(OUT_DIR, `${item.id}.jpg`));
+          await produceOne(client, item);
           done.add(item.id);
           console.log(`✓ ${item.id} (${item.aspect})`);
           break;
@@ -223,7 +310,6 @@ async function main() {
     }
   };
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
-  await rm(tmp, { recursive: true, force: true });
 
   await writeManifest(done);
   console.log(`manifest: ${done.size}/${CATALOG.length} images${failed ? `, ${failed} failed` : ""}`);
