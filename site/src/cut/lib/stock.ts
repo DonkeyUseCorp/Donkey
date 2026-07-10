@@ -31,6 +31,9 @@ export interface StockVideo {
   category: StockVideoCategory;
   /** The generation prompt, saved verbatim — the editable starting point. */
   prompt: string;
+  /** Characters only: the person description, kept separate from the spoken
+   * line so the generate panel can put new words in the same mouth. */
+  persona?: string;
   /** Vision-extracted keywords for the visible content (objects, setting,
    * subjects) — what the search box matches beyond the prompt text. */
   tags: string[];
@@ -67,3 +70,15 @@ export const STOCK_ASPECT_LABEL: Record<StockAspect, string> = {
   "9:16": "Portrait (9:16)",
   "1:1": "Square (1:1)",
 };
+
+/** A readable title from a stock id, e.g. "nature-waves" → "Nature Waves". */
+export const stockTitle = (id: string) =>
+  id.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+
+/** The talking-character prompt: a persona plus the line they speak. One
+ * template shared by the catalog generator and the editor's character mode, so
+ * a character says new words in the same style the stock clip shows. The
+ * register is deliberately UGC, not cinematic — tight selfie framing, ordinary
+ * light, imperfect handheld feel is what makes the people read as real. */
+export const characterPrompt = (persona: string, line: string) =>
+  `A casual selfie video recorded on a phone front camera: ${persona}, framed in a tight close-up with the face filling most of the frame, looking into the lens and talking mid-conversation, candid and unposed. They say: "${line}" Ordinary available light, true-to-life skin texture with pores and small imperfections, slightly shaky handheld framing, the look of real user-generated footage. No text, no watermarks, no captions.`;

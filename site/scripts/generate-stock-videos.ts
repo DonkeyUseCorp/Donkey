@@ -23,7 +23,8 @@ import { GoogleGenAI } from "@google/genai";
 import { JWT } from "google-auth-library";
 import sharp from "sharp";
 
-import type { StockVideoAspect, StockVideoCategory } from "../src/cut/lib/stock";
+import { geminiModels, veoModels } from "../src/lib/inference/gemini-models";
+import { characterPrompt, type StockVideoAspect, type StockVideoCategory } from "../src/cut/lib/stock";
 
 interface CatalogItem {
   id: string;
@@ -32,10 +33,13 @@ interface CatalogItem {
   /** Rendered length; Veo takes 4, 6, or 8 seconds. */
   seconds: 4 | 6 | 8;
   prompt: string;
+  /** Characters only: the person description, written into the manifest so the
+   * editor can compose new lines for the same persona. */
+  persona?: string;
 }
 
-const MODEL = process.env.GEMINI_VIDEO_MODEL?.trim() || "veo-3.1-fast-generate-001";
-const TAG_MODEL = "gemini-2.5-flash";
+const MODEL = veoModels.fast;
+const TAG_MODEL = geminiModels.flash;
 const OUT_DIR = path.join(import.meta.dirname, "..", "public", "cut-stock-video");
 const MANIFEST = path.join(import.meta.dirname, "..", "src", "cut", "lib", "stockVideoManifest.ts");
 // Veo renders take minutes each and quotas are tight; keep the fan-out small.
@@ -53,10 +57,21 @@ const animeClip = (subject: string) =>
   `High-quality anime animation: ${subject} Clean line art, vibrant cel shading, detailed background, smooth motion. No text, no watermarks.`;
 
 // Talking characters: Veo 3.1 renders the spoken line as real dialogue audio.
-// The quoted line is the editable part — clicking a character in the editor
-// loads this prompt into the generate panel so the user swaps in their script.
-const charClip = (person: string, line: string) =>
-  `A talking-head video: ${person}, looking into the camera and speaking naturally with subtle hand gestures. They say: "${line}" Realistic skin texture, soft key lighting, shallow depth of field. No text, no watermarks, no captions.`;
+// The persona lands in the manifest so the editor's character mode can compose
+// new lines for the same person; the sample line here is only the stock clip.
+const character = (
+  id: string,
+  aspect: StockVideoAspect,
+  persona: string,
+  line: string
+): CatalogItem => ({
+  id,
+  category: "Characters",
+  aspect,
+  seconds: 8,
+  persona,
+  prompt: characterPrompt(persona, line),
+});
 
 // What must never show up in a stock clip, on the channel Veo actually
 // listens to (plain nouns; the prompt's "no text" line is belt-and-braces).
@@ -73,14 +88,26 @@ const seedFromId = (id: string) => {
 
 const CATALOG: CatalogItem[] = [
   // Talking Characters — one editable spoken line each, varied looks and sets.
-  { id: "character-studio-host", category: "Characters", aspect: "16:9", seconds: 8, prompt: charClip("a friendly man in his 30s with short dreadlocks, wearing a mustard crewneck, seated in a podcast studio with a boom mic and acoustic foam panels", "So I tested this for thirty days, and honestly? The results surprised me.") },
-  { id: "character-loft-creator", category: "Characters", aspect: "9:16", seconds: 8, prompt: charClip("a woman in her late 20s with a copper bob and freckles, wearing a white tee, standing in a bright plant-filled loft, casual vlog framing", "Okay, quick story time — because this completely changed how I work.") },
-  { id: "character-office-mentor", category: "Characters", aspect: "16:9", seconds: 8, prompt: charClip("a silver-haired man in his 50s with glasses and a navy blazer, seated at a tidy desk in a corner office with warm afternoon light", "After twenty years in this industry, there's one lesson I keep coming back to.") },
-  { id: "character-kitchen-vlogger", category: "Characters", aspect: "9:16", seconds: 8, prompt: charClip("a cheerful woman in her 40s wearing a linen apron, standing at a marble kitchen counter with fresh herbs and a cutting board", "You only need three ingredients for this — and you probably have them already.") },
-  { id: "character-cafe-analyst", category: "Characters", aspect: "16:9", seconds: 8, prompt: charClip("a young man in his 20s with round glasses and a grey hoodie, sitting by a rainy café window with a laptop and a flat white", "Let's break down what these numbers actually mean.") },
-  { id: "character-outdoor-coach", category: "Characters", aspect: "9:16", seconds: 8, prompt: charClip("an athletic woman in her 30s with a high ponytail, wearing a running jacket, standing on a park trail at golden hour", "Day one is the hardest — here's how to make it stick.") },
-  { id: "character-workshop-maker", category: "Characters", aspect: "16:9", seconds: 8, prompt: charClip("a bearded man in his 40s in a denim work shirt, standing in a woodworking shop with shelves of hand tools behind him", "Most people get this step wrong, so watch closely.") },
-  { id: "character-lounge-storyteller", category: "Characters", aspect: "16:9", seconds: 8, prompt: charClip("an elegant woman in her 60s with silver hair and a burgundy scarf, seated in an armchair by warm lamplight and bookshelves", "Now this — this is a story I've never told anyone.") },
+  character("character-studio-host", "16:9", "a friendly man in his 30s with short dreadlocks, wearing a mustard crewneck, acoustic foam panels soft in the background", "So I tested this for thirty days, and honestly? The results surprised me."),
+  character("character-loft-creator", "9:16", "a woman in her late 20s with a copper bob, freckles and no makeup, white wired earbuds in, a plant-filled loft blurred behind her", "Okay, quick story time — because this completely changed how I work."),
+  character("character-office-mentor", "16:9", "a silver-haired man in his 50s with glasses and an open collar, warm afternoon window light on his face", "After twenty years in this industry, there's one lesson I keep coming back to."),
+  character("character-kitchen-vlogger", "9:16", "a cheerful woman in her 40s in a linen apron, flour dusted on one cheek, a kitchen counter out of focus behind her", "You only need three ingredients for this — and you probably have them already."),
+  character("character-cafe-analyst", "16:9", "a young man in his 20s with round glasses and a grey hoodie, a rainy café window bokeh behind him", "Let's break down what these numbers actually mean."),
+  character("character-outdoor-coach", "9:16", "an athletic woman in her 30s with a high ponytail, slightly out of breath, loose hairs moving in the breeze on a park trail at golden hour", "Day one is the hardest — here's how to make it stick."),
+  character("character-workshop-maker", "16:9", "a bearded man in his 40s in a denim work shirt with sawdust on the shoulder, woodworking shop shelves behind him", "Most people get this step wrong, so watch closely."),
+  character("character-lounge-storyteller", "16:9", "an elegant woman in her 60s with silver hair and a burgundy scarf, warm lamplight from one side", "Now this — this is a story I've never told anyone."),
+  character("character-gym-trainer", "16:9", "a muscular man in his 30s with a buzz cut, a light sheen of sweat, gym equipment blurred behind him", "Three sets. That's it. Let me show you why less is more."),
+  character("character-startup-founder", "16:9", "a South Asian woman in her 30s in a blazer over a plain tee, a scribbled whiteboard out of focus behind her", "We almost ran out of money twice. Here's what saved us."),
+  character("character-bookshop-owner", "16:9", "an East Asian man in his 60s in a knit cardigan, tall secondhand-bookshop shelves behind him", "People ask me why paper books survive. Well, let me tell you."),
+  character("character-garden-guide", "9:16", "a Latina woman in her 50s in a sunhat, harsh midday sun making her squint a little, greenhouse plants behind her", "If your plants keep dying, you're probably doing this one thing."),
+  character("character-music-producer", "16:9", "a young Black woman in her 20s with headphones around her neck, synthesizers and studio gear bokeh behind her", "Listen to what happens when I take the bass out."),
+  character("character-street-reporter", "9:16", "a man in his 20s on a busy city sidewalk, wind blowing his hair across his forehead, traffic passing behind him", "We asked fifty people the same question — the answers blew us away."),
+  character("character-chef-pass", "16:9", "a Middle Eastern man in his 40s in chef whites, steam and a bright kitchen pass out of focus behind him", "The secret isn't the sauce. It's the salt — and when you add it."),
+  character("character-science-teacher", "16:9", "a woman in her 40s in a lab coat with safety glasses pushed up into her hair, a classroom lab behind her", "Everything you learned about this in school? Half of it is wrong."),
+  character("character-travel-blogger", "9:16", "a man in his 30s in a backwards maroon cap and aviator glasses, evening sun on his face, an old-town square with string lights behind him", "This city gets skipped by everyone — and that's exactly why you should go."),
+  character("character-finance-coach", "16:9", "a Black man in his 40s in a fitted sweater, a home-office bookshelf and desk lamp blurred behind him", "If you can save ten percent, you can retire early. Here's the math."),
+  character("character-nurse-educator", "16:9", "a Filipina woman in her 30s in scrubs with a stethoscope around her neck, a bright clinic room behind her", "Most people take their blood pressure wrong. Watch this."),
+  character("character-grandpa-gamer", "16:9", "a cheerful man in his 70s with a white beard, his face lit by shifting RGB keyboard glow in a dim room", "My grandson taught me this game. Now I coach him."),
 
   // Business
   { id: "business-team-walkthrough", category: "Business", aspect: "16:9", seconds: 6, prompt: clip("a slow tracking shot following a small team walking and talking through a bright modern office, glass walls and plants passing by.") },
@@ -242,6 +269,7 @@ async function writeManifest(done: Set<string>, tags: Map<string, string[]>) {
     id: c.id,
     category: c.category,
     prompt: c.prompt,
+    ...(c.persona ? { persona: c.persona } : {}),
     tags: tags.get(c.id) ?? [],
     aspect: c.aspect,
     file: `/cut-stock-video/${c.id}.mp4`,
