@@ -11,14 +11,15 @@ import { STOCK_VIDEOS } from "@/cut/lib/stockVideoManifest";
 import { cn } from "@/lib/utils";
 import { CopyRefButton, RefHandlePill } from "./AssetRefs";
 
-// The Video tab's reference browser: a searchable catalog of AI-generated stock
-// clips. Every clip carries the prompt that made it — clicking one loads that
+// The Video tab's reference browser: a catalog of AI-generated stock clips.
+// Every clip carries the prompt that made it — clicking one loads that
 // prompt into the generate panel beside it to edit and render on the user's
 // account. Videos the user generates show up in that panel, not here.
 //
 // Two sections: "Talking Characters" (talking-head clips whose prompt ends in
 // an editable spoken line), then the footage grid headed by its category
-// chips. "View all" drills into a section, titled with a breadcrumb.
+// chips. "View all" drills into a section, titled with a breadcrumb; search
+// lives only inside a drilled section and scopes to it.
 
 const CHARACTERS = STOCK_VIDEOS.filter((v) => v.category === "Characters");
 const FOOTAGE = STOCK_VIDEOS.filter((v) => v.category !== "Characters");
@@ -44,17 +45,22 @@ export function StockVideosPanel() {
   const [cat, setCat] = useState<"all" | StockCategory>("all");
   const [query, setQuery] = useState("");
 
-  // A revealed stock clip may sit off screen — clear the search and open the
-  // view that has its tile (a drilled section, the matching chip filter).
+  // Search is scoped to a drilled section, so switching views starts it fresh.
+  const go = (next: View) => {
+    setView(next);
+    setQuery("");
+  };
+
+  // A revealed stock clip may sit off screen — open the view that has its
+  // tile (a drilled section, the matching chip filter).
   useRevealEffect((ref) => {
     if (ref.scope !== "stock") return;
     const item = STOCK_VIDEOS.find((v) => v.id === ref.id);
     if (!item) return;
-    setQuery("");
     if (item.category === "Characters") {
-      setView(CHARACTERS.indexOf(item) >= SECTION_PREVIEW ? "characters" : "root");
+      go(CHARACTERS.indexOf(item) >= SECTION_PREVIEW ? "characters" : "root");
     } else {
-      setView("videos");
+      go("videos");
       setCat(item.category);
     }
   });
@@ -66,8 +72,11 @@ export function StockVideosPanel() {
     item.category.toLowerCase().includes(q) ||
     item.tags.some((t) => t.includes(q));
 
-  const characters = CHARACTERS.filter(matches);
-  const footage = FOOTAGE.filter((v) => (cat === "all" || v.category === cat) && matches(v));
+  // The root shows every section unfiltered; the query applies once drilled in.
+  const characters = view === "characters" ? CHARACTERS.filter(matches) : CHARACTERS;
+  const footage = FOOTAGE.filter(
+    (v) => (cat === "all" || v.category === cat) && (view !== "videos" || matches(v))
+  );
 
   const chips = (
     <div className="flex min-w-0 flex-wrap gap-1">
@@ -83,67 +92,60 @@ export function StockVideosPanel() {
   );
 
   return (
-    <>
-      <div className="flex h-12 shrink-0 items-center px-3.5">
-        <label className="flex w-full items-center gap-2 rounded-lg border border-input px-2.5 py-1.5 focus-within:border-ring">
-          <Search className="size-3.5 shrink-0 text-muted-foreground" />
-          <input
-            className="w-full bg-transparent text-[12px] outline-none placeholder:text-muted-foreground"
-            placeholder="Search stock…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        </label>
-      </div>
-
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3.5 pb-4">
-        {STOCK_VIDEOS.length === 0 ? (
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
-            No stock videos are bundled yet.
-          </p>
-        ) : view === "root" ? (
-          <>
-            {characters.length > 0 && (
-              <section className="shrink-0">
-                <SectionHead
-                  title="Talking Characters"
-                  onViewAll={
-                    characters.length > SECTION_PREVIEW ? () => setView("characters") : undefined
-                  }
-                />
-                <Grid items={characters.slice(0, SECTION_PREVIEW)} />
-              </section>
-            )}
+    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3.5 pt-3 pb-4">
+      {STOCK_VIDEOS.length === 0 ? (
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          No stock videos are bundled yet.
+        </p>
+      ) : view === "root" ? (
+        <>
+          {characters.length > 0 && (
             <section className="shrink-0">
-              <div className="mb-2 flex items-start justify-between gap-2">
-                {chips}
-                {footage.length > SECTION_PREVIEW && (
-                  <ViewAllButton onClick={() => setView("videos")} />
-                )}
-              </div>
-              {footage.length > 0 ? (
-                <Grid items={footage.slice(0, SECTION_PREVIEW)} />
-              ) : (
-                characters.length === 0 && <Empty />
-              )}
+              <SectionHead
+                title="Talking Characters"
+                onViewAll={
+                  characters.length > SECTION_PREVIEW ? () => go("characters") : undefined
+                }
+              />
+              <Grid items={characters.slice(0, SECTION_PREVIEW)} />
             </section>
-          </>
-        ) : (
-          <>
-            <Crumb
-              title={view === "characters" ? "Talking Characters" : "Stock Videos"}
-              onBack={() => setView("root")}
-            />
-            {view === "videos" && chips}
-            {(view === "characters" ? characters : footage).length > 0 ? (
-              <Grid items={view === "characters" ? characters : footage} />
+          )}
+          <section className="mt-3 shrink-0">
+            <div className="mb-2 flex items-start justify-between gap-2">
+              {chips}
+              {footage.length > SECTION_PREVIEW && <ViewAllButton onClick={() => go("videos")} />}
+            </div>
+            {footage.length > 0 ? (
+              <Grid items={footage.slice(0, SECTION_PREVIEW)} />
             ) : (
-              <Empty />
+              characters.length === 0 && <Empty />
             )}
-          </>
-        )}
-      </div>
-    </>
+          </section>
+        </>
+      ) : (
+        <>
+          <Crumb
+            title={view === "characters" ? "Talking Characters" : "Stock Videos"}
+            onBack={() => go("root")}
+          />
+          <label className="flex shrink-0 items-center gap-2 rounded-lg border border-input px-2.5 py-1.5 focus-within:border-ring">
+            <Search className="size-3.5 shrink-0 text-muted-foreground" />
+            <input
+              className="w-full bg-transparent text-[12px] outline-none placeholder:text-muted-foreground"
+              placeholder={view === "characters" ? "Search characters…" : "Search videos…"}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </label>
+          {view === "videos" && chips}
+          {(view === "characters" ? characters : footage).length > 0 ? (
+            <Grid items={view === "characters" ? characters : footage} />
+          ) : (
+            <Empty />
+          )}
+        </>
+      )}
+    </div>
   );
 }
 
@@ -205,18 +207,26 @@ function StockTile({ item }: { item: StockVideo }) {
         flash && "ring-2 ring-[#0a84ff] ring-offset-1"
       )}
       onMouseEnter={() => {
-        void videoRef.current?.play().catch(() => {});
+        const v = videoRef.current;
+        if (!v) return;
+        // Preview with sound; if the browser blocks unmuted autoplay, fall
+        // back to a silent preview.
+        v.muted = false;
+        void v.play().catch(() => {
+          v.muted = true;
+          void v.play().catch(() => {});
+        });
       }}
       onMouseLeave={() => {
         const v = videoRef.current;
         if (v) {
           v.pause();
           v.currentTime = 0;
+          v.muted = true;
         }
       }}
     >
       <button
-        title={item.prompt}
         className="block w-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
         draggable
         onDragStart={(e) => setRefDragData(e, refFromStockVideo(item))}
@@ -255,6 +265,7 @@ function StockTile({ item }: { item: StockVideo }) {
               src: item.file,
               isVideo: true,
               playable: true,
+              aspect: item.aspect,
               name: stockTitle(item.id),
               prompt: item.prompt,
               assetId: null,
