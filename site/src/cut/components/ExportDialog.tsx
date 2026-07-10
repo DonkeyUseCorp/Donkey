@@ -21,7 +21,6 @@ export function ExportDialog() {
   const clips = useEditor((s) => s.clips);
   const assets = useEditor((s) => s.assets);
   const status = useExport((s) => s.status);
-  const stage = useExport((s) => s.stage);
   const ratio = useExport((s) => s.ratio);
   const error = useExport((s) => s.error);
   // "Original" leads: sized from the footage on the timeline, so it is always
@@ -107,22 +106,23 @@ export function ExportDialog() {
         )}
 
         {status === "running" && (
-          <div className="pt-1">
-            <div className="h-1.5 overflow-hidden rounded-full bg-secondary">
-              <div
-                className="h-full rounded-full bg-primary transition-[width] duration-300"
-                style={{ width: `${Math.round(ratio * 100)}%` }}
-              />
+          <>
+            <div className="pt-1">
+              <div className="h-1.5 overflow-hidden rounded-full bg-secondary">
+                <div
+                  className="h-full rounded-full bg-primary transition-[width] duration-300"
+                  style={{ width: `${Math.round(ratio * 100)}%` }}
+                />
+              </div>
+              <div className="mt-2.5 flex justify-end text-xs text-muted-foreground">
+                <span className="font-mono tabular-nums">{Math.round(ratio * 100)}%</span>
+              </div>
+              <p className="mt-3 text-center text-xs text-muted-foreground">
+                Rendering in the background. You can keep editing, or close this
+                to hide it and it keeps going.
+              </p>
             </div>
-            <div className="mt-2.5 flex justify-between text-xs text-muted-foreground">
-              <span>{stage}</span>
-              <span className="font-mono tabular-nums">{Math.round(ratio * 100)}%</span>
-            </div>
-            <p className="mt-3 text-center text-xs text-muted-foreground">
-              Rendering in the background. You can keep editing, or close this to
-              hide it and it keeps going.
-            </p>
-            <DialogFooter className="mt-4 w-full sm:justify-center">
+            <DialogFooter className="py-2 sm:justify-center">
               <Button
                 variant="ghost"
                 size="sm"
@@ -135,40 +135,44 @@ export function ExportDialog() {
                 Cancel export
               </Button>
             </DialogFooter>
-          </div>
+          </>
         )}
 
         {status === "done" && (
-          <div className="flex flex-col items-center pt-2 text-center">
-            <span className="mb-3 grid size-11 place-items-center rounded-full bg-[#30d158] text-[#04180b]">
-              <Check className="size-5" />
-            </span>
-            <div className="text-sm text-muted-foreground">
-              Saved into the project's exports folder and downloaded.
+          <>
+            <div className="flex flex-col items-center pt-2 text-center">
+              <span className="mb-3 grid size-11 place-items-center rounded-full bg-[#30d158] text-[#04180b]">
+                <Check className="size-5" />
+              </span>
+              <div className="text-sm text-muted-foreground">
+                Saved into the project's exports folder and downloaded.
+              </div>
             </div>
-            <DialogFooter className="mt-4 w-full">
+            <DialogFooter>
               <Button className="w-full" onClick={close}>
                 Done
               </Button>
             </DialogFooter>
-          </div>
+          </>
         )}
 
         {status === "error" && (
-          <div>
-            <div className="mb-2 text-sm font-medium text-destructive">
-              Export didn't finish
+          <>
+            <div>
+              <div className="mb-2 text-sm font-medium text-destructive">
+                Export didn't finish
+              </div>
+              <pre className="max-h-36 overflow-auto rounded-lg border border-border bg-background p-2.5 font-mono text-[10.5px] leading-relaxed break-words whitespace-pre-wrap text-muted-foreground select-text">
+                {error}
+              </pre>
             </div>
-            <pre className="max-h-36 overflow-auto rounded-lg border border-border bg-background p-2.5 font-mono text-[10.5px] leading-relaxed break-words whitespace-pre-wrap text-muted-foreground select-text">
-              {error}
-            </pre>
-            <DialogFooter className="mt-4">
+            <DialogFooter>
               <Button variant="ghost" onClick={close}>
                 Close
               </Button>
               <Button onClick={() => useExport.getState().dismiss()}>Try again</Button>
             </DialogFooter>
-          </div>
+          </>
         )}
       </DialogContent>
     </Dialog>
