@@ -1,8 +1,10 @@
-// The bundled stock-image catalog: AI-generated stills that ship with the site
-// (files under public/cut-stock, manifest in stockManifest.ts). Each entry keeps
-// the exact prompt that produced it — clicking a stock image copies that prompt
-// into the generate flyover for the user to edit and re-render on their account.
-// Regenerate or extend the set with `bun scripts/generate-stock-images.ts`.
+// The bundled stock catalogs: AI-generated stills and clips that ship with the
+// site (files under public/cut-stock and public/cut-stock-video, manifests in
+// stockManifest.ts and stockVideoManifest.ts). Each entry keeps the exact
+// prompt that produced it — clicking a stock tile copies that prompt into the
+// generate panel beside it for the user to edit and re-render on their account.
+// Regenerate or extend the sets with `bun scripts/generate-stock-images.ts`
+// and `bun scripts/generate-stock-videos.ts`.
 
 export type StockAspect = "16:9" | "9:16" | "1:1";
 
@@ -19,6 +21,26 @@ export interface StockImage {
   file: string;
   /** Small grid thumbnail URL for the browse panel. */
   thumb: string;
+}
+
+/** Veo renders landscape and portrait only — no square video. */
+export type StockVideoAspect = "16:9" | "9:16";
+
+export interface StockVideo {
+  id: string;
+  category: StockCategory;
+  /** The generation prompt, saved verbatim — the editable starting point. */
+  prompt: string;
+  /** Vision-extracted keywords for the visible content (objects, setting,
+   * subjects) — what the search box matches beyond the prompt text. */
+  tags: string[];
+  aspect: StockVideoAspect;
+  /** Site-relative mp4 URL (under /cut-stock-video/) — playback, refs, timeline. */
+  file: string;
+  /** Poster-frame thumbnail URL for the browse grid. */
+  thumb: string;
+  /** Rendered length in seconds. */
+  duration: number;
 }
 
 export const STOCK_CATEGORIES = [

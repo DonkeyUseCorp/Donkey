@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 
-// The image lightbox: a full-screen preview opened from a stock tile or a
+// The media lightbox: a full-screen preview opened from a stock tile or a
 // generated image. Held in its own store so any tile can open it and a single
 // overlay (mounted once in the editor) renders it.
 
@@ -11,6 +11,9 @@ export interface LightboxItem {
   src: string;
   /** Generated stills are 8s videos — render the poster frame, not an <img>. */
   isVideo: boolean;
+  /** True for real footage (a stock clip): play it with controls instead of
+   * showing the poster frame. */
+  playable?: boolean;
   name: string;
   /** The generation prompt, when known. */
   prompt: string;

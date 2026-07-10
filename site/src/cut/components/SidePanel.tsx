@@ -45,6 +45,8 @@ import { buildDragGhost, FolderCrumb, FolderShelf } from "./desktopFolders";
 import { GenerateVideoPanel } from "./GeneratePanel";
 import { ImageGenPanel } from "./ImageGenPanel";
 import { StockImagesPanel } from "./StockImagesPanel";
+import { StockVideosPanel } from "./StockVideosPanel";
+import { STOCK_VIDEOS } from "@/cut/lib/stockVideoManifest";
 import { LibraryCard } from "./LibraryView";
 
 // Drag a library clip onto a folder tile to file it (side panel, single card).
@@ -80,7 +82,15 @@ export function SidePanel({
   // Clicking a reference token anywhere jumps here: switch to the tab that
   // owns the asset; the matching card scrolls into view and flashes.
   useRevealEffect((ref) => {
-    setTab(ref.scope === "project" ? "media" : ref.scope === "library" ? "library" : "image");
+    setTab(
+      ref.scope === "project"
+        ? "media"
+        : ref.scope === "library"
+          ? "library"
+          : STOCK_VIDEOS.some((v) => v.id === ref.id)
+            ? "video"
+            : "image"
+    );
   });
 
   return (
@@ -124,16 +134,20 @@ export function SidePanel({
         })}
       </div>
 
-      {tab === "image" ? (
-        // The Image tab is two columns: the generate-image input on the left,
+      {tab === "image" || tab === "video" ? (
+        // The generate tabs are two columns: the generate input on the left,
         // the stock reference browser on the right. Clicking a stock tile loads
         // its prompt into the generate panel beside it.
         <>
           <div className="flex w-[252px] min-h-0 shrink-0 flex-col border-r border-border">
-            <ImageGenPanel projectId={projectId} />
+            {tab === "image" ? (
+              <ImageGenPanel projectId={projectId} />
+            ) : (
+              <GenerateVideoPanel projectId={projectId} />
+            )}
           </div>
           <div className="flex w-[264px] min-h-0 shrink-0 flex-col">
-            <StockImagesPanel />
+            {tab === "image" ? <StockImagesPanel /> : <StockVideosPanel />}
           </div>
         </>
       ) : (
@@ -141,7 +155,6 @@ export function SidePanel({
           {tab === "media" && (
             <MediaPanel projectId={projectId} onImport={onImport} importing={importing} />
           )}
-          {tab === "video" && <GenerateVideoPanel projectId={projectId} />}
           {tab === "library" && <LibraryPanel projectId={projectId} />}
           {tab === "audio" && <AudioPanel projectId={projectId} importing={importing} />}
           {tab === "subtitles" && <SubtitlesPanel />}

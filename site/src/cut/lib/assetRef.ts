@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
 import { fetchLibrary, libraryMediaUrl, type LibraryAsset } from "./library";
-import type { StockImage } from "./stock";
+import type { StockImage, StockVideo } from "./stock";
 import { STOCK_IMAGES } from "./stockManifest";
+import { STOCK_VIDEOS } from "./stockVideoManifest";
 import { useEditor } from "./store";
 import type { MediaAsset } from "./types";
 
@@ -66,6 +67,15 @@ export const refFromStock = (i: StockImage): AssetRef => ({
   name: i.id,
   kind: "image",
   url: i.file,
+});
+
+export const refFromStockVideo = (v: StockVideo): AssetRef => ({
+  scope: "stock",
+  id: v.id,
+  name: v.id,
+  kind: "video",
+  url: v.file,
+  duration: v.duration,
 });
 
 export const sameRef = (a: AssetRef, b: AssetRef) => a.scope === b.scope && a.id === b.id;
@@ -279,6 +289,7 @@ export function useRefCandidates(): AssetRef[] {
       ...project,
       ...lib.map(refFromLibrary),
       ...STOCK_IMAGES.map(refFromStock),
+      ...STOCK_VIDEOS.map(refFromStockVideo),
     ]) {
       const key = ref.name.toLowerCase();
       if (seen.has(key)) continue;

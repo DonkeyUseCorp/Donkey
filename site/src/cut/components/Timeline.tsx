@@ -22,7 +22,7 @@ import {
 import { draggingRef, hasRefDrag, refFromAsset, startPointerRefDrag, type AssetRef } from "@/cut/lib/assetRef";
 import { importLibraryAsset, saveTemplate } from "@/cut/lib/library";
 import { startDrag } from "@/cut/lib/drag";
-import { ensurePeaks, importImage } from "@/cut/lib/media";
+import { ensurePeaks, importImage, importStockVideo } from "@/cut/lib/media";
 import { clipLen, clipSpeed, getClipSpans, projectDuration, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
 import type { VideoTrackPlacement } from "@/cut/lib/store";
 import { formatTime, formatTimecode } from "@/cut/lib/time";
@@ -145,6 +145,15 @@ function draggingStill(e: React.DragEvent): AssetRef | null {
   if (!hasRefDrag(e)) return null;
   const ref = draggingRef();
   return ref?.kind === "image" ? ref : null;
+}
+
+/** The stock-clip ref being dragged (a stock video tile), null for any other
+ * drag — project and library videos carry their own MIMEs and are handled
+ * first. On the timeline it imports into the project and lands as footage. */
+function draggingStockVideo(e: React.DragEvent): AssetRef | null {
+  if (!hasRefDrag(e)) return null;
+  const ref = draggingRef();
+  return ref?.scope === "stock" && ref.kind === "video" ? ref : null;
 }
 
 /** Insertion slot for a new clip dropped at time `t`: it lands before the
@@ -469,6 +478,8 @@ export function Timeline() {
       if (!asset || !isBaseType(asset.type)) return null;
       return { duration: asset.type === "image" ? STILL_SECONDS : asset.duration };
     }
+    const stockVideo = draggingStockVideo(e);
+    if (stockVideo) return { duration: stockVideo.duration ?? 0 };
     return draggingStill(e) ? { duration: STILL_SECONDS } : null;
   };
 
@@ -498,6 +509,7 @@ export function Timeline() {
       const lib = draggingLibrary();
       const libId = draggedLibraryId(e);
       const still = draggingStill(e);
+      const stockVideo = draggingStockVideo(e);
       const projectId = useEditor.getState().projectId;
       clearAssetDrag();
       if (libId && lib && isBaseType(lib.type) && projectId) {
@@ -510,6 +522,12 @@ export function Timeline() {
       const asset = id ? useEditor.getState().assets.find((a) => a.id === id) : null;
       if (id && isBaseType(asset?.type)) {
         useEditor.getState().addVideoFromAsset(id, place, t);
+        return;
+      }
+      if (stockVideo && projectId) {
+        void importStockVideo(projectId, { url: stockVideo.url, name: stockVideo.name })
+          .then((vid) => useEditor.getState().addVideoFromAsset(vid.id, place, t))
+          .catch(() => {});
         return;
       }
       if (still && projectId) {
@@ -563,17 +581,21 @@ export function Timeline() {
       onDragOver={(e) => {
         const isLib = hasLibraryDrag(e);
         const still = draggingStill(e);
-        if (!hasAssetDrag(e) && !isLib && !still) return;
+        const stockVideo = draggingStockVideo(e);
+        if (!hasAssetDrag(e) && !isLib && !still && !stockVideo) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = "copy";
         // Preview where a video would land; audio drops free-form. Library and
-        // image drags carry their own shape since they aren't in the project yet.
+        // stock drags carry their own shape since they aren't in the project yet.
         let type: "video" | "audio" | "image" | undefined;
         let duration = 0;
         if (isLib) {
           const lib = draggingLibrary();
           type = lib?.type;
           duration = lib?.duration ?? 0;
+        } else if (stockVideo) {
+          type = "video";
+          duration = stockVideo.duration ?? 0;
         } else if (still) {
           type = "video";
           duration = STILL_SECONDS;
@@ -611,6 +633,7 @@ export function Timeline() {
         const lib = draggingLibrary();
         const libId = draggedLibraryId(e);
         const still = draggingStill(e);
+        const stockVideo = draggingStockVideo(e);
         const projectId = useEditor.getState().projectId;
         clearAssetDrag();
         if (libId && lib && projectId) {
@@ -629,7 +652,15 @@ export function Timeline() {
           return;
         }
 
-        // An image ref imports as a still, then snaps into the base-track slot.
+        // A stock clip imports as footage, an image ref as a still, then each
+        // snaps into the base-track slot.
+        if (stockVideo && projectId) {
+          e.preventDefault();
+          void importStockVideo(projectId, { url: stockVideo.url, name: stockVideo.name })
+            .then((asset) => placeAssetAt(asset.id, "video", t))
+            .catch(() => {});
+          return;
+        }
         if (still && projectId) {
           e.preventDefault();
           void importImage(projectId, still)

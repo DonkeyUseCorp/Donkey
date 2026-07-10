@@ -181,6 +181,29 @@ export async function importImage(
   return asset;
 }
 
+/** Store a fetchable video (a stock clip) in the project's media as a regular
+ * video asset and register it, without placing it on the timeline. Callers
+ * choose where it lands. */
+export async function importStockVideo(
+  projectId: string,
+  video: { url: string; name: string }
+): Promise<MediaAsset> {
+  const dl = await fetch(video.url);
+  if (!dl.ok) throw new Error("Could not read the video.");
+  const blob = await dl.blob();
+  const file = new File([blob], video.url.split("/").pop() || "video.mp4", {
+    type: blob.type || "video/mp4",
+  });
+  const asset = await importFileToProject(projectId, file);
+  if (!asset) throw new Error("Could not add the video.");
+  asset.name = video.name;
+  // Like a stock image, it lands where the caller places it, not in Media.
+  asset.origin = "stock";
+  useEditor.getState().addAsset(asset);
+  void enrichAsset(asset);
+  return asset;
+}
+
 /** Build a runtime asset for a media file the engine already wrote into the
  * project folder (freeze frames, AI generations) — probe metadata, no upload. */
 export async function assetFromProjectFile(

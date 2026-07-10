@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Check, Copy, Loader2, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useLightbox } from "@/cut/lib/lightbox";
-import { importImage } from "@/cut/lib/media";
+import { importImage, importStockVideo } from "@/cut/lib/media";
 import { useEditor } from "@/cut/lib/store";
 
 // The image lightbox: the bigger version of a stock or generated image, with
@@ -41,7 +41,10 @@ export function Lightbox() {
       if (item.assetId) {
         useEditor.getState().addClipFromAsset(item.assetId);
       } else {
-        const asset = await importImage(projectId, { url: item.src, name: item.name });
+        // A stock clip imports as footage; a stock image bakes into a still.
+        const asset = item.playable
+          ? await importStockVideo(projectId, { url: item.src, name: item.name })
+          : await importImage(projectId, { url: item.src, name: item.name });
         useEditor.getState().addClipFromAsset(asset.id);
       }
       setAddedSrc(item.src);
@@ -70,13 +73,24 @@ export function Lightbox() {
         </button>
 
         {item.isVideo ? (
-          <video
-            muted
-            playsInline
-            preload="metadata"
-            src={`${item.src}#t=0.1`}
-            className="block max-h-[75vh] w-full object-contain"
-          />
+          item.playable ? (
+            <video
+              controls
+              autoPlay
+              loop
+              playsInline
+              src={item.src}
+              className="block max-h-[75vh] w-full bg-black object-contain"
+            />
+          ) : (
+            <video
+              muted
+              playsInline
+              preload="metadata"
+              src={`${item.src}#t=0.1`}
+              className="block max-h-[75vh] w-full object-contain"
+            />
+          )
         ) : (
           // eslint-disable-next-line @next/next/no-img-element -- static/project image, client-only page
           <img

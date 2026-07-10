@@ -1,46 +1,40 @@
 "use client";
 
-import { useState } from "react";
 import { Film, Loader2, Plus, Sparkles, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  addRefOnce,
-  collectRefs,
-  sameRef,
-  useRefCandidates,
-  useAssetDrop,
-  type AssetRef,
-} from "@/cut/lib/assetRef";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { collectRefs, useRefCandidates, useAssetDrop } from "@/cut/lib/assetRef";
 import { signInUrl, useGenerate, useSignedIn, type GenerateJob } from "@/cut/lib/generate";
 import { useEditor } from "@/cut/lib/store";
 import { useLocalPref } from "@/cut/lib/uiState";
+import { useVideoGen } from "@/cut/lib/videoGen";
 import { cn } from "@/lib/utils";
 import { MentionTextarea, RefChips } from "./AssetRefs";
+import { GeneratedAssetMenu } from "./GeneratedAssetMenu";
 
-// AI video generation (Veo). Image generation lives in the stock browser's
-// flyover — see StockImagesPanel / ImageGenFlyover.
+// The generate-video panel: an always-on column in the Video tab, sitting left
+// of the stock-clip browser. Clicking a stock tile loads its saved prompt here.
 //
 // A visual reference (dragged in or @name-mentioned) seeds the render: Veo
 // takes one input image, so the first reference's picture becomes the start
 // frame.
 
-const chip = (active: boolean) =>
+// Segmented pill group, same language as the platform switcher in PlatformPreview.
+const segGroup = "flex gap-0.5 rounded-full border border-border bg-card p-0.5 shadow-xs";
+const segButton = (active: boolean) =>
   cn(
-    "rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
-    active
-      ? "border-primary bg-primary/10 text-primary"
-      : "border-border text-muted-foreground hover:text-foreground"
+    "rounded-full px-2.5 py-[3px] text-[11px] font-medium transition-colors",
+    active ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"
   );
 
 export function GenerateVideoPanel({ projectId }: { projectId: string }) {
   const signedIn = useSignedIn();
   const allJobs = useGenerate((s) => s.jobs);
   const jobs = allJobs.filter((j) => j.projectId === projectId && j.kind === "video");
-  const [prompt, setPrompt] = useState("");
-  const [refs, setRefs] = useState<AssetRef[]>([]);
+  const { prompt, refs } = useVideoGen();
   const candidates = useRefCandidates();
   const { active: dropActive, attachTarget, targetProps } = useAssetDrop((ref) => {
-    if (ref.kind !== "audio") setRefs((prev) => addRefOnce(prev, ref));
+    if (ref.kind !== "audio") useVideoGen.getState().addRef(ref);
   });
   const [tier, setTier] = useLocalPref<"fast" | "high">(
     "cut-gen-tier",
@@ -59,14 +53,13 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
     void useGenerate
       .getState()
       .generateVideo(projectId, text, { tier, durationSeconds: seconds, refs: all });
-    setPrompt("");
-    setRefs([]);
+    useVideoGen.getState().openWith("");
   };
 
   return (
     <>
       <div className="flex h-12 shrink-0 items-center justify-between pr-2.5 pl-4">
-        <span className="text-sm font-semibold tracking-tight">Video</span>
+        <span className="text-sm font-semibold tracking-tight">Generate video</span>
       </div>
 
       <div
@@ -83,7 +76,7 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
         )}
         <RefChips
           refs={refs}
-          onRemove={(ref) => setRefs((prev) => prev.filter((r) => !sameRef(r, ref)))}
+          onRemove={(ref) => useVideoGen.getState().removeRef(ref)}
           className="shrink-0"
           peekSide="bottom"
         />
@@ -91,7 +84,7 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
           className="gen-prompt min-h-[88px] w-full shrink-0 resize-y rounded-lg border border-input bg-transparent px-2.5 py-2 text-[12.5px] leading-relaxed outline-none focus:border-ring"
           placeholder="A drone shot rising over a foggy coastline at sunrise… Drop media in or type @ to reference it."
           value={prompt}
-          onChange={setPrompt}
+          onChange={(v) => useVideoGen.getState().setPrompt(v)}
           candidates={candidates}
           submitKey="mod-enter"
           menuSide="bottom"
@@ -99,16 +92,26 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
         />
 
         <div className="flex shrink-0 items-center justify-between gap-2">
-          <div className="flex gap-1.5">
+          <div className={segGroup}>
             {[4, 6, 8].map((s) => (
-              <button key={s} className={chip(seconds === s)} onClick={() => setSeconds(s)}>
+              <button
+                key={s}
+                className={segButton(seconds === s)}
+                aria-pressed={seconds === s}
+                onClick={() => setSeconds(s)}
+              >
                 {s}s
               </button>
             ))}
           </div>
-          <div className="flex gap-1.5">
+          <div className={segGroup}>
             {(["fast", "high"] as const).map((t) => (
-              <button key={t} className={chip(tier === t)} onClick={() => setTier(t)}>
+              <button
+                key={t}
+                className={segButton(tier === t)}
+                aria-pressed={tier === t}
+                onClick={() => setTier(t)}
+              >
                 {t === "fast" ? "Fast" : "Best"}
               </button>
             ))}
@@ -180,7 +183,7 @@ function JobRow({ job }: { job: GenerateJob }) {
           )}
         >
           {job.status === "running" && "Rendering…"}
-          {job.status === "done" && "In your media"}
+          {job.status === "done" && "Ready — drag it in or press +"}
           {job.status === "error" && (job.error ?? "Failed.")}
         </div>
       </div>
@@ -193,14 +196,27 @@ function JobRow({ job }: { job: GenerateJob }) {
           <Plus className="size-3.5" />
         </button>
       )}
-      {job.status !== "running" && (
-        <button
-          title="Dismiss"
-          className="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
-          onClick={() => useGenerate.getState().dismiss(job.id)}
-        >
-          <Trash2 className="size-3.5" />
-        </button>
+      {job.status === "done" && asset ? (
+        <GeneratedAssetMenu
+          asset={asset}
+          projectId={job.projectId}
+          triggerClassName="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 data-popup-open:opacity-100 hover:text-foreground"
+          after={
+            <DropdownMenuItem onClick={() => useGenerate.getState().dismiss(job.id)}>
+              <Trash2 /> Dismiss
+            </DropdownMenuItem>
+          }
+        />
+      ) : (
+        job.status !== "running" && (
+          <button
+            title="Dismiss"
+            className="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
+            onClick={() => useGenerate.getState().dismiss(job.id)}
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        )
       )}
     </div>
   );
