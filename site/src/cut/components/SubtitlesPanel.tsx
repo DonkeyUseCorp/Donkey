@@ -33,7 +33,7 @@ export function SubtitlesPanel() {
   const status = useEditor((s) => s.subtitleStatus);
   const error = useEditor((s) => s.subtitleError);
   const hasCues = subtitles.cues.length > 0;
-  const [tab, setTab] = useState<"content" | "styles" | "settings">("content");
+  const [tab, setTab] = useState<"content" | "styles" | "options">("content");
 
   const growTimeline = () => {
     const cur = useEditor.getState();
@@ -54,7 +54,7 @@ export function SubtitlesPanel() {
               [
                 ["content", "Content"],
                 ["styles", "Styles"],
-                ["settings", "Settings"],
+                ["options", "Options"],
               ] as const
             ).map(([id, label], i) => (
               <React.Fragment key={id}>
@@ -99,9 +99,6 @@ export function SubtitlesPanel() {
             </Button>
           </div>
           <Transcript cues={subtitles.cues} />
-          <div className="shrink-0 border-t border-border px-3.5 py-3">
-            <GenerateSubtitlesAudio />
-          </div>
           {status === "error" && error && (
             <p className="sub-error shrink-0 border-t border-border px-4 py-2.5 text-[11px] leading-relaxed text-red-600">
               {error}
@@ -111,7 +108,7 @@ export function SubtitlesPanel() {
       ) : tab === "styles" ? (
         <StylesTab />
       ) : (
-        <SettingsTab />
+        <OptionsTab />
       )}
     </>
   );
@@ -126,9 +123,10 @@ const ACCENT_MODES: { id: WordAccentMode; label: string }[] = [
   { id: "box", label: "Highlight" },
 ];
 
-/** The Settings tab: caption visibility, the karaoke word highlight with its
- * treatment and color, and position reset for a dragged caption. */
-function SettingsTab() {
+/** The Options tab: caption visibility, the karaoke word highlight with its
+ * treatment and color, position reset for a dragged caption, and the
+ * subtitle-voiceover generator. */
+function OptionsTab() {
   const subtitles = useEditor((s) => s.subtitles);
   const moved = subtitles.x !== undefined || subtitles.y !== undefined;
   // Effective word treatment: the caption style's defaults with the user's
@@ -136,9 +134,12 @@ function SettingsTab() {
   const look = karaokeLook(captionStyle(subtitles.style), subtitles);
 
   return (
-    <div className="sub-settings flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-4 py-3">
+    <div className="sub-options flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-4 py-3">
+      <div className="mb-1 border-b border-border pb-3">
+        <GenerateSubtitlesAudio />
+      </div>
       <label className="flex min-h-8 items-center justify-between text-xs font-medium">
-        Show
+        Show subtitles
         <Switch
           className="sub-show"
           checked={subtitles.showOnVideo || subtitles.showOnTimeline}
