@@ -350,12 +350,12 @@ class Engine {
     this.fillBlackVeil(1 - gain);
   }
 
-  /** Draw the overlay tracks on one side of the base — `below` (track < 0) or
-   * `above` (track > 0) — in z-order (further-back first). A full-frame clip
-   * covers what's under it; a regioned one shares the frame, letting lower
-   * tracks show in its margins. Collects the clips it touched into `active`. */
-  private drawOverlays(t: number, play: boolean, side: "below" | "above", active: Set<string>) {
+  /** Overlay clips live at time `t` on one side of the base — `below`
+   * (track < 0) or `above` (track > 0) — with their assets, in z-order
+   * (further-back first). */
+  private liveOverlays(t: number, side: "below" | "above") {
     const s = useEditor.getState();
+    const live: { clip: OverlayClip; asset: MediaAsset }[] = [];
     const clips = s.overlayClips
       .filter((c) => (side === "below" ? c.track < 0 : c.track > 0))
       .sort((a, b) => a.track - b.track);
@@ -366,20 +366,55 @@ class Engine {
       const speed = c.speed && c.speed > 0 ? c.speed : 1;
       const len = Math.max(0.1, (c.out - c.in) / speed);
       if (t < c.start || t >= c.start + len) continue;
-      active.add(c.id);
-      const el = this.overlayVideoFor(c, asset);
-      if (el.playbackRate !== speed) el.playbackRate = speed;
-      const target = c.in + Math.max(0, t - c.start) * speed;
-      const tol = play ? 0.34 : 0.05;
-      if (Math.abs(el.currentTime - target) > tol && !el.seeking) el.currentTime = target;
-      if (play) {
-        if (el.paused && el.readyState >= 2) void el.play().catch(() => {});
-      } else if (!el.paused) {
-        el.pause();
-      }
+      live.push({ clip: c, asset });
+    }
+    return live;
+  }
+
+  /** Seek/rate/play one overlay clip's element toward its frame at timeline
+   * time `t` (the overlay counterpart of `prepare`). */
+  private prepareOverlay(clip: OverlayClip, asset: MediaAsset, t: number, play: boolean) {
+    const el = this.overlayVideoFor(clip, asset);
+    const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
+    if (el.playbackRate !== speed) el.playbackRate = speed;
+    const target = clip.in + Math.max(0, t - clip.start) * speed;
+    const tol = play ? 0.34 : 0.05;
+    if (Math.abs(el.currentTime - target) > tol && !el.seeking) el.currentTime = target;
+    if (play) {
+      if (el.paused && el.readyState >= 2) void el.play().catch(() => {});
+    } else if (!el.paused) {
+      el.pause();
+    }
+    return el;
+  }
+
+  /** Live overlays for one side, each already primed toward `t`. Computed once
+   * so the skim path's readiness check and the draw step share the same
+   * filter/sort/seek instead of repeating it per frame. */
+  private prepareSide(t: number, play: boolean, side: "below" | "above") {
+    return this.liveOverlays(t, side).map(({ clip, asset }) => ({
+      clip,
+      el: this.prepareOverlay(clip, asset, t, play),
+    }));
+  }
+
+  /** Draw the overlay tracks on one side of the base — `below` (track < 0) or
+   * `above` (track > 0) — in z-order (further-back first). A full-frame clip
+   * covers what's under it; a regioned one shares the frame, letting lower
+   * tracks show in its margins. Collects the clips it touched into `active`.
+   * Pass `prepared` (from `prepareSide`) to reuse an already-primed side. */
+  private drawOverlays(
+    t: number,
+    play: boolean,
+    side: "below" | "above",
+    active: Set<string>,
+    prepared?: { clip: OverlayClip; el: HTMLVideoElement }[]
+  ) {
+    for (const { clip, el } of prepared ?? this.prepareSide(t, play, side)) {
+      active.add(clip.id);
       if (el.readyState < 2 || !el.videoWidth) continue;
-      const rect = rectOf(c);
-      const cover = c.fit === "fill" || (c.fit == null && isFullRect(rect));
+      const rect = rectOf(clip);
+      const cover = clip.fit === "fill" || (clip.fit == null && isFullRect(rect));
       this.drawIntoRect(el, rect, cover, 1);
     }
   }
@@ -484,26 +519,40 @@ class Engine {
       const pt =
         s.skimTime !== null ? Math.max(0, Math.min(s.skimTime, total - 0.001)) : t;
       const span = spans.find((sp) => pt >= sp.start && pt < sp.start + sp.len);
-      // Prime the base element (create it, issue any seek) before repainting.
-      // A cold element or an unbuffered seek has no decodable frame yet, and
-      // clearing to black now — before the seek resolves — is what makes fast
-      // scrubbing strobe. Hold the last painted frame until a real frame lands.
+      // Prime every layer live at `pt` — the base element and each overlay
+      // track — before repainting (create them, issue any seeks). A cold
+      // element or an unbuffered seek has no decodable frame yet, and painting
+      // around it tears the composite: black before the base's seek resolves,
+      // or the base flashing through where an overlay covers it. Hold the last
+      // painted frame until every live layer has a frame, so each scrubbed
+      // frame is the same composite playback and export show.
+      let ready = true;
       if (span) {
         const el = this.prepare(span, Math.min(pt, span.start + span.len), false, true);
-        if (el.readyState < 2 || !el.videoWidth) {
-          this.pauseExcept(new Set([span.clip.id]));
-          this.syncSoundtrack(t, false);
-          return;
-        }
+        if (el.readyState < 2 || !el.videoWidth) ready = false;
+      }
+      // Prime each side once; the readiness scan and the draw step below reuse
+      // these instead of re-filtering/seeking the overlays a second time.
+      const belowLive = this.prepareSide(pt, false, "below");
+      const aboveLive = this.prepareSide(pt, false, "above");
+      for (const { el } of [...belowLive, ...aboveLive]) {
+        // An errored element never becomes ready; paint without it rather
+        // than wedging the preview on a broken source.
+        if (!el.error && (el.readyState < 2 || !el.videoWidth)) ready = false;
+      }
+      if (!ready) {
+        this.pauseExcept(new Set(span ? [span.clip.id] : []));
+        this.syncSoundtrack(t, false);
+        return;
       }
       const active = new Set<string>();
       this.clearCanvas();
-      this.drawOverlays(pt, false, "below", active);
+      this.drawOverlays(pt, false, "below", active, belowLive);
       // Past the base track there is no base frame — just the backdrop and the
       // upper/lower tracks that are still running at `pt`.
       if (span) this.composite(span, spans, Math.min(pt, span.start + span.len), false);
       else this.pauseExcept(new Set());
-      this.drawOverlays(pt, false, "above", active);
+      this.drawOverlays(pt, false, "above", active, aboveLive);
       this.drawProjectFade(this.projectFadeGain(pt, total));
       this.cleanupOverlays(active);
       this.syncSoundtrack(t, false);
