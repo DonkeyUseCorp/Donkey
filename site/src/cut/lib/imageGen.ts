@@ -16,10 +16,22 @@ export const IMAGE_ASPECT_LABEL: Record<ImageAspect, string> = {
   "1:1": "Square (1:1)",
 };
 
+/** Output detail for the next generation. The image model maps these to real
+ * pixel sizes (1K ≈ 1MP, 2K ≈ 4MP, 4K ≈ 16MP). */
+export type ImageResolution = "1K" | "2K" | "4K";
+
+export const IMAGE_RESOLUTION_LABEL: Record<ImageResolution, string> = {
+  "1K": "1K",
+  "2K": "2K",
+  "4K": "4K",
+};
+
 interface ImageGenState {
   prompt: string;
   /** The shape the next generation is composed in. */
   aspect: ImageAspect;
+  /** The output detail the next generation renders at. */
+  resolution: ImageResolution;
   /** Visual references attached to the next generation (dragged in or picked
    * via @name mentions resolved on send). */
   refs: AssetRef[];
@@ -28,6 +40,7 @@ interface ImageGenState {
   openWith: (prompt: string) => void;
   setPrompt: (prompt: string) => void;
   setAspect: (aspect: ImageAspect) => void;
+  setResolution: (resolution: ImageResolution) => void;
   addRef: (ref: AssetRef) => void;
   removeRef: (ref: AssetRef) => void;
 }
@@ -35,10 +48,12 @@ interface ImageGenState {
 export const useImageGen = create<ImageGenState>((set) => ({
   prompt: "",
   aspect: "9:16",
+  resolution: "2K",
   refs: [],
   openWith: (prompt) => set({ prompt, refs: [] }),
   setPrompt: (prompt) => set({ prompt }),
   setAspect: (aspect) => set({ aspect }),
+  setResolution: (resolution) => set({ resolution }),
   addRef: (ref) => set((s) => ({ refs: addRefOnce(s.refs, ref) })),
   removeRef: (ref) => set((s) => ({ refs: s.refs.filter((r) => !sameRef(r, ref)) })),
 }));

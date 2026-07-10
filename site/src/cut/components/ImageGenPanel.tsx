@@ -1,19 +1,26 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import { ChevronDown, Loader2, Maximize2, Sparkles, Trash2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+  ChevronDown,
+  Loader2,
+  Maximize2,
+  Proportions,
+  Scaling,
+  Sparkles,
+  Trash2,
+  type LucideIcon,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { clearAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
 import { collectRefs, useRefCandidates, useAssetDrop } from "@/cut/lib/assetRef";
 import { signInUrl, useGenerate, useSignedIn } from "@/cut/lib/generate";
-import { IMAGE_ASPECT_LABEL, useImageGen, type ImageAspect } from "@/cut/lib/imageGen";
+import {
+  IMAGE_RESOLUTION_LABEL,
+  useImageGen,
+  type ImageAspect,
+  type ImageResolution,
+} from "@/cut/lib/imageGen";
 import { useLightbox } from "@/cut/lib/lightbox";
 import { useEditor } from "@/cut/lib/store";
 import type { MediaAsset } from "@/cut/lib/types";
@@ -28,8 +35,16 @@ import { CopyRefButton, MentionTextarea, RefChips, RefHandlePill } from "./Asset
 // References ride along as input images: drag any image or video in (stock
 // tile, media card, library clip, timeline clip) or mention it by @name.
 
+// A short orientation word keeps the Size pill narrow enough to share a row with
+// Resolution in this column; the icon carries the "aspect" meaning.
+const ASPECT_SHORT: Record<ImageAspect, string> = {
+  "16:9": "Landscape",
+  "9:16": "Portrait",
+  "1:1": "Square",
+};
+
 export function ImageGenPanel({ projectId }: { projectId: string }) {
-  const { prompt, aspect, refs } = useImageGen();
+  const { prompt, aspect, resolution, refs } = useImageGen();
   const signedIn = useSignedIn();
   const candidates = useRefCandidates();
   const job = useGenerate((s) =>
@@ -57,7 +72,7 @@ export function ImageGenPanel({ projectId }: { projectId: string }) {
   const go = () => {
     const { text, refs: all } = collectRefs(prompt.trim(), refs, candidates, { dropAudio: true });
     if (!text) return;
-    void useGenerate.getState().generateImage(projectId, text, { refs: all, aspect });
+    void useGenerate.getState().generateImage(projectId, text, { refs: all, aspect, resolution });
   };
 
   return (
@@ -93,27 +108,30 @@ export function ImageGenPanel({ projectId }: { projectId: string }) {
           />
         </div>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger className="flex w-full shrink-0 items-center justify-between rounded-lg border border-input px-2.5 py-2 text-[12.5px] outline-none hover:border-ring focus-visible:border-ring">
-            <span className="text-muted-foreground">Size</span>
-            <span className="flex items-center gap-1 font-medium">
-              {IMAGE_ASPECT_LABEL[aspect]}
-              <ChevronDown className="size-3.5 text-muted-foreground" />
-            </span>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="min-w-[190px]">
-            <DropdownMenuRadioGroup
-              value={aspect}
-              onValueChange={(v) => useImageGen.getState().setAspect(v as ImageAspect)}
-            >
-              {(Object.keys(IMAGE_ASPECT_LABEL) as ImageAspect[]).map((a) => (
-                <DropdownMenuRadioItem key={a} value={a} className="whitespace-nowrap">
-                  {IMAGE_ASPECT_LABEL[a]}
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {/* Size (aspect) and resolution, both as compact pills on one row —
+            matching the audio language picker's style. */}
+        <div className="flex shrink-0 items-center gap-2">
+          <PillSelect
+            icon={Proportions}
+            title="Image size"
+            value={aspect}
+            options={(Object.keys(ASPECT_SHORT) as ImageAspect[]).map((a) => ({
+              value: a,
+              label: ASPECT_SHORT[a],
+            }))}
+            onChange={(v) => useImageGen.getState().setAspect(v)}
+          />
+          <PillSelect
+            icon={Scaling}
+            title="Resolution"
+            value={resolution}
+            options={(Object.keys(IMAGE_RESOLUTION_LABEL) as ImageResolution[]).map((r) => ({
+              value: r,
+              label: IMAGE_RESOLUTION_LABEL[r],
+            }))}
+            onChange={(v) => useImageGen.getState().setResolution(v)}
+          />
+        </div>
 
         <Button
           className="w-full shrink-0"
@@ -173,6 +191,46 @@ export function ImageGenPanel({ projectId }: { projectId: string }) {
         )}
       </div>
     </div>
+  );
+}
+
+/** A compact rounded pill wrapping a native select — an icon, the value, and a
+ * chevron. Mirrors the audio language picker so the generate controls read as
+ * one family. Native select keeps the option list keyboard- and OS-friendly. */
+function PillSelect<T extends string>({
+  icon: Icon,
+  title,
+  value,
+  options,
+  onChange,
+}: {
+  icon: LucideIcon;
+  title: string;
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (value: T) => void;
+}) {
+  return (
+    <label
+      className="relative inline-flex items-center gap-1.5 rounded-full border border-input py-1 pr-2 pl-2.5 text-muted-foreground transition-colors focus-within:border-ring"
+      title={title}
+    >
+      <Icon className="size-3.5 shrink-0" />
+      <span className="relative inline-flex min-w-0 items-center">
+        <select
+          className="max-w-full appearance-none truncate bg-transparent pr-5 text-[12.5px] text-foreground outline-none"
+          value={value}
+          onChange={(e) => onChange(e.target.value as T)}
+        >
+          {options.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <ChevronDown className="pointer-events-none absolute top-1/2 right-0 size-3.5 -translate-y-1/2" />
+      </span>
+    </label>
   );
 }
 

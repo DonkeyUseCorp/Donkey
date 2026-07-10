@@ -278,6 +278,11 @@ const geminiModelPricing: Record<GeminiModel, ProviderCreditPricing> = {
   // Generative image editing/generation ("nano banana") bills per output image:
   // ~1290 output tokens at $30/1M ≈ $0.039 each.
   [geminiModels.flashImage]: { generationCostMicros: usdWithMargin("0.039") },
+  // "Nano banana pro" bills per output image by resolution: $0.134 at 1K/2K, $0.24 at
+  // 4K. Our per-image price can't vary by resolution, so this charges the 1K/2K rate
+  // (the default is 2K); 4K currently under-bills. Make billing resolution-aware before
+  // relying on heavy 4K use.
+  [geminiModels.proImage]: { generationCostMicros: usdWithMargin("0.134") },
 };
 
 // Generative text/image-to-video (Veo). Model ids are hardcoded (gemini-models.ts), so each is priced

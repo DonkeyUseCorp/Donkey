@@ -101,10 +101,14 @@ export function createGeminiImageAssetProvider(
       );
     }
 
+    const imageConfig = imageConfigFromParameters(toJsonObject(request.parameters ?? {}));
     const params: GenerateContentParameters = {
       model,
       contents: [{ role: "user", parts }] as unknown as GenerateContentParameters["contents"],
-      config: { responseModalities: [Modality.IMAGE, Modality.TEXT] },
+      config: {
+        responseModalities: [Modality.IMAGE, Modality.TEXT],
+        ...(imageConfig ? { imageConfig } : {}),
+      },
     };
     const client = clientFactory(clientConfig.options);
 
@@ -156,6 +160,29 @@ export function createGeminiImageAssetProvider(
     generateAsset,
     refreshAsset,
   };
+}
+
+// Frame + detail the caller passes through request.parameters. aspectRatio and imageSize
+// map to the model's imageConfig; imageSize is whitelisted so a stray value never earns a
+// Vertex 400. Returns undefined when neither is set, so text-only calls send no config.
+const IMAGE_SIZES = new Set(["1K", "2K", "4K"]);
+
+function imageConfigFromParameters(
+  parameters: JsonObject | undefined,
+): { aspectRatio?: string; imageSize?: string } | undefined {
+  if (!parameters) {
+    return undefined;
+  }
+  const config: { aspectRatio?: string; imageSize?: string } = {};
+  const aspectRatio = stringValue(parameters.aspectRatio);
+  if (aspectRatio) {
+    config.aspectRatio = aspectRatio;
+  }
+  const imageSize = stringValue(parameters.imageSize);
+  if (imageSize && IMAGE_SIZES.has(imageSize)) {
+    config.imageSize = imageSize;
+  }
+  return config.aspectRatio || config.imageSize ? config : undefined;
 }
 
 type InlineImage = { data: string; mimeType: string };

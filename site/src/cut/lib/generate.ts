@@ -6,6 +6,7 @@ import { apiFetch, apiJson } from "./api";
 import type { AssetRef } from "./assetRef";
 import { enrichAsset, importFileToProject } from "./media";
 import { refsToInlineImages } from "./refMedia";
+import { useImageGen } from "./imageGen";
 import { useEditor } from "./store";
 import { mediaUrl, type MediaAsset } from "./types";
 
@@ -45,7 +46,11 @@ interface GenerateState {
   generateImage: (
     projectId: string,
     prompt: string,
-    opts?: { refs?: AssetRef[]; aspect?: "16:9" | "9:16" | "1:1" }
+    opts?: {
+      refs?: AssetRef[];
+      aspect?: "16:9" | "9:16" | "1:1";
+      resolution?: "1K" | "2K" | "4K";
+    }
   ) => Promise<GenerateJob>;
   generateVideo: (
     projectId: string,
@@ -233,14 +238,14 @@ export const useGenerate = create<GenerateState>((set, get) => {
       return (async () => {
         try {
           const aspect = opts?.aspect ?? useEditor.getState().aspect;
-          const frame =
-            aspect === "16:9" ? "16:9 widescreen" : aspect === "1:1" ? "1:1 square" : "9:16 vertical";
+          const resolution = opts?.resolution ?? useImageGen.getState().resolution;
           const images = await refsToInlineImages(opts?.refs ?? []);
           const res = await hostedPost("/api/inference/assets", {
             kind: "image",
-            // The image route takes no aspect parameter; steer it in the prompt.
-            prompt: `${prompt}\n\nCompose the image in a ${frame} frame.`,
+            prompt,
             ...(images.length > 0 ? { inputs: { images } } : {}),
+            // The image model takes a real frame + detail via imageConfig; no prompt steering.
+            parameters: { aspectRatio: aspect, imageSize: resolution },
           });
           if (!res.ok) throw new Error(await readError(res, "Image generation failed."));
           const gen = (await res.json()) as GenerationResponse;

@@ -13,6 +13,10 @@ export const geminiModels = {
   // Generative image editing/generation ("nano banana"). Bump here when adopting a
   // newer image model; the backend also honors a GEMINI_IMAGE_MODEL override.
   flashImage: "gemini-2.5-flash-image",
+  // "Nano banana pro": higher-fidelity image editing/generation that takes a real
+  // aspectRatio + imageSize (1K/2K/4K) via imageConfig. Gemini 3 preview models are
+  // served only on Vertex's global endpoint, which our client already targets.
+  proImage: "gemini-3-pro-image-preview",
 } as const;
 
 export type GeminiModel = (typeof geminiModels)[keyof typeof geminiModels];
@@ -64,5 +68,5 @@ export const geminiModelRoles = {
   // Vision grounding: a cheap structured pick over already-parsed elements.
   visionGrounding: geminiModels.flashLite,
   // Generative image editing and generation.
-  imageGeneration: geminiModels.flashImage,
+  imageGeneration: geminiModels.proImage,
 } as const;
