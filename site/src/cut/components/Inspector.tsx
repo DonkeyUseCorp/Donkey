@@ -180,7 +180,7 @@ export function Inspector() {
 
 function PanelTitle({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex h-10 shrink-0 items-center px-3.5 text-[11px] font-semibold tracking-widest text-muted-foreground uppercase">
+    <div className="flex h-10 shrink-0 items-center px-3.5 text-sm font-semibold tracking-tight">
       {children}
     </div>
   );
