@@ -134,7 +134,7 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
           </p>
         ) : (
           <p className="shrink-0 text-[11px] leading-relaxed text-muted-foreground">
-            Veo renders take a minute or two — keep editing while it runs.
+            Renders take a minute or two. Keep editing while it runs.
           </p>
         )}
 
@@ -179,7 +179,7 @@ function JobRow({ job }: { job: GenerateJob }) {
             job.status === "error" ? "text-red-600" : "text-muted-foreground"
           )}
         >
-          {job.status === "running" && "Rendering with Veo…"}
+          {job.status === "running" && "Rendering…"}
           {job.status === "done" && "In your media"}
           {job.status === "error" && (job.error ?? "Failed.")}
         </div>
