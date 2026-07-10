@@ -676,9 +676,13 @@ function LibraryPanel({ projectId }: { projectId: string }) {
           <Loader2 className="size-4 animate-spin" />
         </div>
       ) : shown.length === 0 ? (
-        <div className="px-3.5 py-6 text-center text-xs text-muted-foreground">
-          {openFolder !== null ? "Empty folder" : "No items"}
-        </div>
+        // At the root, filed-away assets, folders, and templates all count as
+        // content — "No items" is only for a truly empty library.
+        openFolder !== null ? (
+          <div className="px-3.5 py-6 text-center text-xs text-muted-foreground">Empty folder</div>
+        ) : all.length === 0 && folders.length === 0 && templates.length === 0 ? (
+          <div className="px-3.5 py-6 text-center text-xs text-muted-foreground">No items</div>
+        ) : null
       ) : (
         <div className="grid min-h-0 flex-1 grid-cols-2 content-start gap-2.5 overflow-y-auto px-3.5 pb-3.5">
           {shown.map((a) => (
@@ -750,7 +754,6 @@ function PublishPanel() {
   const combined = [publish.caption.trim(), tagsLine].filter(Boolean).join("\n\n");
   const count = combined.length;
   const [copiedAll, setCopiedAll] = useState(false);
-
 
   return (
     <>
