@@ -335,7 +335,7 @@ export const aiApi = {
     const userText = lastUserText(body.messages);
     const attachments = lastUserAttachments(body.messages);
     const attachBlock = attachments.length
-      ? `\n\n<attached_assets>\nThe user attached these project media assets to this message (ids are usable with the editor tools):\n${JSON.stringify(attachments)}\n</attached_assets>`
+      ? `\n\n<attached_assets>\nThe user attached these media assets to this message; their text may cite one by @handle or @name. Assets with scope "project" are in the open project (ids usable with the editor tools); "library" and "stock" assets live outside it until imported:\n${JSON.stringify(attachments)}\n</attached_assets>`
       : "";
     const prompt = `${userText}${attachBlock}\n\n<editor_state>\n${JSON.stringify(body.context ?? {})}\n</editor_state>`;
 
@@ -387,6 +387,9 @@ export const aiApi = {
       providers: {
         claude: { available: value.claude.ok, note: value.claude.note },
         codex: { available: value.codex.ok, note: value.codex.note },
+        // Gemini chats run from the page through Donkey's hosted inference;
+        // the browser overlays the real availability from its sign-in probe.
+        gemini: { available: true, note: "runs on your Donkey account" },
         test: { available: true, note: "hermetic test provider" },
       },
     });

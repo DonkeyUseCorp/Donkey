@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport, type UIMessage } from "ai";
+import { DefaultChatTransport, type ChatTransport, type UIMessage } from "ai";
 import {
   ArrowUp,
   Check,
@@ -10,9 +10,9 @@ import {
   CircleDashed,
   Copy,
   Ellipsis,
+  ExternalLink,
   FolderPlus,
   History,
-  Music,
   Plus,
   Sparkles,
   Square,
@@ -36,27 +36,34 @@ import {
 import { apiFetch, engineReady } from "@/cut/lib/api";
 import { buildAiContext } from "@/cut/lib/aiContext";
 import { runAiTool } from "@/cut/lib/aiTools";
-import { draggedAssetId, hasAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
+import { setAssetDragData } from "@/cut/lib/assetDrag";
+import {
+  addRefOnce,
+  collectRefs,
+  normalizeRef,
+  sameRef,
+  setRefDragData,
+  splitMentions,
+  useRefCandidates,
+  useAssetDrop,
+  type AssetRef,
+} from "@/cut/lib/assetRef";
+import { signInUrl, useSignedIn } from "@/cut/lib/generate";
+import { streamGeminiChat } from "@/cut/lib/geminiChat";
 import { saveAssetToLibrary } from "@/cut/lib/library";
+import { revealRef } from "@/cut/lib/refReveal";
 import { useEditor } from "@/cut/lib/store";
-import { formatTime } from "@/cut/lib/time";
-import type { AssetType } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
+import { MentionTextarea, RefChips, RefThumb, RefTokenChip } from "./AssetRefs";
 
-/** Asset reference attached to a chat message — enough to render a card and
- * for the model to act on the asset via its editor tools. */
-export interface ChatAsset {
-  id: string;
-  name: string;
-  type: AssetType;
-  duration: number;
-  url: string;
-}
+// Chat attachments are asset refs — anything in the project, the library, or
+// the stock catalog. They arrive by drag (media cards, library clips, stock
+// tiles, timeline clips, the preview) or as @name mentions in the message.
 
 interface AiModel {
   id: string;
   label: string;
-  provider: "claude" | "codex" | "test";
+  provider: "claude" | "codex" | "gemini" | "test";
   hidden?: boolean;
 }
 
@@ -100,6 +107,7 @@ const FAVS_KEY = "cut-ai-favs";
 const PROVIDER_LABEL: Record<string, string> = {
   claude: "Claude Code",
   codex: "Codex",
+  gemini: "Gemini",
   test: "Testing",
 };
 
@@ -114,10 +122,17 @@ const SUGGESTIONS = [
 
 /** Chat provider bucket for a model id. */
 const provider = (id: string): string =>
-  id.startsWith("claude") ? "claude" : id === "cut-test" ? "test" : "codex";
+  id.startsWith("claude")
+    ? "claude"
+    : id.startsWith("gemini")
+      ? "gemini"
+      : id === "cut-test"
+        ? "test"
+        : "codex";
 
 export function AiPanel({ onClose }: { onClose: () => void }) {
   const [info, setInfo] = useState<ModelsInfo | null>(null);
+  const signedIn = useSignedIn();
   const [model, setModel] = useState<string>(() =>
     typeof window === "undefined" ? "claude-fable-5" : localStorage.getItem(MODEL_KEY) ?? "claude-fable-5"
   );
@@ -164,6 +179,23 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
     setModel(id);
     localStorage.setItem(MODEL_KEY, id);
   };
+
+  // Gemini runs on the user's Donkey account, so its availability is the
+  // sign-in probe, not the engine's CLI checks. Signed-in state (or a probe
+  // still in flight) leaves it usable; a definite signed-out disables it.
+  const mergedInfo = useMemo<ModelsInfo | null>(() => {
+    if (!info) return null;
+    return {
+      ...info,
+      providers: {
+        ...info.providers,
+        gemini:
+          signedIn === false
+            ? { available: false, note: "sign in to Donkey to chat" }
+            : (info.providers.gemini ?? { available: true, note: "" }),
+      },
+    };
+  }, [info, signedIn]);
 
   return (
     <aside className="ai-panel relative flex min-h-0 w-[340px] shrink-0 animate-in flex-col border-l border-border bg-card duration-300 ease-out slide-in-from-right-full">
@@ -248,7 +280,7 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
       <ChatSession
         key={activeChat}
         threadId={activeChat}
-        info={info}
+        info={mergedInfo}
         model={model}
         onModelChange={selectModel}
       />
@@ -270,8 +302,9 @@ function ChatSession({
   onModelChange: (id: string) => void;
 }) {
   const [input, setInput] = useState("");
-  const [attachments, setAttachments] = useState<ChatAsset[]>([]);
-  const [dragDepth, setDragDepth] = useState(0);
+  const [attachments, setAttachments] = useState<AssetRef[]>([]);
+  const candidates = useRefCandidates();
+  const { active: dropActive, attachTarget, targetProps } = useAssetDrop((ref) => setAttachments((prev) => addRefOnce(prev, ref)));
   const sessionKeyRef = useRef<string | null>(null);
   // Resume from the saved thread when this id exists in history.
   const [initialThread] = useState<ChatThread | undefined>(() =>
@@ -281,25 +314,43 @@ function ChatSession({
   const modelRef = useRef(model);
   modelRef.current = model;
 
-  const transport = useMemo(
-    () =>
-      new DefaultChatTransport({
-        // The engine origin is discovered asynchronously; await it per request
-        // (not at mount) so an early send still targets the local engine rather
-        // than the hosted origin, where the Cut APIs 404. engineReady memoizes,
-        // so only the first request pays for discovery.
-        prepareSendMessagesRequest: async ({ messages }) => ({
-          api: `${await engineReady()}/api/cut/ai/chat`,
-          body: {
-            messages,
-            model: modelRef.current,
-            context: buildAiContext(),
-            providerSession: providerSessions.current[provider(modelRef.current)],
-          },
-        }),
+  // Gemini turns run their editor tools inside the transport loop (no engine
+  // bridge); this flags them so onToolCall doesn't execute those calls again.
+  const clientToolsRef = useRef(false);
+  const transport = useMemo<ChatTransport<UIMessage>>(() => {
+    const engine = new DefaultChatTransport<UIMessage>({
+      // The engine origin is discovered asynchronously; await it per request
+      // (not at mount) so an early send still targets the local engine rather
+      // than the hosted origin, where the Cut APIs 404. engineReady memoizes,
+      // so only the first request pays for discovery.
+      prepareSendMessagesRequest: async ({ messages }) => ({
+        api: `${await engineReady()}/api/cut/ai/chat`,
+        body: {
+          messages,
+          model: modelRef.current,
+          context: buildAiContext(),
+          providerSession: providerSessions.current[provider(modelRef.current)],
+        },
       }),
-    []
-  );
+    });
+    return {
+      // Claude/Codex chat through the local engine; Gemini goes straight from
+      // the page to Donkey's hosted inference with the user's session.
+      sendMessages: async (options) => {
+        if (provider(modelRef.current) === "gemini") {
+          clientToolsRef.current = true;
+          return streamGeminiChat({
+            model: modelRef.current,
+            messages: options.messages,
+            abortSignal: options.abortSignal,
+          });
+        }
+        clientToolsRef.current = false;
+        return engine.sendMessages(options);
+      },
+      reconnectToStream: (options) => engine.reconnectToStream(options),
+    };
+  }, []);
 
   const { messages, sendMessage, stop, status, error, clearError } = useChat({
     id: threadId,
@@ -313,6 +364,9 @@ function ChatSession({
       }
     },
     onToolCall: ({ toolCall }) => {
+      // Gemini turns already executed the tool in the transport loop; their
+      // tool chunks are display-only.
+      if (clientToolsRef.current) return;
       // Execute on the editor store, then hand the result back to the
       // server-side bridge (which is holding the provider's tool call open).
       void (async () => {
@@ -379,56 +433,30 @@ function ChatSession({
   }, [messages, busy]);
 
   const send = (text: string) => {
-    const t = text.trim();
-    if ((!t && attachments.length === 0) || busy) return;
+    // Inline @mentions attach their assets alongside the dropped chips. The
+    // message keeps the raw tokens — they render as interactive chips and the
+    // model reads the handle↔asset mapping from <attached_assets>.
+    const body = text.trim();
+    const { refs: all } = collectRefs(body, attachments, candidates);
+    if ((!body && all.length === 0) || busy || !currentAvailable) return;
     clearError();
     void sendMessage({
-      text: t,
-      ...(attachments.length > 0 && { metadata: { attachments } }),
+      text: body,
+      ...(all.length > 0 && { metadata: { attachments: all } }),
     });
     setInput("");
     setAttachments([]);
-  };
-
-  const attachAsset = (id: string) => {
-    const a = useEditor.getState().assets.find((x) => x.id === id);
-    if (!a) return;
-    setAttachments((prev) =>
-      prev.some((x) => x.id === a.id)
-        ? prev
-        : [...prev, { id: a.id, name: a.name, type: a.type, duration: a.duration, url: a.url }]
-    );
   };
 
   const currentAvailable = info ? info.providers[provider(model)]?.available !== false : true;
 
   return (
     <div
+      ref={attachTarget}
+      {...targetProps}
       className="relative flex min-h-0 flex-1 flex-col"
-      onDragEnter={(e) => {
-        if (hasAssetDrag(e)) {
-          e.preventDefault();
-          setDragDepth((n) => n + 1);
-        }
-      }}
-      onDragOver={(e) => {
-        if (hasAssetDrag(e)) {
-          e.preventDefault();
-          e.dataTransfer.dropEffect = "copy";
-        }
-      }}
-      onDragLeave={(e) => {
-        if (hasAssetDrag(e)) setDragDepth((n) => Math.max(0, n - 1));
-      }}
-      onDrop={(e) => {
-        setDragDepth(0);
-        const id = draggedAssetId(e);
-        if (!id) return;
-        e.preventDefault();
-        attachAsset(id);
-      }}
     >
-      {dragDepth > 0 && (
+      {dropActive && (
         <div className="pointer-events-none absolute inset-1.5 z-10 grid place-items-center rounded-xl border-2 border-dashed border-[#0a84ff] bg-[#0a84ff]/8">
           <span className="rounded-full bg-card px-3 py-1 text-[11.5px] font-medium text-[#0a84ff] shadow-sm">
             Drop to attach
@@ -475,36 +503,21 @@ function ChatSession({
 
       <div className="shrink-0 border-t border-border p-2.5">
         <div className="rounded-xl border border-input bg-background focus-within:border-ring">
-          {attachments.length > 0 && (
-            <div className="flex flex-wrap gap-2 px-2.5 pt-2.5">
-              {attachments.map((a) => (
-                <div key={a.id} className="ai-attachment relative">
-                  <AssetThumb asset={a} className="size-14" />
-                  <button
-                    aria-label={`Remove ${a.name}`}
-                    title="Remove"
-                    className="absolute -top-1.5 -right-1.5 grid size-4.5 place-items-center rounded-full bg-neutral-900 text-white shadow-sm transition-colors hover:bg-neutral-700"
-                    onClick={() => setAttachments((p) => p.filter((x) => x.id !== a.id))}
-                  >
-                    <X className="size-3" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-          <textarea
+          <RefChips
+            refs={attachments}
+            onRemove={(ref) => setAttachments((p) => p.filter((x) => !sameRef(x, ref)))}
+            className="px-2.5 pt-2.5"
+          />
+          <MentionTextarea
             className="ai-input max-h-40 min-h-[38px] w-full resize-none bg-transparent px-3 pt-2 text-[12.5px] leading-relaxed outline-none placeholder:text-muted-foreground/70"
             rows={2}
-            placeholder="Ask about your video, or tell me what to change…"
+            placeholder="Ask about your video, or tell me what to change… @ references media"
             value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              e.stopPropagation();
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                send(input);
-              }
-            }}
+            onChange={setInput}
+            candidates={candidates}
+            submitKey="enter"
+            menuSide="top"
+            onSubmit={() => send(input)}
           />
           <div className="flex items-center gap-1 px-1.5 pb-1.5">
             <ModelSelector info={info} model={model} onSelect={onModelChange} />
@@ -527,57 +540,47 @@ function ChatSession({
           </div>
         </div>
         {info && !currentAvailable && (
-          <p className="ai-provider-note mt-1.5 px-1 text-[10.5px] leading-relaxed text-amber-700">
-            {PROVIDER_LABEL[provider(model)]}: {info.providers[provider(model)]?.note}
-          </p>
+          provider(model) === "gemini" ? (
+            <p className="ai-provider-note mt-1.5 px-1 text-[10.5px] leading-relaxed text-muted-foreground">
+              Gemini chats on your Donkey account.{" "}
+              <a
+                className="font-medium text-blue-600 hover:underline dark:text-blue-400"
+                href={signInUrl()}
+              >
+                Sign in
+              </a>{" "}
+              to continue.
+            </p>
+          ) : (
+            <p className="ai-provider-note mt-1.5 px-1 text-[10.5px] leading-relaxed text-amber-700">
+              {PROVIDER_LABEL[provider(model)]}: {info.providers[provider(model)]?.note}
+            </p>
+          )
         )}
       </div>
     </div>
   );
 }
 
-/** Square media preview used by attachment chips and in-chat asset cards. */
-function AssetThumb({ asset, className }: { asset: ChatAsset; className?: string }) {
-  return (
-    <div
-      className={cn(
-        "relative overflow-hidden rounded-lg border border-border bg-muted",
-        className
-      )}
-    >
-      {asset.type === "video" ? (
-        <video
-          src={`${asset.url}#t=0.1`}
-          preload="metadata"
-          muted
-          playsInline
-          className="size-full object-cover"
-        />
-      ) : (
-        <div className="grid size-full place-items-center bg-gradient-to-br from-emerald-100 to-emerald-50 text-emerald-600">
-          <Music className="size-4.5" />
-        </div>
-      )}
-      <span className="absolute right-1 bottom-1 rounded-[5px] bg-black/65 px-1 py-px font-mono text-[8.5px] text-white tabular-nums">
-        {formatTime(asset.duration)}
-      </span>
-    </div>
-  );
-}
-
-/** Asset card inside a sent message — click to open, drag onto the timeline,
- * "…" menu for more actions. */
-function MessageAssetCard({ asset }: { asset: ChatAsset }) {
+/** Asset card inside a sent message — click to jump back to the original
+ * asset, drag onto the timeline, "…" menu for more actions. */
+function MessageAssetCard({ asset }: { asset: AssetRef }) {
   return (
     <div className="ai-msg-asset group relative w-16">
       <button
         className="flex w-full flex-col gap-1 text-left"
-        title="Click to open · drag to the timeline"
+        title={`${asset.name} — click to show · drag to the timeline`}
         draggable
-        onDragStart={(e) => setAssetDragData(e, asset.id)}
-        onClick={() => window.open(asset.url, "_blank", "noopener")}
+        onDragStart={(e) => {
+          // Project assets keep the timeline-placement payload; the ref rides
+          // along either way (chat, creators), from the card's own data so it
+          // survives the asset leaving the project.
+          if (asset.scope === "project") setAssetDragData(e, asset.id);
+          setRefDragData(e, asset);
+        }}
+        onClick={() => revealRef(asset)}
       >
-        <AssetThumb asset={asset} className="size-16 transition-colors group-hover:border-input" />
+        <RefThumb item={asset} className="size-16 transition-colors group-hover:border-input" />
         <span className="w-full truncate text-[10px] text-muted-foreground">{asset.name}</span>
       </button>
       <DropdownMenu>
@@ -592,21 +595,48 @@ function MessageAssetCard({ asset }: { asset: ChatAsset }) {
           <Ellipsis className="size-3" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-40">
-          <DropdownMenuItem
-            onClick={() => {
-              const s = useEditor.getState();
-              const full = s.assets.find((a) => a.id === asset.id);
-              if (!full || !s.projectId) return;
-              void saveAssetToLibrary(s.projectId, full).catch(() => {
-                // Library write failed; nothing to roll back.
-              });
-            }}
-          >
-            <FolderPlus /> Add to library
+          <DropdownMenuItem onClick={() => window.open(asset.url, "_blank", "noopener")}>
+            <ExternalLink /> Open file
           </DropdownMenuItem>
+          {asset.scope === "project" && (
+            <DropdownMenuItem
+              onClick={() => {
+                const s = useEditor.getState();
+                const full = s.assets.find((a) => a.id === asset.id);
+                if (!full || !s.projectId) return;
+                void saveAssetToLibrary(s.projectId, full).catch(() => {
+                  // Library write failed; nothing to roll back.
+                });
+              }}
+            >
+              <FolderPlus /> Add to library
+            </DropdownMenuItem>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
+  );
+}
+
+/** User-message text with resolved `@` mentions rendered as interactive token
+ * chips. Tokens resolve against the message's own attachments first (they hold
+ * what was meant at send time), then the live candidates. */
+function MentionedText({ text, attachments }: { text: string; attachments: AssetRef[] }) {
+  const candidates = useRefCandidates();
+  const parts = useMemo(
+    () => splitMentions(text, [...attachments, ...candidates]),
+    [text, attachments, candidates]
+  );
+  return (
+    <>
+      {parts.map((p, i) =>
+        typeof p === "string" ? (
+          <span key={i}>{p}</span>
+        ) : (
+          <RefTokenChip key={i} item={p} onDark />
+        )
+      )}
+    </>
   );
 }
 
@@ -634,20 +664,23 @@ function MessageCopy({ text }: { text: string }) {
 function MessageView({ message }: { message: UIMessage }) {
   if (message.role === "user") {
     const text = message.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
-    const attachments = (message.metadata as { attachments?: ChatAsset[] } | undefined)
-      ?.attachments;
+    // normalizeRef also reads attachments saved by older threads (pre-ref shape).
+    const attachments = ((message.metadata as { attachments?: unknown[] } | undefined)
+      ?.attachments ?? [])
+      .map(normalizeRef)
+      .filter((r): r is AssetRef => r !== null);
     return (
       <div className="ai-msg-user group mb-3 flex flex-col items-end gap-1">
-        {attachments && attachments.length > 0 && (
+        {attachments.length > 0 && (
           <div className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
             {attachments.map((a) => (
-              <MessageAssetCard key={a.id} asset={a} />
+              <MessageAssetCard key={`${a.scope}:${a.id}`} asset={a} />
             ))}
           </div>
         )}
         {text && (
           <div className="max-w-[85%] rounded-2xl rounded-br-md bg-neutral-900 px-3 py-2 text-[12.5px] leading-relaxed whitespace-pre-wrap text-white">
-            {text}
+            <MentionedText text={text} attachments={attachments} />
           </div>
         )}
         <MessageCopy text={text} />
@@ -736,7 +769,7 @@ function ModelSelector({
   });
   const showTest = typeof window !== "undefined" && localStorage.getItem("cut-ai-test") === "1";
   const models = (info?.models ?? []).filter((m) => !m.hidden || showTest);
-  const groups = ["claude", "codex", ...(showTest ? ["test"] : [])].map((p) => ({
+  const groups = ["claude", "codex", "gemini", ...(showTest ? ["test"] : [])].map((p) => ({
     provider: p,
     models: models.filter((m) => m.provider === p),
     available: info?.providers[p]?.available ?? true,
