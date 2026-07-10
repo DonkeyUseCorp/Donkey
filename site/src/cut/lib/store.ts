@@ -22,7 +22,7 @@ import type {
   VideoClip,
 } from "./types";
 import { apiFetch, apiJson } from "./api";
-import { emptySubtitles, isCrossStyle, mediaUrl, SPEED_MAX, SPEED_MIN, TRANSITION_MAX } from "./types";
+import { emptySubtitles, IMAGE_CLIP_SECONDS, isCrossStyle, mediaUrl, SPEED_MAX, SPEED_MIN, TRANSITION_MAX } from "./types";
 import { readTextStyle } from "./textStyle";
 import { loadUiState, saveUiState } from "./uiState";
 import { captureTimelineFrames } from "./visualFrames";
@@ -449,11 +449,11 @@ export const useEditor = create<EditorState>((set, get) => {
         // (landscape footage → 16:9, portrait → 9:16); the user can switch it
         // any time from the top bar.
         const guess =
-          asset.type === "video" &&
+          (asset.type === "video" || asset.type === "image") &&
           asset.width !== undefined &&
           asset.height !== undefined &&
           s.clips.length === 0 &&
-          !s.assets.some((a) => a.type === "video")
+          !s.assets.some((a) => a.type === "video" || a.type === "image")
             ? asset.width >= asset.height
               ? ("16:9" as Aspect)
               : ("9:16" as Aspect)
@@ -495,13 +495,13 @@ export const useEditor = create<EditorState>((set, get) => {
 
     addClipFromAsset: (assetId, index) => {
       const asset = get().assets.find((a) => a.id === assetId);
-      if (!asset || asset.type !== "video") return;
+      if (!asset || (asset.type !== "video" && asset.type !== "image")) return;
       push();
       const clip: VideoClip = {
         id: uid(),
         assetId,
         in: 0,
-        out: asset.duration,
+        out: asset.type === "image" ? IMAGE_CLIP_SECONDS : asset.duration,
         muted: false,
       };
       set((s) => {
@@ -517,10 +517,15 @@ export const useEditor = create<EditorState>((set, get) => {
       const asset = get().assets.find((a) => a.id === assetId);
       if (!asset || asset.type !== "audio") return;
       push();
+      // The soundtrack is one lane — slide the clip to the next free slot at or
+      // after the target so it never lands on top of an existing sound.
+      const want = Math.max(0, start ?? get().currentTime);
+      const len = Math.max(MIN_LEN, asset.duration);
+      const taken = get().audioClips.map((a) => ({ start: a.start, end: a.start + clipLen(a) }));
       const clip: AudioClip = {
         id: uid(),
         assetId,
-        start: Math.max(0, start ?? get().currentTime),
+        start: nextFreeStart(taken, want, len),
         in: 0,
         out: asset.duration,
         volume: 1,
@@ -677,10 +682,11 @@ export const useEditor = create<EditorState>((set, get) => {
 
     addVideoFromAsset: (assetId, place, start) => {
       const asset = get().assets.find((a) => a.id === assetId);
-      if (!asset || asset.type !== "video") return;
+      if (!asset || (asset.type !== "video" && asset.type !== "image")) return;
+      const out = asset.type === "image" ? IMAGE_CLIP_SECONDS : asset.duration;
       push();
       if (place.kind === "base") {
-        const v: VideoClip = { id: uid(), assetId, in: 0, out: asset.duration, muted: false };
+        const v: VideoClip = { id: uid(), assetId, in: 0, out, muted: false };
         set((s) => {
           const spans = getClipSpans(s.clips, s.assets);
           const at = spans.filter((sp) => sp.start + sp.len / 2 <= start).length;
@@ -699,7 +705,7 @@ export const useEditor = create<EditorState>((set, get) => {
         track,
         start: Math.max(0, start),
         in: 0,
-        out: asset.duration,
+        out,
         muted: false,
       };
       set((s) => ({

@@ -7,14 +7,16 @@ import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/cut/lib/api";
 import { renderPreviewProxy } from "@/cut/lib/exportClient";
 import { useExport } from "@/cut/lib/exportStore";
+import { hasRefDrag } from "@/cut/lib/assetRef";
 import { enrichAsset, importFileToProject } from "@/cut/lib/media";
 import { backTarget, useCutBase } from "@/cut/lib/nav";
 import { getClipSpans, projectDuration, serializeDoc, useEditor } from "@/cut/lib/store";
+import type { MediaAsset } from "@/cut/lib/types";
 import { AiPanel } from "./AiPanel";
 import { ExportDialog } from "./ExportDialog";
 import { ExportStatus } from "./ExportStatus";
 import { Inspector } from "./Inspector";
-import { ImageGenFlyover } from "./ImageGenFlyover";
+import { Lightbox } from "./Lightbox";
 import { Preview } from "./Preview";
 import { SidePanel } from "./SidePanel";
 import { Timeline, videoInsertIndex } from "./Timeline";
@@ -190,18 +192,21 @@ export function Editor({
   }, [projectId]);
 
   const importFiles = useCallback(
-    async (files: FileList | File[], at?: number | null) => {
+    async (files: FileList | File[], at?: number | null, origin?: MediaAsset["origin"]) => {
       const list = Array.from(files);
       setImporting((n) => n + list.length);
       for (const file of list) {
         try {
           const asset = await importFileToProject(projectId, file);
           if (!asset) continue;
+          // Recordings are created media: tag them so they land on the timeline
+          // but never in the Media panel (reserved for user imports).
+          if (origin) asset.origin = origin;
           const s = useEditor.getState();
           s.addAsset(asset);
-          if (asset.type === "video") {
+          if (asset.type === "video" || asset.type === "image") {
             // A drop on the timeline inserts at the pointer's slot; anywhere
-            // else appends at the end.
+            // else appends at the end. A still rides the base track like footage.
             if (at == null) {
               s.addClipFromAsset(asset.id);
             } else {
@@ -214,7 +219,9 @@ export function Editor({
               s.addClipFromAsset(asset.id, clipsIndex);
             }
           } else {
-            s.addAudioFromAsset(asset.id, at ?? 0);
+            // A timeline drop lands at the pointer; anywhere else drops at the
+            // playhead (the store slides it right only if that spot is taken).
+            s.addAudioFromAsset(asset.id, at ?? undefined);
           }
           void enrichAsset(asset);
         } catch (err) {
@@ -227,19 +234,23 @@ export function Editor({
     [projectId]
   );
 
-  // Whole-window drag & drop.
+  // Whole-window drag & drop for OS files. Chrome tags native <img> drags
+  // with `Files` too, so internal drags — which always carry the ref MIME —
+  // are filtered out; dragging a stock tile never raises the import veil.
   useEffect(() => {
+    const isFileDrag = (e: DragEvent) =>
+      !!e.dataTransfer?.types.includes("Files") && !hasRefDrag(e);
     const enter = (e: DragEvent) => {
-      if (!e.dataTransfer?.types.includes("Files")) return;
+      if (!isFileDrag(e)) return;
       e.preventDefault();
       dragDepth.current++;
       useEditor.getState().setDropActive(true);
     };
     const over = (e: DragEvent) => {
-      if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
+      if (isFileDrag(e)) e.preventDefault();
     };
     const leave = (e: DragEvent) => {
-      if (!e.dataTransfer?.types.includes("Files")) return;
+      if (!isFileDrag(e)) return;
       dragDepth.current = Math.max(0, dragDepth.current - 1);
       if (dragDepth.current === 0) useEditor.getState().setDropActive(false);
     };
@@ -257,7 +268,7 @@ export function Editor({
       return Math.max(0, t);
     };
     const drop = (e: DragEvent) => {
-      if (!e.dataTransfer?.files.length) return;
+      if (hasRefDrag(e) || !e.dataTransfer?.files.length) return;
       e.preventDefault();
       dragDepth.current = 0;
       useEditor.getState().setDropActive(false);
@@ -365,10 +376,8 @@ export function Editor({
           }`}
         >
           <SidePanel projectId={projectId} onImport={importFiles} importing={importing > 0} />
-          {/* relative: anchors the generate-image flyover over the canvas column */}
-          <div className="relative grid min-h-0 min-w-0">
+          <div className="grid min-h-0 min-w-0">
             <Preview />
-            <ImageGenFlyover projectId={projectId} />
           </div>
           {hasInspector && <Inspector />}
         </div>
@@ -377,6 +386,7 @@ export function Editor({
       {aiOpen && <AiPanel onClose={() => useEditor.getState().setAiOpen(false)} />}
       {exportOpen && <ExportDialog />}
       <ExportStatus />
+      <Lightbox />
       {dropActive && (
         <div className="fixed inset-0 z-60 grid place-items-center bg-background/70 backdrop-blur-md">
           <div className="pointer-events-none flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-[#0a84ff] bg-[#0a84ff]/10 px-12 py-9 text-[#0a84ff]">

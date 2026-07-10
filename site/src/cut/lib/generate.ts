@@ -45,7 +45,7 @@ interface GenerateState {
   generateImage: (
     projectId: string,
     prompt: string,
-    opts?: { refs?: AssetRef[] }
+    opts?: { refs?: AssetRef[]; aspect?: "16:9" | "9:16" | "1:1" }
   ) => Promise<GenerateJob>;
   generateVideo: (
     projectId: string,
@@ -223,14 +223,14 @@ export const useGenerate = create<GenerateState>((set, get) => {
       set((s) => ({ jobs: [job, ...s.jobs] }));
       return (async () => {
         try {
-          const aspect = useEditor.getState().aspect;
+          const aspect = opts?.aspect ?? useEditor.getState().aspect;
+          const frame =
+            aspect === "16:9" ? "16:9 widescreen" : aspect === "1:1" ? "1:1 square" : "9:16 vertical";
           const images = await refsToInlineImages(opts?.refs ?? []);
           const res = await hostedPost("/api/inference/assets", {
             kind: "image",
             // The image route takes no aspect parameter; steer it in the prompt.
-            prompt: `${prompt}\n\nCompose the image in a ${
-              aspect === "16:9" ? "16:9 widescreen" : "9:16 vertical"
-            } frame.`,
+            prompt: `${prompt}\n\nCompose the image in a ${frame} frame.`,
             ...(images.length > 0 ? { inputs: { images } } : {}),
           });
           if (!res.ok) throw new Error(await readError(res, "Image generation failed."));
@@ -247,7 +247,10 @@ export const useGenerate = create<GenerateState>((set, get) => {
             out.filename ?? "image.png"
           );
           form.append("name", promptName(prompt));
-          const baked = await apiFetch(`/api/cut/projects/${projectId}/still`, {
+          // Mark it generated so it surfaces in the generate panel; a stock
+          // image imported from a tile sends no origin (plain import).
+          form.append("origin", "generated");
+          const baked = await apiFetch(`/api/cut/projects/${projectId}/image`, {
             method: "POST",
             body: form,
           });
@@ -327,6 +330,7 @@ export const useGenerate = create<GenerateState>((set, get) => {
           const asset = await importFileToProject(projectId, file);
           if (!asset) throw new Error("Could not import the generated video.");
           asset.name = promptName(prompt);
+          asset.origin = "generated"; // lives in the generate panel, not Media
           if (adopt(projectId, asset)) opts?.onDone?.(asset);
           update(job.id, { status: "done", assetId: asset.id });
         } catch (err) {

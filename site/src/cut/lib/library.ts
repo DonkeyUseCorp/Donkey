@@ -17,7 +17,7 @@ export interface LibraryAsset {
   id: string;
   fileName: string;
   name: string;
-  type: "video" | "audio";
+  type: "video" | "audio" | "image";
   duration: number;
   width?: number;
   height?: number;
@@ -144,7 +144,7 @@ export async function addLibraryAssetToProject(
 ): Promise<MediaAsset> {
   const asset = await importLibraryAsset(projectId, lib);
   const s = useEditor.getState();
-  if (asset.type === "video") s.addClipFromAsset(asset.id);
+  if (asset.type === "video" || asset.type === "image") s.addClipFromAsset(asset.id);
   else s.addAudioFromAsset(asset.id);
   return asset;
 }

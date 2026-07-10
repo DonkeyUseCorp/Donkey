@@ -19,14 +19,14 @@ import {
   hasAssetDrag,
   hasLibraryDrag,
 } from "@/cut/lib/assetDrag";
-import { refFromAsset, startPointerRefDrag } from "@/cut/lib/assetRef";
+import { draggingRef, hasRefDrag, refFromAsset, startPointerRefDrag, type AssetRef } from "@/cut/lib/assetRef";
 import { importLibraryAsset, saveTemplate } from "@/cut/lib/library";
 import { startDrag } from "@/cut/lib/drag";
-import { ensurePeaks } from "@/cut/lib/media";
+import { ensurePeaks, importImage } from "@/cut/lib/media";
 import { clipLen, clipSpeed, getClipSpans, projectDuration, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
 import type { VideoTrackPlacement } from "@/cut/lib/store";
 import { formatTime, formatTimecode } from "@/cut/lib/time";
-import { TRANSITION_STYLE_LABELS } from "@/cut/lib/types";
+import { IMAGE_CLIP_SECONDS, TRANSITION_STYLE_LABELS } from "@/cut/lib/types";
 import type { AudioClip, ClipSpan, MediaAsset, OverlayClip, SubtitleCue, TextOverlay, TransitionStyle } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -129,6 +129,22 @@ function dropIndex(spans: ClipSpan[], from: number, dxSec: number): number {
       if (edge < spans[k].start + spans[k].len / 2) to = k;
   }
   return to;
+}
+
+/** On-timeline length a dropped image occupies (it has no intrinsic duration). */
+const STILL_SECONDS = IMAGE_CLIP_SECONDS;
+
+/** A base-track asset type — footage or a still image both ride the video lane. */
+const isBaseType = (t: string | undefined): t is "video" | "image" =>
+  t === "video" || t === "image";
+
+/** The image ref being dragged (a stock tile), null for any other drag —
+ * asset and library drags carry the ref MIME too but with video/audio kinds.
+ * On the timeline it lands on the base track as a still image. */
+function draggingStill(e: React.DragEvent): AssetRef | null {
+  if (!hasRefDrag(e)) return null;
+  const ref = draggingRef();
+  return ref?.kind === "image" ? ref : null;
 }
 
 /** Insertion slot for a new clip dropped at time `t`: it lands before the
@@ -424,9 +440,9 @@ export function Timeline() {
 
   // Drop an asset onto the timeline: video snaps into the nearest slot at time
   // `t`, audio lands free-form there.
-  const placeAssetAt = (assetId: string, type: "video" | "audio", t: number) => {
+  const placeAssetAt = (assetId: string, type: "video" | "audio" | "image", t: number) => {
     const s = useEditor.getState();
-    if (type === "video") {
+    if (isBaseType(type)) {
       const sp = getClipSpans(s.clips, s.assets);
       const spanIndex = videoInsertIndex(sp, t);
       const clipsIndex =
@@ -439,15 +455,21 @@ export function Timeline() {
     }
   };
 
-  // The video being dragged, whether it comes from project media or the library.
+  // The video being dragged — project media, a library clip, or an image ref
+  // (which lands as a still).
   const draggedVideo = (e: React.DragEvent): { duration: number } | null => {
     if (hasLibraryDrag(e)) {
       const lib = draggingLibrary();
-      return lib && lib.type === "video" ? { duration: lib.duration } : null;
+      if (!lib || !isBaseType(lib.type)) return null;
+      return { duration: lib.type === "image" ? STILL_SECONDS : lib.duration };
     }
     const id = draggingAssetId();
-    const asset = id ? useEditor.getState().assets.find((a) => a.id === id) : null;
-    return asset && asset.type === "video" ? { duration: asset.duration } : null;
+    if (id) {
+      const asset = useEditor.getState().assets.find((a) => a.id === id);
+      if (!asset || !isBaseType(asset.type)) return null;
+      return { duration: asset.type === "image" ? STILL_SECONDS : asset.duration };
+    }
+    return draggingStill(e) ? { duration: STILL_SECONDS } : null;
   };
 
   // Drop targets for the upper tracks and between-track gaps: dragging a video
@@ -475,9 +497,10 @@ export function Timeline() {
       setDropType(null);
       const lib = draggingLibrary();
       const libId = draggedLibraryId(e);
+      const still = draggingStill(e);
       const projectId = useEditor.getState().projectId;
       clearAssetDrag();
-      if (libId && lib && lib.type === "video" && projectId) {
+      if (libId && lib && isBaseType(lib.type) && projectId) {
         void importLibraryAsset(projectId, lib)
           .then((asset) => useEditor.getState().addVideoFromAsset(asset.id, place, t))
           .catch(() => {});
@@ -485,8 +508,14 @@ export function Timeline() {
       }
       const id = draggedAssetId(e);
       const asset = id ? useEditor.getState().assets.find((a) => a.id === id) : null;
-      if (id && asset?.type === "video") {
+      if (id && isBaseType(asset?.type)) {
         useEditor.getState().addVideoFromAsset(id, place, t);
+        return;
+      }
+      if (still && projectId) {
+        void importImage(projectId, still)
+          .then((img) => useEditor.getState().addVideoFromAsset(img.id, place, t))
+          .catch(() => {});
       }
     },
   });
@@ -533,25 +562,30 @@ export function Timeline() {
       style={{ height: timelineH }}
       onDragOver={(e) => {
         const isLib = hasLibraryDrag(e);
-        if (!hasAssetDrag(e) && !isLib) return;
+        const still = draggingStill(e);
+        if (!hasAssetDrag(e) && !isLib && !still) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = "copy";
-        // Preview where a video would land; audio drops free-form. Library drags
-        // carry their own shape since they aren't in the project yet.
-        let type: "video" | "audio" | undefined;
+        // Preview where a video would land; audio drops free-form. Library and
+        // image drags carry their own shape since they aren't in the project yet.
+        let type: "video" | "audio" | "image" | undefined;
         let duration = 0;
         if (isLib) {
           const lib = draggingLibrary();
           type = lib?.type;
           duration = lib?.duration ?? 0;
+        } else if (still) {
+          type = "video";
+          duration = STILL_SECONDS;
         } else {
           const id = draggingAssetId();
           const asset = id ? useEditor.getState().assets.find((a) => a.id === id) : null;
           type = asset?.type;
-          duration = asset?.duration ?? 0;
+          duration = asset?.type === "image" ? STILL_SECONDS : asset?.duration ?? 0;
         }
-        setDropType(type ?? null);
-        if (type !== "video" || !duration) {
+        // A still rides the base (video) lane: light its insertion zones.
+        setDropType(isBaseType(type) ? "video" : type ?? null);
+        if (!isBaseType(type) || !duration) {
           setAssetDrop(null);
           return;
         }
@@ -576,6 +610,7 @@ export function Timeline() {
         // A library asset must be copied into the project before it can land.
         const lib = draggingLibrary();
         const libId = draggedLibraryId(e);
+        const still = draggingStill(e);
         const projectId = useEditor.getState().projectId;
         clearAssetDrag();
         if (libId && lib && projectId) {
@@ -587,10 +622,20 @@ export function Timeline() {
         }
 
         const id = draggedAssetId(e);
-        if (!id) return;
-        e.preventDefault();
-        const asset = useEditor.getState().assets.find((a) => a.id === id);
-        if (asset) placeAssetAt(id, asset.type, t);
+        if (id) {
+          e.preventDefault();
+          const asset = useEditor.getState().assets.find((a) => a.id === id);
+          if (asset) placeAssetAt(id, asset.type, t);
+          return;
+        }
+
+        // An image ref imports as a still, then snaps into the base-track slot.
+        if (still && projectId) {
+          e.preventDefault();
+          void importImage(projectId, still)
+            .then((asset) => placeAssetAt(asset.id, "image", t))
+            .catch(() => {});
+        }
       }}
     >
       <div
@@ -1301,7 +1346,9 @@ function ClipView({
     const len0 = span.len;
     startDrag(e, {
       onMove: (dx) => {
-        const nout = Math.max(clip.in + 0.15, Math.min(asset.duration, out0 + (dx / pps) * speed));
+        // A still has no source length, so its clip can stretch to any duration.
+        const maxOut = asset.type === "image" ? Infinity : asset.duration;
+        const nout = Math.max(clip.in + 0.15, Math.min(maxOut, out0 + (dx / pps) * speed));
         s.updateClipTransient(clip.id, { out: nout });
       },
       onUp: () => {
@@ -1384,32 +1431,34 @@ function ClipView({
           className="bottom-1 right-2"
           onToggle={() => useEditor.getState().updateClip(clip.id, { hidden: !clip.hidden })}
         />
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <button
-                aria-label="Clip options"
-                className="tl-clip-menu absolute top-1 right-2 z-4 grid size-[18px] place-items-center rounded-[5px] bg-black/55 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/75"
-                onPointerDown={(e) => e.stopPropagation()}
-              />
-            }
-          >
-            <EllipsisVertical className="size-3" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-44">
-            <DropdownMenuItem
-              disabled={clip.muted}
-              onClick={() => {
-                const s = useEditor.getState();
-                s.select({ kind: "clip", id: clip.id });
-                s.detachAudio();
-                void ensurePeaks(asset);
-              }}
+        {asset.type === "video" && (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <button
+                  aria-label="Clip options"
+                  className="tl-clip-menu absolute top-1 right-2 z-4 grid size-[18px] place-items-center rounded-[5px] bg-black/55 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/75"
+                  onPointerDown={(e) => e.stopPropagation()}
+                />
+              }
             >
-              <AudioLines /> Detach audio
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+              <EllipsisVertical className="size-3" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-44">
+              <DropdownMenuItem
+                disabled={clip.muted}
+                onClick={() => {
+                  const s = useEditor.getState();
+                  s.select({ kind: "clip", id: clip.id });
+                  s.detachAudio();
+                  void ensurePeaks(asset);
+                }}
+              >
+                <AudioLines /> Detach audio
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
         <span
           className={cn(trimHandle, "tl-trim-l", trim?.side === "l" && "z-3 after:opacity-100")}
           style={{ left: hidPx }}

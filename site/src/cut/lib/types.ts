@@ -1,6 +1,10 @@
 import { apiUrl } from "./api";
 
-export type AssetType = "video" | "audio";
+export type AssetType = "video" | "audio" | "image";
+
+/** Default on-timeline length (seconds) a still image occupies when placed —
+ * an image has no intrinsic duration, so the clip carries this as its `out`. */
+export const IMAGE_CLIP_SECONDS = 8;
 
 /** Project output frame. Vertical (TikTok/Reels) or widescreen (YouTube). */
 export type Aspect = "9:16" | "16:9";
@@ -24,9 +28,11 @@ export interface StoredAsset {
   duration: number; // seconds
   width?: number;
   height?: number;
-  /** Set on assets Cut generated itself (AI voiceovers, generated images);
-   * absent on imports. */
-  origin?: "voiceover" | "generated";
+  /** How this asset entered the project. Absent = the user imported it (drag,
+   * drop, or upload), so it belongs in the Media panel. Any value marks media
+   * Cut created or fetched — it lives where it was made (the timeline or a
+   * generation panel) and is kept out of the Media panel. */
+  origin?: "voiceover" | "generated" | "recording" | "stock" | "freeze";
 }
 
 /** Runtime asset: stored fields plus derived/browser-only data. */
@@ -456,6 +462,8 @@ export interface ProjectSummary {
   assetCount: number;
   /** Media file used for the card poster / hover fallback. */
   previewFile?: string;
+  /** The poster file is a still image, so the card renders it as an <img>. */
+  previewIsImage?: boolean;
   /** Source time (seconds) of the poster frame — the first clip's trim-in. */
   previewStart?: number;
   /** Whether a rendered proxy of the edit exists to play on hover. */

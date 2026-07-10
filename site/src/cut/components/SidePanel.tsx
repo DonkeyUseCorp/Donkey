@@ -43,6 +43,7 @@ import { CopyNameLabel } from "./AssetRefs";
 import { AudioPanel } from "./AudioPanel";
 import { buildDragGhost, FolderCrumb, FolderShelf } from "./desktopFolders";
 import { GenerateVideoPanel } from "./GeneratePanel";
+import { ImageGenPanel } from "./ImageGenPanel";
 import { StockImagesPanel } from "./StockImagesPanel";
 import { LibraryCard } from "./LibraryView";
 
@@ -123,17 +124,30 @@ export function SidePanel({
         })}
       </div>
 
-      <div className="flex w-[264px] min-h-0 shrink-0 flex-col">
-        {tab === "media" && (
-          <MediaPanel projectId={projectId} onImport={onImport} importing={importing} />
-        )}
-        {tab === "video" && <GenerateVideoPanel projectId={projectId} />}
-        {tab === "image" && <StockImagesPanel />}
-        {tab === "library" && <LibraryPanel projectId={projectId} />}
-        {tab === "audio" && <AudioPanel projectId={projectId} importing={importing} />}
-        {tab === "subtitles" && <SubtitlesPanel />}
-        {tab === "publish" && <PublishPanel />}
-      </div>
+      {tab === "image" ? (
+        // The Image tab is two columns: the generate-image input on the left,
+        // the stock reference browser on the right. Clicking a stock tile loads
+        // its prompt into the generate panel beside it.
+        <>
+          <div className="flex w-[252px] min-h-0 shrink-0 flex-col border-r border-border">
+            <ImageGenPanel projectId={projectId} />
+          </div>
+          <div className="flex w-[264px] min-h-0 shrink-0 flex-col">
+            <StockImagesPanel />
+          </div>
+        </>
+      ) : (
+        <div className="flex w-[264px] min-h-0 shrink-0 flex-col">
+          {tab === "media" && (
+            <MediaPanel projectId={projectId} onImport={onImport} importing={importing} />
+          )}
+          {tab === "video" && <GenerateVideoPanel projectId={projectId} />}
+          {tab === "library" && <LibraryPanel projectId={projectId} />}
+          {tab === "audio" && <AudioPanel projectId={projectId} importing={importing} />}
+          {tab === "subtitles" && <SubtitlesPanel />}
+          {tab === "publish" && <PublishPanel />}
+        </div>
+      )}
     </div>
   );
 }
@@ -156,7 +170,10 @@ function MediaPanel({
   onImport: (files: FileList) => void;
   importing: boolean;
 }) {
-  const assets = useEditor((s) => s.assets);
+  // Only user-imported media lives here; anything Cut created (recordings, AI
+  // generations, voiceovers, freeze frames, stock adds) is tagged with an
+  // `origin` and stays where it was made.
+  const assets = useEditor((s) => s.assets).filter((a) => a.origin == null);
   const exportOpen = useEditor((s) => s.exportOpen);
   // A render that finishes in the background (dialog closed) drops a new file in
   // the exports folder; re-read the list when it lands so it shows without a
@@ -348,7 +365,7 @@ function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string 
 
   const add = () => {
     const s = useEditor.getState();
-    if (asset.type === "video") s.addClipFromAsset(asset.id);
+    if (asset.type === "video" || asset.type === "image") s.addClipFromAsset(asset.id);
     else s.addAudioFromAsset(asset.id);
   };
 
@@ -412,14 +429,19 @@ function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string 
             playsInline
             className="size-full object-cover"
           />
+        ) : asset.type === "image" ? (
+          // eslint-disable-next-line @next/next/no-img-element -- engine/static file, not Next-optimizable
+          <img src={asset.url} alt={asset.name} loading="lazy" className="size-full object-cover" />
         ) : (
           <div className="grid size-full place-items-center bg-gradient-to-br from-emerald-100 to-emerald-50 text-emerald-600">
             <Music className="size-4.5" />
           </div>
         )}
-        <span className="absolute right-1 bottom-1 rounded-[5px] bg-black/65 px-1 py-px font-mono text-[9.5px] text-white tabular-nums">
-          {formatTime(asset.duration)}
-        </span>
+        {asset.type !== "image" && (
+          <span className="absolute right-1 bottom-1 rounded-[5px] bg-black/65 px-1 py-px font-mono text-[9.5px] text-white tabular-nums">
+            {formatTime(asset.duration)}
+          </span>
+        )}
         <span className="absolute top-1 left-1 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
           <span
             role="button"
@@ -455,13 +477,9 @@ function AssetCard({ asset, projectId }: { asset: MediaAsset; projectId: string 
       <CopyNameLabel name={asset.name} className="text-[11px] text-muted-foreground" />
     </div>
     <AlertDialog open={confirmUses !== null} onOpenChange={(o) => !o && setConfirmUses(null)}>
-      <AlertDialogContent>
+      <AlertDialogContent aria-describedby={undefined}>
         <AlertDialogHeader>
           <AlertDialogTitle>Remove “{asset.name}” from the project?</AlertDialogTitle>
-          <AlertDialogDescription>
-            It’s used by {confirmUses} {confirmUses === 1 ? "clip" : "clips"} on the timeline,
-            which will be removed too. This can be undone with ⌘Z.
-          </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>

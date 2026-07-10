@@ -23,7 +23,7 @@ export interface LibraryAsset {
   id: string;
   fileName: string;
   name: string;
-  type: "video" | "audio";
+  type: "video" | "audio" | "image";
   duration: number;
   width?: number;
   height?: number;
@@ -49,7 +49,7 @@ export interface LibraryFolder {
 export interface TemplateMedia {
   fileName: string; // private copy inside the library media folder
   name: string;
-  type: "video" | "audio";
+  type: "video" | "audio" | "image";
   duration: number;
   width?: number;
   height?: number;
@@ -156,6 +156,7 @@ export async function listLibrary(): Promise<LibraryAsset[]> {
 
 const VIDEO_RE = /\.(mp4|mov|m4v|webm|mkv)$/i;
 const AUDIO_RE = /\.(mp3|m4a|aac|wav|ogg|flac)$/i;
+const IMAGE_RE = /\.(png|jpe?g|webp|gif|avif|bmp)$/i;
 
 function ffprobe(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -181,7 +182,7 @@ async function probe(filePath: string) {
   );
   let width: number | undefined;
   let height: number | undefined;
-  if (VIDEO_RE.test(filePath)) {
+  if (VIDEO_RE.test(filePath) || IMAGE_RE.test(filePath)) {
     const dims = await ffprobe([
       "-select_streams", "v:0",
       "-show_entries", "stream=width,height",
@@ -194,6 +195,7 @@ async function probe(filePath: string) {
       height = h;
     }
   }
+  // An image has no timeline duration of its own.
   return { duration: Number.isFinite(duration) ? duration : 0, width, height };
 }
 
@@ -202,9 +204,10 @@ async function freeName(original: string) {
   return uniqueName(base, libMediaPath);
 }
 
-function typeOf(fileName: string): "video" | "audio" | null {
+function typeOf(fileName: string): "video" | "audio" | "image" | null {
   if (VIDEO_RE.test(fileName)) return "video";
   if (AUDIO_RE.test(fileName)) return "audio";
+  if (IMAGE_RE.test(fileName)) return "image";
   return null;
 }
 
@@ -355,7 +358,7 @@ export async function moveAsset(assetId: string, folderId: string | null) {
 export interface TemplateInput {
   name: string;
   duration: number;
-  media: { fileName: string; name: string; type: "video" | "audio"; duration: number; width?: number; height?: number }[];
+  media: { fileName: string; name: string; type: "video" | "audio" | "image"; duration: number; width?: number; height?: number }[];
   layers: TemplateLayer[];
   audio: TemplateAudio[];
   texts: unknown[];

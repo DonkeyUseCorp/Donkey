@@ -676,6 +676,19 @@ function CardPreview({ project: p }: { project: ProjectSummary }) {
   // The proxy starts at the edit's first frame; the source starts at the clip's
   // trim-in, so both posters show what actually plays first.
   const posterT = p.hasPreview ? 0 : p.previewStart ?? 0.1;
+
+  // A still-image project with no rendered proxy posters as the image itself.
+  if (!p.hasPreview && p.previewIsImage) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element -- engine media file, not Next-optimizable
+      <img
+        src={mediaUrl(p.id, p.previewFile!)}
+        alt=""
+        className="absolute inset-0 size-full object-cover"
+      />
+    );
+  }
+
   const src = p.hasPreview
     ? apiUrl(`/api/cut/projects/${p.id}/preview`)
     : mediaUrl(p.id, p.previewFile!);

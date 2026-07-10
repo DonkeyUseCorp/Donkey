@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { AtSign, Check, Copy, Music, X } from "lucide-react";
+import { Check, Copy, Music, X } from "lucide-react";
 import {
+  highlightMentions,
   mentionToken,
   refToken,
   type AssetRef,
@@ -52,7 +53,7 @@ export function RefThumb({ item, className }: { item: AssetRef; className?: stri
   );
 }
 
-/** The `v2` badge shown on chips, cards, and the mention menu. */
+/** The `v2` badge shown on chips, cards, and the mention menu (on light UI). */
 export function RefHandleBadge({ handle, className }: { handle: string; className?: string }) {
   return (
     <span
@@ -66,23 +67,32 @@ export function RefHandleBadge({ handle, className }: { handle: string; classNam
   );
 }
 
+/** A legible reference-token pill for image tiles: dark so it reads over any
+ * image, showing the mention to type (`@i2`, `@nature-dunes`). Caller controls
+ * visibility (shown on hover). */
+export function RefHandlePill({ token, className }: { token: string; className?: string }) {
+  return (
+    <span
+      className={cn(
+        "pointer-events-none max-w-[calc(100%-0.5rem)] truncate rounded-[5px] bg-black/65 px-1.5 py-0.5 font-mono text-[10px] font-medium text-white",
+        className
+      )}
+    >
+      {token}
+    </span>
+  );
+}
+
 /** Hover peek: a larger look at the ref, floated above the anchor. */
 function RefPeek({ item, side = "top" }: { item: AssetRef; side?: "top" | "bottom" }) {
   return (
     <div
       className={cn(
-        "ref-peek pointer-events-none absolute left-0 z-50 w-44 rounded-xl border border-border bg-popover p-1.5 shadow-xl",
+        "ref-peek pointer-events-none absolute left-0 z-50 w-44 overflow-hidden rounded-xl shadow-xl",
         side === "top" ? "bottom-full mb-1.5" : "top-full mt-1.5"
       )}
     >
       <RefThumb item={item} className="aspect-square w-full" />
-      <div className="mt-1 flex items-center gap-1 px-0.5">
-        {item.handle && <RefHandleBadge handle={item.handle} />}
-        <span className="min-w-0 truncate text-[10.5px] text-foreground">{item.name}</span>
-      </div>
-      <div className="px-0.5 text-[9.5px] tracking-wide text-muted-foreground uppercase">
-        {item.scope} · click to show
-      </div>
     </div>
   );
 }
@@ -134,12 +144,15 @@ export function RefChips({
   onRemove,
   className,
   peekSide = "top",
+  thumbClassName = "size-14",
 }: {
   refs: AssetRef[];
   onRemove: (ref: AssetRef) => void;
   className?: string;
   /** Open peeks downward when the chips sit near the top of their panel. */
   peekSide?: "top" | "bottom";
+  /** Thumbnail size, e.g. "size-12" for a compact in-input composer. */
+  thumbClassName?: string;
 }) {
   const candidates = useRefCandidates();
   if (refs.length === 0) return null;
@@ -155,6 +168,7 @@ export function RefChips({
             item={{ ...r, handle }}
             onRemove={onRemove}
             peekSide={peekSide}
+            thumbClassName={thumbClassName}
           />
         );
       })}
@@ -166,10 +180,12 @@ function RefChip({
   item,
   onRemove,
   peekSide,
+  thumbClassName,
 }: {
   item: AssetRef;
   onRemove: (ref: AssetRef) => void;
   peekSide: "top" | "bottom";
+  thumbClassName: string;
 }) {
   const [peek, setPeek] = useState(false);
   return (
@@ -184,7 +200,7 @@ function RefChip({
         className="block text-left"
         onClick={() => revealRef(item)}
       >
-        <RefThumb item={item} className="size-14" />
+        <RefThumb item={item} className={thumbClassName} />
       </button>
       {item.handle && <RefHandleBadge handle={item.handle} className="absolute bottom-1 left-1" />}
       {peek && <RefPeek item={item} side={peekSide} />}
@@ -305,6 +321,7 @@ export function MentionTextarea({
   rows?: number;
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
   const [caret, setCaret] = useState(0);
   const [dismissed, setDismissed] = useState<number | null>(null);
   const [sel, setSel] = useState(0);
@@ -368,19 +385,38 @@ export function MentionTextarea({
               <RefThumb item={c} className="size-8" />
               {c.handle && <RefHandleBadge handle={c.handle} className="shrink-0" />}
               <span className="min-w-0 flex-1 truncate text-[11.5px]">{c.name}</span>
-              <span className="shrink-0 text-[9.5px] tracking-wide text-muted-foreground uppercase">
-                {c.scope}
-              </span>
             </button>
           ))}
-          <div className="flex items-center gap-1 px-1.5 pt-1 pb-0.5 text-[10px] text-muted-foreground">
-            <AtSign className="size-2.5" /> Reference by handle (@v2) or name
-          </div>
         </div>
       )}
+      {/* Highlight overlay: a mirror of the text sitting behind the textarea
+          that draws a pill behind every resolved @mention. It shares the
+          textarea's typography and padding so the pills line up exactly, and
+          scrolls in lockstep. */}
+      <div
+        ref={backdropRef}
+        aria-hidden
+        className={cn(
+          className,
+          "pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-transparent"
+        )}
+      >
+        {highlightMentions(value, candidates).map((seg, i) =>
+          seg.ref ? (
+            <span
+              key={i}
+              className="rounded-[4px] bg-[#0a84ff]/12 shadow-[0_0_0_2px_rgba(10,132,255,0.12)]"
+            >
+              {seg.text}
+            </span>
+          ) : (
+            <span key={i}>{seg.text}</span>
+          )
+        )}
+      </div>
       <textarea
         ref={taRef}
-        className={className}
+        className={cn(className, "relative bg-transparent")}
         rows={rows}
         placeholder={placeholder}
         value={value}
@@ -388,6 +424,13 @@ export function MentionTextarea({
           setDismissed(null);
           onChange(e.target.value);
           setCaret(e.target.selectionStart ?? 0);
+        }}
+        onScroll={(e) => {
+          const bd = backdropRef.current;
+          if (bd) {
+            bd.scrollTop = e.currentTarget.scrollTop;
+            bd.scrollLeft = e.currentTarget.scrollLeft;
+          }
         }}
         onSelect={syncCaret}
         onKeyDown={(e) => {

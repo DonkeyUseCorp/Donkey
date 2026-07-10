@@ -1,9 +1,6 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import type { ProjectDoc } from "@/cut/lib/types";
-import { makeFreezeFrame, makeStillClip } from "../frames";
+import { makeFreezeFrame, probeDims } from "../frames";
 import {
   createProject,
   createProjectFolder,
@@ -265,9 +262,9 @@ export const projectsApi = {
     });
   },
 
-  /** Bake an uploaded still image into a video clip in the project's media
-   * folder (AI-generated images arrive here after hosted generation). */
-  async importStill(req: Request, { id }: { id: string }) {
+  /** Store an uploaded image as a first-class image asset at native
+   * resolution — no video baking. AI generations and stock tiles land here. */
+  async importImage(req: Request, { id }: { id: string }) {
     try {
       if (!(await readProject(id))) return err("Project not found.", 404);
       const form = await req.formData();
@@ -275,28 +272,19 @@ export const projectsApi = {
       if (!(file instanceof File)) return err("No image in upload.", 400);
       const nameField = form.get("name");
       const name = typeof nameField === "string" && nameField.trim() ? nameField.trim() : file.name;
-      const slug =
-        name
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-+|-+$/g, "")
-          .slice(0, 40) || "still";
-      const tmp = await mkdtemp(path.join(os.tmpdir(), "cut-still-"));
-      try {
-        const src = path.join(tmp, path.basename(file.name).replace(/[^\w.-]+/g, "_") || "image.png");
-        await writeFile(src, Buffer.from(await file.arrayBuffer()));
-        // 8s of still footage — room to trim like any other clip.
-        const made = await makeStillClip(id, src, 8, `ai-${slug}`);
-        return Response.json({
-          id: crypto.randomUUID().slice(0, 8),
-          type: "video",
-          name,
-          origin: "generated",
-          ...made,
-        });
-      } finally {
-        void rm(tmp, { recursive: true, force: true });
-      }
+      const origin = form.get("origin") === "generated" ? "generated" : undefined;
+      const fileName = await saveMedia(id, file);
+      const dims = await probeDims(mediaPath(id, fileName));
+      return Response.json({
+        id: crypto.randomUUID().slice(0, 8),
+        type: "image",
+        name,
+        fileName,
+        duration: 0,
+        width: dims.width,
+        height: dims.height,
+        ...(origin ? { origin } : {}),
+      });
     } catch (e) {
       return caught(e, "Could not import the image.");
     }

@@ -48,6 +48,8 @@ export interface ExportSpec {
     tailZoom?: number;
     /** Hidden clips keep their slot but render black + silent. */
     hidden?: boolean;
+    /** A still image: looped for the clip's length instead of trimmed. */
+    image?: boolean;
   }[];
   /** Upper video tracks composited over the base, bottom track first. */
   overlayVideos?: {
@@ -61,6 +63,8 @@ export interface ExportSpec {
     fit?: "fit" | "fill";
     muted: boolean;
     speed?: number;
+    /** A still image: looped for the clip's length instead of trimmed. */
+    image?: boolean;
   }[];
   audio: {
     file: string;
@@ -356,8 +360,16 @@ async function runExport(job: Job, spec: ExportSpec) {
   const padColor = hasBelow ? "black@0.0" : "black";
   // One ffmpeg input per distinct media file (from the project folder),
   // plus one per uploaded overlay PNG.
+  // Still images are excluded here: a plain `-i file` decodes one frame, so
+  // each image clip/overlay gets its own looped input below instead.
   const mediaFiles = [
-    ...new Set([...spec.clips, ...spec.audio, ...overlayVideos].map((c) => c.file)),
+    ...new Set(
+      [
+        ...spec.clips.filter((c) => !c.image),
+        ...spec.audio,
+        ...overlayVideos.filter((o) => !o.image),
+      ].map((c) => c.file)
+    ),
   ];
   const audioPresence = new Map<string, boolean>();
   const videoPresence = new Map<string, boolean>();
@@ -390,6 +402,26 @@ async function runExport(job: Job, spec: ExportSpec) {
   for (const o of spec.overlays) {
     inputIndex.set(o.file, nInputs++);
     inputs.push("-i", path.join(job.tmpDir, path.basename(o.file)));
+  }
+
+  // Looped input per still image, sized to the clip's timeline length so the
+  // segment fills without a source trim. Keyed by clip/overlay identity since
+  // two clips of the same image can have different lengths.
+  const imageClipInput = new Map<number, number>();
+  for (let j = 0; j < spec.clips.length; j++) {
+    const c = spec.clips[j];
+    if (!c.image) continue;
+    const dur = Math.max(0.1, (c.out - c.in) / clipRate(c));
+    imageClipInput.set(j, nInputs++);
+    inputs.push("-loop", "1", "-t", num(dur), "-framerate", String(fps), "-i", await resolveMedia(spec, c.file));
+  }
+  const imageOverlayInput = new Map<(typeof overlayVideos)[number], number>();
+  for (const oc of overlayVideos) {
+    if (!oc.image) continue;
+    const ospeed = oc.speed && oc.speed > 0 ? oc.speed : 1;
+    const olen = Math.max(0.1, (oc.out - oc.in) / ospeed);
+    imageOverlayInput.set(oc, nInputs++);
+    inputs.push("-loop", "1", "-t", num(olen), "-framerate", String(fps), "-i", await resolveMedia(spec, oc.file));
   }
 
   // One concat-demuxer input for all subtitle stills: cues never overlap, so
@@ -430,7 +462,7 @@ async function runExport(job: Job, spec: ExportSpec) {
 
   // Per-clip normalized video + audio segments for the join below.
   spec.clips.forEach((c, j) => {
-    const idx = inputIndex.get(c.file)!;
+    const idx = c.image ? imageClipInput.get(j)! : inputIndex.get(c.file)!;
     const speed = clipRate(c);
     const dur = clipDur(c);
     // Edge-transition ramps, clamped so head+tail never overrun the segment.
@@ -438,7 +470,12 @@ async function runExport(job: Job, spec: ExportSpec) {
     const tz = Math.max(0, Math.min(c.tailZoom ?? 0, dur - hz));
     const hf = Math.max(0, Math.min(c.headFade ?? 0, dur));
     const tf = Math.max(0, Math.min(c.tailFade ?? 0, dur - hf));
-    if (videoPresence.get(c.file) && !c.hidden) {
+    // A still's looped input is already the right length at `fps`; it has no
+    // source span to trim. Footage trims `in..out` and re-times by speed.
+    const timebase = c.image
+      ? `[${idx}:v]setpts=PTS-STARTPTS`
+      : `[${idx}:v]trim=${num(c.in)}:${num(c.out)},setpts=(PTS-STARTPTS)/${num(speed)}`;
+    if ((c.image || videoPresence.get(c.file)) && !c.hidden) {
       const region = regionPx(c.frame, W, H);
       let frame: string;
       if (region) {
@@ -461,10 +498,9 @@ async function runExport(job: Job, spec: ExportSpec) {
             : `scale=${W}:${H}:force_original_aspect_ratio=decrease,` +
               `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=${padColor}`;
       }
-      // setpts/speed rescales the clip's duration on the timeline.
-      const core =
-        `[${idx}:v]trim=${num(c.in)}:${num(c.out)},setpts=(PTS-STARTPTS)/${num(speed)},` +
-        `fps=${fps},${frame},setsar=1,format=${baseFmt}`;
+      // setpts/speed rescales the clip's duration on the timeline (footage);
+      // a still just replays its looped input.
+      const core = `${timebase},fps=${fps},${frame},setsar=1,format=${baseFmt}`;
       const fades =
         (hf > 0.01 ? `,fade=t=in:st=0:d=${num(hf)}` : "") +
         (tf > 0.01 ? `,fade=t=out:st=${num(Math.max(0, dur - tf))}:d=${num(tf)}` : "");
@@ -575,8 +611,8 @@ async function runExport(job: Job, spec: ExportSpec) {
   // Overlay one track clip onto `onto`, returning the new label; also queues its
   // audio. Reused for the below backdrop and the above-base stack.
   const addOverlay = (oc: (typeof overlayVideos)[number], onto: string): string => {
-    if (!videoPresence.get(oc.file)) return onto;
-    const idx = inputIndex.get(oc.file)!;
+    if (!oc.image && !videoPresence.get(oc.file)) return onto;
+    const idx = oc.image ? imageOverlayInput.get(oc)! : inputIndex.get(oc.file)!;
     const ospeed = oc.speed && oc.speed > 0 ? oc.speed : 1;
     const olen = Math.max(0.1, (oc.out - oc.in) / ospeed);
     const end = Math.min(oc.start + olen, spec.duration);
@@ -598,10 +634,13 @@ async function runExport(job: Job, spec: ExportSpec) {
     }
     const k = ovk++;
     const seg = `ovv${k}`;
-    // tpad delays the clip to its timeline start without a leading-frame stall.
+    // A still replays its looped input; footage trims its source span and
+    // re-times by speed. tpad then delays the clip to its timeline start.
+    const timebase = oc.image
+      ? `[${idx}:v]setpts=PTS-STARTPTS`
+      : `[${idx}:v]trim=${num(oc.in)}:${num(oc.out)},setpts=(PTS-STARTPTS)/${num(ospeed)}`;
     filters.push(
-      `[${idx}:v]trim=${num(oc.in)}:${num(oc.out)},setpts=(PTS-STARTPTS)/${num(ospeed)},` +
-        `fps=${fps},${framing},setsar=1,format=yuv420p,tpad=start_duration=${num(oc.start)}[${seg}]`
+      `${timebase},fps=${fps},${framing},setsar=1,format=yuv420p,tpad=start_duration=${num(oc.start)}[${seg}]`
     );
     const next = `vovv${k}`;
     filters.push(

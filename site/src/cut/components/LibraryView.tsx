@@ -7,6 +7,7 @@ import {
   Film,
   Folder,
   FolderOpen,
+  Image as ImageIcon,
   Link as LinkIcon,
   Loader2,
   Music,
@@ -413,14 +414,19 @@ export function LibraryCard({
             preload="metadata"
             className="size-full object-cover"
           />
+        ) : a.type === "image" ? (
+          // eslint-disable-next-line @next/next/no-img-element -- library media file, not Next-optimizable
+          <img src={libraryMediaUrl(a.fileName)} alt={a.name} loading="lazy" className="size-full object-cover" />
         ) : (
           <div className="grid size-full place-items-center bg-gradient-to-br from-emerald-100 to-emerald-50 text-emerald-600">
             <Music className="size-5" />
           </div>
         )}
-        <span className="absolute right-1.5 bottom-1.5 rounded-md bg-black/65 px-1.5 py-0.5 font-mono text-[10px] text-white tabular-nums">
-          {formatTime(a.duration)}
-        </span>
+        {a.type !== "image" && (
+          <span className="absolute right-1.5 bottom-1.5 rounded-md bg-black/65 px-1.5 py-0.5 font-mono text-[10px] text-white tabular-nums">
+            {formatTime(a.duration)}
+          </span>
+        )}
         {onUse && (
           <button
             aria-label="Add to timeline"
@@ -481,6 +487,11 @@ export function LibraryCard({
         {a.type === "video" && (
           <span className="absolute bottom-1.5 left-1.5 text-white/90">
             <Film className="size-3.5 drop-shadow" />
+          </span>
+        )}
+        {a.type === "image" && (
+          <span className="absolute bottom-1.5 left-1.5 text-white/90">
+            <ImageIcon className="size-3.5 drop-shadow" />
           </span>
         )}
       </div>

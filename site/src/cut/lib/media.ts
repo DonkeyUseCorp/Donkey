@@ -2,8 +2,8 @@
 
 import { apiFetch, apiJson } from "./api";
 import { useEditor } from "./store";
-import type { AudioClip, MediaAsset, ProjectSummary, StoredAsset, VideoClip } from "./types";
-import { mediaUrl } from "./types";
+import type { AssetType, AudioClip, MediaAsset, ProjectSummary, StoredAsset, VideoClip } from "./types";
+import { IMAGE_CLIP_SECONDS, mediaUrl } from "./types";
 
 const uid = () => crypto.randomUUID().slice(0, 8);
 
@@ -12,8 +12,10 @@ export function isMediaFile(file: File) {
   return (
     file.type.startsWith("video/") ||
     file.type.startsWith("audio/") ||
+    file.type.startsWith("image/") ||
     isVideoFile(file) ||
-    isAudioFile(file)
+    isAudioFile(file) ||
+    isImageFile(file)
   );
 }
 
@@ -50,8 +52,9 @@ export async function createProjectFromFile(
   const doc: Partial<{ assets: StoredAsset[]; clips: VideoClip[]; audioClips: AudioClip[] }> = {
     assets: [stored],
   };
-  if (asset.type === "video") {
-    doc.clips = [{ id: uid(), assetId: asset.id, in: 0, out: asset.duration, muted: false }];
+  if (asset.type === "video" || asset.type === "image") {
+    const out = asset.type === "image" ? IMAGE_CLIP_SECONDS : asset.duration;
+    doc.clips = [{ id: uid(), assetId: asset.id, in: 0, out, muted: false }];
   } else {
     doc.audioClips = [
       { id: uid(), assetId: asset.id, start: 0, in: 0, out: asset.duration, volume: 1 },
@@ -73,6 +76,10 @@ export function isAudioFile(file: File) {
   return file.type.startsWith("audio/") || /\.(mp3|m4a|aac|wav|ogg|flac)$/i.test(file.name);
 }
 
+export function isImageFile(file: File) {
+  return file.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|avif|bmp)$/i.test(file.name);
+}
+
 /** Upload a raw file into the project folder, probe it, and return the asset.
  * Thumbnails/waveform are filled in asynchronously via `enrichAsset`. */
 export async function importFileToProject(
@@ -80,15 +87,19 @@ export async function importFileToProject(
   file: File
 ): Promise<MediaAsset | null> {
   // MIME wins over extension: recordings are .webm for both video and audio.
-  const type = file.type.startsWith("video/")
+  const type: AssetType | null = file.type.startsWith("video/")
     ? "video"
     : file.type.startsWith("audio/")
       ? "audio"
-      : isVideoFile(file)
-        ? "video"
-        : isAudioFile(file)
-          ? "audio"
-          : null;
+      : file.type.startsWith("image/")
+        ? "image"
+        : isVideoFile(file)
+          ? "video"
+          : isAudioFile(file)
+            ? "audio"
+            : isImageFile(file)
+              ? "image"
+              : null;
   if (!type) return null;
 
   const form = new FormData();
@@ -121,9 +132,52 @@ export async function importFileToProject(
       asset.width = v.videoWidth;
       asset.height = v.videoHeight;
     }
+  } else if (type === "image") {
+    // Images have no intrinsic duration; the timeline clip carries its length.
+    const dims = await loadImageMeta(url);
+    asset.width = dims.width;
+    asset.height = dims.height;
   } else {
     asset.duration = await loadAudioDuration(url);
   }
+  return asset;
+}
+
+/** Natural pixel size of an image URL, for framing on the timeline. */
+function loadImageMeta(url: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    img.onerror = () => resolve({ width: 0, height: 0 });
+    img.src = url;
+  });
+}
+
+/** Store a fetchable image (a stock tile) in the project's media as a
+ * first-class image asset at its native resolution — no video baking — and
+ * register it, without placing it on the timeline. Callers choose where it
+ * lands. */
+export async function importImage(
+  projectId: string,
+  image: { url: string; name: string }
+): Promise<MediaAsset> {
+  const dl = await fetch(image.url);
+  if (!dl.ok) throw new Error("Could not read the image.");
+  const blob = await dl.blob();
+  const form = new FormData();
+  form.append("file", blob, image.url.split("/").pop() || "image.png");
+  form.append("name", image.name);
+  const res = await apiFetch(`/api/cut/projects/${projectId}/image`, {
+    method: "POST",
+    body: form,
+  });
+  const body = await apiJson<MediaAsset>(res);
+  if (!res.ok || !body.fileName) throw new Error(body.error ?? "Could not add the image.");
+  // A stock image lands on the timeline where the caller places it, not in the
+  // Media panel — tag it so it stays out.
+  const asset: MediaAsset = { ...body, url: mediaUrl(projectId, body.fileName), origin: "stock" };
+  useEditor.getState().addAsset(asset);
+  void enrichAsset(asset);
   return asset;
 }
 
@@ -157,7 +211,12 @@ export async function assetFromProjectFile(
  * store. Safe to call repeatedly; skips assets that are already enriched. */
 export async function enrichAsset(asset: MediaAsset) {
   try {
-    if (asset.type === "video" && !asset.thumbs?.length) {
+    if (asset.type === "image") {
+      // A still is its own filmstrip: one frame, tiled across the clip.
+      if (!asset.thumbs?.length) {
+        useEditor.getState().updateAsset(asset.id, { thumbs: [asset.url], thumbStep: IMAGE_CLIP_SECONDS });
+      }
+    } else if (asset.type === "video" && !asset.thumbs?.length) {
       const { thumbs, thumbStep } = await makeThumbs(asset.url, asset.duration);
       useEditor.getState().updateAsset(asset.id, { thumbs, thumbStep });
     } else if (asset.type === "audio" && !asset.peaks?.length) {

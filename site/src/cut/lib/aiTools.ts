@@ -7,7 +7,7 @@ import { getClipSpans, TIMELINE_H_MAX, TIMELINE_H_MIN, totalDuration, useEditor 
 import { buildAiContext } from "./aiContext";
 import { resolveVoice, synthesizeSpeech, SPEECH_VOICES } from "./tts";
 import { DUCK_DEFAULT, generateSubtitlesReadout } from "./voiceover";
-import { FRAME, mediaUrl, TRANSITION_STYLE_IDS, type AudioClip, type FontId, type MediaAsset, type TransitionStyle } from "./types";
+import { FRAME, IMAGE_CLIP_SECONDS, mediaUrl, TRANSITION_STYLE_IDS, type AudioClip, type FontId, type MediaAsset, type TransitionStyle } from "./types";
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -90,7 +90,8 @@ export async function runAiTool(
     case "trim_clip": {
       const clip = requireItem(s.clips, input.clipId, "video clip");
       const asset = s.assets.find((a) => a.id === clip.assetId);
-      const dur = asset?.duration ?? clip.out;
+      // A still has no source bound, so its clip can stretch to any length.
+      const dur = asset?.type === "image" ? Infinity : asset?.duration ?? clip.out;
       const nextIn = isNum(input.in) ? clamp(input.in, 0, dur - 0.1) : clip.in;
       const nextOut = isNum(input.out) ? clamp(input.out, 0.1, dur) : clip.out;
       if (nextOut - nextIn < 0.1) throw new ToolError("Clip must stay at least 0.1s long.");
@@ -212,7 +213,7 @@ export async function runAiTool(
       });
       const body = await apiJson<MediaAsset>(res);
       if (!res.ok) throw new ToolError(body.error ?? "Could not render the freeze frame.");
-      const asset: MediaAsset = { ...body, url: mediaUrl(projectId, body.fileName) };
+      const asset: MediaAsset = { ...body, url: mediaUrl(projectId, body.fileName), origin: "freeze" };
       const cur = useEditor.getState();
       cur.addAsset(asset);
       cur.addClipFromAsset(asset.id); // lands at the end, selected
@@ -248,7 +249,8 @@ export async function runAiTool(
         assetId: asset.id,
         name: asset.name,
         kind: "image",
-        duration: Math.round(asset.duration * 100) / 100,
+        // A still has no source length; report its default placed length.
+        duration: IMAGE_CLIP_SECONDS,
         addedToTimeline: placed.added,
         clipId: placed.clipId,
         index: placed.index,

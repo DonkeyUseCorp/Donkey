@@ -147,6 +147,9 @@ async function buildExportForm(
     speed: clipSpeed(sp.clip),
     transition: sp.transitionOut,
     hidden: sp.clip.hidden,
+    // A still: the server loops the image for the clip's length instead of
+    // trimming a source span.
+    image: sp.asset.type === "image",
     headFade: 0,
     tailFade: 0,
     headZoom: 0,
@@ -194,6 +197,7 @@ async function buildExportForm(
       fit: c.fit,
       muted: c.muted,
       speed: c.speed,
+      image: assetById.get(c.assetId)!.type === "image",
     }));
 
   const audio = doc.audioClips

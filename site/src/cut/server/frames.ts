@@ -3,7 +3,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { mediaPath } from "./projects";
-import { uniqueName } from "./util";
 
 function run(cmd: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -30,7 +29,7 @@ function run(cmd: string, args: string[]): Promise<void> {
   });
 }
 
-function probeDims(file: string): Promise<{ width: number; height: number }> {
+export function probeDims(file: string): Promise<{ width: number; height: number }> {
   return new Promise((resolve) => {
     const p = spawn("ffprobe", [
       "-v", "error",
@@ -56,35 +55,6 @@ function probeDims(file: string): Promise<{ width: number; height: number }> {
       resolve({ width: 1080, height: 1920 });
     });
   });
-}
-
-/**
- * Bake a still image into an H.264 clip in the project's media folder, so it
- * rides the timeline, preview, and export like any other footage.
- */
-export async function makeStillClip(
-  projectId: string,
-  imagePath: string,
-  seconds: number,
-  fileBase: string
-): Promise<{ fileName: string; duration: number; width: number; height: number }> {
-  const fileName = await uniqueName(`${fileBase}.mp4`, (n) => mediaPath(projectId, n));
-  const out = mediaPath(projectId, fileName);
-  await run("ffmpeg", [
-    "-y",
-    "-loop", "1",
-    "-i", imagePath,
-    "-t", seconds.toFixed(3),
-    "-r", "30",
-    // yuv420p needs even dimensions, whatever size the image came in at.
-    "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-    "-c:v", "libx264",
-    "-preset", "veryfast",
-    "-pix_fmt", "yuv420p",
-    out,
-  ]);
-  const dims = await probeDims(out);
-  return { fileName, duration: seconds, width: dims.width, height: dims.height };
 }
 
 export interface FreezeFraming {

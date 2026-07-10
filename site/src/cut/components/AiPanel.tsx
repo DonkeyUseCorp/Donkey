@@ -449,14 +449,6 @@ function ChatSession({
       {...targetProps}
       className="relative flex min-h-0 flex-1 flex-col"
     >
-      {dropActive && (
-        <div className="pointer-events-none absolute inset-1.5 z-10 grid place-items-center rounded-xl border-2 border-dashed border-[#0a84ff] bg-[#0a84ff]/8">
-          <span className="rounded-full bg-card px-3 py-1 text-[11.5px] font-medium text-[#0a84ff] shadow-sm">
-            Drop to attach
-          </span>
-        </div>
-      )}
-
       <div ref={scrollRef} className="ai-messages min-h-0 flex-1 overflow-y-auto px-3.5 py-3">
         {messages.length === 0 && (
           <div className="flex flex-col gap-3 pt-6">
@@ -495,7 +487,19 @@ function ChatSession({
       </div>
 
       <div className="shrink-0 border-t border-border p-2.5">
-        <div className="rounded-xl border border-input bg-background focus-within:border-ring">
+        <div
+          className={cn(
+            "rounded-xl border bg-background transition-colors",
+            dropActive
+              ? "border-[#0a84ff] ring-2 ring-[#0a84ff]/30"
+              : "border-input focus-within:border-ring"
+          )}
+        >
+          {dropActive && (
+            <div className="px-3 pt-2 text-[11.5px] font-medium text-[#0a84ff]">
+              Drop to attach
+            </div>
+          )}
           <RefChips
             refs={attachments}
             onRemove={(ref) => setAttachments((p) => p.filter((x) => !sameRef(x, ref)))}

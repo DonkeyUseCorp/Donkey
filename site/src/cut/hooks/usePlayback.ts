@@ -19,6 +19,52 @@ function duckGainAt(audioClips: AudioClip[], t: number): number {
   return g;
 }
 
+// A base/overlay clip is backed by a <video> for footage or an <img> for a
+// still image. These helpers read either kind uniformly so the compositor
+// stays one code path — an image never seeks, plays, or carries audio.
+type MediaEl = HTMLVideoElement | HTMLImageElement;
+const isImageEl = (el: MediaEl): el is HTMLImageElement =>
+  typeof HTMLImageElement !== "undefined" && el instanceof HTMLImageElement;
+const elReady = (el: MediaEl) =>
+  isImageEl(el) ? el.complete && el.naturalWidth > 0 : el.readyState >= 2 && el.videoWidth > 0;
+const elW = (el: MediaEl) => (isImageEl(el) ? el.naturalWidth : el.videoWidth);
+const elH = (el: MediaEl) => (isImageEl(el) ? el.naturalHeight : el.videoHeight);
+// A source that will never become ready: a video decode error, or an image
+// that finished loading (`complete`) with no pixels (a broken/unreachable URL).
+// The compositor paints through these instead of wedging on them.
+const elErrored = (el: MediaEl) =>
+  isImageEl(el) ? el.complete && el.naturalWidth === 0 : !!el.error;
+const pauseEl = (el: MediaEl) => {
+  if (!isImageEl(el) && !el.paused) el.pause();
+};
+/** Build the decoder element for a clip's asset: an <img> for a still, a
+ * hidden <video> for footage. */
+function makeMediaEl(asset: MediaAsset): MediaEl {
+  if (asset.type === "image") {
+    const img = document.createElement("img");
+    img.crossOrigin = "anonymous";
+    img.src = asset.url;
+    return img;
+  }
+  const v = document.createElement("video");
+  v.playsInline = true;
+  v.preload = "auto";
+  v.crossOrigin = "anonymous";
+  v.src = asset.url;
+  return v;
+}
+/** Release an element's source. Images just drop the src; videos stop and
+ * unload the decoder. */
+function teardown(el: MediaEl) {
+  if (isImageEl(el)) {
+    el.removeAttribute("src");
+    return;
+  }
+  el.pause();
+  el.removeAttribute("src");
+  el.load();
+}
+
 // The canvas backing store is the full frame resolution (1080×1920 or
 // 1920×1080, set by Preview from the project aspect) so the preview stays
 // sharp on Retina displays. The engine reads the size off the canvas each
@@ -35,10 +81,10 @@ class Engine {
   // decoders, so a cross-dissolve can show both at once and the incoming clip
   // warms during the overlap instead of fighting the outgoing one over a single
   // element's seek head (the black flash between same-source segments).
-  private videoEls = new Map<string, HTMLVideoElement>();
+  private videoEls = new Map<string, MediaEl>();
   // One element per overlay clip (keyed by clip id, not asset) so the same
   // source can appear on two tracks at once.
-  private overlayEls = new Map<string, HTMLVideoElement>();
+  private overlayEls = new Map<string, MediaEl>();
   private audioEls = new Map<string, HTMLAudioElement>();
   private raf = 0;
   private activeClipId: string | null = null;
@@ -55,30 +101,18 @@ class Engine {
   dispose() {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
-    for (const el of this.videoEls.values()) {
-      el.pause();
-      el.removeAttribute("src");
-      el.load();
-    }
-    for (const el of this.overlayEls.values()) {
-      el.pause();
-      el.removeAttribute("src");
-      el.load();
-    }
+    for (const el of this.videoEls.values()) teardown(el);
+    for (const el of this.overlayEls.values()) teardown(el);
     for (const el of this.audioEls.values()) el.pause();
     this.videoEls.clear();
     this.overlayEls.clear();
     this.audioEls.clear();
   }
 
-  private videoFor(clip: VideoClip, asset: MediaAsset) {
+  private videoFor(clip: VideoClip, asset: MediaAsset): MediaEl {
     let el = this.videoEls.get(clip.id);
     if (!el) {
-      el = document.createElement("video");
-      el.playsInline = true;
-      el.preload = "auto";
-      el.crossOrigin = "anonymous";
-      el.src = asset.url;
+      el = makeMediaEl(asset);
       this.videoEls.set(clip.id, el);
     }
     return el;
@@ -86,8 +120,11 @@ class Engine {
 
   /** Seek/rate/play one clip's element toward its frame at timeline time `t`,
    * without touching any other element (the caller pauses stale ones). */
-  private prepare(span: ClipSpan, t: number, play: boolean, muted: boolean) {
+  private prepare(span: ClipSpan, t: number, play: boolean, muted: boolean): MediaEl {
     const el = this.videoFor(span.clip, span.asset);
+    // A still never seeks, plays, or carries audio — it's ready as soon as the
+    // <img> decodes. Skip every video-clock operation.
+    if (isImageEl(el)) return el;
     const speed = clipSpeed(span.clip);
     if (el.playbackRate !== speed) el.playbackRate = speed;
     const target = span.clip.in + Math.max(0, t - span.start) * speed;
@@ -113,7 +150,7 @@ class Engine {
 
   private pauseExcept(keep: Set<string>) {
     for (const [clipId, el] of this.videoEls) {
-      if (!keep.has(clipId) && !el.paused) el.pause();
+      if (!keep.has(clipId)) pauseEl(el);
     }
   }
 
@@ -121,7 +158,7 @@ class Engine {
    * region and crops the overflow (clipped to the rect); "fit" contains the
    * whole picture inside it, centered. `zoom` scales the picture around the
    * region's center (zoom transitions), clipping the overflow to the rect. */
-  private drawIntoRect(el: HTMLVideoElement, rect: FrameRect, fill: boolean, alpha: number, zoom = 1) {
+  private drawIntoRect(el: MediaEl, rect: FrameRect, fill: boolean, alpha: number, zoom = 1) {
     const ctx = this.canvas.getContext("2d");
     if (!ctx) return;
     const W = this.canvas.width;
@@ -130,12 +167,11 @@ class Engine {
     const ry = rect.y * H;
     const rw = rect.w * W;
     const rh = rect.h * H;
-    const sc =
-      (fill
-        ? Math.max(rw / el.videoWidth, rh / el.videoHeight)
-        : Math.min(rw / el.videoWidth, rh / el.videoHeight)) * zoom;
-    const dw = el.videoWidth * sc;
-    const dh = el.videoHeight * sc;
+    const vw = elW(el);
+    const vh = elH(el);
+    const sc = (fill ? Math.max(rw / vw, rh / vh) : Math.min(rw / vw, rh / vh)) * zoom;
+    const dw = vw * sc;
+    const dh = vh * sc;
     const dx = rx + (rw - dw) / 2;
     const dy = ry + (rh - dh) / 2;
     const prevAlpha = ctx.globalAlpha;
@@ -153,7 +189,7 @@ class Engine {
     ctx.globalAlpha = prevAlpha;
   }
 
-  private drawLayer(el: HTMLVideoElement | null, clip: VideoClip | undefined, clear: boolean, alpha: number, zoom = 1) {
+  private drawLayer(el: MediaEl | null, clip: VideoClip | undefined, clear: boolean, alpha: number, zoom = 1) {
     const ctx = this.canvas.getContext("2d");
     if (!ctx) return;
     const W = this.canvas.width;
@@ -176,7 +212,7 @@ class Engine {
     }
     // Mid-seek the element has no decodable frame; keep the previous frame
     // on the canvas instead of strobing black (matters while skimming).
-    if (el.readyState < 2 || !el.videoWidth) return;
+    if (!elReady(el)) return;
     if (clear) {
       ctx.fillStyle = "#000";
       ctx.fillRect(0, 0, W, H);
@@ -189,12 +225,11 @@ class Engine {
       return;
     }
     const fill = clip?.fit === "fill";
-    const scale =
-      (fill
-        ? Math.max(W / el.videoWidth, H / el.videoHeight)
-        : Math.min(W / el.videoWidth, H / el.videoHeight)) * zoom;
-    const dw = el.videoWidth * scale;
-    const dh = el.videoHeight * scale;
+    const vw = elW(el);
+    const vh = elH(el);
+    const scale = (fill ? Math.max(W / vw, H / vh) : Math.min(W / vw, H / vh)) * zoom;
+    const dw = vw * scale;
+    const dh = vh * scale;
     let dx = (W - dw) / 2;
     let dy = (H - dh) / 2;
     if (fill) {
@@ -224,7 +259,7 @@ class Engine {
     const next = spans[idx + 1];
     const prev = spans[idx - 1];
     const style = masterSpan.clip.transitionStyle ?? "crossfade";
-    let incEl: HTMLVideoElement | null = null;
+    let incEl: MediaEl | null = null;
     let alpha = 0;
     let masterZoom = 1;
     let incZoom = 1;
@@ -283,7 +318,9 @@ class Engine {
     // A live voiceover ducks the base clip's sound under it. The clip's own
     // volume rides on top (the element clamps at 1; export honors up to 1.5).
     const duck = duckGainAt(useEditor.getState().audioClips, t);
-    masterEl.volume = Math.max(0, Math.min(1, gain * duck * (masterSpan.clip.volume ?? 1)));
+    if (!isImageEl(masterEl)) {
+      masterEl.volume = Math.max(0, Math.min(1, gain * duck * (masterSpan.clip.volume ?? 1)));
+    }
     this.pauseExcept(keep);
     // No clear here — the tick clears once, then draws the below tracks, so the
     // base composites over them (a regioned base leaves them showing).
@@ -296,15 +333,12 @@ class Engine {
     return masterEl;
   }
 
-  private overlayVideoFor(clip: OverlayClip, asset: MediaAsset) {
+  private overlayVideoFor(clip: OverlayClip, asset: MediaAsset): MediaEl {
     let el = this.overlayEls.get(clip.id);
     if (!el) {
-      el = document.createElement("video");
-      el.playsInline = true;
-      el.preload = "auto";
-      el.crossOrigin = "anonymous";
-      el.muted = true; // overlay audio is mixed on export, not previewed here
-      el.src = asset.url;
+      el = makeMediaEl(asset);
+      // Overlay audio is mixed on export, not previewed here.
+      if (!isImageEl(el)) el.muted = true;
       this.overlayEls.set(clip.id, el);
     }
     return el;
@@ -373,8 +407,9 @@ class Engine {
 
   /** Seek/rate/play one overlay clip's element toward its frame at timeline
    * time `t` (the overlay counterpart of `prepare`). */
-  private prepareOverlay(clip: OverlayClip, asset: MediaAsset, t: number, play: boolean) {
+  private prepareOverlay(clip: OverlayClip, asset: MediaAsset, t: number, play: boolean): MediaEl {
     const el = this.overlayVideoFor(clip, asset);
+    if (isImageEl(el)) return el;
     const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
     if (el.playbackRate !== speed) el.playbackRate = speed;
     const target = clip.in + Math.max(0, t - clip.start) * speed;
@@ -408,11 +443,11 @@ class Engine {
     play: boolean,
     side: "below" | "above",
     active: Set<string>,
-    prepared?: { clip: OverlayClip; el: HTMLVideoElement }[]
+    prepared?: { clip: OverlayClip; el: MediaEl }[]
   ) {
     for (const { clip, el } of prepared ?? this.prepareSide(t, play, side)) {
       active.add(clip.id);
-      if (el.readyState < 2 || !el.videoWidth) continue;
+      if (!elReady(el)) continue;
       const rect = rectOf(clip);
       const cover = clip.fit === "fill" || (clip.fit == null && isFullRect(rect));
       this.drawIntoRect(el, rect, cover, 1);
@@ -424,10 +459,9 @@ class Engine {
     const s = useEditor.getState();
     for (const [id, el] of this.overlayEls) {
       if (active.has(id)) continue;
-      if (!el.paused) el.pause();
+      pauseEl(el);
       if (!s.overlayClips.some((c) => c.id === id)) {
-        el.removeAttribute("src");
-        el.load();
+        teardown(el);
         this.overlayEls.delete(id);
       }
     }
@@ -490,9 +524,7 @@ class Engine {
       const live = new Set(s.clips.map((c) => c.id));
       for (const [id, el] of this.videoEls) {
         if (live.has(id)) continue;
-        el.pause();
-        el.removeAttribute("src");
-        el.load();
+        teardown(el);
         this.videoEls.delete(id);
       }
     }
@@ -529,16 +561,16 @@ class Engine {
       let ready = true;
       if (span) {
         const el = this.prepare(span, Math.min(pt, span.start + span.len), false, true);
-        if (el.readyState < 2 || !el.videoWidth) ready = false;
+        // A broken source never becomes ready; paint without it rather than
+        // wedging the preview on it.
+        if (!elErrored(el) && !elReady(el)) ready = false;
       }
       // Prime each side once; the readiness scan and the draw step below reuse
       // these instead of re-filtering/seeking the overlays a second time.
       const belowLive = this.prepareSide(pt, false, "below");
       const aboveLive = this.prepareSide(pt, false, "above");
       for (const { el } of [...belowLive, ...aboveLive]) {
-        // An errored element never becomes ready; paint without it rather
-        // than wedging the preview on a broken source.
-        if (!el.error && (el.readyState < 2 || !el.videoWidth)) ready = false;
+        if (!elErrored(el) && !elReady(el)) ready = false;
       }
       if (!ready) {
         this.pauseExcept(new Set(span ? [span.clip.id] : []));
@@ -567,7 +599,9 @@ class Engine {
     // this only bites a genuinely cold first frame.)
     if (span) {
       const el = this.prepare(span, t, true, span.clip.muted || !!span.clip.hidden);
-      if (el.readyState < 2 || !el.videoWidth) {
+      // A broken source (unreachable still, decode error) never becomes ready;
+      // fall through so the wall clock advances past it instead of freezing.
+      if (!elReady(el) && !elErrored(el)) {
         this.pauseExcept(new Set([span.clip.id]));
         this.syncSoundtrack(t, true);
         return;
@@ -591,14 +625,23 @@ class Engine {
       // only when the clock genuinely leads.
       const now = performance.now();
       const dt = this.lastPlayNow ? Math.min(0.25, (now - this.lastPlayNow) / 1000) : 0;
-      const speed = clipSpeed(span.clip);
-      const derived = span.start + (el.currentTime - span.clip.in) / speed;
-      const cand = Math.min(t + dt, derived + 0.06);
-      t = derived - cand > 0.25 ? derived : Math.max(t, cand);
-      t = Math.max(span.start, Math.min(t, span.start + span.len));
+      let atEnd: boolean;
+      if (isImageEl(el)) {
+        // A still has no element clock — advance purely by wall clock and end
+        // at the clip's timeline footprint.
+        t = Math.max(span.start, Math.min(t + dt, span.start + span.len));
+        atEnd = t >= span.start + span.len - 0.0001;
+      } else {
+        const speed = clipSpeed(span.clip);
+        const derived = span.start + (el.currentTime - span.clip.in) / speed;
+        const cand = Math.min(t + dt, derived + 0.06);
+        t = derived - cand > 0.25 ? derived : Math.max(t, cand);
+        t = Math.max(span.start, Math.min(t, span.start + span.len));
+        atEnd = el.currentTime >= span.clip.out - 0.02 || el.ended;
+      }
       // Clip boundary: hand off to the next clip, or (if the base is done but an
       // upper/lower track runs on) fall through to the wall-clock tail.
-      if (el.currentTime >= span.clip.out - 0.02 || el.ended) {
+      if (atEnd) {
         const idx = spans.indexOf(span);
         const next = spans[idx + 1];
         if (next) {
@@ -613,7 +656,7 @@ class Engine {
         } else if (t >= total - 0.001) {
           // Base and every other track finished.
           useEditor.setState({ playing: false, currentTime: total });
-          el.pause();
+          pauseEl(el);
           this.drawOverlays(t, true, "above", active);
           this.drawProjectFade(this.projectFadeGain(total, total));
           this.cleanupOverlays(active);
@@ -646,7 +689,7 @@ class Engine {
     const fadeGain = this.projectFadeGain(t, total);
     if (fadeGain < 1 && span) {
       const mel = this.videoEls.get(span.clip.id);
-      if (mel) mel.volume = Math.min(mel.volume, fadeGain);
+      if (mel && !isImageEl(mel)) mel.volume = Math.min(mel.volume, fadeGain);
     }
     this.drawProjectFade(fadeGain);
     this.cleanupOverlays(active);

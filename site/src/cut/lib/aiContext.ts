@@ -85,7 +85,8 @@ export function buildAiContext(opts?: { fullCues?: boolean }) {
       len: r(sp.len),
       in: r(sp.clip.in),
       out: r(sp.clip.out),
-      sourceDuration: r(sp.asset.duration),
+      // A still has no source length; report its placed length instead of 0.
+      sourceDuration: r(sp.asset.type === "image" ? sp.len : sp.asset.duration),
       muted: sp.clip.muted,
       framing: sp.clip.fit ?? "fit",
       speed: r(sp.clip.speed ?? 1),

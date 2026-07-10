@@ -269,7 +269,7 @@ export function useRefCandidates(): AssetRef[] {
   return useMemo(() => {
     const counters = { v: 0, i: 0, a: 0 };
     const project = assets.map((a) => {
-      const prefix = a.origin === "generated" ? "i" : a.type === "video" ? "v" : "a";
+      const prefix = a.type === "image" ? "i" : a.type === "video" ? "v" : "a";
       counters[prefix] += 1;
       return { ...refFromAsset(a), handle: `${prefix}${counters[prefix]}` };
     });
@@ -325,6 +325,26 @@ export function splitMentions(text: string, candidates: AssetRef[]): (string | A
     last = m.index + m[0].length;
   }
   if (last < text.length) parts.push(text.slice(last));
+  return parts;
+}
+
+/** Like {@link splitMentions}, but keeps the literal token text for every
+ * resolved mention so an overlay can render it as a pill in place — the
+ * rendered characters stay identical to the textarea, so widths align. */
+export function highlightMentions(
+  text: string,
+  candidates: AssetRef[]
+): { text: string; ref: AssetRef | null }[] {
+  const parts: { text: string; ref: AssetRef | null }[] = [];
+  let last = 0;
+  for (const m of text.matchAll(MENTION_RE)) {
+    const ref = resolveRefByName(m[1] ?? m[2] ?? "", candidates);
+    if (!ref) continue;
+    if (m.index > last) parts.push({ text: text.slice(last, m.index), ref: null });
+    parts.push({ text: m[0], ref });
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) parts.push({ text: text.slice(last), ref: null });
   return parts;
 }
 

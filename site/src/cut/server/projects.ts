@@ -145,7 +145,8 @@ async function summarize(id: string, doc: ProjectDoc): Promise<ProjectSummary> {
   const firstClipAsset = firstClip
     ? doc.assets.find((a) => a.id === firstClip.assetId)
     : undefined;
-  const previewAsset = firstClipAsset ?? doc.assets.find((a) => a.type === "video");
+  const previewAsset =
+    firstClipAsset ?? doc.assets.find((a) => a.type === "video" || a.type === "image");
   // Poster the clip's actual first frame (its trim-in), not the source's 0s.
   const previewStart = firstClipAsset && firstClip ? firstClip.in : 0;
   const [hasPreview, sizeBytes] = await Promise.all([
@@ -161,6 +162,7 @@ async function summarize(id: string, doc: ProjectDoc): Promise<ProjectSummary> {
     clipCount: doc.clips.length,
     assetCount: doc.assets.length,
     previewFile: previewAsset?.fileName,
+    previewIsImage: previewAsset?.type === "image",
     previewStart,
     hasPreview,
     folderId: doc.folderId ?? null,
