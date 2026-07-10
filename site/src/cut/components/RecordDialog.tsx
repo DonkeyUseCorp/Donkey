@@ -41,6 +41,7 @@ type DeviceOption = { id: string; label: string };
 function toOptions(devices: MediaDeviceInfo[], kind: MediaDeviceKind, fallback: string) {
   return devices
     .filter((d) => d.kind === kind && d.deviceId)
+    .sort((a, b) => Number(b.deviceId === "default") - Number(a.deviceId === "default"))
     .map((d, i) => ({ id: d.deviceId, label: d.label || `${fallback} ${i + 1}` }));
 }
 
@@ -333,7 +334,7 @@ function DevicePill({
         {icon}
         <SelectValue className="truncate" />
       </SelectTrigger>
-      <SelectContent>
+      <SelectContent alignItemWithTrigger={false} className="w-auto max-w-72">
         {options.map((o) => (
           <SelectItem key={o.id} value={o.id} className="text-xs">
             {o.label}
