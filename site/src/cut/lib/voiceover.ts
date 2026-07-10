@@ -15,7 +15,7 @@ export const DUCK_DEFAULT = 0.4;
  */
 export async function generateSubtitlesReadout(
   voice: string,
-  opts?: { cueIds?: string[]; direction?: string; duck?: number }
+  opts?: { cueIds?: string[]; direction?: string; language?: string; duck?: number }
 ) {
   const s = useEditor.getState();
   const projectId = s.projectId;
@@ -27,7 +27,7 @@ export async function generateSubtitlesReadout(
   const { asset, offset, layout } = await synthesizeSpeech(
     projectId,
     cues.map((c) => ({ text: c.text, at: c.start })),
-    { voice, direction: opts?.direction, name: "Subtitles readout" }
+    { voice, direction: opts?.direction, language: opts?.language, name: "Subtitles readout" }
   );
   const duck = opts?.duck ?? DUCK_DEFAULT;
   const cur = useEditor.getState();

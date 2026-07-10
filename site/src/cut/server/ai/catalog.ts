@@ -224,6 +224,7 @@ export const AI_TOOLS: AiToolDef[] = [
       script: str("What the voice should say"),
       voice: str("Voice id from list_voices (optional; a sensible default is chosen)"),
       direction: str("Delivery instruction, e.g. 'Say warmly, like an old friend' (optional)"),
+      language: str("Spoken language as BCP-47, e.g. es-US, ja-JP (optional; default auto-detects from the script — write the script in the target language)"),
       duck: num("Lower other audio to this gain while the voice plays, 0..1 (default 0.4; 1 = no ducking)"),
       start: num("Timeline start in seconds (default: the playhead)"),
     }, ["script"]),
@@ -235,6 +236,7 @@ export const AI_TOOLS: AiToolDef[] = [
     inputSchema: obj({
       voice: str("Voice id from list_voices (optional)"),
       direction: str("Delivery instruction, e.g. 'Narrate briskly, documentary style' (optional)"),
+      language: str("Spoken language as BCP-47, e.g. es-US, ja-JP (optional; default auto-detects — cues are spoken as written, so translate them first for another language)"),
       duck: num("Lower other audio to this gain while the voice plays, 0..1 (default 0.4)"),
     }),
   },
@@ -395,7 +397,7 @@ Titles burn into the export exactly as previewed.`,
 Soundtrack clips: volume 0..1.5, fadeIn/fadeOut seconds (max half the clip), start = timeline position, in/out = trim inside the source. Fades render with ffmpeg afade on export.
 Ducking: a soundtrack clip's \`duck\` (0..1, via update_audio) lowers ALL other audio — video-clip sound and other music — to that gain while the clip plays; 1 clears it. Voiceovers set this so narration sits over quieter music. It applies in both the preview and the export.
 Voiceover (Donkey's hosted speech model — signed in, spends credits, like image/video generation):
-- voiceover_generate(script, voice?, direction?, duck?, start?): synthesizes the script and drops it on the soundtrack at the playhead (or start). Defaults to a 0.4 duck so it sits over other audio. Voices are Gemini's prebuilt set — list_voices returns them (id + one-word character like Warm, Upbeat, Gravelly); omit voice for a good default. \`direction\` steers delivery in natural language ("Say warmly, like an old friend"); the script itself can carry inline tags like [whispers], [excited], [laughs].
+- voiceover_generate(script, voice?, direction?, duck?, start?, language?): synthesizes the script and drops it on the soundtrack at the playhead (or start). Defaults to a 0.4 duck so it sits over other audio. Voices are Gemini's prebuilt set — list_voices returns them (id + one-word character like Warm, Upbeat, Gravelly); omit voice for a good default. \`direction\` steers delivery in natural language ("Say warmly, like an old friend"); the script itself can carry inline tags like [whispers], [excited], [laughs].
 - read_subtitles_aloud(voice?, direction?, duck?): speaks the existing subtitle cues, each line at its own cue time — captions become narration. Needs cues first.
 Subtitles: subtitles_generate transcribes the cut's audio on-device (Apple speech, macOS 26); cues are caption-sized (≈38 chars). subtitles_from_visuals is the fallback for a cut with NO speech — it watches sampled frames (via the user's Claude login) and writes timed narration captions of what's on screen. So: speech present → subtitles_generate; silent/music-only footage the user wants captioned → subtitles_from_visuals. Never fabricate a spoken transcript.
 captions_generate rewrites existing cues into punchy social captions (emoji, curiosity-hook opener) in a style (clean/hook/punchy), keeping timings — use it when the ask is social/TikTok captions rather than a plain transcript.

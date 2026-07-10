@@ -375,6 +375,7 @@ export async function runAiTool(
           typeof input.direction === "string" && input.direction.trim()
             ? input.direction.trim()
             : undefined,
+        language: typeof input.language === "string" ? input.language : undefined,
         duck: isNum(input.duck) ? clamp(input.duck, 0, 1) : undefined,
       });
       const sel = useEditor.getState().selection;
@@ -545,6 +546,7 @@ async function synthesizeAndPlace(
   const { asset, offset } = await synthesizeSpeech(projectId, segments, {
     voice,
     direction,
+    language: typeof input.language === "string" ? input.language : undefined,
     name,
   });
   const cur = useEditor.getState();

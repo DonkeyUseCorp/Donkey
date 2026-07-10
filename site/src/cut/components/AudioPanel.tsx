@@ -31,7 +31,7 @@ import { useEditor } from "@/cut/lib/store";
 import { formatTime } from "@/cut/lib/time";
 import { NoCreditsError, synthesizeSpeech } from "@/cut/lib/tts";
 import { DUCK_DEFAULT } from "@/cut/lib/voiceover";
-import { useSpeakerVoice, VoicePicker } from "@/cut/components/VoicePicker";
+import { useSpeakerVoice, useSpeechLanguage, VoicePicker } from "@/cut/components/VoicePicker";
 import { cn } from "@/lib/utils";
 
 /** Starting points for the direction prompt — picking one fills the input so
@@ -104,6 +104,7 @@ function sectionLabel(text: string) {
 
 function VoiceGenerator({ projectId }: { projectId: string }) {
   const voice = useSpeakerVoice();
+  const language = useSpeechLanguage();
   const [script, setScript] = useState("");
   const [direction, setDirection] = useState("");
   const [busy, setBusy] = useState(false);
@@ -133,6 +134,7 @@ function VoiceGenerator({ projectId }: { projectId: string }) {
       const { asset } = await synthesizeSpeech(projectId, [{ text, at: 0 }], {
         voice,
         direction,
+        language,
         name: `AI voice — ${lead}`,
       });
       const cur = useEditor.getState();

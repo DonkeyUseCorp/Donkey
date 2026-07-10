@@ -59,6 +59,64 @@ export const SPEECH_VOICES: SpeechVoice[] = [
 
 export const DEFAULT_VOICE = "Puck";
 
+export interface SpeechLanguage {
+  id: string;
+  label: string;
+  /** Voice-picker sample line, written natively in the language. */
+  sample: string;
+}
+
+// Sample lines stay full declarative sentences — "Hey!"-style leads make the
+// TTS model intermittently return an empty clip. Change with care and re-check
+// reliability across voices.
+const SAMPLE_TEXT = "This is how I sound. Let's make something worth remembering.";
+
+/** Languages the speech model speaks (BCP-47, fixed by the model). "auto" lets
+ * the model match the text; a concrete pick pins pronunciation and picks the
+ * sample line's language. */
+export const SPEECH_LANGUAGES: SpeechLanguage[] = [
+  { id: "auto", label: "Auto — match the text", sample: SAMPLE_TEXT },
+  { id: "ar-EG", label: "Arabic", sample: "هذا هو صوتي. لنصنع شيئًا يستحق التذكر." },
+  { id: "bn-BD", label: "Bengali", sample: "আমার কণ্ঠ এমনই শোনায়। চলুন মনে রাখার মতো কিছু তৈরি করি।" },
+  { id: "nl-NL", label: "Dutch", sample: "Zo klink ik. Laten we iets maken dat het onthouden waard is." },
+  { id: "en-US", label: "English", sample: SAMPLE_TEXT },
+  { id: "en-IN", label: "English (India)", sample: SAMPLE_TEXT },
+  { id: "fr-FR", label: "French", sample: "Voici comment je sonne. Créons quelque chose d'inoubliable." },
+  { id: "de-DE", label: "German", sample: "So klinge ich. Lass uns etwas Unvergessliches schaffen." },
+  { id: "hi-IN", label: "Hindi", sample: "मेरी आवाज़ ऐसी है। चलिए कुछ यादगार बनाते हैं।" },
+  { id: "id-ID", label: "Indonesian", sample: "Seperti inilah suara saya. Mari membuat sesuatu yang layak dikenang." },
+  { id: "it-IT", label: "Italian", sample: "Questa è la mia voce. Creiamo qualcosa che valga la pena ricordare." },
+  { id: "ja-JP", label: "Japanese", sample: "これが私の声です。記憶に残るものを作りましょう。" },
+  { id: "ko-KR", label: "Korean", sample: "제 목소리는 이렇습니다. 기억에 남을 만한 것을 만들어 봅시다." },
+  { id: "mr-IN", label: "Marathi", sample: "माझा आवाज असा आहे. चला काहीतरी संस्मरणीय बनवूया." },
+  { id: "pl-PL", label: "Polish", sample: "Tak brzmi mój głos. Stwórzmy coś wartego zapamiętania." },
+  { id: "pt-BR", label: "Portuguese", sample: "Esta é a minha voz. Vamos criar algo que valha a pena lembrar." },
+  { id: "ro-RO", label: "Romanian", sample: "Așa sună vocea mea. Să creăm ceva demn de amintit." },
+  { id: "ru-RU", label: "Russian", sample: "Вот как звучит мой голос. Давайте создадим что-то запоминающееся." },
+  { id: "es-US", label: "Spanish", sample: "Así sueno. Hagamos algo digno de recordar." },
+  { id: "ta-IN", label: "Tamil", sample: "என் குரல் இப்படித்தான் ஒலிக்கிறது. நினைவில் நிற்கும் ஒன்றை உருவாக்குவோம்." },
+  { id: "te-IN", label: "Telugu", sample: "నా గొంతు ఇలా వినిపిస్తుంది. గుర్తుండిపోయేది ఒకటి చేద్దాం." },
+  { id: "th-TH", label: "Thai", sample: "เสียงของฉันเป็นแบบนี้ มาสร้างสิ่งที่น่าจดจำกันเถอะ" },
+  { id: "tr-TR", label: "Turkish", sample: "Sesim böyle. Hatırlanmaya değer bir şey yapalım." },
+  { id: "uk-UA", label: "Ukrainian", sample: "Ось як звучить мій голос. Створімо щось варте пам'яті." },
+  { id: "vi-VN", label: "Vietnamese", sample: "Giọng của tôi nghe như thế này. Hãy cùng tạo nên điều gì đó đáng nhớ." },
+];
+
+export const DEFAULT_LANGUAGE = "auto";
+
+/** Resolve a requested speech language against the catalog: an exact
+ * (case-insensitive) BCP-47 match, else a bare language ("es") to its catalog
+ * variant, else auto-detect. Shared by every generation surface and the AI
+ * copilot so a loose ask still lands on a supported code. */
+export function resolveLanguage(wanted?: string): string {
+  const w = wanted?.trim().toLowerCase();
+  if (!w || w === "auto") return DEFAULT_LANGUAGE;
+  const exact = SPEECH_LANGUAGES.find((l) => l.id.toLowerCase() === w);
+  if (exact) return exact.id;
+  const bare = SPEECH_LANGUAGES.find((l) => l.id.toLowerCase().startsWith(`${w}-`));
+  return bare?.id ?? DEFAULT_LANGUAGE;
+}
+
 /** Resolve a requested voice against the catalog: an exact (or
  * case-insensitive) id match, else the default. Shared by the Audio panel and
  * the AI copilot so both land on the same voice. */
@@ -117,9 +175,11 @@ async function readError(res: Response, fallback: string): Promise<string> {
 async function synthesizeSegment(
   text: string,
   voice: string,
-  direction?: string
+  direction?: string,
+  language?: string
 ): Promise<PcmClip> {
   const style = direction?.trim();
+  const languageCode = resolveLanguage(language);
   const res = await fetch("/api/inference/assets", {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-donkey-client-id": CLIENT_ID },
@@ -127,6 +187,9 @@ async function synthesizeSegment(
       kind: "speech",
       prompt: style ? `${style}: ${text}` : text,
       inputs: { voice },
+      ...(languageCode !== DEFAULT_LANGUAGE
+        ? { parameters: { languageCode } }
+        : {}),
     }),
   });
   if (!res.ok) {
@@ -213,7 +276,7 @@ export interface SpeechLayout {
 export async function synthesizeSpeech(
   projectId: string,
   segments: SpeechSegment[],
-  opts: { voice: string; direction?: string; name?: string }
+  opts: { voice: string; direction?: string; language?: string; name?: string }
 ): Promise<{ asset: MediaAsset; offset: number; layout: SpeechLayout[] }> {
   const lines = segments
     .map((s) => ({ text: s.text.trim(), at: Math.max(0, s.at) }))
@@ -238,13 +301,13 @@ export async function synthesizeSpeech(
       const i = next++;
       try {
         try {
-          clips[i] = await synthesizeSegment(lines[i].text, voice, opts.direction);
+          clips[i] = await synthesizeSegment(lines[i].text, voice, opts.direction, opts.language);
         } catch (e) {
           // An empty balance repeats forever — resending only burns the queue.
           if (e instanceof NoCreditsError) throw e;
           // The TTS backend rejects the odd call spuriously; one resend of just
           // this line usually lands and saves the rest of the batch.
-          clips[i] = await synthesizeSegment(lines[i].text, voice, opts.direction);
+          clips[i] = await synthesizeSegment(lines[i].text, voice, opts.direction, opts.language);
         }
       } catch (e) {
         // Name the line that failed so a one-bad-cue batch is actionable.
@@ -290,21 +353,20 @@ export async function synthesizeSpeech(
   return { asset, offset, layout };
 }
 
-/** A short spoken sample for the voice picker. Each voice is synthesized once
- * per session and cached as a blob URL. */
+/** A short spoken sample for the voice picker, in the picked language. Each
+ * voice+language pair is synthesized once per session and cached as a blob URL. */
 const samples = new Map<string, string>();
-// Kept punchy but deliberately free of the "Hey!"-style lead that makes the TTS
-// model intermittently return an empty clip (it stops before speaking). Change
-// with care and re-check reliability across voices.
-const SAMPLE_TEXT = "This is how I sound. Let's make something worth remembering.";
 
-export async function speechSampleUrl(voice: string): Promise<string> {
+export async function speechSampleUrl(voice: string, language?: string): Promise<string> {
   const id = resolveVoice(voice);
-  const cached = samples.get(id);
+  const lang = resolveLanguage(language);
+  const key = `${id}|${lang}`;
+  const cached = samples.get(key);
   if (cached) return cached;
-  const clip = await synthesizeSegment(SAMPLE_TEXT, id);
+  const text = SPEECH_LANGUAGES.find((l) => l.id === lang)?.sample ?? SAMPLE_TEXT;
+  const clip = await synthesizeSegment(text, id, undefined, lang);
   const url = URL.createObjectURL(assembleWav([clip], [0]));
-  samples.set(id, url);
+  samples.set(key, url);
   return url;
 }
 

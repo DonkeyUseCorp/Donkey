@@ -1,48 +1,67 @@
 "use client";
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Captions, ChevronDown, Loader2, Pause, Play } from "lucide-react";
+import { Captions, ChevronDown, Languages, Loader2, Pause, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { creditsUrl, signInUrl, useSignedIn } from "@/cut/lib/generate";
 import { useEditor } from "@/cut/lib/store";
-import { NoCreditsError, resolveVoice, speechSampleUrl, SPEECH_VOICES } from "@/cut/lib/tts";
+import {
+  NoCreditsError,
+  resolveLanguage,
+  resolveVoice,
+  speechSampleUrl,
+  SPEECH_LANGUAGES,
+  SPEECH_VOICES,
+} from "@/cut/lib/tts";
 import { generateSubtitlesReadout } from "@/cut/lib/voiceover";
 
-const VOICE_KEY = "cut-tts-voice";
-
-// One shared speaker-voice preference for every surface that generates audio
-// (Audio tab, Subtitles tab, clip settings). Module-level so all mounted
-// pickers stay in sync; persisted so it survives reloads.
-let currentVoice: string | null = null;
-const listeners = new Set<() => void>();
-
-function readVoice(): string {
-  if (currentVoice === null) {
-    currentVoice = resolveVoice(
-      typeof window === "undefined" ? undefined : (localStorage.getItem(VOICE_KEY) ?? undefined)
-    );
-  }
-  return currentVoice;
+// Shared speech preferences (speaker voice, spoken language) for every surface
+// that generates audio (Audio tab, Subtitles tab, clip settings). Module-level
+// so all mounted pickers stay in sync; persisted so they survive reloads.
+function preference(key: string, resolve: (wanted?: string) => string) {
+  let current: string | null = null;
+  const listeners = new Set<() => void>();
+  return {
+    read(): string {
+      if (current === null) {
+        current = resolve(
+          typeof window === "undefined" ? undefined : (localStorage.getItem(key) ?? undefined)
+        );
+      }
+      return current;
+    },
+    write(id: string) {
+      current = resolve(id);
+      try {
+        localStorage.setItem(key, current);
+      } catch {
+        // Preference only.
+      }
+      listeners.forEach((l) => l());
+    },
+    subscribe(l: () => void) {
+      listeners.add(l);
+      return () => {
+        listeners.delete(l);
+      };
+    },
+  };
 }
 
-function writeVoice(id: string) {
-  currentVoice = resolveVoice(id);
-  try {
-    localStorage.setItem(VOICE_KEY, currentVoice);
-  } catch {
-    // Preference only.
-  }
-  listeners.forEach((l) => l());
-}
-
-function subscribe(l: () => void) {
-  listeners.add(l);
-  return () => listeners.delete(l);
-}
+const voicePref = preference("cut-tts-voice", resolveVoice);
+const languagePref = preference("cut-tts-language", resolveLanguage);
 
 /** The shared speaker voice; every generation surface reads this. */
 export function useSpeakerVoice(): string {
-  return useSyncExternalStore(subscribe, readVoice, () => resolveVoice(undefined));
+  return useSyncExternalStore(voicePref.subscribe, voicePref.read, () => resolveVoice(undefined));
+}
+
+/** The shared spoken language ("auto" = match the text); every generation
+ * surface reads this. */
+export function useSpeechLanguage(): string {
+  return useSyncExternalStore(languagePref.subscribe, languagePref.read, () =>
+    resolveLanguage(undefined)
+  );
 }
 
 /**
@@ -58,6 +77,7 @@ export function VoicePicker({
   title?: string;
 }) {
   const voice = useSpeakerVoice();
+  const language = useSpeechLanguage();
   const signedOut = useSignedIn() === false;
   const [sampling, setSampling] = useState<null | "loading" | "playing">(null);
   const sampler = useRef<HTMLAudioElement | null>(null);
@@ -80,7 +100,7 @@ export function VoicePicker({
     }
     const seq = ++sampleSeq.current;
     setSampling("loading");
-    speechSampleUrl(voice)
+    speechSampleUrl(voice, language)
       .then((url) => {
         if (seq !== sampleSeq.current) return;
         el.src = url;
@@ -122,11 +142,33 @@ export function VoicePicker({
           <select
             className="voice-select w-full appearance-none truncate rounded-lg border border-input bg-transparent py-2 pr-8 pl-2.5 text-[12.5px] outline-none focus:border-ring"
             value={voice}
-            onChange={(e) => writeVoice(e.target.value)}
+            onChange={(e) => voicePref.write(e.target.value)}
           >
             {SPEECH_VOICES.map((v) => (
               <option key={v.id} value={v.id}>
                 {v.id} · {v.style}
+              </option>
+            ))}
+          </select>
+          <ChevronDown className="pointer-events-none absolute top-1/2 right-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <span
+          className="grid size-8 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"
+          title="Spoken language"
+        >
+          <Languages className="size-3.5" />
+        </span>
+        <div className="relative min-w-0 flex-1">
+          <select
+            className="voice-language w-full appearance-none truncate rounded-lg border border-input bg-transparent py-2 pr-8 pl-2.5 text-[12.5px] outline-none focus:border-ring"
+            value={language}
+            onChange={(e) => languagePref.write(e.target.value)}
+          >
+            {SPEECH_LANGUAGES.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.label}
               </option>
             ))}
           </select>
@@ -150,6 +192,7 @@ export function GenerateSubtitlesAudio({
   label?: string;
 }) {
   const voice = useSpeakerVoice();
+  const language = useSpeechLanguage();
   const signedOut = useSignedIn() === false;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ text: string; credits?: boolean } | null>(null);
@@ -162,7 +205,7 @@ export function GenerateSubtitlesAudio({
     setBusy(true);
     setError(null);
     try {
-      await generateSubtitlesReadout(voice, { cueIds });
+      await generateSubtitlesReadout(voice, { cueIds, language });
     } catch (e) {
       setError(
         e instanceof Error
