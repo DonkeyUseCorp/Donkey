@@ -110,28 +110,28 @@ export function ImageGenPanel({ projectId }: { projectId: string }) {
           />
         </div>
 
-        {/* Aspect ratio and resolution pills on one row. Closed pills show the compact
-            technical value (the ratio; the pixel dimensions); the dropdowns spell out
-            the full labels. The resolution's pixels follow the chosen aspect. */}
+        {/* Aspect ratio and resolution pills on one row. Closed pills stay short
+            ("Landscape", "2K"); the dropdowns carry the technical detail (ratio,
+            pixel dimensions). The resolution's pixels follow the chosen aspect. */}
         <div className="flex shrink-0 items-center gap-2">
           <PillSelect
+            className="min-w-0 flex-1"
             title="Aspect ratio"
             value={aspect}
-            display={aspect}
+            display={ASPECT_WORD[aspect]}
             options={(Object.keys(ASPECT_WORD) as ImageAspect[]).map((a) => ({
               value: a,
-              label: `${a} · ${ASPECT_WORD[a]}`,
+              label: `${ASPECT_WORD[a]} · ${a}`,
             }))}
             onChange={(v) => useImageGen.getState().setAspect(v)}
           />
           <PillSelect
-            className="min-w-0 flex-1"
             title="Resolution"
             value={resolution}
-            display={pixelDims(aspect, resolution)}
+            display={resolution}
             options={(Object.keys(IMAGE_RESOLUTION_LABEL) as ImageResolution[]).map((r) => ({
               value: r,
-              label: pixelDims(aspect, r),
+              label: `${r} · ${pixelDims(aspect, r)}`,
             }))}
             onChange={(v) => useImageGen.getState().setResolution(v)}
           />
