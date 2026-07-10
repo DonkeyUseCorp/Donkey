@@ -1,14 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Mic, Square, Video } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Mic, Square, Video, X } from "lucide-react";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -221,17 +215,40 @@ export function RecordDialog({
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>{mode === "camera" ? "Record camera" : "Record audio"}</DialogTitle>
-        </DialogHeader>
+      <DialogContent
+        showCloseButton={false}
+        className={cn(
+          "gap-0 overflow-hidden p-0 transition-[max-width] duration-200",
+          // Compact while waiting for permission; grow to a full preview once
+          // the camera is live. Audio mode keeps a steady width.
+          mode === "audio"
+            ? "sm:max-w-md"
+            : stream
+              ? "sm:max-w-lg"
+              : "sm:max-w-xs"
+        )}
+      >
+        {/* Kept for accessibility; the dialog reads as its own preview. */}
+        <DialogTitle className="sr-only">
+          {mode === "camera" ? "Record camera" : "Record audio"}
+        </DialogTitle>
+        {/* Custom close so it stays legible over the full-bleed video. */}
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          title="Close"
+          className="absolute top-2 right-2 z-20 grid size-8 place-items-center rounded-full bg-black/45 text-white backdrop-blur-sm transition-colors hover:bg-black/65"
+        >
+          <X className="size-4" />
+        </button>
 
         {error ? (
-          <p className="text-sm text-muted-foreground">{error}</p>
+          <p className="p-6 text-sm text-muted-foreground">{error}</p>
         ) : (
           <>
             {mode === "camera" ? (
-              <div className="relative overflow-hidden rounded-xl bg-black">
+              <div className="relative w-full min-w-0 overflow-hidden bg-black">
                 {/* Mirrored preview; the recording itself is not mirrored. */}
                 <video
                   ref={videoRef}
@@ -243,13 +260,43 @@ export function RecordDialog({
                   <LiveWaveform
                     stream={stream}
                     className={cn(
-                      "absolute inset-x-0 bottom-11 h-8 text-white/80",
+                      "absolute inset-x-0 bottom-3 h-8 w-full text-white/80",
                       recording && "text-red-400"
                     )}
                   />
                 )}
                 {recording && <RecTimer elapsed={elapsed} />}
-                <div className="absolute inset-x-0 bottom-2 flex justify-center gap-2 px-2">
+              </div>
+            ) : (
+              <div className="px-6 pt-10">
+                <div className="relative grid h-36 place-items-center rounded-xl bg-muted px-4 pb-12">
+                  {stream ? (
+                    <LiveWaveform
+                      stream={stream}
+                      className={cn("h-16 w-full text-foreground/70", recording && "text-red-500")}
+                    />
+                  ) : (
+                    <span className="grid size-16 place-items-center rounded-full bg-card text-foreground shadow-sm">
+                      <Mic className="size-7" />
+                    </span>
+                  )}
+                  {recording && <RecTimer elapsed={elapsed} />}
+                  <div className="absolute inset-x-0 bottom-2 flex justify-center px-2">
+                    <DevicePill
+                      icon={<Mic className="size-3.5 shrink-0" />}
+                      options={mics}
+                      value={activeMicId}
+                      onChange={pickMic}
+                      disabled={recording}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="min-w-0 space-y-2 px-6 pt-3 pb-6">
+              {mode === "camera" && (
+                <div className="flex justify-center gap-2">
                   <DevicePill
                     icon={<Video className="size-3.5 shrink-0" />}
                     options={cameras}
@@ -265,66 +312,35 @@ export function RecordDialog({
                     disabled={recording}
                   />
                 </div>
-              </div>
-            ) : (
-              <div className="relative grid h-36 place-items-center rounded-xl bg-muted px-4 pb-12">
-                {stream ? (
-                  <LiveWaveform
-                    stream={stream}
-                    className={cn("h-16 w-full text-foreground/70", recording && "text-red-500")}
-                  />
+              )}
+              <div className="flex justify-center">
+                {!recording ? (
+                  <button
+                    className="grid size-12 place-items-center rounded-full border-[3px] border-foreground/20 transition-transform hover:scale-105 disabled:opacity-40"
+                    title="Start recording"
+                    disabled={!stream}
+                    onClick={startRecording}
+                  >
+                    <span className="size-8 rounded-full bg-red-500" />
+                  </button>
                 ) : (
-                  <span className="grid size-16 place-items-center rounded-full bg-card text-foreground shadow-sm">
-                    <Mic className="size-7" />
-                  </span>
+                  <button
+                    className="grid size-12 place-items-center rounded-full border-[3px] border-red-500/40 transition-transform hover:scale-105"
+                    title="Stop and use recording"
+                    onClick={stopRecording}
+                  >
+                    <Square className="size-5 fill-red-500 stroke-none" />
+                  </button>
                 )}
-                {recording && <RecTimer elapsed={elapsed} />}
-                <div className="absolute inset-x-0 bottom-2 flex justify-center px-2">
-                  <DevicePill
-                    icon={<Mic className="size-3.5 shrink-0" />}
-                    options={mics}
-                    value={activeMicId}
-                    onChange={pickMic}
-                    disabled={recording}
-                  />
-                </div>
               </div>
-            )}
-
-            <div className="mt-1 flex justify-center">
-              {!recording ? (
-                <button
-                  className="grid size-12 place-items-center rounded-full border-[3px] border-foreground/20 transition-transform hover:scale-105 disabled:opacity-40"
-                  title="Start recording"
-                  disabled={!stream}
-                  onClick={startRecording}
-                >
-                  <span className="size-8 rounded-full bg-red-500" />
-                </button>
-              ) : (
-                <button
-                  className="grid size-12 place-items-center rounded-full border-[3px] border-red-500/40 transition-transform hover:scale-105"
-                  title="Stop and use recording"
-                  onClick={stopRecording}
-                >
-                  <Square className="size-5 fill-red-500 stroke-none" />
-                </button>
+              {!recording && (notice || !stream) && (
+                <p className="text-center text-xs text-muted-foreground">
+                  {notice ?? "Waiting for permission…"}
+                </p>
               )}
             </div>
-            <p className="text-center text-xs text-muted-foreground">
-              {recording
-                ? "Recording — click stop to drop it on the timeline."
-                : notice ??
-                  (stream ? "Click the red button to start." : "Waiting for permission…")}
-            </p>
           </>
         )}
-
-        <div className="flex justify-end">
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-        </div>
       </DialogContent>
     </Dialog>
   );
@@ -412,37 +428,32 @@ function LiveWaveform({ stream, className }: { stream: MediaStream; className?: 
       const height = Math.round(canvas.clientHeight * dpr);
       if (canvas.width !== width) canvas.width = width;
       if (canvas.height !== height) canvas.height = height;
-      const barWidth = 2 * dpr;
-      const step = barWidth + 1 * dpr;
+      const barWidth = 3 * dpr;
+      const step = barWidth + 2 * dpr;
       const maxBars = Math.max(1, Math.floor(width / step));
       levels.push(rms);
+      // Pad the history so the meter spans the full frame from the first frame
+      // instead of growing in from the right; padding reads as idle dots.
+      while (levels.length < maxBars) levels.unshift(0);
       if (levels.length > maxBars) levels.splice(0, levels.length - maxBars);
 
       const g = canvas.getContext("2d");
       if (!g) return;
       g.clearRect(0, 0, width, height);
       g.fillStyle = colorRef.current || getComputedStyle(canvas).color;
-      // Interior silence (a pause between two sounds) gets a thin connecting
-      // line so the waves read as one continuous track; leading/trailing
-      // silence stays empty so the line never dangles into blank space.
-      let first = -1;
-      let last = -1;
-      for (let i = 0; i < levels.length; i++) {
-        if (levels[i] >= SILENCE) {
-          if (first === -1) first = i;
-          last = i;
-        }
-      }
-      const lineH = 2 * dpr;
+      // Idle input draws a row of small centered dots so the meter reads as a
+      // ready track spanning the whole width; sound grows each into a bar.
+      const idle = barWidth;
       for (let i = 0; i < levels.length; i++) {
         const x = width - (levels.length - i) * step;
-        if (levels[i] >= SILENCE) {
-          const h = Math.max(lineH, Math.min(1, levels[i] * 3) * height);
-          g.fillRect(x, (height - h) / 2, barWidth, h);
-        } else if (i > first && i < last) {
-          // Fill the full step so adjacent segments join into one line.
-          g.fillRect(x, (height - lineH) / 2, step, lineH);
-        }
+        const h =
+          levels[i] >= SILENCE
+            ? Math.max(idle, Math.min(1, levels[i] * 3) * height)
+            : idle;
+        const r = Math.min(barWidth / 2, h / 2);
+        g.beginPath();
+        g.roundRect(x, (height - h) / 2, barWidth, h, r);
+        g.fill();
       }
     };
     draw();
