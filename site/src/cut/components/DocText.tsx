@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import { cn } from "@/lib/utils";
+import { baseMarkdownComponents } from "./markdownComponents";
 
 // Rendering for text assets (a dropped script, notes, a CSV, an assistant
 // deliverable): fetch the file behind the ref URL and render it by extension —
@@ -159,18 +160,14 @@ export function DocText({
       <div className={cn("doc-md", className)}>
         <Markdown
           components={{
+            ...baseMarkdownComponents,
             h1: (p) => <h1 className="mt-3 mb-1.5 text-[1.25em] font-semibold first:mt-0" {...p} />,
             h2: (p) => <h2 className="mt-3 mb-1.5 text-[1.1em] font-semibold first:mt-0" {...p} />,
             h3: (p) => <h3 className="mt-2 mb-1 font-semibold first:mt-0" {...p} />,
-            p: (p) => <p className="mb-1.5 last:mb-0" {...p} />,
-            ul: (p) => <ul className="mb-1.5 list-disc pl-4 last:mb-0" {...p} />,
-            ol: (p) => <ol className="mb-1.5 list-decimal pl-4 last:mb-0" {...p} />,
-            li: (p) => <li className="mb-0.5" {...p} />,
             code: (p) => <code className="rounded bg-muted px-1 py-px font-mono text-[0.9em]" {...p} />,
             pre: (p) => (
               <pre className="mb-1.5 overflow-x-auto rounded-md bg-muted/70 p-2 font-mono text-[0.9em] last:mb-0" {...p} />
             ),
-            a: (p) => <a className="text-[#0a84ff] underline" target="_blank" {...p} />,
             blockquote: (p) => (
               <blockquote className="mb-1.5 border-l-2 border-border pl-2 text-muted-foreground" {...p} />
             ),

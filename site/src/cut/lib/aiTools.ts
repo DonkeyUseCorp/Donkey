@@ -69,9 +69,7 @@ export async function runAiTool(
     }
 
     case "watch_video": {
-      const projectId = s.projectId;
-      if (!projectId) throw new ToolError("No project open.");
-      const { asset, clip } = resolveWatchTarget(s, input);
+      const { projectId, asset, clip, speed, from, to } = resolveWatchRange(s, input);
       if (asset.type === "audio")
         throw new ToolError(`"${asset.name}" is audio — detect_silence and subtitles_generate are the listening tools.`);
       interface WatchBody {
@@ -97,19 +95,6 @@ export async function runAiTool(
           note: "A still image — one frame, no time axis.",
         };
       }
-      const speed = clip?.speed && clip.speed > 0 ? clip.speed : 1;
-      const dur = asset.duration > 0 ? asset.duration : Infinity;
-      const from = clamp(isNum(input.from) ? input.from : clip ? clip.in : 0, 0, dur);
-      // An unknown duration leaves `to` for the engine to probe.
-      const to = isNum(input.to)
-        ? clamp(input.to, 0, dur)
-        : clip
-          ? clip.out
-          : Number.isFinite(dur)
-            ? dur
-            : undefined;
-      if (to !== undefined && to <= from)
-        throw new ToolError("from/to describe an empty range of the source.");
       const res = await apiFetch(`/api/cut/projects/${projectId}/watch`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -163,23 +148,8 @@ export async function runAiTool(
     }
 
     case "detect_silence": {
-      const projectId = s.projectId;
-      if (!projectId) throw new ToolError("No project open.");
-      const { asset, clip } = resolveWatchTarget(s, input);
+      const { projectId, asset, clip, speed, from, to } = resolveWatchRange(s, input);
       if (asset.type === "image") throw new ToolError(`"${asset.name}" is an image — it has no audio.`);
-      const speed = clip?.speed && clip.speed > 0 ? clip.speed : 1;
-      const dur = asset.duration > 0 ? asset.duration : Infinity;
-      const from = clamp(isNum(input.from) ? input.from : clip ? clip.in : 0, 0, dur);
-      // An unknown duration leaves `to` for the engine to probe.
-      const to = isNum(input.to)
-        ? clamp(input.to, 0, dur)
-        : clip
-          ? clip.out
-          : Number.isFinite(dur)
-            ? dur
-            : undefined;
-      if (to !== undefined && to <= from)
-        throw new ToolError("from/to describe an empty range of the source.");
       const res = await apiFetch(`/api/cut/projects/${projectId}/silence`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1151,6 +1121,39 @@ function resolveWatchTarget(
     return { asset: requireItem(s.assets, input.asset_id, "project asset"), clip: null };
   }
   throw new ToolError("Pass clip_id or asset_id — see videoTrack and media in the editor state.");
+}
+
+/** The shared preamble for the source-reading tools (watch_video, detect_silence):
+ * require an open project, resolve the target asset/clip, and derive the source
+ * range to scan. Each tool then does its own media-type check and API call. */
+function resolveWatchRange(
+  s: ReturnType<typeof useEditor.getState>,
+  input: Record<string, unknown>,
+): {
+  projectId: string;
+  asset: MediaAsset;
+  clip: { id: string; start: number; in: number; out: number; speed?: number } | null;
+  speed: number;
+  from: number;
+  to: number | undefined;
+} {
+  const projectId = s.projectId;
+  if (!projectId) throw new ToolError("No project open.");
+  const { asset, clip } = resolveWatchTarget(s, input);
+  const speed = clip?.speed && clip.speed > 0 ? clip.speed : 1;
+  const dur = asset.duration > 0 ? asset.duration : Infinity;
+  const from = clamp(isNum(input.from) ? input.from : clip ? clip.in : 0, 0, dur);
+  // An unknown duration leaves `to` for the engine to probe.
+  const to = isNum(input.to)
+    ? clamp(input.to, 0, dur)
+    : clip
+      ? clip.out
+      : Number.isFinite(dur)
+        ? dur
+        : undefined;
+  if (to !== undefined && to <= from)
+    throw new ToolError("from/to describe an empty range of the source.");
+  return { projectId, asset, clip, speed, from, to };
 }
 
 function requireItem<T extends { id: string }>(pool: T[], id: unknown, label: string): T {

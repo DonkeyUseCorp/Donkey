@@ -24,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 import Markdown from "react-markdown";
+import { baseMarkdownComponents } from "./markdownComponents";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -780,14 +781,10 @@ const MessageView = memo(function MessageView({ message }: { message: UIMessage 
             <div key={i} className="ai-md max-w-full text-[12.5px] leading-relaxed">
               <Markdown
                 components={{
-                  p: (p) => <p className="mb-1.5 last:mb-0" {...p} />,
-                  ul: (p) => <ul className="mb-1.5 list-disc pl-4 last:mb-0" {...p} />,
-                  ol: (p) => <ol className="mb-1.5 list-decimal pl-4 last:mb-0" {...p} />,
-                  li: (p) => <li className="mb-0.5" {...p} />,
+                  ...baseMarkdownComponents,
                   code: (p) => (
                     <code className="rounded bg-muted px-1 py-px font-mono text-[11px]" {...p} />
                   ),
-                  a: (p) => <a className="text-[#0a84ff] underline" target="_blank" {...p} />,
                 }}
               >
                 {part.text}
