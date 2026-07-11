@@ -36,6 +36,7 @@ import {
 } from "@/cut/lib/library";
 import { creditsUrl, signInUrl, useSignedIn } from "@/cut/lib/generate";
 import { enrichAsset } from "@/cut/lib/media";
+import { usePreviewAudio } from "@/cut/lib/previewAudio";
 import { useEditor } from "@/cut/lib/store";
 import { formatTime } from "@/cut/lib/time";
 import { NoCreditsError, synthesizeSpeech } from "@/cut/lib/tts";
@@ -67,25 +68,13 @@ export function AudioPanel({
   projectId: string;
   importing: boolean;
 }) {
-  // One shared player for every row so starting a clip stops the last one.
-  const player = useRef<HTMLAudioElement | null>(null);
-  const [playingUrl, setPlayingUrl] = useState<string | null>(null);
-  const togglePlay = (url: string) => {
-    const el = (player.current ??= new Audio());
-    if (playingUrl === url) {
-      el.pause();
-      setPlayingUrl(null);
-      return;
-    }
-    el.src = url;
-    el.onended = () => setPlayingUrl(null);
-    el.onerror = () => setPlayingUrl(null);
-    setPlayingUrl(url);
-    void el.play().catch(() => setPlayingUrl(null));
-  };
+  // The app-wide preview player: starting a clip stops the last one, here or
+  // on a chat audio card. Leaving the tab stops whatever is playing.
+  const playingUrl = usePreviewAudio((s) => s.url);
+  const togglePlay = usePreviewAudio((s) => s.toggle);
   useEffect(
     () => () => {
-      player.current?.pause();
+      usePreviewAudio.getState().stop();
     },
     []
   );
