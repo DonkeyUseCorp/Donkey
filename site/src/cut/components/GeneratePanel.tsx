@@ -44,7 +44,7 @@ const ASPECT_WORD: Record<VideoAspect, string> = {
 };
 
 // Segmented pill group, same language as the platform switcher in PlatformPreview.
-const segGroup = "flex gap-0.5 rounded-full border border-border bg-card p-0.5 shadow-xs";
+const segGroup = "flex h-7 items-center gap-0.5 rounded-full border border-border bg-card p-0.5 shadow-xs";
 const segButton = (active: boolean) =>
   cn(
     "rounded-full px-2.5 py-[3px] text-[11px] font-medium transition-colors",
@@ -181,7 +181,7 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
 
         {/* Which model renders the clip — a dropdown, since the catalog grows. */}
         <PillSelect
-          className="shrink-0"
+          className="h-7 shrink-0"
           title="Model"
           value={tier}
           display={model.model}
@@ -207,6 +207,7 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
             ))}
           </div>
           <PillSelect
+            className="h-7"
             title="Resolution"
             value={effResolution}
             display={effResolution}
@@ -217,7 +218,7 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
 
         {/* Shape, the same pill family as the image panel. */}
         <PillSelect
-          className="shrink-0"
+          className="h-7 shrink-0"
           title="Aspect ratio"
           value={effAspect}
           display={ASPECT_WORD[effAspect]}
