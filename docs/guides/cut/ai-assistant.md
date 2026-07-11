@@ -1,0 +1,101 @@
+# Cut's AI Assistant
+
+The assistant is the chat panel inside the Cut editor. It answers questions about the open project and edits it by calling typed tools against the live editor state, while the user watches the changes land. Three providers share one brain — the user's Claude Code login, the user's Codex login, and Gemini through Donkey's hosted inference — and all three get the same system prompt, tool catalog, and skills library; only the transport differs.
+
+**The one rule: the model makes every decision.** No code inspects the user's words. A message goes to a model with the project state attached, and the harness acts only on the typed tool calls that come back. If you're tempted to write `if (text.includes("subtitles"))` anywhere in the chat path, that knowledge belongs in the system prompt, a tool description, or a skill.
+
+## How a turn runs
+
+The model decides *what* to change; the browser tab holding the project does the changing. Everything between them — the engine, the MCP proxy, the hosted route — is transport.
+
+```
+user message + @attachments + fresh <editor_state> snapshot
+  │
+  ├─ Claude or GPT model picked ──▶ local engine, /api/cut/ai/chat
+  │       spawns the user's own CLI (Claude Agent SDK / codex exec),
+  │       resumes that provider's session, streams the reply back
+  │
+  │       provider ──stdio MCP proxy──▶ engine ──chat stream──▶ browser tab
+  │                                       ▲   runs the tool on the editor
+  │                                       └── store, POSTs the result back
+  │
+  └─ Gemini picked ──▶ hosted inference route (Donkey sign-in + credits)
+          the page itself loops: model round → run the function calls
+          on the editor store → send results back → next round,
+          until a round returns no calls
+```
+
+On the engine path, the chat route holds one streaming response open per turn. The provider sees a single MCP server named `cut`: a small stdio proxy the provider harness spawns, which forwards every tool listing and call to the engine over HTTP. The engine writes each call into the open chat stream; the tab executes it on the editor store and posts the result back; the engine hands it to the waiting provider. A call the tab never answers times out after two minutes.
+
+The Gemini path skips the engine entirely — the same carve-out as AI media generation. The page posts the conversation to Donkey's hosted responses route with the user's session, executes any function calls directly against the store, and repeats until the model settles on a reply (at most 16 rounds). Gemini's thought signatures are replayed exactly with each call, and an empty round surfaces as an error rather than a blank bubble.
+
+Which path runs is chosen by the model id alone. The picker lives in the page so a site deploy updates it for everyone; the engine only reports which CLIs are installed and signed in (probed and cached for a minute), and the page overlays Gemini availability from its own sign-in probe.
+
+## What the model knows
+
+Every knowledge surface is defined once — the catalog file ships in the engine and is bundled into the page, so all providers read identical text.
+
+| Surface | Size today | When it enters context |
+| --- | --- | --- |
+| System prompt | ~3.1K chars (~750 tokens) | Claude: replaces the Agent SDK default. Codex: prepended to the first turn (a resumed session already has it). Gemini: the instructions field, every round. |
+| Tool catalog (49 tools) | ~30K chars (~7.5K tokens) | Claude/Codex: the MCP tool listing. Gemini: function declarations on each request. |
+| Skills library (7 docs) | ~14.5K chars (~3.6K tokens) total | On demand only, via the list-skills and read-skill tools. |
+| Editor snapshot | Grows with the project; media list and subtitle cues capped at 60 each | Attached to the newest user message as `<editor_state>`, rebuilt fresh every turn. |
+| Attachments | Metadata JSON per asset | `<attached_assets>` on the message that carried them; on the Gemini path the newest message also carries the actual payloads (frames, images, text contents). |
+| Full state | Uncapped | The get-state tool — the model calls it when the snapshot is stale or truncated. |
+| The rendered frame | One 640px JPEG | The capture-frame tool, for visual judgment. |
+
+The system prompt is deliberately small: the voice, the deliverable rule (below), id discipline, the undo-versus-credits asymmetry, and pointers into the skills. The skills carry the deep per-area documentation — editor overview, timeline editing, transitions, titles, audio and subtitles, stock and generation, publish and export — so the always-on cost stays near 8K tokens and detail is pulled only when the model works in that area.
+
+The snapshot is a compact JSON picture of everything user-visible: project meta, playhead, selection, every media asset with its origin tag, the video track with gaps and transitions, overlay video, soundtrack, titles, subtitle tracks with the first 60 cues, publish metadata, and view state. Numbers are rounded to two decimals and empty fields are omitted. When a list is truncated the snapshot says so, which is the model's cue to call get-state.
+
+## The decision layer
+
+Deciding what the user wants is prompt text, executed by the model. The prompt orders the calls it must make each turn:
+
+1. **Deliverable first.** "Write me a caption / a script / a prompt" asks for words — the answer goes in chat and the project stays untouched until the user says "do it". A request to change the project gets acted on directly with tools.
+2. **Doing beats asking.** Edits are free to reverse (unlimited undo), so the model acts on reasonable interpretations. Generation is the exception: undo removes the clip but credits stay spent, so it generates only when the user asked for the media itself.
+3. **Free before paid.** Bundled stock is checked before spending generation credits when existing media could serve.
+
+"This" resolves to the current selection, ids come verbatim from the state, and unfamiliar areas trigger a skill read first.
+
+## Doing the work
+
+Tool calls execute in the open tab against the same store the user is editing — same state, same selection, same undo history.
+
+- **Readable failure, then retry.** Tools validate and clamp their inputs and throw human-readable errors ("No clip with that id — call get_state for current ids"), which return to the model as tool errors it can recover from.
+- **One undo step per turn.** History batches while the assistant is busy, so ⌘Z reverts the whole turn rather than one call at a time.
+- **Small results.** Tools return ids and rounded numbers, plus a short note when behavior surprised ("that spot was taken — slid right").
+- **Async when rendering.** Video generation outruns the two-minute tool window, so those tools start the job and return immediately; the clip files under the chat that asked — the owning thread is captured at call time — and lands on the timeline only when the user asked for that.
+- **Chat owns what it makes.** Media created by chat tools is tagged with its thread and previews on a card in the conversation. Placing it on the timeline or filing it into Media or the Library transfers ownership; deleting the thread deletes whatever it still owns.
+- **Two tools stay server-side.** The skill list and skill reads are answered by the engine directly — no browser hop.
+
+## Context across turns
+
+Threads persist per project in the browser's local storage — the newest 30, titled by their first message. What a returning thread remembers depends on the provider:
+
+- **Claude and Codex hold their own history.** Each turn sends only the newest message plus the fresh snapshot; prior turns live in the provider's native session, whose id is saved on the thread and resumed. The engine never replays conversation history itself.
+- **Gemini is stateless.** The page replays the whole thread every turn — text only. Old turns are stripped to their words; tool traffic, old snapshots, and old attachment payloads stay out, and the fresh snapshot rides only the newest message.
+
+A thread saves one session slot per provider, so switching models mid-thread keeps each provider's own context. The asymmetry to know: Gemini can pick up any thread because it replays the transcript, while a CLI provider joining a thread it hasn't chatted in starts from only the newest message.
+
+## Limits
+
+| Limit | Value |
+| --- | --- |
+| Provider turns per request (Claude) | 30 |
+| Tool rounds per turn (Gemini) | 16 |
+| Browser tool execution | 120s |
+| Snapshot caps | 60 media items, 60 cues |
+| Saved threads per project | 30 |
+| CLI availability probe cache | 60s |
+
+## One-shot helpers
+
+Three narrow AI calls run beside the chat, each a single engine round-trip through the user's Claude login on a small model: the caption style rewrite, caption translation, and visual subtitles (sampled frames in, timed narration cues out). The panel buttons and the chat's subtitle tools reach them through the same store actions. The style rewrite falls back to the original lines on failure; translation fails loudly instead, because filling a track with the wrong language would be silent corruption.
+
+A hidden hermetic test provider exercises the full engine bridge — context, tool round-trips, streaming — without spending tokens; end-to-end tests select it as their model.
+
+## Where it lives
+
+The shared catalog (system prompt, tools, skills), the chat route with its provider runners, the browser-tool bridge, and the stdio MCP proxy live with the engine's AI code under the site's Cut folder (`server/ai/`, `server/http/ai.ts`). The page side holds the snapshot builder (`lib/aiContext.ts`), the tool implementations (`lib/aiTools.ts`), the Gemini loop (`lib/geminiChat.ts`), the model catalog (`lib/aiModels.ts`), and the chat panel with threads and transport (`components/AiPanel.tsx`).

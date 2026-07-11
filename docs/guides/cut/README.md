@@ -56,6 +56,12 @@ Missing tools disable the matching feature; they never affect the rest of the si
 | AI generation (image / video / voiceover) | a Donkey sign-in and credits |
 | Projects, library, exports | writable local disk (Application Support when run as the engine) |
 
+## The assistant's knowledge
+
+The AI assistant knows the editor through three surfaces: the catalog — tool definitions, the skills library, and the system prompt, shared by every provider — the browser-side tool implementations that run those tools against the live editor store, and the per-turn context snapshot sent with each message. The catalog lives with the engine's AI code; the implementations and snapshot live with the editor client code. How a chat turn actually runs — providers, the tool bridge, context budgets — is its own guide: [Cut's AI Assistant](ai-assistant.md).
+
+**Teach the assistant in the same change.** When an editor feature lands, changes, or goes away, update those surfaces with it — usually by adding, updating, or deleting the matching tools and skills, and by extending the context snapshot when the feature adds user-visible state. A feature the catalog omits is invisible to the assistant, and a stale tool or skill is worse: the assistant confidently acts on behavior that no longer exists.
+
 ## Where it lives
 
 The editor, its handlers, and the engine entry sit under the site app's Cut folder; host routing, the hosted API shut-off, and the CORS grant live in the site's proxy file (`src/proxy.ts`, the Next 16 successor to middleware). The app-side supervisor lives with the Donkey runtime code, and the packaging scripts stage the engine binary into the app bundle.

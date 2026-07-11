@@ -39,7 +39,8 @@ Supported product and engineering guides live in `docs/guides/`. This list is th
 
 - [Backend API Guide](guides/backend-apis.md) — the hosted routes the Mac app and site call for model-backed work.
 - [Frontend and Next.js Guidelines](guides/frontend-nextjs-guidelines.md) — route structure, server/client boundaries, styling, and data access in the site app.
-- [Cut](guides/cut.md) — the standalone free video editor on the `cut.*` subdomain: what it shares with Donkey (nothing yet), and the local resources it runs on.
+- [Cut](guides/cut/README.md) — the standalone free video editor on the `cut.*` subdomain: what it shares with Donkey (nothing yet), and the local resources it runs on.
+- [Cut's AI Assistant](guides/cut/ai-assistant.md) — how a chat turn runs: the providers, the tool bridge into the editor, what the model knows, and the context budgets.
 
 **Operations**
 
