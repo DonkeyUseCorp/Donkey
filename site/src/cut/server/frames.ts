@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, unlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { mediaPath } from "./projects";
+import { num, round } from "./util";
 
 function run(cmd: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -122,4 +123,261 @@ export async function makeFreezeFrame(
   } finally {
     void rm(tmp, { recursive: true, force: true });
   }
+}
+
+/** Media duration in seconds via ffprobe (0 when unknown). */
+export function probeDuration(file: string): Promise<number> {
+  return new Promise((resolve) => {
+    const p = spawn("ffprobe", [
+      "-v", "error",
+      "-show_entries", "format=duration",
+      "-of", "csv=p=0",
+      file,
+    ]);
+    let out = "";
+    const timer = setTimeout(() => {
+      p.kill("SIGKILL");
+      resolve(0);
+    }, 30_000);
+    timer.unref();
+    p.stdout.on("data", (d) => (out += d));
+    p.on("close", () => {
+      clearTimeout(timer);
+      resolve(parseFloat(out) || 0);
+    });
+    p.on("error", () => {
+      clearTimeout(timer);
+      resolve(0);
+    });
+  });
+}
+
+interface CaptureRun {
+  ok: boolean;
+  timedOut: boolean;
+  stderr: string;
+}
+
+/** Run ffmpeg keeping the whole stderr — the frame/silence reports stream
+ * there. A timeout resolves instead of rejecting so callers can salvage
+ * partial output; a missing binary still maps to the install hint. */
+function runCapture(args: string[], timeoutMs: number): Promise<CaptureRun> {
+  return new Promise((resolve, reject) => {
+    const p = spawn("ffmpeg", args);
+    let err = "";
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      p.kill("SIGKILL");
+    }, timeoutMs);
+    timer.unref();
+    p.stderr.on("data", (d) => {
+      if (err.length < 2_000_000) err += d.toString();
+    });
+    p.on("error", (e) => {
+      clearTimeout(timer);
+      reject(
+        e.message.includes("ENOENT")
+          ? new Error("ffmpeg was not found. Install it with: brew install ffmpeg")
+          : e
+      );
+    });
+    p.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ ok: code === 0 && !timedOut, timedOut, stderr: err });
+    });
+  });
+}
+
+const errTail = (stderr: string) => stderr.trim().split("\n").slice(-3).join("\n");
+
+const sheetDataUrl = async (file: string) =>
+  `data:image/jpeg;base64,${(await readFile(file)).toString("base64")}`;
+
+const SHEET_GRID = 3; // cells per row and column
+const SHEET_CELL = 480; // cell long side, px
+const SHEET_GAP = 4; // tile margin and padding, px — the client stamps cells by this geometry
+const SCENE_THRESHOLD = 0.3; // ffmpeg scene-score cut point
+const WATCH_BUDGET_MS = 100_000; // all attempts together; leaves salvage room under the 120s tool cap
+
+export interface SheetFrame {
+  t: number;
+  scene?: number;
+}
+
+export interface WatchResult {
+  sheets: { image: string; frames: SheetFrame[] }[];
+  /** Cell geometry, so the client can stamp each cell with its time. */
+  layout: { grid: number; margin: number; padding: number };
+  sceneChanges: number[];
+  coveredTo: number;
+  truncated: boolean;
+}
+
+/**
+ * Sample a media file into timestamped contact sheets: frames picked at scene
+ * changes plus a steady density floor, each cell stamped with its source time,
+ * tiled 3×3. This is how the assistant watches footage — a bounded survey of
+ * what the file actually shows (maxSheets per call; callers narrow the range
+ * to see more).
+ */
+export async function makeContactSheets(
+  projectId: string,
+  sourceFile: string,
+  opts: { from: number; to: number; interval: number; maxSheets: number; still?: boolean }
+): Promise<WatchResult> {
+  const src = mediaPath(projectId, sourceFile);
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "veditor-watch-"));
+  try {
+    const dims = await probeDims(src);
+    const scale = dims.width >= dims.height ? `scale=${SHEET_CELL}:-2` : `scale=-2:${SHEET_CELL}`;
+
+    // A still is its own one-cell sheet — no sampling, no time axis.
+    if (opts.still) {
+      const out = path.join(tmp, "sheet-01.jpg");
+      const r = await runCapture(
+        ["-hide_banner", "-nostats", "-y", "-i", src, "-vf", scale, "-frames:v", "1", "-q:v", "5", out],
+        30_000
+      );
+      if (!r.ok) throw new Error(errTail(r.stderr) || "Could not read the image.");
+      return {
+        sheets: [{ image: await sheetDataUrl(out), frames: [{ t: 0 }] }],
+        layout: { grid: 1, margin: 0, padding: 0 },
+        sceneChanges: [],
+        coveredTo: 0,
+        truncated: false,
+      };
+    }
+
+    const { from, to, interval, maxSheets } = opts;
+    const minGap = Math.max(0.4, interval / 3);
+    const graph = [
+      // First frame always; a scene cut once minGap has passed; the floor.
+      `select='isnan(prev_selected_t)+gt(scene,${SCENE_THRESHOLD})*gte(t-prev_selected_t,${num(minGap)})+gte(t-prev_selected_t,${num(interval)})'`,
+      "metadata=print",
+      scale,
+      `tile=${SHEET_GRID}x${SHEET_GRID}:padding=${SHEET_GAP}:margin=${SHEET_GAP}`,
+    ].join(",");
+    const args = (hw: boolean) => [
+      "-hide_banner", "-nostats", "-loglevel", "info", "-y",
+      ...(hw ? ["-hwaccel", "videotoolbox"] : []),
+      "-ss", num(from),
+      "-t", num(to - from),
+      "-i", src,
+      "-map", "0:v:0", "-an", "-sn", "-dn",
+      "-vf", graph,
+      "-fps_mode", "vfr",
+      "-frames:v", String(maxSheets),
+      "-q:v", "5",
+      path.join(tmp, "sheet-%02d.jpg"),
+    ];
+
+    // Hardware decode first; a source it refuses gets one software retry.
+    const deadline = Date.now() + WATCH_BUDGET_MS;
+    let run = await runCapture(args(true), WATCH_BUDGET_MS);
+    if (!run.ok && !run.timedOut && deadline - Date.now() > 5_000) {
+      for (const f of await readdir(tmp)) void unlink(path.join(tmp, f)).catch(() => {});
+      run = await runCapture(args(false), deadline - Date.now());
+    }
+
+    const files = (await readdir(tmp)).filter((f) => f.endsWith(".jpg")).sort();
+    // A timeout or a mid-run decode error may leave the last sheet half-written.
+    if (!run.ok && files.length > 0) files.pop();
+    if (files.length === 0) {
+      throw new Error(
+        run.timedOut
+          ? "Sampling timed out before the first sheet was ready — try a shorter range or a larger interval."
+          : errTail(run.stderr) || "Could not sample the video."
+      );
+    }
+
+    // metadata=print logs each selected frame ("frame:N … pts_time:T" then
+    // "lavfi.scene_score=S"); times are relative to the input seek.
+    const frames: SheetFrame[] = [];
+    for (const line of run.stderr.split("\n")) {
+      const t = /frame:\d+.*pts_time:([\d.]+)/.exec(line);
+      if (t) {
+        frames.push({ t: round(from + parseFloat(t[1])) });
+        continue;
+      }
+      const s = /lavfi\.scene_score=([\d.]+)/.exec(line);
+      if (s && frames.length > 0) frames[frames.length - 1].scene = parseFloat(s[1]);
+    }
+    const perSheet = SHEET_GRID * SHEET_GRID;
+    const kept = frames.slice(0, files.length * perSheet);
+    const sheets = await Promise.all(
+      files.map(async (f, i) => ({
+        image: await sheetDataUrl(path.join(tmp, f)),
+        frames: kept.slice(i * perSheet, (i + 1) * perSheet),
+      }))
+    );
+    const lastT = kept.length > 0 ? kept[kept.length - 1].t : from;
+    // An aborted run (timeout or error) that salvaged sheets covered only what
+    // it decoded — never claim the full range for it.
+    const truncated =
+      (!run.ok || frames.length >= maxSheets * perSheet) && lastT < to - interval;
+    return {
+      sheets,
+      layout: { grid: SHEET_GRID, margin: SHEET_GAP, padding: SHEET_GAP },
+      sceneChanges: kept.filter((f) => (f.scene ?? 0) >= SCENE_THRESHOLD).map((f) => f.t),
+      coveredTo: truncated ? lastT : to,
+      truncated,
+    };
+  } finally {
+    void rm(tmp, { recursive: true, force: true });
+  }
+}
+
+export interface SilenceRange {
+  start: number;
+  end: number;
+  duration: number;
+}
+
+/** Find silent stretches in a media file's audio (ffmpeg silencedetect).
+ * Times are absolute source seconds. */
+export async function detectSilence(
+  projectId: string,
+  sourceFile: string,
+  opts: { from: number; to: number; thresholdDb: number; minSilence: number }
+): Promise<SilenceRange[]> {
+  const { from, to, thresholdDb, minSilence } = opts;
+  const r = await runCapture(
+    [
+      "-hide_banner", "-nostats", "-loglevel", "info",
+      ...(from > 0 ? ["-ss", num(from)] : []),
+      "-t", num(to - from),
+      "-i", mediaPath(projectId, sourceFile),
+      "-vn", "-sn", "-dn",
+      "-af", `silencedetect=n=${thresholdDb}dB:d=${num(minSilence)}`,
+      "-f", "null", "-",
+    ],
+    60_000
+  );
+  if (!r.ok) {
+    if (/does not contain any stream|matches no streams|Cannot find a matching stream/i.test(r.stderr))
+      throw new Error("This file has no audio track.");
+    throw new Error(
+      r.timedOut ? "Silence detection timed out — try a shorter range." : errTail(r.stderr)
+    );
+  }
+  const silences: SilenceRange[] = [];
+  let open: number | null = null;
+  for (const line of r.stderr.split("\n")) {
+    const s = /silence_start: (-?[\d.]+)/.exec(line);
+    if (s) {
+      open = Math.max(from, from + parseFloat(s[1]));
+      continue;
+    }
+    const e = /silence_end: (-?[\d.]+)/.exec(line);
+    if (e && open !== null) {
+      const end = Math.min(to, from + parseFloat(e[1]));
+      if (end > open) silences.push({ start: round(open), end: round(end), duration: round(end - open) });
+      open = null;
+    }
+  }
+  // Silence still open at the end of the range closes there.
+  if (open !== null && to > open)
+    silences.push({ start: round(open), end: round(to), duration: round(to - open) });
+  return silences;
 }

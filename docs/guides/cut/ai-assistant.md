@@ -38,14 +38,15 @@ Every knowledge surface is defined once — the catalog file ships in the engine
 | Surface | Size today | When it enters context |
 | --- | --- | --- |
 | System prompt | ~3.1K chars (~750 tokens) | Claude: replaces the Agent SDK default. Codex: prepended to the first turn (a resumed session already has it). Gemini: the instructions field, every round. |
-| Tool catalog (49 tools) | ~30K chars (~7.5K tokens) | Claude/Codex: the MCP tool listing. Gemini: function declarations on each request. |
-| Skills library (7 docs) | ~14.5K chars (~3.6K tokens) total | On demand only, via the list-skills and read-skill tools. |
+| Tool catalog (51 tools) | ~32K chars (~8K tokens) | Claude/Codex: the MCP tool listing. Gemini: function declarations on each request. |
+| Skills library (8 docs) | ~16.5K chars (~4K tokens) total | On demand only, via the list-skills and read-skill tools. |
 | Editor snapshot | Grows with the project; media list and subtitle cues capped at 60 each | Attached to the newest user message as `<editor_state>`, rebuilt fresh every turn. |
 | Attachments | Metadata JSON per asset | `<attached_assets>` on the message that carried them; on the Gemini path the newest message also carries the actual payloads (frames, images, text contents). |
 | Full state | Uncapped | The get-state tool — the model calls it when the snapshot is stale or truncated. |
-| The rendered frame | One 640px JPEG | The capture-frame tool, for visual judgment. |
+| The rendered frame | One 640px JPEG | The capture-frame tool, for visual judgment at the playhead. |
+| The footage itself | Up to four 3×3 contact sheets per call | The watch-video tool: the engine samples a source at scene changes plus a steady floor (ffmpeg), the page stamps each cell with its source time, and the result carries the scene-change times. Detect-silence reports dead air the same way, numbers only. |
 
-The system prompt is deliberately small: the voice, the deliverable rule (below), id discipline, the undo-versus-credits asymmetry, and pointers into the skills. The skills carry the deep per-area documentation — editor overview, timeline editing, transitions, titles, audio and subtitles, stock and generation, publish and export — so the always-on cost stays near 8K tokens and detail is pulled only when the model works in that area.
+The system prompt is deliberately small: the voice, the deliverable rule (below), id discipline, the undo-versus-credits asymmetry, and pointers into the skills. The skills carry the deep per-area documentation — editor overview, timeline editing, watching and cutting by content, transitions, titles, audio and subtitles, stock and generation, publish and export — so the always-on cost stays near 8.5K tokens and detail is pulled only when the model works in that area.
 
 The snapshot is a compact JSON picture of everything user-visible: project meta, playhead, selection, every media asset with its origin tag, the video track with gaps and transitions, overlay video, soundtrack, titles, subtitle tracks with the first 60 cues, publish metadata, and view state. Numbers are rounded to two decimals and empty fields are omitted. When a list is truncated the snapshot says so, which is the model's cue to call get-state.
 
@@ -66,6 +67,7 @@ Tool calls execute in the open tab against the same store the user is editing �
 - **Readable failure, then retry.** Tools validate and clamp their inputs and throw human-readable errors ("No clip with that id — call get_state for current ids"), which return to the model as tool errors it can recover from.
 - **One undo step per turn.** History batches while the assistant is busy, so ⌘Z reverts the whole turn rather than one call at a time.
 - **Small results.** Tools return ids and rounded numbers, plus a short note when behavior surprised ("that spot was taken — slid right").
+- **Frames become images.** A tool result's `image`/`images` data URLs leave the JSON and reach the model as real images on every path — the engine bridge emits MCP image blocks after the data text, and the Gemini loop rides the first on the function response and the rest as image parts. Watching happens in whatever model the user is chatting with; there is no side model.
 - **Async when rendering.** Video generation outruns the two-minute tool window, so those tools start the job and return immediately; the clip files under the chat that asked — the owning thread is captured at call time — and lands on the timeline only when the user asked for that.
 - **Chat owns what it makes.** Media created by chat tools is tagged with its thread and previews on a card in the conversation. Placing it on the timeline or filing it into Media or the Library transfers ownership; deleting the thread deletes whatever it still owns.
 - **Two tools stay server-side.** The skill list and skill reads are answered by the engine directly — no browser hop.
@@ -86,6 +88,7 @@ A thread saves one session slot per provider, so switching models mid-thread kee
 | Provider turns per request (Claude) | 30 |
 | Tool rounds per turn (Gemini) | 16 |
 | Browser tool execution | 120s |
+| One watch-video call | 600s of source, 4 sheets (36 frames); the result says where coverage stopped |
 | Snapshot caps | 60 media items, 60 cues |
 | Saved threads per project | 30 |
 | CLI availability probe cache | 60s |

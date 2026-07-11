@@ -93,6 +93,30 @@ function readThreads(): ChatThread[] {
   }
 }
 
+/** Persisted copies drop frame payloads (data URLs) from tool outputs — one
+ * watch_video result carries ~1MB of contact sheets and localStorage holds a
+ * few MB per origin. The live thread keeps its images; replayed turns only
+ * ever reuse text parts, so nothing downstream misses them. */
+function slimForStorage(list: ChatThread[]): ChatThread[] {
+  const bulky = (v: unknown) => typeof v === "string" && v.startsWith("data:image/");
+  return list.map((t) => ({
+    ...t,
+    messages: t.messages.map((m) => ({
+      ...m,
+      parts: m.parts.map((p) => {
+        const out = (p as { output?: unknown }).output;
+        if (!out || typeof out !== "object") return p;
+        const o = out as Record<string, unknown>;
+        if (!bulky(o.image) && !(Array.isArray(o.images) && o.images.some(bulky))) return p;
+        return {
+          ...p,
+          output: { ...o, image: undefined, images: undefined, imagesOmitted: true },
+        } as typeof p;
+      }),
+    })),
+  }));
+}
+
 function writeThreads(list: ChatThread[]) {
   // Cap history, but retain any overflow thread that still owns chat media —
   // deleting media is an explicit act (deleting its thread), never a side
@@ -102,7 +126,7 @@ function writeThreads(list: ChatThread[]) {
     ...list.slice(THREAD_LIMIT).filter((t) => threadOwnsAssets(t.id)),
   ];
   try {
-    localStorage.setItem(threadsKey(), JSON.stringify(kept));
+    localStorage.setItem(threadsKey(), JSON.stringify(slimForStorage(kept)));
   } catch {
     // Storage full/blocked — history just won't persist.
   }

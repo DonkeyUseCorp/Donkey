@@ -443,12 +443,31 @@ export const aiApi = {
     if (result.errorText !== undefined) {
       return Response.json({ ...mcpText(result.errorText), isError: true });
     }
-    // Screenshots come back as data URLs; hand them to the model as images.
-    const out = result.output as { image?: string } | undefined;
-    if (name === "capture_frame" && out?.image?.startsWith("data:image/")) {
-      const [head, data] = out.image.split(",", 2);
-      const mimeType = head.slice(5, head.indexOf(";"));
-      return Response.json({ content: [{ type: "image", data, mimeType }] });
+    // Frames come back as data URLs in `image`/`images`; hand them to the
+    // model as MCP image blocks. The data text rides first, so a provider
+    // that can't read images still gets the numbers.
+    const out = result.output as { image?: unknown; images?: unknown } | undefined;
+    const urls = [
+      ...(typeof out?.image === "string" ? [out.image] : []),
+      ...(Array.isArray(out?.images)
+        ? out.images.filter((u): u is string => typeof u === "string")
+        : []),
+    ]
+      .filter((u) => u.startsWith("data:image/"))
+      .slice(0, 6);
+    if (urls.length > 0) {
+      const rest = Object.fromEntries(
+        Object.entries(out as Record<string, unknown>).filter(([k]) => k !== "image" && k !== "images")
+      );
+      return Response.json({
+        content: [
+          { type: "text", text: JSON.stringify(rest) },
+          ...urls.map((u) => {
+            const [head, data] = u.split(",", 2);
+            return { type: "image", data, mimeType: head.slice(5, head.indexOf(";")) };
+          }),
+        ],
+      });
     }
     return Response.json(mcpText(result.output ?? { ok: true }));
   },

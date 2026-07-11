@@ -68,6 +68,166 @@ export async function runAiTool(
       return { image: scaled.toDataURL("image/jpeg", 0.75), note: "Video frame only; titles and captions overlay this in the UI." };
     }
 
+    case "watch_video": {
+      const projectId = s.projectId;
+      if (!projectId) throw new ToolError("No project open.");
+      const { asset, clip } = resolveWatchTarget(s, input);
+      if (asset.type === "audio")
+        throw new ToolError(`"${asset.name}" is audio — detect_silence and subtitles_generate are the listening tools.`);
+      interface WatchBody {
+        sheets: { image: string; frames: { t: number; scene?: number }[] }[];
+        layout: { grid: number; margin: number; padding: number };
+        sceneChanges: number[];
+        coveredTo: number;
+        truncated: boolean;
+        error?: string;
+      }
+      // A still is one sheet with no time axis.
+      if (asset.type === "image") {
+        const res = await apiFetch(`/api/cut/projects/${projectId}/watch`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ file: asset.fileName, still: true }),
+        });
+        const body = await apiJson<WatchBody>(res);
+        if (!res.ok) throw new ToolError(body.error ?? "Could not read the image.");
+        return {
+          images: body.sheets.map((sh) => sh.image),
+          source: { assetId: asset.id, name: asset.name },
+          note: "A still image — one frame, no time axis.",
+        };
+      }
+      const speed = clip?.speed && clip.speed > 0 ? clip.speed : 1;
+      const dur = asset.duration > 0 ? asset.duration : Infinity;
+      const from = clamp(isNum(input.from) ? input.from : clip ? clip.in : 0, 0, dur);
+      // An unknown duration leaves `to` for the engine to probe.
+      const to = isNum(input.to)
+        ? clamp(input.to, 0, dur)
+        : clip
+          ? clip.out
+          : Number.isFinite(dur)
+            ? dur
+            : undefined;
+      if (to !== undefined && to <= from)
+        throw new ToolError("from/to describe an empty range of the source.");
+      const res = await apiFetch(`/api/cut/projects/${projectId}/watch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          file: asset.fileName,
+          from,
+          ...(to !== undefined ? { to } : {}),
+          ...(isNum(input.interval_seconds) ? { interval: input.interval_seconds } : {}),
+        }),
+      });
+      const body = await apiJson<WatchBody>(res);
+      if (!res.ok) throw new ToolError(body.error ?? "Could not watch the video.");
+      // The engine's ffmpeg has no text renderer; the cells get their source-
+      // time stamps here on a canvas. A sheet that fails to stamp rides plain —
+      // sheetFrames stays the authority either way.
+      let stamped = true;
+      const images = await Promise.all(
+        body.sheets.map((sh) =>
+          stampSheet(sh.image, sh.frames.map((f) => f.t), body.layout).catch(() => {
+            stamped = false;
+            return sh.image;
+          })
+        )
+      );
+      return {
+        images,
+        sheetFrames: body.sheets.map((sh) => sh.frames.map((f) => round2(f.t))),
+        sceneChanges: body.sceneChanges.map(round2),
+        coveredTo: round2(body.coveredTo),
+        truncated: body.truncated,
+        source: { assetId: asset.id, name: asset.name, duration: round2(asset.duration) },
+        ...(clip
+          ? {
+              clip: {
+                id: clip.id,
+                timelineStart: round2(clip.start),
+                in: round2(clip.in),
+                out: round2(clip.out),
+                speed: round2(speed),
+                note: `timeline_t = ${round2(clip.start)} + (source_t - ${round2(clip.in)}) / ${round2(speed)}, for source_t in [${round2(clip.in)}, ${round2(clip.out)}]`,
+              },
+            }
+          : {}),
+        note:
+          "Cells read left→right then top→bottom; each stamp is SOURCE seconds." +
+          (body.truncated
+            ? ` Coverage stopped at ${round2(body.coveredTo)}s — call again with from=${round2(body.coveredTo)} to continue.`
+            : "") +
+          (stamped ? "" : " (Stamps unavailable — sheetFrames lists each cell's time.)"),
+      };
+    }
+
+    case "detect_silence": {
+      const projectId = s.projectId;
+      if (!projectId) throw new ToolError("No project open.");
+      const { asset, clip } = resolveWatchTarget(s, input);
+      if (asset.type === "image") throw new ToolError(`"${asset.name}" is an image — it has no audio.`);
+      const speed = clip?.speed && clip.speed > 0 ? clip.speed : 1;
+      const dur = asset.duration > 0 ? asset.duration : Infinity;
+      const from = clamp(isNum(input.from) ? input.from : clip ? clip.in : 0, 0, dur);
+      // An unknown duration leaves `to` for the engine to probe.
+      const to = isNum(input.to)
+        ? clamp(input.to, 0, dur)
+        : clip
+          ? clip.out
+          : Number.isFinite(dur)
+            ? dur
+            : undefined;
+      if (to !== undefined && to <= from)
+        throw new ToolError("from/to describe an empty range of the source.");
+      const res = await apiFetch(`/api/cut/projects/${projectId}/silence`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          file: asset.fileName,
+          from,
+          ...(to !== undefined ? { to } : {}),
+          ...(isNum(input.threshold_db) ? { threshold_db: input.threshold_db } : {}),
+          ...(isNum(input.min_silence) ? { min_silence: input.min_silence } : {}),
+        }),
+      });
+      interface SilenceBody {
+        silences: { start: number; end: number; duration: number }[];
+        error?: string;
+      }
+      const body = await apiJson<SilenceBody>(res);
+      if (!res.ok) throw new ToolError(body.error ?? "Could not scan for silence.");
+      // Pre-map each silence's overlap with the clip's trimmed range onto the
+      // timeline so the model cuts on ready numbers.
+      const toTimeline = (t: number) =>
+        round2(clip!.start + (clamp(t, clip!.in, clip!.out) - clip!.in) / speed);
+      return {
+        silences: body.silences.map((x) => ({
+          start: round2(x.start),
+          end: round2(x.end),
+          duration: round2(x.duration),
+          ...(clip && x.end > clip.in && x.start < clip.out
+            ? { timeline: { start: toTimeline(x.start), end: toTimeline(x.end) } }
+            : {}),
+        })),
+        source: { assetId: asset.id, name: asset.name, duration: round2(asset.duration) },
+        ...(clip
+          ? {
+              clip: {
+                id: clip.id,
+                timelineStart: round2(clip.start),
+                in: round2(clip.in),
+                out: round2(clip.out),
+                speed: round2(speed),
+              },
+            }
+          : {}),
+        ...(body.silences.length === 0
+          ? { note: "No silence at these settings — a higher threshold_db or shorter min_silence hears more." }
+          : {}),
+      };
+    }
+
     case "seek": {
       if (!isNum(input.t)) throw new ToolError("t (seconds) is required.");
       s.seek(input.t);
@@ -924,6 +1084,71 @@ async function synthesizeVoiceover(
     duck: duck < 1 ? duck : null,
     addedToTimeline: true,
   };
+}
+
+/** Draw each cell's source-time stamp onto a contact sheet. The bundled
+ * ffmpeg ships without a text renderer (LGPL build, no freetype), so the
+ * stamps land here, where a canvas always can. */
+async function stampSheet(
+  image: string,
+  times: number[],
+  layout: { grid: number; margin: number; padding: number }
+): Promise<string> {
+  const img = new Image();
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error("Bad sheet image."));
+    img.src = image;
+  });
+  const canvas = document.createElement("canvas");
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("No 2d context.");
+  ctx.drawImage(img, 0, 0);
+  const { grid, margin, padding } = layout;
+  const cellW = (canvas.width - 2 * margin - (grid - 1) * padding) / grid;
+  const cellH = (canvas.height - 2 * margin - (grid - 1) * padding) / grid;
+  const size = Math.max(13, Math.round(cellH / 12));
+  ctx.font = `bold ${size}px ui-monospace, monospace`;
+  ctx.textBaseline = "bottom";
+  times.forEach((t, i) => {
+    const x = margin + (i % grid) * (cellW + padding);
+    const y = margin + Math.floor(i / grid) * (cellH + padding);
+    const label = `${round2(t)}s`;
+    const w = ctx.measureText(label).width;
+    ctx.fillStyle = "rgba(0,0,0,0.6)";
+    ctx.fillRect(x + 4, y + cellH - size - 10, w + 10, size + 8);
+    ctx.fillStyle = "#fff";
+    ctx.fillText(label, x + 9, y + cellH - 6);
+  });
+  return canvas.toDataURL("image/jpeg", 0.8);
+}
+
+/** Resolve a watch/listen target: a timeline clip (its source plus trim and
+ * placement) or a bare project asset. */
+function resolveWatchTarget(
+  s: ReturnType<typeof useEditor.getState>,
+  input: Record<string, unknown>
+): {
+  asset: MediaAsset;
+  clip: { id: string; start: number; in: number; out: number; speed?: number } | null;
+} {
+  if (input.clip_id !== undefined && input.clip_id !== null) {
+    const id = String(input.clip_id);
+    const clip =
+      s.clips.find((c) => c.id === id) ??
+      s.overlayClips.find((c) => c.id === id) ??
+      s.audioClips.find((c) => c.id === id);
+    if (!clip) throw new ToolError(`No clip with id ${id}. Call get_state for current ids.`);
+    const asset = s.assets.find((a) => a.id === clip.assetId);
+    if (!asset) throw new ToolError("That clip's media asset is missing.");
+    return { asset, clip };
+  }
+  if (input.asset_id !== undefined && input.asset_id !== null) {
+    return { asset: requireItem(s.assets, input.asset_id, "project asset"), clip: null };
+  }
+  throw new ToolError("Pass clip_id or asset_id — see videoTrack and media in the editor state.");
 }
 
 function requireItem<T extends { id: string }>(pool: T[], id: unknown, label: string): T {

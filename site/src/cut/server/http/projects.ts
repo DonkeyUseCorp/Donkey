@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import type { ProjectDoc } from "@/cut/lib/types";
-import { makeFreezeFrame, probeDims } from "../frames";
+import { detectSilence, makeContactSheets, makeFreezeFrame, probeDims, probeDuration } from "../frames";
 import {
   createProject,
   createProjectFolder,
@@ -27,6 +27,7 @@ import { exists } from "../util";
 const err = (message: string, status: number) => Response.json({ error: message }, { status });
 const caught = (e: unknown, fallback: string, status = 500) =>
   err(e instanceof Error ? e.message : fallback, status);
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 /** Project CRUD, media, exports, transcription, freeze-frames. */
 export const projectsApi = {
@@ -327,6 +328,73 @@ export const projectsApi = {
       });
     } catch (e) {
       return caught(e, String(e));
+    }
+  },
+
+  /** Sample a media file into timestamped contact sheets (the assistant's eyes). */
+  async watch(req: Request, { id }: { id: string }) {
+    try {
+      if (!(await readProject(id))) return err("Project not found.", 404);
+      const body = (await req.json()) as {
+        file?: string;
+        from?: number;
+        to?: number;
+        interval?: number;
+        maxSheets?: number;
+        still?: boolean;
+      };
+      if (!body.file) return err("file is required.", 400);
+      if (body.still) {
+        return Response.json(
+          await makeContactSheets(id, body.file, { from: 0, to: 0, interval: 1, maxSheets: 1, still: true })
+        );
+      }
+      const from = Math.max(0, typeof body.from === "number" ? body.from : 0);
+      const wanted = typeof body.to === "number" ? body.to : await probeDuration(mediaPath(id, body.file));
+      if (typeof body.to !== "number" && wanted <= 0)
+        return err("Could not read the media duration — pass to (seconds).", 400);
+      if (!(wanted > from)) return err("from/to describe an empty range.", 400);
+      const to = Math.min(wanted, from + 600); // bound the decode per call; callers resume from coveredTo
+      const interval =
+        typeof body.interval === "number"
+          ? clamp(body.interval, 0.5, 30)
+          : clamp((to - from) / 32, 2, 30);
+      const maxSheets = clamp(Math.round(typeof body.maxSheets === "number" ? body.maxSheets : 4), 1, 4);
+      const out = await makeContactSheets(id, body.file, { from, to, interval, maxSheets });
+      // The per-call decode cap is itself truncation — the caller asked for more.
+      if (to < wanted && !out.truncated) {
+        out.truncated = true;
+        out.coveredTo = to;
+      }
+      return Response.json(out);
+    } catch (e) {
+      return caught(e, "Could not sample the video.");
+    }
+  },
+
+  /** Report silent stretches in a media file's audio. */
+  async silence(req: Request, { id }: { id: string }) {
+    try {
+      if (!(await readProject(id))) return err("Project not found.", 404);
+      const body = (await req.json()) as {
+        file?: string;
+        from?: number;
+        to?: number;
+        threshold_db?: number;
+        min_silence?: number;
+      };
+      if (!body.file) return err("file is required.", 400);
+      const from = Math.max(0, typeof body.from === "number" ? body.from : 0);
+      const to = typeof body.to === "number" ? body.to : await probeDuration(mediaPath(id, body.file));
+      if (typeof body.to !== "number" && to <= 0)
+        return err("Could not read the media duration — pass to (seconds).", 400);
+      if (!(to > from)) return err("from/to describe an empty range.", 400);
+      const thresholdDb = clamp(typeof body.threshold_db === "number" ? body.threshold_db : -30, -90, 0);
+      const minSilence = clamp(typeof body.min_silence === "number" ? body.min_silence : 0.35, 0.05, 10);
+      const silences = await detectSilence(id, body.file, { from, to, thresholdDb, minSilence });
+      return Response.json({ silences, from, to });
+    } catch (e) {
+      return caught(e, "Could not scan for silence.");
     }
   },
 };

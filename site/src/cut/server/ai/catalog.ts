@@ -39,8 +39,33 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "capture_frame",
     description:
-      "Capture what the video preview currently shows (at the playhead) as an image, so you can see the frame, titles, and captions exactly as rendered.",
+      "Capture the composited video frame the preview shows at the playhead as an image. Titles and captions are drawn over the canvas in the UI, so they don't appear here — this checks the footage, not the text.",
     inputSchema: obj({}),
+  },
+  {
+    name: "watch_video",
+    description:
+      "Watch a video source with your own eyes: samples its frames at scene changes plus a steady floor into timestamped contact-sheet images, and returns the detected scene-change times (natural cut candidates). Pass clip_id to watch a timeline clip's source (the result includes that clip's source↔timeline time math) or asset_id for any project video or image. The stamp burned into each cell is SOURCE seconds — what trim_clip's in/out use — not timeline seconds. Coverage is capped per call: survey the whole range first, then call again with a narrow from/to and a small interval_seconds where the cut needs care; the result says where coverage stopped. Read the watching-and-cutting skill before editing footage by content.",
+    inputSchema: obj({
+      clip_id: str("Video clip id, track 0 or overlay (defaults from/to to its trimmed in/out)"),
+      asset_id: str("Project asset id (video or image) — watch the source itself"),
+      from: num("Source start s (default: the clip's in, else 0)"),
+      to: num("Source end s (default: the clip's out, else the source's end; spans at most 600s per call)"),
+      interval_seconds: num("Target seconds between sampled frames, 0.5–30 (default spreads ~32 frames across the range)"),
+    }),
+  },
+  {
+    name: "detect_silence",
+    description:
+      "Find silent stretches in a source's audio — dead air, long pauses, gaps between takes. Returns [{start,end,duration}] in SOURCE seconds, plus each one's timeline times when clip_id is passed. Cheap and image-free; pair it with the transcript's cue timings to find filler, then cut with split_at / trim_clip / delete_item.",
+    inputSchema: obj({
+      clip_id: str("Clip id — video, overlay, or soundtrack; scopes to its trimmed range and maps results to timeline seconds"),
+      asset_id: str("Project asset id (video or audio)"),
+      from: num("Source start s (default: the clip's in, else 0)"),
+      to: num("Source end s (default: the clip's out, else the source's end)"),
+      threshold_db: num("Loudness below this counts as silence, dBFS (default -30)"),
+      min_silence: num("Shortest silent stretch to report, seconds (default 0.35)"),
+    }),
   },
   {
     name: "seek",
@@ -501,6 +526,29 @@ Times are in seconds on the shared timeline. The playhead is currentTime; a skim
 - The user can copy/paste any selected segment (video, overlay video, audio, title) with ⌘C/⌘V; pastes aim for the playhead and slide right to free space.
 - Zoom: set_view pxPerSec (12..800) or fit. The timeline panel height: set_view timelineH (170..600).`,
 
+  "watching-and-cutting": `# Watching footage & cutting by content
+When a request depends on what the footage actually contains — "cut the dead air", "clip the best moment", "remove the boring part", "split where the scene changes" — watch it first. Never guess at content you haven't seen.
+
+Your eyes and ears:
+- watch_video(clip_id | asset_id, from?, to?, interval_seconds?): samples the SOURCE at scene changes plus a steady floor and returns timestamped contact sheets — cells read left→right, top→bottom, and each burned stamp is source seconds — plus sceneChanges, the natural cut candidates. Coverage is capped per call: survey the whole range at the default interval first, then zoom into the moments that matter with a narrow from/to and interval_seconds 0.5–1. When truncated, continue from coveredTo.
+- detect_silence(clip_id | asset_id, threshold_db?, min_silence?): silent stretches in source seconds; with clip_id each also carries its timeline times.
+- capture_frame: one composited frame at the playhead — for checking the final look, not for surveying footage.
+
+The flow for "edit this for me":
+1. get_state — every clip, its trim (in/out), speed, gaps, and the other tracks.
+2. Speech? subtitles_generate first — cue timings are timeline seconds and say what is said when.
+3. watch_video each distinct source (or the ranges in question); note scene changes and what happens where.
+4. Trimming dead air: detect_silence, then cross-check cue gaps so a cut never clips a word.
+5. Execute: split_at (timeline s) to divide, delete_item to drop a segment, trim_clip (source s) to tighten edges, place_clip/move_clip to close gaps or reorder, set_speed to compress slow stretches.
+6. Verify: seek to each new cut; capture_frame when the change is visual.
+
+Time math (get this right):
+- watch_video, detect_silence, and trim_clip speak SOURCE seconds; split_at and place_clip speak TIMELINE seconds.
+- timeline_t = clip.start + (source_t − clip.in) / clip.speed, valid while source_t is inside [in, out]. Each watch result's clip block carries this formula with the real numbers filled in.
+- The same source can appear in several clips — map per clip.
+
+Cutting dead air well: leave ~0.2s of breathing room around speech; prefer split_at + delete_item, then place_clip to close the gap (a beat of black may be wanted — ask the cut, not the tool); trim_clip only tightens a clip's edges.`,
+
   "transitions-and-fades": `# Transitions & fades
 Three fade-like features exist; route the ask to the right one:
 - set_transition: a styled join between one video clip and the next.
@@ -564,7 +612,7 @@ Rules:
 - Don't transcribe a video with no speech. If the user wants captions on silent footage, use subtitles_from_visuals (it narrates what's on screen). Never invent a spoken transcript.
 - Voiceovers duck other audio by default so they stay audible. Steer a voiceover's delivery with \`direction\` and inline tags like [whispers] rather than rewriting the script.
 - generate_image / generate_video / generate_character_video / voiceover_generate / read_subtitles_aloud make media through hosted models (spends the user's Donkey credits, needs sign-in); call them when the user asked for the media itself — a request for the prompt or script gets text in chat. Bundled stock media (stock_search / stock_add) is free — use it when it fits. Media the user attached is in \`media\`; pass those asset ids as generation references when they say "use this". Generated media previews on a chat card the user can expand, drag in, or file away; add it to the timeline (add_to_timeline:true or an index) only when they asked for it in the cut. Write a rich, specific prompt from their shorthand. Video renders take a minute or two.
-- capture_frame shows you the actual rendered frame when visual judgment matters.`;
+- You can see and hear: watch_video samples a source's frames into timestamped contact sheets (scene changes included) — watch before cutting footage you haven't seen; detect_silence finds dead air; capture_frame shows the one rendered frame at the playhead. The watching-and-cutting skill has the flow.`;
 }
 
 export const AI_SKILL_INDEX = Object.keys(AI_SKILLS);

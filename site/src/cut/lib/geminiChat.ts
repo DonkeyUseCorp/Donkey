@@ -101,30 +101,40 @@ async function execTool(name: string, args: Record<string, unknown>): Promise<un
   return runAiTool(name, args);
 }
 
-/** A tool result as a function_response content part. The id pairs it with its
+/** A tool result as content parts. The id pairs the function_response with its
  * originating call so Gemini matches responses to calls across parallel calls.
- * Screenshots leave the JSON (a data URL inlined as text would blow the token
- * budget) and ride along as an image part instead, so the model sees the frame. */
-function functionResponsePart(name: string, output: unknown, id: string): Item {
-  if (output && typeof output === "object" && "image" in output) {
-    const { image, ...rest } = output as { image?: unknown };
-    const match = typeof image === "string" ? /^data:([^;,]+);base64,(.+)$/.exec(image) : null;
-    if (match) {
-      return {
-        type: "function_response",
-        id,
-        name,
-        response: rest,
-        mimeType: match[1],
-        screenshotBase64: match[2],
-      };
+ * Frames leave the JSON (a data URL inlined as text would blow the token
+ * budget) and ride along as image parts instead: the first on the response
+ * itself, the rest (contact sheets) as input_image parts in the same turn. */
+function functionResponseParts(name: string, output: unknown, id: string): Item[] {
+  if (output && typeof output === "object" && ("image" in output || "images" in output)) {
+    const { image, images, ...rest } = output as { image?: unknown; images?: unknown };
+    const parsed = [
+      ...(typeof image === "string" ? [image] : []),
+      ...(Array.isArray(images) ? images.filter((u): u is string => typeof u === "string") : []),
+    ]
+      .map((u) => /^data:([^;,]+);base64,(.+)$/.exec(u))
+      .filter((m): m is RegExpExecArray => m !== null);
+    if (parsed.length > 0) {
+      const [first, ...more] = parsed;
+      return [
+        {
+          type: "function_response",
+          id,
+          name,
+          response: rest,
+          mimeType: first[1],
+          screenshotBase64: first[2],
+        },
+        ...more.map((m) => ({ type: "input_image", dataBase64: m[2], mimeType: m[1] })),
+      ];
     }
   }
   const response =
     output && typeof output === "object" && !Array.isArray(output)
       ? output
       : { result: output ?? null };
-  return { type: "function_response", id, name, response };
+  return [{ type: "function_response", id, name, response }];
 }
 
 interface ResponseBody {
@@ -212,11 +222,11 @@ export function streamGeminiChat({
             try {
               const output = await execTool(name, args);
               emit({ type: "tool-output-available", toolCallId, output: output ?? null });
-              responseParts.push(functionResponsePart(name, output, toolCallId));
+              responseParts.push(...functionResponseParts(name, output, toolCallId));
             } catch (err) {
               const errorText = err instanceof Error ? err.message : String(err);
               emit({ type: "tool-output-error", toolCallId, errorText });
-              responseParts.push(functionResponsePart(name, { error: errorText }, toolCallId));
+              responseParts.push(...functionResponseParts(name, { error: errorText }, toolCallId));
             }
           }
           input.push({ role: "assistant", content: assistantParts });
