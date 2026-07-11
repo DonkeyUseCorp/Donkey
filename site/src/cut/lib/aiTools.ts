@@ -3,7 +3,7 @@
 import { apiFetch, apiJson } from "./api";
 import { refFromAsset, refFromStockVideo, type AssetRef } from "./assetRef";
 import { chatOwner, tagChatAsset } from "./chatAssets";
-import { useGenerate } from "./generate";
+import { useGenerate, type VideoGenOptions } from "./generate";
 import { enrichAsset, ensurePeaks, importImage, importStockVideo } from "./media";
 import { characterPrompt, stockTitle } from "./stock";
 import { STOCK_IMAGES } from "./stockManifest";
@@ -367,8 +367,10 @@ export async function runAiTool(
       if (!prompt) throw new ToolError("A prompt is required.");
       const refs = resolveRefAssets(input.reference_asset_ids);
 
-      // Hosted image generation is synchronous and quick, so wait it out and
-      // place the still — it lands in the panel job list either way.
+      // Captured before the render: the image files under the chat that
+      // asked, even if the user switches threads while it generates.
+      const chatId = chatOwner();
+      // Hosted image generation is synchronous and quick, so wait it out.
       const job = await useGenerate.getState().generateImage(projectId, prompt, {
         ...(input.aspect === "16:9" || input.aspect === "9:16" || input.aspect === "1:1"
           ? { aspect: input.aspect }
@@ -384,8 +386,10 @@ export async function runAiTool(
       const cur = useEditor.getState();
       const asset = cur.assets.find((a) => a.id === job.assetId);
       if (!asset) throw new ToolError("The generated image did not land in the project.");
-      tagChatAsset(asset.id);
-      const placed = maybeAddGeneratedClip(asset.id, input);
+      tagChatAsset(asset.id, chatId);
+      const placed = wantsTimeline(input, "index")
+        ? addGeneratedClip(asset.id, promptedIndex(input))
+        : NOT_PLACED;
       return {
         assetId: asset.id,
         name: asset.name,
@@ -411,17 +415,12 @@ export async function runAiTool(
       if (!signedIn) throw new ToolError("Sign in to Donkey to generate video.");
 
       // Veo renders can outrun the assistant tool bridge's 2-minute cap, so
-      // don't block: start the job and place the clip when it lands.
+      // don't block: start the job and let its completion place the clip.
       const refs =
         input.reference_asset_id === undefined
           ? []
           : resolveRefAssets([input.reference_asset_id]);
-      const addToTimeline = input.add_to_timeline === true || isNum(input.index);
-      const promptedIndex = isNum(input.index) ? Math.round(input.index) : undefined;
-      // Captured now: the render must file under the chat that asked, even if
-      // the user switches threads before it lands.
-      const chatId = chatOwner();
-      void gen.generateVideo(projectId, prompt, {
+      return launchVeoJob(projectId, prompt, input, {
         tier: input.tier === "high" ? "high" : "fast",
         durationSeconds: isNum(input.duration_seconds)
           ? clamp(Math.round(input.duration_seconds), 4, 8)
@@ -431,26 +430,7 @@ export async function runAiTool(
           ? { resolution: input.resolution }
           : {}),
         ...(refs.length > 0 ? { refs } : {}),
-        onDone: (asset) => {
-          tagChatAsset(asset.id, chatId);
-          if (addToTimeline)
-            maybeAddGeneratedClip(asset.id, { add_to_timeline: true, index: promptedIndex });
-        },
       });
-      // The job entry is prepended synchronously, so the newest job is this
-      // render; the chat follows it by id to show a live card.
-      const jobId = useGenerate.getState().jobs[0]?.id ?? null;
-      return {
-        kind: "video",
-        started: true,
-        jobId,
-        addToTimeline,
-        note:
-          "Rendering with Veo — it previews in this chat when it lands, in a minute or two" +
-          (addToTimeline
-            ? ", and goes onto the timeline."
-            : ". It stays in the chat (and the Video panel's renders) until the user places it."),
-      };
     }
 
     case "generate_character_video": {
@@ -465,37 +445,19 @@ export async function runAiTool(
       const gen = useGenerate.getState();
       const signedIn = gen.signedIn ?? (await gen.probeNow());
       if (!signedIn) throw new ToolError("Sign in to Donkey to generate video.");
-      const addToTimeline = input.add_to_timeline === true || isNum(input.index);
-      const promptedIndex = isNum(input.index) ? Math.round(input.index) : undefined;
-      const chatId = chatOwner();
-      void gen.generateVideo(projectId, characterPrompt(character.persona!, line), {
-        tier: input.tier === "high" ? "high" : "fast",
-        durationSeconds: isNum(input.duration_seconds)
-          ? clamp(Math.round(input.duration_seconds), 4, 8)
-          : undefined,
-        aspect: character.aspect,
-        // The character's own clip seeds the render so the same person
-        // delivers the line — composing would swap the face, so it rides raw.
-        refs: [refFromStockVideo(character)],
-        composeRefs: false,
-        onDone: (asset) => {
-          tagChatAsset(asset.id, chatId);
-          if (addToTimeline)
-            maybeAddGeneratedClip(asset.id, { add_to_timeline: true, index: promptedIndex });
-        },
-      });
-      const jobId = useGenerate.getState().jobs[0]?.id ?? null;
       return {
-        kind: "video",
-        started: true,
-        jobId,
+        ...launchVeoJob(projectId, characterPrompt(character.persona!, line), input, {
+          tier: input.tier === "high" ? "high" : "fast",
+          durationSeconds: isNum(input.duration_seconds)
+            ? clamp(Math.round(input.duration_seconds), 4, 8)
+            : undefined,
+          aspect: character.aspect,
+          // The character's own clip seeds the render so the same person
+          // delivers the line — composing would swap the face, so it rides raw.
+          refs: [refFromStockVideo(character)],
+          composeRefs: false,
+        }),
         character: character.id,
-        addToTimeline,
-        note:
-          "Rendering with Veo — it previews in this chat when it lands, in a minute or two" +
-          (addToTimeline
-            ? ", and goes onto the timeline."
-            : ". It stays in the chat (and the Video panel's renders) until the user places it."),
       };
     }
 
@@ -570,12 +532,14 @@ export async function runAiTool(
       const img = vid ? undefined : STOCK_IMAGES.find((i) => i.id === id);
       if (!vid && !img)
         throw new ToolError(`No stock item with id ${id}. Call stock_search for ids.`);
+      // Captured before the import: the media files under the chat that
+      // asked, even if the user switches threads while it downloads.
+      const chatId = chatOwner();
       const asset = vid
         ? await importStockVideo(projectId, { url: vid.file, name: stockTitle(vid.id) })
         : await importImage(projectId, { url: img!.file, name: stockTitle(img!.id) });
-      tagChatAsset(asset.id);
-      // An explicit start is itself the ask to place.
-      const addToTimeline = input.add_to_timeline === true || isNum(input.start);
+      tagChatAsset(asset.id, chatId);
+      const addToTimeline = wantsTimeline(input, "start");
       let clipId: string | null = null;
       if (addToTimeline) {
         useEditor
@@ -728,8 +692,7 @@ export async function runAiTool(
         throw new ToolError("script is required.");
       const start = isNum(input.start) ? Math.max(0, input.start) : s.currentTime;
       const lead = input.script.trim().split(/\s+/).slice(0, 4).join(" ");
-      // An explicit start is itself the ask to place on the soundtrack.
-      const place = input.add_to_timeline === true || isNum(input.start);
+      const place = wantsTimeline(input, "start");
       return synthesizeVoiceover(
         [{ text: input.script, at: 0 }],
         `AI voice — ${lead}`,
@@ -923,6 +886,9 @@ async function synthesizeVoiceover(
       ? input.direction.trim()
       : undefined;
   const duck = isNum(input.duck) ? clamp(input.duck, 0, 1) : DUCK_DEFAULT;
+  // Captured before synthesis: the audio files under the chat that asked,
+  // even if the user switches threads while it renders.
+  const chatId = chatOwner();
   const { asset, offset } = await synthesizeSpeech(projectId, segments, {
     voice,
     direction,
@@ -931,7 +897,7 @@ async function synthesizeVoiceover(
   });
   const cur = useEditor.getState();
   cur.addAsset(asset);
-  tagChatAsset(asset.id);
+  tagChatAsset(asset.id, chatId);
   void enrichAsset(asset);
   if (!place) {
     return {
@@ -1013,26 +979,67 @@ function layoutPatch(layout: string): Partial<OverlayClip> {
   return { frame: key === "full" ? undefined : { ...L.rect }, fit: L.fit };
 }
 
-/** Append a generated asset to the video track at an optional index, when the
- * model passed add_to_timeline:true. By default generated media stays on its
- * chat preview card until the user asks for it in the cut. Shared by
- * generate_image (inline) and generate_video (on the render's completion). */
-function maybeAddGeneratedClip(
+/** The model asked for timeline placement — explicitly, or implicitly by
+ * giving a position. Otherwise generated media stays on its chat card. */
+function wantsTimeline(input: Record<string, unknown>, positionKey: "index" | "start"): boolean {
+  return input.add_to_timeline === true || isNum(input[positionKey]);
+}
+
+const NOT_PLACED = { added: false, clipId: null, index: null };
+
+const promptedIndex = (input: Record<string, unknown>): number | undefined =>
+  isNum(input.index) ? Math.round(input.index) : undefined;
+
+/** Append a generated asset to the video track, at `index` when given. Shared
+ * by generate_image (inline) and the video renders' completion. */
+function addGeneratedClip(
   assetId: string,
-  input: { add_to_timeline?: unknown; index?: unknown }
+  index?: number
 ): { added: boolean; clipId: string | null; index: number | null } {
-  // An explicit index is itself the ask to place ("make it the cover frame").
-  if (input.add_to_timeline !== true && !isNum(input.index))
-    return { added: false, clipId: null, index: null };
   const s = useEditor.getState();
-  if (!s.assets.some((a) => a.id === assetId)) return { added: false, clipId: null, index: null };
+  if (!s.assets.some((a) => a.id === assetId)) return NOT_PLACED;
   s.addClipFromAsset(assetId); // lands at the end, selected
   const sel = useEditor.getState().selection;
   const clipId = sel?.kind === "clip" ? sel.id : null;
   const count = useEditor.getState().clips.length;
-  const index = isNum(input.index) ? clamp(Math.round(input.index), 0, count - 1) : count - 1;
-  if (clipId && index !== count - 1) s.moveClip(clipId, index);
-  return { added: true, clipId, index };
+  const at = index === undefined ? count - 1 : clamp(Math.round(index), 0, count - 1);
+  if (clipId && at !== count - 1) s.moveClip(clipId, at);
+  return { added: true, clipId, index: at };
+}
+
+/** Start a Veo render — the shared shape of generate_video and
+ * generate_character_video: the job previews as a live chat card, the landed
+ * asset files under the asking chat, and it goes onto the timeline only when
+ * the model asked. Returns the tool output. */
+function launchVeoJob(
+  projectId: string,
+  prompt: string,
+  input: Record<string, unknown>,
+  opts: Omit<VideoGenOptions, "onDone">
+) {
+  const addToTimeline = wantsTimeline(input, "index");
+  const index = promptedIndex(input);
+  // Captured now: the render must file under the chat that asked, even if
+  // the user switches threads before it lands.
+  const chatId = chatOwner();
+  const { jobId } = useGenerate.getState().generateVideo(projectId, prompt, {
+    ...opts,
+    onDone: (asset) => {
+      tagChatAsset(asset.id, chatId);
+      if (addToTimeline) addGeneratedClip(asset.id, index);
+    },
+  });
+  return {
+    kind: "video",
+    started: true,
+    jobId,
+    addToTimeline,
+    note:
+      "Rendering with Veo — it previews in this chat when it lands, in a minute or two" +
+      (addToTimeline
+        ? ", and goes onto the timeline."
+        : ". It stays in the chat (and the Video panel's renders) until the user places it."),
+  };
 }
 
 function titlePatch(input: Record<string, unknown>) {

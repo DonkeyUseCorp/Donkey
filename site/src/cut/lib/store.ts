@@ -521,6 +521,14 @@ export const useEditor = create<EditorState>((set, get) => {
     removeAsset: (id) => {
       const st = get();
       if (!st.assets.some((a) => a.id === id)) return;
+      // An unreferenced asset is no doc edit: history snapshots don't cover
+      // the asset list, so removing one must not open a checkpoint or churn
+      // the clip arrays (a fresh clips reference would count as a doc change
+      // and wipe the redo branch).
+      if (!st.clips.some((c) => c.assetId === id) && !st.audioClips.some((c) => c.assetId === id)) {
+        set((s) => ({ assets: s.assets.filter((a) => a.id !== id) }));
+        return;
+      }
       push();
       // Cascade removes this asset's clips; every clip is free-positioned, so
       // the rest of the timeline (and its annotations) stays where it is.
@@ -2024,6 +2032,23 @@ useEditor.subscribe((s, prev) => {
     docSeq++;
 });
 
+/** The asset fields persisted in project.json — the projection autosave
+ * writes, and the one its change detector compares (runtime fields like
+ * thumbs/peaks must not mark the doc dirty). */
+export function storedAssets(assets: MediaAsset[]): StoredAsset[] {
+  return assets.map(({ id, fileName, name, type, duration, width, height, origin, chatId }) => ({
+    id,
+    fileName,
+    name,
+    type,
+    duration,
+    ...(width !== undefined ? { width } : {}),
+    ...(height !== undefined ? { height } : {}),
+    ...(origin !== undefined ? { origin } : {}),
+    ...(chatId !== undefined ? { chatId } : {}),
+  }));
+}
+
 /** The persistable slice of the editor state, for autosave. */
 export function serializeDoc(s: {
   projectName: string;
@@ -2039,22 +2064,9 @@ export function serializeDoc(s: {
   notes: { text: string; publishedAt: string; links: string[] };
   subtitles: SubtitlesBlock;
 }): Partial<ProjectDoc> {
-  const assets: StoredAsset[] = s.assets.map(
-    ({ id, fileName, name, type, duration, width, height, origin, chatId }) => ({
-      id,
-      fileName,
-      name,
-      type,
-      duration,
-      ...(width !== undefined ? { width } : {}),
-      ...(height !== undefined ? { height } : {}),
-      ...(origin !== undefined ? { origin } : {}),
-      ...(chatId !== undefined ? { chatId } : {}),
-    })
-  );
   return {
     name: s.projectName,
-    assets,
+    assets: storedAssets(s.assets),
     clips: s.clips,
     audioClips: s.audioClips,
     overlayClips: s.overlayClips,

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type ChatTransport, type UIMessage } from "ai";
 import {
@@ -38,7 +38,7 @@ import { apiFetch, engineReady } from "@/cut/lib/api";
 import { buildAiContext } from "@/cut/lib/aiContext";
 import { runAiTool } from "@/cut/lib/aiTools";
 import { setAssetDragData } from "@/cut/lib/assetDrag";
-import { deleteChatAssets, setActiveChatThread } from "@/cut/lib/chatAssets";
+import { deleteChatAssets, setActiveChatThread, threadOwnsAssets } from "@/cut/lib/chatAssets";
 import {
   addRefOnce,
   collectRefs,
@@ -94,10 +94,15 @@ function readThreads(): ChatThread[] {
 }
 
 function writeThreads(list: ChatThread[]) {
-  // A thread falling off the end of history takes its chat-only assets with it.
-  for (const t of list.slice(THREAD_LIMIT)) deleteChatAssets(t.id);
+  // Cap history, but retain any overflow thread that still owns chat media —
+  // deleting media is an explicit act (deleting its thread), never a side
+  // effect of the history cap.
+  const kept = [
+    ...list.slice(0, THREAD_LIMIT),
+    ...list.slice(THREAD_LIMIT).filter((t) => threadOwnsAssets(t.id)),
+  ];
   try {
-    localStorage.setItem(threadsKey(), JSON.stringify(list.slice(0, THREAD_LIMIT)));
+    localStorage.setItem(threadsKey(), JSON.stringify(kept));
   } catch {
     // Storage full/blocked — history just won't persist.
   }
@@ -592,6 +597,10 @@ function ChatSession({
  * asset, double-click to expand, drag onto the timeline, "…" menu for more
  * actions. */
 function MessageAssetCard({ asset }: { asset: AssetRef }) {
+  // The reveal waits out the double-click window, so expanding doesn't also
+  // jump the side panel to the asset.
+  const clickTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(clickTimer.current), []);
   return (
     <div className="ai-msg-asset group relative w-16">
       <button
@@ -605,8 +614,14 @@ function MessageAssetCard({ asset }: { asset: AssetRef }) {
           if (asset.scope === "project") setAssetDragData(e, asset.id);
           setRefDragData(e, asset);
         }}
-        onClick={() => revealRef(asset)}
-        onDoubleClick={() => useLightbox.getState().open(lightboxItemFromRef(asset))}
+        onClick={() => {
+          window.clearTimeout(clickTimer.current);
+          clickTimer.current = window.setTimeout(() => revealRef(asset), 250);
+        }}
+        onDoubleClick={() => {
+          window.clearTimeout(clickTimer.current);
+          useLightbox.getState().open(lightboxItemFromRef(asset));
+        }}
       >
         <RefThumb item={asset} className="size-16 transition-colors group-hover:border-input" />
         <span className="w-full truncate text-[10px] text-muted-foreground">{asset.name}</span>
@@ -694,7 +709,10 @@ function MessageCopy({ text }: { text: string }) {
   );
 }
 
-function MessageView({ message }: { message: UIMessage }) {
+/** Memoized per message: a streaming turn replaces `messages` every chunk,
+ * and only the growing message should re-render — settled ones hold whole
+ * asset-card subtrees. */
+const MessageView = memo(function MessageView({ message }: { message: UIMessage }) {
   if (message.role === "user") {
     const text = message.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
     // normalizeRef also reads attachments saved by older threads (pre-ref shape).
@@ -786,7 +804,7 @@ function MessageView({ message }: { message: UIMessage }) {
       <MessageCopy text={text} />
     </div>
   );
-}
+});
 
 function ModelSelector({
   info,

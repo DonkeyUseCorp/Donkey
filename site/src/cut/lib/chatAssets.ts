@@ -1,5 +1,7 @@
 "use client";
 
+import { useGenerate } from "./generate";
+import { usePreviewAudio } from "./previewAudio";
 import { useEditor } from "./store";
 
 // Chat-created media belongs to its thread. The files live in the project's
@@ -31,8 +33,18 @@ export function tagChatAsset(assetId: string, chatId: string | null = activeChat
   useEditor.getState().updateAsset(assetId, { origin: "chat", chatId });
 }
 
+/** Whether a thread still owns chat media in the open project — such a thread
+ * must not fall out of history silently, or its media becomes unreachable. */
+export function threadOwnsAssets(threadId: string): boolean {
+  return useEditor.getState().assets.some(
+    (a) => a.origin === "chat" && a.chatId === threadId
+  );
+}
+
 /** Delete the assets a thread still owns: origin "chat", tagged with the
- * thread, and not referenced by any clip. One undo step. */
+ * thread, and not referenced by any clip. Assets sit outside the undo
+ * history, so this is not undoable — call it only for an explicit thread
+ * deletion. */
 export function deleteChatAssets(threadId: string) {
   const s = useEditor.getState();
   const inUse = new Set(
@@ -41,8 +53,13 @@ export function deleteChatAssets(threadId: string) {
   const owned = s.assets.filter(
     (a) => a.origin === "chat" && a.chatId === threadId && !inUse.has(a.id)
   );
-  if (owned.length === 0) return;
-  s.beginHistoryBatch();
-  for (const a of owned) useEditor.getState().removeAsset(a.id);
-  useEditor.getState().endHistoryBatch();
+  for (const a of owned) {
+    usePreviewAudio.getState().stop(a.url);
+    useEditor.getState().removeAsset(a.id);
+    // A render-history entry pointing at deleted media would show as a dead
+    // row in the Video panel; it goes with the asset.
+    for (const j of useGenerate.getState().jobs.filter((job) => job.assetId === a.id)) {
+      useGenerate.getState().dismiss(j.id);
+    }
+  }
 }

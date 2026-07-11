@@ -282,8 +282,12 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
   const genAudioKey = useEditor((s) => {
     const sp = getClipSpans(s.clips, s.assets).find((x) => x.clip.id === clip.id);
     if (!sp) return "";
+    // AI-voice audio regardless of where it was made: the Audio panel tags
+    // voiceovers, the chat tags its own — both are voice over this clip.
     const voiceAssets = new Set(
-      s.assets.filter((a) => a.origin === "voiceover").map((a) => a.id)
+      s.assets
+        .filter((a) => a.origin === "voiceover" || (a.origin === "chat" && a.type === "audio"))
+        .map((a) => a.id)
     );
     return s.audioClips
       .filter((a) => {

@@ -10,7 +10,7 @@ import { useExport } from "@/cut/lib/exportStore";
 import { fileZoneAt, hasRefDrag } from "@/cut/lib/assetRef";
 import { enrichAsset, importFileToProject } from "@/cut/lib/media";
 import { backTarget, useCutBase } from "@/cut/lib/nav";
-import { projectDuration, serializeDoc, useEditor } from "@/cut/lib/store";
+import { projectDuration, serializeDoc, storedAssets, useEditor } from "@/cut/lib/store";
 import type { MediaAsset } from "@/cut/lib/types";
 import { AiPanel } from "./AiPanel";
 import { ExportDialog } from "./ExportDialog";
@@ -150,6 +150,19 @@ export function Editor({
     };
 
     let primed = false;
+    // Assets change identity on runtime enrichment (thumbs, peaks) too, so a
+    // new reference compares by its stored projection: field edits like an
+    // origin change ("Add to Media", chat tagging) must save, enrichment not.
+    let lastAssetsRef = useEditor.getState().assets;
+    let lastAssetsJson = JSON.stringify(storedAssets(lastAssetsRef));
+    const assetsChanged = (assets: MediaAsset[]): boolean => {
+      if (assets === lastAssetsRef) return false;
+      const json = JSON.stringify(storedAssets(assets));
+      const changed = json !== lastAssetsJson;
+      lastAssetsRef = assets;
+      lastAssetsJson = json;
+      return changed;
+    };
     const unsub = useEditor.subscribe((s) => {
       if (!s.loaded || s.projectId !== projectId) return;
       if (!primed) {
@@ -158,9 +171,14 @@ export function Editor({
         primed = true;
         last = serializeDoc(s);
         lastName = s.projectName;
+        assetsChanged(s.assets);
         return;
       }
+      // Evaluated every tick (not short-circuited) so the asset baseline
+      // advances even when another slice triggered this save.
+      const assetsDirty = assetsChanged(s.assets);
       const changed =
+        assetsDirty ||
         s.clips !== (last.clips as unknown) ||
         s.audioClips !== (last.audioClips as unknown) ||
         s.overlayClips !== (last.overlayClips as unknown) ||
@@ -169,7 +187,6 @@ export function Editor({
         s.aspect !== last.aspect ||
         s.fadeIn !== (last.fadeIn ?? 0) ||
         s.fadeOut !== (last.fadeOut ?? 0) ||
-        s.assets.length !== last.assets?.length ||
         s.publish.caption !== last.publish?.caption ||
         s.publish.tags !== last.publish?.tags ||
         s.publish.soundTitle !== last.publish?.soundTitle ||
