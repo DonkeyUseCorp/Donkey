@@ -294,6 +294,7 @@ export interface LaneDrag {
   id: string;
   targetRow: number; // hovered display row (one past the end = new track)
   ghostX: number; // ghost left in px — follows the pointer
+  ghostY: number; // ghost vertical offset in px from its resting row — follows the pointer
   slotStart: number; // resolved landing start, seconds
   len: number; // dragged item length, seconds
   /** Carried off its own lane set (an upper video layer headed elsewhere);
@@ -376,6 +377,11 @@ export function startLaneMove<V = unknown>(
   // stay reachable; the scroll distance folds back into the drag delta.
   const scroller = (e.currentTarget as HTMLElement).closest<HTMLElement>("[data-tl-scroll]");
   const sc0 = scroller?.scrollLeft ?? 0;
+  // The ghost's vertical anchor: rows can mount mid-drag (a would-be new
+  // track revealing itself), shifting this item's row in the layout. The
+  // ghost offset subtracts that shift so it stays glued to the pointer.
+  const rowEl = (e.currentTarget as HTMLElement).parentElement;
+  const rowTop0 = rowEl?.getBoundingClientRect().top ?? 0;
 
   let live = false;
   let targetRow = ui.homeRow;
@@ -415,6 +421,7 @@ export function startLaneMove<V = unknown>(
       }
       const effDx = dx + ((scroller?.scrollLeft ?? sc0) - sc0);
       ds = Math.max(0, start0 + effDx / ui.pps);
+      const ghostY = dy - (rowEl ? rowEl.getBoundingClientRect().top - rowTop0 : 0);
 
       // Carried off its own lane set (an upper video layer headed to another
       // track, down to track 0, or an insert gap): neighbors flow back and
@@ -431,6 +438,7 @@ export function startLaneMove<V = unknown>(
             id,
             targetRow: ui.homeRow,
             ghostX: ds * ui.pps,
+            ghostY,
             slotStart: ds,
             len,
             away: true,
@@ -502,7 +510,7 @@ export function startLaneMove<V = unknown>(
       const pushed = new Set(after.map((x) => x.view.id));
       ui.onSnap(guide);
       applyMoves((x) => (pushed.has(x.view.id) ? x.view.start + delta : x.view.start));
-      ui.onDrag({ kind, id, targetRow, ghostX: ds * ui.pps, slotStart: clamped, len });
+      ui.onDrag({ kind, id, targetRow, ghostX: ds * ui.pps, ghostY, slotStart: clamped, len });
     },
     onUp: (_dx, _dy, moved) => {
       ui.vertical?.setActive?.(false);
