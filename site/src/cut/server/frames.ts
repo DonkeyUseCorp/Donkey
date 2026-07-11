@@ -276,7 +276,11 @@ export async function makeContactSheets(
     const deadline = Date.now() + WATCH_BUDGET_MS;
     let run = await runCapture(args(true), WATCH_BUDGET_MS);
     if (!run.ok && !run.timedOut && deadline - Date.now() > 5_000) {
-      for (const f of await readdir(tmp)) void unlink(path.join(tmp, f)).catch(() => {});
+      // Await every stale-sheet delete before the retry writes new sheets to the
+      // same paths, or a slow unlink can land after ffmpeg and wipe a fresh sheet.
+      await Promise.all(
+        (await readdir(tmp)).map((f) => unlink(path.join(tmp, f)).catch(() => {})),
+      );
       run = await runCapture(args(false), deadline - Date.now());
     }
 

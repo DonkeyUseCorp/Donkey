@@ -30,12 +30,13 @@ export const usePreviewAudio = create<PreviewAudioState>((set, get) => ({
     }
     audio.src = url;
     audio.onended = () => set({ url: null });
-    audio.onerror = () => set({ url: null });
+    // Only the load that still owns the state may clear it — a superseded load's
+    // late error/rejection must not knock out the preview playing now.
+    audio.onerror = () => {
+      if (get().url === url) set({ url: null });
+    };
     set({ url });
     void audio.play().catch(() => {
-      // A superseded play() rejects late ("interrupted by a new load
-      // request") — only the call still owning the state may clear it, or a
-      // stale rejection would knock out the preview playing now.
       if (get().url === url) set({ url: null });
     });
   },
