@@ -1,7 +1,7 @@
 "use client";
 
 import React, { memo, useEffect, useRef, useState } from "react";
-import { AlertCircle, Captions, ChevronDown, Languages, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { AlertCircle, Captions, ChevronDown, Languages, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { GenerateSubtitlesAudio } from "@/cut/components/VoicePicker";
@@ -17,7 +17,6 @@ import {
 import { TIMELINE_H_MIN, useEditor } from "@/cut/lib/store";
 import { PLATE_PAD_X, PLATE_PAD_Y, PLATE_RADIUS, plateFill } from "@/cut/lib/textRender";
 import {
-  MAX_SUBTITLE_LANES,
   fontStack,
   type SubtitleCue,
   type SubtitlesBlock,
@@ -57,7 +56,6 @@ export function SubtitlesPanel() {
   const lane = useEditor((s) => s.subtitleLane);
   const status = useEditor((s) => s.subtitleStatus);
   const error = useEditor((s) => s.subtitleError);
-  const laneCount = subtitleLaneCount(subtitles);
   const activeCues = laneCues(subtitles, lane);
   const hasCues = activeCues.length > 0;
   const [tab, setTab] = useState<"content" | "styles" | "options">("content");
@@ -108,50 +106,6 @@ export function SubtitlesPanel() {
           <span className="text-sm font-semibold tracking-tight">Subtitles</span>
         )}
       </div>
-
-      {(laneCount > 1 || subtitles.cues.length > 0) && (
-        <div className="sub-tracks flex shrink-0 items-center gap-1 px-3.5 pb-2">
-          {Array.from({ length: laneCount }, (_, i) => (
-            <button
-              key={i}
-              className={cn(
-                "sub-track-pill rounded-full border px-2.5 py-1 text-[11px] font-semibold tracking-wide transition-colors",
-                i === lane
-                  ? "border-transparent bg-neutral-900 text-white"
-                  : "border-input text-muted-foreground hover:text-foreground"
-              )}
-              aria-pressed={i === lane}
-              title={`Subtitle track ${i + 1}`}
-              onClick={() => useEditor.getState().setSubtitleLane(i)}
-            >
-              {laneLabel(subtitles, i)}
-            </button>
-          ))}
-          {laneCount < MAX_SUBTITLE_LANES && (
-            <button
-              className="sub-track-add grid size-6 place-items-center rounded-full border border-dashed border-input text-muted-foreground transition-colors hover:text-foreground"
-              title="Add a subtitle track (another language)"
-              aria-label="Add a subtitle track"
-              onClick={() => useEditor.getState().addSubtitleTrack()}
-            >
-              <Plus className="size-3.5" />
-            </button>
-          )}
-          {laneCount > 1 && (
-            <button
-              className="sub-track-remove ml-auto grid size-6 place-items-center rounded-md text-muted-foreground transition-colors hover:text-red-600"
-              title="Remove this subtitle track and its captions (undoable)"
-              aria-label="Remove this subtitle track"
-              onClick={() => {
-                const s = useEditor.getState();
-                s.removeSubtitleTrack(s.subtitleLane);
-              }}
-            >
-              <Trash2 className="size-3.5" />
-            </button>
-          )}
-        </div>
-      )}
 
       {!hasCues ? (
         <EmptyState status={status} error={error} onGenerate={generate} onTranslate={translate} />
