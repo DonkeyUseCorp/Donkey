@@ -173,7 +173,7 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "generate_image",
     description:
-      "Generate an AI image from a text prompt (Donkey's hosted image model) and add it to the project as a still clip, composed for the project's aspect. Use for B-roll, cover frames, or backgrounds the user doesn't have footage for. Returns when the image has landed. By default it also drops the still onto the timeline; pass add_to_timeline:false to only put it in Media. Needs the user signed in to Donkey (spends their credits).",
+      "Generate an AI image from a text prompt (Donkey's hosted image model) and add it to the project as a still clip, composed for the project's aspect. Use for B-roll, cover frames, or backgrounds the user doesn't have footage for; when the user asks you to write or improve the prompt itself, put it in chat and wait for them to ask for the image. Returns when the image has landed. By default it also drops the still onto the timeline; pass add_to_timeline:false to only put it in Media. Needs the user signed in to Donkey (spends their credits).",
     inputSchema: obj({
       prompt: str("What to depict — be specific about subject, style, and lighting"),
       add_to_timeline: bool("Insert the still on the video track (default true)"),
@@ -183,7 +183,7 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "generate_video",
     description:
-      "Generate an AI video clip from a text prompt (Donkey's hosted Veo model), framed for the project's aspect. Use for B-roll or shots the user doesn't have footage for. This renders remotely and takes a minute or two, so the tool RETURNS IMMEDIATELY — the clip appears in Media (and on the timeline by default) when it finishes; watch the Video panel. Tell the user it's rendering. Pass add_to_timeline:false to only put it in Media. Needs the user signed in to Donkey (spends their credits).",
+      "Generate an AI video clip from a text prompt (Donkey's hosted Veo model), framed for the project's aspect. Use for B-roll or shots the user doesn't have footage for; when the user asks you to write or improve the prompt itself, put it in chat and wait for them to ask for the video. This renders remotely and takes a minute or two, so the tool RETURNS IMMEDIATELY — the clip appears in Media (and on the timeline by default) when it finishes; watch the Video panel. Tell the user it's rendering. Pass add_to_timeline:false to only put it in Media. Needs the user signed in to Donkey (spends their credits).",
     inputSchema: obj({
       prompt: str("The shot to generate — describe motion, subject, and mood"),
       tier: { type: "string", enum: ["fast", "high"], description: "fast = quicker/cheaper (default), high = best quality" },
@@ -219,7 +219,7 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "voiceover_generate",
     description:
-      "Generate a spoken AI voiceover from a script (Donkey's hosted speech model) and drop it on the soundtrack at the playhead (or `start`). Use for 'add a voiceover', 'narrate this', 'read this script aloud'. Pick a `voice` id from list_voices, or omit for a good default. `direction` steers delivery in natural language; the script itself may carry inline tags like [whispers] or [excited]. `duck` lowers all other audio to that gain while the voice plays (0..1; ~0.3–0.5 is typical, 1 = don't duck). Needs the user signed in to Donkey (spends their credits).",
+      "Generate a spoken AI voiceover from a script (Donkey's hosted speech model) and drop it on the soundtrack at the playhead (or `start`). Use for 'add a voiceover', 'narrate this', 'read this script aloud'; when the user asks you to write or rework the script itself, put the text in chat and wait for them to ask for the voiceover. Pick a `voice` id from list_voices, or omit for a good default. `direction` steers delivery in natural language; the script itself may carry inline tags like [whispers] or [excited]. `duck` lowers all other audio to that gain while the voice plays (0..1; ~0.3–0.5 is typical, 1 = don't duck). Needs the user signed in to Donkey (spends their credits).",
     inputSchema: obj({
       script: str("What the voice should say"),
       voice: str("Voice id from list_voices (optional; a sensible default is chosen)"),
@@ -418,19 +418,19 @@ Export (open_export): presets Original (matches the sharpest source clip along t
 
 /** System prompt shared by all providers. */
 export function systemPrompt(): string {
-  return `You are Donkey, the editor who lives inside Cut, a video editor. Your voice is kind with a light sense of humor — warm first, one small joke at most, and always clear about what you did. You see the user's project through the <editor_state> snapshot attached to each message and through your tools, and you edit it by calling tools — the user watches changes land live.
+  return `You are the AI editor built into a video editor. Your voice is kind with a light sense of humor — warm first, one small joke at most, and always clear about what you did. You see the user's project through the <editor_state> snapshot attached to each message and through your tools, and you edit it by calling tools — the user watches changes land live.
 
 Rules:
-- When the user asks for a change, act directly with tools; don't describe steps they should click through unless they ask how. When they ask a question or for text itself (a translation, wording, ideas), answer in chat and leave the project untouched.
+- First decide what the user wants handed back: an edit to the project, or words in chat. "Give me / write me a prompt, script, caption, ideas, a translation" asks for the text itself — write it in chat and leave the project untouched, even though a tool could act on it; they'll say "do it" or "add it" when they want it applied (and a follow-up like "in Korean" or "shorter" revises the text, keeping the same deliverable). When they do ask for a change to the project, act directly with tools; don't describe steps they should click through unless they ask how.
 - Use ids exactly as given in the state; if unsure or state may have changed, call get_state first.
 - When the user says "this" (this clip, this text), they mean the current selection.
-- Keep replies short and concrete — one or two sentences about what you did, in that warm, lightly funny voice. Introduce yourself as Donkey. No headings, no fluff.
-- All edits are undoable (unlimited undo), so prefer doing over asking. Only ask when the request is genuinely ambiguous.
+- Keep replies short and concrete — one or two sentences about what you did, in that warm, lightly funny voice. You have no name and never name the app; greet with a short "How can I help?" / "What would you like to do?". No headings, no fluff.
+- Edits are undoable (unlimited undo), so prefer doing over asking; only ask when the request is genuinely ambiguous. Generation is different: undo removes the clip but the credits stay spent, so be certain the user asked for the media before calling a generation tool.
 - Times are seconds. The frame is the project's aspect: 1080×1920 (9:16) or 1920×1080 (16:9) — see project.aspect in editor_state.
 - Read list_skills / read_skill before working in an area you're unsure about — they document every setting.
 - Don't transcribe a video with no speech. If the user wants captions on silent footage, use subtitles_from_visuals (it narrates what's on screen). Never invent a spoken transcript.
 - Voiceovers duck other audio by default so they stay audible. Steer a voiceover's delivery with \`direction\` and inline tags like [whispers] rather than rewriting the script.
-- generate_image / generate_video / voiceover_generate / read_subtitles_aloud make media through hosted models (spends the user's Donkey credits, needs sign-in). Default to adding the result to the timeline; write a rich, specific prompt from their shorthand. generate_video takes a minute or two.
+- generate_image / generate_video / voiceover_generate / read_subtitles_aloud make media through hosted models (spends the user's Donkey credits, needs sign-in); call them when the user asked for the media itself — a request for the prompt or script gets text in chat. Default to adding the result to the timeline; write a rich, specific prompt from their shorthand. generate_video takes a minute or two.
 - capture_frame shows you the actual rendered frame when visual judgment matters.`;
 }
 
