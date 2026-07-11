@@ -21,6 +21,10 @@ export type GeminiClientFactory = (options: GoogleGenAIOptions) => GeminiClient;
 
 const vertexLocation = "global";
 const vertexAIScope = "https://www.googleapis.com/auth/cloud-platform";
+// Client-side request timeout so a stalled upstream call aborts instead of hanging
+// the caller (e.g. a harness step) forever. Generous enough to clear a slow 4K
+// image generation while still bounding a true hang.
+const requestTimeoutMs = 120_000;
 
 export function defaultGeminiClientFactory(options: GoogleGenAIOptions): GeminiClient {
   return new GoogleGenAI(options);
@@ -31,25 +35,16 @@ export function geminiClientConfig(environment: AdapterEnvironment): {
   options: GoogleGenAIOptions;
   service: "vertex-ai";
 } {
-  const apiVersion = environment.GEMINI_API_VERSION?.trim() || undefined;
-  const timeout = numberFromString(environment.GEMINI_TIMEOUT_MS);
-  const httpOptions: GoogleGenAIOptions["httpOptions"] | undefined =
-    timeout === undefined ? undefined : { timeout };
   const googleCredentials = googleCredentialsFromEnvironment(environment);
   const project = googleCredentials?.project_id;
 
   const options: GoogleGenAIOptions = {
     vertexai: true,
     location: vertexLocation,
+    httpOptions: { timeout: requestTimeoutMs },
   };
   if (project) {
     options.project = project;
-  }
-  if (apiVersion) {
-    options.apiVersion = apiVersion;
-  }
-  if (httpOptions) {
-    options.httpOptions = httpOptions;
   }
   if (googleCredentials) {
     options.googleAuthOptions = {
@@ -186,12 +181,4 @@ export function geminiCandidateParts(candidate: JsonObject | undefined): JsonObj
     return [];
   }
   return candidate.content.parts.filter(isJsonObject);
-}
-
-function numberFromString(value: string | undefined): number | undefined {
-  if (!value?.trim()) {
-    return undefined;
-  }
-  const number = Number(value);
-  return Number.isFinite(number) ? number : undefined;
 }

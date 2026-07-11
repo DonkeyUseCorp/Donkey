@@ -40,6 +40,10 @@ const defaultScreenshotParseModel = geminiModelRoles.screenshotParse;
 const defaultDebugOverlayScreenshotParseModel = geminiModelRoles.screenshotParse;
 const defaultVertexLocation = "global";
 const vertexAIScope = "https://www.googleapis.com/auth/cloud-platform";
+// Client-side request timeout so a stalled parse aborts instead of hanging the
+// per-step agent loop; screenshot parsing is normally a few seconds, so this only
+// trips on a true hang.
+const requestTimeoutMs = 120_000;
 
 export function createGeminiFlashScreenshotParser(
   environment: AdapterEnvironment = process.env,
@@ -51,11 +55,11 @@ export function createGeminiFlashScreenshotParser(
     id: screenshotProviderID,
     inferenceProvider: geminiProviderID,
     configured: config.configured,
-    modelForRequest: (request) => screenshotParseModelForRequest(request, environment),
+    modelForRequest: (request) => screenshotParseModelForRequest(request),
     async parse(request) {
       ensureConfigured(config.configured);
       const client = clientFactory(config.options);
-      const model = screenshotParseModelForRequest(request, environment);
+      const model = screenshotParseModelForRequest(request);
       const startedAt = performance.now();
 
       let rawResponse: unknown;
@@ -89,7 +93,7 @@ export function createGeminiFlashScreenshotParser(
     async *stream(request) {
       ensureConfigured(config.configured);
       const client = clientFactory(config.options);
-      const model = screenshotParseModelForRequest(request, environment);
+      const model = screenshotParseModelForRequest(request);
       const startedAt = performance.now();
       const generator = await streamGeminiContent(client, request, model);
       let accumulatedText = "";
@@ -146,18 +150,12 @@ export function createGeminiFlashScreenshotParser(
   };
 }
 
-export function screenshotParseModelForRequest(
-  request: ScreenshotParseRequest,
-  environment: AdapterEnvironment = process.env,
-) {
+export function screenshotParseModelForRequest(request: ScreenshotParseRequest) {
   if (isDebugOverlayRequest(request)) {
-    return environment.GEMINI_SCREENSHOT_PARSE_DEBUG_MODEL?.trim()
-      || environment.GEMINI_SCREENSHOT_PARSE_MODEL?.trim()
-      || defaultDebugOverlayScreenshotParseModel;
+    return defaultDebugOverlayScreenshotParseModel;
   }
 
-  return environment.GEMINI_SCREENSHOT_PARSE_MODEL?.trim()
-    || defaultScreenshotParseModel;
+  return defaultScreenshotParseModel;
 }
 
 function geminiRequestParameters(
@@ -554,10 +552,6 @@ export function geminiClientConfig(environment: AdapterEnvironment = process.env
   service: "vertex-ai" | "gemini-api";
   location: string;
 } {
-  const apiVersion = environment.GEMINI_API_VERSION?.trim() || undefined;
-  const timeout = numberFromString(environment.GEMINI_TIMEOUT_MS);
-  const httpOptions: GoogleGenAIOptions["httpOptions"] | undefined =
-    timeout === undefined ? undefined : { timeout };
   const googleCredentials = googleCredentialsFromEnvironment(environment);
   const project = googleCredentials?.project_id;
   const apiKey =
@@ -566,20 +560,12 @@ export function geminiClientConfig(environment: AdapterEnvironment = process.env
     || "";
 
   if (project) {
-    const location = environment.GEMINI_VERTEX_LOCATION?.trim()
-      || environment.GOOGLE_VERTEX_LOCATION?.trim()
-      || defaultVertexLocation;
     const options: GoogleGenAIOptions = {
       vertexai: true,
-      location,
+      location: defaultVertexLocation,
       project,
+      httpOptions: { timeout: requestTimeoutMs },
     };
-    if (apiVersion) {
-      options.apiVersion = apiVersion;
-    }
-    if (httpOptions) {
-      options.httpOptions = httpOptions;
-    }
     if (googleCredentials) {
       options.googleAuthOptions = {
         authClient: googleAuthClient(googleCredentials),
@@ -589,19 +575,15 @@ export function geminiClientConfig(environment: AdapterEnvironment = process.env
       configured: true,
       options,
       service: "vertex-ai",
-      location,
+      location: defaultVertexLocation,
     };
   }
 
-  const options: GoogleGenAIOptions = {};
+  const options: GoogleGenAIOptions = {
+    httpOptions: { timeout: requestTimeoutMs },
+  };
   if (apiKey) {
     options.apiKey = apiKey;
-  }
-  if (apiVersion) {
-    options.apiVersion = apiVersion;
-  }
-  if (httpOptions) {
-    options.httpOptions = httpOptions;
   }
 
   return {
@@ -697,10 +679,3 @@ function stringValue(value: JsonValue | undefined) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function numberFromString(value: string | undefined) {
-  if (!value) {
-    return undefined;
-  }
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}

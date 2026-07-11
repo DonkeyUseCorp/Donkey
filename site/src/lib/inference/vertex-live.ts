@@ -4,10 +4,10 @@ import { InferenceProviderError } from "@/lib/inference/providers";
 
 const vertexAIScope = "https://www.googleapis.com/auth/cloud-platform";
 const defaultVertexLocation = "global";
-// The backend owns the Live model id (the client never selects it). Override
-// with GEMINI_LIVE_MODEL. `gemini-live-2.5-flash` is the model that resolves on
-// Vertex AI in the `global` location and accepts the BidiGenerateContent setup
-// (verified end-to-end via GeminiLiveCommandSessionLiveSmokeTests).
+// The backend owns the Live model id (the client never selects it).
+// `gemini-live-2.5-flash` is the model that resolves on Vertex AI in the `global`
+// location and accepts the BidiGenerateContent setup (verified end-to-end via
+// GeminiLiveCommandSessionLiveSmokeTests).
 const defaultLiveModel = "gemini-live-2.5-flash";
 
 type AdapterEnvironment = Record<string, string | undefined>;
@@ -95,11 +95,8 @@ export async function mintVertexLiveConnection(
     });
   }
 
-  const location =
-    environment.GEMINI_VERTEX_LOCATION?.trim()
-    || environment.GOOGLE_VERTEX_LOCATION?.trim()
-    || defaultVertexLocation;
-  const model = environment.GEMINI_LIVE_MODEL?.trim() || defaultLiveModel;
+  const location = defaultVertexLocation;
+  const model = defaultLiveModel;
   const host =
     location === "global"
       ? "aiplatform.googleapis.com"

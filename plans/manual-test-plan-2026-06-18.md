@@ -47,7 +47,6 @@ Do this once before the runs below.
   - `BROWSER_USE_API_KEY` (starts with `bu_`) — backend only, for `web.automate`.
   - `GEMINI_API_KEY` **or** `GOOGLE_APPLICATION_CREDENTIALS_JSON` — image
     generate/edit, voice Gemini fallback, site asset route.
-  - Optional: `GEMINI_IMAGE_MODEL`, `GEMINI_TRANSCRIPTION_MODEL`.
 - **Account/credits.** Browser automation and image generation charge real
   credits — have a funded account (top up `balanceMicros` on a 402 per dev convention).
 

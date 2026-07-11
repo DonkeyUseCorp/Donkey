@@ -40,8 +40,7 @@ export function createGeminiImageAssetProvider(
 ): InferenceProvider {
   const clientConfig = geminiClientConfig(environment);
   const configured = clientConfig.configured;
-  const defaultModel =
-    environment.GEMINI_IMAGE_MODEL?.trim() || geminiModelRoles.imageGeneration;
+  const defaultModel = geminiModelRoles.imageGeneration;
 
   async function listModels(
     modalities: InferenceModality[],
@@ -77,9 +76,8 @@ export function createGeminiImageAssetProvider(
     }
 
     const model = request.model?.trim() || defaultModel;
-    // Fail before spending: the GEMINI_IMAGE_MODEL override (or a caller model) may resolve to an
-    // id with no configured price. The preflight catches a caller-supplied model, but not a model
-    // resolved from the env default, so guard here too — never run a generation we can't price.
+    // Fail before spending: a caller-supplied model may resolve to an id with no configured price.
+    // The preflight catches that, but guard here too — never run a generation we can't price.
     if (!providerCreditPricing(providerID, model)) {
       throw new InferenceProviderError(
         "No credit price is configured for the selected image model.",

@@ -11,7 +11,7 @@ export const geminiModels = {
   flash: "gemini-3.5-flash",
   flashLite: "gemini-3.1-flash-lite",
   // Generative image editing/generation ("nano banana"). Bump here when adopting a
-  // newer image model; the backend also honors a GEMINI_IMAGE_MODEL override.
+  // newer image model.
   flashImage: "gemini-2.5-flash-image",
   // "Nano banana pro": higher-fidelity image editing/generation that takes a real
   // aspectRatio + imageSize (1K/2K/4K) via imageConfig. Gemini 3 preview models are
