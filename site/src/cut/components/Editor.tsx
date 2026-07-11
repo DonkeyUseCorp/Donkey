@@ -10,7 +10,7 @@ import { useExport } from "@/cut/lib/exportStore";
 import { fileZoneAt, hasRefDrag } from "@/cut/lib/assetRef";
 import { enrichAsset, importFileToProject } from "@/cut/lib/media";
 import { backTarget, useCutBase } from "@/cut/lib/nav";
-import { getClipSpans, projectDuration, serializeDoc, useEditor } from "@/cut/lib/store";
+import { projectDuration, serializeDoc, useEditor } from "@/cut/lib/store";
 import type { MediaAsset } from "@/cut/lib/types";
 import { AiPanel } from "./AiPanel";
 import { ExportDialog } from "./ExportDialog";
@@ -19,7 +19,7 @@ import { Inspector } from "./Inspector";
 import { Lightbox } from "./Lightbox";
 import { Preview } from "./Preview";
 import { SidePanel } from "./SidePanel";
-import { Timeline, videoInsertIndex } from "./Timeline";
+import { Timeline } from "./Timeline";
 import { TopBar } from "./TopBar";
 
 export function Editor({
@@ -205,19 +205,10 @@ export function Editor({
           const s = useEditor.getState();
           s.addAsset(asset);
           if (asset.type === "video" || asset.type === "image") {
-            // A drop on the timeline inserts at the pointer's slot; anywhere
-            // else appends at the end. A still rides the base track like footage.
-            if (at == null) {
-              s.addClipFromAsset(asset.id);
-            } else {
-              const spans = getClipSpans(s.clips, s.assets);
-              const spanIndex = videoInsertIndex(spans, at);
-              const clipsIndex =
-                spanIndex < spans.length
-                  ? s.clips.findIndex((c) => c.id === spans[spanIndex].clip.id)
-                  : s.clips.length;
-              s.addClipFromAsset(asset.id, clipsIndex);
-            }
+            // A drop on the timeline lands at the pointer (sliding to the base
+            // track's next free slot); anywhere else appends at the end. A
+            // still rides the base track like footage.
+            s.addClipFromAsset(asset.id, at ?? undefined);
           } else {
             // A timeline drop lands at the pointer; anywhere else drops at the
             // playhead (the store slides it right only if that spot is taken).

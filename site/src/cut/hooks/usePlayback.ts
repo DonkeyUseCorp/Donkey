@@ -639,12 +639,14 @@ class Engine {
         t = Math.max(span.start, Math.min(t, span.start + span.len));
         atEnd = el.currentTime >= span.clip.out - 0.02 || el.ended;
       }
-      // Clip boundary: hand off to the next clip, or (if the base is done but an
-      // upper/lower track runs on) fall through to the wall-clock tail.
+      // Clip boundary: hand off to the next clip when it abuts (or dissolves),
+      // fall into the gap when it doesn't — the base plays black there and the
+      // wall clock advances — or (if the base is done but an upper/lower track
+      // runs on) fall through to the wall-clock tail.
       if (atEnd) {
         const idx = spans.indexOf(span);
         const next = spans[idx + 1];
-        if (next) {
+        if (next && next.start <= span.start + span.len + 0.001) {
           // Jump past the finished clip's whole footprint (including any
           // cross-dissolve overlap), not back to next.start — which still sits
           // inside the outgoing clip's footprint, so find() would re-pick the
@@ -653,6 +655,12 @@ class Engine {
           t = Math.max(next.start + 0.0001, span.start + span.len);
           span = next;
           el = this.composite(next, spans, t, true);
+        } else if (next) {
+          // A gap before the next clip: step just past this clip's footprint
+          // so the next tick's find() sees no active span and the wall-clock
+          // path carries time (and the soundtrack) across the black stretch.
+          t = Math.max(t, span.start + span.len + 0.0001);
+          pauseEl(el);
         } else if (t >= total - 0.001) {
           // Base and every other track finished.
           useEditor.setState({ playing: false, currentTime: total });
