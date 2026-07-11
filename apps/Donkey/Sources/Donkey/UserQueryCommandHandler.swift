@@ -1750,13 +1750,10 @@ struct LocalAppUserQueryCommandHandler: UserQueryCommandHandling {
         }
     }
 
-    /// Escape hatch to suppress the cosmetic animated-cursor playback (set `DONKEY_DISABLE_CURSOR_VIZ=1`).
-    /// The playback animates an overlay window's frame, which can trip a re-entrant AppKit layout crash on
-    /// some macOS builds; turning it off lets a run proceed (the harness still does the real vision input
-    /// and the text narration still updates).
-    static var cursorVisualizationDisabled: Bool {
-        ProcessInfo.processInfo.environment["DONKEY_DISABLE_CURSOR_VIZ"] == "1"
-    }
+    /// Escape hatch to suppress the cosmetic animated-cursor playback. The playback animates an overlay
+    /// window's frame, which can trip a re-entrant AppKit layout crash on some macOS builds; flip this to
+    /// `true` to let a run proceed (the harness still does the real vision input and text narration).
+    static let cursorVisualizationDisabled = false
 
     private static func uptimeMilliseconds() -> Double {
         ProcessInfo.processInfo.systemUptime * 1_000

@@ -14,7 +14,7 @@ import Foundation
 ///   stays on the backend. This is the production path.
 public struct GeminiVoiceTranscriptionRuntime: LocalVoiceTranscriptionRuntime {
     /// Turn-based transcription model. A fast flash model is plenty for short voice
-    /// commands; override with `GEMINI_TRANSCRIPTION_MODEL`.
+    /// commands; bump here when adopting a newer transcription model.
     public static let defaultModel = "gemini-2.5-flash"
 
     private static let prompt =
@@ -35,7 +35,7 @@ public struct GeminiVoiceTranscriptionRuntime: LocalVoiceTranscriptionRuntime {
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) {
         self.apiKey = GeminiGenerateContent.trimmed(apiKey ?? environment["GEMINI_API_KEY"])
-        self.model = GeminiGenerateContent.trimmed(model ?? environment["GEMINI_TRANSCRIPTION_MODEL"]) ?? Self.defaultModel
+        self.model = GeminiGenerateContent.trimmed(model) ?? Self.defaultModel
         self.httpClient = httpClient
         self.environment = environment
     }
@@ -45,8 +45,8 @@ public struct GeminiVoiceTranscriptionRuntime: LocalVoiceTranscriptionRuntime {
         model entry: AIModelRegistryEntry
     ) async throws -> LocalVoiceTranscript {
         // Use the routed entry's model when it carries a usable one for this runtime; otherwise fall
-        // back to `self.model` (the env override, else the constant). The metadata reports what was
-        // used. `self.model` already folds env override over the constant.
+        // back to `self.model` (an init-supplied model, else the constant). The metadata reports
+        // what was used.
         let requestModel = Self.resolvedModel(entry: entry, fallback: model)
         let request: URLRequest
         if let apiKey {

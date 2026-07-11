@@ -113,13 +113,11 @@ from bypassing it.
 `GeminiLiveConnectionFactory.makeProvider` picks the connection path from config:
 
 - **Developer API** (`GEMINI_API_KEY` set): connect directly to
-  `wss://generativelanguage.googleapis.com/ws/...BidiGenerateContent?key=<KEY>` with the
-  client-configured model (`GEMINI_LIVE_MODEL`, default `GeminiLiveConfiguration.defaultModel`). No
-  backend round-trip. **Dev-only** — a client-held key; not for production. The default Dev-API model
-  is **audio-output only**: the session requests `AUDIO` response modality
-  (`GeminiLiveConnection.audioOutput`, controlled by `GEMINI_LIVE_AUDIO_OUTPUT`, default on); tool
-  calls and output transcription still flow, which is all the Command Layer needs. Point
-  `GEMINI_LIVE_MODEL` at a TEXT-capable Live model and set `GEMINI_LIVE_AUDIO_OUTPUT=0` to get TEXT.
+  `wss://generativelanguage.googleapis.com/ws/...BidiGenerateContent?key=<KEY>` with the hardcoded
+  `GeminiLiveConfiguration.defaultModel`. No backend round-trip. **Dev-only** — a client-held key;
+  not for production. That model is **audio-output only**: the session requests `AUDIO` response
+  modality (`GeminiLiveConnection.audioOutput`, on by default in code); tool calls and output
+  transcription still flow, which is all the Command Layer needs.
 - **Vertex AI** (no key — production): the backend authenticates with Google Cloud OAuth
   (service-account) credentials. `DonkeyBackendInferenceClient.mintLiveConnection()` →
   `POST /api/inference/live-token/` (`site/src/app/api/inference/live-token/route.ts` +
@@ -133,16 +131,14 @@ Both produce a single `GeminiLiveConnection` (url + optional bearer + model + au
 
 ### Configuration
 
+Everything about the Live session — always-on, mic audio off, audio-output on, model ids, and the
+Vertex `global` location — is fixed in code. Only two secrets are read from the environment; both are
+optional depending on the auth path.
+
 | Variable | Where | Meaning |
 |---|---|---|
-| `GEMINI_LIVE_ENABLED` | client | Always-on Live session. **On by default**; set falsey to opt out. |
-| `GEMINI_LIVE_AUDIO` | client | Also stream microphone audio (optional). Off by default. |
-| `GEMINI_API_KEY` | client | **Dev-only.** When set, route the Live session through the Developer-API key path instead of Vertex. Default/production is keyless Vertex. |
-| `GEMINI_LIVE_MODEL` | client (dev) / backend (Vertex) | Realtime command Live model. Vertex default `gemini-live-2.5-flash`; Dev-API default `gemini-2.5-flash-native-audio-preview-09-2025`. |
-| `GEMINI_LIVE_AUDIO_OUTPUT` | client (dev) | Request AUDIO response modality on the Dev-API path. **On by default** (the default Dev-API model is audio-only); set falsey only with a TEXT-capable `GEMINI_LIVE_MODEL`. |
-| `GEMINI_VISION_MODEL` | client | Turn-based **vision** model (default `gemini-3.5-flash`). A stronger, non-Live model used only when a task needs the screen — see below. |
+| `GEMINI_API_KEY` | client | **Dev-only secret.** When set, route the Live session through the Developer-API key path instead of Vertex. Default/production is keyless Vertex. |
 | `GOOGLE_APPLICATION_CREDENTIALS_JSON` | backend | Vertex service-account JSON used to mint tokens. |
-| `GEMINI_VERTEX_LOCATION` | backend | Vertex location (default `global`). |
 
 ### Two models: realtime command vs vision
 
@@ -162,7 +158,7 @@ dropped while audio is streaming to avoid double-handling.
 
 ## Continuous audio
 
-When `GEMINI_LIVE_AUDIO` is enabled and the session connects, the model fires
+Mic-audio streaming is off in code today. When it is on and the session connects, the model fires
 `onLiveAudioStreamingChanged(true)`; `UserQueryOverlayController` calls
 `MicrophoneWaveformMeter.startContinuousListening()`, which keeps the engine running (and ignores
 UI-driven `stop()`s) so audio streams beyond the voice-capture window. Tear down via
@@ -170,10 +166,9 @@ UI-driven `stop()`s) so audio streams beyond the voice-capture window. Tear down
 
 ## Configuration recap
 
-Live runs against Vertex AI using backend-minted OAuth tokens (no client-held API key). Enable/audio
-are client toggles (`GEMINI_LIVE_ENABLED` on by default, `GEMINI_LIVE_AUDIO` opt-in). The backend
-route needs `GOOGLE_APPLICATION_CREDENTIALS_JSON` and optionally `GEMINI_VERTEX_LOCATION` /
-`GEMINI_LIVE_MODEL`.
+Live runs against Vertex AI using backend-minted OAuth tokens (no client-held API key). It is always
+on, at the `global` Vertex location, all fixed in code. The backend route needs
+`GOOGLE_APPLICATION_CREDENTIALS_JSON`.
 
 ## Testing
 

@@ -8,19 +8,13 @@ import Testing
 struct GeminiLiveTests {
     @Test
     func configurationParsesEnvironment() {
-        // Live is on by default with no env set; audio off.
-        let defaults = GeminiLiveConfiguration.fromEnvironment([:])
-        #expect(defaults.enabled)
-        #expect(defaults.audioEnabled == false)
-
-        // Explicit opt-out.
-        let disabled = GeminiLiveConfiguration.fromEnvironment(["GEMINI_LIVE_ENABLED": "false"])
-        #expect(disabled.enabled == false)
-
-        // Optional audio opt-in.
-        let withAudio = GeminiLiveConfiguration.fromEnvironment(["GEMINI_LIVE_AUDIO": "true"])
-        #expect(withAudio.enabled)
-        #expect(withAudio.audioEnabled)
+        // Live is always on with audio off and audio-output on; only GEMINI_API_KEY
+        // is read from the environment, the rest is fixed in code.
+        let config = GeminiLiveConfiguration.fromEnvironment([:])
+        #expect(config.enabled)
+        #expect(config.audioEnabled == false)
+        #expect(config.liveAudioOutput)
+        #expect(config.apiKey == nil)
     }
 
     @Test
@@ -67,19 +61,17 @@ struct GeminiLiveTests {
     @Test
     func developerAPIProviderUsesKeyModelAndAudioOutput() async throws {
         // GEMINI_API_KEY → connect directly to the Developer API with the key in
-        // the query string, the configured model, and AUDIO output (gemini-3.1
-        // Live is audio-only).
+        // the query string, the hardcoded default model, and AUDIO output.
         let config = GeminiLiveConfiguration.fromEnvironment([
-            "GEMINI_API_KEY": "test-key-123",
-            "GEMINI_LIVE_MODEL": "gemini-3.1-flash-live-preview"
+            "GEMINI_API_KEY": "test-key-123"
         ])
         #expect(config.apiKey == "test-key-123")
-        #expect(config.model == "gemini-3.1-flash-live-preview")
+        #expect(config.model == GeminiLiveConfiguration.defaultModel)
 
         let connection = try await GeminiLiveConnectionFactory.makeProvider(configuration: config)()
         #expect(connection.bearerToken == nil)
         #expect(connection.audioOutput)
-        #expect(connection.model == "gemini-3.1-flash-live-preview")
+        #expect(connection.model == GeminiLiveConfiguration.defaultModel)
         #expect(connection.url.absoluteString.contains("generativelanguage.googleapis.com"))
         #expect(connection.url.query?.contains("key=test-key-123") == true)
     }
@@ -94,9 +86,6 @@ struct GeminiLiveTests {
         #expect(defaults.apiKey == nil)
         #expect(defaults.model == GeminiLiveConfiguration.defaultModel)
         #expect(defaults.visionModel == "gemini-3.5-flash")
-        // GEMINI_VISION_MODEL overrides the vision model.
-        let overridden = GeminiLiveConfiguration.fromEnvironment(["GEMINI_VISION_MODEL": "gemini-2.5-pro"])
-        #expect(overridden.visionModel == "gemini-2.5-pro")
     }
 
     @Test

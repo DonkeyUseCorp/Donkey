@@ -18,7 +18,7 @@ public struct LocalUIElementNativeVisualDetector: Sendable {
         tesseractPath: String? = nil
     ) {
         _ = maxAnalysisDimension
-        self.algorithm = algorithm ?? Self.algorithmFromEnvironment()
+        self.algorithm = algorithm ?? .borderUI
         self.interactableDetector = GenericInteractableDetector(
             magickPath: magickPath,
             tesseractPath: tesseractPath
@@ -393,21 +393,6 @@ public struct LocalUIElementNativeVisualDetector: Sendable {
         return box.kind
     }
 
-    private static func algorithmFromEnvironment(
-        environment: [String: String] = ProcessInfo.processInfo.environment
-    ) -> NativeVisualDetectionAlgorithm {
-        let value = environment["DONKEY_NATIVE_VISUAL_DETECTOR"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        switch value {
-        case "interactables", "interactables-v2", "generic-interactables", "generic-interactables-v2":
-            return .interactablesV2
-        case "border", "border-ui", "generic-border", "generic-border-ui":
-            return .borderUI
-        default:
-            return .borderUI
-        }
-    }
 }
 
 private struct NativeVisualDetectionResult: Equatable, Sendable {

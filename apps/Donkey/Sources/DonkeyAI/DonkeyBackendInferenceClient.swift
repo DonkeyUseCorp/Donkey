@@ -116,7 +116,7 @@ public struct DonkeyBackendInferenceConfiguration: Equatable, Sendable {
         return DonkeyBackendInferenceConfiguration(
             baseURL: baseURL,
             clientID: environment["DONKEY_CLIENT_ID"] ?? stableClientID(),
-            devAuthBypass: boolEnvironmentValue(environment["DONKEY_DEV_AUTH_BYPASS"])
+            devAuthBypass: false
         )
     }
 
@@ -139,15 +139,6 @@ public struct DonkeyBackendInferenceConfiguration: Equatable, Sendable {
     private static func trimmed(_ value: String?) -> String? {
         let trimmedValue = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmedValue?.isEmpty == false ? trimmedValue : nil
-    }
-
-    private static func boolEnvironmentValue(_ value: String?) -> Bool {
-        switch trimmed(value)?.lowercased() {
-        case "1", "true", "yes", "on":
-            return true
-        default:
-            return false
-        }
     }
 
     private static func stableClientID() -> String {

@@ -633,19 +633,6 @@ struct DonkeyBackendInferenceClientTests {
     }
 
     @Test
-    func configurationReadsDevAuthBypassEnvironment() throws {
-        let configuration = try DonkeyBackendInferenceConfiguration.fromEnvironment([
-            "DONKEY_WEB_BASE_URL": "https://web.donkey.example",
-            "DONKEY_CLIENT_ID": "client-env",
-            "DONKEY_DEV_AUTH_BYPASS": "1",
-        ])
-
-        #expect(configuration.baseURL.absoluteString == "https://web.donkey.example")
-        #expect(configuration.clientID == "client-env")
-        #expect(configuration.devAuthBypass == true)
-    }
-
-    @Test
     func configurationUsesBundledWebBaseURL() throws {
         let fixture = try temporaryBundle(info: [
             "DonkeyWebBaseURL": "https://bundle.donkey.example"

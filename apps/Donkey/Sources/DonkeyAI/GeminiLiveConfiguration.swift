@@ -23,18 +23,17 @@ public struct GeminiLiveConfiguration: Equatable, Sendable {
     /// this key instead of minting a Vertex token via the backend. Dev-only — a
     /// client-held key; prod uses the keyless Vertex path.
     public var apiKey: String?
-    /// Live model id for the Developer-API path (`GEMINI_LIVE_MODEL`). The Vertex
-    /// path ignores this (its model comes from the backend mint response).
+    /// Live model id for the Developer-API path. The Vertex path ignores this (its
+    /// model comes from the backend mint response).
     public var model: String
-    /// Model used for the per-turn vision driver (`GEMINI_VISION_MODEL`). This is a
+    /// Model used for the per-turn vision driver. This is a
     /// turn-based `generateContent` model (not Live/bidi) running the built-in
     /// `computer_use` tool — a stronger model for screenshot grounding than the fast
     /// realtime command model.
     public var visionModel: String
-    /// Whether the Developer-API Live session requests AUDIO response modality
-    /// (`GEMINI_LIVE_AUDIO_OUTPUT`). The default Dev-API model is audio-output only,
-    /// so this defaults true; set falsey when pointing `GEMINI_LIVE_MODEL` at a
-    /// TEXT-capable Live model. Ignored on the Vertex path (always TEXT).
+    /// Whether the Developer-API Live session requests AUDIO response modality. The
+    /// default Dev-API model is audio-output only, so this defaults true; set falsey
+    /// with a TEXT-capable Live model. Ignored on the Vertex path (always TEXT).
     public var liveAudioOutput: Bool
 
     /// Default Developer-API Live (command) model — the realtime, tool-calling
@@ -62,42 +61,24 @@ public struct GeminiLiveConfiguration: Equatable, Sendable {
         self.liveAudioOutput = liveAudioOutput
     }
 
-    /// Build from environment.
-    ///
-    /// - `GEMINI_LIVE_ENABLED` (bool) — the always-on Live session, **on by
-    ///   default**; set to a falsey value to opt out.
-    /// - `GEMINI_LIVE_AUDIO` (bool) — also stream microphone audio (optional).
-    ///
-    /// The model id is owned by the backend (`GEMINI_LIVE_MODEL` there); the
-    /// client never selects it.
+    /// Build from environment. Only `GEMINI_API_KEY` (a secret, dev-only) is read;
+    /// the always-on Live session and its audio behavior are fixed in code. The
+    /// model id is owned by the backend; the client never selects it.
     public static func fromEnvironment(
         _ environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> GeminiLiveConfiguration {
         GeminiLiveConfiguration(
-            enabled: boolValue(environment["GEMINI_LIVE_ENABLED"], default: true),
-            audioEnabled: boolValue(environment["GEMINI_LIVE_AUDIO"]),
+            enabled: true,
+            audioEnabled: false,
             apiKey: trimmed(environment["GEMINI_API_KEY"]),
-            model: trimmed(environment["GEMINI_LIVE_MODEL"]) ?? defaultModel,
-            visionModel: trimmed(environment["GEMINI_VISION_MODEL"]) ?? defaultVisionModel,
-            liveAudioOutput: boolValue(environment["GEMINI_LIVE_AUDIO_OUTPUT"], default: true)
+            model: defaultModel,
+            visionModel: defaultVisionModel,
+            liveAudioOutput: true
         )
     }
 
     private static func trimmed(_ value: String?) -> String? {
         let trimmedValue = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmedValue?.isEmpty == false ? trimmedValue : nil
-    }
-
-    private static func boolValue(_ value: String?, default defaultValue: Bool = false) -> Bool {
-        switch trimmed(value)?.lowercased() {
-        case .none:
-            return defaultValue
-        case "1", "true", "yes", "on":
-            return true
-        case "0", "false", "no", "off":
-            return false
-        default:
-            return defaultValue
-        }
     }
 }

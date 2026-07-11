@@ -5,8 +5,8 @@ import Foundation
 ///
 /// - **Developer API** (`GEMINI_API_KEY` set): connect directly to
 ///   `generativelanguage.googleapis.com` with the key in the query string, using
-///   the client-configured model (`GEMINI_LIVE_MODEL`, default
-///   `GeminiLiveConfiguration.defaultModel` — an audio-output-only model). No
+///   the hardcoded `GeminiLiveConfiguration.defaultModel` (an audio-output-only
+///   model). No
 ///   backend round-trip. Dev-only — a client-held key.
 /// - **Vertex AI** (no key): mint a short-lived OAuth token via the backend
 ///   (`DonkeyBackendInferenceClient.mintLiveConnection`); the model + endpoint
@@ -38,7 +38,7 @@ public enum GeminiLiveConnectionFactory {
         // The key authenticates via the query string, so there's no bearer token.
         // The default Dev-API model is audio-output only, so `audioOutput` defaults
         // true (tool calls + output transcription still flow even when TEXT is
-        // rejected); set `GEMINI_LIVE_AUDIO_OUTPUT=0` for a TEXT-capable model.
+        // rejected); use a TEXT-capable model to change that.
         return GeminiLiveConnection(url: url, bearerToken: nil, model: model, audioOutput: audioOutput)
     }
 
