@@ -13,22 +13,37 @@ import { useEditor } from "./store";
 // the Library (its own file).
 
 let activeChatId: string | null = null;
+/** The thread whose turn is streaming right now. Pinned for the whole turn,
+ * so a tool that runs after the user clicks over to another thread still
+ * tags its media with the thread that asked. */
+let turnChatId: string | null = null;
 
-/** The chat thread whose tools are currently running. The chat session sets
- * this while mounted so tool-created assets can be tagged with their owner. */
+/** The chat thread whose panel is on screen. The chat session sets this while
+ * mounted so tool-created assets can be tagged with their owner. */
 export function setActiveChatThread(id: string | null) {
   activeChatId = id;
 }
 
-/** The owning thread to stamp on an asset created right now. Capture it
- * before a background render so the clip files under the chat that asked,
- * even if the user has switched threads by the time it lands. */
+/** Pin `id` as the owner for a streaming turn's tool work. */
+export function beginChatTurn(id: string) {
+  turnChatId = id;
+}
+
+/** Release the turn pin — only if `id` still holds it (a newer turn wins). */
+export function endChatTurn(id: string) {
+  if (turnChatId === id) turnChatId = null;
+}
+
+/** The owning thread to stamp on an asset created right now: the streaming
+ * turn's thread when one is live, else the open panel's. Capture it before a
+ * background render so the clip files under the chat that asked, even if the
+ * user has switched threads by the time it lands. */
 export function chatOwner(): string | null {
-  return activeChatId;
+  return turnChatId ?? activeChatId;
 }
 
 /** Tag a landed project asset as owned by a chat thread. */
-export function tagChatAsset(assetId: string, chatId: string | null = activeChatId) {
+export function tagChatAsset(assetId: string, chatId: string | null = chatOwner()) {
   if (!chatId) return;
   useEditor.getState().updateAsset(assetId, { origin: "chat", chatId });
 }

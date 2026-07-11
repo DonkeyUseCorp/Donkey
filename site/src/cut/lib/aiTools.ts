@@ -378,7 +378,9 @@ export async function runAiTool(
       const nextIn = isNum(input.in) ? clamp(input.in, 0, dur - 0.1) : clip.in;
       const nextOut = isNum(input.out) ? clamp(input.out, 0.1, dur) : clip.out;
       if (nextOut - nextIn < 0.1) throw new ToolError("Clip must stay at least 0.1s long.");
-      s.updateClip(clip.id, { in: nextIn, out: nextOut });
+      // Trim through the store's resize path so track 0 keeps its no-overlap
+      // invariant: extending a clip pushes the following run right.
+      s.setClipTrim(clip.id, nextIn, nextOut);
       return { in: nextIn, out: nextOut, len: Math.round((nextOut - nextIn) * 100) / 100 };
     }
 

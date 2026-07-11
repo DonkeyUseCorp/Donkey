@@ -80,15 +80,25 @@ export const refFromStockVideo = (v: StockVideo): AssetRef => ({
   duration: v.duration,
 });
 
-/** A transient ref for a text file dropped from the desktop: the contents stay
- * behind an object URL and are read at send time. */
-export const refFromTextFile = (file: File): AssetRef => ({
-  scope: "file",
-  id: crypto.randomUUID().slice(0, 8),
-  name: file.name,
-  kind: "text",
-  url: URL.createObjectURL(file),
-});
+/** A ref for a text file dropped from the desktop: the contents ride inline
+ * as a data: URL. The ref persists into the thread's saved messages, and a
+ * data: URL still reads after a reload — an object URL would die with the
+ * page and leave the attachment permanently unreadable. */
+export async function refFromTextFile(file: File): Promise<AssetRef> {
+  const url = await new Promise<string>((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(r.error ?? new Error(`Could not read ${file.name}.`));
+    r.readAsDataURL(file);
+  });
+  return {
+    scope: "file",
+    id: crypto.randomUUID().slice(0, 8),
+    name: file.name,
+    kind: "text",
+    url,
+  };
+}
 
 export const sameRef = (a: AssetRef, b: AssetRef) => a.scope === b.scope && a.id === b.id;
 

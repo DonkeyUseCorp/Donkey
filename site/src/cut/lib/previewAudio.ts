@@ -32,7 +32,12 @@ export const usePreviewAudio = create<PreviewAudioState>((set, get) => ({
     audio.onended = () => set({ url: null });
     audio.onerror = () => set({ url: null });
     set({ url });
-    void audio.play().catch(() => set({ url: null }));
+    void audio.play().catch(() => {
+      // A superseded play() rejects late ("interrupted by a new load
+      // request") — only the call still owning the state may clear it, or a
+      // stale rejection would knock out the preview playing now.
+      if (get().url === url) set({ url: null });
+    });
   },
   stop: (url) => {
     if (url !== undefined && get().url !== url) return;

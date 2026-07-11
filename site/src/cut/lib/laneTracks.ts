@@ -274,8 +274,18 @@ function rubberBand(overPx: number, max: number): number {
 const leftGuide = (t: number, pps: number) => t * pps;
 const rightGuide = (t: number, pps: number) => t * pps - CLIP_GAP;
 
-// The in-flight elastic snap-back; any new gesture cancels it.
-let snapBackRaf = 0;
+// The in-flight elastic snap-back. A new gesture settles it instantly rather
+// than abandoning it: the floor is a correctness bound (a media item's first
+// sample, or the leader run), and an abandoned snap would persist a
+// below-floor trim into the doc.
+let snapBack: { raf: number; finish: () => void } | null = null;
+function settleSnapBack() {
+  if (!snapBack) return;
+  cancelAnimationFrame(snapBack.raf);
+  const { finish } = snapBack;
+  snapBack = null;
+  finish();
+}
 
 /** The live move drag, published so the Timeline can render the ghost, the
  * landing slot, and grow the lane stack while a new row is hovered. */
@@ -326,7 +336,7 @@ export function startLaneMove<V = unknown>(
   id: string,
   ui: LaneMoveUI<V>
 ) {
-  cancelAnimationFrame(snapBackRaf);
+  settleSnapBack();
   const s = useEditor.getState();
   if (e.metaKey || e.shiftKey) {
     s.toggleSelect({ kind, id } as NonNullable<Selection>);
@@ -551,7 +561,7 @@ export function startLaneTrim(
   side: "l" | "r",
   ui: LaneTrimUI
 ) {
-  cancelAnimationFrame(snapBackRaf);
+  settleSnapBack();
   const s = useEditor.getState();
   const ad = ADAPTERS[kind];
   const raw0 = ad.raws(s).find((r) => ad.view(r).id === id);
@@ -582,15 +592,21 @@ export function startLaneTrim(
       .sort((a, b) => a.view.start - b.view.start);
     const last = leaders[leaders.length - 1];
     const lastAllow = last ? allow(last.raw, raw0) : 0;
+    // Each leader's declared dissolve into the item after it (the last one's
+    // into the trimmed item itself): packing the run keeps those overlaps, so
+    // they come off the floor and stay in the re-lay.
+    const pairAllow = leaders.map((l, i) =>
+      i + 1 < leaders.length ? allow(l.raw, leaders[i + 1].raw) : lastAllow
+    );
     const prevEnd =
       leaders.reduce((m, l) => Math.max(m, l.view.start + l.view.len), 0) - lastAllow;
-    const runFloor = leaders.reduce((sum, l) => sum + l.view.len, 0) - lastAllow;
+    const runFloor = leaders.reduce((sum, l, i) => sum + l.view.len - pairAllow[i], 0);
     const floor = Math.max(runFloor, ad.leftFloor(raw0));
     const free = Math.max(prevEnd, ad.leftFloor(raw0));
     const moved = new Map<string, number>();
     startDrag(e, {
       onMove: (dx, _dy, ev) => {
-        cancelAnimationFrame(snapBackRaf);
+        settleSnapBack();
         const desired = Math.min(maxStart, start0 + dx / ui.pps);
         let start: number;
         if (desired >= free) {
@@ -614,7 +630,8 @@ export function startLaneTrim(
         }
         // Re-lay the leaders right-to-left from their resting spots: each one
         // slides only as far as the pushed edge (or the item it now abuts)
-        // forces it, so a retreating drag lets the run flow back. Unmoved
+        // forces it, so a retreating drag lets the run flow back — and a
+        // cross-dissolved pair keeps its overlap while it slides. Unmoved
         // leaders get no patch (they'd re-render for nothing).
         const patches = [ad.trimLeftPatch(raw0, start)];
         let limit = Math.max(start, runFloor) + lastAllow;
@@ -628,7 +645,8 @@ export function startLaneTrim(
             if (Math.abs(ns - l.view.start) > 1e-9) moved.set(l.view.id, ns);
             else moved.delete(l.view.id);
           }
-          limit = ns;
+          // The leader before this one may keep its dissolve overlap into it.
+          limit = ns + (i > 0 ? pairAllow[i - 1] : 0);
         }
         ad.apply(patches);
       },
@@ -637,15 +655,17 @@ export function startLaneTrim(
         const cur = ad.raws(useEditor.getState()).find((r) => ad.view(r).id === id);
         const from = cur ? ad.view(cur).start : floor;
         if (from >= floor - 1e-4) return; // settled within the room
-        // Elastic spring back to the floor.
+        // Elastic spring back to the floor. `finish` lands the floor exactly,
+        // so an interrupting gesture settles rather than strands the trim.
         const t0 = performance.now();
+        const finish = () => ad.apply([ad.trimLeftPatch(raw0, floor)]);
         const step = (now: number) => {
           const p = Math.min(1, (now - t0) / 240);
           const v = Math.max(0, from + (floor - from) * easeOutBack(p));
           ad.apply([ad.trimLeftPatch(raw0, p < 1 ? v : floor)]);
-          if (p < 1) snapBackRaf = requestAnimationFrame(step);
+          snapBack = p < 1 ? { raf: requestAnimationFrame(step), finish } : null;
         };
-        snapBackRaf = requestAnimationFrame(step);
+        snapBack = { raf: requestAnimationFrame(step), finish };
       },
     });
     return;

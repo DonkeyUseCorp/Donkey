@@ -144,6 +144,10 @@ export interface EditorState {
   /** Set a clip's playback rate (0.25–4). A longer footprint pushes the
    * following clips right by the overflow; a shorter one opens a gap. */
   setClipSpeed: (id: string, speed: number) => void;
+  /** Set a clip's source trim points with the same run rules as a speed
+   * resize: a longer footprint pushes the following clips right, a shorter
+   * one opens a gap, and a live dissolve keeps its overlap. */
+  setClipTrim: (id: string, nextIn: number, nextOut: number) => void;
   /** Set the transition into the next clip (seconds; 0 clears it), optionally
    * changing its style; omitting the style keeps the clip's current one. */
   setClipTransition: (id: string, seconds: number, style?: TransitionStyle) => void;
@@ -286,6 +290,52 @@ type ClipboardItem =
   | { kind: "overlayClip"; item: OverlayClip }
   | { kind: "text"; item: TextOverlay };
 let clipboard: ClipboardItem[] = [];
+
+/** Bumped whenever subtitle lanes renumber (a track removal). Async work that
+ * captured a lane index checks it before landing, so a result can't write to
+ * what is now a different language's track. */
+let laneEpoch = 0;
+
+/** Resize a track-0 clip's footprint to `newLen` (a trim or speed change),
+ * keeping the track sound: a live dissolve into the next clip stays a
+ * dissolve (the run follows the resize so the pair keeps its overlap);
+ * otherwise a longer footprint pushes the run right by the overflow and a
+ * shorter one just opens a gap. One undo step. */
+function resizeClipFootprint(clip: VideoClip, patch: Partial<VideoClip>, newLen: number) {
+  useEditor.getState().pushHistory();
+  useEditor.getState().updateClipTransient(clip.id, patch);
+  const next = useEditor
+    .getState()
+    .clips.filter((c) => c.id !== clip.id && c.start >= clip.start)
+    .reduce<VideoClip | null>((m, c) => (!m || c.start < m.start ? c : m), null);
+  const nextStart = next?.start ?? Infinity;
+  const keep = next
+    ? Math.min(
+        transitionOverlap(clip, next),
+        Math.max(0, clip.start + clipLen(clip) - nextStart),
+        newLen * 0.9
+      )
+    : 0;
+  const delta =
+    keep > 1e-6
+      ? clip.start + newLen - keep - nextStart
+      : Math.max(0, clip.start + newLen - nextStart);
+  if (Math.abs(delta) > 1e-6) {
+    useEditor.setState((st) => ({
+      clips: st.clips
+        .map((c) =>
+          c.id !== clip.id && c.start >= clip.start
+            ? { ...c, start: Math.max(0, c.start + delta) }
+            : c
+        )
+        .sort((a, b) => a.start - b.start),
+    }));
+  }
+}
+const staleLaneError = {
+  subtitleStatus: "error" as const,
+  subtitleError: "Subtitle tracks changed while working — run it again.",
+};
 
 /** Earliest start at/after `t` where a `len`-long item fits between the
  * occupied `spans` of one lane: each blocker slides the candidate right to its
@@ -525,7 +575,11 @@ export const useEditor = create<EditorState>((set, get) => {
       // the asset list, so removing one must not open a checkpoint or churn
       // the clip arrays (a fresh clips reference would count as a doc change
       // and wipe the redo branch).
-      if (!st.clips.some((c) => c.assetId === id) && !st.audioClips.some((c) => c.assetId === id)) {
+      if (
+        !st.clips.some((c) => c.assetId === id) &&
+        !st.overlayClips.some((c) => c.assetId === id) &&
+        !st.audioClips.some((c) => c.assetId === id)
+      ) {
         set((s) => ({ assets: s.assets.filter((a) => a.id !== id) }));
         return;
       }
@@ -534,15 +588,18 @@ export const useEditor = create<EditorState>((set, get) => {
       // the rest of the timeline (and its annotations) stays where it is.
       set((s) => {
         const goneClips = new Set(s.clips.filter((c) => c.assetId === id).map((c) => c.id));
+        const goneOverlay = new Set(s.overlayClips.filter((c) => c.assetId === id).map((c) => c.id));
         const goneAudio = new Set(s.audioClips.filter((c) => c.assetId === id).map((c) => c.id));
         const keep = (sel: Selection) =>
           !!sel &&
           !((sel.kind === "clip" && goneClips.has(sel.id)) ||
+            (sel.kind === "overlayClip" && goneOverlay.has(sel.id)) ||
             (sel.kind === "audio" && goneAudio.has(sel.id)));
         const multiSelection = s.multiSelection.filter(keep);
         return {
           assets: s.assets.filter((a) => a.id !== id),
           clips: s.clips.filter((c) => c.assetId !== id),
+          overlayClips: s.overlayClips.filter((c) => c.assetId !== id),
           audioClips: s.audioClips.filter((c) => c.assetId !== id),
           multiSelection,
           selection: keep(s.selection) ? s.selection : multiSelection[multiSelection.length - 1] ?? null,
@@ -648,46 +705,18 @@ export const useEditor = create<EditorState>((set, get) => {
     },
 
     setClipSpeed: (id, speed) => {
-      const s = get();
-      const clip = s.clips.find((c) => c.id === id);
+      const clip = get().clips.find((c) => c.id === id);
       if (!clip) return;
       const clamped = Math.max(SPEED_MIN, Math.min(SPEED_MAX, speed));
       if (Math.abs(clamped - clipSpeed(clip)) < 1e-4) return;
-      const newLen = Math.max(MIN_LEN, (clip.out - clip.in) / clamped);
-      push();
-      get().updateClipTransient(id, { speed: clamped });
-      const followers = s.clips.filter((c) => c.id !== id && c.start >= clip.start);
-      const next = followers.reduce<VideoClip | null>(
-        (m, c) => (!m || c.start < m.start ? c : m),
-        null
-      );
-      const nextStart = next?.start ?? Infinity;
-      // A live dissolve into the next clip stays a dissolve: the run follows
-      // the resize (both directions) so the pair keeps its overlap. Otherwise
-      // free-track rules — a longer footprint pushes the run right by the
-      // overflow (like a resize); a shorter one just opens a gap.
-      const keep = next
-        ? Math.min(
-            transitionOverlap(clip, next),
-            Math.max(0, clip.start + clipLen(clip) - nextStart),
-            newLen * 0.9
-          )
-        : 0;
-      const delta =
-        keep > 1e-6
-          ? clip.start + newLen - keep - nextStart
-          : Math.max(0, clip.start + newLen - nextStart);
-      if (Math.abs(delta) > 1e-6) {
-        set((st) => ({
-          clips: st.clips
-            .map((c) =>
-              c.id !== id && c.start >= clip.start
-                ? { ...c, start: Math.max(0, c.start + delta) }
-                : c
-            )
-            .sort((a, b) => a.start - b.start),
-        }));
-      }
+      resizeClipFootprint(clip, { speed: clamped }, Math.max(MIN_LEN, (clip.out - clip.in) / clamped));
+    },
+
+    setClipTrim: (id, nextIn, nextOut) => {
+      const clip = get().clips.find((c) => c.id === id);
+      if (!clip) return;
+      if (Math.abs(nextIn - clip.in) < 1e-6 && Math.abs(nextOut - clip.out) < 1e-6) return;
+      resizeClipFootprint(clip, { in: nextIn, out: nextOut }, (nextOut - nextIn) / clipSpeed(clip));
     },
 
     setClipTransition: (id, seconds, style) => {
@@ -1234,8 +1263,12 @@ export const useEditor = create<EditorState>((set, get) => {
     insertTemplate: (template, assetIds, offset) => {
       push();
       const usable = template.layers.filter((l) => assetIds[l.media]);
-      const clipLayers = usable.filter((l) => l.asClip);
-      const overlayLayers = usable.filter((l) => !l.asClip);
+      // Templates saved before the base-track removal persisted `onBase`;
+      // read it as asClip so their footage still lands on track 0.
+      const isClip = (l: (typeof usable)[number]) =>
+        l.asClip ?? (l as { onBase?: boolean }).onBase;
+      const clipLayers = usable.filter((l) => isClip(l));
+      const overlayLayers = usable.filter((l) => !isClip(l));
       // Clip layers append at the end of the current track 0; the
       // free-positioned parts (overlays, audio, captions) shift to line up with
       // that segment. A template with no clip layers drops in at the playhead.
@@ -1343,6 +1376,7 @@ export const useEditor = create<EditorState>((set, get) => {
       const assetById = new Map(s.assets.map((a) => [a.id, a]));
       // Generation targets the active subtitle track, with its own language.
       const lane = s.subtitleLane;
+      const epoch = laneEpoch;
       const spec = {
         duration,
         locale: trackLocale(s.subtitles, lane),
@@ -1378,6 +1412,7 @@ export const useEditor = create<EditorState>((set, get) => {
       try {
         const cues = await runTranscription(projectId, spec);
         if (cues === null) return; // switched projects mid-run
+        if (laneEpoch !== epoch) return set(staleLaneError);
         // Only the active track's cues are replaced; other languages stay.
         const tagged = cues.map((c) => ({ ...c, ...(lane > 0 ? { lane } : {}) }));
         if (cues.length === 0) {
@@ -1426,6 +1461,7 @@ export const useEditor = create<EditorState>((set, get) => {
       const sp = getClipSpans(s.clips, s.assets).find((x) => x.clip.id === clipId);
       if (!sp) throw new Error("The clip is no longer on the timeline.");
       const lane = s.subtitleLane;
+      const epoch = laneEpoch;
       // The clip's own sound, deliberately unmuted: this transcribes what the
       // clip says even when its timeline audio is muted.
       const spec = {
@@ -1447,6 +1483,10 @@ export const useEditor = create<EditorState>((set, get) => {
       try {
         const cues = await runTranscription(projectId, spec);
         if (cues === null) return; // switched projects mid-run
+        if (laneEpoch !== epoch) {
+          set(staleLaneError);
+          throw new Error(staleLaneError.subtitleError);
+        }
         // The job timed cues against the lone clip, so shift them (and their
         // word timings) onto the clip's timeline span. New cues replace any
         // on the active track that overlapped the clip; the rest of the
@@ -1490,6 +1530,7 @@ export const useEditor = create<EditorState>((set, get) => {
       }
       const duration = totalDuration(s.clips);
       const lane = s.subtitleLane;
+      const epoch = laneEpoch;
       set({ subtitleStatus: "running", subtitleError: null });
       try {
         const frames = await captureTimelineFrames(spans);
@@ -1510,6 +1551,7 @@ export const useEditor = create<EditorState>((set, get) => {
           throw new Error(body.error ?? "Captioning failed.");
         }
         if (get().projectId !== projectId) return; // switched projects mid-run
+        if (laneEpoch !== epoch) return set(staleLaneError);
         const cues: SubtitleCue[] = body.cues.map((c) => ({
           id: uid(),
           start: c.start,
@@ -1609,6 +1651,7 @@ export const useEditor = create<EditorState>((set, get) => {
       if (source.length === 0) return;
       const locale = trackLocale(s.subtitles, lane);
       const projectId = s.projectId;
+      const epoch = laneEpoch;
       set({ subtitleStatus: "running", subtitleError: null });
       try {
         const res = await apiFetch("/api/cut/ai/captions", {
@@ -1624,6 +1667,7 @@ export const useEditor = create<EditorState>((set, get) => {
         if (!res.ok || !Array.isArray(body.texts) || body.texts.length !== source.length) {
           throw new Error(body.error || "Could not translate the captions.");
         }
+        if (laneEpoch !== epoch) return set(staleLaneError);
         push();
         const texts = body.texts;
         set((cur) => ({
@@ -1694,6 +1738,7 @@ export const useEditor = create<EditorState>((set, get) => {
       );
       if (count <= 1) return;
       push();
+      laneEpoch++; // lanes renumber: invalidate in-flight lane-targeted work
       const gone = new Set(
         s.subtitles.cues.filter((c) => (c.lane ?? 0) === lane).map((c) => c.id)
       );
@@ -1720,7 +1765,12 @@ export const useEditor = create<EditorState>((set, get) => {
                 return l > lane ? { ...c, lane: l - 1 > 0 ? l - 1 : undefined } : c;
               }),
           },
-          subtitleLane: Math.max(0, Math.min(count - 2, cur.subtitleLane)),
+          // The active lane follows its track: lanes above the removed one
+          // shift down; removing the active one clamps into range.
+          subtitleLane: Math.max(
+            0,
+            Math.min(count - 2, cur.subtitleLane > lane ? cur.subtitleLane - 1 : cur.subtitleLane)
+          ),
           multiSelection,
           selection: keep(cur.selection)
             ? cur.selection

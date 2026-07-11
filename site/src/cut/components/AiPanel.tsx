@@ -38,7 +38,7 @@ import { apiFetch, engineReady } from "@/cut/lib/api";
 import { buildAiContext } from "@/cut/lib/aiContext";
 import { runAiTool } from "@/cut/lib/aiTools";
 import { setAssetDragData } from "@/cut/lib/assetDrag";
-import { deleteChatAssets, setActiveChatThread, threadOwnsAssets } from "@/cut/lib/chatAssets";
+import { beginChatTurn, deleteChatAssets, endChatTurn, setActiveChatThread, threadOwnsAssets } from "@/cut/lib/chatAssets";
 import {
   addRefOnce,
   collectRefs,
@@ -445,6 +445,15 @@ function ChatSession({
     setActiveChatThread(threadId);
     return () => setActiveChatThread(null);
   }, [threadId]);
+
+  // Pin this thread as the owner while its turn streams. Deliberately no
+  // unmount cleanup: a thread switch mid-turn unmounts this session while the
+  // stream (and its tool calls) keeps running — the pin must outlive the
+  // panel so that work still files under the thread that asked.
+  useEffect(() => {
+    if (busy) beginChatTurn(threadId);
+    else endChatTurn(threadId);
+  }, [busy, threadId]);
 
   // Coalesce every edit the assistant makes in one turn into a single undo
   // step, so ⌘Z reverts the whole turn rather than one tool call at a time.

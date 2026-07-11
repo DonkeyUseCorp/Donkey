@@ -147,7 +147,7 @@ export async function refsFromDroppedFiles(projectId: string, files: File[]): Pr
   for (const file of files) {
     try {
       if (isTextFile(file) && !isMediaFile(file)) {
-        refs.push(refFromTextFile(file));
+        refs.push(await refFromTextFile(file));
         continue;
       }
       const asset = await importFileToProject(projectId, file);

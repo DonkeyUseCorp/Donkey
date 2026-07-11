@@ -69,12 +69,18 @@ export function AudioPanel({
   importing: boolean;
 }) {
   // The app-wide preview player: starting a clip stops the last one, here or
-  // on a chat audio card. Leaving the tab stops whatever is playing.
+  // on a chat audio card. Leaving the tab silences only this panel's own
+  // preview — a chat card's playback belongs to the chat, which is still on
+  // screen.
   const playingUrl = usePreviewAudio((s) => s.url);
-  const togglePlay = usePreviewAudio((s) => s.toggle);
+  const ownedUrl = useRef<string | null>(null);
+  const togglePlay = (url: string) => {
+    ownedUrl.current = url;
+    usePreviewAudio.getState().toggle(url);
+  };
   useEffect(
     () => () => {
-      usePreviewAudio.getState().stop();
+      if (ownedUrl.current) usePreviewAudio.getState().stop(ownedUrl.current);
     },
     []
   );
