@@ -467,9 +467,12 @@ async function runExport(job: Job, spec: ExportSpec) {
 
   const filters: string[] = [];
 
-  // Per-clip timeline length (source span compressed/expanded by speed).
+  // Per-clip timeline length (source span compressed/expanded by speed). A
+  // gap spacer (no file) keeps its exact length: flooring it at 0.1s would
+  // land everything after the gap later than the timeline shows, drifting
+  // burned-in captions off the picture.
   const clipDur = (c: ExportSpec["clips"][number]) =>
-    Math.max(0.1, (c.out - c.in) / clipRate(c));
+    c.file ? Math.max(0.1, (c.out - c.in) / clipRate(c)) : Math.max(0, c.out - c.in);
 
   // Per-clip normalized video + audio segments for the join below.
   spec.clips.forEach((c, j) => {

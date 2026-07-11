@@ -23,6 +23,14 @@ export function laneCues(subs: SubtitlesBlock, lane: number): SubtitleCue[] {
   return subs.cues.filter((c) => (c.lane ?? 0) === lane);
 }
 
+/** A track's language: its own meta, then the block-level legacy locale (which
+ * described the first track only), then English. The panel's language select
+ * and every generation path read this same chain, so the language shown is
+ * always the language sent. */
+export function trackLocale(subs: SubtitlesBlock, lane: number): string {
+  return subs.tracks?.[lane]?.locale ?? (lane === 0 ? subs.locale : undefined) ?? "en-US";
+}
+
 /** A track's effective caption anchor plus the block's karaoke overrides —
  * the `pos` argument `cueOverlay` takes. The track's own dragged spot wins,
  * then the block-level legacy spot (first track only), then the style's

@@ -23,6 +23,7 @@ import type {
   VideoClip,
 } from "./types";
 import { apiFetch, apiJson } from "./api";
+import { trackLocale } from "./subtitles";
 import { emptySubtitles, IMAGE_CLIP_SECONDS, isCrossStyle, MAX_SUBTITLE_LANES, mediaUrl, SPEED_MAX, SPEED_MIN, TRANSITION_MAX } from "./types";
 import { readTextStyle } from "./textStyle";
 import { loadUiState, saveUiState } from "./uiState";
@@ -162,7 +163,9 @@ export interface EditorState {
   /** Keep the clips array sorted by start (consumers read `clips[0]` as the
    * timeline's first clip). Called after a lane-coordinator move commits. */
   sortClips: () => void;
-  /** Reorder video track 0 by index and re-pack it (the AI reorder op). */
+  /** Reorder video track 0 by index (the AI reorder op): the clip lifts out
+   * (leaving a gap) and a slot opens at the target index — clips from the
+   * landing point shift right; nothing else moves. */
   moveClip: (id: string, toIndex: number) => void;
   /** Add a video asset to the timeline at a placement: an existing track or a
    * freshly inserted one. Used by media / library drops. */
@@ -645,16 +648,36 @@ export const useEditor = create<EditorState>((set, get) => {
       const newLen = Math.max(MIN_LEN, (clip.out - clip.in) / clamped);
       push();
       get().updateClipTransient(id, { speed: clamped });
-      // Free track: a longer footprint pushes the following run right by the
-      // overflow (like a resize); a shorter one just opens a gap.
       const followers = s.clips.filter((c) => c.id !== id && c.start >= clip.start);
-      const nextStart = followers.reduce((m, c) => Math.min(m, c.start), Infinity);
-      const delta = Math.max(0, clip.start + newLen - nextStart);
-      if (delta > 1e-6) {
+      const next = followers.reduce<VideoClip | null>(
+        (m, c) => (!m || c.start < m.start ? c : m),
+        null
+      );
+      const nextStart = next?.start ?? Infinity;
+      // A live dissolve into the next clip stays a dissolve: the run follows
+      // the resize (both directions) so the pair keeps its overlap. Otherwise
+      // free-track rules — a longer footprint pushes the run right by the
+      // overflow (like a resize); a shorter one just opens a gap.
+      const keep = next
+        ? Math.min(
+            transitionOverlap(clip, next),
+            Math.max(0, clip.start + clipLen(clip) - nextStart),
+            newLen * 0.9
+          )
+        : 0;
+      const delta =
+        keep > 1e-6
+          ? clip.start + newLen - keep - nextStart
+          : Math.max(0, clip.start + newLen - nextStart);
+      if (Math.abs(delta) > 1e-6) {
         set((st) => ({
-          clips: st.clips.map((c) =>
-            c.id !== id && c.start >= clip.start ? { ...c, start: c.start + delta } : c
-          ),
+          clips: st.clips
+            .map((c) =>
+              c.id !== id && c.start >= clip.start
+                ? { ...c, start: Math.max(0, c.start + delta) }
+                : c
+            )
+            .sort((a, b) => a.start - b.start),
         }));
       }
     },
@@ -788,18 +811,31 @@ export const useEditor = create<EditorState>((set, get) => {
       })),
 
     moveClip: (id, toIndex) => {
-      // The AI reorder op: splice the clip to the target index (in start
-      // order) and re-pack the whole track. Pointer drags never come here —
-      // they free-place through the lane coordinator.
+      // The AI reorder op: lift the clip out (its old spot becomes a gap) and
+      // open a slot at the target index — the landing clip and everything
+      // after it shift right by the moved footprint, everything else keeps
+      // its absolute time, so audio, titles, and captions stay synced to the
+      // clips they annotate. Pointer drags never come here — they free-place
+      // through the lane coordinator.
       const clips = [...get().clips].sort((a, b) => a.start - b.start);
       const from = clips.findIndex((c) => c.id === id);
       if (from < 0) return;
       const to = Math.max(0, Math.min(clips.length - 1, toIndex));
       if (to === from) return;
       push();
-      const [moved] = clips.splice(from, 1);
-      clips.splice(to, 0, moved);
-      set({ clips: packStarts(clips) });
+      const moved = clips[from];
+      const others = clips.filter((c) => c.id !== id);
+      const len = clipLen(moved);
+      const anchor = to < others.length ? others[to] : null;
+      const newStart = anchor ? anchor.start : totalDuration(others);
+      set({
+        clips: [
+          ...others.map((c) =>
+            c.start >= newStart - 1e-6 ? { ...c, start: c.start + len } : c
+          ),
+          { ...moved, start: newStart },
+        ].sort((a, b) => a.start - b.start),
+      });
     },
 
     addVideoFromAsset: (assetId, place, start) => {
@@ -1301,7 +1337,7 @@ export const useEditor = create<EditorState>((set, get) => {
       const lane = s.subtitleLane;
       const spec = {
         duration,
-        locale: s.subtitles.tracks?.[lane]?.locale ?? s.subtitles.locale ?? "en-US",
+        locale: trackLocale(s.subtitles, lane),
         // The transcribe mix is a sequential fold, so gaps between the
         // free-placed clips ship as explicit silent spacers (empty file).
         clips: spanSequence(spans).flatMap(({ gapBefore, span: sp }) => [
@@ -1337,7 +1373,10 @@ export const useEditor = create<EditorState>((set, get) => {
         // Only the active track's cues are replaced; other languages stay.
         const tagged = cues.map((c) => ({ ...c, ...(lane > 0 ? { lane } : {}) }));
         if (cues.length === 0) {
-          // No speech in the audio — leave the other tracks untouched.
+          // No speech in the audio — leave the other tracks untouched. This
+          // still deletes the active track's cues (possibly hand-edited), so
+          // it checkpoints like the replace path: ⌘Z brings them back.
+          if (get().subtitles.cues.some((c) => (c.lane ?? 0) === lane)) push();
           set((cur) => ({
             subtitles: {
               ...cur.subtitles,
@@ -1383,7 +1422,7 @@ export const useEditor = create<EditorState>((set, get) => {
       // clip says even when its timeline audio is muted.
       const spec = {
         duration: sp.len,
-        locale: s.subtitles.tracks?.[lane]?.locale ?? s.subtitles.locale ?? "en-US",
+        locale: trackLocale(s.subtitles, lane),
         clips: [
           {
             file: sp.asset.fileName,
@@ -1453,7 +1492,7 @@ export const useEditor = create<EditorState>((set, get) => {
           body: JSON.stringify({
             frames,
             duration,
-            locale: s.subtitles.tracks?.[lane]?.locale ?? s.subtitles.locale ?? "en-US",
+            locale: trackLocale(s.subtitles, lane),
           }),
         });
         const body = await apiJson<{
@@ -1560,10 +1599,7 @@ export const useEditor = create<EditorState>((set, get) => {
       const laneOf = (c: SubtitleCue) => c.lane ?? 0;
       const source = s.subtitles.cues.filter((c) => laneOf(c) === fromLane);
       if (source.length === 0) return;
-      const locale =
-        s.subtitles.tracks?.[lane]?.locale ??
-        (lane === 0 ? s.subtitles.locale : undefined) ??
-        "en-US";
+      const locale = trackLocale(s.subtitles, lane);
       const projectId = s.projectId;
       set({ subtitleStatus: "running", subtitleError: null });
       try {
@@ -1664,6 +1700,11 @@ export const useEditor = create<EditorState>((set, get) => {
           subtitles: {
             ...cur.subtitles,
             tracks,
+            // The block-level legacy locale and dragged anchor described the
+            // first track; when that track goes, they go with it — the
+            // promoted track must not inherit the deleted one's language or
+            // caption spot.
+            ...(lane === 0 ? { locale: undefined, x: undefined, y: undefined } : {}),
             cues: cur.subtitles.cues
               .filter((c) => (c.lane ?? 0) !== lane)
               .map((c) => {
@@ -2087,8 +2128,7 @@ export function totalDuration(clips: VideoClip[]) {
 type LegacyClip = Omit<VideoClip, "start"> & { start?: number };
 
 /** Assign packed sequential starts (each clip after the previous, dissolves
- * overlapping): the layout older docs implied by array order. Also the shape
- * `moveClip` (the AI reorder op) re-lays the track into. */
+ * overlapping): the layout older docs implied by array order. */
 function packStarts(clips: LegacyClip[]): VideoClip[] {
   let t = 0;
   const out: VideoClip[] = [];

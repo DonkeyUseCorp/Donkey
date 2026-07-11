@@ -219,10 +219,12 @@ async function runTranscribe(job: TranscribeJob, spec: TranscribeSpec) {
 
     const filters: string[] = [];
     // Per-clip timeline length: a sped-up clip is shorter and time-stretched,
-    // so the transcript's cue times line up with what the user sees.
+    // so the transcript's cue times line up with what the user sees. A gap
+    // spacer (no file) keeps its exact length — flooring it at 0.1s would
+    // land every cue after the gap late.
     const clipDur = (c: TranscribeSpec["clips"][number]) => {
       const speed = c.speed && c.speed > 0 ? c.speed : 1;
-      return Math.max(0.1, (c.out - c.in) / speed);
+      return c.file ? Math.max(0.1, (c.out - c.in) / speed) : Math.max(0, c.out - c.in);
     };
     spec.clips.forEach((c, j) => {
       const speed = c.speed && c.speed > 0 ? c.speed : 1;

@@ -24,7 +24,7 @@ import { importLibraryAsset, saveTemplate } from "@/cut/lib/library";
 import { isDragActive, startDrag, subscribeDragActive } from "@/cut/lib/drag";
 import { CLIP_GAP, startLaneMove, startLaneTrim, type LaneDrag } from "@/cut/lib/laneTracks";
 import { ensurePeaks, importImage, importStockVideo } from "@/cut/lib/media";
-import { clipLen, clipSpeed, getClipSpans, projectDuration, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
+import { clipLen, clipSpeed, getClipSpans, nextFreeStart, projectDuration, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
 import type { VideoTrackPlacement } from "@/cut/lib/store";
 import { subtitleLaneCount } from "@/cut/lib/subtitles";
 import { formatTime, formatTimecode } from "@/cut/lib/time";
@@ -571,7 +571,15 @@ export function Timeline() {
           setAssetDrop(null);
           return;
         }
-        setAssetDrop({ t: Math.max(0, timeAt(e.clientX)), len: duration });
+        // Preview the true landing spot: the drop slides past occupied
+        // stretches to the next free slot, so the dashed box must too — a
+        // box under the pointer that lands minutes away is a lie.
+        const cur = useEditor.getState();
+        const taken = cur.clips.map((c) => ({ start: c.start, end: c.start + clipLen(c) }));
+        setAssetDrop({
+          t: nextFreeStart(taken, Math.max(0, timeAt(e.clientX)), duration),
+          len: duration,
+        });
       }}
       onDragLeave={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
@@ -677,7 +685,7 @@ export function Timeline() {
         </Button>
       </div>
 
-      <div ref={scrollRef} className="tl-scroll min-h-0 flex-1 overflow-auto">
+      <div ref={scrollRef} data-tl-scroll className="tl-scroll min-h-0 flex-1 overflow-auto">
         <div className="flex min-h-full flex-col" style={{ width: contentW + PAD_SIDE * 2 }}>
           <div
             ref={innerRef}
@@ -1303,6 +1311,9 @@ function ClipView({
     rowH: VIDEO_H,
     laneCount: 0,
     homeRow: 0,
+    // The box is inset by half the incoming dissolve; click-to-seek anchors
+    // on where the box is drawn, not the clip's footprint start.
+    visStart,
     onDrag,
     onSnap,
     vertical: {

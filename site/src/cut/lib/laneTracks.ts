@@ -29,7 +29,7 @@
 import type React from "react";
 import { refFromAsset, startPointerRefDrag } from "./assetRef";
 import { startDrag } from "./drag";
-import { clipLen, getClipSpans, projectDuration, useEditor } from "./store";
+import { clipLen, getClipSpans, projectDuration, transitionOverlap, useEditor } from "./store";
 import type {
   AudioClip,
   MediaAsset,
@@ -87,6 +87,10 @@ interface LaneAdapter<T> {
   assetOf?(s: S, raw: T): MediaAsset | undefined;
   /** After a committed move (e.g. keep cues sorted). */
   onMoved?(): void;
+  /** Legal physical overlap (seconds) of `raw` into the same-lane item after
+   * it — a video cross-dissolve's declared width. Gestures treat overlap up
+   * to this as contact, not intrusion. Absent = footprints are solid. */
+  overlapInto?(raw: T, next: T): number;
 }
 
 const speedOf = (c: { speed?: number }) => (c.speed && c.speed > 0 ? c.speed : 1);
@@ -117,6 +121,7 @@ const clipAdapter: LaneAdapter<VideoClip> = {
   },
   assetOf: (s, c) => s.assets.find((x) => x.id === c.assetId),
   onMoved: () => useEditor.getState().sortClips(),
+  overlapInto: (c, next) => transitionOverlap(c, next),
 };
 
 const audioAdapter: LaneAdapter<AudioClip> = {
@@ -293,6 +298,10 @@ export interface LaneMoveUI<V = unknown> {
   laneCount: number;
   /** The grabbed item's current display row. */
   homeRow: number;
+  /** Timeline second the item's box is rendered at, when it differs from the
+   * item's start (a clip after a cross-dissolve draws inset by half the
+   * overlap) — keeps click-to-seek under the pointer. */
+  visStart?: number;
   /** Publish (or clear) the in-flight drag so the slot and rows track it. */
   onDrag(d: LaneDrag | null): void;
   /** Paint (or clear) the snap guide at this stage-x pixel. */
@@ -329,7 +338,10 @@ export function startLaneMove<V = unknown>(
   const self = ad.view(raw0);
   s.select({ kind, id } as Selection);
   // Clicking anywhere on the timeline moves the playhead — bars included.
-  s.seek(self.start + (e.clientX - e.currentTarget.getBoundingClientRect().left) / ui.pps);
+  s.seek(
+    (ui.visStart ?? self.start) +
+      (e.clientX - e.currentTarget.getBoundingClientRect().left) / ui.pps
+  );
   s.pushHistory();
 
   const start0 = self.start;
@@ -345,10 +357,15 @@ export function startLaneMove<V = unknown>(
   );
   const targets = snapTargets(s, kind, id);
   const tol = SNAP_PX / ui.pps;
+  const allow = (a: LaneRaw, b: LaneRaw) => ad.overlapInto?.(a, b) ?? 0;
   // Dragging a media-backed item can also hand its asset to a reference drop
   // zone (AI chat, the image/video creators).
   const asset = ad.assetOf?.(s, raw0);
   const refDrag = asset ? startPointerRefDrag(refFromAsset(asset)) : null;
+  // Dragging against a viewport edge scrolls the timeline so off-screen times
+  // stay reachable; the scroll distance folds back into the drag delta.
+  const scroller = (e.currentTarget as HTMLElement).closest<HTMLElement>("[data-tl-scroll]");
+  const sc0 = scroller?.scrollLeft ?? 0;
 
   let live = false;
   let targetRow = ui.homeRow;
@@ -356,7 +373,24 @@ export function startLaneMove<V = unknown>(
   let ds = start0;
   let awayTarget: V | null = null;
 
-  const restRestore = () => ad.apply(rest.map((x) => ad.movePatch(x.raw, x.view.start)));
+  // Patch only items whose position actually changes this frame (plus
+  // restores of previously shifted ones): dragging one cue must not rebuild
+  // hundreds of unmoved neighbors on every mousemove.
+  const shifted = new Map<string, number>();
+  const applyMoves = (startFor: (x: (typeof rest)[number]) => number) => {
+    const patches: Patch<LaneRaw>[] = [];
+    for (const x of rest) {
+      const want = startFor(x);
+      const cur = shifted.get(x.view.id) ?? x.view.start;
+      if (Math.abs(want - cur) > 1e-9) {
+        patches.push(ad.movePatch(x.raw, want));
+        if (Math.abs(want - x.view.start) > 1e-9) shifted.set(x.view.id, want);
+        else shifted.delete(x.view.id);
+      }
+    }
+    if (patches.length) ad.apply(patches);
+  };
+  const restRestore = () => applyMoves((x) => x.view.start);
 
   startDrag(e, {
     onMove: (dx, dy, ev) => {
@@ -364,7 +398,13 @@ export function startLaneMove<V = unknown>(
       if (!live) ui.vertical?.setActive?.(true);
       live = true;
       refDrag?.move(ev);
-      ds = Math.max(0, start0 + dx / ui.pps);
+      if (scroller) {
+        const r = scroller.getBoundingClientRect();
+        if (ev.clientX > r.right - 36) scroller.scrollLeft += 14;
+        else if (ev.clientX < r.left + 36) scroller.scrollLeft -= 14;
+      }
+      const effDx = dx + ((scroller?.scrollLeft ?? sc0) - sc0);
+      ds = Math.max(0, start0 + effDx / ui.pps);
 
       // Carried off its own lane set (an upper video layer headed to another
       // track, down to track 0, or an insert gap): neighbors flow back and
@@ -395,8 +435,15 @@ export function startLaneMove<V = unknown>(
       targetRow = ad.multiLane
         ? Math.min(ui.laneCount, Math.max(0, ui.homeRow + Math.round(dy / ui.rowH)))
         : ui.homeRow;
-      // A brand-new row has no neighbors to part.
-      const lane = targetRow < usedLanes.length ? usedLanes[targetRow] : Infinity;
+      // Which lane to part/collide on: multi-lane rows are display indexes
+      // into the compacted used-lane list (a row past the end is a brand-new
+      // lane with no neighbors); single-lane kinds stay on their own lane —
+      // their row number is not an index into that list.
+      const lane = ad.multiLane
+        ? targetRow < usedLanes.length
+          ? usedLanes[targetRow]
+          : Infinity
+        : self.lane;
 
       // Snap whichever edge of the moving item lands nearest a logical time.
       let start = ds;
@@ -417,24 +464,34 @@ export function startLaneMove<V = unknown>(
       }
       // Same-lane neighbors part around the slot: ones whose midpoint sits
       // left of the ghost's center keep their spot (the slot lands after
-      // them), the rest slide right as a run to make room.
+      // them), the rest slide right as a run to make room. A cross-dissolve
+      // is contact, not intrusion: the slot may overlap the neighbor before
+      // it by that neighbor's declared transition, and only pushes the run
+      // after it once the overlap into its first item exceeds the item's own
+      // declared transition.
       const others = rest
         .filter((x) => x.view.lane === lane)
         .sort((a, b) => a.view.start - b.view.start);
       const center = ds + len / 2;
       const before = others.filter((x) => x.view.start + x.view.len / 2 <= center);
       const after = others.filter((x) => x.view.start + x.view.len / 2 > center);
-      const clamped = Math.max(start, ...before.map((b) => b.view.start + b.view.len));
+      const prev = before[before.length - 1];
+      const clampFloor = prev
+        ? Math.max(
+            0,
+            ...before.slice(0, -1).map((b) => b.view.start + b.view.len),
+            prev.view.start + prev.view.len - allow(prev.raw, raw0)
+          )
+        : 0;
+      const clamped = Math.max(start, clampFloor);
       if (clamped !== start) guide = null;
       slotStart = clamped;
-      const delta = after.length ? Math.max(0, clamped + len - after[0].view.start) : 0;
+      const delta = after.length
+        ? Math.max(0, clamped + len - allow(raw0, after[0].raw) - after[0].view.start)
+        : 0;
       const pushed = new Set(after.map((x) => x.view.id));
       ui.onSnap(guide);
-      ad.apply(
-        rest.map((x) =>
-          ad.movePatch(x.raw, pushed.has(x.view.id) ? x.view.start + delta : x.view.start)
-        )
-      );
+      applyMoves((x) => (pushed.has(x.view.id) ? x.view.start + delta : x.view.start));
       ui.onDrag({ kind, id, targetRow, ghostX: ds * ui.pps, slotStart: clamped, len });
     },
     onUp: (_dx, _dy, moved) => {
@@ -504,6 +561,7 @@ export function startLaneTrim(
   s.pushHistory();
   const targets = snapTargets(s, kind, id);
   const tol = SNAP_PX / ui.pps;
+  const allow = (a: LaneRaw, b: LaneRaw) => ad.overlapInto?.(a, b) ?? 0;
   const sameLane = ad
     .raws(s)
     .map((r) => ({ raw: r, view: ad.view(r) }))
@@ -512,17 +570,24 @@ export function startLaneTrim(
   if (side === "l") {
     const start0 = self.start;
     const maxStart = start0 + self.len - ad.minLen;
-    // Items before this one, at their original spots. The edge grows freely
-    // into the open gap; past the neighbor it shoves the run left, closing
-    // gap after gap until everything sits flush against 0 — plus a media
-    // item's own floor: the edge can't reveal earlier than its first sample.
+    // Items before this one (start-ordered), at their original spots. The
+    // edge grows freely into the open gap; past the neighbor it shoves the
+    // run left, closing gap after gap until everything sits flush against 0 —
+    // plus a media item's own floor: the edge can't reveal earlier than its
+    // first sample. The nearest leader may be a cross-dissolve partner whose
+    // footprint crosses this item's start: it yields its declared overlap
+    // before the edge starts pushing it.
     const leaders = sameLane
-      .filter((x) => x.view.start + x.view.len <= start0 + 1e-3)
+      .filter((x) => x.view.start < start0 - 1e-3)
       .sort((a, b) => a.view.start - b.view.start);
-    const prevEnd = leaders.reduce((m, l) => Math.max(m, l.view.start + l.view.len), 0);
-    const runFloor = leaders.reduce((sum, l) => sum + l.view.len, 0);
+    const last = leaders[leaders.length - 1];
+    const lastAllow = last ? allow(last.raw, raw0) : 0;
+    const prevEnd =
+      leaders.reduce((m, l) => Math.max(m, l.view.start + l.view.len), 0) - lastAllow;
+    const runFloor = leaders.reduce((sum, l) => sum + l.view.len, 0) - lastAllow;
     const floor = Math.max(runFloor, ad.leftFloor(raw0));
     const free = Math.max(prevEnd, ad.leftFloor(raw0));
+    const moved = new Map<string, number>();
     startDrag(e, {
       onMove: (dx, _dy, ev) => {
         cancelAnimationFrame(snapBackRaf);
@@ -549,14 +614,21 @@ export function startLaneTrim(
         }
         // Re-lay the leaders right-to-left from their resting spots: each one
         // slides only as far as the pushed edge (or the item it now abuts)
-        // forces it, so a retreating drag lets the run flow back.
+        // forces it, so a retreating drag lets the run flow back. Unmoved
+        // leaders get no patch (they'd re-render for nothing).
         const patches = [ad.trimLeftPatch(raw0, start)];
-        let limit = Math.max(start, runFloor);
+        let limit = Math.max(start, runFloor) + lastAllow;
         for (let i = leaders.length - 1; i >= 0; i--) {
           const l = leaders[i];
           const end = Math.min(l.view.start + l.view.len, limit);
-          patches.push(ad.movePatch(l.raw, end - l.view.len));
-          limit = end - l.view.len;
+          const ns = end - l.view.len;
+          const cur = moved.get(l.view.id) ?? l.view.start;
+          if (Math.abs(ns - cur) > 1e-9) {
+            patches.push(ad.movePatch(l.raw, ns));
+            if (Math.abs(ns - l.view.start) > 1e-9) moved.set(l.view.id, ns);
+            else moved.delete(l.view.id);
+          }
+          limit = ns;
         }
         ad.apply(patches);
       },
@@ -584,11 +656,16 @@ export function startLaneTrim(
   const maxEnd = self.start + ad.maxLen(s, raw0);
   // Items after this one, at their original spots: extending the edge past
   // the first of them pushes the whole run right (their gaps preserved);
-  // pulling back lets them return.
+  // pulling back lets them return. A cross-dissolve into the first follower
+  // is contact, not intrusion — the edge only pushes once the overlap
+  // exceeds the declared transition, so grabbing a dissolved clip's handle
+  // never shoves its partner.
   const followers = sameLane
     .filter((x) => x.view.start >= self.start)
     .sort((a, b) => a.view.start - b.view.start);
   const nextStart = followers.length ? followers[0].view.start : Infinity;
+  const nextAllow = followers.length ? allow(raw0, followers[0].raw) : 0;
+  let lastDelta = 0;
   startDrag(e, {
     onMove: (dx, _dy, ev) => {
       let end = Math.max(minEnd, Math.min(maxEnd, end0 + dx / ui.pps));
@@ -597,11 +674,13 @@ export function startLaneTrim(
         end = hit;
         ui.onSnap(rightGuide(end, ui.pps));
       } else ui.onSnap(null);
-      const delta = Math.max(0, end - nextStart);
-      ad.apply([
-        ad.trimRightPatch(raw0, end),
-        ...followers.map((f) => ad.movePatch(f.raw, f.view.start + delta)),
-      ]);
+      const delta = Math.max(0, end - nextAllow - nextStart);
+      const run =
+        delta === lastDelta
+          ? []
+          : followers.map((f) => ad.movePatch(f.raw, f.view.start + delta));
+      lastDelta = delta;
+      ad.apply([ad.trimRightPatch(raw0, end), ...run]);
     },
     onUp: () => ui.onSnap(null),
   });

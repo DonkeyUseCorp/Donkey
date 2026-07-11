@@ -12,6 +12,7 @@ import {
   karaokeLook,
   laneCues,
   subtitleLaneCount,
+  trackLocale,
 } from "@/cut/lib/subtitles";
 import { TIMELINE_H_MIN, useEditor } from "@/cut/lib/store";
 import { PLATE_PAD_X, PLATE_PAD_Y, PLATE_RADIUS, plateFill } from "@/cut/lib/textRender";
@@ -43,16 +44,12 @@ const TIMELINE_H_WITH_SUBS = Math.max(TIMELINE_H_MIN, 276);
 
 /** A track's short pill label: its language code (EN, KO, …). */
 function laneLabel(subs: SubtitlesBlock, lane: number): string {
-  const locale =
-    subs.tracks?.[lane]?.locale ?? (lane === 0 ? subs.locale : undefined) ?? "en-US";
-  return locale.split("-")[0].toUpperCase();
+  return trackLocale(subs, lane).split("-")[0].toUpperCase();
 }
 
 /** A track's language name from the locale picker list, else its short code. */
 function laneLanguage(subs: SubtitlesBlock, lane: number): string {
-  const locale =
-    subs.tracks?.[lane]?.locale ?? (lane === 0 ? subs.locale : undefined) ?? "en-US";
-  return LOCALES.find(([id]) => id === locale)?.[1] ?? laneLabel(subs, lane);
+  return LOCALES.find(([id]) => id === trackLocale(subs, lane))?.[1] ?? laneLabel(subs, lane);
 }
 
 export function SubtitlesPanel() {
@@ -387,8 +384,7 @@ function EmptyState({
 }) {
   const subtitles = useEditor((s) => s.subtitles);
   const lane = useEditor((s) => s.subtitleLane);
-  const locale =
-    subtitles.tracks?.[lane]?.locale ?? (lane === 0 ? subtitles.locale : undefined) ?? "en-US";
+  const locale = trackLocale(subtitles, lane);
   // Other tracks that already have captions — each can seed this one by translation.
   const sources = Array.from({ length: subtitleLaneCount(subtitles) }, (_, i) => i).filter(
     (i) => i !== lane && laneCues(subtitles, i).length > 0

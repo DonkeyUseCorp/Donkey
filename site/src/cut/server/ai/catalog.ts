@@ -70,7 +70,7 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "move_clip",
     description:
-      "Reorder a track-0 video clip to a new index and re-pack the track end-to-end — this closes every gap. To move one clip in time (keeping gaps), use place_clip.",
+      "Reorder a track-0 video clip to a new index: it lifts out (its old spot becomes a gap) and clips from the landing index shift right to make room — nothing else moves, so sound and titles stay synced. To move one clip in time, use place_clip.",
     inputSchema: obj({ clipId: str("Video clip id"), toIndex: num("Target index, 0-based") }, ["clipId", "toIndex"]),
   },
   {
@@ -99,7 +99,7 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "delete_item",
     description:
-      "Delete a video clip, overlay video, soundtrack clip, or title by id. Every track is free-positioned, so deleting leaves a gap; close it with move_clip if the cut should stay tight.",
+      "Delete a video clip, overlay video, soundtrack clip, or title by id. Every track is free-positioned, so deleting leaves a gap; place_clip can slide a neighbor into it if the cut should stay tight.",
     inputSchema: obj({
       kind: { type: "string", enum: ["clip", "overlayClip", "audio", "text"], description: "Item kind" },
       id: str("Item id"),
@@ -486,7 +486,7 @@ Times are in seconds on the shared timeline. The playhead is currentTime; a skim
 
   "timeline-editing": `# Timeline editing
 - Every track is free-positioned: items carry a start time, gaps are allowed, and a track-0 gap plays black (and silence). Deleting leaves a gap. videoTrack entries in editor_state report gapBefore where one exists.
-- Two ways to move a track-0 clip: place_clip sets its start (respects gaps, slides right if the spot is taken); move_clip reorders by index and re-packs the whole track end-to-end — the right call for "put this first" or "tighten the cut", wrong when the user laid out deliberate gaps. Index-based inserts (freeze_frame, generated clips) also re-pack.
+- Two ways to move a track-0 clip: place_clip sets its start (respects gaps, slides right if the spot is taken); move_clip reorders by index, opening a slot at the landing point — clips after it shift right, every other gap survives. Index-based inserts (freeze_frame, generated clips) open a slot the same way.
 - Overlay video: a video/image asset can sit on a track above track 0 (track 1, 2… — topmost wins) or behind it (track -1…). A full-frame overlay covers everything below it; give it a layout to share the frame — top/bottom/left/right halves for a split screen, pip for a floating corner box, or a custom region rect. add_overlay_video creates one from a media asset; update_overlay_video moves/trims/regions/mutes/hides it. The user makes them by dragging media above/below track 0; they drag the region in the preview.
 - A clip's timeline length is (out-in)/speed; total duration runs to the last clip's end, gaps included, minus cross-style transition overlaps.
 - trim_clip changes in/out inside the source media. in >= 0, out <= source duration, out-in >= 0.1.
