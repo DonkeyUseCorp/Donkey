@@ -3,7 +3,7 @@
 import type { ClipSpan } from "./types";
 
 // Sample the cut's picture for the visual-subtitles pipeline: a handful of
-// small jpeg frames spread along the base track, each stamped with its
+// small jpeg frames spread along video track 0, each stamped with its
 // timeline time. Captured in the browser from the same media elements the
 // preview uses, so nothing re-renders server-side.
 
@@ -47,7 +47,7 @@ function seekTo(v: HTMLVideoElement, t: number): Promise<void> {
   });
 }
 
-/** Capture timeline frames from the base track's visible clips. */
+/** Capture timeline frames from video track 0's visible clips. */
 export async function captureTimelineFrames(spans: ClipSpan[]): Promise<CapturedFrame[]> {
   const visible = spans.filter((sp) => !sp.clip.hidden);
   if (visible.length === 0) return [];

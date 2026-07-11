@@ -139,7 +139,7 @@ export function Preview() {
 /**
  * Direct-manipulation handle for the selected video layer's frame region: drag
  * the box to reposition, drag the corner to resize (both update the clip's
- * `frame` rect). Works for a regioned base clip (split-screen half) or an
+ * `frame` rect). Works for a regioned track-0 clip (split-screen half) or an
  * overlay clip, and only while that clip is live under the playhead so it lines
  * up with the compositor. A full-frame layer needs no handle.
  */

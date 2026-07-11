@@ -200,7 +200,7 @@ const Value = ({ children, className }: { children: React.ReactNode; className?:
 );
 
 /** One-click frame layouts (Full / Top / Bottom / Left / Right / PiP) shared by
- * the base-clip and overlay-clip panels. Picking one regions the clip so two
+ * the video-clip and overlay-clip panels. Picking one regions the clip so two
  * videos can share the frame; "Full" clears the region. */
 function LayoutButtons({
   rect,

@@ -64,7 +64,7 @@ export interface TemplateLayer {
   muted: boolean;
   speed?: number;
   track: number;
-  onBase?: boolean; // re-materializes onto the base track rather than an overlay
+  asClip?: boolean; // re-materializes as a track-0 timeline clip rather than an overlay
 }
 export interface TemplateAudio {
   media: number;

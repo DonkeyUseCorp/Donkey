@@ -42,23 +42,18 @@ const TRANSITION_ICONS: Record<TransitionStyle, LucideIcon> = {
 };
 
 const VIDEO_H = 64;
-const OVERLAY_H = VIDEO_H; // upper video tracks match the base row height
+const OVERLAY_H = VIDEO_H; // every video track shares the same row height
 const AUDIO_H = 44;
 
 /** Where a dragged video clip can land. Re-exported name for the store's
- * placement union (existing track / base row / newly-inserted track). */
+ * placement union (existing track, 0 included / newly-inserted track). */
 type TrackTarget = VideoTrackPlacement;
 
 /** Encode/decode a placement in a row's `data-drop` attribute. */
 function placementAttr(place: TrackTarget): string {
-  return place.kind === "base"
-    ? "base"
-    : place.kind === "track"
-      ? `track:${place.track}`
-      : `insert:${place.level}`;
+  return place.kind === "track" ? `track:${place.track}` : `insert:${place.level}`;
 }
 function parsePlacement(raw: string): TrackTarget | null {
-  if (raw === "base") return { kind: "base" };
   const [k, n] = raw.split(":");
   if (k === "track") return { kind: "track", track: Number(n) };
   if (k === "insert") return { kind: "insert", level: Number(n) };
@@ -69,10 +64,10 @@ function samePlacement(a: TrackTarget | null, b: TrackTarget | null): boolean {
   if (!a || !b || a.kind !== b.kind) return false;
   return a.kind === "track"
     ? a.track === (b as { track: number }).track
-    : a.kind === "insert"
-      ? a.level === (b as { level: number }).level
-      : true;
+    : a.level === (b as { level: number }).level;
 }
+/** Video track 0 — the store's `clips` array — as a drop placement. */
+const TRACK_ZERO: TrackTarget = { kind: "track", track: 0 };
 const TEXT_H = 28;
 const SUB_H = 22;
 const PAD_END = 320;
@@ -92,13 +87,13 @@ const trimHandle =
 /** On-timeline length a dropped image occupies (it has no intrinsic duration). */
 const STILL_SECONDS = IMAGE_CLIP_SECONDS;
 
-/** A base-track asset type — footage or a still image both ride the video lane. */
-const isBaseType = (t: string | undefined): t is "video" | "image" =>
+/** An asset type that lands as a video clip — footage or a still image. */
+const isClipMedia = (t: string | undefined): t is "video" | "image" =>
   t === "video" || t === "image";
 
 /** The image ref being dragged (a stock tile), null for any other drag —
  * asset and library drags carry the ref MIME too but with video/audio kinds.
- * On the timeline it lands on the base track as a still image. */
+ * On the timeline it lands on video track 0 as a still image. */
 function draggingStill(e: React.DragEvent): AssetRef | null {
   if (!hasRefDrag(e)) return null;
   const ref = draggingRef();
@@ -149,7 +144,7 @@ export function Timeline() {
   if (!dragging) heldContentW.current = liveContentW;
   const contentW = heldContentW.current;
 
-  // Drop preview while dragging a media asset onto the base track: where the
+  // Drop preview while dragging a media asset onto video track 0: where the
   // pointer is and how long the clip would run.
   const [assetDrop, setAssetDrop] = useState<{ t: number; len: number } | null>(null);
   // Kind of external media being dragged over the timeline (audio vs video).
@@ -165,7 +160,7 @@ export function Timeline() {
   const [snapX, setSnapX] = useState<number | null>(null);
   const insertMode = videoDragging || dropType === "video";
 
-  // Which drop the cursor is over: an upper track, the base row, or a gap
+  // Which drop the cursor is over: an existing track (0 included) or a gap
   // between/above/below tracks that would open a new one. Hit-test live via
   // elementFromPoint — rows and gap zones carry a `data-drop` placement.
   const resolveDropTrack = useCallback((clientX: number, clientY: number): TrackTarget => {
@@ -182,29 +177,29 @@ export function Timeline() {
       if (clientY > rows[rows.length - 1].getBoundingClientRect().bottom)
         return { kind: "insert", level: Math.min(0, ...tracks) - 1 };
     }
-    return { kind: "base" };
+    return TRACK_ZERO;
   }, []);
 
   // Drive the drop preview while a clip is dragged across tracks: highlight the
-  // target track, base slot, or a between-track insertion line.
+  // target track's slot or a between-track insertion line.
   const previewCross = useCallback((target: TrackTarget | null, start = 0, len = 0) => {
     if (target === null) return setOverlayDrop(null);
     setOverlayDrop({ target, t: start, len });
   }, []);
 
-  // Releasing a base clip anywhere but the base row lifts it out onto that track
-  // (or a new one); on the base row the lane coordinator commits the move.
-  const onBaseCrossDrop = useCallback(
+  // Releasing a track-0 clip on any other track lifts it out onto that track
+  // (or a new one); on its own track the lane coordinator commits the move.
+  const onClipCrossDrop = useCallback(
     (id: string, target: TrackTarget, start: number) => {
       previewCross(null);
-      if (target.kind === "base") return;
-      useEditor.getState().dropVideoClip({ kind: "base", id }, target, start);
+      if (samePlacement(target, TRACK_ZERO)) return;
+      useEditor.getState().dropVideoClip({ kind: "clip", id }, target, start);
     },
     [previewCross]
   );
 
   // Releasing an overlay clip anywhere: another track, a new inserted track, or
-  // down into the base row.
+  // down onto track 0.
   const onOverlayCrossDrop = useCallback(
     (id: string, target: TrackTarget, start: number) => {
       previewCross(null);
@@ -226,9 +221,9 @@ export function Timeline() {
     return { used, rowOf, count: used.length };
   }, [overlays]);
 
-  // Video tracks either side of the base: positive tracks (PiP / composited
-  // layers) render above the base, negative ones below it as a backdrop. Both
-  // list highest-first (nearest the base at the inner edge); empty tracks vanish.
+  // Video tracks either side of track 0: positive tracks (PiP / composited
+  // layers) render above it, negative ones below it as a backdrop. Both list
+  // highest-first (nearest track 0 at the inner edge); empty tracks vanish.
   const aboveTracks = useMemo(
     () => [...new Set(overlayClips.map((c) => c.track).filter((n) => n > 0))].sort((a, b) => b - a),
     [overlayClips]
@@ -408,7 +403,7 @@ export function Timeline() {
     audioRow = 0
   ) => {
     const s = useEditor.getState();
-    if (isBaseType(type)) {
+    if (isClipMedia(type)) {
       s.addClipFromAsset(assetId, t);
     } else {
       const used = [...new Set(s.audioClips.map((a) => a.lane ?? 0))].sort((a, b) => a - b);
@@ -423,13 +418,13 @@ export function Timeline() {
   const draggedVideo = (e: React.DragEvent): { duration: number } | null => {
     if (hasLibraryDrag(e)) {
       const lib = draggingLibrary();
-      if (!lib || !isBaseType(lib.type)) return null;
+      if (!lib || !isClipMedia(lib.type)) return null;
       return { duration: lib.type === "image" ? STILL_SECONDS : lib.duration };
     }
     const id = draggingAssetId();
     if (id) {
       const asset = useEditor.getState().assets.find((a) => a.id === id);
-      if (!asset || !isBaseType(asset.type)) return null;
+      if (!asset || !isClipMedia(asset.type)) return null;
       return { duration: asset.type === "image" ? STILL_SECONDS : asset.duration };
     }
     const stockVideo = draggingStockVideo(e);
@@ -466,7 +461,7 @@ export function Timeline() {
       const stockVideo = draggingStockVideo(e);
       const projectId = useEditor.getState().projectId;
       clearAssetDrag();
-      if (libId && lib && isBaseType(lib.type) && projectId) {
+      if (libId && lib && isClipMedia(lib.type) && projectId) {
         void importLibraryAsset(projectId, lib)
           .then((asset) => useEditor.getState().addVideoFromAsset(asset.id, place, t))
           .catch(() => {});
@@ -474,7 +469,7 @@ export function Timeline() {
       }
       const id = draggedAssetId(e);
       const asset = id ? useEditor.getState().assets.find((a) => a.id === id) : null;
-      if (id && isBaseType(asset?.type)) {
+      if (id && isClipMedia(asset?.type)) {
         useEditor.getState().addVideoFromAsset(id, place, t);
         return;
       }
@@ -559,8 +554,8 @@ export function Timeline() {
           type = asset?.type;
           duration = asset?.type === "image" ? STILL_SECONDS : asset?.duration ?? 0;
         }
-        // A still rides the base (video) lane: light its insertion zones.
-        setDropType(isBaseType(type) ? "video" : type ?? null);
+        // A still rides the video tracks: light their insertion zones.
+        setDropType(isClipMedia(type) ? "video" : type ?? null);
         if (type === "audio") {
           // Preview which audio row the sound would land on.
           setAudioDrop({
@@ -572,7 +567,7 @@ export function Timeline() {
           return;
         }
         setAudioDrop(null);
-        if (!isBaseType(type) || !duration) {
+        if (!isClipMedia(type) || !duration) {
           setAssetDrop(null);
           return;
         }
@@ -619,7 +614,7 @@ export function Timeline() {
         }
 
         // A stock clip imports as footage, an image ref as a still, then each
-        // snaps into the base-track slot.
+        // lands in the track-0 slot.
         if (stockVideo && projectId) {
           e.preventDefault();
           void importStockVideo(projectId, { url: stockVideo.url, name: stockVideo.name })
@@ -746,7 +741,7 @@ export function Timeline() {
           <div
             className="relative mt-1.5"
             style={{ height: VIDEO_H }}
-            data-drop="base"
+            data-drop={placementAttr(TRACK_ZERO)}
             onPointerDown={deselectIfSelf}
           >
             {insertMode && insertZone(1)}
@@ -756,7 +751,7 @@ export function Timeline() {
                 <Plus className="size-3.5" /> Add media to this project
               </div>
             )}
-            {samePlacement(overlayDrop?.target ?? null, { kind: "base" }) && (
+            {samePlacement(overlayDrop?.target ?? null, TRACK_ZERO) && (
               <div
                 className="pointer-events-none absolute top-0.5 rounded-lg border-[1.5px] border-dashed border-[#0a84ff]/70 bg-[#0a84ff]/10"
                 style={{
@@ -800,7 +795,7 @@ export function Timeline() {
                 onSnap={setSnapX}
                 resolveTarget={resolveDropTrack}
                 onCrossMove={previewCross}
-                onCrossDrop={onBaseCrossDrop}
+                onCrossDrop={onClipCrossDrop}
                 onDragActive={setVideoDragging}
               />
             ))}
@@ -919,7 +914,7 @@ export function Timeline() {
                 />
               )}
               {audioClips.map((a) => {
-                const baseRow = audioLanes.rowOf.get(a.lane ?? 0) ?? 0;
+                const homeRow = audioLanes.rowOf.get(a.lane ?? 0) ?? 0;
                 const drag = laneDrag?.kind === "audio" && laneDrag.id === a.id ? laneDrag : null;
                 return (
                   <AudioView
@@ -927,8 +922,8 @@ export function Timeline() {
                     clip={a}
                     asset={assets.find((x) => x.id === a.assetId)}
                     pps={pps}
-                    top={(drag ? drag.targetRow : baseRow) * AUDIO_H}
-                    baseRow={baseRow}
+                    top={(drag ? drag.targetRow : homeRow) * AUDIO_H}
+                    homeRow={homeRow}
                     laneCount={audioLanes.count}
                     selected={selKeys.has(`audio:${a.id}`)}
                     drag={drag}
@@ -963,15 +958,15 @@ export function Timeline() {
                 />
               )}
               {overlays.map((o) => {
-                const baseRow = overlayLanes.rowOf.get(o.lane ?? 0) ?? 0;
+                const homeRow = overlayLanes.rowOf.get(o.lane ?? 0) ?? 0;
                 const drag = laneDrag?.kind === "text" && laneDrag.id === o.id ? laneDrag : null;
                 return (
                   <TextBar
                     key={o.id}
                     overlay={o}
                     pps={pps}
-                    top={(drag ? drag.targetRow : baseRow) * TEXT_H}
-                    baseRow={baseRow}
+                    top={(drag ? drag.targetRow : homeRow) * TEXT_H}
+                    homeRow={homeRow}
                     laneCount={overlayLanes.count}
                     selected={selKeys.has(`text:${o.id}`)}
                     drag={drag}
@@ -1005,7 +1000,7 @@ export function Timeline() {
                   cue={c}
                   pps={pps}
                   top={(c.lane ?? 0) * SUB_H}
-                  baseRow={c.lane ?? 0}
+                  homeRow={c.lane ?? 0}
                   selected={selKeys.has(`cue:${c.id}`)}
                   drag={laneDrag?.kind === "cue" && laneDrag.id === c.id ? laneDrag : null}
                   parting={laneDrag?.kind === "cue" && laneDrag.id !== c.id}
@@ -1258,11 +1253,11 @@ function ClipView({
   selected: boolean;
   /** This clip's live drag when it is the one being carried (ghost mode). */
   drag: LaneDrag | null;
-  /** Another base clip is dragging: animate this one's parting shifts. */
+  /** Another track-0 clip is dragging: animate this one's parting shifts. */
   parting: boolean;
   onDrag: (d: LaneDrag | null) => void;
   onSnap: (x: number | null) => void;
-  /** Which drop the given screen point is over (track / base / insert gap). */
+  /** Which drop the given screen point is over (a track / an insert gap). */
   resolveTarget: (clientX: number, clientY: number) => TrackTarget;
   /** Preview a cross-track drop (null clears it). */
   onCrossMove: (target: TrackTarget | null, start?: number, len?: number) => void;
@@ -1307,12 +1302,12 @@ function ClipView({
     pps,
     rowH: VIDEO_H,
     laneCount: 0,
-    baseRow: 0,
+    homeRow: 0,
     onDrag,
     onSnap,
     vertical: {
       resolve: (ev: PointerEvent) => resolveTarget(ev.clientX, ev.clientY),
-      isHome: (t: TrackTarget) => samePlacement(t, { kind: "base" }),
+      isHome: (t: TrackTarget) => samePlacement(t, TRACK_ZERO),
       preview: (t: TrackTarget | null, start: number, len: number) =>
         t ? onCrossMove(t, start, len) : onCrossMove(null),
       commit: (id: string, t: TrackTarget, start: number) => onCrossDrop(id, t, start),
@@ -1484,7 +1479,7 @@ function AudioView({
   asset,
   pps,
   top,
-  baseRow,
+  homeRow,
   laneCount,
   selected,
   drag,
@@ -1497,7 +1492,7 @@ function AudioView({
   pps: number;
   /** Rendered row top in px — follows the drag's target row while carried. */
   top: number;
-  baseRow: number;
+  homeRow: number;
   laneCount: number;
   selected: boolean;
   /** This bar's live drag when it is the one being carried (ghost mode). */
@@ -1537,7 +1532,7 @@ function AudioView({
 
   if (!asset) return null;
 
-  const ui = { pps, rowH: AUDIO_H, laneCount, baseRow, onDrag, onSnap };
+  const ui = { pps, rowH: AUDIO_H, laneCount, homeRow, onDrag, onSnap };
 
   return (
     <div
@@ -1635,7 +1630,7 @@ function OverlayClipView({
 }) {
   const w = Math.max(10, overlayLen(clip) * pps);
 
-  // Same filmstrip as a base clip so an overlay reads as a video, not a
+  // Same filmstrip as a track-0 clip so an overlay reads as a video, not a
   // featureless bar — sampled across the clip's trimmed span.
   const filmstrip = useMemo(() => {
     if (!asset?.thumbs?.length || !asset.thumbStep) return [];
@@ -1656,13 +1651,13 @@ function OverlayClipView({
   if (!asset) return null;
 
   // The move gesture is the shared lane behavior (parting, snapping); its
-  // verticality is the video placement system — other tracks, insert gaps,
-  // and the base row — resolved by DOM hit-testing.
+  // verticality is the video placement system — other tracks (0 included)
+  // and insert gaps — resolved by DOM hit-testing.
   const ui = {
     pps,
     rowH: OVERLAY_H,
     laneCount: 0,
-    baseRow: 0,
+    homeRow: 0,
     onDrag,
     onSnap,
     vertical: {
@@ -1746,7 +1741,7 @@ function TextBar({
   overlay: o,
   pps,
   top,
-  baseRow,
+  homeRow,
   laneCount,
   selected,
   drag,
@@ -1757,7 +1752,7 @@ function TextBar({
   overlay: TextOverlay;
   pps: number;
   top: number;
-  baseRow: number;
+  homeRow: number;
   laneCount: number;
   selected: boolean;
   /** This bar's live drag when it is the one being carried (ghost mode). */
@@ -1770,7 +1765,7 @@ function TextBar({
   onSnap: (x: number | null) => void;
 }) {
   const w = Math.max(8, (o.end - o.start) * pps);
-  const ui = { pps, rowH: TEXT_H, laneCount, baseRow, onDrag, onSnap };
+  const ui = { pps, rowH: TEXT_H, laneCount, homeRow, onDrag, onSnap };
 
   return (
     <div
@@ -1812,7 +1807,7 @@ function SubBar({
   cue,
   pps,
   top,
-  baseRow,
+  homeRow,
   selected,
   drag,
   parting,
@@ -1823,7 +1818,7 @@ function SubBar({
   pps: number;
   /** Rendered row top in px — one row per subtitle track (language). */
   top: number;
-  baseRow: number;
+  homeRow: number;
   selected: boolean;
   /** This bar's live drag when it is the one being carried (ghost mode). */
   drag: LaneDrag | null;
@@ -1833,7 +1828,7 @@ function SubBar({
   onSnap: (x: number | null) => void;
 }) {
   const w = Math.max(8, (cue.end - cue.start) * pps);
-  const ui = { pps, rowH: SUB_H, laneCount: 0, baseRow, onDrag, onSnap };
+  const ui = { pps, rowH: SUB_H, laneCount: 0, homeRow, onDrag, onSnap };
 
   return (
     <div

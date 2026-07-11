@@ -212,7 +212,7 @@ async function buildExportForm(
     clipEntries[i],
   ]);
 
-  // Upper video tracks composited over the base; hidden ones are dropped.
+  // Video tracks composited around track 0; hidden ones are dropped.
   const overlayVideos = doc.overlayClips
     .filter((c) => !c.hidden && assetById.has(c.assetId) && c.start < duration)
     .map((c) => ({
@@ -223,7 +223,7 @@ async function buildExportForm(
       track: c.track,
       frame: c.frame,
       // Pass `fit` through unset so the server's "default full-frame overlay
-      // covers the base" branch fires — normalizing to "fit" here defeated it.
+      // covers what's below" branch fires — normalizing to "fit" defeated it.
       fit: c.fit,
       muted: c.muted,
       speed: c.speed,

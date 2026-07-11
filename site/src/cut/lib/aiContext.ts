@@ -113,7 +113,7 @@ export function buildAiContext(opts?: { fullCues?: boolean }) {
       muted: sp.clip.muted,
       framing: sp.clip.fit ?? "fit",
       speed: r(sp.clip.speed ?? 1),
-      // The base track is free-positioned: empty stretches play black.
+      // Track 0 is free-positioned: empty stretches play black.
       ...(() => {
         const prevEnd = index === 0 ? 0 : spans[index - 1].start + spans[index - 1].len;
         return sp.start - prevEnd > 0.005 ? { gapBefore: r(sp.start - prevEnd) } : {};
@@ -126,7 +126,7 @@ export function buildAiContext(opts?: { fullCues?: boolean }) {
         ? { panX: r(sp.clip.panX ?? 0), panY: r(sp.clip.panY ?? 0) }
         : {}),
     })),
-    // Video layers composited with the base: track > 0 above it (topmost
+    // Video layers composited with track 0: track > 0 above it (topmost
     // full-frame clip covers the rest), track < 0 behind it.
     overlayVideo: s.overlayClips.map((c) => ({ id: c.id, ...describeOverlayClip(c, assetById) })),
     soundtrack: s.audioClips.map((a) => ({ id: a.id, ...describeAudio(a, assetById) })),
@@ -199,7 +199,7 @@ function describeOverlayClip(c: OverlayClip, assets: Map<string, { name: string 
     out: r(c.out),
     muted: c.muted,
     ...(c.hidden ? { hidden: true } : {}),
-    // The frame region this layer occupies: Full covers the base; Top/Bottom/
+    // The frame region this layer occupies: Full covers the frame; Top/Bottom/
     // Left/Right split it; PiP floats inside it.
     layout: regionLabel(rect),
     region: { x: r(rect.x), y: r(rect.y), w: r(rect.w), h: r(rect.h) },

@@ -144,7 +144,7 @@ export async function runAiTool(
         throw new ToolError("Only video or image assets can sit on a video track.");
       const start = isNum(input.start) ? Math.max(0, input.start) : s.currentTime;
       const track = isNum(input.track) ? Math.round(input.track) : 1;
-      if (track === 0) throw new ToolError("Track 0 is the base track — use place_clip for it.");
+      if (track === 0) throw new ToolError("Track 0 holds the timeline clips — use place_clip for it.");
       s.addVideoFromAsset(asset.id, { kind: "track", track }, start);
       const cur = useEditor.getState();
       const sel = cur.selection;
@@ -178,7 +178,7 @@ export async function runAiTool(
       }
       if (isNum(input.track)) {
         const track = Math.round(input.track);
-        if (track === 0) throw new ToolError("Track 0 is the base track.");
+        if (track === 0) throw new ToolError("Track 0 holds the timeline clips — overlays are non-zero.");
         patch.track = track;
       }
       if (typeof input.muted === "boolean") patch.muted = input.muted;

@@ -19,9 +19,10 @@ function duckGainAt(audioClips: AudioClip[], t: number): number {
   return g;
 }
 
-// A base/overlay clip is backed by a <video> for footage or an <img> for a
-// still image. These helpers read either kind uniformly so the compositor
-// stays one code path — an image never seeks, plays, or carries audio.
+// A video clip on any track is backed by a <video> for footage or an <img>
+// for a still image. These helpers read either kind uniformly so the
+// compositor stays one code path — an image never seeks, plays, or carries
+// audio.
 type MediaEl = HTMLVideoElement | HTMLImageElement;
 const isImageEl = (el: MediaEl): el is HTMLImageElement =>
   typeof HTMLImageElement !== "undefined" && el instanceof HTMLImageElement;
@@ -71,7 +72,7 @@ function teardown(el: MediaEl) {
 // frame, so an aspect switch takes effect seamlessly.
 
 /**
- * Preview engine. One hidden <video> per base clip and one <audio> per
+ * Preview engine. One hidden <video> per track-0 clip and one <audio> per
  * soundtrack clip; the active clip's video element is the master clock while
  * playing and every frame is composited onto the preview canvas (contain-fit,
  * matching the export's letterboxing).
@@ -89,8 +90,9 @@ class Engine {
   private raf = 0;
   private activeClipId: string | null = null;
   private disposed = false;
-  // Wall-clock stamp for advancing time past the base track, where there is no
-  // base video element to act as the master clock.
+  // Wall-clock stamp for advancing time where track 0 has nothing playing —
+  // in a gap or past its end there is no track-0 video element to act as the
+  // master clock.
   private lastPlayNow = 0;
 
   constructor(private canvas: HTMLCanvasElement) {
@@ -217,7 +219,7 @@ class Engine {
       ctx.fillStyle = "#000";
       ctx.fillRect(0, 0, W, H);
     }
-    // A regioned base clip (split-screen half) draws into its rect over the
+    // A regioned track-0 clip (split-screen half) draws into its rect over the
     // black frame; the full-frame path below keeps the pan-crop behavior.
     const rect = rectOf(clip ?? {});
     if (!isFullRect(rect)) {
@@ -263,7 +265,7 @@ class Engine {
     let alpha = 0;
     let masterZoom = 1;
     let incZoom = 1;
-    let black = 0; // fade-to-black veil over the base, 0..1
+    let black = 0; // fade-to-black veil over the master clip, 0..1
     let gain = 1; // master audio follows the picture through a fade edge
     // Warm the next clip's decoder shortly before its entrance (the dissolve
     // start, or the hard cut) so it enters with a frame already decoded — a
@@ -315,20 +317,20 @@ class Engine {
         }
       }
     }
-    // A live voiceover ducks the base clip's sound under it. The clip's own
+    // A live voiceover ducks the master clip's sound under it. The clip's own
     // volume rides on top (the element clamps at 1; export honors up to 1.5).
     const duck = duckGainAt(useEditor.getState().audioClips, t);
     if (!isImageEl(masterEl)) {
       masterEl.volume = Math.max(0, Math.min(1, gain * duck * (masterSpan.clip.volume ?? 1)));
     }
     this.pauseExcept(keep);
-    // No clear here — the tick clears once, then draws the below tracks, so the
-    // base composites over them (a regioned base leaves them showing).
+    // No clear here — the tick clears once, then draws the negative tracks, so
+    // track 0 composites over them (a regioned clip leaves them showing).
     this.drawLayer(masterEl, masterSpan.clip, false, 1, masterZoom);
     if (incEl) this.drawLayer(incEl, next!.clip, false, alpha, incZoom);
-    // Veil only the base's own footprint, like the export's per-clip fade
-    // filter: a regioned base darkens inside its rect while a below track shows
-    // through the margins; tracks drawn after (above the base) stay lit.
+    // Veil only the master clip's own footprint, like the export's per-clip
+    // fade filter: a regioned clip darkens inside its rect while a track
+    // behind shows through the margins; tracks drawn after (above) stay lit.
     if (black > 0) this.fillBlackVeil(black, rectOf(masterSpan.clip));
     return masterEl;
   }
@@ -378,13 +380,13 @@ class Engine {
   }
 
   /** The picture side of the project fade: a black veil over the whole frame
-   * (everything drawn this tick — base, tracks, at any time), matching the
+   * (everything drawn this tick, on every track, at any time), matching the
    * export's fade on the final composite. */
   private drawProjectFade(gain: number) {
     this.fillBlackVeil(1 - gain);
   }
 
-  /** Overlay clips live at time `t` on one side of the base — `below`
+  /** Overlay clips live at time `t` on one side of track 0 — `below`
    * (track < 0) or `above` (track > 0) — with their assets, in z-order
    * (further-back first). */
   private liveOverlays(t: number, side: "below" | "above") {
@@ -433,7 +435,7 @@ class Engine {
     }));
   }
 
-  /** Draw the overlay tracks on one side of the base — `below` (track < 0) or
+  /** Draw the overlay tracks on one side of track 0 — `below` (track < 0) or
    * `above` (track > 0) — in z-order (further-back first). A full-frame clip
    * covers what's under it; a regioned one shares the frame, letting lower
    * tracks show in its margins. Collects the clips it touched into `active`.
@@ -528,7 +530,7 @@ class Engine {
         this.videoEls.delete(id);
       }
     }
-    // Whole-project length so time past the base (a longer upper/lower track or
+    // Whole-project length so time past track 0's end (a longer video track or
     // soundtrack) is still reachable while scrubbing and playing.
     const total = projectDuration(s);
 
@@ -551,11 +553,11 @@ class Engine {
       const pt =
         s.skimTime !== null ? Math.max(0, Math.min(s.skimTime, total - 0.001)) : t;
       const span = spans.find((sp) => pt >= sp.start && pt < sp.start + sp.len);
-      // Prime every layer live at `pt` — the base element and each overlay
+      // Prime every layer live at `pt` — the track-0 element and each overlay
       // track — before repainting (create them, issue any seeks). A cold
       // element or an unbuffered seek has no decodable frame yet, and painting
-      // around it tears the composite: black before the base's seek resolves,
-      // or the base flashing through where an overlay covers it. Hold the last
+      // around it tears the composite: black before the track-0 seek resolves,
+      // or track 0 flashing through where an overlay covers it. Hold the last
       // painted frame until every live layer has a frame, so each scrubbed
       // frame is the same composite playback and export show.
       let ready = true;
@@ -580,8 +582,8 @@ class Engine {
       const active = new Set<string>();
       this.clearCanvas();
       this.drawOverlays(pt, false, "below", active, belowLive);
-      // Past the base track there is no base frame — just the backdrop and the
-      // upper/lower tracks that are still running at `pt`.
+      // Where track 0 has nothing live there is no master frame — just the
+      // backdrop and the other tracks still running at `pt`.
       if (span) this.composite(span, spans, Math.min(pt, span.start + span.len), false);
       else this.pauseExcept(new Set());
       this.drawOverlays(pt, false, "above", active, aboveLive);
@@ -640,9 +642,9 @@ class Engine {
         atEnd = el.currentTime >= span.clip.out - 0.02 || el.ended;
       }
       // Clip boundary: hand off to the next clip when it abuts (or dissolves),
-      // fall into the gap when it doesn't — the base plays black there and the
-      // wall clock advances — or (if the base is done but an upper/lower track
-      // runs on) fall through to the wall-clock tail.
+      // fall into the gap when it doesn't — track 0 plays black there and the
+      // wall clock advances — or (if track 0 is done but another track runs
+      // on) fall through to the wall-clock tail.
       if (atEnd) {
         const idx = spans.indexOf(span);
         const next = spans[idx + 1];
@@ -662,7 +664,7 @@ class Engine {
           t = Math.max(t, span.start + span.len + 0.0001);
           pauseEl(el);
         } else if (t >= total - 0.001) {
-          // Base and every other track finished.
+          // Track 0 and every other track finished.
           useEditor.setState({ playing: false, currentTime: total });
           pauseEl(el);
           this.drawOverlays(t, true, "above", active);
@@ -674,7 +676,7 @@ class Engine {
       }
       this.lastPlayNow = now;
     } else {
-      // Past the base track but an upper/lower track is still playing: no master
+      // Nothing live on track 0 but another track is still playing: no master
       // element, so advance time by the wall clock and let the overlays follow.
       this.pauseExcept(new Set());
       const now = performance.now();

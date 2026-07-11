@@ -205,9 +205,9 @@ export function Editor({
           const s = useEditor.getState();
           s.addAsset(asset);
           if (asset.type === "video" || asset.type === "image") {
-            // A drop on the timeline lands at the pointer (sliding to the base
-            // track's next free slot); anywhere else appends at the end. A
-            // still rides the base track like footage.
+            // A drop on the timeline lands at the pointer (sliding to track
+            // 0's next free slot); anywhere else appends at the end. A still
+            // rides track 0 like footage.
             s.addClipFromAsset(asset.id, at ?? undefined);
           } else {
             // A timeline drop lands at the pointer; anywhere else drops at the

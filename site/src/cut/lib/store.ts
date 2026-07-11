@@ -32,19 +32,18 @@ const uid = () => crypto.randomUUID().slice(0, 8);
 
 const MIN_LEN = 0.1;
 
-/** Where a video clip lands when dropped: an existing track, the magnetic base
- * row, or a brand-new track inserted at z-level `level`. Track numbers are
- * signed: positive tracks sit above the base (higher = closer to the top),
- * negative tracks sit below it (more negative = further behind), base is 0.
- * Inserting shifts the tracks past `level` (up for positive, down for negative)
- * to open the slot. */
+/** Where a video clip lands when dropped: an existing track or a brand-new
+ * track inserted at z-level `level`. Track numbers are signed: track 0 is the
+ * `clips` array, positive tracks sit above it (higher = closer to the top),
+ * negative tracks sit below it (more negative = further behind). Inserting
+ * shifts the tracks past `level` (up for positive, down for negative) to open
+ * the slot. */
 export type VideoTrackPlacement =
   | { kind: "track"; track: number }
-  | { kind: "base" }
   | { kind: "insert"; level: number };
 
-/** Open a slot at `level`, moving other clips out of the way: above the base
- * (level > 0) shifts tracks at/above it up; below the base (level < 0) shifts
+/** Open a slot at `level`, moving other clips out of the way: above track 0
+ * (level > 0) shifts tracks at/above it up; below track 0 (level < 0) shifts
  * tracks at/below it down. `exclude` is the clip being placed (left untouched). */
 function openInsertSlot(clips: OverlayClip[], level: number, exclude?: string): OverlayClip[] {
   return level > 0
@@ -86,7 +85,7 @@ export interface EditorState {
   assets: MediaAsset[];
   clips: VideoClip[];
   audioClips: AudioClip[];
-  /** Upper video tracks composited over the base track. */
+  /** Video tracks composited around track 0 (`clips`): positive above, negative behind. */
   overlayClips: OverlayClip[];
   overlays: TextOverlay[];
   /** Output frame (9:16 vertical or 16:9 widescreen), persisted per project. */
@@ -131,7 +130,7 @@ export interface EditorState {
   updateAsset: (id: string, patch: Partial<MediaAsset>) => void;
   /** Remove a project asset and any clips/audio that reference it. */
   removeAsset: (id: string) => void;
-  /** Add a video clip from an asset onto the base track — at `start` (sliding
+  /** Add a video clip from an asset onto video track 0 — at `start` (sliding
    * to the track's next free slot), or appended at the end when omitted. */
   addClipFromAsset: (assetId: string, start?: number) => void;
   /** Add a soundtrack clip from an audio asset at `start` (default: the
@@ -163,16 +162,16 @@ export interface EditorState {
   /** Keep the clips array sorted by start (consumers read `clips[0]` as the
    * timeline's first clip). Called after a lane-coordinator move commits. */
   sortClips: () => void;
-  /** Reorder the base track by index and re-pack it (the AI reorder op). */
+  /** Reorder video track 0 by index and re-pack it (the AI reorder op). */
   moveClip: (id: string, toIndex: number) => void;
-  /** Add a video asset to the timeline at a placement: an upper track, the base
-   * row, or a freshly inserted track. Used by media / library drops. */
+  /** Add a video asset to the timeline at a placement: an existing track or a
+   * freshly inserted one. Used by media / library drops. */
   addVideoFromAsset: (assetId: string, place: VideoTrackPlacement, start: number) => void;
-  /** Move an existing clip (base or upper) to a placement, preserving its
+  /** Move an existing clip (track 0 or upper) to a placement, preserving its
    * trim/region/speed. Inserting a track renumbers the ones above it; dropping
-   * on the base row lands free-positioned at the drop time. Owns its own history. */
+   * onto track 0 lands free-positioned at the drop time. Owns its own history. */
   dropVideoClip: (
-    source: { kind: "base" | "overlay"; id: string },
+    source: { kind: "clip" | "overlay"; id: string },
     place: VideoTrackPlacement,
     start: number
   ) => void;
@@ -426,7 +425,7 @@ export const useEditor = create<EditorState>((set, get) => {
           ...a,
           url: mediaUrl(id, a.fileName),
         }));
-        // Older docs stored the base track packed (array order implied the
+        // Older docs stored video track 0 packed (array order implied the
         // position); bake explicit starts in once so every clip is free-placed.
         const legacy = (doc.clips as LegacyClip[]).some((c) => typeof c.start !== "number");
         set({
@@ -546,8 +545,8 @@ export const useEditor = create<EditorState>((set, get) => {
       push();
       const out = asset.type === "image" ? IMAGE_CLIP_SECONDS : asset.duration;
       const len = Math.max(MIN_LEN, out);
-      // Default: append at the end of the base track; with a target time,
-      // slide to the track's next free slot there.
+      // Default: append at the end of track 0; with a target time, slide to
+      // the track's next free slot there.
       const want = Math.max(0, start ?? totalDuration(get().clips));
       const taken = get().clips.map((c) => ({ start: c.start, end: c.start + clipLen(c) }));
       const clip: VideoClip = {
@@ -808,7 +807,7 @@ export const useEditor = create<EditorState>((set, get) => {
       if (!asset || (asset.type !== "video" && asset.type !== "image")) return;
       const out = asset.type === "image" ? IMAGE_CLIP_SECONDS : asset.duration;
       push();
-      if (place.kind === "base") {
+      if (place.kind === "track" && place.track === 0) {
         const taken = get().clips.map((c) => ({ start: c.start, end: c.start + clipLen(c) }));
         const v: VideoClip = {
           id: uid(),
@@ -824,7 +823,7 @@ export const useEditor = create<EditorState>((set, get) => {
         }));
         return;
       }
-      // Full-frame by default: covers the base ("topmost plays"); the inspector
+      // Full-frame by default: covers track 0 ("topmost plays"); the inspector
       // regions it (split half / corner PiP).
       const track = place.kind === "insert" ? place.level : place.track;
       const ov: OverlayClip = {
@@ -845,7 +844,7 @@ export const useEditor = create<EditorState>((set, get) => {
     dropVideoClip: (source, place, start) => {
       const s = get();
       const src =
-        source.kind === "base"
+        source.kind === "clip"
           ? s.clips.find((c) => c.id === source.id)
           : s.overlayClips.find((c) => c.id === source.id);
       if (!src) return;
@@ -862,8 +861,8 @@ export const useEditor = create<EditorState>((set, get) => {
         speed: src.speed,
       };
 
-      if (place.kind === "base") {
-        if (source.kind === "base") return; // a same-track move commits through the lane coordinator
+      if (place.kind === "track" && place.track === 0) {
+        if (source.kind === "clip") return; // a same-track move commits through the lane coordinator
         const taken = s.clips.map((c) => ({ start: c.start, end: c.start + clipLen(c) }));
         const clip: VideoClip = {
           id: uid(),
@@ -962,7 +961,7 @@ export const useEditor = create<EditorState>((set, get) => {
         }
       }
 
-      // An overlay clip selected: slice it in place, like the base track.
+      // An overlay clip selected: slice it in place, like a track-0 clip.
       if (selection?.kind === "overlayClip") {
         const c = get().overlayClips.find((x) => x.id === selection.id);
         if (c) {
@@ -1158,9 +1157,9 @@ export const useEditor = create<EditorState>((set, get) => {
           if (!sp) continue;
           const mi = mediaFor(sp.clip.assetId);
           if (mi == null) continue;
-          // Base-track clips re-materialize onto the base track (onBase), so a
-          // template stands up its own video instead of an empty base.
-          layers.push({ media: mi, start: sp.start - start0, in: sp.clip.in, out: sp.clip.out, frame: sp.clip.frame, fit: sp.clip.fit, muted: sp.clip.muted, speed: sp.clip.speed, track: 1, onBase: true });
+          // Track-0 clips re-materialize onto track 0 (asClip), so a template
+          // stands up its own video instead of an empty timeline.
+          layers.push({ media: mi, start: sp.start - start0, in: sp.clip.in, out: sp.clip.out, frame: sp.clip.frame, fit: sp.clip.fit, muted: sp.clip.muted, speed: sp.clip.speed, track: 1, asClip: true });
         } else if (sel.kind === "overlayClip") {
           const c = s.overlayClips.find((x) => x.id === sel.id);
           if (!c) continue;
@@ -1191,13 +1190,13 @@ export const useEditor = create<EditorState>((set, get) => {
     insertTemplate: (template, assetIds, offset) => {
       push();
       const usable = template.layers.filter((l) => assetIds[l.media]);
-      const baseLayers = usable.filter((l) => l.onBase);
-      const overlayLayers = usable.filter((l) => !l.onBase);
-      // Base clips append (magnetic) at the end of the current base track; the
+      const clipLayers = usable.filter((l) => l.asClip);
+      const overlayLayers = usable.filter((l) => !l.asClip);
+      // Clip layers append at the end of the current track 0; the
       // free-positioned parts (overlays, audio, captions) shift to line up with
-      // that segment. A template with no base clips drops in at the playhead.
-      const shift = baseLayers.length ? totalDuration(get().clips) : Math.max(0, offset);
-      const newClips: VideoClip[] = [...baseLayers]
+      // that segment. A template with no clip layers drops in at the playhead.
+      const shift = clipLayers.length ? totalDuration(get().clips) : Math.max(0, offset);
+      const newClips: VideoClip[] = [...clipLayers]
         .sort((a, b) => a.start - b.start)
         .map((l) => ({
           start: l.start + shift,
@@ -1210,11 +1209,11 @@ export const useEditor = create<EditorState>((set, get) => {
           ...(l.fit ? { fit: l.fit } : {}),
           ...(l.speed ? { speed: l.speed } : {}),
         }));
-      const baseTrack = Math.max(0, ...get().overlayClips.map((c) => c.track));
+      const topTrack = Math.max(0, ...get().overlayClips.map((c) => c.track));
       const newOverlays: OverlayClip[] = overlayLayers.map((l) => ({
         id: uid(),
         assetId: assetIds[l.media],
-        track: baseTrack + l.track,
+        track: topTrack + l.track,
         start: l.start + shift,
         in: l.in,
         out: l.out,
@@ -2076,7 +2075,7 @@ export function getClipSpans(
   return spans;
 }
 
-/** End of the base track: where its last clip runs out (clips are free-placed,
+/** End of video track 0: where its last clip runs out (clips are free-placed,
  * so gaps count toward this, they just play black). */
 export function totalDuration(clips: VideoClip[]) {
   let end = 0;
@@ -2084,7 +2083,7 @@ export function totalDuration(clips: VideoClip[]) {
   return end;
 }
 
-/** A base clip as older docs stored it: packed by array order, no `start`. */
+/** A track-0 clip as older docs stored it: packed by array order, no `start`. */
 type LegacyClip = Omit<VideoClip, "start"> & { start?: number };
 
 /** Assign packed sequential starts (each clip after the previous, dissolves
@@ -2102,7 +2101,7 @@ function packStarts(clips: LegacyClip[]): VideoClip[] {
   return out;
 }
 
-/** The base track as a gapless sequence for the sequential render graphs
+/** Video track 0 as a gapless sequence for the sequential render graphs
  * (export, transcription): each span in start order, with the length of the
  * black/silent spacer that precedes it wherever the free-placed clips leave
  * the track empty. Sub-50ms gaps are treated as abutting. */
@@ -2117,10 +2116,10 @@ export function spanSequence(spans: ClipSpan[]): { gapBefore: number; span: Clip
   return out;
 }
 
-/** The playable length of the whole project: the base track plus anything that
- * runs past it on an upper/lower video track or the soundtrack. Drives the
- * timeline extent, the seek clamp, and export length so content beyond the base
- * is reachable. */
+/** The playable length of the whole project: video track 0 plus anything that
+ * runs past it on another video track or the soundtrack. Drives the timeline
+ * extent, the seek clamp, and export length so content past track 0's end is
+ * reachable. */
 export function projectDuration(s: {
   clips: VideoClip[];
   overlayClips: OverlayClip[];

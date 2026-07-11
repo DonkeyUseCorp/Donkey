@@ -70,13 +70,13 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "move_clip",
     description:
-      "Reorder a base-track video clip to a new index and re-pack the track end-to-end — this closes every gap. To move one clip in time (keeping gaps), use place_clip.",
+      "Reorder a track-0 video clip to a new index and re-pack the track end-to-end — this closes every gap. To move one clip in time (keeping gaps), use place_clip.",
     inputSchema: obj({ clipId: str("Video clip id"), toIndex: num("Target index, 0-based") }, ["clipId", "toIndex"]),
   },
   {
     name: "place_clip",
     description:
-      "Move a base-track video clip to a timeline start time (seconds). The base track is free-positioned: gaps are allowed and play black. If another clip occupies that spot, the clip slides right to the next free one.",
+      "Move a track-0 video clip to a timeline start time (seconds). The track is free-positioned: gaps are allowed and play black. If another clip occupies that spot, the clip slides right to the next free one.",
     inputSchema: obj({ clipId: str("Video clip id"), start: num("Target timeline start s") }, ["clipId", "start"]),
   },
   {
@@ -108,11 +108,11 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "add_overlay_video",
     description:
-      "Put a project video or image asset on an overlay video track, composited with the base: track 1+ sits above it (the topmost full-frame clip covers everything below), negative tracks sit behind it. Pick a layout to share the frame — halves for a split screen, pip for picture-in-picture. Asset ids come from `media` in the editor state.",
+      "Put a project video or image asset on an overlay video track, composited with track 0: track 1+ sits above it (the topmost full-frame clip covers everything below), negative tracks sit behind it. Pick a layout to share the frame — halves for a split screen, pip for picture-in-picture. Asset ids come from `media` in the editor state.",
     inputSchema: obj({
       asset_id: str("Project asset id (video or image)"),
       start: num("Timeline start s (default: the playhead)"),
-      track: num("Video track, non-zero; 1 = first layer above the base, -1 = behind it (default 1)"),
+      track: num("Video track, non-zero; 1 = first layer above track 0, -1 = behind it (default 1)"),
       layout: {
         type: "string",
         enum: ["full", "top", "bottom", "left", "right", "pip"],
@@ -129,7 +129,7 @@ export const AI_TOOLS: AiToolDef[] = [
       start: num("Timeline start s"),
       in: num("Source in s"),
       out: num("Source out s"),
-      track: num("Video track, non-zero; positive above the base, negative behind"),
+      track: num("Video track, non-zero; positive above track 0, negative behind"),
       muted: bool("Mute the clip's own audio"),
       hidden: bool("Hide the layer without deleting it"),
       layout: {
@@ -280,7 +280,7 @@ export const AI_TOOLS: AiToolDef[] = [
       "Import a stock video or image (by stock_search id) into the project and, by default, drop it on the video track. Free — the media ships with Cut.",
     inputSchema: obj({
       id: str("Stock item id from stock_search"),
-      add_to_timeline: bool("Place it on the base video track (default true)"),
+      add_to_timeline: bool("Place it on video track 0 (default true)"),
       start: num("Timeline start s (default: appended at the end)"),
     }, ["id"]),
   },
@@ -480,19 +480,19 @@ Cut is a local, project-based short-video editor. Each project has an output asp
 - Media shows only what the user imported. Everything Cut makes carries an origin tag (generated, voiceover, recording, stock, freeze — see \`media\` in editor_state) and lives where it was created, e.g. generated clips in the Video panel's job list; a "…" menu on each files it into Media or the Library.
 - Center: the video preview canvas (composited at the project's frame size) with draggable text overlays and subtitle captions.
 - Right: the Inspector — its content follows the selection (video clip, overlay video, soundtrack clip, title, or cue).
-- Bottom: the timeline (resizable by dragging its top border). Rows top-to-bottom: overlay video tracks above the base, the base video track, overlay tracks behind it, soundtrack lanes (green), titles (purple), subtitle tracks (amber, when enabled). Every track is free-positioned in time.
+- Bottom: the timeline (resizable by dragging its top border). Rows top-to-bottom: the video tracks in z-order (positive tracks, then track 0, then negative tracks behind it), soundtrack lanes (green), titles (purple), subtitle tracks (amber, when enabled). Every track is free-positioned in time.
 Everything autosaves to the project folder. Undo/redo is unlimited (⌘Z / ⇧⌘Z).
 Times are in seconds on the shared timeline. The playhead is currentTime; a skimmer previews under the mouse without moving the playhead.`,
 
   "timeline-editing": `# Timeline editing
-- Every track is free-positioned: items carry a start time, gaps are allowed, and a base-track gap plays black (and silence). Deleting leaves a gap. videoTrack entries in editor_state report gapBefore where one exists.
-- Two ways to move a base clip: place_clip sets its start (respects gaps, slides right if the spot is taken); move_clip reorders by index and re-packs the whole track end-to-end — the right call for "put this first" or "tighten the cut", wrong when the user laid out deliberate gaps. Index-based inserts (freeze_frame, generated clips) also re-pack.
-- Overlay video: a video/image asset can sit on a track above the base (track 1, 2… — topmost wins) or behind it (track -1…). A full-frame overlay covers the base; give it a layout to share the frame — top/bottom/left/right halves for a split screen, pip for a floating corner box, or a custom region rect. add_overlay_video creates one from a media asset; update_overlay_video moves/trims/regions/mutes/hides it. The user makes them by dragging media above/below the base track; they drag the region in the preview.
+- Every track is free-positioned: items carry a start time, gaps are allowed, and a track-0 gap plays black (and silence). Deleting leaves a gap. videoTrack entries in editor_state report gapBefore where one exists.
+- Two ways to move a track-0 clip: place_clip sets its start (respects gaps, slides right if the spot is taken); move_clip reorders by index and re-packs the whole track end-to-end — the right call for "put this first" or "tighten the cut", wrong when the user laid out deliberate gaps. Index-based inserts (freeze_frame, generated clips) also re-pack.
+- Overlay video: a video/image asset can sit on a track above track 0 (track 1, 2… — topmost wins) or behind it (track -1…). A full-frame overlay covers everything below it; give it a layout to share the frame — top/bottom/left/right halves for a split screen, pip for a floating corner box, or a custom region rect. add_overlay_video creates one from a media asset; update_overlay_video moves/trims/regions/mutes/hides it. The user makes them by dragging media above/below track 0; they drag the region in the preview.
 - A clip's timeline length is (out-in)/speed; total duration runs to the last clip's end, gaps included, minus cross-style transition overlaps.
 - trim_clip changes in/out inside the source media. in >= 0, out <= source duration, out-in >= 0.1.
 - set_speed sets a clip's playback rate (0.25–4×); it changes the clip's timeline length, and later titles/captions ripple to stay in sync.
 - set_transition joins a clip into the next one (0–2s, six styles) — read the transitions-and-fades skill before styling cuts. Splitting or deleting clears the affected transition.
-- split_at cuts the base clip under that time into two clips at the exact frame. With a soundtrack or overlay clip selected it splits that instead.
+- split_at cuts the track-0 clip under that time into two clips at the exact frame. With a soundtrack or overlay clip selected it splits that instead.
 - The user can multi-select (⌘/⇧-click) and delete several items at once; a hover chip on each video clip toggles its own audio.
 - detach_audio lifts a video clip's sound to the soundtrack track (and mutes the clip) so audio can be cut independently of video.
 - freeze_frame grabs one frame (default: the playhead — what the user currently sees) as a still clip and inserts it, by default at index 0 as a cover/hook frame ("make this the first frame"). The still is baked at the project's current aspect with the clip's framing applied; if the user later switches aspect they should capture a fresh one.
@@ -537,7 +537,7 @@ Caption look: the Subtitles panel offers 10 visual presets (clean, hook, punchy,
 Two ways to get footage the user doesn't have: bundled stock (local, free) and hosted generation (signed in, spends credits). Prefer stock when it genuinely fits; generate when the shot needs to be specific.
 Stock: stock_search browses the bundled catalogs — footage clips and images in 8 categories plus ~20 UGC talking characters — matching prompts, categories, and tags. stock_add imports an item into the project (origin "stock") and drops it on the timeline. In the UI these live in the Video and Image tabs beside the generators; clicking a stock tile seeds the generate panel with its prompt.
 Generation:
-- generate_image(prompt, aspect?, resolution?, reference_asset_ids?, add_to_timeline?, index?): the hosted image model renders the prompt at 16:9, 9:16, or 1:1 (default: project aspect) and 1K/2K/4K. The image rides the base track as a still clip (8s default, stretchable). Great for a cover/hook frame (index 0), a background, or a b-roll still.
+- generate_image(prompt, aspect?, resolution?, reference_asset_ids?, add_to_timeline?, index?): the hosted image model renders the prompt at 16:9, 9:16, or 1:1 (default: project aspect) and 1K/2K/4K. The image rides video track 0 as a still clip (8s default, stretchable). Great for a cover/hook frame (index 0), a background, or a b-roll still.
 - generate_video(prompt, tier?, duration_seconds?, aspect?, resolution?, reference_asset_id?, add_to_timeline?, index?): a hosted Veo model renders a 4–8s clip with audio. tier "fast" (default) is quicker/cheaper, "high" is best quality. This takes a minute or two, so the tool returns right away and the clip appears in the Video panel's renders (and on the timeline by default) when it finishes — tell the user it's rendering. Don't call it again for the same shot while one is in flight.
 - generate_character_video(character_id, line, …): a stock talking character delivers a line to camera, same async render as generate_video. Characters come from stock_search kind:"character" — each has a persona; you write the line (chat deliverable rules apply: asked for "a script", write it in chat first).
 References: users attach images/clips to their message or the generate panels; project asset ids (see \`media\` in editor_state, including attachments — OS drops become project assets) pass through reference_asset_ids / reference_asset_id. A model recomposes the prompt around them: for video at most one image survives as the literal opening frame; for images any number can be drawn from. When the user says "use this clip/image", pass the reference — don't just describe it in the prompt.

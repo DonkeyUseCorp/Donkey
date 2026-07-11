@@ -51,7 +51,7 @@ export interface ExportSpec {
     /** A still image: looped for the clip's length instead of trimmed. */
     image?: boolean;
   }[];
-  /** Upper video tracks composited over the base, bottom track first. */
+  /** Video tracks composited around the track-0 `clips`, bottom track first. */
   overlayVideos?: {
     file: string;
     in: number;
@@ -352,13 +352,13 @@ async function runExport(job: Job, spec: ExportSpec) {
   const { width: W, height: H, fps } = spec;
 
   const overlayVideos = spec.overlayVideos ?? [];
-  // Tracks below the base (negative) form a backdrop it draws over; tracks above
-  // (positive) sit on top. A below track means the base must carry alpha where
+  // Negative tracks form a backdrop track 0 draws over; positive tracks sit
+  // on top. A below track means the track-0 picture must carry alpha where
   // it's regioned so the backdrop shows through its margins.
   const belowVideos = overlayVideos.filter((o) => o.track < 0).sort((a, b) => a.track - b.track);
   const aboveVideos = overlayVideos.filter((o) => o.track > 0).sort((a, b) => a.track - b.track);
   const hasBelow = belowVideos.length > 0;
-  const baseFmt = hasBelow ? "yuva420p" : "yuv420p";
+  const clipFmt = hasBelow ? "yuva420p" : "yuv420p";
   const padColor = hasBelow ? "black@0.0" : "black";
   // One ffmpeg input per distinct media file (from the project folder),
   // plus one per uploaded overlay PNG.
@@ -490,8 +490,8 @@ async function runExport(job: Job, spec: ExportSpec) {
       const region = regionPx(c.frame, W, H);
       let frame: string;
       if (region) {
-        // A regioned base clip (split-screen half) scales into its rect, then
-        // pads out to the full frame with black around it.
+        // A regioned track-0 clip (split-screen half) scales into its rect,
+        // then pads out to the full frame with black around it.
         const { rx, ry, rw, rh } = region;
         frame =
           c.fit === "fill"
@@ -511,7 +511,7 @@ async function runExport(job: Job, spec: ExportSpec) {
       }
       // setpts/speed rescales the clip's duration on the timeline (footage);
       // a still just replays its looped input.
-      const core = `${timebase},fps=${fps},${frame},setsar=1,format=${baseFmt}`;
+      const core = `${timebase},fps=${fps},${frame},setsar=1,format=${clipFmt}`;
       const fades =
         (hf > 0.01 ? `,fade=t=in:st=0:d=${num(hf)}` : "") +
         (tf > 0.01 ? `,fade=t=out:st=${num(Math.max(0, dur - tf))}:d=${num(tf)}` : "");
@@ -531,7 +531,7 @@ async function runExport(job: Job, spec: ExportSpec) {
               : `${num(TRANSITION_ZOOM)}-${k}*in/${frames}`;
           return (
             `zoompan=z=${z}:x=iw/2-(iw/zoom/2):y=ih/2-(ih/zoom/2)` +
-            `:d=1:s=${W}x${H}:fps=${fps},setsar=1,format=${baseFmt}`
+            `:d=1:s=${W}x${H}:fps=${fps},setsar=1,format=${clipFmt}`
           );
         };
         const slices: { from: number; to: number; fx?: string }[] = [];
@@ -564,7 +564,7 @@ async function runExport(job: Job, spec: ExportSpec) {
       // track shows) when one exists, otherwise plain black.
       const slot = hasBelow ? "black@0.0" : "black";
       filters.push(
-        `color=c=${slot}:s=${W}x${H}:r=${fps},trim=0:${num(dur)},setpts=PTS-STARTPTS,format=${baseFmt}[v${j}]`
+        `color=c=${slot}:s=${W}x${H}:r=${fps},trim=0:${num(dur)},setpts=PTS-STARTPTS,format=${clipFmt}[v${j}]`
       );
     }
     if (!c.muted && !c.hidden && audioPresence.get(c.file)) {
@@ -613,14 +613,15 @@ async function runExport(job: Job, spec: ExportSpec) {
     aAcc = aOut;
   }
 
-  // Composite the video stack bottom→top: below-base tracks form a backdrop the
-  // base draws over (a regioned base leaves them showing), then the above-base
-  // tracks sit on top. A full-frame layer covers; a regioned one shares the frame
-  // (split half) or floats (PiP). Overlay audio (unless muted) mixes in below.
+  // Composite the video stack bottom→top: negative tracks form a backdrop
+  // track 0 draws over (a regioned clip leaves them showing), then the
+  // positive tracks sit on top. A full-frame layer covers; a regioned one
+  // shares the frame (split half) or floats (PiP). Overlay audio (unless
+  // muted) mixes in below.
   const overlaySoundLabels: string[] = [];
   let ovk = 0;
-  // Overlay one track clip onto `onto`, returning the new label; also queues its
-  // audio. Reused for the below backdrop and the above-base stack.
+  // Overlay one track clip onto `onto`, returning the new label; also queues
+  // its audio. Reused for the backdrop and the positive-track stack.
   const addOverlay = (oc: (typeof overlayVideos)[number], onto: string): string => {
     if (!oc.image && !videoPresence.get(oc.file)) return onto;
     const idx = oc.image ? imageOverlayInput.get(oc)! : inputIndex.get(oc.file)!;
@@ -672,16 +673,17 @@ async function runExport(job: Job, spec: ExportSpec) {
 
   let vLabel = vAcc;
   if (hasBelow) {
-    // Backdrop = black + the below-base tracks; the alpha-carrying base draws
-    // over it (regioned margins reveal the backdrop), then flatten for encoding.
+    // Backdrop = black + the negative tracks; the alpha-carrying track-0
+    // picture draws over it (regioned margins reveal the backdrop), then
+    // flatten for encoding.
     filters.push(
       `color=c=black:s=${W}x${H}:r=${fps},trim=0:${num(spec.duration)},setpts=PTS-STARTPTS,format=yuva420p[below0]`
     );
     let belowLabel = "below0";
     for (const oc of belowVideos) belowLabel = addOverlay(oc, belowLabel);
-    filters.push(`[${belowLabel}][${vAcc}]overlay=0:0[basecomp]`);
-    filters.push(`[basecomp]format=yuv420p[baseflat]`);
-    vLabel = "baseflat";
+    filters.push(`[${belowLabel}][${vAcc}]overlay=0:0[t0comp]`);
+    filters.push(`[t0comp]format=yuv420p[t0flat]`);
+    vLabel = "t0flat";
   }
   for (const oc of aboveVideos) vLabel = addOverlay(oc, vLabel);
 

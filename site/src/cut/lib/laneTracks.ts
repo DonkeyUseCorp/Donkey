@@ -21,10 +21,9 @@
  *   lane — the store's `nextFreeStart` is that one primitive.
  * - Cut: the store's `splitAtPlayhead` slices whichever kind is selected.
  *
- * The base video track and the upper video tracks keep their richer
- * verticality (lifting between tracks, insert zones, the base row) by passing
- * a `vertical` strategy to the move gesture; everything else about them is
- * the shared behavior.
+ * The video tracks keep their richer verticality (lifting between tracks,
+ * insert zones, dropping onto track 0) by passing a `vertical` strategy to
+ * the move gesture; everything else about them is the shared behavior.
  */
 
 import type React from "react";
@@ -215,7 +214,7 @@ const ADAPTERS: Record<LaneKind, LaneAdapter<LaneRaw>> = {
   cue: cueAdapter as unknown as LaneAdapter<LaneRaw>,
 };
 
-/** Logical times an edge can snap to: the timeline start, the base track's
+/** Logical times an edge can snap to: the timeline start, video track 0's
  * cut points and end, the playhead, and every other lane item's edges across
  * all track kinds — a title can align to a music hit and vice versa. */
 function snapTargets(s: S, kind: LaneKind, selfId: string): number[] {
@@ -293,7 +292,7 @@ export interface LaneMoveUI<V = unknown> {
   /** Display rows currently in use; targetRow may go one past to open a new track. */
   laneCount: number;
   /** The grabbed item's current display row. */
-  baseRow: number;
+  homeRow: number;
   /** Publish (or clear) the in-flight drag so the slot and rows track it. */
   onDrag(d: LaneDrag | null): void;
   /** Paint (or clear) the snap guide at this stage-x pixel. */
@@ -352,7 +351,7 @@ export function startLaneMove<V = unknown>(
   const refDrag = asset ? startPointerRefDrag(refFromAsset(asset)) : null;
 
   let live = false;
-  let targetRow = ui.baseRow;
+  let targetRow = ui.homeRow;
   let slotStart = start0;
   let ds = start0;
   let awayTarget: V | null = null;
@@ -368,8 +367,8 @@ export function startLaneMove<V = unknown>(
       ds = Math.max(0, start0 + dx / ui.pps);
 
       // Carried off its own lane set (an upper video layer headed to another
-      // track, the base row, or an insert gap): neighbors flow back and the
-      // placement system previews the target instead.
+      // track, down to track 0, or an insert gap): neighbors flow back and
+      // the placement system previews the target instead.
       if (ui.vertical) {
         const target = ui.vertical.resolve(ev);
         if (!ui.vertical.isHome(target)) {
@@ -380,7 +379,7 @@ export function startLaneMove<V = unknown>(
           ui.onDrag({
             kind,
             id,
-            targetRow: ui.baseRow,
+            targetRow: ui.homeRow,
             ghostX: ds * ui.pps,
             slotStart: ds,
             len,
@@ -394,8 +393,8 @@ export function startLaneMove<V = unknown>(
 
       // Vertical drag retracks the item; one row past the end opens a new one.
       targetRow = ad.multiLane
-        ? Math.min(ui.laneCount, Math.max(0, ui.baseRow + Math.round(dy / ui.rowH)))
-        : ui.baseRow;
+        ? Math.min(ui.laneCount, Math.max(0, ui.homeRow + Math.round(dy / ui.rowH)))
+        : ui.homeRow;
       // A brand-new row has no neighbors to part.
       const lane = targetRow < usedLanes.length ? usedLanes[targetRow] : Infinity;
 

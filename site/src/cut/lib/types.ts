@@ -98,9 +98,9 @@ export function regionLabel(r: FrameRect): string {
   return "PiP";
 }
 
-/** A clip on the base video track — free-positioned in time like every other
- * track. The array is kept sorted by `start` (older docs stored a packed
- * sequence; loading bakes their implied starts in). */
+/** A clip on video track 0 — free-positioned in time like every other track.
+ * The array is kept sorted by `start` (older docs stored a packed sequence;
+ * loading bakes their implied starts in). */
 export interface VideoClip {
   id: string;
   assetId: string;
@@ -113,8 +113,8 @@ export interface VideoClip {
   /** How the clip meets its region: letterboxed ("fit", default) or scaled to
    * cover it ("fill", cropping the overflow). */
   fit?: "fit" | "fill";
-  /** The region of the frame this clip occupies; absent = full frame. Lets the
-   * base video share the frame with an overlay (e.g. sit in the top half). */
+  /** The region of the frame this clip occupies; absent = full frame. Lets a
+   * track-0 clip share the frame with an overlay (e.g. sit in the top half). */
   frame?: FrameRect;
   /** Crop-window pan in fill mode, -1..1 per axis (0 = centered): which part
    * of the oversized video stays visible. */
@@ -135,16 +135,17 @@ export interface VideoClip {
 }
 
 /**
- * A clip on an upper video track — free-positioned in time (like the
- * soundtrack) and composited over the base track. `track` 1 sits just above the
- * base; higher tracks sit closer to the top and win where they overlap. A
- * full-frame overlay covers the base ("topmost showing clip plays"); a regioned
- * one shares the frame (split-screen half) or floats small (picture-in-picture).
+ * A clip on a video track other than track 0 — free-positioned in time (like
+ * the soundtrack) and composited with the track-0 clips. `track` 1 sits just
+ * above track 0, higher tracks sit closer to the top and win where they
+ * overlap; negative tracks sit behind. A full-frame overlay covers everything
+ * below it ("topmost showing clip plays"); a regioned one shares the frame
+ * (split-screen half) or floats small (picture-in-picture).
  */
 export interface OverlayClip {
   id: string;
   assetId: string;
-  track: number; // 1-based; higher = closer to the top
+  track: number; // signed, non-zero; higher = closer to the top
   start: number; // timeline position, seconds
   in: number;
   out: number;
@@ -257,9 +258,9 @@ export interface TemplateLayer {
   muted: boolean;
   speed?: number;
   track: number;
-  /** Came from the base (magnetic) track — re-materializes onto it, not an
-   * overlay track, so a template stands up its own base video. */
-  onBase?: boolean;
+  /** Came from video track 0 — re-materializes as a timeline clip, not an
+   * overlay, so a template stands up its own footage. */
+  asClip?: boolean;
 }
 export interface TemplateAudio {
   media: number;
@@ -442,7 +443,7 @@ export interface ProjectDoc {
   assets: StoredAsset[];
   clips: VideoClip[];
   audioClips: AudioClip[];
-  /** Upper video tracks composited over the base track (absent in older docs). */
+  /** Video tracks other than track 0 (`clips`); absent in older docs. */
   overlayClips?: OverlayClip[];
   overlays: TextOverlay[];
   /** Output frame; absent in older projects (which are all 9:16). */
