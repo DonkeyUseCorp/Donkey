@@ -752,6 +752,19 @@ export function Timeline() {
             className="pointer-events-none absolute bottom-0 bg-muted"
             style={{ top: RULER_H, left: -PAD_SIDE, right: -PAD_SIDE }}
           />
+          {/* An empty project reads as a stack of resting tracks: the same
+              hairline rails the video rows draw, repeating to the bottom. */}
+          {total <= 0 && (
+            <div
+              className="pointer-events-none absolute bottom-0"
+              style={{
+                top: RULER_H,
+                left: -PAD_SIDE,
+                right: -PAD_SIDE,
+                background: `repeating-linear-gradient(to bottom, transparent 0 ${VIDEO_H + 4}px, var(--border) ${VIDEO_H + 4}px ${VIDEO_H + 5}px, transparent ${VIDEO_H + 5}px ${VIDEO_H + 6}px)`,
+              }}
+            />
+          )}
           <Ruler pps={pps} width={contentW} onScrub={scrub} />
 
           {/* The top-side new track reveals once the drag heads past the
@@ -805,7 +818,7 @@ export function Timeline() {
 
           {/* An empty track 0 disappears like any other empty track. It
               renders while it has clips, while the whole project is empty
-              (the add-media invite), for the length of an external media
+              (the first drop target), for the length of an external media
               drag, or once an internal drag targets it — the seam where it
               sat resolves to TRACK_ZERO, so heading there reveals the row. */}
           {(spans.length > 0 ||
@@ -820,11 +833,6 @@ export function Timeline() {
           >
             {spans.length > 0 && laneRail(VIDEO_H - 2)}
             {videoDragActive && trackGuide(TRACK_ZERO)}
-            {total <= 0 && !videoDragActive && (
-              <div className="pointer-events-none sticky left-0 flex h-full w-[calc(100vw-40px)] max-w-[900px] items-center justify-center gap-1.5 rounded-xl border-[1.5px] border-dashed border-input text-xs font-medium text-muted-foreground">
-                <Plus className="size-3.5" /> Add media to this project
-              </div>
-            )}
             {trackSlot(TRACK_ZERO, VIDEO_H - 4)}
             {laneDrag?.kind === "clip" && !laneDrag.away && (
               <LaneSlot
