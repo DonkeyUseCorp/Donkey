@@ -4,8 +4,10 @@ import { useEffect } from "react";
 import { create } from "zustand";
 import { apiFetch, apiJson } from "./api";
 import type { AssetRef } from "./assetRef";
+import { composeGenPrompt, foldTextRefs } from "./composeGen";
+import { hostedPost } from "./hosted";
 import { enrichAsset, importFileToProject } from "./media";
-import { refsToInlineImages } from "./refMedia";
+import { refsToInlineImages, visualRefs, type InlineImage } from "./refMedia";
 import { useImageGen } from "./imageGen";
 import { useEditor } from "./store";
 import { mediaUrl, type MediaAsset } from "./types";
@@ -41,8 +43,9 @@ interface GenerateState {
   /** Kick off a generation. Returns when it settles, resolving to the final
    * job (status "done" with assetId, or "error" with a message) so the AI
    * assistant can act on the result; the panel just fires and forgets.
-   * `refs` are visual references — each uploads as an input image (a stock
-   * image as-is, a video by a captured poster frame). */
+   * `refs` are references of any kind — images upload as-is, videos by a
+   * captured poster frame, text files by their contents folded into the
+   * prompt (see composeGen.ts). */
   generateImage: (
     projectId: string,
     prompt: string,
@@ -50,6 +53,9 @@ interface GenerateState {
       refs?: AssetRef[];
       aspect?: "16:9" | "9:16" | "1:1";
       resolution?: "1K" | "2K" | "4K";
+      /** Rewrite the prompt around the references before rendering (the
+       * default when refs are present) — see composeGen.ts. */
+      composeRefs?: boolean;
     }
   ) => Promise<GenerateJob>;
   generateVideo: (
@@ -58,9 +64,19 @@ interface GenerateState {
     opts?: {
       tier?: "fast" | "high";
       durationSeconds?: number;
-      /** Visual references; Veo takes one input image, so the first ref's
-       * picture seeds the render. */
+      /** Composition shape; defaults to the project's orientation. */
+      aspect?: "16:9" | "9:16";
+      resolution?: "720p" | "1080p";
+      /** References of any kind — video, image, text file. Veo takes one
+       * input image, so at most one picture seeds the render. */
       refs?: AssetRef[];
+      /** Rewrite the prompt around the references before rendering (the
+       * default when refs are present) — see composeGen.ts. Veo plays the
+       * input image as the literal first frame, so a prompt that transforms
+       * the reference must become a standalone description with the image
+       * dropped; the rewrite decides which. Character mode passes false — the
+       * poster seed is the point. */
+      composeRefs?: boolean;
       /** Called once with the landed asset when the render completes and the
        * project is still open — lets the AI place the clip after a background
        * render it couldn't wait out (the assistant tool bridge caps at 2min). */
@@ -70,7 +86,6 @@ interface GenerateState {
   dismiss: (id: string) => void;
 }
 
-const CLIENT_ID = "donkey-cut";
 const REFRESH_MS = 8000;
 const VIDEO_DEADLINE_MS = 12 * 60_000;
 
@@ -131,15 +146,6 @@ interface GenerationResponse {
   metadata?: Record<string, unknown>;
 }
 
-/** POST one of Donkey's hosted inference routes with the user's session. */
-export const hostedPost = (path: string, body: unknown, signal?: AbortSignal) =>
-  fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-donkey-client-id": CLIENT_ID },
-    body: JSON.stringify(body),
-    signal,
-  });
-
 async function readError(res: Response, fallback: string): Promise<string> {
   if (res.status === 401) return "Sign in to Donkey to generate media.";
   const body = (await res.json().catch(() => null)) as {
@@ -170,6 +176,28 @@ const providerError = (error: unknown): string | null => {
   }
   return null;
 };
+
+/** Resolve a generation's prompt + input images from its refs. Runs the shared
+ * compose step (see composeGen.ts) unless the caller opted out; on a compose
+ * failure, falls back to the visual refs as-is with text-ref contents folded
+ * into the prompt. `maxImages` caps what the generator accepts (Veo: 1). */
+async function promptAndImages(
+  target: "video" | "image",
+  prompt: string,
+  refs: AssetRef[],
+  compose: boolean,
+  maxImages: number
+): Promise<{ prompt: string; images: InlineImage[] }> {
+  if (refs.length === 0) return { prompt, images: [] };
+  if (compose) {
+    const composed = await composeGenPrompt(target, prompt, refs);
+    if (composed) return { prompt: composed.prompt, images: composed.images.slice(0, maxImages) };
+  }
+  return {
+    prompt: await foldTextRefs(prompt, refs),
+    images: await refsToInlineImages(visualRefs(refs).slice(0, maxImages)),
+  };
+}
 
 function bytesFromBase64(b64: string): Uint8Array<ArrayBuffer> {
   const bin = atob(b64);
@@ -239,10 +267,19 @@ export const useGenerate = create<GenerateState>((set, get) => {
         try {
           const aspect = opts?.aspect ?? useEditor.getState().aspect;
           const resolution = opts?.resolution ?? useImageGen.getState().resolution;
-          const images = await refsToInlineImages(opts?.refs ?? []);
+          // The job (and the landed asset's name) keeps the user's own words;
+          // only the render sees the composed prompt. The image model takes
+          // several input images, so every kept reference rides along.
+          const { prompt: sent, images } = await promptAndImages(
+            "image",
+            prompt,
+            opts?.refs ?? [],
+            opts?.composeRefs !== false,
+            Infinity
+          );
           const res = await hostedPost("/api/inference/assets", {
             kind: "image",
-            prompt,
+            prompt: sent,
             ...(images.length > 0 ? { inputs: { images } } : {}),
             // The image model takes a real frame + detail via imageConfig; no prompt steering.
             parameters: { aspectRatio: aspect, imageSize: resolution },
@@ -287,16 +324,24 @@ export const useGenerate = create<GenerateState>((set, get) => {
       set((s) => ({ jobs: [job, ...s.jobs] }));
       return (async () => {
         try {
-          // Veo seeds from a single first-frame image; extra refs would be dropped
-          // silently, so send just the first.
-          const images = await refsToInlineImages((opts?.refs ?? []).slice(0, 1));
+          // The job (and the landed asset's name) keeps the user's own words;
+          // only the render sees the composed prompt. Veo seeds from a single
+          // first-frame image, so at most one kept picture rides along.
+          const { prompt: sent, images } = await promptAndImages(
+            "video",
+            prompt,
+            opts?.refs ?? [],
+            opts?.composeRefs !== false,
+            1
+          );
           const res = await hostedPost("/api/inference/assets", {
             kind: "video",
-            prompt,
+            prompt: sent,
             ...(images.length > 0 ? { inputs: { images } } : {}),
             parameters: {
               tier: opts?.tier === "high" ? "high" : "fast",
-              aspectRatio: useEditor.getState().aspect,
+              aspectRatio: opts?.aspect ?? useEditor.getState().aspect,
+              ...(opts?.resolution ? { resolution: opts.resolution } : {}),
               ...(opts?.durationSeconds ? { durationSeconds: opts.durationSeconds } : {}),
             },
           });
