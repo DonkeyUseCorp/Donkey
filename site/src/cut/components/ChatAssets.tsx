@@ -1,20 +1,21 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import type React from "react";
 import { Copy, ExternalLink, FileText, Film, Loader2, Maximize2, Plus } from "lucide-react";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { clearAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
 import {
+  projectRefs,
   refFromAsset,
   refToken,
   setRefDragData,
-  useRefFor,
   type AssetRef,
   type AssetRefKind,
 } from "@/cut/lib/assetRef";
 import { useGenerate } from "@/cut/lib/generate";
 import { lightboxItemFromRef, useLightbox } from "@/cut/lib/lightbox";
+import { usePreviewAudio } from "@/cut/lib/previewAudio";
 import { useEditor } from "@/cut/lib/store";
 import { formatTime } from "@/cut/lib/time";
 import type { MediaAsset } from "@/cut/lib/types";
@@ -22,6 +23,7 @@ import { cn } from "@/lib/utils";
 import { AudioRow } from "./AudioPanel";
 import { DocText, useDocText } from "./DocText";
 import { GeneratedAssetMenu } from "./GeneratedAssetMenu";
+import { cardIconButton } from "./iconButton";
 
 // Assets rendered inside chat messages. Anything the assistant makes previews
 // here as a media-first card and stays in the chat until the user moves it:
@@ -73,8 +75,9 @@ export function ToolOutputAssets({ output }: { output: unknown }) {
 }
 
 /** A video render the tool started but couldn't wait out: a live card that
- * follows the generation job and becomes the clip's card when it lands. After
- * a reload the job store is empty and the render's home is the Video panel. */
+ * follows the generation job and becomes the clip's card when it lands.
+ * Settled jobs persist per browser, so the card survives a reload; only a
+ * render still in flight when the page closed has no card afterwards. */
 export function ChatVideoJobCard({ jobId }: { jobId: string }) {
   const job = useGenerate((s) => s.jobs.find((j) => j.id === jobId));
   if (!job) return null;
@@ -125,7 +128,6 @@ const dragProps = (item: AssetRef, asset?: MediaAsset) => ({
 /** The chat card's "…" menu: timeline/expand/reference actions around the
  * shared move-to-Media/Library pair. Project assets only. */
 function ChatCardMenu({ asset, triggerClassName }: { asset: MediaAsset; triggerClassName: string }) {
-  const ref = useRefFor(asset.name);
   const projectId = useEditor((s) => s.projectId);
   if (!projectId) return null;
   return (
@@ -148,9 +150,16 @@ function ChatCardMenu({ asset, triggerClassName }: { asset: MediaAsset; triggerC
             <Maximize2 /> Expand
           </DropdownMenuItem>
           <DropdownMenuItem
-            onClick={() =>
-              void navigator.clipboard.writeText(refToken(ref ?? refFromAsset(asset))).catch(() => {})
-            }
+            onClick={() => {
+              // The session handle (v2, i1) is derived, not stored — resolve
+              // it at click time instead of subscribing every card to it.
+              const live = projectRefs(useEditor.getState().assets).find(
+                (r) => r.id === asset.id
+              );
+              void navigator.clipboard
+                .writeText(refToken(live ?? refFromAsset(asset)))
+                .catch(() => {});
+            }}
           >
             <Copy /> Copy reference
           </DropdownMenuItem>
@@ -228,30 +237,16 @@ function MediaCard({ item, asset }: ChatCardProps) {
 }
 
 /** Audio as the shared playable row (waveform, play, drag), with the chat menu
- * on it; double-click opens the big player. */
+ * on it; double-click opens the big player. Playback goes through the
+ * app-wide preview player, so it stops other previews and vice versa. */
 function AudioCard({ item, asset }: ChatCardProps) {
   const ref = liveRef(item, asset);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [playing, setPlaying] = useState(false);
+  const playing = usePreviewAudio((s) => s.url === ref.url);
+  // Only this card's own preview stops when the card goes away.
   useEffect(() => {
-    const el = audioRef.current;
-    return () => el?.pause();
-  }, []);
-  const toggle = () => {
-    let el = audioRef.current;
-    if (!el) {
-      el = new Audio(ref.url);
-      el.onended = () => setPlaying(false);
-      audioRef.current = el;
-    }
-    if (playing) {
-      el.pause();
-      setPlaying(false);
-    } else {
-      void el.play().catch(() => setPlaying(false));
-      setPlaying(true);
-    }
-  };
+    const url = ref.url;
+    return () => usePreviewAudio.getState().stop(url);
+  }, [ref.url]);
   return (
     <div
       className="ai-chat-asset w-full max-w-[280px] bg-card"
@@ -263,16 +258,9 @@ function AudioCard({ item, asset }: ChatCardProps) {
         url={ref.url}
         peaks={asset?.peaks}
         playing={playing}
-        onTogglePlay={toggle}
+        onTogglePlay={(url) => usePreviewAudio.getState().toggle(url)}
         onAdd={() => asset && useEditor.getState().addAudioFromAsset(asset.id)}
-        menu={
-          asset && (
-            <ChatCardMenu
-              asset={asset}
-              triggerClassName="grid size-6 shrink-0 place-items-center rounded-full bg-muted text-foreground transition-all hover:bg-muted-foreground/20"
-            />
-          )
-        }
+        menu={asset && <ChatCardMenu asset={asset} triggerClassName={cardIconButton} />}
         onDragStart={(e) => {
           if (asset) setAssetDragData(e, asset.id);
           else setRefDragData(e, item);

@@ -18,8 +18,11 @@ export interface LightboxItem {
    * up front so it opens at its final size instead of growing on media load. */
   aspect?: "16:9" | "9:16" | "1:1";
   /** For a project asset, its id (add straight to the timeline); null for a
-   * stock item, which the lightbox imports first. */
+   * stock or library item, which the lightbox imports first. */
   assetId: string | null;
+  /** For a library asset, its id — "Use" copies it in through the library
+   * route so it files like any other library use, not as stock. */
+  libraryId?: string;
 }
 
 /** The lightbox view of an asset ref — how chat cards and attachment chips
@@ -30,6 +33,7 @@ export const lightboxItemFromRef = (ref: AssetRef): LightboxItem => ({
   name: ref.name,
   prompt: "",
   assetId: ref.scope === "project" ? ref.id : null,
+  ...(ref.scope === "library" ? { libraryId: ref.id } : {}),
 });
 
 interface LightboxState {

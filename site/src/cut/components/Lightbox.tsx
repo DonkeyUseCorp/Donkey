@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, Copy, FileText, Loader2, Music, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { addLibraryAssetToProject, fetchLibrary } from "@/cut/lib/library";
 import { useLightbox, type LightboxItem } from "@/cut/lib/lightbox";
 import { importImage, importStockVideo } from "@/cut/lib/media";
+import { usePreviewAudio } from "@/cut/lib/previewAudio";
 import { useEditor } from "@/cut/lib/store";
 import { DocText, useDocText } from "./DocText";
 import { PeakStrip } from "./AudioPanel";
@@ -51,6 +53,12 @@ export function Lightbox() {
         } else {
           useEditor.getState().addClipFromAsset(item.assetId);
         }
+      } else if (item.libraryId) {
+        // Library media copies in through the library route, like using it
+        // from the Library panel.
+        const lib = (await fetchLibrary()).assets.find((a) => a.id === item.libraryId);
+        if (!lib) throw new Error("Library asset not found.");
+        await addLibraryAssetToProject(projectId, lib);
       } else {
         // A stock clip imports as footage; a stock image bakes into a still.
         const asset =
@@ -67,9 +75,11 @@ export function Lightbox() {
     }
   };
 
-  // Audio without a project asset (a library ref) has nowhere direct to land;
-  // text never rides the timeline.
-  const canAdd = item.kind !== "text" && (item.kind !== "audio" || item.assetId !== null);
+  // Text never rides the timeline; audio needs a project or library home to
+  // land from.
+  const canAdd =
+    item.kind !== "text" &&
+    (item.kind !== "audio" || item.assetId !== null || item.libraryId !== undefined);
 
   // With a known aspect the dialog width follows it — capped so the media
   // stays within 68vh tall and 860px/92vw wide — and the media box carries the
@@ -187,13 +197,22 @@ function AudioBody({ item }: { item: LightboxItem }) {
   const asset = useEditor((s) =>
     item.assetId ? s.assets.find((a) => a.id === item.assetId) : undefined
   );
+  const audioEl = useRef<HTMLAudioElement>(null);
+  // The big player takes over from any row/card preview, and closing the
+  // lightbox stops it — a detached media element can keep playing otherwise.
+  // The element renders with the body, so it exists by the time this runs.
+  useEffect(() => {
+    usePreviewAudio.getState().stop();
+    const el = audioEl.current;
+    return () => el?.pause();
+  }, []);
   return (
     <div className="flex flex-col gap-3 rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 p-5 pt-10 shadow-2xl">
       <Music className="size-8 text-white/90" />
       {asset?.peaks && asset.peaks.length > 0 && (
         <PeakStrip peaks={asset.peaks} className="h-10 text-white/85" />
       )}
-      <audio controls autoPlay src={item.src} className="w-full" />
+      <audio ref={audioEl} controls autoPlay src={item.src} className="w-full" />
     </div>
   );
 }

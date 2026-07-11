@@ -302,13 +302,23 @@ export function useAssetDrop(
 let libraryCache: LibraryAsset[] | null = null;
 let libraryLoad: Promise<LibraryAsset[]> | null = null;
 
+/** The open project's media as refs with their session handles, assigned in
+ * media order — `v1` videos, `i1` generated stills, `a1` audio — so a prompt
+ * can say `@v2` instead of the full name. Handles are derived, never stored:
+ * anything that shows one resolves it from the current asset list. */
+export function projectRefs(assets: MediaAsset[]): AssetRef[] {
+  const counters = { v: 0, i: 0, a: 0 };
+  return assets.map((a) => {
+    const prefix = a.type === "image" ? "i" : a.type === "video" ? "v" : "a";
+    counters[prefix] += 1;
+    return { ...refFromAsset(a), handle: `${prefix}${counters[prefix]}` };
+  });
+}
+
 /** Everything referenceable right now, in resolution order: the open project's
  * media, then the shared library, then the stock catalog. Names are unique
  * within the list (first scope wins) so a mention resolves to one asset.
- *
- * Project assets get short handles in media order — `v1` videos, `i1`
- * generated stills, `a1` audio — so a prompt can say `@v2` instead of the full
- * name. Library items mention by name; stock ids are already short (`@nature-dunes`). */
+ * Library items mention by name; stock ids are already short (`@nature-dunes`). */
 export function useRefCandidates(): AssetRef[] {
   const assets = useEditor((s) => s.assets);
   const [lib, setLib] = useState<LibraryAsset[]>(libraryCache ?? []);
@@ -325,12 +335,7 @@ export function useRefCandidates(): AssetRef[] {
   }, []);
 
   return useMemo(() => {
-    const counters = { v: 0, i: 0, a: 0 };
-    const project = assets.map((a) => {
-      const prefix = a.type === "image" ? "i" : a.type === "video" ? "v" : "a";
-      counters[prefix] += 1;
-      return { ...refFromAsset(a), handle: `${prefix}${counters[prefix]}` };
-    });
+    const project = projectRefs(assets);
     const seen = new Set<string>();
     const out: AssetRef[] = [];
     for (const ref of [

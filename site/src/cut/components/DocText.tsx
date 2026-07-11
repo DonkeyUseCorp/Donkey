@@ -18,6 +18,21 @@ export function docFormat(name: string): DocFormat {
   return "plain";
 }
 
+/** One fetch per URL per session — cards remount on every thread switch and
+ * the lightbox opens the same file, so the text is cached. A failed fetch is
+ * not cached, leaving the next mount to retry. */
+const docCache = new Map<string, Promise<string>>();
+
+function fetchDoc(url: string): Promise<string> {
+  let p = docCache.get(url);
+  if (!p) {
+    p = fetch(url).then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))));
+    p.catch(() => docCache.delete(url));
+    docCache.set(url, p);
+  }
+  return p;
+}
+
 /** The file's text, fetched once per URL. `failed` marks an unreadable file so
  * callers can show a plain error instead of an empty card. */
 export function useDocText(url: string): { text: string | null; failed: boolean } {
@@ -28,8 +43,7 @@ export function useDocText(url: string): { text: string | null; failed: boolean 
   );
   useEffect(() => {
     let alive = true;
-    fetch(url)
-      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
+    fetchDoc(url)
       .then((t) => alive && setState({ url, text: t, failed: false }))
       .catch(() => alive && setState({ url, text: null, failed: true }));
     return () => {
@@ -66,8 +80,11 @@ function parseRows(text: string, delim: string): string[][] {
       } else {
         cell += c;
       }
-    } else if (c === '"' && cell === "") {
+    } else if (c === '"' && cell.trim() === "") {
+      // Opens a quoted field even after leading whitespace (`a, "b, c"`),
+      // which many exporters emit; the padding drops with the quote.
       quoted = true;
+      cell = "";
     } else if (c === delim) {
       push();
     } else if (c === "\n") {
