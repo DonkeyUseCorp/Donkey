@@ -42,11 +42,6 @@ final class MacPermissionSetupWindowController: NSWindowController, NSWindowDele
         completed?()
     }
 
-    var permissionsAreReady: Bool {
-        model.refresh()
-        return model.canContinue
-    }
-
     func showSetup() {
         model.refresh()
         showWindow(nil)

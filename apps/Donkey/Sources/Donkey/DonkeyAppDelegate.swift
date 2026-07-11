@@ -13,7 +13,6 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     private var authCoordinator: DonkeyAuthCoordinator?
     private var onboardingWindowController: OnboardingWindowController?
     private var permissionSetupController: MacPermissionSetupWindowController?
-    private var manualPermissionSetupController: MacPermissionSetupWindowController?
     private var overlayController: UserQueryOverlayController?
     private var uiUnderstandingCoordinator: UIUnderstandingCoordinator?
     /// Mirrors the auth coordinator's session phase into the overlay's `needsLogin`, so the notch
@@ -98,8 +97,6 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     ) -> Bool {
         if authCoordinator?.isAuthenticated != true {
             presentOnboardingCard(entry: .signIn)
-        } else if let permissionSetupController {
-            permissionSetupController.showSetup()
         } else if overlayController == nil {
             startAuthenticatedAppSurfaces()
         }
@@ -182,25 +179,15 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startAuthenticatedAppSurfaces() {
-        guard overlayController == nil,
-              permissionSetupController == nil
-        else { return }
+        guard overlayController == nil else { return }
 
         onboardingWindowController?.close()
         NSApp.setActivationPolicy(.regular)
 
-        // The notch overlay renders immediately on launch, so it's always present. When permissions
-        // still need granting, the setup window opens alongside the notch rather than gating it.
+        // Launch never opens the permission setup window: many users install Donkey only for Cut and
+        // need none of these grants. A task that needs a permission asks in the notch mid-conversation
+        // (the harness permission gate), and the window stays reachable via the Permissions Setup menu.
         startOverlaySurfaces()
-
-        let permissionSetupController = MacPermissionSetupWindowController()
-        guard !permissionSetupController.permissionsAreReady else { return }
-
-        self.permissionSetupController = permissionSetupController
-        permissionSetupController.completed = { [weak self] in
-            self?.permissionSetupController = nil
-        }
-        permissionSetupController.showSetup()
     }
 
     private func startOverlaySurfaces() {
@@ -427,14 +414,13 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Permissions setup
 
-    /// Reopens the Accessibility / screenshot / microphone permission walkthrough on demand. Uses a
-    /// dedicated retain so it never collides with the launch-time `permissionSetupController`, which the
-    /// startup state machine keys off of.
+    /// Opens the Accessibility / screenshot / microphone permission walkthrough on demand — the only
+    /// way this window appears besides a task's in-notch permission request.
     @objc private func permissionsSetupMenuAction(_ sender: Any?) {
         let controller = MacPermissionSetupWindowController()
-        manualPermissionSetupController = controller
+        permissionSetupController = controller
         controller.completed = { [weak self] in
-            self?.manualPermissionSetupController = nil
+            self?.permissionSetupController = nil
         }
         controller.showSetup()
     }
@@ -457,7 +443,6 @@ final class DonkeyAppDelegate: NSObject, NSApplicationDelegate {
         uiUnderstandingCoordinator = nil
         overlayController?.stop()
         overlayController = nil
-        permissionSetupController = nil
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
