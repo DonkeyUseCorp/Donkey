@@ -39,6 +39,7 @@ import { formatTime } from "@/cut/lib/time";
 import { useLocalPref } from "@/cut/lib/uiState";
 import type { MediaAsset } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
+import { cardIconButton } from "@/cut/components/iconButton";
 import { useRevealEffect, useRevealFlash } from "@/cut/lib/refReveal";
 import { CopyNameLabel } from "./AssetRefs";
 import { AudioPanel } from "./AudioPanel";
@@ -624,7 +625,7 @@ function LibraryPanel({ projectId }: { projectId: string }) {
                 </button>
                 <button
                   title="Delete template"
-                  className="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
+                  className={cn(cardIconButton, "opacity-0 group-hover:opacity-100")}
                   onClick={() => void removeTemplate(t.id)}
                 >
                   <Trash2 className="size-3.5" />

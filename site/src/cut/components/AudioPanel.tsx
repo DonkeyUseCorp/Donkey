@@ -43,6 +43,7 @@ import { DUCK_DEFAULT } from "@/cut/lib/voiceover";
 import { useSpeakerVoice, useSpeechLanguage, VoicePicker } from "@/cut/components/VoicePicker";
 import { GeneratedAssetMenu } from "@/cut/components/GeneratedAssetMenu";
 import { cn } from "@/lib/utils";
+import { cardIconButton } from "@/cut/components/iconButton";
 
 /** Starting points for the direction prompt — picking one fills the input so
  * it can be tweaked before generating. */
@@ -425,7 +426,7 @@ function AudioRow({
           type="button"
           title="Add at the playhead"
           aria-label="Add at the playhead"
-          className="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className={cardIconButton}
           onClick={onAdd}
         >
           <Plus className="size-3.5" />
@@ -471,7 +472,7 @@ function ProjectAudio({
               <GeneratedAssetMenu
                 asset={a}
                 projectId={projectId}
-                triggerClassName="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                triggerClassName={cardIconButton}
                 after={
                   <DropdownMenuItem
                     variant="destructive"
