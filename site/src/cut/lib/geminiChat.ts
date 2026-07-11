@@ -4,7 +4,10 @@ import type { UIMessage, UIMessageChunk } from "ai";
 import { AI_SKILL_INDEX, AI_SKILLS, AI_TOOLS, systemPrompt } from "@/cut/server/ai/catalog";
 import { buildAiContext } from "./aiContext";
 import { runAiTool } from "./aiTools";
-import { hostedPost, useGenerate } from "./generate";
+import { normalizeRef } from "./assetRef";
+import { useGenerate } from "./generate";
+import { hostedPost } from "./hosted";
+import { refsToParts } from "./refMedia";
 
 // Gemini chat runs from the page through Donkey's hosted Responses route with
 // the user's sign-in and credits — the local engine is not involved (same
@@ -27,8 +30,10 @@ const toolDeclarations = () =>
 
 /** The conversation replayed as hosted-Responses input items. Only text (and
  * attachment refs) from past turns — tool traffic stays within its own turn.
- * The fresh editor snapshot rides on the newest user message alone. */
-function inputFromMessages(messages: UIMessage[]): Item[] {
+ * The fresh editor snapshot rides on the newest user message alone, and so do
+ * the attachments' actual payloads (video frames, images, text-file contents):
+ * older turns keep just the metadata JSON so replays stay within budget. */
+async function inputFromMessages(messages: UIMessage[]): Promise<Item[]> {
   const lastUser = messages.findLast((m) => m.role === "user");
   const items: Item[] = [];
   for (const m of messages) {
@@ -36,17 +41,29 @@ function inputFromMessages(messages: UIMessage[]): Item[] {
       .map((p) => (p.type === "text" ? p.text : ""))
       .join("")
       .trim();
+    const extra: Item[] = [];
     if (m.role === "user") {
       const meta = (m.metadata as { attachments?: unknown[] } | undefined)?.attachments;
       if (Array.isArray(meta) && meta.length > 0) {
-        text += `\n\n<attached_assets>\nThe user attached these media assets to this message; their text may cite one by @handle or @name. Assets with scope "project" are in the open project (ids usable with the editor tools); "library" and "stock" assets live outside it until imported:\n${JSON.stringify(meta)}\n</attached_assets>`;
+        text += `\n\n<attached_assets>\nThe user attached these assets to this message; their text may cite one by @handle or @name. Assets with scope "project" are in the open project (ids usable with the editor tools); "library" and "stock" assets live outside it until imported; "file" assets came straight from the user's computer and exist only on this message:\n${JSON.stringify(meta)}\n</attached_assets>`;
+        if (m === lastUser) {
+          // Best-effort: a ref that no longer resolves (deleted asset, stale
+          // object URL) degrades this turn to metadata-only instead of failing.
+          const refs = meta.map(normalizeRef).filter((r) => r !== null);
+          try {
+            extra.push(...(await refsToParts(refs)).parts);
+          } catch {}
+        }
       }
       if (m === lastUser) {
         text += `\n\n<editor_state>\n${JSON.stringify(buildAiContext())}\n</editor_state>`;
       }
     }
-    if (!text) continue;
-    items.push({ role: m.role === "user" ? "user" : "assistant", content: [{ text }] });
+    if (!text && extra.length === 0) continue;
+    items.push({
+      role: m.role === "user" ? "user" : "assistant",
+      content: [...(text ? [{ text }] : []), ...extra],
+    });
   }
   return items;
 }
@@ -137,7 +154,7 @@ export function streamGeminiChat({
         controller.enqueue(chunk as unknown as UIMessageChunk);
       emit({ type: "start" });
       try {
-        const input = inputFromMessages(messages);
+        const input = await inputFromMessages(messages);
         const tools = toolDeclarations();
         let textCount = 0;
         let settled = false;

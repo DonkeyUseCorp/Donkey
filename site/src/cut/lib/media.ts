@@ -80,6 +80,10 @@ export function isImageFile(file: File) {
   return file.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|avif|bmp)$/i.test(file.name);
 }
 
+export function isTextFile(file: File) {
+  return file.type.startsWith("text/") || /\.(txt|md|markdown|srt|vtt|csv|json)$/i.test(file.name);
+}
+
 /** Upload a raw file into the project folder, probe it, and return the asset.
  * Thumbnails/waveform are filled in asynchronously via `enrichAsset`. */
 export async function importFileToProject(

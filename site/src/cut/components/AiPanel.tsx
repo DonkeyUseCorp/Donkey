@@ -52,9 +52,11 @@ import { signInUrl, useSignedIn } from "@/cut/lib/generate";
 import { streamGeminiChat } from "@/cut/lib/geminiChat";
 import { AI_MODELS } from "@/cut/lib/aiModels";
 import { saveAssetToLibrary } from "@/cut/lib/library";
+import { refsFromDroppedFiles } from "@/cut/lib/refMedia";
 import { revealRef } from "@/cut/lib/refReveal";
 import { useEditor } from "@/cut/lib/store";
 import { cn } from "@/lib/utils";
+import { cardIconButton } from "@/cut/components/iconButton";
 import { MentionTextarea, RefChips, RefThumb, RefTokenChip } from "./AssetRefs";
 
 // Chat attachments are asset refs — anything in the project, the library, or
@@ -297,7 +299,18 @@ function ChatSession({
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<AssetRef[]>([]);
   const candidates = useRefCandidates();
-  const { active: dropActive, attachTarget, targetProps } = useAssetDrop((ref) => setAttachments((prev) => addRefOnce(prev, ref)));
+  const { active: dropActive, attachTarget, targetProps } = useAssetDrop(
+    (ref) => setAttachments((prev) => addRefOnce(prev, ref)),
+    // OS files dropped on the chat attach as references (media files import
+    // into the project on the way; text files ride as-is).
+    (files) => {
+      const projectId = useEditor.getState().projectId;
+      if (!projectId) return;
+      void refsFromDroppedFiles(projectId, files).then((refs) =>
+        setAttachments((prev) => refs.reduce(addRefOnce, prev))
+      );
+    }
+  );
   const sessionKeyRef = useRef<string | null>(null);
   // Resume from the saved thread when this id exists in history.
   const [initialThread] = useState<ChatThread | undefined>(() =>
@@ -645,7 +658,7 @@ function MessageCopy({ text }: { text: string }) {
     <button
       aria-label="Copy message"
       title="Copy"
-      className="ai-msg-copy grid size-6 place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-muted hover:text-foreground"
+      className={cn("ai-msg-copy", cardIconButton, "opacity-0 group-hover:opacity-100")}
       onClick={() => {
         void navigator.clipboard.writeText(text).then(() => {
           setCopied(true);

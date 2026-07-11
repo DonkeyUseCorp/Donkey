@@ -1,11 +1,15 @@
 "use client";
 
-import type { AssetRef } from "./assetRef";
+import { refFromAsset, refFromTextFile, type AssetRef } from "./assetRef";
+import { enrichAsset, importFileToProject, isMediaFile, isTextFile } from "./media";
+import { useEditor } from "./store";
 
-// Turn an asset ref into the inline-image shape the hosted generation routes
-// take (`inputs.images = [{ data, mimeType }]`). Stock images upload as-is;
-// video refs (project clips, library media, generated stills) upload a single
-// captured frame — the browser reads the same media URLs the previews use.
+// Turn refs and dropped files into what the hosted models take. Generation
+// routes read `inputs.images = [{ data, mimeType }]`: stock images upload
+// as-is; video refs (project clips, library media, generated stills) upload a
+// single captured frame — the browser reads the same media URLs the previews
+// use. Responses calls (prompt composition, chat) read content parts, where
+// text refs contribute their contents.
 
 export interface InlineImage {
   /** Base64 payload, no data: prefix. */
@@ -111,10 +115,10 @@ function captureFrame(url: string, duration?: number): Promise<InlineImage> {
 }
 
 /** A single reference image for `ref`: the file itself for images, a captured
- * poster frame for videos. Audio has no picture and rejects. */
+ * poster frame for videos. Audio and text have no picture and reject. */
 export async function refToInlineImage(ref: AssetRef): Promise<InlineImage> {
-  if (ref.kind === "audio") {
-    throw new Error(`“${ref.name}” is audio — it can't be a visual reference.`);
+  if (ref.kind === "audio" || ref.kind === "text") {
+    throw new Error(`“${ref.name}” has no picture — it can't be a visual reference.`);
   }
   if (ref.kind === "image") {
     const res = await fetch(ref.url);
@@ -128,4 +132,70 @@ export async function refToInlineImage(ref: AssetRef): Promise<InlineImage> {
  * ref fails the call so the user knows the reference didn't ride along. */
 export function refsToInlineImages(refs: AssetRef[]): Promise<InlineImage[]> {
   return Promise.all(refs.map(refToInlineImage));
+}
+
+/** The refs that can ride to a visual model as input images. */
+export const visualRefs = (refs: AssetRef[]): AssetRef[] =>
+  refs.filter((r) => r.kind === "image" || r.kind === "video");
+
+/** Attach OS files dropped on a composer, returned as refs in drop order.
+ * Media files import into the project first (they land in the Media panel like
+ * any user import); text files become transient file refs read at send time.
+ * Files that are neither, and failed imports, are skipped. */
+export async function refsFromDroppedFiles(projectId: string, files: File[]): Promise<AssetRef[]> {
+  const refs: AssetRef[] = [];
+  for (const file of files) {
+    try {
+      if (isTextFile(file) && !isMediaFile(file)) {
+        refs.push(refFromTextFile(file));
+        continue;
+      }
+      const asset = await importFileToProject(projectId, file);
+      if (!asset) continue;
+      useEditor.getState().addAsset(asset);
+      void enrichAsset(asset);
+      refs.push(refFromAsset(asset));
+    } catch (err) {
+      console.error(`Attach failed for ${file.name}:`, err);
+    }
+  }
+  return refs;
+}
+
+/** A text ref's contents (a dropped script, notes, subtitles…). */
+export async function readRefText(ref: AssetRef): Promise<string> {
+  const res = await fetch(ref.url);
+  if (!res.ok) throw new Error(`Could not read “${ref.name}”.`);
+  return res.text();
+}
+
+/** A ref list as hosted-Responses content parts, for any Gemini call that
+ * should actually see the attachments: each visual ref contributes a numbered
+ * label plus its picture (image as-is, video by poster frame), each text ref
+ * its contents, and audio a name-only marker. `visuals` returns the pictures
+ * in label order (`Image 1` = visuals[0]) so a model can pick among them. */
+export async function refsToParts(
+  refs: AssetRef[]
+): Promise<{ parts: Record<string, unknown>[]; visuals: InlineImage[] }> {
+  const parts: Record<string, unknown>[] = [];
+  const visuals: InlineImage[] = [];
+  for (const ref of refs) {
+    if (ref.kind === "audio") {
+      parts.push({ text: `Attached audio "${ref.name}" (audio content not included).` });
+      continue;
+    }
+    if (ref.kind === "text") {
+      parts.push({ text: `Attached file "${ref.name}":\n${await readRefText(ref)}` });
+      continue;
+    }
+    const image = await refToInlineImage(ref);
+    visuals.push(image);
+    parts.push({
+      text:
+        `Image ${visuals.length} — ` +
+        (ref.kind === "video" ? `a frame of video "${ref.name}":` : `image "${ref.name}":`),
+    });
+    parts.push({ type: "input_image", dataBase64: image.data, mimeType: image.mimeType });
+  }
+  return { parts, visuals };
 }

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/cut/lib/api";
 import { renderPreviewProxy } from "@/cut/lib/exportClient";
 import { useExport } from "@/cut/lib/exportStore";
-import { hasRefDrag } from "@/cut/lib/assetRef";
+import { fileZoneAt, hasRefDrag } from "@/cut/lib/assetRef";
 import { enrichAsset, importFileToProject } from "@/cut/lib/media";
 import { backTarget, useCutBase } from "@/cut/lib/nav";
 import { getClipSpans, projectDuration, serializeDoc, useEditor } from "@/cut/lib/store";
@@ -272,6 +272,13 @@ export function Editor({
       e.preventDefault();
       dragDepth.current = 0;
       useEditor.getState().setDropActive(false);
+      // A drop on a file-taking composer (generate/chat attachments) belongs
+      // to it; everything else imports into the project as before.
+      const zone = fileZoneAt(e.clientX, e.clientY);
+      if (zone) {
+        zone(Array.from(e.dataTransfer.files));
+        return;
+      }
       void importFiles(e.dataTransfer.files, timelineDropTime(e));
     };
     window.addEventListener("dragenter", enter);

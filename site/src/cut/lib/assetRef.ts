@@ -10,10 +10,10 @@ import { useEditor } from "./store";
 import type { MediaAsset } from "./types";
 
 // One reference model for every piece of media in the app. A ref names an
-// asset wherever it lives — the open project, the shared library, or the
-// bundled stock catalog — with enough to preview it (url, kind, duration) and
-// to hand it to whatever wants it: an AI chat attachment, an image/video
-// generation reference, or a timeline drop.
+// asset wherever it lives — the open project, the shared library, the bundled
+// stock catalog, or a file dropped straight from the desktop — with enough to
+// preview it (url, kind, duration) and to hand it to whatever wants it: an AI
+// chat attachment, an image/video generation reference, or a timeline drop.
 //
 // Refs travel two ways:
 // - Native HTML5 drags (cards, tiles, chat) carry a REF_MIME JSON payload;
@@ -25,8 +25,10 @@ import type { MediaAsset } from "./types";
 // `@"asset name"` by name. `refToken` makes the token, `parseMentions`
 // resolves tokens back to refs on send.
 
-export type AssetRefScope = "project" | "library" | "stock";
-export type AssetRefKind = "video" | "audio" | "image";
+/** "file" marks a transient ref made from a desktop drop (a text file riding a
+ * composer) — it lives only in the composer's state, never in a catalog. */
+export type AssetRefScope = "project" | "library" | "stock" | "file";
+export type AssetRefKind = "video" | "audio" | "image" | "text";
 
 export interface AssetRef {
   scope: AssetRefScope;
@@ -76,6 +78,16 @@ export const refFromStockVideo = (v: StockVideo): AssetRef => ({
   kind: "video",
   url: v.file,
   duration: v.duration,
+});
+
+/** A transient ref for a text file dropped from the desktop: the contents stay
+ * behind an object URL and are read at send time. */
+export const refFromTextFile = (file: File): AssetRef => ({
+  scope: "file",
+  id: crypto.randomUUID().slice(0, 8),
+  name: file.name,
+  kind: "text",
+  url: URL.createObjectURL(file),
 });
 
 export const sameRef = (a: AssetRef, b: AssetRef) => a.scope === b.scope && a.id === b.id;
@@ -146,10 +158,26 @@ export function clearRefDrag() {
 interface RefZone {
   el: HTMLElement;
   onDrop: (ref: AssetRef) => void;
+  /** Present when the zone also takes OS file drops (composer attachments). */
+  onFiles?: (files: File[]) => void;
   setActive: (active: boolean) => void;
 }
 
 const zones = new Set<RefZone>();
+
+/** The file-accepting zone under a window drop, if any. Rect-based, because
+ * the editor's import veil overlays the window during OS drags and would
+ * swallow an elementFromPoint check. Lets the editor's window-level drop
+ * handler hand files to the composer they landed on instead of importing them
+ * onto the timeline. */
+export function fileZoneAt(x: number, y: number): ((files: File[]) => void) | null {
+  for (const z of zones) {
+    if (!z.onFiles) continue;
+    const r = z.el.getBoundingClientRect();
+    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return z.onFiles;
+  }
+  return null;
+}
 
 function zoneAt(x: number, y: number): RefZone | null {
   const hit = document.elementFromPoint(x, y);
@@ -182,8 +210,14 @@ export function startPointerRefDrag(ref: AssetRef) {
 }
 
 /** Make an element accept asset refs from both drag transports:
- * `<div ref={attachTarget} {...targetProps}>` — `active` styles the highlight. */
-export function useAssetDrop(onDrop: (ref: AssetRef) => void): {
+ * `<div ref={attachTarget} {...targetProps}>` — `active` styles the highlight.
+ * Pass `onFiles` to also take OS file drops: the zone highlights during the
+ * drag and the editor's window-level drop handler delivers the files here
+ * (via `fileZoneAt`) instead of importing them onto the timeline. */
+export function useAssetDrop(
+  onDrop: (ref: AssetRef) => void,
+  onFiles?: (files: File[]) => void
+): {
   active: boolean;
   attachTarget: (el: HTMLElement | null) => void;
   targetProps: Pick<
@@ -195,19 +229,28 @@ export function useAssetDrop(onDrop: (ref: AssetRef) => void): {
   const [el, setEl] = useState<HTMLElement | null>(null);
   const depth = useRef(0);
   const cb = useRef(onDrop);
+  const filesCb = useRef(onFiles);
   useEffect(() => {
     cb.current = onDrop;
+    filesCb.current = onFiles;
   });
 
-  // Register the element as a drop zone for pointer-drag delivery.
+  // Register the element as a drop zone for pointer-drag delivery (and, when
+  // it takes files, for the editor's window-drop routing).
+  const takesFiles = !!onFiles;
   useEffect(() => {
     if (!el) return;
-    const zone: RefZone = { el, onDrop: (r) => cb.current(r), setActive };
+    const zone: RefZone = {
+      el,
+      onDrop: (r) => cb.current(r),
+      ...(takesFiles && { onFiles: (f: File[]) => filesCb.current?.(f) }),
+      setActive,
+    };
     zones.add(zone);
     return () => {
       zones.delete(zone);
     };
-  }, [el]);
+  }, [el, takesFiles]);
 
   const attachTarget = useCallback((node: HTMLElement | null) => setEl(node), []);
 
@@ -218,20 +261,25 @@ export function useAssetDrop(onDrop: (ref: AssetRef) => void): {
       depth.current = 0;
       setActive(false);
     };
+    // File-taking zones also light up for OS file drags; the drop itself is
+    // delivered by the editor's window-level handler through `fileZoneAt`, so
+    // here it only clears the highlight and lets the event bubble.
+    const accepts = (e: React.DragEvent) =>
+      hasRefDrag(e) || (takesFiles && Array.from(e.dataTransfer.types).includes("Files"));
     return {
       onDragEnter: (e) => {
-        if (!hasRefDrag(e)) return;
+        if (!accepts(e)) return;
         e.preventDefault();
         depth.current += 1;
         setActive(true);
       },
       onDragOver: (e) => {
-        if (!hasRefDrag(e)) return;
+        if (!accepts(e)) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = "copy";
       },
       onDragLeave: (e) => {
-        if (!hasRefDrag(e)) return;
+        if (!accepts(e)) return;
         depth.current -= 1;
         if (depth.current <= 0) done();
       },
@@ -243,7 +291,7 @@ export function useAssetDrop(onDrop: (ref: AssetRef) => void): {
         cb.current(ref);
       },
     };
-  }, []);
+  }, [takesFiles]);
 
   return { active, attachTarget, targetProps };
 }

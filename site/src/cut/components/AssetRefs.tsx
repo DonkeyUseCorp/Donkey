@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Copy, Music, X } from "lucide-react";
+import { Check, Copy, FileText, Music, X } from "lucide-react";
 import {
   highlightMentions,
   mentionToken,
@@ -19,7 +19,8 @@ import { cn } from "@/lib/utils";
 // Every surface that takes references (AI chat, image/video creators)
 // composes these.
 
-/** Square media preview for a ref: video poster frame, image, or audio glyph. */
+/** Square media preview for a ref: video poster frame, image, or a glyph for
+ * audio and text files. */
 export function RefThumb({ item, className }: { item: AssetRef; className?: string }) {
   return (
     <div
@@ -39,6 +40,10 @@ export function RefThumb({ item, className }: { item: AssetRef; className?: stri
       ) : item.kind === "image" ? (
         // eslint-disable-next-line @next/next/no-img-element -- refs point at engine/static files, not Next-optimizable images
         <img src={item.url} alt={item.name} loading="lazy" className="size-full object-cover" />
+      ) : item.kind === "text" ? (
+        <div className="grid size-full place-items-center bg-gradient-to-br from-slate-100 to-slate-50 text-slate-500">
+          <FileText className="size-4.5" />
+        </div>
       ) : (
         <div className="grid size-full place-items-center bg-gradient-to-br from-emerald-100 to-emerald-50 text-emerald-600">
           <Music className="size-4.5" />
