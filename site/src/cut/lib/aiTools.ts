@@ -1,13 +1,34 @@
 "use client";
 
 import { apiFetch, apiJson } from "./api";
+import { refFromAsset, refFromStockVideo, type AssetRef } from "./assetRef";
 import { useGenerate } from "./generate";
-import { enrichAsset, ensurePeaks } from "./media";
-import { getClipSpans, TIMELINE_H_MAX, TIMELINE_H_MIN, totalDuration, useEditor } from "./store";
+import { enrichAsset, ensurePeaks, importImage, importStockVideo } from "./media";
+import { characterPrompt, stockTitle } from "./stock";
+import { STOCK_IMAGES } from "./stockManifest";
+import { STOCK_VIDEOS } from "./stockVideoManifest";
+import { getClipSpans, nextFreeStart, TIMELINE_H_MAX, TIMELINE_H_MIN, totalDuration, useEditor } from "./store";
 import { buildAiContext } from "./aiContext";
+import { laneCues, subtitleLaneCount } from "./subtitles";
 import { resolveVoice, synthesizeSpeech, SPEECH_VOICES } from "./tts";
 import { DUCK_DEFAULT, generateSubtitlesReadout } from "./voiceover";
-import { FRAME, IMAGE_CLIP_SECONDS, mediaUrl, TRANSITION_STYLE_IDS, type AudioClip, type FontId, type MediaAsset, type TransitionStyle } from "./types";
+import {
+  FRAME,
+  IMAGE_CLIP_SECONDS,
+  LAYOUTS,
+  MAX_SUBTITLE_LANES,
+  mediaUrl,
+  rectOf,
+  regionLabel,
+  SPEED_MAX,
+  SPEED_MIN,
+  TRANSITION_STYLE_IDS,
+  type AudioClip,
+  type FontId,
+  type MediaAsset,
+  type OverlayClip,
+  type TransitionStyle,
+} from "./types";
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -64,10 +85,18 @@ export async function runAiTool(
       }
       const id = String(input.id ?? "");
       const pool =
-        kind === "clip" ? s.clips : kind === "audio" ? s.audioClips : kind === "text" ? s.overlays : null;
+        kind === "clip"
+          ? s.clips
+          : kind === "overlayClip"
+            ? s.overlayClips
+            : kind === "audio"
+              ? s.audioClips
+              : kind === "text"
+                ? s.overlays
+                : null;
       if (!pool) throw new ToolError(`Unknown kind: ${kind}`);
       if (!pool.some((x) => x.id === id)) throw new ToolError(`No ${kind} with id ${id}.`);
-      s.select({ kind: kind as "clip" | "audio" | "text", id });
+      s.select({ kind: kind as "clip" | "overlayClip" | "audio" | "text", id });
       return { selection: { kind, id } };
     }
 
@@ -85,6 +114,99 @@ export async function runAiTool(
       if (!isNum(input.toIndex)) throw new ToolError("toIndex is required.");
       s.moveClip(clip.id, clamp(Math.round(input.toIndex), 0, s.clips.length - 1));
       return { order: useEditor.getState().clips.map((c) => c.id) };
+    }
+
+    case "place_clip": {
+      const clip = requireItem(s.clips, input.clipId, "video clip");
+      if (!isNum(input.start)) throw new ToolError("start (seconds) is required.");
+      const len = (clip.out - clip.in) / (clip.speed && clip.speed > 0 ? clip.speed : 1);
+      const taken = s.clips
+        .filter((c) => c.id !== clip.id)
+        .map((c) => ({
+          start: c.start,
+          end: c.start + (c.out - c.in) / (c.speed && c.speed > 0 ? c.speed : 1),
+        }));
+      const at = nextFreeStart(taken, Math.max(0, input.start), len);
+      s.updateClip(clip.id, { start: at });
+      useEditor.getState().sortClips();
+      return {
+        id: clip.id,
+        start: round2(at),
+        ...(Math.abs(at - Math.max(0, input.start)) > 0.005
+          ? { note: "That spot was taken — slid right to the next free one." }
+          : {}),
+      };
+    }
+
+    case "add_overlay_video": {
+      const asset = requireItem(s.assets, input.asset_id, "project asset");
+      if (asset.type !== "video" && asset.type !== "image")
+        throw new ToolError("Only video or image assets can sit on a video track.");
+      const start = isNum(input.start) ? Math.max(0, input.start) : s.currentTime;
+      const track = isNum(input.track) ? Math.round(input.track) : 1;
+      if (track === 0) throw new ToolError("Track 0 is the base track — use place_clip for it.");
+      s.addVideoFromAsset(asset.id, { kind: "track", track }, start);
+      const cur = useEditor.getState();
+      const sel = cur.selection;
+      const id = sel?.kind === "overlayClip" ? sel.id : null;
+      if (!id) throw new ToolError("Could not create the overlay clip.");
+      // Same undo step as the add: the layout rides the transient patch.
+      if (typeof input.layout === "string")
+        cur.updateOverlayClipTransient(id, layoutPatch(input.layout));
+      const c = useEditor.getState().overlayClips.find((x) => x.id === id)!;
+      return {
+        id: c.id,
+        track: c.track,
+        start: round2(c.start),
+        len: round2((c.out - c.in) / (c.speed && c.speed > 0 ? c.speed : 1)),
+        layout: regionLabel(rectOf(c)),
+      };
+    }
+
+    case "update_overlay_video": {
+      const c = requireItem(s.overlayClips, input.id, "overlay video clip");
+      const asset = s.assets.find((a) => a.id === c.assetId);
+      // A still has no source bound, so its clip can stretch to any length.
+      const dur = asset?.type === "image" ? Infinity : asset?.duration ?? c.out;
+      const patch: Partial<OverlayClip> = {};
+      if (isNum(input.start)) patch.start = Math.max(0, input.start);
+      if (isNum(input.in)) patch.in = clamp(input.in, 0, dur - 0.1);
+      if (isNum(input.out)) patch.out = clamp(input.out, 0.1, dur);
+      if (patch.in !== undefined || patch.out !== undefined) {
+        if ((patch.out ?? c.out) - (patch.in ?? c.in) < 0.1)
+          throw new ToolError("Clip must stay at least 0.1s long.");
+      }
+      if (isNum(input.track)) {
+        const track = Math.round(input.track);
+        if (track === 0) throw new ToolError("Track 0 is the base track.");
+        patch.track = track;
+      }
+      if (typeof input.muted === "boolean") patch.muted = input.muted;
+      if (typeof input.hidden === "boolean") patch.hidden = input.hidden || undefined;
+      if (typeof input.layout === "string") {
+        Object.assign(patch, layoutPatch(input.layout));
+      } else if (input.region && typeof input.region === "object") {
+        const rg = input.region as Record<string, unknown>;
+        if (!isNum(rg.x) || !isNum(rg.y) || !isNum(rg.w) || !isNum(rg.h))
+          throw new ToolError("region needs numeric x, y, w, h (frame fractions).");
+        const w = clamp(rg.w, 0.05, 1);
+        const h = clamp(rg.h, 0.05, 1);
+        patch.frame = { x: clamp(rg.x, 0, 1 - w), y: clamp(rg.y, 0, 1 - h), w, h };
+      }
+      if (input.fit === "fit" || input.fit === "fill") patch.fit = input.fit;
+      if (isNum(input.speed)) patch.speed = clamp(input.speed, SPEED_MIN, SPEED_MAX);
+      if (Object.keys(patch).length === 0) throw new ToolError("Nothing to change.");
+      s.updateOverlayClip(c.id, patch);
+      const next = useEditor.getState().overlayClips.find((x) => x.id === c.id)!;
+      return {
+        id: next.id,
+        track: next.track,
+        start: round2(next.start),
+        layout: regionLabel(rectOf(next)),
+        fit: next.fit ?? "fit",
+        muted: next.muted,
+        ...(next.hidden ? { hidden: true } : {}),
+      };
     }
 
     case "trim_clip": {
@@ -119,9 +241,16 @@ export async function runAiTool(
     }
 
     case "delete_item": {
-      const kind = String(input.kind) as "clip" | "audio" | "text";
+      const kind = String(input.kind) as "clip" | "overlayClip" | "audio" | "text";
       const id = String(input.id ?? "");
-      const pool = kind === "clip" ? s.clips : kind === "audio" ? s.audioClips : s.overlays;
+      const pool =
+        kind === "clip"
+          ? s.clips
+          : kind === "overlayClip"
+            ? s.overlayClips
+            : kind === "audio"
+              ? s.audioClips
+              : s.overlays;
       if (!pool.some((x) => x.id === id)) throw new ToolError(`No ${kind} with id ${id}.`);
       s.select({ kind, id });
       s.deleteSelection();
@@ -234,10 +363,19 @@ export async function runAiTool(
       if (!projectId) throw new ToolError("No project open.");
       const prompt = String(input.prompt ?? "").trim();
       if (!prompt) throw new ToolError("A prompt is required.");
+      const refs = resolveRefAssets(input.reference_asset_ids);
 
       // Hosted image generation is synchronous and quick, so wait it out and
-      // place the still — it lands in Media (and the panel job list) either way.
-      const job = await useGenerate.getState().generateImage(projectId, prompt);
+      // place the still — it lands in the panel job list either way.
+      const job = await useGenerate.getState().generateImage(projectId, prompt, {
+        ...(input.aspect === "16:9" || input.aspect === "9:16" || input.aspect === "1:1"
+          ? { aspect: input.aspect }
+          : {}),
+        ...(input.resolution === "1K" || input.resolution === "2K" || input.resolution === "4K"
+          ? { resolution: input.resolution }
+          : {}),
+        ...(refs.length > 0 ? { refs } : {}),
+      });
       if (job.status !== "done" || !job.assetId) {
         throw new ToolError(job.error ?? "Image generation failed.");
       }
@@ -271,6 +409,10 @@ export async function runAiTool(
 
       // Veo renders can outrun the assistant tool bridge's 2-minute cap, so
       // don't block: start the job and place the clip when it lands.
+      const refs =
+        input.reference_asset_id === undefined
+          ? []
+          : resolveRefAssets([input.reference_asset_id]);
       const addToTimeline = input.add_to_timeline !== false;
       const promptedIndex = isNum(input.index) ? Math.round(input.index) : undefined;
       void gen.generateVideo(projectId, prompt, {
@@ -278,6 +420,11 @@ export async function runAiTool(
         durationSeconds: isNum(input.duration_seconds)
           ? clamp(Math.round(input.duration_seconds), 4, 8)
           : undefined,
+        ...(input.aspect === "16:9" || input.aspect === "9:16" ? { aspect: input.aspect } : {}),
+        ...(input.resolution === "720p" || input.resolution === "1080p"
+          ? { resolution: input.resolution }
+          : {}),
+        ...(refs.length > 0 ? { refs } : {}),
         onDone: addToTimeline
           ? (asset) => maybeAddGeneratedClip(asset.id, { index: promptedIndex })
           : undefined,
@@ -287,24 +434,159 @@ export async function runAiTool(
         started: true,
         addToTimeline,
         note:
-          "Rendering with Veo — it lands in Media" +
-          (addToTimeline ? " and on the timeline" : "") +
+          "Rendering with Veo — it lands " +
+          (addToTimeline ? "on the timeline" : "in the Video panel's renders") +
           " in a minute or two. Track it in the Video panel.",
       };
     }
 
-    case "subtitles_generate": {
-      if (typeof input.locale === "string" && input.locale) {
-        s.setSubtitlesView({ locale: input.locale });
+    case "generate_character_video": {
+      const projectId = s.projectId;
+      if (!projectId) throw new ToolError("No project open.");
+      const id = String(input.character_id ?? "");
+      const character = STOCK_VIDEOS.find((v) => v.id === id && v.persona);
+      if (!character)
+        throw new ToolError(`No talking character with id ${id}. Call stock_search kind:"character".`);
+      const line = String(input.line ?? "").trim();
+      if (!line) throw new ToolError("line is required — what should they say?");
+      const gen = useGenerate.getState();
+      const signedIn = gen.signedIn ?? (await gen.probeNow());
+      if (!signedIn) throw new ToolError("Sign in to Donkey to generate video.");
+      const addToTimeline = input.add_to_timeline !== false;
+      const promptedIndex = isNum(input.index) ? Math.round(input.index) : undefined;
+      void gen.generateVideo(projectId, characterPrompt(character.persona!, line), {
+        tier: input.tier === "high" ? "high" : "fast",
+        durationSeconds: isNum(input.duration_seconds)
+          ? clamp(Math.round(input.duration_seconds), 4, 8)
+          : undefined,
+        aspect: character.aspect,
+        // The character's own clip seeds the render so the same person
+        // delivers the line — composing would swap the face, so it rides raw.
+        refs: [refFromStockVideo(character)],
+        composeRefs: false,
+        onDone: addToTimeline
+          ? (asset) => maybeAddGeneratedClip(asset.id, { index: promptedIndex })
+          : undefined,
+      });
+      return {
+        kind: "video",
+        started: true,
+        character: character.id,
+        addToTimeline,
+        note:
+          "Rendering with Veo — it lands " +
+          (addToTimeline ? "on the timeline" : "in the Video panel's renders") +
+          " in a minute or two. Track it in the Video panel.",
+      };
+    }
+
+    case "stock_search": {
+      const q = String(input.query ?? "").trim().toLowerCase();
+      const kindIn =
+        input.kind === "video" || input.kind === "image" || input.kind === "character"
+          ? input.kind
+          : undefined;
+      interface Hit {
+        id: string;
+        kind: "video" | "image" | "character";
+        category: string;
+        aspect: string;
+        duration?: number;
+        persona?: string;
+        prompt: string;
+        tags: string[];
       }
-      await s.generateSubtitles();
+      const hits: Hit[] = [];
+      for (const v of STOCK_VIDEOS) {
+        const kind = v.category === "Characters" ? "character" : "video";
+        if (kindIn && kindIn !== kind) continue;
+        hits.push({
+          id: v.id,
+          kind,
+          category: v.category,
+          aspect: v.aspect,
+          duration: round2(v.duration),
+          ...(v.persona ? { persona: v.persona } : {}),
+          prompt: v.prompt,
+          tags: v.tags,
+        });
+      }
+      if (!kindIn || kindIn === "image") {
+        for (const i of STOCK_IMAGES) {
+          hits.push({
+            id: i.id,
+            kind: "image",
+            category: i.category,
+            aspect: i.aspect,
+            prompt: i.prompt,
+            tags: i.tags,
+          });
+        }
+      }
+      const words = q.split(/\s+/).filter(Boolean);
+      const matches = hits.filter((h) => {
+        const hay = [h.id, h.category, h.prompt, h.persona ?? "", ...h.tags]
+          .join(" ")
+          .toLowerCase();
+        return words.every((w) => hay.includes(w));
+      });
+      const trim = (t: string, n: number) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
+      return {
+        results: matches.slice(0, 12).map((h) => ({
+          ...h,
+          prompt: trim(h.prompt, 160),
+          ...(h.persona ? { persona: trim(h.persona, 160) } : {}),
+          tags: h.tags.slice(0, 6),
+        })),
+        total: matches.length,
+        ...(matches.length > 12 ? { truncated: true } : {}),
+      };
+    }
+
+    case "stock_add": {
+      const projectId = s.projectId;
+      if (!projectId) throw new ToolError("No project open.");
+      const id = String(input.id ?? "");
+      const vid = STOCK_VIDEOS.find((v) => v.id === id);
+      const img = vid ? undefined : STOCK_IMAGES.find((i) => i.id === id);
+      if (!vid && !img)
+        throw new ToolError(`No stock item with id ${id}. Call stock_search for ids.`);
+      const asset = vid
+        ? await importStockVideo(projectId, { url: vid.file, name: stockTitle(vid.id) })
+        : await importImage(projectId, { url: img!.file, name: stockTitle(img!.id) });
+      const addToTimeline = input.add_to_timeline !== false;
+      let clipId: string | null = null;
+      if (addToTimeline) {
+        useEditor
+          .getState()
+          .addClipFromAsset(asset.id, isNum(input.start) ? Math.max(0, input.start) : undefined);
+        const sel = useEditor.getState().selection;
+        clipId = sel?.kind === "clip" ? sel.id : null;
+      }
+      return {
+        assetId: asset.id,
+        name: asset.name,
+        kind: vid ? "video" : "image",
+        duration: round2(vid ? asset.duration : IMAGE_CLIP_SECONDS),
+        addedToTimeline: addToTimeline,
+        clipId,
+      };
+    }
+
+    case "subtitles_generate": {
+      const lane = targetSubtitleTrack(input);
+      if (typeof input.locale === "string" && input.locale)
+        useEditor.getState().setSubtitleTrackMeta(lane, { locale: input.locale });
+      await useEditor.getState().generateSubtitles();
       const cur = useEditor.getState();
       if (cur.subtitleStatus === "error")
         throw new ToolError(cur.subtitleError ?? "Transcription failed.");
-      if (cur.subtitles.cues.length > 0 && cur.timelineH < 276) cur.setTimelineH(276);
+      const made = laneCues(cur.subtitles, lane).length;
+      if (made > 0 && cur.timelineH < 276) cur.setTimelineH(276);
       return {
         status: cur.subtitleStatus,
-        cues: cur.subtitles.cues.length,
+        track: lane,
+        cues: made,
         note:
           cur.subtitleStatus === "empty"
             ? "No speech found — no subtitles were added to the video."
@@ -318,14 +600,17 @@ export async function runAiTool(
         | "clean"
         | "hook"
         | "punchy";
-      await s.generateCaptions(style);
+      const lane = targetSubtitleTrack(input);
+      await useEditor.getState().generateCaptions(style);
       const cur = useEditor.getState();
       if (cur.subtitleStatus === "error")
         throw new ToolError(cur.subtitleError ?? "Captions failed.");
-      if (cur.subtitles.cues.length > 0 && cur.timelineH < 276) cur.setTimelineH(276);
+      const made = laneCues(cur.subtitles, lane).length;
+      if (made > 0 && cur.timelineH < 276) cur.setTimelineH(276);
       return {
         status: cur.subtitleStatus,
-        cues: cur.subtitles.cues.length,
+        track: lane,
+        cues: made,
         style: cur.subtitles.style,
         note:
           cur.subtitleStatus === "empty"
@@ -335,14 +620,78 @@ export async function runAiTool(
     }
 
     case "subtitles_from_visuals": {
+      const lane = targetSubtitleTrack(input);
       if (typeof input.locale === "string" && input.locale)
-        s.setSubtitlesView({ locale: input.locale });
-      await s.generateVisualSubtitles();
+        useEditor.getState().setSubtitleTrackMeta(lane, { locale: input.locale });
+      await useEditor.getState().generateVisualSubtitles();
       const cur = useEditor.getState();
       if (cur.subtitleStatus === "error")
         throw new ToolError(cur.subtitleError ?? "Visual captioning failed.");
-      if (cur.subtitles.cues.length > 0 && cur.timelineH < 276) cur.setTimelineH(276);
-      return { status: cur.subtitleStatus, cues: cur.subtitles.cues.length };
+      const made = laneCues(cur.subtitles, lane).length;
+      if (made > 0 && cur.timelineH < 276) cur.setTimelineH(276);
+      return { status: cur.subtitleStatus, track: lane, cues: made };
+    }
+
+    case "subtitles_add_track": {
+      const count = subtitleLaneCount(s.subtitles);
+      if (count >= MAX_SUBTITLE_LANES)
+        throw new ToolError(`Already at ${MAX_SUBTITLE_LANES} subtitle tracks.`);
+      s.addSubtitleTrack(
+        typeof input.language === "string" && input.language.trim()
+          ? input.language.trim()
+          : undefined
+      );
+      return { track: count, tracks: count + 1 };
+    }
+
+    case "subtitles_remove_track": {
+      if (!isNum(input.track)) throw new ToolError("track is required.");
+      const lane = Math.round(input.track);
+      const count = subtitleLaneCount(s.subtitles);
+      if (lane < 0 || lane >= count) throw new ToolError(`No subtitle track ${lane}.`);
+      if (count <= 1) throw new ToolError("The last subtitle track can't be removed.");
+      s.removeSubtitleTrack(lane);
+      return { removed: lane, tracks: count - 1 };
+    }
+
+    case "subtitles_translate_track": {
+      const language = typeof input.language === "string" ? input.language.trim() : "";
+      if (!language) throw new ToolError("language (BCP-47, e.g. ko-KR) is required.");
+      const subs = s.subtitles;
+      const count = subtitleLaneCount(subs);
+      const localeOf = (i: number) =>
+        subs.tracks?.[i]?.locale ?? (i === 0 ? subs.locale : undefined);
+      const hasCues = (i: number) => laneCues(subs, i).length > 0;
+      const lanes = Array.from({ length: count }, (_, i) => i);
+      const from = isNum(input.from_track)
+        ? Math.round(input.from_track)
+        : lanes.find(hasCues) ?? -1;
+      if (from < 0 || from >= count || !hasCues(from))
+        throw new ToolError("No captions to translate — generate subtitles first.");
+      // Reuse the track already set to this language, else add one.
+      let target = lanes.find((i) => i !== from && localeOf(i) === language) ?? -1;
+      if (target < 0) {
+        if (count >= MAX_SUBTITLE_LANES)
+          throw new ToolError(
+            `Already at ${MAX_SUBTITLE_LANES} subtitle tracks — remove one first.`
+          );
+        s.addSubtitleTrack(language);
+        target = count;
+      }
+      const st = useEditor.getState();
+      st.setSubtitleLane(target);
+      st.setSubtitleTrackMeta(target, { locale: language });
+      await useEditor.getState().translateSubtitleTrack(from);
+      const cur = useEditor.getState();
+      if (cur.subtitleStatus === "error")
+        throw new ToolError(cur.subtitleError ?? "Translation failed.");
+      if (cur.timelineH < 276) cur.setTimelineH(276);
+      return {
+        track: target,
+        language,
+        from,
+        cues: laneCues(cur.subtitles, target).length,
+      };
     }
 
     case "list_voices": {
@@ -367,8 +716,9 @@ export async function runAiTool(
     }
 
     case "read_subtitles_aloud": {
-      if (!s.subtitles.cues.some((c) => c.text.trim()))
-        throw new ToolError("No subtitles to read — generate subtitles first.");
+      const lane = targetSubtitleTrack(input);
+      if (!laneCues(useEditor.getState().subtitles, lane).some((c) => c.text.trim()))
+        throw new ToolError("No subtitles on that track — generate subtitles first.");
       const voice = resolveVoice(typeof input.voice === "string" ? input.voice : undefined);
       // The shared readout also re-times the cues to the generated voice's
       // pace, keeping the word highlighter in step.
@@ -491,8 +841,9 @@ export async function runAiTool(
 
     case "merge_cue": {
       const cue = requireItem(s.subtitles.cues, input.id, "subtitle cue");
-      if (s.subtitles.cues.findIndex((c) => c.id === cue.id) <= 0)
-        throw new ToolError("That is the first cue — nothing before it to merge into.");
+      const mates = laneCues(s.subtitles, cue.lane ?? 0);
+      if (mates.findIndex((c) => c.id === cue.id) <= 0)
+        throw new ToolError("That is its track's first cue — nothing before it to merge into.");
       s.mergeCueIntoPrev(cue.id);
       return { mergedInto: "previous cue" };
     }
@@ -572,6 +923,53 @@ function requireItem<T extends { id: string }>(pool: T[], id: unknown, label: st
   const item = pool.find((x) => x.id === String(id ?? ""));
   if (!item) throw new ToolError(`No ${label} with id ${String(id)}. Call get_state for current ids.`);
   return item;
+}
+
+/** Resolve a subtitle-track tool param (default: the active track), make it
+ * the active track — generation, translation, and readout all write there. */
+function targetSubtitleTrack(input: Record<string, unknown>): number {
+  const s = useEditor.getState();
+  const count = subtitleLaneCount(s.subtitles);
+  const lane = isNum(input.track) ? Math.round(input.track) : s.subtitleLane;
+  if (lane < 0 || lane >= count)
+    throw new ToolError(
+      `No subtitle track ${lane} — tracks 0–${count - 1} exist (subtitles_add_track adds one).`
+    );
+  s.setSubtitleLane(lane);
+  return lane;
+}
+
+/** Map generation reference ids to project assets. Audio can't be looked at,
+ * so only image and video assets resolve. */
+function resolveRefAssets(ids: unknown): AssetRef[] {
+  if (ids === undefined || ids === null) return [];
+  const s = useEditor.getState();
+  return (Array.isArray(ids) ? ids : [ids]).map((raw) => {
+    const asset = s.assets.find((a) => a.id === String(raw));
+    if (!asset)
+      throw new ToolError(`No project asset with id ${String(raw)} — see media in the editor state.`);
+    if (asset.type === "audio")
+      throw new ToolError(`"${asset.name}" is audio — visual references must be images or videos.`);
+    return refFromAsset(asset);
+  });
+}
+
+/** An overlay clip's frame patch for a layout preset name. */
+const OVERLAY_LAYOUT_KEYS = {
+  full: "full",
+  top: "top",
+  bottom: "bottom",
+  left: "left",
+  right: "right",
+  pip: "corner",
+} as const;
+
+function layoutPatch(layout: string): Partial<OverlayClip> {
+  const key = OVERLAY_LAYOUT_KEYS[layout as keyof typeof OVERLAY_LAYOUT_KEYS];
+  if (!key)
+    throw new ToolError(`Unknown layout "${layout}". Use full, top, bottom, left, right, or pip.`);
+  const L = LAYOUTS[key];
+  return { frame: key === "full" ? undefined : { ...L.rect }, fit: L.fit };
 }
 
 /** Append a generated asset to the video track (default) at an optional index.
