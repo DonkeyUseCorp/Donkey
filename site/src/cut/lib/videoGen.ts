@@ -8,8 +8,58 @@ import type { StockVideo } from "./stock";
 // (which loads a stock clip's saved prompt into it on click) and the always-on
 // generate panel that sits beside the browser in the Video tab.
 
+/** The shape the next generated clip is composed in — Veo renders landscape
+ * and portrait. */
+export type VideoAspect = "16:9" | "9:16";
+
+export const VIDEO_ASPECT_LABEL: Record<VideoAspect, string> = {
+  "16:9": "Landscape (16:9)",
+  "9:16": "Portrait (9:16)",
+};
+
+/** Output detail the next clip renders at. */
+export type VideoResolution = "720p" | "1080p";
+
+/** A selectable video model: the tier the backend resolves to a concrete
+ * model id (gemini-models.ts) plus the knobs that model supports. The
+ * generate panel renders its duration/aspect/resolution controls from the
+ * selected entry and clamps stored picks to it, so adding a model here is the
+ * whole client-side change. */
+export interface VideoModelOption {
+  tier: "fast" | "high";
+  /** Segment label ("Fast") and the model name shown beside it. */
+  word: string;
+  model: string;
+  durations: number[];
+  aspects: VideoAspect[];
+  resolutions: VideoResolution[];
+}
+
+export const VIDEO_MODELS: VideoModelOption[] = [
+  {
+    tier: "fast",
+    word: "Fast",
+    model: "Veo 3.1 Fast",
+    durations: [4, 6, 8],
+    aspects: ["16:9", "9:16"],
+    resolutions: ["720p", "1080p"],
+  },
+  {
+    tier: "high",
+    word: "Best",
+    model: "Veo 3.1",
+    durations: [4, 6, 8],
+    aspects: ["16:9", "9:16"],
+    resolutions: ["720p", "1080p"],
+  },
+];
+
 interface VideoGenState {
   prompt: string;
+  /** The shape the next generation is composed in. */
+  aspect: VideoAspect;
+  /** The output detail the next generation renders at. */
+  resolution: VideoResolution;
   /** Visual references attached to the next generation (dragged in or picked
    * via @name mentions resolved on send). */
   refs: AssetRef[];
@@ -24,18 +74,24 @@ interface VideoGenState {
   openCharacter: (character: StockVideo) => void;
   clearCharacter: () => void;
   setPrompt: (prompt: string) => void;
+  setAspect: (aspect: VideoAspect) => void;
+  setResolution: (resolution: VideoResolution) => void;
   addRef: (ref: AssetRef) => void;
   removeRef: (ref: AssetRef) => void;
 }
 
 export const useVideoGen = create<VideoGenState>((set) => ({
   prompt: "",
+  aspect: "16:9",
+  resolution: "720p",
   refs: [],
   character: null,
   openWith: (prompt) => set({ prompt, refs: [], character: null }),
   openCharacter: (character) => set({ character, prompt: "", refs: [] }),
   clearCharacter: () => set({ character: null }),
   setPrompt: (prompt) => set({ prompt }),
+  setAspect: (aspect) => set({ aspect }),
+  setResolution: (resolution) => set({ resolution }),
   addRef: (ref) => set((s) => ({ refs: addRefOnce(s.refs, ref) })),
   removeRef: (ref) => set((s) => ({ refs: s.refs.filter((r) => !sameRef(r, ref)) })),
 }));

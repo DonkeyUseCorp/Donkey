@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import { ChevronDown, Copy, Loader2, Maximize2, Sparkles, Trash2 } from "lucide-react";
+import { Copy, Loader2, Maximize2, Sparkles, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { SectionTitle } from "@/cut/components/SectionTitle";
@@ -15,10 +15,12 @@ import {
   type ImageResolution,
 } from "@/cut/lib/imageGen";
 import { useLightbox } from "@/cut/lib/lightbox";
+import { refsFromDroppedFiles } from "@/cut/lib/refMedia";
 import { useEditor } from "@/cut/lib/store";
 import type { MediaAsset } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
 import { MentionTextarea, RefChips, RefHandlePill } from "./AssetRefs";
+import { PillSelect } from "./PillSelect";
 import { GeneratedAssetMenu } from "./GeneratedAssetMenu";
 
 // The generate-image panel: an always-on column in the Image tab, sitting left
@@ -63,9 +65,17 @@ export function ImageGenPanel({ projectId }: { projectId: string }) {
     () => assets.filter((a) => a.origin === "generated" && a.type === "image").reverse(),
     [assets]
   );
-  const { active: dropActive, attachTarget, targetProps } = useAssetDrop((ref) => {
-    if (ref.kind !== "audio") useImageGen.getState().addRef(ref);
-  });
+  const { active: dropActive, attachTarget, targetProps } = useAssetDrop(
+    (ref) => {
+      if (ref.kind !== "audio") useImageGen.getState().addRef(ref);
+    },
+    // OS files dropped on the panel attach as references (media files import
+    // into the project on the way; text files ride as-is).
+    (files) =>
+      void refsFromDroppedFiles(projectId, files).then((refs) => {
+        for (const r of refs) if (r.kind !== "audio") useImageGen.getState().addRef(r);
+      })
+  );
 
   // Default the size to the project's own orientation when the panel opens, so
   // a widescreen project generates landscape images by default (the user can
@@ -199,50 +209,6 @@ export function ImageGenPanel({ projectId }: { projectId: string }) {
         )}
       </div>
     </div>
-  );
-}
-
-/** A rounded pill wrapping a native select — a compact `display` shows when closed,
- * while the dropdown lists the fuller option labels (an invisible select overlays the
- * pill, so it keeps native keyboard/OS behavior). Mirrors the audio language picker's
- * chrome so the generate controls read as one family. */
-function PillSelect<T extends string>({
-  className,
-  title,
-  value,
-  display,
-  options,
-  onChange,
-}: {
-  className?: string;
-  title: string;
-  value: T;
-  display: string;
-  options: { value: T; label: string }[];
-  onChange: (value: T) => void;
-}) {
-  return (
-    <label
-      className={cn(
-        "relative flex items-center rounded-full border border-input py-1.5 pr-2.5 pl-3.5 transition-colors focus-within:border-ring",
-        className
-      )}
-      title={title}
-    >
-      <span className="min-w-0 flex-1 truncate text-[12.5px] text-foreground">{display}</span>
-      <ChevronDown className="ml-1 size-3.5 shrink-0 text-muted-foreground" />
-      <select
-        className="absolute inset-0 w-full cursor-pointer appearance-none opacity-0"
-        value={value}
-        onChange={(e) => onChange(e.target.value as T)}
-      >
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </label>
   );
 }
 

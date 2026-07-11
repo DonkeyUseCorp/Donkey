@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { Copy, Film, Loader2, Maximize2, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -14,13 +14,22 @@ import {
 } from "@/cut/lib/assetRef";
 import { signInUrl, useGenerate, useSignedIn, type GenerateJob } from "@/cut/lib/generate";
 import { useLightbox } from "@/cut/lib/lightbox";
+import { refsFromDroppedFiles } from "@/cut/lib/refMedia";
 import { characterPrompt, stockTitle } from "@/cut/lib/stock";
 import { useEditor } from "@/cut/lib/store";
 import { useLocalPref } from "@/cut/lib/uiState";
-import { useVideoGen } from "@/cut/lib/videoGen";
+import {
+  useVideoGen,
+  VIDEO_ASPECT_LABEL,
+  VIDEO_MODELS,
+  type VideoAspect,
+  type VideoModelOption,
+} from "@/cut/lib/videoGen";
 import { cn } from "@/lib/utils";
 import { MentionTextarea, RefChips, RefHandlePill } from "./AssetRefs";
 import { GeneratedAssetMenu } from "./GeneratedAssetMenu";
+import { cardIconButton } from "./iconButton";
+import { PillSelect } from "./PillSelect";
 
 // The generate-video panel: an always-on column in the Video tab, sitting left
 // of the stock-clip browser. Clicking a stock tile loads its saved prompt here.
@@ -28,6 +37,11 @@ import { GeneratedAssetMenu } from "./GeneratedAssetMenu";
 // A visual reference (dragged in or @name-mentioned) seeds the render: Veo
 // takes one input image, so the first reference's picture becomes the start
 // frame.
+
+const ASPECT_WORD: Record<VideoAspect, string> = {
+  "16:9": "Landscape",
+  "9:16": "Portrait",
+};
 
 // Segmented pill group, same language as the platform switcher in PlatformPreview.
 const segGroup = "flex gap-0.5 rounded-full border border-border bg-card p-0.5 shadow-xs";
@@ -41,21 +55,46 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
   const signedIn = useSignedIn();
   const allJobs = useGenerate((s) => s.jobs);
   const jobs = allJobs.filter((j) => j.projectId === projectId && j.kind === "video");
-  const { prompt, refs, character } = useVideoGen();
+  const { prompt, refs, character, aspect, resolution } = useVideoGen();
   const candidates = useRefCandidates();
-  const { active: dropActive, attachTarget, targetProps } = useAssetDrop((ref) => {
-    if (ref.kind !== "audio") useVideoGen.getState().addRef(ref);
-  });
-  const [tier, setTier] = useLocalPref<"fast" | "high">(
+  const { active: dropActive, attachTarget, targetProps } = useAssetDrop(
+    (ref) => {
+      if (ref.kind !== "audio") useVideoGen.getState().addRef(ref);
+    },
+    // OS files dropped on the panel attach as references (media files import
+    // into the project on the way; text files ride as-is).
+    (files) =>
+      void refsFromDroppedFiles(projectId, files).then((refs) => {
+        for (const r of refs) if (r.kind !== "audio") useVideoGen.getState().addRef(r);
+      })
+  );
+  const [tier, setTier] = useLocalPref<VideoModelOption["tier"]>(
     "cut-gen-tier",
     "fast",
-    (v) => v === "fast" || v === "high"
+    (v) => VIDEO_MODELS.some((m) => m.tier === v)
   );
   const [seconds, setSeconds] = useLocalPref<number>(
     "cut-gen-seconds",
     8,
-    (v) => v === 4 || v === 6 || v === 8
+    (v) => typeof v === "number" && VIDEO_MODELS.some((m) => m.durations.includes(v))
   );
+
+  // Every knob renders from — and is clamped to — what the selected model
+  // supports, so a stored pick from another model can never reach the API.
+  const model = VIDEO_MODELS.find((m) => m.tier === tier) ?? VIDEO_MODELS[0];
+  const effSeconds = model.durations.includes(seconds)
+    ? seconds
+    : model.durations[model.durations.length - 1];
+  const effAspect = model.aspects.includes(aspect) ? aspect : model.aspects[0];
+  const effResolution = model.resolutions.includes(resolution)
+    ? resolution
+    : model.resolutions[0];
+
+  // Default the shape to the project's own orientation when the panel opens,
+  // same as the image panel (the user can still pick the other one).
+  useEffect(() => {
+    useVideoGen.getState().setAspect(useEditor.getState().aspect);
+  }, []);
 
   const go = () => {
     const { text, refs: all } = collectRefs(prompt.trim(), refs, candidates, { dropAudio: true });
@@ -65,9 +104,16 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
     // same person delivers it.
     const composed = character?.persona ? characterPrompt(character.persona, text) : text;
     const seedRefs = character ? [refFromStockVideo(character)] : all;
-    void useGenerate
-      .getState()
-      .generateVideo(projectId, composed, { tier, durationSeconds: seconds, refs: seedRefs });
+    void useGenerate.getState().generateVideo(projectId, composed, {
+      tier,
+      durationSeconds: effSeconds,
+      aspect: effAspect,
+      resolution: effResolution,
+      refs: seedRefs,
+      // The character's poster seed is the point — the same person must
+      // deliver the line — so free-form prompts alone get the ref rewrite.
+      composeRefs: !character,
+    });
     useVideoGen.getState().openWith("");
   };
 
@@ -133,32 +179,54 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
           />
         </div>
 
+        {/* Which model renders the clip — a dropdown, since the catalog grows. */}
+        <PillSelect
+          className="shrink-0"
+          title="Model"
+          value={tier}
+          display={model.model}
+          options={VIDEO_MODELS.map((m) => ({
+            value: m.tier,
+            label: `${m.word} · ${m.model}`,
+          }))}
+          onChange={setTier}
+        />
+
+        {/* The remaining knobs follow the selected model's capabilities. */}
         <div className="flex shrink-0 items-center justify-between gap-2">
           <div className={segGroup}>
-            {[4, 6, 8].map((s) => (
+            {model.durations.map((s) => (
               <button
                 key={s}
-                className={segButton(seconds === s)}
-                aria-pressed={seconds === s}
+                className={segButton(effSeconds === s)}
+                aria-pressed={effSeconds === s}
                 onClick={() => setSeconds(s)}
               >
                 {s}s
               </button>
             ))}
           </div>
-          <div className={segGroup}>
-            {(["fast", "high"] as const).map((t) => (
-              <button
-                key={t}
-                className={segButton(tier === t)}
-                aria-pressed={tier === t}
-                onClick={() => setTier(t)}
-              >
-                {t === "fast" ? "Fast" : "Best"}
-              </button>
-            ))}
-          </div>
+          <PillSelect
+            title="Resolution"
+            value={effResolution}
+            display={effResolution}
+            options={model.resolutions.map((r) => ({ value: r, label: r }))}
+            onChange={(v) => useVideoGen.getState().setResolution(v)}
+          />
         </div>
+
+        {/* Shape, the same pill family as the image panel. */}
+        <PillSelect
+          className="shrink-0"
+          title="Aspect ratio"
+          value={effAspect}
+          display={ASPECT_WORD[effAspect]}
+          options={model.aspects.map((a) => ({
+            value: a,
+            label: VIDEO_ASPECT_LABEL[a],
+          }))}
+          onChange={(v) => useVideoGen.getState().setAspect(v)}
+        />
 
         <Button
           className="gen-go w-full shrink-0"
@@ -234,7 +302,7 @@ function JobRow({ job, handle }: { job: GenerateJob; handle?: string }) {
         {job.status !== "running" && (
           <button
             title="Dismiss"
-            className="grid size-6 shrink-0 place-items-center rounded-full text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
+            className={cn(cardIconButton, "opacity-0 group-hover:opacity-100")}
             onClick={() => useGenerate.getState().dismiss(job.id)}
           >
             <Trash2 className="size-3.5" />
