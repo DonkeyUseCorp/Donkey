@@ -2040,7 +2040,7 @@ export function serializeDoc(s: {
   subtitles: SubtitlesBlock;
 }): Partial<ProjectDoc> {
   const assets: StoredAsset[] = s.assets.map(
-    ({ id, fileName, name, type, duration, width, height, origin }) => ({
+    ({ id, fileName, name, type, duration, width, height, origin, chatId }) => ({
       id,
       fileName,
       name,
@@ -2049,6 +2049,7 @@ export function serializeDoc(s: {
       ...(width !== undefined ? { width } : {}),
       ...(height !== undefined ? { height } : {}),
       ...(origin !== undefined ? { origin } : {}),
+      ...(chatId !== undefined ? { chatId } : {}),
     })
   );
   return {

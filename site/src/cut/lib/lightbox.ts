@@ -1,19 +1,16 @@
 "use client";
 
 import { create } from "zustand";
+import type { AssetRef } from "./assetRef";
 
-// The media lightbox: a full-screen preview opened from a stock tile or a
-// generated image. Held in its own store so any tile can open it and a single
-// overlay (mounted once in the editor) renders it.
+// The asset lightbox: a full-screen viewer opened from stock tiles, generated
+// media, and chat asset cards. Held in its own store so any surface can open
+// it and a single overlay (mounted once in the editor) renders it.
 
 export interface LightboxItem {
-  /** Big source. Stock: the static file URL; generated: the still's media URL. */
+  kind: "video" | "image" | "audio" | "text";
+  /** Fetchable source for the media or file. */
   src: string;
-  /** Generated stills are 8s videos — render the poster frame, not an <img>. */
-  isVideo: boolean;
-  /** True for real footage (a stock clip): play it with controls instead of
-   * showing the poster frame. */
-  playable?: boolean;
   name: string;
   /** The generation prompt, when known. */
   prompt: string;
@@ -21,9 +18,19 @@ export interface LightboxItem {
    * up front so it opens at its final size instead of growing on media load. */
   aspect?: "16:9" | "9:16" | "1:1";
   /** For a project asset, its id (add straight to the timeline); null for a
-   * stock image, which the lightbox bakes into a still first. */
+   * stock item, which the lightbox imports first. */
   assetId: string | null;
 }
+
+/** The lightbox view of an asset ref — how chat cards and attachment chips
+ * open the big version of whatever they show. */
+export const lightboxItemFromRef = (ref: AssetRef): LightboxItem => ({
+  kind: ref.kind,
+  src: ref.url,
+  name: ref.name,
+  prompt: "",
+  assetId: ref.scope === "project" ? ref.id : null,
+});
 
 interface LightboxState {
   item: LightboxItem | null;

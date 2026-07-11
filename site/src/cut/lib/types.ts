@@ -30,9 +30,12 @@ export interface StoredAsset {
   height?: number;
   /** How this asset entered the project. Absent = the user imported it (drag,
    * drop, or upload), so it belongs in the Media panel. Any value marks media
-   * Cut created or fetched — it lives where it was made (the timeline or a
-   * generation panel) and is kept out of the Media panel. */
-  origin?: "voiceover" | "generated" | "recording" | "stock" | "freeze";
+   * Cut created or fetched — it lives where it was made (the timeline, a
+   * generation panel, or an AI chat card) and is kept out of the Media panel. */
+  origin?: "voiceover" | "generated" | "recording" | "stock" | "freeze" | "chat";
+  /** For origin "chat": the chat thread that made it. Deleting that thread
+   * deletes the assets it still owns (see chatAssets.ts). */
+  chatId?: string;
 }
 
 /** Runtime asset: stored fields plus derived/browser-only data. */

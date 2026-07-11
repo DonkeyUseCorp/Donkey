@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type ChatTransport, type UIMessage } from "ai";
 import {
@@ -13,6 +13,7 @@ import {
   ExternalLink,
   FolderPlus,
   History,
+  Maximize2,
   Plus,
   Sparkles,
   Square,
@@ -37,6 +38,7 @@ import { apiFetch, engineReady } from "@/cut/lib/api";
 import { buildAiContext } from "@/cut/lib/aiContext";
 import { runAiTool } from "@/cut/lib/aiTools";
 import { setAssetDragData } from "@/cut/lib/assetDrag";
+import { deleteChatAssets, setActiveChatThread } from "@/cut/lib/chatAssets";
 import {
   addRefOnce,
   collectRefs,
@@ -52,12 +54,14 @@ import { signInUrl, useSignedIn } from "@/cut/lib/generate";
 import { streamGeminiChat } from "@/cut/lib/geminiChat";
 import { AI_MODELS } from "@/cut/lib/aiModels";
 import { saveAssetToLibrary } from "@/cut/lib/library";
+import { lightboxItemFromRef, useLightbox } from "@/cut/lib/lightbox";
 import { refsFromDroppedFiles } from "@/cut/lib/refMedia";
 import { revealRef } from "@/cut/lib/refReveal";
 import { useEditor } from "@/cut/lib/store";
 import { cn } from "@/lib/utils";
 import { cardIconButton } from "@/cut/components/iconButton";
 import { MentionTextarea, RefChips, RefThumb, RefTokenChip } from "./AssetRefs";
+import { ToolOutputAssets } from "./ChatAssets";
 
 // Chat attachments are asset refs — anything in the project, the library, or
 // the stock catalog. They arrive by drag (media cards, library clips, stock
@@ -90,6 +94,8 @@ function readThreads(): ChatThread[] {
 }
 
 function writeThreads(list: ChatThread[]) {
+  // A thread falling off the end of history takes its chat-only assets with it.
+  for (const t of list.slice(THREAD_LIMIT)) deleteChatAssets(t.id);
   try {
     localStorage.setItem(threadsKey(), JSON.stringify(list.slice(0, THREAD_LIMIT)));
   } catch {
@@ -165,6 +171,9 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
   const deleteThread = (id: string) => {
     writeThreads(readThreads().filter((t) => t.id !== id));
     setThreads((p) => p.filter((t) => t.id !== id));
+    // The thread's chat-only assets go with it; anything placed or filed
+    // into Media/Library stays.
+    deleteChatAssets(id);
     // If the open chat was deleted, start a fresh one so it can't re-save
     // itself on the next message and resurrect the thread.
     if (activeChat === id) setActiveChat(crypto.randomUUID());
@@ -401,6 +410,13 @@ function ChatSession({
 
   const busy = status === "submitted" || status === "streaming";
 
+  // While this thread is open its tools tag created assets with it, so
+  // deleting the thread later can clean them up.
+  useEffect(() => {
+    setActiveChatThread(threadId);
+    return () => setActiveChatThread(null);
+  }, [threadId]);
+
   // Coalesce every edit the assistant makes in one turn into a single undo
   // step, so ⌘Z reverts the whole turn rather than one tool call at a time.
   useEffect(() => {
@@ -573,7 +589,8 @@ function ChatSession({
 }
 
 /** Asset card inside a sent message — click to jump back to the original
- * asset, drag onto the timeline, "…" menu for more actions. */
+ * asset, double-click to expand, drag onto the timeline, "…" menu for more
+ * actions. */
 function MessageAssetCard({ asset }: { asset: AssetRef }) {
   return (
     <div className="ai-msg-asset group relative w-16">
@@ -589,6 +606,7 @@ function MessageAssetCard({ asset }: { asset: AssetRef }) {
           setRefDragData(e, asset);
         }}
         onClick={() => revealRef(asset)}
+        onDoubleClick={() => useLightbox.getState().open(lightboxItemFromRef(asset))}
       >
         <RefThumb item={asset} className="size-16 transition-colors group-hover:border-input" />
         <span className="w-full truncate text-[10px] text-muted-foreground">{asset.name}</span>
@@ -605,6 +623,11 @@ function MessageAssetCard({ asset }: { asset: AssetRef }) {
           <Ellipsis className="size-3" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-40">
+          <DropdownMenuItem
+            onClick={() => useLightbox.getState().open(lightboxItemFromRef(asset))}
+          >
+            <Maximize2 /> Expand
+          </DropdownMenuItem>
           <DropdownMenuItem onClick={() => window.open(asset.url, "_blank", "noopener")}>
             <ExternalLink /> Open file
           </DropdownMenuItem>
@@ -734,23 +757,28 @@ function MessageView({ message }: { message: UIMessage }) {
           const failed = p.state === "output-error";
           const done = p.state === "output-available";
           return (
-            <details key={i} className="ai-tool group max-w-full">
-              <summary
-                className={cn(
-                  "flex cursor-pointer list-none items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors select-none hover:bg-muted/60 [&::-webkit-details-marker]:hidden",
-                  failed && "border-red-200 text-red-700"
-                )}
-              >
-                <Wrench className="size-3 shrink-0" />
-                <span className="font-mono">{name}</span>
-                {done && <Check className="size-3 text-emerald-600" />}
-                {failed && <TriangleAlert className="size-3" />}
-                {!done && !failed && <CircleDashed className="size-3 animate-spin" />}
-              </summary>
-              <pre className="mt-1 max-h-40 overflow-auto rounded-md bg-muted/70 p-2 font-mono text-[10px] leading-relaxed whitespace-pre-wrap">
-                {JSON.stringify({ input: p.input, output: p.output, error: p.errorText }, null, 2)}
-              </pre>
-            </details>
+            <Fragment key={i}>
+              <details className="ai-tool group max-w-full">
+                <summary
+                  className={cn(
+                    "flex cursor-pointer list-none items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors select-none hover:bg-muted/60 [&::-webkit-details-marker]:hidden",
+                    failed && "border-red-200 text-red-700"
+                  )}
+                >
+                  <Wrench className="size-3 shrink-0" />
+                  <span className="font-mono">{name}</span>
+                  {done && <Check className="size-3 text-emerald-600" />}
+                  {failed && <TriangleAlert className="size-3" />}
+                  {!done && !failed && <CircleDashed className="size-3 animate-spin" />}
+                </summary>
+                <pre className="mt-1 max-h-40 overflow-auto rounded-md bg-muted/70 p-2 font-mono text-[10px] leading-relaxed whitespace-pre-wrap">
+                  {JSON.stringify({ input: p.input, output: p.output, error: p.errorText }, null, 2)}
+                </pre>
+              </details>
+              {/* Media the tool made previews right under its chip — it stays
+                  in the chat until the user drags it out or files it away. */}
+              {done && <ToolOutputAssets output={p.output} />}
+            </Fragment>
           );
         }
         return null;

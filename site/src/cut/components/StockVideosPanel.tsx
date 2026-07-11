@@ -264,9 +264,8 @@ function StockTile({ item }: { item: StockVideo }) {
           className="grid size-5 place-items-center rounded-full bg-black/45 text-white hover:bg-black/65"
           onClick={() =>
             useLightbox.getState().open({
+              kind: "video",
               src: item.file,
-              isVideo: true,
-              playable: true,
               aspect: item.aspect,
               name: stockTitle(item.id),
               prompt: item.prompt,

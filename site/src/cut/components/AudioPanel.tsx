@@ -281,8 +281,9 @@ function VoiceGenerator({ projectId }: { projectId: string }) {
   );
 }
 
-/** Tiny waveform for a row, from the asset's normalized peaks. */
-function PeakStrip({ peaks }: { peaks: number[] }) {
+/** Tiny waveform for a row, from the asset's normalized peaks. Also drawn
+ * bigger by the lightbox and the chat's audio cards (`className` restyles). */
+export function PeakStrip({ peaks, className }: { peaks: number[]; className?: string }) {
   const BARS = 48;
   const step = Math.max(1, Math.floor(peaks.length / BARS));
   const bars: number[] = [];
@@ -297,7 +298,7 @@ function PeakStrip({ peaks }: { peaks: number[] }) {
     <svg
       viewBox={`0 0 ${BARS * 2} 16`}
       preserveAspectRatio="none"
-      className="mt-1 h-4 w-full text-muted-foreground/50"
+      className={cn("mt-1 h-4 w-full text-muted-foreground/50", className)}
       aria-hidden
     >
       {bars.map((p, i) => {
@@ -352,7 +353,10 @@ function buildAudioDragGhost(name: string, width: number, peaks?: number[]): HTM
   return el;
 }
 
-function AudioRow({
+/** One audio asset as a playable row — the shared audio preview (panels and
+ * the chat's audio cards): play button, name, duration, waveform, and a
+ * hover-revealed menu + add button. */
+export function AudioRow({
   name,
   duration,
   url,

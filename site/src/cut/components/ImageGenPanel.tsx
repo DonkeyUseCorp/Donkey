@@ -275,8 +275,8 @@ function GeneratedTile({
             <DropdownMenuItem
               onClick={() =>
                 useLightbox.getState().open({
+                  kind: "image",
                   src: asset.url,
-                  isVideo: false,
                   name: asset.name,
                   prompt: asset.name,
                   assetId: asset.id,

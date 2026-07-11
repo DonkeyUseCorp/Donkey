@@ -113,7 +113,7 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
       // The character's poster seed is the point — the same person must
       // deliver the line — so free-form prompts alone get the ref rewrite.
       composeRefs: !character,
-    });
+    }).settled;
     useVideoGen.getState().openWith("");
   };
 
@@ -387,9 +387,8 @@ function JobRow({ job, handle }: { job: GenerateJob; handle?: string }) {
               <DropdownMenuItem
                 onClick={() =>
                   useLightbox.getState().open({
+                    kind: "video",
                     src: asset.url,
-                    isVideo: true,
-                    playable: true,
                     name: asset.name,
                     prompt: job.prompt,
                     assetId: asset.id,

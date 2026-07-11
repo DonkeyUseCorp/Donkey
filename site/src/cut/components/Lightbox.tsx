@@ -1,24 +1,27 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Copy, Loader2, Plus, X } from "lucide-react";
+import { Check, Copy, FileText, Loader2, Music, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useLightbox } from "@/cut/lib/lightbox";
+import { useLightbox, type LightboxItem } from "@/cut/lib/lightbox";
 import { importImage, importStockVideo } from "@/cut/lib/media";
 import { useEditor } from "@/cut/lib/store";
+import { DocText, useDocText } from "./DocText";
+import { PeakStrip } from "./AudioPanel";
 
-// The media lightbox: the big version of a stock or generated item floating
-// straight on the backdrop — media on top, name and prompt below, plus a
-// button to drop it onto the timeline. Mounted once in the editor. When the
-// item's aspect is known the dialog is laid out at its final size before the
-// media loads.
+// The asset lightbox: the big version of a stock, generated, or chat asset
+// floating straight on the backdrop — media on top, name and prompt below,
+// plus a button to drop it onto the timeline. Mounted once in the editor.
+// Video and images size the dialog from a known aspect before the media
+// loads; audio gets a waveform player and text files render formatted
+// (markdown, CSV table, plain text).
 
 const ASPECT_RATIO: Record<string, number> = { "16:9": 16 / 9, "9:16": 9 / 16, "1:1": 1 };
 
 export function Lightbox() {
   const item = useLightbox((s) => s.item);
   const [adding, setAdding] = useState(false);
-  // Keyed to the added image's src, so opening a different image clears the
+  // Keyed to the added item's src, so opening a different item clears the
   // "Added" confirmation without a reset effect.
   const [addedSrc, setAddedSrc] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -43,12 +46,17 @@ export function Lightbox() {
     setAdding(true);
     try {
       if (item.assetId) {
-        useEditor.getState().addClipFromAsset(item.assetId);
+        if (item.kind === "audio") {
+          useEditor.getState().addAudioFromAsset(item.assetId);
+        } else {
+          useEditor.getState().addClipFromAsset(item.assetId);
+        }
       } else {
         // A stock clip imports as footage; a stock image bakes into a still.
-        const asset = item.playable
-          ? await importStockVideo(projectId, { url: item.src, name: item.name })
-          : await importImage(projectId, { url: item.src, name: item.name });
+        const asset =
+          item.kind === "video"
+            ? await importStockVideo(projectId, { url: item.src, name: item.name })
+            : await importImage(projectId, { url: item.src, name: item.name });
         useEditor.getState().addClipFromAsset(asset.id);
       }
       setAddedSrc(item.src);
@@ -59,14 +67,23 @@ export function Lightbox() {
     }
   };
 
+  // Audio without a project asset (a library ref) has nowhere direct to land;
+  // text never rides the timeline.
+  const canAdd = item.kind !== "text" && (item.kind !== "audio" || item.assetId !== null);
+
   // With a known aspect the dialog width follows it — capped so the media
   // stays within 68vh tall and 860px/92vw wide — and the media box carries the
-  // same ratio, so nothing shifts when the file loads.
+  // same ratio, so nothing shifts when the file loads. Audio and text use
+  // fixed reading widths instead.
   const ratio = item.aspect ? ASPECT_RATIO[item.aspect] : undefined;
-  const mediaClass = ratio
-    ? "block w-full rounded-2xl bg-black object-cover shadow-2xl"
-    : "block max-h-[68vh] w-full rounded-2xl bg-black object-contain shadow-2xl";
-  const mediaStyle = ratio ? { aspectRatio: ratio } : undefined;
+  const width =
+    item.kind === "audio"
+      ? "min(92vw, 480px)"
+      : item.kind === "text"
+        ? "min(92vw, 720px)"
+        : ratio
+          ? `min(92vw, 860px, ${Math.round(68 * ratio * 100) / 100}vh)`
+          : "min(92vw, 860px)";
 
   return (
     <div
@@ -75,7 +92,7 @@ export function Lightbox() {
     >
       <div
         className="relative flex max-h-[92vh] flex-col gap-3"
-        style={{ width: ratio ? `min(92vw, 860px, ${Math.round(68 * ratio * 100) / 100}vh)` : "min(92vw, 860px)" }}
+        style={{ width }}
         onClick={(e) => e.stopPropagation()}
       >
         <button
@@ -86,47 +103,25 @@ export function Lightbox() {
           <X className="size-4" />
         </button>
 
-        {item.isVideo ? (
-          item.playable ? (
-            <video
-              controls
-              autoPlay
-              loop
-              playsInline
-              src={item.src}
-              className={mediaClass}
-              style={mediaStyle}
-            />
-          ) : (
-            <video
-              muted
-              playsInline
-              preload="metadata"
-              src={`${item.src}#t=0.1`}
-              className={mediaClass}
-              style={mediaStyle}
-            />
-          )
-        ) : (
-          // eslint-disable-next-line @next/next/no-img-element -- static/project image, client-only page
-          <img src={item.src} alt={item.name} className={mediaClass} style={mediaStyle} />
-        )}
+        <LightboxMedia item={item} ratio={ratio} />
 
         <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0 truncate text-[15px] font-semibold tracking-tight text-white">
               {item.name}
             </div>
-            <Button className="shrink-0" disabled={adding} onClick={add}>
-              {adding ? (
-                <Loader2 data-icon="inline-start" className="animate-spin" />
-              ) : added ? (
-                <Check data-icon="inline-start" />
-              ) : (
-                <Plus data-icon="inline-start" />
-              )}
-              {added ? "Added" : "Use"}
-            </Button>
+            {canAdd && (
+              <Button className="shrink-0" disabled={adding} onClick={add}>
+                {adding ? (
+                  <Loader2 data-icon="inline-start" className="animate-spin" />
+                ) : added ? (
+                  <Check data-icon="inline-start" />
+                ) : (
+                  <Plus data-icon="inline-start" />
+                )}
+                {added ? "Added" : "Use"}
+              </Button>
+            )}
           </div>
 
           {item.prompt && item.prompt !== item.name && (
@@ -155,6 +150,70 @@ export function Lightbox() {
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function LightboxMedia({ item, ratio }: { item: LightboxItem; ratio?: number }) {
+  if (item.kind === "audio") return <AudioBody item={item} />;
+  if (item.kind === "text") return <TextBody item={item} />;
+
+  const mediaClass = ratio
+    ? "block w-full rounded-2xl bg-black object-cover shadow-2xl"
+    : "block max-h-[68vh] w-full rounded-2xl bg-black object-contain shadow-2xl";
+  const mediaStyle = ratio ? { aspectRatio: ratio } : undefined;
+
+  if (item.kind === "video") {
+    return (
+      <video
+        controls
+        autoPlay
+        loop
+        playsInline
+        src={item.src}
+        className={mediaClass}
+        style={mediaStyle}
+      />
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element -- static/project image, client-only page
+    <img src={item.src} alt={item.name} className={mediaClass} style={mediaStyle} />
+  );
+}
+
+function AudioBody({ item }: { item: LightboxItem }) {
+  const asset = useEditor((s) =>
+    item.assetId ? s.assets.find((a) => a.id === item.assetId) : undefined
+  );
+  return (
+    <div className="flex flex-col gap-3 rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 p-5 pt-10 shadow-2xl">
+      <Music className="size-8 text-white/90" />
+      {asset?.peaks && asset.peaks.length > 0 && (
+        <PeakStrip peaks={asset.peaks} className="h-10 text-white/85" />
+      )}
+      <audio controls autoPlay src={item.src} className="w-full" />
+    </div>
+  );
+}
+
+function TextBody({ item }: { item: LightboxItem }) {
+  const { text, failed } = useDocText(item.src);
+  return (
+    <div className="flex max-h-[68vh] flex-col overflow-hidden rounded-2xl bg-card shadow-2xl">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2.5 pr-12">
+        <FileText className="size-4 text-muted-foreground" />
+        <span className="truncate text-[12.5px] font-medium">{item.name}</span>
+      </div>
+      <div className="min-h-0 overflow-y-auto px-4 py-3 text-[12.5px] leading-relaxed">
+        {failed ? (
+          <p className="text-muted-foreground">Could not read the file.</p>
+        ) : text === null ? (
+          <Loader2 className="size-4 animate-spin text-muted-foreground" />
+        ) : (
+          <DocText name={item.name} text={text} />
+        )}
       </div>
     </div>
   );

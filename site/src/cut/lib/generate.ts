@@ -58,32 +58,36 @@ interface GenerateState {
       composeRefs?: boolean;
     }
   ) => Promise<GenerateJob>;
+  /** Kick off a video render. Returns the job id right away (the render
+   * outlives most callers) plus the settled job for anyone who waits. */
   generateVideo: (
     projectId: string,
     prompt: string,
-    opts?: {
-      tier?: "fast" | "high";
-      durationSeconds?: number;
-      /** Composition shape; defaults to the project's orientation. */
-      aspect?: "16:9" | "9:16";
-      resolution?: "720p" | "1080p";
-      /** References of any kind — video, image, text file. Veo takes one
-       * input image, so at most one picture seeds the render. */
-      refs?: AssetRef[];
-      /** Rewrite the prompt around the references before rendering (the
-       * default when refs are present) — see composeGen.ts. Veo plays the
-       * input image as the literal first frame, so a prompt that transforms
-       * the reference must become a standalone description with the image
-       * dropped; the rewrite decides which. Character mode passes false — the
-       * poster seed is the point. */
-      composeRefs?: boolean;
-      /** Called once with the landed asset when the render completes and the
-       * project is still open — lets the AI place the clip after a background
-       * render it couldn't wait out (the assistant tool bridge caps at 2min). */
-      onDone?: (asset: MediaAsset) => void;
-    }
-  ) => Promise<GenerateJob>;
+    opts?: VideoGenOptions
+  ) => { jobId: string; settled: Promise<GenerateJob> };
   dismiss: (id: string) => void;
+}
+
+export interface VideoGenOptions {
+  tier?: "fast" | "high";
+  durationSeconds?: number;
+  /** Composition shape; defaults to the project's orientation. */
+  aspect?: "16:9" | "9:16";
+  resolution?: "720p" | "1080p";
+  /** References of any kind — video, image, text file. Veo takes one
+   * input image, so at most one picture seeds the render. */
+  refs?: AssetRef[];
+  /** Rewrite the prompt around the references before rendering (the
+   * default when refs are present) — see composeGen.ts. Veo plays the
+   * input image as the literal first frame, so a prompt that transforms
+   * the reference must become a standalone description with the image
+   * dropped; the rewrite decides which. Character mode passes false — the
+   * poster seed is the point. */
+  composeRefs?: boolean;
+  /** Called once with the landed asset when the render completes and the
+   * project is still open — lets the AI place the clip after a background
+   * render it couldn't wait out (the assistant tool bridge caps at 2min). */
+  onDone?: (asset: MediaAsset) => void;
 }
 
 const REFRESH_MS = 8000;
@@ -206,14 +210,47 @@ function bytesFromBase64(b64: string): Uint8Array<ArrayBuffer> {
   return bytes;
 }
 
+/** Settled video jobs persist per browser, so a render left unplaced (a chat
+ * card, the Video panel's renders list) survives a reload. Running jobs don't
+ * persist: a reload kills the in-flight poll loop, so a restored one would
+ * spin forever. */
+const JOBS_KEY = "cut-gen-video-jobs";
+const JOBS_CAP = 50;
+
+function readPersistedJobs(): GenerateJob[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(JOBS_KEY) ?? "[]") as unknown;
+    return Array.isArray(v)
+      ? (v as GenerateJob[]).filter((j) => j?.id && j.status !== "running")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistJobs(jobs: GenerateJob[]) {
+  try {
+    localStorage.setItem(
+      JOBS_KEY,
+      JSON.stringify(
+        jobs.filter((j) => j.kind === "video" && j.status !== "running").slice(0, JOBS_CAP)
+      )
+    );
+  } catch {
+    // Storage full/blocked — render history just won't persist.
+  }
+}
+
 export const useGenerate = create<GenerateState>((set, get) => {
   // A single session probe is in flight at a time, but the answer stays
   // re-checkable for the page's whole life: a sign-in can complete in another
   // tab, or the session cookie can land a beat after this page loads.
   let probing: Promise<boolean> | null = null;
 
-  const update = (id: string, patch: Partial<GenerateJob>) =>
+  const update = (id: string, patch: Partial<GenerateJob>) => {
     set((s) => ({ jobs: s.jobs.map((j) => (j.id === id ? { ...j, ...patch } : j)) }));
+    persistJobs(get().jobs);
+  };
 
   const fail = (id: string, err: unknown) =>
     update(id, { status: "error", error: err instanceof Error ? err.message : String(err) });
@@ -233,7 +270,7 @@ export const useGenerate = create<GenerateState>((set, get) => {
 
   return {
     signedIn: null,
-    jobs: [],
+    jobs: typeof window === "undefined" ? [] : readPersistedJobs(),
 
     probe: () => {
       void get().probeNow();
@@ -322,7 +359,7 @@ export const useGenerate = create<GenerateState>((set, get) => {
     generateVideo: (projectId, prompt, opts) => {
       const job: GenerateJob = { id: uid(), projectId, kind: "video", prompt, status: "running" };
       set((s) => ({ jobs: [job, ...s.jobs] }));
-      return (async () => {
+      const settledRun = (async () => {
         try {
           // The job (and the landed asset's name) keeps the user's own words;
           // only the render sees the composed prompt. Veo seeds from a single
@@ -397,9 +434,13 @@ export const useGenerate = create<GenerateState>((set, get) => {
         }
         return settled(job.id, job);
       })();
+      return { jobId: job.id, settled: settledRun };
     },
 
-    dismiss: (id) => set((s) => ({ jobs: s.jobs.filter((j) => j.id !== id) })),
+    dismiss: (id) => {
+      set((s) => ({ jobs: s.jobs.filter((j) => j.id !== id) }));
+      persistJobs(get().jobs);
+    },
   };
 });
 

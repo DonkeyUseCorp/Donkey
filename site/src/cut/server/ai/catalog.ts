@@ -223,7 +223,7 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "generate_image",
     description:
-      "Generate an AI image from a text prompt (Donkey's hosted image model) and add it to the project as a still clip. Use for B-roll, cover frames, or backgrounds the user doesn't have footage for; when the user asks you to write or improve the prompt itself, put it in chat and wait for them to ask for the image. reference_asset_ids attaches project images/video frames the render should draw from (the user's attached references, a clip to restyle) — the prompt is recomposed around them. Returns when the image has landed. By default it also drops the still onto the timeline; pass add_to_timeline:false to keep it off (it stays in the Image panel's renders, where a \"…\" menu files it into Media or the Library). Needs the user signed in to Donkey (spends their credits).",
+      "Generate an AI image from a text prompt (Donkey's hosted image model). Use for B-roll, cover frames, or backgrounds the user doesn't have footage for; when the user asks you to write or improve the prompt itself, put it in chat and wait for them to ask for the image. reference_asset_ids attaches project images/video frames the render should draw from (the user's attached references, a clip to restyle) — the prompt is recomposed around them. Returns when the image has landed. The image previews as a card in this chat, where the user can expand it, drag it onto the timeline, or file it into Media or the Library from its \"…\" menu; pass add_to_timeline:true (or an index) only when they asked for it in the cut. Needs the user signed in to Donkey (spends their credits).",
     inputSchema: obj({
       prompt: str("What to depict — be specific about subject, style, and lighting"),
       aspect: { type: "string", enum: ["16:9", "9:16", "1:1"], description: "Image shape (default: the project aspect)" },
@@ -233,14 +233,14 @@ export const AI_TOOLS: AiToolDef[] = [
         items: { type: "string" },
         description: "Project asset ids (images or videos) to use as visual references",
       },
-      add_to_timeline: bool("Insert the still on the video track (default true)"),
-      index: num("Insert position on the video track (default: end; 0 = first/cover)"),
+      add_to_timeline: bool("Insert the still on the video track (default false — it stays on its chat card until the user asks)"),
+      index: num("Insert position on the video track (passing it implies add_to_timeline; 0 = first/cover)"),
     }, ["prompt"]),
   },
   {
     name: "generate_video",
     description:
-      "Generate an AI video clip from a text prompt (Donkey's hosted Veo model). Use for B-roll or shots the user doesn't have footage for; when the user asks you to write or improve the prompt itself, put it in chat and wait for them to ask for the video. reference_asset_id seeds the render with one project image or video frame (it becomes the opening frame when the subject is used as-is). This renders remotely and takes a minute or two, so the tool RETURNS IMMEDIATELY — the clip appears in the Video panel's renders (and on the timeline by default) when it finishes. Tell the user it's rendering. Pass add_to_timeline:false to keep it off the timeline. Needs the user signed in to Donkey (spends their credits).",
+      "Generate an AI video clip from a text prompt (Donkey's hosted Veo model). Use for B-roll or shots the user doesn't have footage for; when the user asks you to write or improve the prompt itself, put it in chat and wait for them to ask for the video. reference_asset_id seeds the render with one project image or video frame (it becomes the opening frame when the subject is used as-is). This renders remotely and takes a minute or two, so the tool RETURNS IMMEDIATELY — the clip previews as a live card in this chat (and in the Video panel's renders) when it finishes. Tell the user it's rendering. Pass add_to_timeline:true (or an index) only when they asked for it in the cut; otherwise the user drags it in from the card. Needs the user signed in to Donkey (spends their credits).",
     inputSchema: obj({
       prompt: str("The shot to generate — describe motion, subject, and mood"),
       tier: { type: "string", enum: ["fast", "high"], description: "fast = quicker/cheaper (default), high = best quality" },
@@ -248,21 +248,21 @@ export const AI_TOOLS: AiToolDef[] = [
       aspect: { type: "string", enum: ["16:9", "9:16"], description: "Clip shape (default: the project aspect)" },
       resolution: { type: "string", enum: ["720p", "1080p"], description: "Output detail (default 720p)" },
       reference_asset_id: str("One project asset id (image or video) to seed the render"),
-      add_to_timeline: bool("Insert the clip on the video track (default true)"),
-      index: num("Insert position on the video track (default: end)"),
+      add_to_timeline: bool("Insert the clip on the video track when it lands (default false — it stays on its chat card until the user asks)"),
+      index: num("Insert position on the video track (passing it implies add_to_timeline)"),
     }, ["prompt"]),
   },
   {
     name: "generate_character_video",
     description:
-      "Generate a UGC-style selfie clip of a stock talking character speaking a line you write (Donkey's hosted Veo model). Pick a character id from stock_search kind:\"character\" — each has a persona and look; the same person then delivers the line to camera. Like generate_video this RETURNS IMMEDIATELY and the clip lands in the Video panel's renders (and on the timeline by default) a minute or two later. Needs the user signed in to Donkey (spends their credits).",
+      "Generate a UGC-style selfie clip of a stock talking character speaking a line you write (Donkey's hosted Veo model). Pick a character id from stock_search kind:\"character\" — each has a persona and look; the same person then delivers the line to camera. Like generate_video this RETURNS IMMEDIATELY and the clip previews in this chat (and the Video panel's renders) a minute or two later; add_to_timeline:true places it when it lands. Needs the user signed in to Donkey (spends their credits).",
     inputSchema: obj({
       character_id: str("Talking-character id from stock_search"),
       line: str("What the character says, spoken to camera"),
       tier: { type: "string", enum: ["fast", "high"], description: "fast = quicker/cheaper (default), high = best quality" },
       duration_seconds: num("Clip length 4–8 seconds (default 8)"),
-      add_to_timeline: bool("Insert the clip on the video track (default true)"),
-      index: num("Insert position on the video track (default: end)"),
+      add_to_timeline: bool("Insert the clip on the video track when it lands (default false — it stays on its chat card until the user asks)"),
+      index: num("Insert position on the video track (passing it implies add_to_timeline)"),
     }, ["character_id", "line"]),
   },
   {
@@ -277,11 +277,11 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "stock_add",
     description:
-      "Import a stock video or image (by stock_search id) into the project and, by default, drop it on the video track. Free — the media ships with Cut.",
+      "Import a stock video or image (by stock_search id) into the project. It previews as a card in this chat; pass add_to_timeline:true (or a `start`) to also drop it on the video track when the user asked for it in the cut. Free — the media ships with Cut.",
     inputSchema: obj({
       id: str("Stock item id from stock_search"),
-      add_to_timeline: bool("Place it on video track 0 (default true)"),
-      start: num("Timeline start s (default: appended at the end)"),
+      add_to_timeline: bool("Place it on video track 0 (default false — it stays on its chat card until the user asks)"),
+      start: num("Timeline start s (passing it implies add_to_timeline; default when placed: appended at the end)"),
     }, ["id"]),
   },
   {
@@ -340,14 +340,15 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "voiceover_generate",
     description:
-      "Generate a spoken AI voiceover from a script (Donkey's hosted speech model) and drop it on the soundtrack at the playhead (or `start`). Use for 'add a voiceover', 'narrate this', 'read this script aloud'; when the user asks you to write or rework the script itself, put the text in chat and wait for them to ask for the voiceover. Pick a `voice` id from list_voices, or omit for a good default. `direction` steers delivery in natural language and can ask for another language — 'say it in Spanish' translates the script before synthesis; the script itself may carry inline tags like [whispers] or [excited]. `duck` lowers all other audio to that gain while the voice plays (0..1; ~0.3–0.5 is typical, 1 = don't duck). Needs the user signed in to Donkey (spends their credits).",
+      "Generate a spoken AI voiceover from a script (Donkey's hosted speech model). The audio previews as a playable card in this chat; pass add_to_timeline:true (or a `start`) to also drop it on the soundtrack when the user asked for it in the cut ('add a voiceover', 'narrate this'). When the user asks you to write or rework the script itself, put the text in chat and wait for them to ask for the voiceover. Pick a `voice` id from list_voices, or omit for a good default. `direction` steers delivery in natural language and can ask for another language — 'say it in Spanish' translates the script before synthesis; the script itself may carry inline tags like [whispers] or [excited]. `duck` lowers all other audio to that gain while the voice plays (0..1; ~0.3–0.5 is typical, 1 = don't duck). Needs the user signed in to Donkey (spends their credits).",
     inputSchema: obj({
       script: str("What the voice should say"),
       voice: str("Voice id from list_voices (optional; a sensible default is chosen)"),
       direction: str("Delivery instruction, e.g. 'Say warmly, like an old friend'; may include a language ask, which translates the script (optional)"),
       language: str("Pronunciation language as BCP-47, e.g. es-US, ja-JP (optional; default auto-detects — this reads the script as written, it does not translate)"),
       duck: num("Lower other audio to this gain while the voice plays, 0..1 (default 0.4; 1 = no ducking)"),
-      start: num("Timeline start in seconds (default: the playhead)"),
+      add_to_timeline: bool("Place it on the soundtrack (default false — it stays on its chat card until the user asks)"),
+      start: num("Timeline start in seconds (passing it implies add_to_timeline; default when placed: the playhead)"),
     }, ["script"]),
   },
   {
@@ -477,7 +478,7 @@ export const AI_SKILLS: Record<string, string> = {
   "editor-overview": `# Cut editor overview
 Cut is a local, project-based short-video editor. Each project has an output aspect — 9:16 vertical (1080×1920, TikTok/Reels/Shorts) or 16:9 widescreen (1920×1080, YouTube) — switchable from the pill in the top bar; the current one is in editor_state project.aspect. Layout:
 - Left icon rail tabs: Media (user-imported files + Exports list), Library (shared reusable assets), Video (stock clip browser — footage + talking characters — beside the AI video generator), Image (stock images beside the AI image generator), Audio (AI voiceover + audio files), Text (title presets), Subtitles (transcript editor), Publish (caption/tags/sound metadata). Camera/mic recording lives in the top bar next to the aspect picker.
-- Media shows only what the user imported. Everything Cut makes carries an origin tag (generated, voiceover, recording, stock, freeze — see \`media\` in editor_state) and lives where it was created, e.g. generated clips in the Video panel's job list; a "…" menu on each files it into Media or the Library.
+- Media shows only what the user imported. Everything Cut makes carries an origin tag (generated, voiceover, recording, stock, freeze, chat — see \`media\` in editor_state) and lives where it was created — media you make previews on a card in this chat, panel renders sit in their job lists; a "…" menu on each files it into Media or the Library, and every card drags onto the timeline. Deleting a chat thread deletes the chat media the user never placed or filed away.
 - Center: the video preview canvas (composited at the project's frame size) with draggable text overlays and subtitle captions.
 - Right: the Inspector — its content follows the selection (video clip, overlay video, soundtrack clip, title, or cue).
 - Bottom: the timeline (resizable by dragging its top border). Rows top-to-bottom: the video tracks in z-order (positive tracks, then track 0, then negative tracks behind it), soundtrack lanes (green), titles (purple), subtitle tracks (amber, when enabled). Every track is free-positioned in time.
@@ -524,7 +525,7 @@ Titles burn into the export exactly as previewed.`,
 Soundtrack clips: volume 0..1.5, fadeIn/fadeOut seconds (max half the clip), start = timeline position, in/out = trim inside the source; clips can spread across several soundtrack lanes (the \`lane\` field), new sounds slide to free space in their lane. Fades render with ffmpeg afade on export.
 Ducking: a soundtrack clip's \`duck\` (0..1, via update_audio) lowers ALL other audio — video-clip sound and other music — to that gain while the clip plays; 1 clears it. Voiceovers set this so narration sits over quieter music. It applies in both the preview and the export.
 Voiceover (Donkey's hosted speech model — signed in, spends credits, like image/video generation):
-- voiceover_generate(script, voice?, direction?, duck?, start?, language?): synthesizes the script and drops it on the soundtrack at the playhead (or start). Defaults to a 0.4 duck so it sits over other audio. Voices are Gemini's prebuilt set — list_voices returns them (id + one-word character like Warm, Upbeat, Gravelly); omit voice for a good default. \`direction\` steers delivery in natural language ("Say warmly, like an old friend") and may ask for another language — "say it in Spanish" translates the script before synthesis; the script itself can carry inline tags like [whispers], [excited], [laughs]. \`language\` only pins pronunciation of the text as written.
+- voiceover_generate(script, voice?, direction?, duck?, add_to_timeline?, start?, language?): synthesizes the script into a playable chat card; add_to_timeline:true (or a start) also drops it on the soundtrack at the playhead (or start) when the user asked for it in the cut. Defaults to a 0.4 duck when placed so it sits over other audio. Voices are Gemini's prebuilt set — list_voices returns them (id + one-word character like Warm, Upbeat, Gravelly); omit voice for a good default. \`direction\` steers delivery in natural language ("Say warmly, like an old friend") and may ask for another language — "say it in Spanish" translates the script before synthesis; the script itself can carry inline tags like [whispers], [excited], [laughs]. \`language\` only pins pronunciation of the text as written.
 - read_subtitles_aloud(voice?, direction?, duck?, track?): speaks one subtitle track's cues, each line at its own cue time — captions become narration. Needs cues first. The Inspector offers the same per-clip: "Generate audio for clip" transcribes just that clip when it has no cues yet, then voices it.
 Subtitle tracks: a project carries up to 3, one language each (editor_state subtitles.tracks; each cue's \`track\`). Each track shows its own caption line, dragged to its own spot; all share one visual style. The panel and generation write to the ACTIVE track — the track tool param switches it. subtitles_add_track / subtitles_remove_track manage them; subtitles_translate_track("ko-KR") is the whole "add Korean subtitles" flow when captions exist (it adds/reuses the track and translates cue-for-cue).
 Generating: subtitles_generate transcribes the cut's audio on-device (Apple speech, macOS 26) onto the target track; cues are caption-sized (≈38 chars). subtitles_from_visuals is the fallback for a cut with NO speech — it watches sampled frames (via the user's Claude login) and writes timed narration captions of what's on screen. So: speech present → subtitles_generate; silent/music-only footage the user wants captioned → subtitles_from_visuals. Never fabricate a spoken transcript.
@@ -535,10 +536,10 @@ Caption look: the Subtitles panel offers 10 visual presets (clean, hook, punchy,
 
   "ai-generation": `# Stock media & AI generation
 Two ways to get footage the user doesn't have: bundled stock (local, free) and hosted generation (signed in, spends credits). Prefer stock when it genuinely fits; generate when the shot needs to be specific.
-Stock: stock_search browses the bundled catalogs — footage clips and images in 8 categories plus ~20 UGC talking characters — matching prompts, categories, and tags. stock_add imports an item into the project (origin "stock") and drops it on the timeline. In the UI these live in the Video and Image tabs beside the generators; clicking a stock tile seeds the generate panel with its prompt.
+Stock: stock_search browses the bundled catalogs — footage clips and images in 8 categories plus ~20 UGC talking characters — matching prompts, categories, and tags. stock_add imports an item into the project as a chat card; add_to_timeline:true (or a start) also drops it on the timeline when the user asked. In the UI these live in the Video and Image tabs beside the generators; clicking a stock tile seeds the generate panel with its prompt.
 Generation:
-- generate_image(prompt, aspect?, resolution?, reference_asset_ids?, add_to_timeline?, index?): the hosted image model renders the prompt at 16:9, 9:16, or 1:1 (default: project aspect) and 1K/2K/4K. The image rides video track 0 as a still clip (8s default, stretchable). Great for a cover/hook frame (index 0), a background, or a b-roll still.
-- generate_video(prompt, tier?, duration_seconds?, aspect?, resolution?, reference_asset_id?, add_to_timeline?, index?): a hosted Veo model renders a 4–8s clip with audio. tier "fast" (default) is quicker/cheaper, "high" is best quality. This takes a minute or two, so the tool returns right away and the clip appears in the Video panel's renders (and on the timeline by default) when it finishes — tell the user it's rendering. Don't call it again for the same shot while one is in flight.
+- generate_image(prompt, aspect?, resolution?, reference_asset_ids?, add_to_timeline?, index?): the hosted image model renders the prompt at 16:9, 9:16, or 1:1 (default: project aspect) and 1K/2K/4K. The still previews in the chat; placed (add_to_timeline:true or an index) it rides video track 0 as a still clip (8s default, stretchable). Great for a cover/hook frame (index 0), a background, or a b-roll still.
+- generate_video(prompt, tier?, duration_seconds?, aspect?, resolution?, reference_asset_id?, add_to_timeline?, index?): a hosted Veo model renders a 4–8s clip with audio. tier "fast" (default) is quicker/cheaper, "high" is best quality. This takes a minute or two, so the tool returns right away and the clip previews in the chat and the Video panel's renders when it finishes (on the timeline only when asked) — tell the user it's rendering. Don't call it again for the same shot while one is in flight.
 - generate_character_video(character_id, line, …): a stock talking character delivers a line to camera, same async render as generate_video. Characters come from stock_search kind:"character" — each has a persona; you write the line (chat deliverable rules apply: asked for "a script", write it in chat first).
 References: users attach images/clips to their message or the generate panels; project asset ids (see \`media\` in editor_state, including attachments — OS drops become project assets) pass through reference_asset_ids / reference_asset_id. A model recomposes the prompt around them: for video at most one image survives as the literal opening frame; for images any number can be drawn from. When the user says "use this clip/image", pass the reference — don't just describe it in the prompt.
 If generation fails with a sign-in or credits message, relay that plainly — it needs the user signed in to Donkey with credits; it is not a local fallback. Write vivid, specific prompts (subject, style, lighting, motion); the user's request is usually shorthand, so flesh it out.`,
@@ -562,7 +563,7 @@ Rules:
 - Read list_skills / read_skill before working in an area you're unsure about — they document every setting.
 - Don't transcribe a video with no speech. If the user wants captions on silent footage, use subtitles_from_visuals (it narrates what's on screen). Never invent a spoken transcript.
 - Voiceovers duck other audio by default so they stay audible. Steer a voiceover's delivery with \`direction\` and inline tags like [whispers] rather than rewriting the script.
-- generate_image / generate_video / generate_character_video / voiceover_generate / read_subtitles_aloud make media through hosted models (spends the user's Donkey credits, needs sign-in); call them when the user asked for the media itself — a request for the prompt or script gets text in chat. Bundled stock media (stock_search / stock_add) is free — use it when it fits. Media the user attached is in \`media\`; pass those asset ids as generation references when they say "use this". Default to adding the result to the timeline; write a rich, specific prompt from their shorthand. Video renders take a minute or two.
+- generate_image / generate_video / generate_character_video / voiceover_generate / read_subtitles_aloud make media through hosted models (spends the user's Donkey credits, needs sign-in); call them when the user asked for the media itself — a request for the prompt or script gets text in chat. Bundled stock media (stock_search / stock_add) is free — use it when it fits. Media the user attached is in \`media\`; pass those asset ids as generation references when they say "use this". Generated media previews on a chat card the user can expand, drag in, or file away; add it to the timeline (add_to_timeline:true or an index) only when they asked for it in the cut. Write a rich, specific prompt from their shorthand. Video renders take a minute or two.
 - capture_frame shows you the actual rendered frame when visual judgment matters.`;
 }
 

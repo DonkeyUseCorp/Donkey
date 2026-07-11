@@ -43,7 +43,11 @@ export function GeneratedAssetMenu({
         {before}
         {before != null && <DropdownMenuSeparator />}
         <DropdownMenuItem
-          onClick={() => useEditor.getState().updateAsset(asset.id, { origin: undefined })}
+          onClick={() =>
+            // Clearing the origin files it into Media; a chat-owned asset also
+            // sheds its thread so deleting the chat won't touch it.
+            useEditor.getState().updateAsset(asset.id, { origin: undefined, chatId: undefined })
+          }
         >
           <Clapperboard /> Add to Media
         </DropdownMenuItem>

@@ -2,6 +2,7 @@
 
 import { apiFetch, apiJson } from "./api";
 import { refFromAsset, refFromStockVideo, type AssetRef } from "./assetRef";
+import { chatOwner, tagChatAsset } from "./chatAssets";
 import { useGenerate } from "./generate";
 import { enrichAsset, ensurePeaks, importImage, importStockVideo } from "./media";
 import { characterPrompt, stockTitle } from "./stock";
@@ -351,6 +352,7 @@ export async function runAiTool(
       if (sel?.kind === "clip") cur.moveClip(sel.id, index);
       void enrichAsset(asset);
       return {
+        assetId: asset.id,
         clipId: sel?.kind === "clip" ? sel.id : null,
         index,
         duration: body.duration,
@@ -382,6 +384,7 @@ export async function runAiTool(
       const cur = useEditor.getState();
       const asset = cur.assets.find((a) => a.id === job.assetId);
       if (!asset) throw new ToolError("The generated image did not land in the project.");
+      tagChatAsset(asset.id);
       const placed = maybeAddGeneratedClip(asset.id, input);
       return {
         assetId: asset.id,
@@ -413,8 +416,11 @@ export async function runAiTool(
         input.reference_asset_id === undefined
           ? []
           : resolveRefAssets([input.reference_asset_id]);
-      const addToTimeline = input.add_to_timeline !== false;
+      const addToTimeline = input.add_to_timeline === true || isNum(input.index);
       const promptedIndex = isNum(input.index) ? Math.round(input.index) : undefined;
+      // Captured now: the render must file under the chat that asked, even if
+      // the user switches threads before it lands.
+      const chatId = chatOwner();
       void gen.generateVideo(projectId, prompt, {
         tier: input.tier === "high" ? "high" : "fast",
         durationSeconds: isNum(input.duration_seconds)
@@ -425,18 +431,25 @@ export async function runAiTool(
           ? { resolution: input.resolution }
           : {}),
         ...(refs.length > 0 ? { refs } : {}),
-        onDone: addToTimeline
-          ? (asset) => maybeAddGeneratedClip(asset.id, { index: promptedIndex })
-          : undefined,
+        onDone: (asset) => {
+          tagChatAsset(asset.id, chatId);
+          if (addToTimeline)
+            maybeAddGeneratedClip(asset.id, { add_to_timeline: true, index: promptedIndex });
+        },
       });
+      // The job entry is prepended synchronously, so the newest job is this
+      // render; the chat follows it by id to show a live card.
+      const jobId = useGenerate.getState().jobs[0]?.id ?? null;
       return {
         kind: "video",
         started: true,
+        jobId,
         addToTimeline,
         note:
-          "Rendering with Veo — it lands " +
-          (addToTimeline ? "on the timeline" : "in the Video panel's renders") +
-          " in a minute or two. Track it in the Video panel.",
+          "Rendering with Veo — it previews in this chat when it lands, in a minute or two" +
+          (addToTimeline
+            ? ", and goes onto the timeline."
+            : ". It stays in the chat (and the Video panel's renders) until the user places it."),
       };
     }
 
@@ -452,8 +465,9 @@ export async function runAiTool(
       const gen = useGenerate.getState();
       const signedIn = gen.signedIn ?? (await gen.probeNow());
       if (!signedIn) throw new ToolError("Sign in to Donkey to generate video.");
-      const addToTimeline = input.add_to_timeline !== false;
+      const addToTimeline = input.add_to_timeline === true || isNum(input.index);
       const promptedIndex = isNum(input.index) ? Math.round(input.index) : undefined;
+      const chatId = chatOwner();
       void gen.generateVideo(projectId, characterPrompt(character.persona!, line), {
         tier: input.tier === "high" ? "high" : "fast",
         durationSeconds: isNum(input.duration_seconds)
@@ -464,19 +478,24 @@ export async function runAiTool(
         // delivers the line — composing would swap the face, so it rides raw.
         refs: [refFromStockVideo(character)],
         composeRefs: false,
-        onDone: addToTimeline
-          ? (asset) => maybeAddGeneratedClip(asset.id, { index: promptedIndex })
-          : undefined,
+        onDone: (asset) => {
+          tagChatAsset(asset.id, chatId);
+          if (addToTimeline)
+            maybeAddGeneratedClip(asset.id, { add_to_timeline: true, index: promptedIndex });
+        },
       });
+      const jobId = useGenerate.getState().jobs[0]?.id ?? null;
       return {
         kind: "video",
         started: true,
+        jobId,
         character: character.id,
         addToTimeline,
         note:
-          "Rendering with Veo — it lands " +
-          (addToTimeline ? "on the timeline" : "in the Video panel's renders") +
-          " in a minute or two. Track it in the Video panel.",
+          "Rendering with Veo — it previews in this chat when it lands, in a minute or two" +
+          (addToTimeline
+            ? ", and goes onto the timeline."
+            : ". It stays in the chat (and the Video panel's renders) until the user places it."),
       };
     }
 
@@ -554,7 +573,9 @@ export async function runAiTool(
       const asset = vid
         ? await importStockVideo(projectId, { url: vid.file, name: stockTitle(vid.id) })
         : await importImage(projectId, { url: img!.file, name: stockTitle(img!.id) });
-      const addToTimeline = input.add_to_timeline !== false;
+      tagChatAsset(asset.id);
+      // An explicit start is itself the ask to place.
+      const addToTimeline = input.add_to_timeline === true || isNum(input.start);
       let clipId: string | null = null;
       if (addToTimeline) {
         useEditor
@@ -707,11 +728,14 @@ export async function runAiTool(
         throw new ToolError("script is required.");
       const start = isNum(input.start) ? Math.max(0, input.start) : s.currentTime;
       const lead = input.script.trim().split(/\s+/).slice(0, 4).join(" ");
-      return synthesizeAndPlace(
+      // An explicit start is itself the ask to place on the soundtrack.
+      const place = input.add_to_timeline === true || isNum(input.start);
+      return synthesizeVoiceover(
         [{ text: input.script, at: 0 }],
         `AI voice — ${lead}`,
         start,
-        input
+        input,
+        place
       );
     }
 
@@ -732,6 +756,8 @@ export async function runAiTool(
       });
       const sel = useEditor.getState().selection;
       return {
+        assetId: out.asset.id,
+        name: out.asset.name,
         audioClipId: sel?.kind === "audio" ? sel.id : null,
         voice,
         start: round2(out.start),
@@ -882,11 +908,12 @@ export async function runAiTool(
  * sign-in and credits), register the media, and drop one soundtrack clip
  * (voiceovers duck other audio by default). Shared by voiceover_generate and
  * read_subtitles_aloud. */
-async function synthesizeAndPlace(
+async function synthesizeVoiceover(
   segments: { text: string; at: number }[],
   name: string,
   start: number,
-  input: Record<string, unknown>
+  input: Record<string, unknown>,
+  place: boolean
 ) {
   const projectId = useEditor.getState().projectId;
   if (!projectId) throw new ToolError("No project open.");
@@ -904,18 +931,32 @@ async function synthesizeAndPlace(
   });
   const cur = useEditor.getState();
   cur.addAsset(asset);
+  tagChatAsset(asset.id);
+  void enrichAsset(asset);
+  if (!place) {
+    return {
+      assetId: asset.id,
+      name: asset.name,
+      voice,
+      duration: round2(asset.duration),
+      addedToTimeline: false,
+      note: "The voiceover previews in this chat — the user can play it and drag it onto the soundtrack; pass add_to_timeline or start when they ask for it in the cut.",
+    };
+  }
   // A single script lands at `start`; a multi-line readout is pre-offset to its
   // first cue, so it lands at that offset.
   const at = segments.length === 1 ? start : offset;
   cur.addAudioFromAsset(asset.id, at, { duck: duck < 1 ? duck : undefined });
-  void enrichAsset(asset);
   const sel = useEditor.getState().selection;
   return {
+    assetId: asset.id,
+    name: asset.name,
     audioClipId: sel?.kind === "audio" ? sel.id : null,
     voice,
     start: round2(at),
     duration: round2(asset.duration),
     duck: duck < 1 ? duck : null,
+    addedToTimeline: true,
   };
 }
 
@@ -972,14 +1013,17 @@ function layoutPatch(layout: string): Partial<OverlayClip> {
   return { frame: key === "full" ? undefined : { ...L.rect }, fit: L.fit };
 }
 
-/** Append a generated asset to the video track (default) at an optional index.
- * Shared by generate_image (inline) and generate_video (on the render's
- * completion). Respects add_to_timeline:false. */
+/** Append a generated asset to the video track at an optional index, when the
+ * model passed add_to_timeline:true. By default generated media stays on its
+ * chat preview card until the user asks for it in the cut. Shared by
+ * generate_image (inline) and generate_video (on the render's completion). */
 function maybeAddGeneratedClip(
   assetId: string,
   input: { add_to_timeline?: unknown; index?: unknown }
 ): { added: boolean; clipId: string | null; index: number | null } {
-  if (input.add_to_timeline === false) return { added: false, clipId: null, index: null };
+  // An explicit index is itself the ask to place ("make it the cover frame").
+  if (input.add_to_timeline !== true && !isNum(input.index))
+    return { added: false, clipId: null, index: null };
   const s = useEditor.getState();
   if (!s.assets.some((a) => a.id === assetId)) return { added: false, clipId: null, index: null };
   s.addClipFromAsset(assetId); // lands at the end, selected
