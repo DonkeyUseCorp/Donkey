@@ -3,6 +3,17 @@
 import { geminiModels } from "@/lib/inference/gemini-models";
 import { importFileToProject } from "./media";
 import type { MediaAsset } from "./types";
+import {
+  DEFAULT_VOICE,
+  resolveVoice,
+  SPEECH_VOICES,
+  VOICE_SAMPLE_TEXT,
+  type SpeechVoice,
+} from "./voices";
+
+// The voice catalog lives in the dependency-light `voices` module (shared with
+// the build script); re-exported here so existing importers keep working.
+export { DEFAULT_VOICE, resolveVoice, SPEECH_VOICES, type SpeechVoice };
 
 // Client side of AI voiceovers: Gemini speech generation on Donkey's hosted
 // inference routes, with the user's Donkey sign-in and credits (same-origin on
@@ -11,54 +22,11 @@ import type { MediaAsset } from "./types";
 // one WAV, and saves it into the project through the local engine like any
 // other media file.
 
-export interface SpeechVoice {
-  id: string;
-  /** One-word character from the voice catalog ("Warm", "Upbeat"). */
-  style: string;
-}
-
 export interface SpeechSegment {
   text: string;
   /** Timeline offset this line should land at, seconds. */
   at: number;
 }
-
-/** Gemini's prebuilt voices. The set is fixed by the model, so it ships
- * hardcoded — no listing round-trip. */
-export const SPEECH_VOICES: SpeechVoice[] = [
-  { id: "Zephyr", style: "Bright" },
-  { id: "Puck", style: "Upbeat" },
-  { id: "Charon", style: "Informative" },
-  { id: "Kore", style: "Firm" },
-  { id: "Fenrir", style: "Excitable" },
-  { id: "Leda", style: "Youthful" },
-  { id: "Orus", style: "Firm" },
-  { id: "Aoede", style: "Breezy" },
-  { id: "Callirrhoe", style: "Easy-going" },
-  { id: "Autonoe", style: "Bright" },
-  { id: "Enceladus", style: "Breathy" },
-  { id: "Iapetus", style: "Clear" },
-  { id: "Umbriel", style: "Easy-going" },
-  { id: "Algieba", style: "Smooth" },
-  { id: "Despina", style: "Smooth" },
-  { id: "Erinome", style: "Clear" },
-  { id: "Algenib", style: "Gravelly" },
-  { id: "Rasalgethi", style: "Informative" },
-  { id: "Laomedeia", style: "Upbeat" },
-  { id: "Achernar", style: "Soft" },
-  { id: "Alnilam", style: "Firm" },
-  { id: "Schedar", style: "Even" },
-  { id: "Gacrux", style: "Mature" },
-  { id: "Pulcherrima", style: "Forward" },
-  { id: "Achird", style: "Friendly" },
-  { id: "Zubenelgenubi", style: "Casual" },
-  { id: "Vindemiatrix", style: "Gentle" },
-  { id: "Sadachbia", style: "Lively" },
-  { id: "Sadaltager", style: "Knowledgeable" },
-  { id: "Sulafat", style: "Warm" },
-];
-
-export const DEFAULT_VOICE = "Puck";
 
 export interface SpeechLanguage {
   id: string;
@@ -67,10 +35,9 @@ export interface SpeechLanguage {
   sample: string;
 }
 
-// Sample lines stay full declarative sentences — "Hey!"-style leads make the
-// TTS model intermittently return an empty clip. Change with care and re-check
-// reliability across voices.
-const SAMPLE_TEXT = "This is how I sound. Let's make something worth remembering.";
+// The neutral sample line, shared with the persona catalog; also the default
+// text for every language whose own sample is not written out below.
+const SAMPLE_TEXT = VOICE_SAMPLE_TEXT;
 
 /** Languages the speech model speaks (BCP-47, fixed by the model). "auto" lets
  * the model match the text; a concrete pick pins pronunciation and picks the
@@ -116,21 +83,6 @@ export function resolveLanguage(wanted?: string): string {
   if (exact) return exact.id;
   const bare = SPEECH_LANGUAGES.find((l) => l.id.toLowerCase().startsWith(`${w}-`));
   return bare?.id ?? DEFAULT_LANGUAGE;
-}
-
-/** Resolve a requested voice against the catalog: an exact (or
- * case-insensitive) id match, else the default. Shared by the Audio panel and
- * the AI copilot so both land on the same voice. */
-export function resolveVoice(wanted?: string): string {
-  if (typeof wanted === "string" && wanted.trim()) {
-    const exact = SPEECH_VOICES.find((v) => v.id === wanted.trim());
-    if (exact) return exact.id;
-    const ci = SPEECH_VOICES.find(
-      (v) => v.id.toLowerCase() === wanted.trim().toLowerCase()
-    );
-    if (ci) return ci.id;
-  }
-  return DEFAULT_VOICE;
 }
 
 const CLIENT_ID = "donkey-cut";
@@ -479,23 +431,6 @@ export async function synthesizeSpeech(
   const { blob, offset, layout } = await renderSpeechClip(segments, opts);
   const asset = await speechClipToAsset(projectId, blob, opts.name);
   return { asset, offset, layout };
-}
-
-/** A short spoken sample for the voice picker, in the picked language. Each
- * voice+language pair is synthesized once per session and cached as a blob URL. */
-const samples = new Map<string, string>();
-
-export async function speechSampleUrl(voice: string, language?: string): Promise<string> {
-  const id = resolveVoice(voice);
-  const lang = resolveLanguage(language);
-  const key = `${id}|${lang}`;
-  const cached = samples.get(key);
-  if (cached) return cached;
-  const text = SPEECH_LANGUAGES.find((l) => l.id === lang)?.sample ?? SAMPLE_TEXT;
-  const clip = await synthesizeSegment(text, id, undefined, lang);
-  const url = URL.createObjectURL(assembleWav([clip], [0]));
-  samples.set(key, url);
-  return url;
 }
 
 function slug(name: string) {

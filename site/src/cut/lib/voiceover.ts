@@ -58,22 +58,6 @@ async function renderReadout(
 }
 
 /**
- * Voice the subtitle cues and return a blob URL to play in-panel — a preview of
- * exactly what "Generate" will drop on the timeline, without creating an asset.
- * The render is cached, so committing that same readout afterward reuses this
- * audio rather than paying to synthesize it twice.
- */
-export async function previewSubtitlesReadout(
-  voice: string,
-  opts?: { cueIds?: string[]; direction?: string; language?: string }
-): Promise<string> {
-  const cues = readoutCues(opts?.cueIds);
-  if (cues.length === 0) throw new Error("No subtitles to read.");
-  const { blob } = await renderReadout(voice, cues, opts);
-  return URL.createObjectURL(blob);
-}
-
-/**
  * Voice the subtitle cues (all of them, or just `opts.cueIds`) and drop the
  * result on the soundtrack at the first cue. The spoken pace differs from the
  * original recording, so the read cues are re-timed to the generated audio —

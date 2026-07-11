@@ -814,7 +814,7 @@ export async function runAiTool(
     case "list_voices": {
       // Gemini's prebuilt voice catalog is fixed and ships hardcoded.
       return {
-        voices: SPEECH_VOICES.map((v) => ({ id: v.id, style: v.style })),
+        voices: SPEECH_VOICES.map((v) => ({ name: v.name, style: v.style })),
         total: SPEECH_VOICES.length,
       };
     }

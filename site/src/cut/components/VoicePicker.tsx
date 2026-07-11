@@ -1,20 +1,25 @@
 "use client";
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Captions, ChevronDown, Languages, Loader2, Pause, Play } from "lucide-react";
+import { Captions, ChevronDown, Loader2, Pause, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { SectionTitle } from "@/cut/components/SectionTitle";
 import { creditsUrl, signInUrl, useSignedIn } from "@/cut/lib/generate";
 import { useEditor, type EditorState } from "@/cut/lib/store";
+import { NoCreditsError, renderSpeechClip, resolveLanguage, resolveVoice } from "@/cut/lib/tts";
 import {
-  NoCreditsError,
-  resolveLanguage,
-  resolveVoice,
-  speechSampleUrl,
-  SPEECH_LANGUAGES,
   SPEECH_VOICES,
-} from "@/cut/lib/tts";
-import { generateSubtitlesReadout, previewSubtitlesReadout } from "@/cut/lib/voiceover";
+  VOICE_SAMPLE_TEXT,
+  voicePortraitUrl,
+  voiceSampleUrl,
+} from "@/cut/lib/voices";
+import { generateSubtitlesReadout } from "@/cut/lib/voiceover";
+import { cn } from "@/lib/utils";
 
 // Shared speech preferences (speaker voice, spoken language) for every surface
 // that generates audio (Audio tab, Subtitles tab, clip settings). Module-level
@@ -65,130 +70,204 @@ export function useSpeechLanguage(): string {
   );
 }
 
+/** A small round persona portrait, used in the trigger and each grid tile. */
+function VoiceAvatar({ id, style, className }: { id: string; style: string; className?: string }) {
+  return (
+    // eslint-disable-next-line @next/next/no-img-element -- bundled static portrait on a client-only page
+    <img
+      src={voicePortraitUrl(id)}
+      alt={`${id}, a ${style.toLowerCase()} voice`}
+      loading="lazy"
+      className={cn("object-cover", className)}
+    />
+  );
+}
+
+// Women first, then men (grouped, no headers); alphabetical by name within each.
+const ORDERED_VOICES = [...SPEECH_VOICES].sort((a, b) =>
+  a.gender === b.gender ? a.name.localeCompare(b.name) : a.gender === "f" ? -1 : 1
+);
+
 /**
- * Speaker-voice row: a play button that samples the voice plus the voice
- * select. Drop it into any surface that generates speech — they all share one
- * persisted voice choice. Pass `sample` to make the play button preview real
- * content (e.g. the subtitle readout) instead of the canned voice sample.
+ * Speaker-voice picker: a play button plus a compact dropdown showing the chosen
+ * persona. Opening the dropdown reveals a grid of persona portraits — hovering a
+ * tile plays that voice's pre-generated sample clip (a static hosted file, so it
+ * works signed out and costs nothing), clicking selects it and closes.
+ *
+ * The play button samples the selected voice reading a fixed line. With no
+ * `direction` it just plays the hosted clip; once a delivery `direction` is
+ * given ("like a hype announcer") it can't be pre-baked, so it synthesizes a
+ * fresh sample through the hosted model instead (signed in, uses credits).
+ *
+ * Drop it into any surface that generates speech — they all share one persisted
+ * voice choice.
  */
 export function VoicePicker({
-  onError,
   title = "Speaker voice",
-  sample: sampleOverride,
+  direction,
+  onError,
 }: {
-  onError?: (e: unknown) => void;
   title?: string;
-  sample?: { run: () => Promise<string>; title?: string; disabled?: boolean };
+  /** Free-text delivery direction; when non-empty the play button previews via
+   * the model instead of the pre-built clip. */
+  direction?: string;
+  /** Surfaced when a live (direction) preview fails — e.g. no credits. */
+  onError?: (e: unknown) => void;
 }) {
   const voice = useSpeakerVoice();
   const language = useSpeechLanguage();
-  const signedOut = useSignedIn() === false;
+  const selected = SPEECH_VOICES.find((v) => v.id === voice) ?? SPEECH_VOICES[0];
+  const [open, setOpen] = useState(false);
   const [sampling, setSampling] = useState<null | "loading" | "playing">(null);
-  const sampler = useRef<HTMLAudioElement | null>(null);
+  const audio = useRef<HTMLAudioElement | null>(null);
   const sampleSeq = useRef(0);
 
-  useEffect(
-    () => () => {
-      sampler.current?.pause();
-    },
-    []
-  );
+  // Stop any preview when the picker unmounts (menu close is handled in onOpenChange).
+  useEffect(() => () => audio.current?.pause(), []);
 
-  const play = () => {
-    const el = (sampler.current ??= new Audio());
-    if (sampling) {
-      sampleSeq.current++;
-      el.pause();
-      setSampling(null);
-      return;
-    }
-    const seq = ++sampleSeq.current;
-    setSampling("loading");
-    (sampleOverride?.run ?? (() => speechSampleUrl(voice, language)))()
-      .then((url) => {
-        if (seq !== sampleSeq.current) return;
-        el.src = url;
-        el.onended = () => setSampling(null);
-        el.onerror = () => setSampling(null);
-        setSampling("playing");
-        return el.play();
-      })
-      .catch((e: unknown) => {
-        if (seq !== sampleSeq.current) return;
-        setSampling(null);
-        onError?.(e);
-      });
+  const preview = (id: string) => {
+    const el = (audio.current ??= new Audio());
+    el.src = voiceSampleUrl(id);
+    el.currentTime = 0;
+    // Autoplay refusal or a missing file just leaves it silent.
+    void el.play().catch(() => {});
   };
 
-  const sampleTitle = sampleOverride?.title ?? "Hear this voice";
+  const leave = (id: string) => {
+    // Only silence the element if this tile owned the current clip.
+    if (audio.current?.src.endsWith(`${id.toLowerCase()}.mp3`)) audio.current.pause();
+  };
+
+  // Play button: sample the selected voice. A delivery direction can't be
+  // pre-baked, so it routes through the model; otherwise the hosted clip plays.
+  const sample = async () => {
+    const el = (audio.current ??= new Audio());
+    if (sampling) {
+      el.pause();
+      setSampling(null);
+      sampleSeq.current++;
+      return;
+    }
+    const dir = direction?.trim();
+    const seq = ++sampleSeq.current;
+    setSampling("loading");
+    try {
+      let url: string;
+      if (dir) {
+        const { blob } = await renderSpeechClip([{ text: VOICE_SAMPLE_TEXT, at: 0 }], {
+          voice: selected.id,
+          direction: dir,
+          language,
+        });
+        url = URL.createObjectURL(blob);
+      } else {
+        url = voiceSampleUrl(selected.id);
+      }
+      if (seq !== sampleSeq.current) return;
+      el.src = url;
+      el.onended = () => setSampling(null);
+      el.onerror = () => setSampling(null);
+      setSampling("playing");
+      await el.play();
+    } catch (e) {
+      if (seq !== sampleSeq.current) return;
+      setSampling(null);
+      onError?.(e);
+    }
+  };
 
   return (
     <div className="voice-picker flex flex-col gap-1.5">
       <SectionTitle>{title}</SectionTitle>
-      <div className="flex items-center gap-2">
+      <div className="flex items-stretch gap-2">
         <button
           type="button"
-          className="voice-sample grid size-8 shrink-0 place-items-center rounded-full bg-muted text-foreground transition-colors hover:bg-muted-foreground/20 disabled:opacity-40"
-          title={sampleTitle}
-          aria-label={sampleTitle}
-          disabled={signedOut || sampleOverride?.disabled === true}
-          onClick={play}
+          className="voice-sample grid aspect-square shrink-0 place-items-center rounded-lg border border-input text-foreground transition-colors hover:bg-muted"
+          title={direction?.trim() ? "Hear this voice with your direction" : "Hear this voice"}
+          aria-label="Play a sample of the selected voice"
+          onClick={() => void sample()}
         >
           {sampling === "loading" ? (
-            <Loader2 className="size-3.5 animate-spin" />
+            <Loader2 className="size-4 animate-spin" />
           ) : sampling === "playing" ? (
-            <Pause className="size-3.5" />
+            <Pause className="size-4" />
           ) : (
-            <Play className="size-3.5" />
+            <Play className="size-4" />
           )}
         </button>
-        <div className="relative min-w-0 flex-1">
-          <select
-            className="voice-select w-full appearance-none truncate rounded-lg border border-input bg-transparent py-2 pr-8 pl-2.5 text-[12.5px] outline-none focus:border-ring"
-            value={voice}
-            onChange={(e) => voicePref.write(e.target.value)}
-          >
-            {SPEECH_VOICES.map((v) => (
-              <option key={v.id} value={v.id}>
-                {v.id} · {v.style}
-              </option>
+        <DropdownMenu
+          open={open}
+          onOpenChange={(next) => {
+            setOpen(next);
+            if (!next && !sampling) audio.current?.pause();
+          }}
+        >
+        <DropdownMenuTrigger className="voice-select flex min-w-0 flex-1 items-center gap-2.5 overflow-hidden rounded-lg border border-input bg-transparent pr-2.5 text-left outline-none transition-colors focus:border-ring">
+          <VoiceAvatar
+            id={selected.id}
+            style={selected.style}
+            className="size-8 shrink-0 bg-muted"
+          />
+          <span className="min-w-0 flex-1 truncate text-[12.5px]">
+            <span className="font-semibold">{selected.name}</span>{" "}
+            <span className="text-muted-foreground">· {selected.style}</span>
+          </span>
+          <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent className="max-h-96 w-96 max-w-[calc(100vw-2rem)] p-2.5">
+          {/* Women and men each get their own grid so the men always start on a
+              fresh row (grouped, no section headers). */}
+          <div className="flex flex-col gap-3">
+            {[
+              ORDERED_VOICES.filter((v) => v.gender === "f"),
+              ORDERED_VOICES.filter((v) => v.gender === "m"),
+            ].map((group, i) => (
+              <div key={i} className="voice-grid grid grid-cols-5 gap-2">
+                {group.map((v) => {
+                  const isSelected = v.id === voice;
+                  return (
+                    <button
+                      key={v.id}
+                      type="button"
+                      className="voice-tile group flex flex-col gap-1 text-left"
+                      aria-pressed={isSelected}
+                      title={`${v.name} · ${v.style}`}
+                      onClick={() => {
+                        voicePref.write(v.id);
+                        setOpen(false);
+                      }}
+                      onMouseEnter={() => preview(v.id)}
+                      onMouseLeave={() => leave(v.id)}
+                      onFocus={() => preview(v.id)}
+                      onBlur={() => leave(v.id)}
+                    >
+                      <span
+                        className={cn(
+                          "block aspect-square overflow-hidden rounded-lg border bg-muted ring-offset-2 ring-offset-popover transition",
+                          isSelected
+                            ? "border-transparent ring-2 ring-[#0a84ff]"
+                            : "border-input group-hover:border-transparent group-hover:ring-2 group-hover:ring-[#0a84ff]/40"
+                        )}
+                      >
+                        <VoiceAvatar id={v.id} style={v.style} className="size-full" />
+                      </span>
+                      <span className="min-w-0 px-0.5 leading-tight">
+                        <span className="block truncate text-[11px] font-semibold">{v.name}</span>
+                        <span className="block truncate text-[10px] text-muted-foreground">
+                          {v.style}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             ))}
-          </select>
-          <ChevronDown className="pointer-events-none absolute top-1/2 right-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-        </div>
+          </div>
+        </DropdownMenuContent>
+      </DropdownMenu>
       </div>
-      <label
-        className="voice-language-field relative inline-flex max-w-full items-center gap-2 self-end rounded-full border border-input py-1 pr-2.5 pl-3 text-muted-foreground transition-colors focus-within:border-ring"
-        title="Spoken language"
-      >
-        <Languages className="size-3.5 shrink-0" />
-        <span className="relative inline-flex min-w-0 items-center">
-          <select
-            className="voice-language max-w-full appearance-none truncate bg-transparent pr-5 text-[12.5px] text-foreground outline-none"
-            value={language}
-            onChange={(e) => languagePref.write(e.target.value)}
-          >
-            {SPEECH_LANGUAGES.map((l) => (
-              <option key={l.id} value={l.id}>
-                {l.label}
-              </option>
-            ))}
-          </select>
-          <ChevronDown className="pointer-events-none absolute top-1/2 right-0 size-3.5 -translate-y-1/2" />
-        </span>
-      </label>
-      {language !== "auto" && (
-        <p className="voice-language-hint text-[11px] leading-relaxed text-muted-foreground">
-          {`The voice reads your script as written — write it in ${languageLabel(language)} for ${languageLabel(language)} audio.`}
-        </p>
-      )}
     </div>
   );
-}
-
-/** Display name for a resolved language code, for the pronunciation hint. */
-function languageLabel(code: string): string {
-  return SPEECH_LANGUAGES.find((l) => l.id === code)?.label ?? code;
 }
 
 /** The cue ids the readout covers: `select`'s scope, or every non-empty cue. */
@@ -261,21 +340,7 @@ export function GenerateSubtitlesAudio({
 
   return (
     <div className="subtitles-audio flex flex-col gap-2.5">
-      <VoicePicker
-        title="Generated audio"
-        // Play previews the subtitle readout itself; Generate commits it. The
-        // preview is cached, so committing afterward reuses the same audio.
-        sample={{
-          run: () =>
-            previewSubtitlesReadout(voice, {
-              cueIds: selectCueIds?.(useEditor.getState()),
-              language,
-            }),
-          title: "Play the subtitles",
-          disabled: cueCount === 0,
-        }}
-        onError={(e) => setError({ text: e instanceof Error ? e.message : "Could not play the subtitles.", credits: e instanceof NoCreditsError })}
-      />
+      <VoicePicker title="Generated audio" />
       <Button
         variant="outline"
         className="voice-readout w-full"

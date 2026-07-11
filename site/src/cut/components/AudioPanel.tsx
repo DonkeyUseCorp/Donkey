@@ -160,7 +160,10 @@ function VoiceGenerator({ projectId }: { projectId: string }) {
   return (
     <div className="voice-generator flex flex-col gap-3.5">
       {/* Voice settings first — pick how the voice sounds, then script it. */}
-      <VoicePicker onError={(e) => fail(e, "Could not play the sample.")} />
+      <VoicePicker
+        direction={direction}
+        onError={(e) => fail(e, "Could not play the sample.")}
+      />
 
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center gap-1">
@@ -477,7 +480,7 @@ function ProjectAudio({
                     variant="destructive"
                     onClick={() => useEditor.getState().removeAsset(a.id)}
                   >
-                    <Trash2 /> Remove from project
+                    <Trash2 /> Delete
                   </DropdownMenuItem>
                 }
               />
