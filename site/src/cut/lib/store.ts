@@ -352,6 +352,13 @@ export function nextFreeStart(spans: { start: number; end: number }[], t: number
   return at;
 }
 
+/** The timeline footprints (start/end) of a set of clips, for the `nextFreeStart`
+ * collision test. Every placement path — add, drop, paste — occupies the same
+ * shape, so they share this instead of re-deriving `start + clipLen` inline. */
+export function footprints(items: (VideoClip | AudioClip)[]): { start: number; end: number }[] {
+  return items.map((c) => ({ start: c.start, end: c.start + clipLen(c) }));
+}
+
 /** POST a transcribe spec and poll the job to completion. Returns the cues, or
  * null when the user switches projects mid-run. Throws user-facing errors. */
 async function runTranscription(projectId: string, spec: object): Promise<SubtitleCue[] | null> {
@@ -616,7 +623,7 @@ export const useEditor = create<EditorState>((set, get) => {
       // Default: append at the end of track 0; with a target time, slide to
       // the track's next free slot there.
       const want = Math.max(0, start ?? totalDuration(get().clips));
-      const taken = get().clips.map((c) => ({ start: c.start, end: c.start + clipLen(c) }));
+      const taken = footprints(get().clips);
       const clip: VideoClip = {
         id: uid(),
         assetId,
@@ -640,9 +647,7 @@ export const useEditor = create<EditorState>((set, get) => {
       const want = Math.max(0, start ?? get().currentTime);
       const len = Math.max(MIN_LEN, asset.duration);
       const lane = opts?.lane ?? 0;
-      const taken = get()
-        .audioClips.filter((a) => (a.lane ?? 0) === lane)
-        .map((a) => ({ start: a.start, end: a.start + clipLen(a) }));
+      const taken = footprints(get().audioClips.filter((a) => (a.lane ?? 0) === lane));
       const clip: AudioClip = {
         id: uid(),
         assetId,
@@ -881,7 +886,7 @@ export const useEditor = create<EditorState>((set, get) => {
       const out = asset.type === "image" ? IMAGE_CLIP_SECONDS : asset.duration;
       push();
       if (place.kind === "track" && place.track === 0) {
-        const taken = get().clips.map((c) => ({ start: c.start, end: c.start + clipLen(c) }));
+        const taken = footprints(get().clips);
         const v: VideoClip = {
           id: uid(),
           assetId,
@@ -936,7 +941,7 @@ export const useEditor = create<EditorState>((set, get) => {
 
       if (place.kind === "track" && place.track === 0) {
         if (source.kind === "clip") return; // a same-track move commits through the lane coordinator
-        const taken = s.clips.map((c) => ({ start: c.start, end: c.start + clipLen(c) }));
+        const taken = footprints(s.clips);
         const clip: VideoClip = {
           id: uid(),
           ...v,
@@ -1368,45 +1373,69 @@ export const useEditor = create<EditorState>((set, get) => {
       if (!s.projectId || s.subtitleStatus === "running") return;
       const projectId = s.projectId;
       const spans = getClipSpans(s.clips, s.assets);
-      if (spans.length === 0) {
+      const duration = projectDuration(s);
+      const assetById = new Map(s.assets.map((a) => [a.id, a]));
+      // Speech can live on the soundtrack or on an overlay video track, not just
+      // track 0. Overlay-video audio mixes into the transcribe pass as a
+      // positioned source (exactly like a soundtrack clip), so dialogue carried
+      // on an overlay clip gets captioned and an overlay-only cut still works.
+      const audio = s.audioClips
+        .filter((a) => !a.hidden && a.start < duration && assetById.has(a.assetId))
+        .map((a) => ({
+          file: assetById.get(a.assetId)!.fileName,
+          in: a.in,
+          out: a.out,
+          start: a.start,
+          volume: a.volume,
+          speed: a.speed,
+        }))
+        .concat(
+          s.overlayClips
+            .filter(
+              (c) => !c.hidden && !c.muted && c.start < duration && assetById.has(c.assetId),
+            )
+            .map((c) => ({
+              file: assetById.get(c.assetId)!.fileName,
+              in: c.in,
+              out: c.out,
+              start: c.start,
+              volume: 1,
+              speed: c.speed,
+            })),
+        );
+      if (spans.length === 0 && audio.length === 0) {
         set({ subtitleStatus: "error", subtitleError: "Add a video to the timeline first." });
         return;
       }
-      const duration = totalDuration(s.clips);
-      const assetById = new Map(s.assets.map((a) => [a.id, a]));
       // Generation targets the active subtitle track, with its own language.
       const lane = s.subtitleLane;
       const epoch = laneEpoch;
+      const silentSpacer = (len: number) =>
+        ({ file: "", in: 0, out: len, muted: true, speed: 1, transition: 0 });
       const spec = {
         duration,
         locale: trackLocale(s.subtitles, lane),
         // The transcribe mix is a sequential fold, so gaps between the
-        // free-placed clips ship as explicit silent spacers (empty file).
-        clips: spanSequence(spans).flatMap(({ gapBefore, span: sp }) => [
-          ...(gapBefore > 0
-            ? [{ file: "", in: 0, out: gapBefore, muted: true, speed: 1, transition: 0 }]
-            : []),
-          {
-            file: sp.asset.fileName,
-            in: sp.clip.in,
-            out: sp.clip.out,
-            muted: sp.clip.muted,
-            speed: clipSpeed(sp.clip),
-            // The clamped cross-dissolve overlap, so the transcribe mix overlaps
-            // clip audio the same way the timeline does and cues stay in sync.
-            transition: sp.transitionOut,
-          },
-        ]),
-        audio: s.audioClips
-          .filter((a) => a.start < duration && assetById.has(a.assetId))
-          .map((a) => ({
-            file: assetById.get(a.assetId)!.fileName,
-            in: a.in,
-            out: a.out,
-            start: a.start,
-            volume: a.volume,
-            speed: a.speed,
-          })),
+        // free-placed clips ship as explicit silent spacers (empty file). An
+        // overlay-only cut has no track-0 spans: the whole bed is one spacer.
+        clips:
+          spans.length === 0
+            ? [silentSpacer(duration)]
+            : spanSequence(spans).flatMap(({ gapBefore, span: sp }) => [
+                ...(gapBefore > 0 ? [silentSpacer(gapBefore)] : []),
+                {
+                  file: sp.asset.fileName,
+                  in: sp.clip.in,
+                  out: sp.clip.out,
+                  muted: sp.clip.muted,
+                  speed: clipSpeed(sp.clip),
+                  // The clamped cross-dissolve overlap, so the transcribe mix
+                  // overlaps clip audio the same way the timeline does and cues
+                  // stay in sync.
+                  transition: sp.transitionOut,
+                },
+              ]),
+        audio,
       };
       set({ subtitleStatus: "running", subtitleError: null });
       try {
@@ -2012,7 +2041,7 @@ export const useEditor = create<EditorState>((set, get) => {
         // that fits. Earlier items of this same paste count too.
         for (const cb of clipboard) {
           if (cb.kind === "clip") {
-            const taken = clips.map((c) => ({ start: c.start, end: c.start + clipLen(c) }));
+            const taken = footprints(clips);
             const clip: VideoClip = {
               ...cb.item,
               id: uid(),
@@ -2021,16 +2050,16 @@ export const useEditor = create<EditorState>((set, get) => {
             clips = [...clips, clip].sort((a, b) => a.start - b.start);
             newSel.push({ kind: "clip", id: clip.id });
           } else if (cb.kind === "audio") {
-            const taken = audioClips
-              .filter((a) => (a.lane ?? 0) === (cb.item.lane ?? 0))
-              .map((a) => ({ start: a.start, end: a.start + clipLen(a) }));
+            const taken = footprints(
+              audioClips.filter((a) => (a.lane ?? 0) === (cb.item.lane ?? 0)),
+            );
             const item: AudioClip = { ...cb.item, id: uid(), start: nextFreeStart(taken, t, clipLen(cb.item)) };
             audioClips = [...audioClips, item];
             newSel.push({ kind: "audio", id: item.id });
           } else if (cb.kind === "overlayClip") {
-            const taken = overlayClips
-              .filter((c) => c.track === cb.item.track)
-              .map((c) => ({ start: c.start, end: c.start + clipLen(c) }));
+            const taken = footprints(
+              overlayClips.filter((c) => c.track === cb.item.track),
+            );
             const item: OverlayClip = { ...cb.item, id: uid(), start: nextFreeStart(taken, t, clipLen(cb.item)) };
             overlayClips = [...overlayClips, item];
             newSel.push({ kind: "overlayClip", id: item.id });

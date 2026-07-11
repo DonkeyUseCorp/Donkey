@@ -129,10 +129,22 @@ async function buildExportForm(
   target: "export" | "preview"
 ): Promise<FormData> {
   const spans = getClipSpans(doc.clips, doc.assets);
-  if (spans.length === 0) throw new Error("Add a video to the timeline first.");
   const duration = projectDuration(doc);
   const form = new FormData();
   const assetById = new Map(doc.assets.map((a) => [a.id, a]));
+  // Overlay-only cuts (empty track 0) still export: the base becomes a black bed
+  // the length of the project and the overlays/soundtrack composite onto it —
+  // the same path as a gap before the first track-0 clip. Refuse only a cut with
+  // no renderable content at all.
+  const hasOverlayVideo = doc.overlayClips.some(
+    (c) => !c.hidden && assetById.has(c.assetId) && c.start < duration,
+  );
+  const hasAudio = doc.audioClips.some(
+    (a) => !a.hidden && a.start < duration && assetById.has(a.assetId),
+  );
+  if (spans.length === 0 && !hasOverlayVideo && !hasAudio) {
+    throw new Error("Add a video to the timeline first.");
+  }
 
   const clipEntries = spans.map((sp) => ({
     file: sp.asset.fileName,
@@ -185,32 +197,33 @@ async function buildExportForm(
   // The server's video graph is a sequential fold, so gaps between the
   // free-placed clips ship as explicit spacer segments: no file, hidden and
   // muted, which the server renders as black + silence for the gap's length.
-  const clips = spanSequence(spans).flatMap(({ gapBefore }, i) => [
-    ...(gapBefore > 0
-      ? [
-          {
-            file: "",
-            in: 0,
-            out: gapBefore,
-            muted: true,
-            volume: 0,
-            fit: "fit" as const,
-            panX: 0,
-            panY: 0,
-            frame: undefined,
-            speed: 1,
-            transition: 0,
-            hidden: true,
-            image: false,
-            headFade: 0,
-            tailFade: 0,
-            headZoom: 0,
-            tailZoom: 0,
-          },
-        ]
-      : []),
-    clipEntries[i],
-  ]);
+  const spacer = (len: number) => ({
+    file: "",
+    in: 0,
+    out: len,
+    muted: true,
+    volume: 0,
+    fit: "fit" as const,
+    panX: 0,
+    panY: 0,
+    frame: undefined,
+    speed: 1,
+    transition: 0,
+    hidden: true,
+    image: false,
+    headFade: 0,
+    tailFade: 0,
+    headZoom: 0,
+    tailZoom: 0,
+  });
+  // An overlay-only cut has no track-0 spans: the whole base is one black bed.
+  const clips =
+    spans.length === 0
+      ? [spacer(duration)]
+      : spanSequence(spans).flatMap(({ gapBefore }, i) => [
+          ...(gapBefore > 0 ? [spacer(gapBefore)] : []),
+          clipEntries[i],
+        ]);
 
   // Video tracks composited around track 0; hidden ones are dropped.
   const overlayVideos = doc.overlayClips
