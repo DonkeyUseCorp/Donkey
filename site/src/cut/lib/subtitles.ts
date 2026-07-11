@@ -1,7 +1,45 @@
 import { formatTime } from "./time";
-import type { CaptionStyleId, FontId, SubtitleCue, TextOverlay, WordAccentMode } from "./types";
+import type {
+  CaptionStyleId,
+  FontId,
+  SubtitleCue,
+  SubtitlesBlock,
+  TextOverlay,
+  WordAccentMode,
+} from "./types";
 
 export type { CaptionStyleId } from "./types";
+
+/** How many subtitle tracks (languages) the block carries: its track metas,
+ * or any higher lane a cue still sits on; at least one. */
+export function subtitleLaneCount(subs: SubtitlesBlock): number {
+  let n = Math.max(1, subs.tracks?.length ?? 0);
+  for (const c of subs.cues) n = Math.max(n, (c.lane ?? 0) + 1);
+  return n;
+}
+
+/** One track's cues, in start order. */
+export function laneCues(subs: SubtitlesBlock, lane: number): SubtitleCue[] {
+  return subs.cues.filter((c) => (c.lane ?? 0) === lane);
+}
+
+/** A track's effective caption anchor plus the block's karaoke overrides —
+ * the `pos` argument `cueOverlay` takes. The track's own dragged spot wins,
+ * then the block-level legacy spot (first track only), then the style's
+ * default stacked upward per track so simultaneous languages never overlap. */
+export function trackPos(
+  subs: SubtitlesBlock,
+  style: CaptionStyle,
+  lane: number
+): { x: number; y: number; accentMode?: WordAccentMode; accentColor?: string } {
+  const meta = subs.tracks?.[lane];
+  return {
+    x: meta?.x ?? (lane === 0 ? subs.x : undefined) ?? style.x,
+    y: meta?.y ?? (lane === 0 ? subs.y : undefined) ?? Math.max(0.08, style.y - lane * 0.1),
+    accentMode: subs.accentMode,
+    accentColor: subs.accentColor,
+  };
+}
 
 /** Caption look shared by the preview layer and the export burn-in —
  * TikTok-style bold white on a translucent plate, low center. */

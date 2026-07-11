@@ -13,6 +13,7 @@ import type {
   StoredAsset,
   SubtitleCue,
   SubtitlesBlock,
+  SubtitleTrackMeta,
   TemplateAudio,
   TemplateLayer,
   TemplateMedia,
@@ -22,7 +23,7 @@ import type {
   VideoClip,
 } from "./types";
 import { apiFetch, apiJson } from "./api";
-import { emptySubtitles, IMAGE_CLIP_SECONDS, isCrossStyle, mediaUrl, SPEED_MAX, SPEED_MIN, TRANSITION_MAX } from "./types";
+import { emptySubtitles, IMAGE_CLIP_SECONDS, isCrossStyle, MAX_SUBTITLE_LANES, mediaUrl, SPEED_MAX, SPEED_MIN, TRANSITION_MAX } from "./types";
 import { readTextStyle } from "./textStyle";
 import { loadUiState, saveUiState } from "./uiState";
 import { captureTimelineFrames } from "./visualFrames";
@@ -197,7 +198,21 @@ export interface EditorState {
   /** Transcribe (if needed) then rewrite the cues into social captions in the
    * given style, one-to-one so cue timings are preserved. */
   generateCaptions: (style: "clean" | "hook" | "punchy") => Promise<void>;
+  /** Fill the active track by translating another track's cues into the active
+   * track's language. Timings copy over; word timings don't survive
+   * translation, so the new cues carry none. */
+  translateSubtitleTrack: (fromLane: number) => Promise<void>;
   setSubtitlesView: (patch: Partial<Pick<SubtitlesBlock, "showOnVideo" | "showOnTimeline" | "locale" | "style" | "x" | "y" | "wordHighlight" | "accentMode" | "accentColor">>) => void;
+  /** The subtitle track (row) the panel edits and generation writes to. */
+  subtitleLane: number;
+  setSubtitleLane: (lane: number) => void;
+  /** Add a subtitle track — one language each, capped at MAX_SUBTITLE_LANES —
+   * and make it the active one. */
+  addSubtitleTrack: (locale?: string) => void;
+  /** Remove a subtitle track: drops its cues and shifts higher tracks down. */
+  removeSubtitleTrack: (lane: number) => void;
+  /** Patch one track's settings (locale, dragged caption anchor). */
+  setSubtitleTrackMeta: (lane: number, patch: Partial<SubtitleTrackMeta>) => void;
   /** Commit a cue's edited text (empty text deletes the cue). */
   setCueText: (id: string, text: string) => void;
   /** Split a cue at a character offset — at real word timings when known. */
@@ -369,6 +384,7 @@ export const useEditor = create<EditorState>((set, get) => {
     publish: { caption: "", tags: "", soundTitle: "", handle: "" },
     notes: { text: "", publishedAt: "", links: [] },
     subtitles: emptySubtitles(),
+    subtitleLane: 0,
     subtitleStatus: "idle",
     subtitleError: null,
     exportOpen: false,
@@ -397,6 +413,7 @@ export const useEditor = create<EditorState>((set, get) => {
         currentTime: 0,
         playing: false,
         subtitles: emptySubtitles(),
+        subtitleLane: 0,
         subtitleStatus: "idle",
         subtitleError: null,
         exportOpen: false,
@@ -832,9 +849,8 @@ export const useEditor = create<EditorState>((set, get) => {
           ? s.clips.find((c) => c.id === source.id)
           : s.overlayClips.find((c) => c.id === source.id);
       if (!src) return;
-      // Overlay source already snapshotted history on drag-start (it live-moved);
-      // a base source hasn't been mutated yet, so snapshot now.
-      if (source.kind === "base") push();
+      // No checkpoint here: the lane coordinator's drag gesture already pushed
+      // one at pointer-down, so the whole move is a single undo step.
       const v = {
         assetId: src.assetId,
         in: src.in,
@@ -1282,9 +1298,11 @@ export const useEditor = create<EditorState>((set, get) => {
       }
       const duration = totalDuration(s.clips);
       const assetById = new Map(s.assets.map((a) => [a.id, a]));
+      // Generation targets the active subtitle track, with its own language.
+      const lane = s.subtitleLane;
       const spec = {
         duration,
-        locale: s.subtitles.locale ?? "en-US",
+        locale: s.subtitles.tracks?.[lane]?.locale ?? s.subtitles.locale ?? "en-US",
         // The transcribe mix is a sequential fold, so gaps between the
         // free-placed clips ship as explicit silent spacers (empty file).
         clips: spanSequence(spans).flatMap(({ gapBefore, span: sp }) => [
@@ -1317,17 +1335,30 @@ export const useEditor = create<EditorState>((set, get) => {
       try {
         const cues = await runTranscription(projectId, spec);
         if (cues === null) return; // switched projects mid-run
+        // Only the active track's cues are replaced; other languages stay.
+        const tagged = cues.map((c) => ({ ...c, ...(lane > 0 ? { lane } : {}) }));
         if (cues.length === 0) {
-          // No speech in the audio — leave the video untouched.
+          // No speech in the audio — leave the other tracks untouched.
           set((cur) => ({
-            subtitles: { ...cur.subtitles, cues: [], generatedAt: Date.now() },
+            subtitles: {
+              ...cur.subtitles,
+              cues: cur.subtitles.cues.filter((c) => (c.lane ?? 0) !== lane),
+              generatedAt: Date.now(),
+            },
             subtitleStatus: "empty",
           }));
           return;
         }
         push();
         set((cur) => ({
-          subtitles: { ...cur.subtitles, cues, generatedAt: Date.now() },
+          subtitles: {
+            ...cur.subtitles,
+            cues: [
+              ...cur.subtitles.cues.filter((c) => (c.lane ?? 0) !== lane),
+              ...tagged,
+            ].sort((a, b) => a.start - b.start),
+            generatedAt: Date.now(),
+          },
           subtitleStatus: "ready",
         }));
       } catch (err) {
@@ -1348,11 +1379,12 @@ export const useEditor = create<EditorState>((set, get) => {
       const projectId = s.projectId;
       const sp = getClipSpans(s.clips, s.assets).find((x) => x.clip.id === clipId);
       if (!sp) throw new Error("The clip is no longer on the timeline.");
+      const lane = s.subtitleLane;
       // The clip's own sound, deliberately unmuted: this transcribes what the
       // clip says even when its timeline audio is muted.
       const spec = {
         duration: sp.len,
-        locale: s.subtitles.locale ?? "en-US",
+        locale: s.subtitles.tracks?.[lane]?.locale ?? s.subtitles.locale ?? "en-US",
         clips: [
           {
             file: sp.asset.fileName,
@@ -1371,17 +1403,20 @@ export const useEditor = create<EditorState>((set, get) => {
         if (cues === null) return; // switched projects mid-run
         // The job timed cues against the lone clip, so shift them (and their
         // word timings) onto the clip's timeline span. New cues replace any
-        // that overlapped the clip; the rest of the timeline keeps its cues.
+        // on the active track that overlapped the clip; the rest of the
+        // timeline — and every other track — keeps its cues.
         const placed = cues.map((c) => ({
           ...c,
           start: c.start + sp.start,
           end: c.end + sp.start,
           words: c.words?.map((w) => ({ ...w, t0: w.t0 + sp.start, t1: w.t1 + sp.start })),
+          ...(lane > 0 ? { lane } : {}),
         }));
         if (placed.length > 0) push();
         set((cur) => {
           const kept = cur.subtitles.cues.filter(
-            (c) => !(c.end > sp.start && c.start < sp.start + sp.len)
+            (c) =>
+              (c.lane ?? 0) !== lane || !(c.end > sp.start && c.start < sp.start + sp.len)
           );
           const merged = [...kept, ...placed].sort((a, b) => a.start - b.start);
           return {
@@ -1408,6 +1443,7 @@ export const useEditor = create<EditorState>((set, get) => {
         return;
       }
       const duration = totalDuration(s.clips);
+      const lane = s.subtitleLane;
       set({ subtitleStatus: "running", subtitleError: null });
       try {
         const frames = await captureTimelineFrames(spans);
@@ -1415,7 +1451,11 @@ export const useEditor = create<EditorState>((set, get) => {
         const res = await apiFetch("/api/cut/ai/visual-subtitles", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ frames, duration, locale: s.subtitles.locale ?? "en-US" }),
+          body: JSON.stringify({
+            frames,
+            duration,
+            locale: s.subtitles.tracks?.[lane]?.locale ?? s.subtitles.locale ?? "en-US",
+          }),
         });
         const body = await apiJson<{
           cues?: { start: number; end: number; text: string }[];
@@ -1429,10 +1469,18 @@ export const useEditor = create<EditorState>((set, get) => {
           start: c.start,
           end: c.end,
           text: c.text,
+          ...(lane > 0 ? { lane } : {}),
         }));
         push();
         set((cur) => ({
-          subtitles: { ...cur.subtitles, cues, generatedAt: Date.now() },
+          subtitles: {
+            ...cur.subtitles,
+            cues: [
+              ...cur.subtitles.cues.filter((c) => (c.lane ?? 0) !== lane),
+              ...cues,
+            ].sort((a, b) => a.start - b.start),
+            generatedAt: Date.now(),
+          },
           subtitleStatus: cues.length > 0 ? "ready" : "empty",
         }));
       } catch (err) {
@@ -1447,10 +1495,12 @@ export const useEditor = create<EditorState>((set, get) => {
     generateCaptions: async (style) => {
       const s = get();
       if (!s.projectId || s.subtitleStatus === "running") return;
-      // Need cues first — transcribe if the cut hasn't been captioned yet.
-      if (s.subtitles.cues.length === 0) {
+      const lane = s.subtitleLane;
+      const laneOf = (c: SubtitleCue) => c.lane ?? 0;
+      // Need cues first — transcribe if the active track hasn't been captioned.
+      if (!s.subtitles.cues.some((c) => laneOf(c) === lane)) {
         await s.generateSubtitles();
-        if (get().subtitles.cues.length === 0) return; // no speech, or an error
+        if (!get().subtitles.cues.some((c) => laneOf(c) === lane)) return; // no speech, or an error
       }
       const projectId = get().projectId;
       // Apply the look right away for instant feedback, then rewrite the text.
@@ -1459,7 +1509,8 @@ export const useEditor = create<EditorState>((set, get) => {
         subtitleStatus: "running",
         subtitleError: null,
       }));
-      const cues = get().subtitles.cues;
+      // Rewrite only the active track — other languages keep their text.
+      const cues = get().subtitles.cues.filter((c) => laneOf(c) === lane);
       try {
         const res = await apiFetch("/api/cut/ai/captions", {
           method: "POST",
@@ -1503,8 +1554,148 @@ export const useEditor = create<EditorState>((set, get) => {
       }
     },
 
+    translateSubtitleTrack: async (fromLane) => {
+      const s = get();
+      const lane = s.subtitleLane;
+      if (!s.projectId || s.subtitleStatus === "running" || fromLane === lane) return;
+      const laneOf = (c: SubtitleCue) => c.lane ?? 0;
+      const source = s.subtitles.cues.filter((c) => laneOf(c) === fromLane);
+      if (source.length === 0) return;
+      const locale =
+        s.subtitles.tracks?.[lane]?.locale ??
+        (lane === 0 ? s.subtitles.locale : undefined) ??
+        "en-US";
+      const projectId = s.projectId;
+      set({ subtitleStatus: "running", subtitleError: null });
+      try {
+        const res = await apiFetch("/api/cut/ai/captions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            translateTo: locale,
+            cues: source.map((c) => ({ start: c.start, end: c.end, text: c.text })),
+          }),
+        });
+        const body = await apiJson<{ texts?: string[]; error?: string }>(res);
+        if (get().projectId !== projectId) return;
+        if (!res.ok || !Array.isArray(body.texts) || body.texts.length !== source.length) {
+          throw new Error(body.error || "Could not translate the captions.");
+        }
+        push();
+        const texts = body.texts;
+        set((cur) => ({
+          subtitles: {
+            ...cur.subtitles,
+            cues: [
+              ...cur.subtitles.cues.filter((c) => laneOf(c) !== lane),
+              ...source.map((c, i) => ({
+                id: uid(),
+                start: c.start,
+                end: c.end,
+                text: texts[i],
+                ...(lane > 0 ? { lane } : {}),
+              })),
+            ].sort((a, b) => a.start - b.start),
+            generatedAt: Date.now(),
+          },
+          subtitleStatus: "ready",
+        }));
+      } catch (err) {
+        if (get().projectId !== projectId) return;
+        set({
+          subtitleStatus: "error",
+          subtitleError: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+
     setSubtitlesView: (patch) =>
       set((s) => ({ subtitles: { ...s.subtitles, ...patch } })),
+
+    setSubtitleLane: (lane) => {
+      const count = Math.max(
+        1,
+        get().subtitles.tracks?.length ?? 0,
+        ...get().subtitles.cues.map((c) => (c.lane ?? 0) + 1)
+      );
+      set({ subtitleLane: Math.max(0, Math.min(count - 1, lane)) });
+    },
+
+    addSubtitleTrack: (locale) => {
+      const s = get();
+      const count = Math.max(
+        1,
+        s.subtitles.tracks?.length ?? 0,
+        ...s.subtitles.cues.map((c) => (c.lane ?? 0) + 1)
+      );
+      if (count >= MAX_SUBTITLE_LANES) return;
+      push();
+      // Materialize metas up to the new track so indices stay aligned.
+      const tracks: SubtitleTrackMeta[] = Array.from(
+        { length: count + 1 },
+        (_, i) => s.subtitles.tracks?.[i] ?? {}
+      );
+      tracks[count] = { ...(locale ? { locale } : {}) };
+      set((cur) => ({
+        subtitles: { ...cur.subtitles, tracks },
+        subtitleLane: count,
+      }));
+    },
+
+    removeSubtitleTrack: (lane) => {
+      const s = get();
+      const count = Math.max(
+        1,
+        s.subtitles.tracks?.length ?? 0,
+        ...s.subtitles.cues.map((c) => (c.lane ?? 0) + 1)
+      );
+      if (count <= 1) return;
+      push();
+      const gone = new Set(
+        s.subtitles.cues.filter((c) => (c.lane ?? 0) === lane).map((c) => c.id)
+      );
+      const keep = (sel: Selection) => !!sel && !(sel.kind === "cue" && gone.has(sel.id));
+      set((cur) => {
+        const tracks = Array.from(
+          { length: count },
+          (_, i) => cur.subtitles.tracks?.[i] ?? {}
+        ).filter((_, i) => i !== lane);
+        const multiSelection = cur.multiSelection.filter(keep);
+        return {
+          subtitles: {
+            ...cur.subtitles,
+            tracks,
+            cues: cur.subtitles.cues
+              .filter((c) => (c.lane ?? 0) !== lane)
+              .map((c) => {
+                const l = c.lane ?? 0;
+                return l > lane ? { ...c, lane: l - 1 > 0 ? l - 1 : undefined } : c;
+              }),
+          },
+          subtitleLane: Math.max(0, Math.min(count - 2, cur.subtitleLane)),
+          multiSelection,
+          selection: keep(cur.selection)
+            ? cur.selection
+            : multiSelection[multiSelection.length - 1] ?? null,
+        };
+      });
+    },
+
+    setSubtitleTrackMeta: (lane, patch) =>
+      set((s) => {
+        const count = Math.max(
+          1,
+          s.subtitles.tracks?.length ?? 0,
+          ...s.subtitles.cues.map((c) => (c.lane ?? 0) + 1),
+          lane + 1
+        );
+        const tracks: SubtitleTrackMeta[] = Array.from(
+          { length: count },
+          (_, i) => s.subtitles.tracks?.[i] ?? {}
+        );
+        tracks[lane] = { ...tracks[lane], ...patch };
+        return { subtitles: { ...s.subtitles, tracks } };
+      }),
 
     setCueText: (id, text) => {
       const trimmed = text.replace(/\s+/g, " ").trim();
@@ -1584,12 +1775,17 @@ export const useEditor = create<EditorState>((set, get) => {
     },
 
     mergeCueIntoPrev: (id) => {
-      const cues = get().subtitles.cues;
+      const all = get().subtitles.cues;
+      const cue = all.find((c) => c.id === id);
+      if (!cue) return;
+      // "Previous" means the previous cue on the same subtitle track.
+      const cues = all
+        .filter((c) => (c.lane ?? 0) === (cue.lane ?? 0))
+        .sort((a, b) => a.start - b.start);
       const i = cues.findIndex((c) => c.id === id);
       if (i <= 0) return;
       push();
       const prev = cues[i - 1];
-      const cue = cues[i];
       const merged: SubtitleCue = {
         ...prev,
         end: Math.max(prev.end, cue.end),

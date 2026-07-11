@@ -49,6 +49,36 @@ ${numbered}`;
   return arr.map((s, i) => (s && s.trim() ? s.trim() : originals[i]));
 }
 
+/** Translate cues one-to-one into the target locale's language, timings
+ * untouched. Unlike the style rewrite, a failed translation throws — falling
+ * back to the source language would silently fill the track with wrong text. */
+export async function translateCaptions(cues: CaptionInput[], locale: string): Promise<string[]> {
+  const numbered = cues.map((c, i) => `${i + 1}. ${c.text}`).join("\n");
+  let language = locale;
+  try {
+    language = new Intl.DisplayNames(["en"], { type: "language" }).of(locale) ?? locale;
+  } catch {
+    /* unknown locale tag — the raw tag still reads fine in the prompt */
+  }
+  const prompt = `You translate subtitle lines for a short-form social video.
+
+Translate EACH numbered line below into ${language}. Rules:
+- Return EXACTLY ${cues.length} lines — one translation per input line, in the same order.
+- Translate naturally, preserving the meaning and tone — not word-for-word.
+- Mirror the original's brevity: each caption must stay short enough to fit in a vertical video frame.
+- Keep emoji, proper names, and numbers as they are.
+
+Return ONLY a JSON array of ${cues.length} strings. No commentary, no code fence.
+
+Lines:
+${numbered}`;
+
+  const text = await Promise.race([runOnce(prompt), timeout(90_000)]);
+  const arr = parseStringArray(text);
+  if (!arr || arr.length !== cues.length) throw new Error("The translation came back malformed.");
+  return arr.map((s, i) => (s && s.trim() ? s.trim() : cues[i].text));
+}
+
 function timeout(ms: number): Promise<never> {
   return new Promise((_resolve, reject) => {
     setTimeout(() => reject(new Error("timeout")), ms).unref();

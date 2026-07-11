@@ -187,8 +187,9 @@ async function runTranscribe(job: TranscribeJob, spec: TranscribeSpec) {
   try {
     // Render the cut's audible mix (clip audio + soundtrack, in timeline
     // time) to a 16 kHz mono wav — the same graph the export uses, minus
-    // video, so cue times line up with the timeline exactly.
-    const files = [...new Set([...spec.clips, ...spec.audio].map((c) => c.file))];
+    // video, so cue times line up with the timeline exactly. Gap spacers
+    // (empty file) reference no media — they mix in as silence.
+    const files = [...new Set([...spec.clips, ...spec.audio].map((c) => c.file).filter(Boolean))];
     const inputs: string[] = [];
     const inputIndex = new Map<string, number>();
     const audible = new Map<string, boolean>();

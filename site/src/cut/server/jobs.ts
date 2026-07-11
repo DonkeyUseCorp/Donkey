@@ -81,10 +81,12 @@ export interface ExportSpec {
     duck?: number;
   }[];
   overlays: { file: string; start: number; end: number }[];
-  /** Burned-in subtitle stills, non-overlapping and chronological. Kept apart
-   * from `overlays` (titles may overlap each other): these render as one
-   * concat-demuxer slideshow, so karaoke word windows don't multiply inputs. */
-  captions?: { file: string; start: number; end: number }[];
+  /** Burned-in subtitle stills. Kept apart from `overlays` (titles may
+   * overlap each other): each subtitle track (`lane`, absent = 0) is
+   * non-overlapping and chronological within itself and renders as one
+   * concat-demuxer slideshow, so karaoke word windows don't multiply inputs.
+   * Tracks overlap each other in time (one language each). */
+  captions?: { file: string; start: number; end: number; lane?: number }[];
 }
 
 export interface Job {
@@ -361,14 +363,17 @@ async function runExport(job: Job, spec: ExportSpec) {
   // One ffmpeg input per distinct media file (from the project folder),
   // plus one per uploaded overlay PNG.
   // Still images are excluded here: a plain `-i file` decodes one frame, so
-  // each image clip/overlay gets its own looped input below instead.
+  // each image clip/overlay gets its own looped input below instead. Gap
+  // spacers (empty file) reference no media at all — they render as black.
   const mediaFiles = [
     ...new Set(
       [
         ...spec.clips.filter((c) => !c.image),
         ...spec.audio,
         ...overlayVideos.filter((o) => !o.image),
-      ].map((c) => c.file)
+      ]
+        .map((c) => c.file)
+        .filter(Boolean)
     ),
   ];
   const audioPresence = new Map<string, boolean>();
@@ -410,7 +415,7 @@ async function runExport(job: Job, spec: ExportSpec) {
   const imageClipInput = new Map<number, number>();
   for (let j = 0; j < spec.clips.length; j++) {
     const c = spec.clips[j];
-    if (!c.image) continue;
+    if (!c.image || !c.file) continue;
     const dur = Math.max(0.1, (c.out - c.in) / clipRate(c));
     imageClipInput.set(j, nInputs++);
     inputs.push("-loop", "1", "-t", num(dur), "-framerate", String(fps), "-i", await resolveMedia(spec, c.file));
@@ -424,18 +429,24 @@ async function runExport(job: Job, spec: ExportSpec) {
     inputs.push("-loop", "1", "-t", num(olen), "-framerate", String(fps), "-i", await resolveMedia(spec, oc.file));
   }
 
-  // One concat-demuxer input for all subtitle stills: cues never overlap, so
-  // they play as a slideshow with transparent filler ("sub_blank.png", uploaded
-  // with the stills) covering the gaps.
-  let captionsIdx: number | null = null;
-  const captions = (spec.captions ?? [])
-    .filter((c) => c.end > c.start)
-    .sort((a, b) => a.start - b.start);
-  if (captions.length > 0) {
+  // One concat-demuxer input per subtitle track: within a track cues never
+  // overlap, so each plays as a slideshow with transparent filler
+  // ("sub_blank.png", uploaded with the stills) covering the gaps. Tracks
+  // (languages) overlap each other, so each gets its own input.
+  const captionLanes = new Map<number, NonNullable<ExportSpec["captions"]>>();
+  for (const c of spec.captions ?? []) {
+    if (c.end <= c.start) continue;
+    const lane = c.lane ?? 0;
+    if (!captionLanes.has(lane)) captionLanes.set(lane, []);
+    captionLanes.get(lane)!.push(c);
+  }
+  const captionInputs: number[] = [];
+  for (const [lane, entries] of [...captionLanes.entries()].sort((a, b) => a[0] - b[0])) {
+    entries.sort((a, b) => a.start - b.start);
     const blank = path.join(job.tmpDir, "sub_blank.png");
     const lines = ["ffconcat version 1.0"];
     let cursor = 0;
-    for (const c of captions) {
+    for (const c of entries) {
       const from = Math.max(c.start, cursor);
       if (c.end - from < 1e-3) continue;
       if (from - cursor > 1e-3) lines.push(`file '${blank}'`, `duration ${num(from - cursor)}`);
@@ -448,9 +459,9 @@ async function runExport(job: Job, spec: ExportSpec) {
     if (spec.duration - cursor > 1e-3) {
       lines.push(`file '${blank}'`, `duration ${num(spec.duration - cursor)}`);
     }
-    const list = path.join(job.tmpDir, "captions.ffconcat");
+    const list = path.join(job.tmpDir, `captions_${lane}.ffconcat`);
     await writeFile(list, lines.join("\n") + "\n");
-    captionsIdx = nInputs++;
+    captionInputs.push(nInputs++);
     inputs.push("-f", "concat", "-safe", "0", "-i", list);
   }
 
@@ -685,14 +696,14 @@ async function runExport(job: Job, spec: ExportSpec) {
     vLabel = next;
   });
 
-  // Subtitle stills ride one concat-demuxer slideshow (transparent filler in
-  // the gaps), so a karaoke cut with hundreds of word windows still costs a
-  // single ffmpeg input instead of one per still.
-  if (captionsIdx !== null) {
-    filters.push(`[${captionsIdx}:v]fps=${fps},format=yuva420p,setsar=1[caps]`);
-    filters.push(`[${vLabel}][caps]overlay=0:0:eof_action=pass[vcaps]`);
-    vLabel = "vcaps";
-  }
+  // Subtitle stills ride one concat-demuxer slideshow per track (transparent
+  // filler in the gaps), so a karaoke cut with hundreds of word windows still
+  // costs one ffmpeg input per language instead of one per still.
+  captionInputs.forEach((idx, k) => {
+    filters.push(`[${idx}:v]fps=${fps},format=yuva420p,setsar=1[caps${k}]`);
+    filters.push(`[${vLabel}][caps${k}]overlay=0:0:eof_action=pass[vcaps${k}]`);
+    vLabel = `vcaps${k}`;
+  });
 
   // Voiceover ducking: while a ducking clip plays, every other sound drops to
   // its gain. The windows are timeline seconds, so the volume automation must

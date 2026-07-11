@@ -348,6 +348,26 @@ export interface SubtitleCue {
    * (text swapped in place); adding/removing a word drops them and splitting
    * falls back to proportional timing. */
   words?: { t0: number; t1: number; w: string }[];
+  /** Which subtitle track (row) this belongs to, 0-based — one language per
+   * track (e.g. English on 0, Korean on 1), up to MAX_SUBTITLE_LANES. Absent
+   * = the first track. Tracks are managed in the panel, so lanes never
+   * renumber under a cue. */
+  lane?: number;
+}
+
+/** The most subtitle tracks (languages) a project can carry. */
+export const MAX_SUBTITLE_LANES = 3;
+
+/** Per-track subtitle settings; `SubtitlesBlock.tracks` indexes these by cue
+ * lane. Everything else about captions (style, karaoke, visibility) stays
+ * block-level and applies to every track. */
+export interface SubtitleTrackMeta {
+  /** Speech-recognition and display language for this track. */
+  locale?: string;
+  /** Caption anchor as frame fractions; absent = the style's spot, stacked
+   * upward per track so simultaneous languages never sit on each other. */
+  x?: number;
+  y?: number;
 }
 
 /** Caption look preset ids; the presets themselves live in lib/subtitles.ts. */
@@ -365,16 +385,20 @@ export type CaptionStyleId =
 
 export interface SubtitlesBlock {
   cues: SubtitleCue[];
+  /** Per-track settings, indexed by cue lane (absent entries = defaults).
+   * The number of tracks is max(tracks.length, highest cue lane + 1, 1). */
+  tracks?: SubtitleTrackMeta[];
   /** Render captions on the preview and burn them into exports. */
   showOnVideo: boolean;
-  /** Show the cue track on the timeline. */
+  /** Show the cue track(s) on the timeline. */
   showOnTimeline: boolean;
+  /** Legacy single-track language; per-track locales live in `tracks`. */
   locale?: string;
   generatedAt?: number;
   /** Caption look preset; absent = the plain "clean" subtitle style. */
   style?: CaptionStyleId;
-  /** Caption anchor as frame fractions, applied to every cue. Absent = the
-   * style preset's spot (low center). Dragging the caption in the preview sets it. */
+  /** Legacy caption anchor for the first track; dragging now writes the
+   * per-track anchor in `tracks`. Read as the lane-0 fallback. */
   x?: number;
   y?: number;
   /** Karaoke mode: each word lights up as it is spoken, in the preview and

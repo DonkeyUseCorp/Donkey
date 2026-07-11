@@ -19,13 +19,14 @@ import {
   hasAssetDrag,
   hasLibraryDrag,
 } from "@/cut/lib/assetDrag";
-import { draggingRef, hasRefDrag, refFromAsset, startPointerRefDrag, type AssetRef } from "@/cut/lib/assetRef";
+import { draggingRef, hasRefDrag, type AssetRef } from "@/cut/lib/assetRef";
 import { importLibraryAsset, saveTemplate } from "@/cut/lib/library";
 import { isDragActive, startDrag, subscribeDragActive } from "@/cut/lib/drag";
 import { CLIP_GAP, startLaneMove, startLaneTrim, type LaneDrag } from "@/cut/lib/laneTracks";
 import { ensurePeaks, importImage, importStockVideo } from "@/cut/lib/media";
 import { clipLen, clipSpeed, getClipSpans, projectDuration, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
 import type { VideoTrackPlacement } from "@/cut/lib/store";
+import { subtitleLaneCount } from "@/cut/lib/subtitles";
 import { formatTime, formatTimecode } from "@/cut/lib/time";
 import { IMAGE_CLIP_SECONDS, TRANSITION_STYLE_LABELS } from "@/cut/lib/types";
 import type { AudioClip, ClipSpan, MediaAsset, OverlayClip, SubtitleCue, TextOverlay, TransitionStyle } from "@/cut/lib/types";
@@ -986,7 +987,7 @@ export function Timeline() {
           {subtitles.showOnTimeline && subtitles.cues.length > 0 && (
             <div
               className="tl-sub-track relative mt-1.5"
-              style={{ height: SUB_H }}
+              style={{ height: subtitleLaneCount(subtitles) * SUB_H }}
               onPointerDown={deselectIfSelf}
             >
               {laneDrag?.kind === "cue" && (
@@ -1003,6 +1004,8 @@ export function Timeline() {
                   key={c.id}
                   cue={c}
                   pps={pps}
+                  top={(c.lane ?? 0) * SUB_H}
+                  baseRow={c.lane ?? 0}
                   selected={selKeys.has(`cue:${c.id}`)}
                   drag={laneDrag?.kind === "cue" && laneDrag.id === c.id ? laneDrag : null}
                   parting={laneDrag?.kind === "cue" && laneDrag.id !== c.id}
@@ -1234,37 +1237,31 @@ function Playhead({
 
 function ClipView({
   span,
-  index,
   prevOverlap,
   pps,
   selected,
   drag,
-  insertAtIndex,
-  insertLen,
-  scrollRef,
+  parting,
   onDrag,
-  onDrop,
+  onSnap,
   resolveTarget,
   onCrossMove,
   onCrossDrop,
   onDragActive,
 }: {
   span: ClipSpan;
-  index: number;
   /** Cross-dissolve overlap of the previous clip into this one, timeline
    * seconds — the room the incoming transition block claims on this clip's
    * left. This clip's own `span.transitionOut` claims the right. */
   prevOverlap: number;
   pps: number;
   selected: boolean;
-  drag: ClipDrag | null;
-  /** While a media asset is dragged in, clips at/after this index part to
-   * open a slot of `insertLen` seconds. Null when no asset drag is active. */
-  insertAtIndex: number | null;
-  insertLen: number;
-  scrollRef: React.RefObject<HTMLDivElement | null>;
-  onDrag: (id: string, dx: number, dy: number) => void;
-  onDrop: (id: string, dx: number | null) => void;
+  /** This clip's live drag when it is the one being carried (ghost mode). */
+  drag: LaneDrag | null;
+  /** Another base clip is dragging: animate this one's parting shifts. */
+  parting: boolean;
+  onDrag: (d: LaneDrag | null) => void;
+  onSnap: (x: number | null) => void;
   /** Which drop the given screen point is over (track / base / insert gap). */
   resolveTarget: (clientX: number, clientY: number) => TrackTarget;
   /** Preview a cross-track drop (null clears it). */
@@ -1274,53 +1271,25 @@ function ClipView({
   /** Toggle the between-track insertion zones while this clip is dragging. */
   onDragActive: (active: boolean) => void;
 }) {
-  // Left-trim keeps the box and its frames pinned: the handle sweeps through
-  // the clip and the leading area dims as "hidden"; release collapses it.
-  const [trim, setTrim] = useState<{ side: "l"; in0: number } | { side: "r" } | null>(null);
   const { clip, asset } = span;
   const speed = clipSpeed(clip);
   // A cross-dissolve overlaps two clips; inset each box by half the overlap so
   // the pair meets at the overlap midpoint with the same CLIP_GAP gutter as a
-  // hard cut (the dissolve badge floats in that gap). An active trim drops the
-  // insets so the handle sweeps the clip's true extent; the filmstrip start
-  // backs up by exactly the pixels the box gains, so the frames stay pinned
-  // through the reveal.
-  const leftXf = trim ? 0 : prevOverlap / 2;
-  const rightXf = trim ? 0 : span.transitionOut / 2;
+  // hard cut (the dissolve badge floats in that gap).
+  const leftXf = prevOverlap / 2;
+  const rightXf = span.transitionOut / 2;
   const visStart = span.start + leftXf;
   const visLen = Math.max(0, span.len - leftXf - rightXf);
   const w = visLen * pps;
-  const left = visStart * pps;
-  const trimL = trim?.side === "l" ? trim : null;
-  const stripIn = trimL ? Math.min(clip.in, trimL.in0) : clip.in;
-  // Source seconds → timeline px goes through the clip's speed.
-  const hidPx = trimL ? Math.max(0, ((clip.in - trimL.in0) / speed) * pps) : 0;
-  const boxW = trimL ? ((clip.out - stripIn) / speed) * pps : w;
   // Frames start where the box does: skip the source seconds the left dissolve
   // consumed so the filmstrip stays aligned under the inset edge.
-  const filmIn = stripIn + leftXf * speed;
-  const isDragged = drag?.id === clip.id;
-  // Neighbors part to make room for the open slot.
-  const reorderShift =
-    !drag || isDragged
-      ? 0
-      : drag.from < index && index <= drag.to
-        ? -drag.len
-        : drag.to <= index && index < drag.from
-          ? drag.len
-          : 0;
-  // Clips at/after the media-drop point slide right to open the insertion slot.
-  const insertShift = insertAtIndex !== null && index >= insertAtIndex ? insertLen : 0;
-  const shiftSec = reorderShift + insertShift;
-  const parting = drag !== null || insertAtIndex !== null;
+  const filmIn = clip.in + leftXf * speed;
 
-  // During a left-trim the strip is computed from the drag-start in-point so
-  // every frame stays pinned in place while the hidden region sweeps over it.
   const filmstrip = useMemo(() => {
     if (!asset.thumbs?.length || !asset.thumbStep) return [];
     const aspect = (asset.width ?? 16) / Math.max(1, asset.height ?? 9);
     const imgW = Math.max(26, Math.round((VIDEO_H - 4) * aspect));
-    const count = Math.min(120, Math.ceil(boxW / imgW));
+    const count = Math.min(120, Math.ceil(w / imgW));
     return Array.from({ length: count }, (_, k) => {
       const timeAt = filmIn + ((k * imgW + imgW / 2) / pps) * speed;
       const idx = Math.min(
@@ -1329,239 +1298,131 @@ function ClipView({
       );
       return { src: asset.thumbs![idx], left: k * imgW, width: imgW };
     });
-  }, [asset, filmIn, boxW, pps, speed]);
+  }, [asset, filmIn, w, pps, speed]);
 
-  const onBody = (e: React.PointerEvent) => {
-    if (e.metaKey || e.shiftKey) {
-      useEditor.getState().toggleSelect({ kind: "clip", id: clip.id });
-      return;
-    }
-    const s = useEditor.getState();
-    s.select({ kind: "clip", id: clip.id });
-    // Clicking anywhere on the timeline moves the playhead — clips included.
-    const rect = e.currentTarget.getBoundingClientRect();
-    s.seek(visStart + (e.clientX - rect.left) / pps);
-    const el = scrollRef.current;
-    const sc0 = el?.scrollLeft ?? 0;
-    let effDx = 0;
-    let live = false;
-    let target: TrackTarget = { kind: "base" };
-    let dropStart = span.start;
-    // Dragging a clip out of the timeline can also hand its asset to a
-    // reference drop zone (AI chat, the image/video creators).
-    const refDrag = startPointerRefDrag(refFromAsset(asset));
-    startDrag(e, {
-      onMove: (dx, dy, ev) => {
-        if (!live && Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
-        if (!live) onDragActive(true);
-        live = true;
-        refDrag.move(ev);
-        if (el) {
-          const r = el.getBoundingClientRect();
-          if (ev.clientX > r.right - 36) el.scrollLeft += 14;
-          else if (ev.clientX < r.left + 36) el.scrollLeft -= 14;
-        }
-        effDx = dx + ((el?.scrollLeft ?? sc0) - sc0);
-        dropStart = Math.max(0, span.start + effDx / pps);
-        // On the base row it's a reorder; over an upper track or a gap it lifts.
-        target = resolveTarget(ev.clientX, ev.clientY);
-        if (target.kind === "base") {
-          onCrossMove(null);
-          onDrag(clip.id, effDx, Math.max(-26, Math.min(14, dy)));
-        } else {
-          onCrossMove(target, dropStart, span.len);
-        }
-      },
-      onUp: () => {
-        onDragActive(false);
-        if (live && refDrag.drop()) {
-          // A zone took the ref; cancel the timeline move.
-          onCrossMove(null);
-          return onDrop(clip.id, null);
-        }
-        if (!live) return onDrop(clip.id, null);
-        if (target.kind === "base") onDrop(clip.id, effDx);
-        else onCrossDrop(clip.id, target, dropStart);
-      },
-    });
-  };
-
-  // Shift later titles/captions by however much this clip's footprint changed.
-  const rippleTrim = (len0: number) => {
-    const c = useEditor.getState().clips.find((x) => x.id === clip.id);
-    if (c) useEditor.getState().rippleShift(span.start + len0, clipLen(c) - len0);
-  };
-
-  const onTrimLeft = (e: React.PointerEvent) => {
-    const s = useEditor.getState();
-    s.select({ kind: "clip", id: clip.id });
-    s.pushHistory();
-    const in0 = clip.in;
-    const len0 = span.len;
-    setTrim({ side: "l", in0 });
-    startDrag(e, {
-      onMove: (dx) => {
-        const nin = Math.min(clip.out - 0.15, Math.max(0, in0 + (dx / pps) * speed));
-        s.updateClipTransient(clip.id, { in: nin });
-      },
-      onUp: () => {
-        setTrim(null);
-        rippleTrim(len0);
-      },
-    });
-  };
-
-  const onTrimRight = (e: React.PointerEvent) => {
-    const s = useEditor.getState();
-    s.select({ kind: "clip", id: clip.id });
-    s.pushHistory();
-    setTrim({ side: "r" });
-    const out0 = clip.out;
-    const len0 = span.len;
-    startDrag(e, {
-      onMove: (dx) => {
-        // A still has no source length, so its clip can stretch to any duration.
-        const maxOut = asset.type === "image" ? Infinity : asset.duration;
-        const nout = Math.max(clip.in + 0.15, Math.min(maxOut, out0 + (dx / pps) * speed));
-        s.updateClipTransient(clip.id, { out: nout });
-      },
-      onUp: () => {
-        setTrim(null);
-        rippleTrim(len0);
-      },
-    });
+  // The move gesture is the shared lane behavior (parting, snapping); its
+  // verticality is the video placement system — upper tracks and insert
+  // gaps — resolved by DOM hit-testing.
+  const ui = {
+    pps,
+    rowH: VIDEO_H,
+    laneCount: 0,
+    baseRow: 0,
+    onDrag,
+    onSnap,
+    vertical: {
+      resolve: (ev: PointerEvent) => resolveTarget(ev.clientX, ev.clientY),
+      isHome: (t: TrackTarget) => samePlacement(t, { kind: "base" }),
+      preview: (t: TrackTarget | null, start: number, len: number) =>
+        t ? onCrossMove(t, start, len) : onCrossMove(null),
+      commit: (id: string, t: TrackTarget, start: number) => onCrossDrop(id, t, start),
+      setActive: onDragActive,
+    },
   };
 
   return (
-    <>
-      <div
-        className={cn(
-          "tl-clip group absolute top-0.5 cursor-grab overflow-hidden rounded-lg bg-neutral-200 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]",
-          selected && SELECTED_SHADOW,
-          clip.hidden && "opacity-40 grayscale",
-          isDragged
-            ? "tl-clip-ghost pointer-events-none z-7 cursor-grabbing opacity-80 shadow-2xl"
-            : parting && "transition-transform duration-150 ease-out"
-        )}
-        style={{
-          left,
-          width: Math.max(10, boxW - CLIP_GAP),
-          height: VIDEO_H - 4,
-          transform: isDragged
-            ? `translate(${drag!.dx}px, ${drag!.dy}px)`
-            : shiftSec !== 0
-              ? `translateX(${shiftSec * pps}px)`
-              : undefined,
-        }}
-        onPointerDown={onBody}
-      >
-        <div className="tl-filmstrip pointer-events-none absolute inset-0">
-          {filmstrip.map((f, k) => (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              key={k}
-              src={f.src}
-              alt=""
-              draggable={false}
-              className="absolute top-0 h-full object-cover"
-              style={{ left: f.left, width: f.width }}
-            />
-          ))}
-        </div>
-        {selected && (
-          // A blue wash over the whole clip so a multi-selection reads at a
-          // glance, not just from the thin border.
-          <div className="pointer-events-none absolute inset-0 z-[1] bg-[#0a84ff]/25" />
-        )}
-        {hidPx > 0 && (
-          <div
-            className="tl-trim-hidden pointer-events-none absolute inset-y-0 left-0 z-2 border-r border-white/70 bg-black/55"
-            style={{ width: hidPx }}
-          />
-        )}
-        {(isDragged || trim !== null) && (
-          <span
-            className="tl-dur-chip pointer-events-none absolute top-1 z-2 rounded-[5px] bg-black/65 px-1.5 py-px font-mono text-[10px] tabular-nums text-white"
-            style={{ left: hidPx + 4 }}
-          >
-            {(Math.round(span.len * 10) / 10).toFixed(1)}s
-          </span>
-        )}
-        {asset.type === "video" && (
-          <MuteChip
-            muted={clip.muted}
-            className="bottom-1 left-1"
-            onToggle={() => useEditor.getState().updateClip(clip.id, { muted: !clip.muted })}
-          />
-        )}
-        {(clip.speed ?? 1) !== 1 && (
-          <span
-            className="tl-speed-chip absolute right-[30px] bottom-1 z-2 rounded-[5px] bg-black/70 px-1 py-px font-mono text-[9.5px] tabular-nums text-white"
-            title={`${clip.speed}× speed`}
-          >
-            {+(clip.speed ?? 1).toFixed(2)}×
-          </span>
-        )}
-        <HideChip
-          hidden={!!clip.hidden}
-          className="bottom-1 right-2"
-          onToggle={() => useEditor.getState().updateClip(clip.id, { hidden: !clip.hidden })}
-        />
-        {asset.type === "video" && (
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <button
-                  aria-label="Clip options"
-                  className="tl-clip-menu absolute top-1 right-2 z-4 grid size-[18px] place-items-center rounded-[5px] bg-black/55 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/75"
-                  onPointerDown={(e) => e.stopPropagation()}
-                />
-              }
-            >
-              <EllipsisVertical className="size-3" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-44">
-              <DropdownMenuItem
-                disabled={clip.muted}
-                onClick={() => {
-                  const s = useEditor.getState();
-                  s.select({ kind: "clip", id: clip.id });
-                  s.detachAudio();
-                  void ensurePeaks(asset);
-                }}
-              >
-                <AudioLines /> Detach audio
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-        <span
-          className={cn(trimHandle, "tl-trim-l", trim?.side === "l" && "z-3 after:opacity-100")}
-          style={{ left: hidPx }}
-          onPointerDown={onTrimLeft}
-        />
-        <span
-          className={cn(trimHandle, "tl-trim-r right-0", trim?.side === "r" && "after:opacity-100")}
-          onPointerDown={onTrimRight}
-        />
-      </div>
-      {trim !== null && (
-        <div
-          className="tl-trim-tip pointer-events-none absolute z-9 -translate-x-1/2 rounded-md bg-foreground px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-background shadow-md"
-          style={{
-            left: trim.side === "l" ? left + hidPx : left + Math.max(10, w - CLIP_GAP),
-            top: -24,
-          }}
-        >
-          {formatTimecode(trim.side === "l" ? clip.in : clip.out)}
-        </div>
+    <div
+      className={cn(
+        "tl-clip group absolute top-0.5 cursor-grab overflow-hidden rounded-lg bg-neutral-200 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]",
+        selected && SELECTED_SHADOW,
+        clip.hidden && "opacity-40 grayscale",
+        drag
+          ? "tl-clip-ghost pointer-events-none cursor-grabbing opacity-80 shadow-2xl"
+          : parting && "transition-[left] duration-150 ease-out"
       )}
-    </>
+      style={{
+        // The ghost keeps the box's dissolve insets, offset to follow the pointer.
+        left: drag ? drag.ghostX + leftXf * pps : visStart * pps,
+        width: Math.max(10, w - CLIP_GAP),
+        height: VIDEO_H - 4,
+        // Inline so it beats SELECTED_SHADOW's z-10 class on the same element.
+        zIndex: drag ? 20 : undefined,
+      }}
+      onPointerDown={(e) => startLaneMove(e, "clip", clip.id, ui)}
+    >
+      <div className="tl-filmstrip pointer-events-none absolute inset-0">
+        {filmstrip.map((f, k) => (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            key={k}
+            src={f.src}
+            alt=""
+            draggable={false}
+            className="absolute top-0 h-full object-cover"
+            style={{ left: f.left, width: f.width }}
+          />
+        ))}
+      </div>
+      {selected && (
+        // A blue wash over the whole clip so a multi-selection reads at a
+        // glance, not just from the thin border.
+        <div className="pointer-events-none absolute inset-0 z-[1] bg-[#0a84ff]/25" />
+      )}
+      {drag && (
+        <span className="tl-dur-chip pointer-events-none absolute top-1 left-1 z-2 rounded-[5px] bg-black/65 px-1.5 py-px font-mono text-[10px] tabular-nums text-white">
+          {(Math.round(span.len * 10) / 10).toFixed(1)}s
+        </span>
+      )}
+      {asset.type === "video" && (
+        <MuteChip
+          muted={clip.muted}
+          className="bottom-1 left-1"
+          onToggle={() => useEditor.getState().updateClip(clip.id, { muted: !clip.muted })}
+        />
+      )}
+      {(clip.speed ?? 1) !== 1 && (
+        <span
+          className="tl-speed-chip absolute right-[30px] bottom-1 z-2 rounded-[5px] bg-black/70 px-1 py-px font-mono text-[9.5px] tabular-nums text-white"
+          title={`${clip.speed}× speed`}
+        >
+          {+(clip.speed ?? 1).toFixed(2)}×
+        </span>
+      )}
+      <HideChip
+        hidden={!!clip.hidden}
+        className="bottom-1 right-2"
+        onToggle={() => useEditor.getState().updateClip(clip.id, { hidden: !clip.hidden })}
+      />
+      {asset.type === "video" && (
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <button
+                aria-label="Clip options"
+                className="tl-clip-menu absolute top-1 right-2 z-4 grid size-[18px] place-items-center rounded-[5px] bg-black/55 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/75"
+                onPointerDown={(e) => e.stopPropagation()}
+              />
+            }
+          >
+            <EllipsisVertical className="size-3" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-44">
+            <DropdownMenuItem
+              disabled={clip.muted}
+              onClick={() => {
+                const s = useEditor.getState();
+                s.select({ kind: "clip", id: clip.id });
+                s.detachAudio();
+                void ensurePeaks(asset);
+              }}
+            >
+              <AudioLines /> Detach audio
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+      <span
+        className={cn(trimHandle, "tl-trim-l left-0")}
+        onPointerDown={(e) => startLaneTrim(e, "clip", clip.id, "l", ui)}
+      />
+      <span
+        className={cn(trimHandle, "tl-trim-r right-0")}
+        onPointerDown={(e) => startLaneTrim(e, "clip", clip.id, "r", ui)}
+      />
+    </div>
   );
 }
 
-/** Hover chip that toggles a clip out of the played/exported output ("disable").
- * Stays visible while the clip is hidden so re-enabling is one click. */
 function HideChip({
   hidden,
   onToggle,
@@ -1950,6 +1811,8 @@ function TextBar({
 function SubBar({
   cue,
   pps,
+  top,
+  baseRow,
   selected,
   drag,
   parting,
@@ -1958,6 +1821,9 @@ function SubBar({
 }: {
   cue: SubtitleCue;
   pps: number;
+  /** Rendered row top in px — one row per subtitle track (language). */
+  top: number;
+  baseRow: number;
   selected: boolean;
   /** This bar's live drag when it is the one being carried (ghost mode). */
   drag: LaneDrag | null;
@@ -1967,12 +1833,12 @@ function SubBar({
   onSnap: (x: number | null) => void;
 }) {
   const w = Math.max(8, (cue.end - cue.start) * pps);
-  const ui = { pps, rowH: SUB_H, laneCount: 0, baseRow: 0, onDrag, onSnap };
+  const ui = { pps, rowH: SUB_H, laneCount: 0, baseRow, onDrag, onSnap };
 
   return (
     <div
       className={cn(
-        "tl-sub-bar group absolute top-px flex cursor-grab items-center overflow-hidden rounded-[5px] bg-gradient-to-b from-amber-300 to-amber-400 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]",
+        "tl-sub-bar group absolute flex cursor-grab items-center overflow-hidden rounded-[5px] bg-gradient-to-b from-amber-300 to-amber-400 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]",
         selected && SELECTED_SHADOW,
         drag
           ? "tl-sub-ghost pointer-events-none cursor-grabbing opacity-80 shadow-2xl"
@@ -1980,6 +1846,7 @@ function SubBar({
       )}
       style={{
         left: drag ? drag.ghostX : cue.start * pps,
+        top: top + 1,
         width: Math.max(8, w - CLIP_GAP),
         height: SUB_H - 4,
         // Inline so it beats SELECTED_SHADOW's z-10 class on the same element.

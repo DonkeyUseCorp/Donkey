@@ -181,9 +181,11 @@ const overlayClipAdapter: LaneAdapter<OverlayClip> = {
 
 const cueAdapter: LaneAdapter<SubtitleCue> = {
   minLen: 0.15,
+  // One row per language track, but no vertical retracking: a cue belongs to
+  // its language, and tracks are managed in the panel (capped at three).
   multiLane: false,
   raws: (s) => s.subtitles.cues,
-  view: (c) => ({ id: c.id, start: c.start, len: c.end - c.start, lane: 0 }),
+  view: (c) => ({ id: c.id, start: c.start, len: c.end - c.start, lane: c.lane ?? 0 }),
   apply: (patches) => useEditor.getState().updateCuesTransient(patches),
   // Retiming detaches a cue from its word timings; an unmoved patch restores
   // the originals, so parted neighbors that flow back keep theirs.

@@ -1,14 +1,27 @@
 "use client";
 
 import React, { memo, useEffect, useRef, useState } from "react";
-import { AlertCircle, Captions, ChevronDown, Loader2, RefreshCw } from "lucide-react";
+import { AlertCircle, Captions, ChevronDown, Languages, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { GenerateSubtitlesAudio } from "@/cut/components/VoicePicker";
-import { CAPTION_STYLES, captionStyle, fmtCueTime, karaokeLook } from "@/cut/lib/subtitles";
+import {
+  CAPTION_STYLES,
+  captionStyle,
+  fmtCueTime,
+  karaokeLook,
+  laneCues,
+  subtitleLaneCount,
+} from "@/cut/lib/subtitles";
 import { TIMELINE_H_MIN, useEditor } from "@/cut/lib/store";
 import { PLATE_PAD_X, PLATE_PAD_Y, PLATE_RADIUS, plateFill } from "@/cut/lib/textRender";
-import { fontStack, type SubtitleCue, type WordAccentMode } from "@/cut/lib/types";
+import {
+  MAX_SUBTITLE_LANES,
+  fontStack,
+  type SubtitleCue,
+  type SubtitlesBlock,
+  type WordAccentMode,
+} from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
 
 const LOCALES = [
@@ -28,21 +41,43 @@ const LOCALES = [
 /** Give the cue track room when it appears. */
 const TIMELINE_H_WITH_SUBS = Math.max(TIMELINE_H_MIN, 276);
 
+/** A track's short pill label: its language code (EN, KO, …). */
+function laneLabel(subs: SubtitlesBlock, lane: number): string {
+  const locale =
+    subs.tracks?.[lane]?.locale ?? (lane === 0 ? subs.locale : undefined) ?? "en-US";
+  return locale.split("-")[0].toUpperCase();
+}
+
+/** A track's language name from the locale picker list, else its short code. */
+function laneLanguage(subs: SubtitlesBlock, lane: number): string {
+  const locale =
+    subs.tracks?.[lane]?.locale ?? (lane === 0 ? subs.locale : undefined) ?? "en-US";
+  return LOCALES.find(([id]) => id === locale)?.[1] ?? laneLabel(subs, lane);
+}
+
 export function SubtitlesPanel() {
   const subtitles = useEditor((s) => s.subtitles);
+  const lane = useEditor((s) => s.subtitleLane);
   const status = useEditor((s) => s.subtitleStatus);
   const error = useEditor((s) => s.subtitleError);
-  const hasCues = subtitles.cues.length > 0;
+  const laneCount = subtitleLaneCount(subtitles);
+  const activeCues = laneCues(subtitles, lane);
+  const hasCues = activeCues.length > 0;
   const [tab, setTab] = useState<"content" | "styles" | "options">("content");
 
   const growTimeline = () => {
     const cur = useEditor.getState();
-    if (cur.subtitles.cues.length > 0 && cur.timelineH < TIMELINE_H_WITH_SUBS)
-      cur.setTimelineH(TIMELINE_H_WITH_SUBS);
+    // Multiple tracks stack rows, so give the timeline room per track.
+    const want = TIMELINE_H_WITH_SUBS + (subtitleLaneCount(cur.subtitles) - 1) * 22;
+    if (cur.subtitles.cues.length > 0 && cur.timelineH < want) cur.setTimelineH(want);
   };
 
   const generate = () => {
     void useEditor.getState().generateSubtitles().then(growTimeline);
+  };
+
+  const translate = (fromLane: number) => {
+    void useEditor.getState().translateSubtitleTrack(fromLane).then(growTimeline);
   };
 
   return (
@@ -77,8 +112,52 @@ export function SubtitlesPanel() {
         )}
       </div>
 
+      {(laneCount > 1 || subtitles.cues.length > 0) && (
+        <div className="sub-tracks flex shrink-0 items-center gap-1 px-3.5 pb-2">
+          {Array.from({ length: laneCount }, (_, i) => (
+            <button
+              key={i}
+              className={cn(
+                "sub-track-pill rounded-full border px-2.5 py-1 text-[11px] font-semibold tracking-wide transition-colors",
+                i === lane
+                  ? "border-transparent bg-neutral-900 text-white"
+                  : "border-input text-muted-foreground hover:text-foreground"
+              )}
+              aria-pressed={i === lane}
+              title={`Subtitle track ${i + 1}`}
+              onClick={() => useEditor.getState().setSubtitleLane(i)}
+            >
+              {laneLabel(subtitles, i)}
+            </button>
+          ))}
+          {laneCount < MAX_SUBTITLE_LANES && (
+            <button
+              className="sub-track-add grid size-6 place-items-center rounded-full border border-dashed border-input text-muted-foreground transition-colors hover:text-foreground"
+              title="Add a subtitle track (another language)"
+              aria-label="Add a subtitle track"
+              onClick={() => useEditor.getState().addSubtitleTrack()}
+            >
+              <Plus className="size-3.5" />
+            </button>
+          )}
+          {laneCount > 1 && (
+            <button
+              className="sub-track-remove ml-auto grid size-6 place-items-center rounded-md text-muted-foreground transition-colors hover:text-red-600"
+              title="Remove this subtitle track and its captions (undoable)"
+              aria-label="Remove this subtitle track"
+              onClick={() => {
+                const s = useEditor.getState();
+                s.removeSubtitleTrack(s.subtitleLane);
+              }}
+            >
+              <Trash2 className="size-3.5" />
+            </button>
+          )}
+        </div>
+      )}
+
       {!hasCues ? (
-        <EmptyState status={status} error={error} onGenerate={generate} />
+        <EmptyState status={status} error={error} onGenerate={generate} onTranslate={translate} />
       ) : tab === "content" ? (
         <>
           <div className="shrink-0 px-1.5">
@@ -98,7 +177,7 @@ export function SubtitlesPanel() {
               Regenerate
             </Button>
           </div>
-          <Transcript cues={subtitles.cues} />
+          <Transcript cues={activeCues} />
           {status === "error" && error && (
             <p className="sub-error shrink-0 border-t border-border px-4 py-2.5 text-[11px] leading-relaxed text-red-600">
               {error}
@@ -128,7 +207,10 @@ const ACCENT_MODES: { id: WordAccentMode; label: string }[] = [
  * subtitle-voiceover generator. */
 function OptionsTab() {
   const subtitles = useEditor((s) => s.subtitles);
-  const moved = subtitles.x !== undefined || subtitles.y !== undefined;
+  const moved =
+    subtitles.x !== undefined ||
+    subtitles.y !== undefined ||
+    !!subtitles.tracks?.some((t) => t.x !== undefined || t.y !== undefined);
   // Effective word treatment: the caption style's defaults with the user's
   // overrides on top, so the controls always show what's on the video.
   const look = karaokeLook(captionStyle(subtitles.style), subtitles);
@@ -226,7 +308,13 @@ function OptionsTab() {
           size="sm"
           className="sub-position-reset"
           disabled={!moved}
-          onClick={() => useEditor.getState().setSubtitlesView({ x: undefined, y: undefined })}
+          onClick={() => {
+            const s = useEditor.getState();
+            s.setSubtitlesView({ x: undefined, y: undefined });
+            s.subtitles.tracks?.forEach((_, i) =>
+              s.setSubtitleTrackMeta(i, { x: undefined, y: undefined })
+            );
+          }}
         >
           Reset
         </Button>
@@ -290,18 +378,30 @@ function EmptyState({
   status,
   error,
   onGenerate,
+  onTranslate,
 }: {
   status: string;
   error: string | null;
   onGenerate: () => void;
+  onTranslate: (fromLane: number) => void;
 }) {
-  const locale = useEditor((s) => s.subtitles.locale ?? "en-US");
+  const subtitles = useEditor((s) => s.subtitles);
+  const lane = useEditor((s) => s.subtitleLane);
+  const locale =
+    subtitles.tracks?.[lane]?.locale ?? (lane === 0 ? subtitles.locale : undefined) ?? "en-US";
+  // Other tracks that already have captions — each can seed this one by translation.
+  const sources = Array.from({ length: subtitleLaneCount(subtitles) }, (_, i) => i).filter(
+    (i) => i !== lane && laneCues(subtitles, i).length > 0
+  );
+  const [translating, setTranslating] = useState(false);
 
   if (status === "running") {
     return (
       <div className="sub-generating flex flex-col items-center gap-3 px-6 pt-10 text-center">
         <Loader2 className="size-5 animate-spin text-muted-foreground" />
-        <p className="text-[13px] font-medium">Transcribing on this Mac…</p>
+        <p className="text-[13px] font-medium">
+          {translating ? "Translating your captions…" : "Transcribing on this Mac…"}
+        </p>
         <p className="text-[11.5px] leading-relaxed text-muted-foreground">
           Runs in the background — keep editing. Captions appear here when
           it finishes.
@@ -328,7 +428,10 @@ function EmptyState({
         <select
           className="sub-locale w-full appearance-none rounded-lg border border-input bg-transparent py-2 pr-9 pl-2.5 text-[12.5px] outline-none focus:border-ring"
           value={locale}
-          onChange={(e) => useEditor.getState().setSubtitlesView({ locale: e.target.value })}
+          onChange={(e) => {
+            const s = useEditor.getState();
+            s.setSubtitleTrackMeta(s.subtitleLane, { locale: e.target.value });
+          }}
         >
           {LOCALES.map(([id, label]) => (
             <option key={id} value={id}>
@@ -340,12 +443,32 @@ function EmptyState({
       </div>
       <Button
         className="sub-generate w-full"
-        onClick={onGenerate}
+        onClick={() => {
+          setTranslating(false);
+          onGenerate();
+        }}
         title="Transcribe your audio into plain captions, word for word"
       >
         <Captions data-icon="inline-start" />
         {status === "empty" || status === "error" ? "Try again" : "Generate subtitles"}
       </Button>
+      {sources.map((i) => (
+        <Button
+          key={i}
+          variant="outline"
+          className="sub-translate w-full"
+          title={`Write this track by translating the ${laneLanguage(subtitles, i)} captions into ${
+            LOCALES.find(([id]) => id === locale)?.[1] ?? locale
+          }`}
+          onClick={() => {
+            setTranslating(true);
+            onTranslate(i);
+          }}
+        >
+          <Languages data-icon="inline-start" />
+          Translate from {laneLanguage(subtitles, i)}
+        </Button>
+      ))}
     </div>
   );
 }

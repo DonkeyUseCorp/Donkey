@@ -3,7 +3,16 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { startDrag } from "@/cut/lib/drag";
 import { useEditor } from "@/cut/lib/store";
-import { captionStyle, cueAt, cueOverlay, cueWordWindows, karaokeLook } from "@/cut/lib/subtitles";
+import {
+  captionStyle,
+  cueAt,
+  cueOverlay,
+  cueWordWindows,
+  karaokeLook,
+  laneCues,
+  subtitleLaneCount,
+  trackPos,
+} from "@/cut/lib/subtitles";
 import {
   LINE_HEIGHT,
   PLATE_PAD_X,
@@ -30,9 +39,9 @@ interface Guides {
   h: number[]; // horizontal lines (y)
 }
 
-/** The subtitle caption's key in the shared snap-box registry. Overlay ids are
- * uids, so this can't collide. */
-const SUBTITLE_BOX_ID = "subtitle-caption";
+/** A subtitle track's key in the shared snap-box registry. Overlay ids are
+ * uids, so these can't collide. */
+const subtitleBoxId = (lane: number) => `subtitle-caption-${lane}`;
 
 export function OverlayLayer({ stageWidth }: { stageWidth: number }) {
   const overlays = useEditor((s) => s.overlays);
@@ -129,7 +138,7 @@ export function OverlayLayer({ stageWidth }: { stageWidth: number }) {
 
   return (
     <div ref={rootRef} className="pointer-events-none absolute inset-0">
-      <SubtitleCaption
+      <SubtitleCaptions
         stageWidth={stageWidth}
         stageHeight={stageHeight}
         registerBox={registerBox}
@@ -175,18 +184,38 @@ export function OverlayLayer({ stageWidth }: { stageWidth: number }) {
   );
 }
 
-/** The active subtitle cue, rendered exactly like the export burn-in.
- * Nothing renders when subtitles are hidden or there is no cue (no speech).
- * Dragging the caption moves every cue — the position is one project-wide
- * anchor, not per-cue — and rides the same smart snapping and guide lines as
- * titles. */
+/** Every subtitle track's active cue, one caption per language. */
+function SubtitleCaptions(props: {
+  stageWidth: number;
+  stageHeight: number;
+  registerBox: (id: string, el: HTMLElement | null) => void;
+  snap: (id: string, x: number, y: number, ev: PointerEvent) => { x: number; y: number };
+  onSnapEnd: () => void;
+}) {
+  const subtitles = useEditor((s) => s.subtitles);
+  if (!subtitles.showOnVideo) return null;
+  return (
+    <>
+      {Array.from({ length: subtitleLaneCount(subtitles) }, (_, lane) => (
+        <SubtitleCaption key={lane} lane={lane} {...props} />
+      ))}
+    </>
+  );
+}
+
+/** One track's active cue, rendered exactly like the export burn-in.
+ * Nothing renders when there is no cue at the playhead (no speech). Dragging
+ * the caption moves the whole track — the position is one per-track anchor,
+ * not per-cue — and rides the same smart snapping and guide lines as titles. */
 function SubtitleCaption({
+  lane,
   stageWidth,
   stageHeight,
   registerBox,
   snap,
   onSnapEnd,
 }: {
+  lane: number;
   stageWidth: number;
   stageHeight: number;
   registerBox: (id: string, el: HTMLElement | null) => void;
@@ -200,14 +229,14 @@ function SubtitleCaption({
   const aspect = useEditor((s) => s.aspect);
   const t = !playing && skimTime !== null ? skimTime : currentTime;
 
-  if (!subtitles.showOnVideo) return null;
-  const cue = cueAt(subtitles.cues, t);
+  const cues = laneCues(subtitles, lane);
+  const cue = cueAt(cues, t);
   if (!cue || !cue.text.trim()) return null;
 
-  // Captions ride the same style/opener logic as the export burn-in, so the
-  // preview and the rendered file match exactly.
+  // Captions ride the same style/opener/anchor logic as the export burn-in,
+  // so the preview and the rendered file match exactly.
   const style = captionStyle(subtitles.style);
-  const ov = cueOverlay(cue, style, cue.id === subtitles.cues[0]?.id, subtitles);
+  const ov = cueOverlay(cue, style, cue.id === cues[0]?.id, trackPos(subtitles, style, lane));
   // Karaoke: the word under the playhead lights up as it is spoken.
   const wordIndex = subtitles.wordHighlight
     ? cueWordWindows(cue).findIndex((w) => t >= w.start && t < w.end)
@@ -236,7 +265,7 @@ function SubtitleCaption({
   const scale = stageWidth / FRAME[aspect].w;
   return (
     <div
-      ref={(el) => registerBox(SUBTITLE_BOX_ID, el)}
+      ref={(el) => registerBox(subtitleBoxId(lane), el)}
       className="sub-caption pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2 cursor-grab text-center whitespace-pre-wrap active:cursor-grabbing"
       onPointerDown={(e) => {
         const s = useEditor.getState();
@@ -244,8 +273,8 @@ function SubtitleCaption({
         const { x: x0, y: y0 } = ov;
         startDrag(e, {
           onMove: (dx, dy, ev) => {
-            const p = snap(SUBTITLE_BOX_ID, x0 + dx / stageWidth, y0 + dy / stageHeight, ev);
-            useEditor.getState().setSubtitlesView({
+            const p = snap(subtitleBoxId(lane), x0 + dx / stageWidth, y0 + dy / stageHeight, ev);
+            useEditor.getState().setSubtitleTrackMeta(lane, {
               x: Math.min(0.98, Math.max(0.02, p.x)),
               y: Math.min(0.98, Math.max(0.02, p.y)),
             });

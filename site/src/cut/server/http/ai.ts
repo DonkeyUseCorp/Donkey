@@ -11,7 +11,7 @@ import {
   unregisterSession,
   type UIChunkWriter,
 } from "../ai/bridge";
-import { rewriteCaptions } from "../ai/captions";
+import { rewriteCaptions, translateCaptions } from "../ai/captions";
 import { writeVisualCues, type VisualFrame } from "../ai/visualSubtitles";
 import { AI_SKILL_INDEX, AI_SKILLS, AI_TOOLS, systemPrompt } from "../ai/catalog";
 
@@ -284,18 +284,24 @@ const mcpText = (value: unknown) => ({
 
 /** The AI assistant: chat streaming, provider probing, and the MCP bridge. */
 export const aiApi = {
-  /** Rewrite subtitle cues into punchy social captions (one-to-one, timings
-   * preserved). Falls back to the originals on any failure. */
+  /** Rewrite subtitle cues into punchy social captions, or — when translateTo
+   * carries a locale — translate them into that language. One-to-one either
+   * way, timings preserved. The style rewrite falls back to the originals on
+   * failure; a failed translation errors instead. */
   async captions(req: Request) {
     try {
-      const { cues, style } = (await req.json()) as {
+      const { cues, style, translateTo } = (await req.json()) as {
         cues?: { start: number; end: number; text: string }[];
         style?: string;
+        translateTo?: string;
       };
       if (!Array.isArray(cues) || cues.length === 0) {
         return Response.json({ error: "No cues to rewrite." }, { status: 400 });
       }
-      const texts = await rewriteCaptions(cues, typeof style === "string" ? style : "clean");
+      const texts =
+        typeof translateTo === "string" && translateTo
+          ? await translateCaptions(cues, translateTo)
+          : await rewriteCaptions(cues, typeof style === "string" ? style : "clean");
       return Response.json({ texts });
     } catch (e) {
       return Response.json(

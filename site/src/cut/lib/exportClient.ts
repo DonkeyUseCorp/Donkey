@@ -1,8 +1,8 @@
 "use client";
 
 import { apiFetch, apiJson, apiUrl } from "./api";
-import { clipSpeed, getClipSpans, projectDuration } from "./store";
-import { captionStyle, cueOverlay, cueWordWindows } from "./subtitles";
+import { clipSpeed, getClipSpans, projectDuration, spanSequence } from "./store";
+import { captionStyle, cueOverlay, cueWordWindows, laneCues, subtitleLaneCount, trackPos } from "./subtitles";
 import { renderOverlayPng } from "./textRender";
 import { FRAME } from "./types";
 import type {
@@ -134,7 +134,7 @@ async function buildExportForm(
   const form = new FormData();
   const assetById = new Map(doc.assets.map((a) => [a.id, a]));
 
-  const clips = spans.map((sp) => ({
+  const clipEntries = spans.map((sp) => ({
     file: sp.asset.fileName,
     in: sp.clip.in,
     out: sp.clip.out,
@@ -166,8 +166,8 @@ async function buildExportForm(
     const style = sp.clip.transitionStyle ?? "crossfade";
     const d = sp.clip.transition ?? 0;
     if (d <= 0) return;
-    const a = clips[i];
-    const b = clips[i + 1];
+    const a = clipEntries[i];
+    const b = clipEntries[i + 1];
     if (style === "crosszoom" && sp.transitionOut > 0) {
       a.tailZoom = sp.transitionOut;
       b.headZoom = sp.transitionOut;
@@ -181,6 +181,36 @@ async function buildExportForm(
       b.headZoom = Math.min(d, next.len);
     }
   });
+
+  // The server's video graph is a sequential fold, so gaps between the
+  // free-placed clips ship as explicit spacer segments: no file, hidden and
+  // muted, which the server renders as black + silence for the gap's length.
+  const clips = spanSequence(spans).flatMap(({ gapBefore }, i) => [
+    ...(gapBefore > 0
+      ? [
+          {
+            file: "",
+            in: 0,
+            out: gapBefore,
+            muted: true,
+            volume: 0,
+            fit: "fit" as const,
+            panX: 0,
+            panY: 0,
+            frame: undefined,
+            speed: 1,
+            transition: 0,
+            hidden: true,
+            image: false,
+            headFade: 0,
+            tailFade: 0,
+            headZoom: 0,
+            tailZoom: 0,
+          },
+        ]
+      : []),
+    clipEntries[i],
+  ]);
 
   // Upper video tracks composited over the base; hidden ones are dropped.
   const overlayVideos = doc.overlayClips
@@ -224,31 +254,42 @@ async function buildExportForm(
     overlays.push({ file: key, start: o.start, end: Math.min(o.end, duration) });
   }
 
-  // Subtitle stills travel in their own spec lane: the server plays them as
-  // one concat-demuxer slideshow (with a transparent filler frame for gaps),
-  // so karaoke word windows don't each become an ffmpeg input.
-  const captions: { file: string; start: number; end: number }[] = [];
+  // Subtitle stills travel in their own spec lane: the server plays each
+  // subtitle track as one concat-demuxer slideshow (with a transparent filler
+  // frame for gaps), so karaoke word windows don't each become an ffmpeg
+  // input. Tracks overlap each other in time, so every track (language) gets
+  // its own slideshow, marked by `lane`.
+  const captions: { file: string; start: number; end: number; lane?: number }[] = [];
   if (doc.subtitles.showOnVideo) {
     const capStyle = captionStyle(doc.subtitles.style);
-    for (let i = 0; i < doc.subtitles.cues.length; i++) {
-      const cue = doc.subtitles.cues[i];
-      if (cue.start >= duration || !cue.text.trim()) continue;
-      // Karaoke burns one frame per word window (the spoken word accented);
-      // otherwise the whole cue is a single still.
-      const windows = doc.subtitles.wordHighlight
-        ? cueWordWindows(cue)
-        : [{ start: cue.start, end: cue.end }];
-      for (let wi = 0; wi < windows.length; wi++) {
-        const win = windows[wi];
-        if (win.start >= duration) break;
-        const png = await renderOverlayPng(
-          cueOverlay(cue, capStyle, i === 0, doc.subtitles, doc.subtitles.wordHighlight ? wi : undefined),
-          settings.width,
-          settings.height
-        );
-        const key = windows.length > 1 ? `sub_${i}_${wi}.png` : `sub_${i}.png`;
-        form.append(key, png, key);
-        captions.push({ file: key, start: win.start, end: Math.min(win.end, duration) });
+    for (let lane = 0; lane < subtitleLaneCount(doc.subtitles); lane++) {
+      const cues = laneCues(doc.subtitles, lane);
+      const pos = trackPos(doc.subtitles, capStyle, lane);
+      for (let i = 0; i < cues.length; i++) {
+        const cue = cues[i];
+        if (cue.start >= duration || !cue.text.trim()) continue;
+        // Karaoke burns one frame per word window (the spoken word accented);
+        // otherwise the whole cue is a single still.
+        const windows = doc.subtitles.wordHighlight
+          ? cueWordWindows(cue)
+          : [{ start: cue.start, end: cue.end }];
+        for (let wi = 0; wi < windows.length; wi++) {
+          const win = windows[wi];
+          if (win.start >= duration) break;
+          const png = await renderOverlayPng(
+            cueOverlay(cue, capStyle, i === 0, pos, doc.subtitles.wordHighlight ? wi : undefined),
+            settings.width,
+            settings.height
+          );
+          const key = windows.length > 1 ? `sub_${lane}_${i}_${wi}.png` : `sub_${lane}_${i}.png`;
+          form.append(key, png, key);
+          captions.push({
+            file: key,
+            start: win.start,
+            end: Math.min(win.end, duration),
+            ...(lane > 0 ? { lane } : {}),
+          });
+        }
       }
     }
     if (captions.length > 0) {

@@ -11,12 +11,15 @@ interface ReadoutCue {
   start: number;
 }
 
-/** The cues to voice, in timeline order: all subtitle cues, or just `cueIds`. */
+/** The cues to voice, in timeline order: the active subtitle track's cues
+ * (reading every language at once would talk over itself), or just `cueIds`. */
 function readoutCues(cueIds?: string[]): ReadoutCue[] {
   const wanted = cueIds && new Set(cueIds);
-  return useEditor
-    .getState()
-    .subtitles.cues.filter((c) => c.text.trim() && (!wanted || wanted.has(c.id)))
+  const s = useEditor.getState();
+  return s.subtitles.cues
+    .filter((c) =>
+      c.text.trim() && (wanted ? wanted.has(c.id) : (c.lane ?? 0) === s.subtitleLane)
+    )
     .map((c) => ({ id: c.id, text: c.text, start: c.start }));
 }
 
