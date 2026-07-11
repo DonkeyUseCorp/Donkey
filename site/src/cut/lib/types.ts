@@ -98,10 +98,13 @@ export function regionLabel(r: FrameRect): string {
   return "PiP";
 }
 
-/** A clip on the magnetic video track. Order in the array is timeline order. */
+/** A clip on the base video track — free-positioned in time like every other
+ * track. The array is kept sorted by `start` (older docs stored a packed
+ * sequence; loading bakes their implied starts in). */
 export interface VideoClip {
   id: string;
   assetId: string;
+  start: number; // timeline position, seconds
   in: number; // trim-in inside the source, seconds
   out: number; // trim-out inside the source, seconds
   muted: boolean;
@@ -225,6 +228,9 @@ export interface AudioClip {
    * audio and other soundtrack clips) drops to this gain, 0..1. Absent = no
    * ducking. Ducking clips never duck each other. */
   duck?: number;
+  /** Which audio track (row) this sits on, 0-based. Tracks are kept
+   * contiguous: empty ones collapse and dragging past the last adds one. */
+  lane?: number;
 }
 
 /**
@@ -265,6 +271,7 @@ export interface TemplateAudio {
   fadeOut?: number;
   speed?: number;
   duck?: number;
+  lane?: number;
 }
 export interface LibraryTemplate {
   id: string;

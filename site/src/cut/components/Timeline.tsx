@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { AudioLines, Blend, Check, EllipsisVertical, Expand, Eye, EyeOff, FolderPlus, Loader2, Pause, Play, Plus, Scissors, SkipBack, Sunrise, Sunset, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,7 +21,8 @@ import {
 } from "@/cut/lib/assetDrag";
 import { draggingRef, hasRefDrag, refFromAsset, startPointerRefDrag, type AssetRef } from "@/cut/lib/assetRef";
 import { importLibraryAsset, saveTemplate } from "@/cut/lib/library";
-import { startDrag } from "@/cut/lib/drag";
+import { isDragActive, startDrag, subscribeDragActive } from "@/cut/lib/drag";
+import { CLIP_GAP, startLaneMove, startLaneTrim, type LaneDrag } from "@/cut/lib/laneTracks";
 import { ensurePeaks, importImage, importStockVideo } from "@/cut/lib/media";
 import { clipLen, clipSpeed, getClipSpans, projectDuration, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
 import type { VideoTrackPlacement } from "@/cut/lib/store";
@@ -76,12 +77,6 @@ const SUB_H = 22;
 const PAD_END = 320;
 /** Breathing room on both sides so the playhead cap is never clipped. */
 const PAD_SIDE = 20;
-/** Visual gutter between adjacent clips (iMovie); time math stays exact. */
-const CLIP_GAP = 4;
-/** Pull a resized title edge to a logical time within this many screen px. */
-const SNAP_PX = 6;
-/** How far (px) the left edge can rubber-band past its limit before snapping back. */
-const LEFT_RUBBER_PX = 32;
 
 // A high-contrast selected state: a bright blue ring drawn both inside and
 // (crucially) *outside* the box, so it stays visible on top of a clip's
@@ -92,44 +87,6 @@ const SELECTED_SHADOW =
 
 const trimHandle =
   "tl-trim absolute top-0 bottom-0 z-3 w-[10px] cursor-ew-resize after:absolute after:top-1/2 after:left-[3px] after:h-[calc(100%-10px)] after:w-1 after:-translate-y-1/2 after:rounded-full after:bg-white after:opacity-0 after:shadow-[0_0_0_1px_rgba(0,0,0,0.35)] after:transition-opacity group-hover:after:opacity-90 hover:after:opacity-100";
-
-/** Live reorder-drag on the video track: ghost offset plus the open slot. */
-interface ClipDrag {
-  id: string;
-  dx: number; // ghost offset in px (mouse + auto-scroll)
-  dy: number; // vertical lift in px, clamped — iMovie's picked-up feel
-  from: number; // original index in spans
-  to: number; // insertion index while dragging
-  len: number; // dragged clip length, seconds
-  gapStart: number; // open slot position, seconds
-}
-
-interface TextDrag {
-  id: string;
-  targetRow: number; // hovered display row (one past the end = new track)
-  ghostX: number; // ghost left in px — follows the pointer
-  slotStart: number; // resolved landing start, seconds
-  len: number; // dragged title length, seconds
-}
-
-/**
- * Insertion index for a dragged clip (iMovie): the edge leading the drag
- * direction opens a slot once it crosses a neighbor's midpoint.
- */
-function dropIndex(spans: ClipSpan[], from: number, dxSec: number): number {
-  const d = spans[from];
-  let to = from;
-  if (dxSec > 0) {
-    const edge = d.start + d.len + dxSec; // right edge leads
-    for (let k = from + 1; k < spans.length; k++)
-      if (edge > spans[k].start + spans[k].len / 2) to = k;
-  } else if (dxSec < 0) {
-    const edge = d.start + dxSec; // left edge leads
-    for (let k = from - 1; k >= 0; k--)
-      if (edge < spans[k].start + spans[k].len / 2) to = k;
-  }
-  return to;
-}
 
 /** On-timeline length a dropped image occupies (it has no intrinsic duration). */
 const STILL_SECONDS = IMAGE_CLIP_SECONDS;
@@ -154,14 +111,6 @@ function draggingStockVideo(e: React.DragEvent): AssetRef | null {
   if (!hasRefDrag(e)) return null;
   const ref = draggingRef();
   return ref?.scope === "stock" && ref.kind === "video" ? ref : null;
-}
-
-/** Insertion slot for a new clip dropped at time `t`: it lands before the
- * first span whose midpoint is past `t` (spans.length = at the very end).
- * Exported for the Editor's OS-file drops onto the timeline. */
-export function videoInsertIndex(spans: ClipSpan[], t: number): number {
-  for (let k = 0; k < spans.length; k++) if (t < spans[k].start + spans[k].len / 2) return k;
-  return spans.length;
 }
 
 export function Timeline() {
@@ -190,15 +139,18 @@ export function Timeline() {
   const spans = useMemo(() => getClipSpans(clips, assets), [clips, assets]);
   const total = projectDuration({ clips, overlayClips, audioClips });
   // Fill the viewport at minimum so a wide window never leaves the ruler/tracks
-  // cut off; grow past it once the content is longer.
-  const contentW = Math.max(total * pps + PAD_END, viewportW - PAD_SIDE * 2, 600);
+  // cut off; grow past it once the content is longer. While a trim/slide drag
+  // is in flight, hold the width at its drag-start value so the scroll area
+  // doesn't resize under the pointer; it commits on release.
+  const dragging = useSyncExternalStore(subscribeDragActive, isDragActive, () => false);
+  const liveContentW = Math.max(total * pps + PAD_END, viewportW - PAD_SIDE * 2, 600);
+  const heldContentW = useRef(liveContentW);
+  if (!dragging) heldContentW.current = liveContentW;
+  const contentW = heldContentW.current;
 
-  // Reorder drag on the video track: neighbors part to open a highlighted
-  // slot at the insertion point; releasing drops the clip into it.
-  const [clipDrag, setClipDrag] = useState<{ id: string; dx: number; dy: number } | null>(null);
-  // Insertion preview while dragging a media asset onto the video track:
-  // `index` is the span it lands before (spans.length = end), `len` its length.
-  const [assetDrop, setAssetDrop] = useState<{ index: number; len: number } | null>(null);
+  // Drop preview while dragging a media asset onto the base track: where the
+  // pointer is and how long the clip would run.
+  const [assetDrop, setAssetDrop] = useState<{ t: number; len: number } | null>(null);
   // Kind of external media being dragged over the timeline (audio vs video).
   const [dropType, setDropType] = useState<"video" | "audio" | null>(null);
   // A video clip is being dragged (internal or external): reveals the
@@ -211,28 +163,6 @@ export function Timeline() {
   // Stage-x pixel a snapped title edge sits at, for the guide line (null = off).
   const [snapX, setSnapX] = useState<number | null>(null);
   const insertMode = videoDragging || dropType === "video";
-  const dragInfo = useMemo<ClipDrag | null>(() => {
-    if (!clipDrag) return null;
-    const from = spans.findIndex((sp) => sp.clip.id === clipDrag.id);
-    if (from < 0) return null;
-    const to = dropIndex(spans, from, clipDrag.dx / pps);
-    const len = spans[from].len;
-    const gapStart = to <= from ? spans[to].start : spans[to].start + spans[to].len - len;
-    return { id: clipDrag.id, dx: clipDrag.dx, dy: clipDrag.dy, from, to, len, gapStart };
-  }, [clipDrag, spans, pps]);
-
-  const onClipDrag = useCallback(
-    (id: string, dx: number, dy: number) => setClipDrag({ id, dx, dy }),
-    []
-  );
-  const onClipDrop = useCallback((id: string, dx: number | null) => {
-    setClipDrag(null);
-    if (dx === null) return;
-    const s = useEditor.getState();
-    const sp = getClipSpans(s.clips, s.assets);
-    const from = sp.findIndex((x) => x.clip.id === id);
-    if (from >= 0) s.moveClip(id, dropIndex(sp, from, dx / s.pxPerSec));
-  }, []);
 
   // Which drop the cursor is over: an upper track, the base row, or a gap
   // between/above/below tracks that would open a new one. Hit-test live via
@@ -258,12 +188,11 @@ export function Timeline() {
   // target track, base slot, or a between-track insertion line.
   const previewCross = useCallback((target: TrackTarget | null, start = 0, len = 0) => {
     if (target === null) return setOverlayDrop(null);
-    setClipDrag(null);
     setOverlayDrop({ target, t: start, len });
   }, []);
 
   // Releasing a base clip anywhere but the base row lifts it out onto that track
-  // (or a new one); the base row itself is a plain reorder (via onClipDrop).
+  // (or a new one); on the base row the lane coordinator commits the move.
   const onBaseCrossDrop = useCallback(
     (id: string, target: TrackTarget, start: number) => {
       previewCross(null);
@@ -283,9 +212,13 @@ export function Timeline() {
     [previewCross]
   );
 
+  // The one in-flight lane-track drag (audio, title, upper layer, or cue):
+  // the coordinator publishes it so each section can render the ghost, the
+  // landing slot, and grow its row stack while a new row is hovered.
+  const [laneDrag, setLaneDrag] = useState<LaneDrag | null>(null);
+
   // Title tracks: overlays carry a `lane`; used lanes compact to contiguous
   // display rows, so empty tracks disappear on their own.
-  const [textDrag, setTextDrag] = useState<TextDrag | null>(null);
   const overlayLanes = useMemo(() => {
     const used = [...new Set(overlays.map((o) => o.lane ?? 0))].sort((a, b) => a - b);
     const rowOf = new Map(used.map((l, i) => [l, i]));
@@ -304,19 +237,36 @@ export function Timeline() {
     [overlayClips]
   );
 
-  const onTextDrag = useCallback((d: TextDrag | null) => setTextDrag(d), []);
-  const onTextLaneDrop = useCallback((id: string, targetRow: number) => {
-    setTextDrag(null);
-    const s = useEditor.getState();
-    const used = [...new Set(s.overlays.map((o) => o.lane ?? 0))].sort((a, b) => a - b);
-    const cur = s.overlays.find((o) => o.id === id);
-    if (!cur) return;
-    const curRow = used.indexOf(cur.lane ?? 0);
-    if (targetRow === curRow) return;
-    // A row past the end becomes a brand-new track above the current max.
-    const lane = targetRow < used.length ? used[targetRow] : (used[used.length - 1] ?? -1) + 1;
-    s.moveOverlayToLane(id, lane);
-  }, []);
+  // Audio tracks mirror the title tracks: clips carry a `lane`; used lanes
+  // compact to contiguous display rows, so empty tracks disappear on their own.
+  // Drop preview while an audio asset is dragged over the timeline: which row
+  // (one past the end = new track), at what time, for how long.
+  const [audioDrop, setAudioDrop] = useState<{ row: number; t: number; len: number } | null>(null);
+  const audioRef = useRef<HTMLDivElement>(null);
+  const audioLanes = useMemo(() => {
+    const used = [...new Set(audioClips.map((a) => a.lane ?? 0))].sort((a, b) => a - b);
+    const rowOf = new Map(used.map((l, i) => [l, i]));
+    return { used, rowOf, count: used.length };
+  }, [audioClips]);
+
+  // The home track of an in-flight upper-layer drag, so that row can render
+  // the landing slot while the clip stays on its own track.
+  const draggedOverlayTrack =
+    laneDrag?.kind === "overlayClip" && !laneDrag.away
+      ? overlayClips.find((c) => c.id === laneDrag.id)?.track ?? null
+      : null;
+
+  // The audio row under a screen y, one past the last row = a new track.
+  // Before any audio exists there are no rows, so everything resolves to 0.
+  const audioRowAt = useCallback(
+    (clientY: number): number => {
+      const el = audioRef.current;
+      if (!el) return 0;
+      const top = el.getBoundingClientRect().top;
+      return Math.min(audioLanes.count, Math.max(0, Math.floor((clientY - top) / AUDIO_H)));
+    },
+    [audioLanes.count]
+  );
 
   const timeAt = (clientX: number) => {
     const rect = innerRef.current!.getBoundingClientRect();
@@ -447,20 +397,23 @@ export function Timeline() {
     return () => window.removeEventListener("keydown", onKey);
   }, [zoomTo]);
 
-  // Drop an asset onto the timeline: video snaps into the nearest slot at time
-  // `t`, audio lands free-form there.
-  const placeAssetAt = (assetId: string, type: "video" | "audio" | "image", t: number) => {
+  // Drop an asset onto the timeline: every kind lands free-form at time `t`
+  // (sliding to its lane's next free slot); audio targets the hovered audio
+  // row, one past the last row opening a new track.
+  const placeAssetAt = (
+    assetId: string,
+    type: "video" | "audio" | "image",
+    t: number,
+    audioRow = 0
+  ) => {
     const s = useEditor.getState();
     if (isBaseType(type)) {
-      const sp = getClipSpans(s.clips, s.assets);
-      const spanIndex = videoInsertIndex(sp, t);
-      const clipsIndex =
-        spanIndex < sp.length
-          ? s.clips.findIndex((c) => c.id === sp[spanIndex].clip.id)
-          : s.clips.length;
-      s.addClipFromAsset(assetId, clipsIndex);
+      s.addClipFromAsset(assetId, t);
     } else {
-      s.addAudioFromAsset(assetId, t);
+      const used = [...new Set(s.audioClips.map((a) => a.lane ?? 0))].sort((a, b) => a - b);
+      const lane =
+        audioRow < used.length ? used[audioRow] : (used[used.length - 1] ?? -1) + 1;
+      s.addAudioFromAsset(assetId, t, { lane });
     }
   };
 
@@ -607,25 +560,37 @@ export function Timeline() {
         }
         // A still rides the base (video) lane: light its insertion zones.
         setDropType(isBaseType(type) ? "video" : type ?? null);
+        if (type === "audio") {
+          // Preview which audio row the sound would land on.
+          setAudioDrop({
+            row: audioRowAt(e.clientY),
+            t: Math.max(0, timeAt(e.clientX)),
+            len: duration,
+          });
+          setAssetDrop(null);
+          return;
+        }
+        setAudioDrop(null);
         if (!isBaseType(type) || !duration) {
           setAssetDrop(null);
           return;
         }
-        const index = videoInsertIndex(spans, Math.max(0, timeAt(e.clientX)));
-        setAssetDrop((prev) =>
-          prev && prev.index === index && prev.len === duration ? prev : { index, len: duration }
-        );
+        setAssetDrop({ t: Math.max(0, timeAt(e.clientX)), len: duration });
       }}
       onDragLeave={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
           setAssetDrop(null);
           setOverlayDrop(null);
+          setAudioDrop(null);
           setDropType(null);
         }
       }}
       onDrop={(e) => {
+        // Resolve the hovered audio row before the preview (and its rows) clear.
+        const audioRow = audioRowAt(e.clientY);
         setAssetDrop(null);
         setOverlayDrop(null);
+        setAudioDrop(null);
         setDropType(null);
         const t = Math.max(0, timeAt(e.clientX));
 
@@ -639,7 +604,7 @@ export function Timeline() {
         if (libId && lib && projectId) {
           e.preventDefault();
           void importLibraryAsset(projectId, lib)
-            .then((asset) => placeAssetAt(asset.id, asset.type, t))
+            .then((asset) => placeAssetAt(asset.id, asset.type, t, audioRow))
             .catch(() => {});
           return;
         }
@@ -648,7 +613,7 @@ export function Timeline() {
         if (id) {
           e.preventDefault();
           const asset = useEditor.getState().assets.find((a) => a.id === id);
-          if (asset) placeAssetAt(id, asset.type, t);
+          if (asset) placeAssetAt(id, asset.type, t, audioRow);
           return;
         }
 
@@ -736,6 +701,15 @@ export function Timeline() {
               {...overlayDropHandlers({ kind: "track", track })}
             >
               {insertMode && insertZone(track + 1)}
+              {draggedOverlayTrack === track && laneDrag && (
+                <LaneSlot
+                  drag={laneDrag}
+                  pps={pps}
+                  rowH={OVERLAY_H}
+                  barH={OVERLAY_H - 4}
+                  className="rounded-lg bg-[#0a84ff]/10 shadow-[inset_0_0_0_1.5px_rgba(10,132,255,0.4)]"
+                />
+              )}
               {overlayClips
                 .filter((c) => c.track === track)
                 .map((c) => (
@@ -745,6 +719,10 @@ export function Timeline() {
                     asset={assets.find((x) => x.id === c.assetId)}
                     pps={pps}
                     selected={selKeys.has(`overlayClip:${c.id}`)}
+                    drag={laneDrag?.kind === "overlayClip" && laneDrag.id === c.id ? laneDrag : null}
+                    parting={laneDrag?.kind === "overlayClip" && laneDrag.id !== c.id}
+                    onDrag={setLaneDrag}
+                    onSnap={setSnapX}
                     resolveTarget={resolveDropTrack}
                     onCrossMove={previewCross}
                     onCrossDrop={onOverlayCrossDrop}
@@ -787,21 +765,20 @@ export function Timeline() {
                 }}
               />
             )}
-            {dragInfo && (
-              <div
-                className="tl-drop-slot pointer-events-none absolute top-0.5 rounded-lg bg-[#0a84ff]/10 shadow-[inset_0_0_0_1.5px_rgba(10,132,255,0.4),inset_0_2px_10px_rgba(10,60,140,0.08)] transition-[left] duration-150 ease-out"
-                style={{
-                  left: dragInfo.gapStart * pps,
-                  width: Math.max(10, dragInfo.len * pps - CLIP_GAP),
-                  height: VIDEO_H - 4,
-                }}
+            {laneDrag?.kind === "clip" && !laneDrag.away && (
+              <LaneSlot
+                drag={laneDrag}
+                pps={pps}
+                rowH={VIDEO_H}
+                barH={VIDEO_H - 4}
+                className="rounded-lg bg-[#0a84ff]/10 shadow-[inset_0_0_0_1.5px_rgba(10,132,255,0.4),inset_0_2px_10px_rgba(10,60,140,0.08)]"
               />
             )}
             {assetDrop && (
               <div
                 className="tl-asset-drop-slot pointer-events-none absolute top-0.5 flex items-center justify-center rounded-lg border-[1.5px] border-dashed border-[#0a84ff]/70 bg-[#0a84ff]/10 text-[#0a84ff] transition-[left] duration-150 ease-out"
                 style={{
-                  left: (assetDrop.index < spans.length ? spans[assetDrop.index].start : total) * pps,
+                  left: assetDrop.t * pps,
                   width: Math.max(10, assetDrop.len * pps - CLIP_GAP),
                   height: VIDEO_H - 4,
                 }}
@@ -813,16 +790,13 @@ export function Timeline() {
               <ClipView
                 key={span.clip.id}
                 span={span}
-                index={i}
                 prevOverlap={spans[i - 1]?.transitionOut ?? 0}
                 pps={pps}
                 selected={selKeys.has(`clip:${span.clip.id}`)}
-                drag={dragInfo}
-                insertAtIndex={assetDrop ? assetDrop.index : null}
-                insertLen={assetDrop ? assetDrop.len : 0}
-                scrollRef={scrollRef}
-                onDrag={onClipDrag}
-                onDrop={onClipDrop}
+                drag={laneDrag?.kind === "clip" && laneDrag.id === span.clip.id ? laneDrag : null}
+                parting={laneDrag?.kind === "clip" && laneDrag.id !== span.clip.id}
+                onDrag={setLaneDrag}
+                onSnap={setSnapX}
                 resolveTarget={resolveDropTrack}
                 onCrossMove={previewCross}
                 onCrossDrop={onBaseCrossDrop}
@@ -832,7 +806,7 @@ export function Timeline() {
             {/* Transition badge, floating in the gutter where the two clips
                 meet (the overlap midpoint; a hard cut for edge styles),
                 vertically centered on the clip row. */}
-            {!clipDrag &&
+            {laneDrag?.kind !== "clip" &&
               spans.map((span, i) => {
                 const d = span.clip.transition ?? 0;
                 if (!spans[i + 1] || d <= 0) return null;
@@ -868,6 +842,15 @@ export function Timeline() {
               {...overlayDropHandlers({ kind: "track", track })}
             >
               {insertMode && insertZone(track - 1, "bottom")}
+              {draggedOverlayTrack === track && laneDrag && (
+                <LaneSlot
+                  drag={laneDrag}
+                  pps={pps}
+                  rowH={OVERLAY_H}
+                  barH={OVERLAY_H - 4}
+                  className="rounded-lg bg-[#0a84ff]/10 shadow-[inset_0_0_0_1.5px_rgba(10,132,255,0.4)]"
+                />
+              )}
               {overlayClips
                 .filter((c) => c.track === track)
                 .map((c) => (
@@ -877,6 +860,10 @@ export function Timeline() {
                     asset={assets.find((x) => x.id === c.assetId)}
                     pps={pps}
                     selected={selKeys.has(`overlayClip:${c.id}`)}
+                    drag={laneDrag?.kind === "overlayClip" && laneDrag.id === c.id ? laneDrag : null}
+                    parting={laneDrag?.kind === "overlayClip" && laneDrag.id !== c.id}
+                    onDrag={setLaneDrag}
+                    onSnap={setSnapX}
                     resolveTarget={resolveDropTrack}
                     onCrossMove={previewCross}
                     onCrossDrop={onOverlayCrossDrop}
@@ -896,17 +883,60 @@ export function Timeline() {
             </div>
           ))}
 
-          {audioClips.length > 0 && (
-            <div className="relative mt-1.5" style={{ height: AUDIO_H }} onPointerDown={deselectIfSelf}>
-              {audioClips.map((a) => (
-                <AudioView
-                  key={a.id}
-                  clip={a}
-                  asset={assets.find((x) => x.id === a.assetId)}
-                  pps={pps}
-                  selected={selKeys.has(`audio:${a.id}`)}
+          {(audioClips.length > 0 || audioDrop !== null) && (
+            <div
+              ref={audioRef}
+              className="relative mt-1.5"
+              style={{
+                height:
+                  Math.max(
+                    audioLanes.count,
+                    (laneDrag?.kind === "audio" ? laneDrag.targetRow : -1) + 1,
+                    (audioDrop?.row ?? -1) + 1
+                  ) * AUDIO_H,
+              }}
+              onPointerDown={deselectIfSelf}
+            >
+              {audioDrop && (
+                <div
+                  className="tl-audio-drop-slot pointer-events-none absolute rounded-[7px] border-[1.5px] border-dashed border-emerald-500/80 bg-emerald-500/10 transition-[left] duration-150 ease-out"
+                  style={{
+                    left: audioDrop.t * pps,
+                    top: audioDrop.row * AUDIO_H + 2,
+                    width: Math.max(10, audioDrop.len * pps - CLIP_GAP),
+                    height: AUDIO_H - 4,
+                  }}
                 />
-              ))}
+              )}
+              {laneDrag?.kind === "audio" && !laneDrag.away && (
+                <LaneSlot
+                  drag={laneDrag}
+                  pps={pps}
+                  rowH={AUDIO_H}
+                  barH={AUDIO_H - 4}
+                  className="rounded-[7px] bg-emerald-500/10 shadow-[inset_0_0_0_1.5px_rgba(16,185,129,0.5)]"
+                />
+              )}
+              {audioClips.map((a) => {
+                const baseRow = audioLanes.rowOf.get(a.lane ?? 0) ?? 0;
+                const drag = laneDrag?.kind === "audio" && laneDrag.id === a.id ? laneDrag : null;
+                return (
+                  <AudioView
+                    key={a.id}
+                    clip={a}
+                    asset={assets.find((x) => x.id === a.assetId)}
+                    pps={pps}
+                    top={(drag ? drag.targetRow : baseRow) * AUDIO_H}
+                    baseRow={baseRow}
+                    laneCount={audioLanes.count}
+                    selected={selKeys.has(`audio:${a.id}`)}
+                    drag={drag}
+                    parting={laneDrag?.kind === "audio" && laneDrag.id !== a.id}
+                    onDrag={setLaneDrag}
+                    onSnap={setSnapX}
+                  />
+                );
+              })}
             </div>
           )}
 
@@ -915,37 +945,37 @@ export function Timeline() {
               className="relative mt-1.5"
               style={{
                 height:
-                  Math.max(overlayLanes.count, (textDrag?.targetRow ?? -1) + 1) * TEXT_H,
+                  Math.max(
+                    overlayLanes.count,
+                    (laneDrag?.kind === "text" ? laneDrag.targetRow : -1) + 1
+                  ) * TEXT_H,
               }}
               onPointerDown={deselectIfSelf}
             >
-              {textDrag && (
-                <div
-                  className="tl-text-drop-slot pointer-events-none absolute rounded-md bg-purple-500/10 shadow-[inset_0_0_0_1.5px_rgba(168,85,247,0.5)] transition-[left] duration-150 ease-out"
-                  style={{
-                    left: textDrag.slotStart * pps,
-                    top: textDrag.targetRow * TEXT_H + 2,
-                    width: Math.max(8, textDrag.len * pps - CLIP_GAP),
-                    height: TEXT_H - 6,
-                  }}
+              {laneDrag?.kind === "text" && (
+                <LaneSlot
+                  drag={laneDrag}
+                  pps={pps}
+                  rowH={TEXT_H}
+                  barH={TEXT_H - 6}
+                  className="rounded-md bg-purple-500/10 shadow-[inset_0_0_0_1.5px_rgba(168,85,247,0.5)]"
                 />
               )}
               {overlays.map((o) => {
                 const baseRow = overlayLanes.rowOf.get(o.lane ?? 0) ?? 0;
-                const row = textDrag?.id === o.id ? textDrag.targetRow : baseRow;
+                const drag = laneDrag?.kind === "text" && laneDrag.id === o.id ? laneDrag : null;
                 return (
                   <TextBar
                     key={o.id}
                     overlay={o}
                     pps={pps}
-                    top={row * TEXT_H}
+                    top={(drag ? drag.targetRow : baseRow) * TEXT_H}
                     baseRow={baseRow}
                     laneCount={overlayLanes.count}
                     selected={selKeys.has(`text:${o.id}`)}
-                    drag={textDrag?.id === o.id ? textDrag : null}
-                    parting={textDrag !== null && textDrag.id !== o.id}
-                    onDrag={onTextDrag}
-                    onLaneDrop={onTextLaneDrop}
+                    drag={drag}
+                    parting={laneDrag?.kind === "text" && laneDrag.id !== o.id}
+                    onDrag={setLaneDrag}
                     onSnap={setSnapX}
                   />
                 );
@@ -959,12 +989,25 @@ export function Timeline() {
               style={{ height: SUB_H }}
               onPointerDown={deselectIfSelf}
             >
+              {laneDrag?.kind === "cue" && (
+                <LaneSlot
+                  drag={laneDrag}
+                  pps={pps}
+                  rowH={SUB_H}
+                  barH={SUB_H - 4}
+                  className="rounded-[5px] bg-amber-400/15 shadow-[inset_0_0_0_1.5px_rgba(245,158,11,0.55)]"
+                />
+              )}
               {subtitles.cues.map((c) => (
                 <SubBar
                   key={c.id}
                   cue={c}
                   pps={pps}
                   selected={selKeys.has(`cue:${c.id}`)}
+                  drag={laneDrag?.kind === "cue" && laneDrag.id === c.id ? laneDrag : null}
+                  parting={laneDrag?.kind === "cue" && laneDrag.id !== c.id}
+                  onDrag={setLaneDrag}
+                  onSnap={setSnapX}
                 />
               ))}
             </div>
@@ -1579,12 +1622,31 @@ function AudioView({
   clip,
   asset,
   pps,
+  top,
+  baseRow,
+  laneCount,
   selected,
+  drag,
+  parting,
+  onDrag,
+  onSnap,
 }: {
   clip: AudioClip;
   asset: MediaAsset | undefined;
   pps: number;
+  /** Rendered row top in px — follows the drag's target row while carried. */
+  top: number;
+  baseRow: number;
+  laneCount: number;
   selected: boolean;
+  /** This bar's live drag when it is the one being carried (ghost mode). */
+  drag: LaneDrag | null;
+  /** Another sound is dragging: animate this bar's shifts as it parts. */
+  parting: boolean;
+  /** Publish (or clear) the in-flight drag so the slot and rows track it. */
+  onDrag: (d: LaneDrag | null) => void;
+  /** Paint (or clear) the snap guide at this stage-x pixel. */
+  onSnap: (x: number | null) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const len = clipLen(clip);
@@ -1614,67 +1676,27 @@ function AudioView({
 
   if (!asset) return null;
 
-  const onBody = (e: React.PointerEvent) => {
-    if (e.metaKey || e.shiftKey) {
-      useEditor.getState().toggleSelect({ kind: "audio", id: clip.id });
-      return;
-    }
-    const s = useEditor.getState();
-    s.select({ kind: "audio", id: clip.id });
-    s.seek(clip.start + (e.clientX - e.currentTarget.getBoundingClientRect().left) / pps);
-    s.pushHistory();
-    const start0 = clip.start;
-    const refDrag = startPointerRefDrag(refFromAsset(asset));
-    startDrag(e, {
-      onMove: (dx, _dy, ev) => {
-        refDrag.move(ev);
-        s.updateAudioTransient(clip.id, { start: Math.max(0, start0 + dx / pps) });
-      },
-      onUp: () => {
-        // A zone took the ref (e.g. an AI chat attachment); undo the slide.
-        if (refDrag.drop()) s.updateAudioTransient(clip.id, { start: start0 });
-      },
-    });
-  };
-
-  const onTrimLeft = (e: React.PointerEvent) => {
-    const s = useEditor.getState();
-    s.select({ kind: "audio", id: clip.id });
-    s.pushHistory();
-    const in0 = clip.in;
-    const start0 = clip.start;
-    startDrag(e, {
-      onMove: (dx) => {
-        let d = dx / pps;
-        d = Math.max(d, -in0, -start0);
-        d = Math.min(d, clip.out - 0.15 - in0);
-        s.updateAudioTransient(clip.id, { in: in0 + d, start: start0 + d });
-      },
-    });
-  };
-
-  const onTrimRight = (e: React.PointerEvent) => {
-    const s = useEditor.getState();
-    s.select({ kind: "audio", id: clip.id });
-    s.pushHistory();
-    const out0 = clip.out;
-    startDrag(e, {
-      onMove: (dx) => {
-        const nout = Math.max(clip.in + 0.15, Math.min(asset.duration, out0 + dx / pps));
-        s.updateAudioTransient(clip.id, { out: nout });
-      },
-    });
-  };
+  const ui = { pps, rowH: AUDIO_H, laneCount, baseRow, onDrag, onSnap };
 
   return (
     <div
       className={cn(
-        "tl-audio-clip group absolute top-0.5 cursor-grab overflow-hidden rounded-[7px] bg-gradient-to-b from-emerald-500 to-emerald-600 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.1)]",
+        "tl-audio-clip group absolute cursor-grab overflow-hidden rounded-[7px] bg-gradient-to-b from-emerald-500 to-emerald-600 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.1)]",
         selected && SELECTED_SHADOW,
-        clip.hidden && "opacity-40 grayscale"
+        clip.hidden && "opacity-40 grayscale",
+        drag
+          ? "tl-audio-ghost pointer-events-none cursor-grabbing opacity-80 shadow-2xl"
+          : parting && "transition-[left] duration-150 ease-out"
       )}
-      style={{ left: clip.start * pps, width: Math.max(10, w - CLIP_GAP), height: AUDIO_H - 4 }}
-      onPointerDown={onBody}
+      style={{
+        left: drag ? drag.ghostX : clip.start * pps,
+        top: top + 2,
+        width: Math.max(10, w - CLIP_GAP),
+        height: AUDIO_H - 4,
+        // Inline so it beats SELECTED_SHADOW's z-10 class on the same element.
+        zIndex: drag ? 20 : undefined,
+      }}
+      onPointerDown={(e) => startLaneMove(e, "audio", clip.id, ui)}
     >
       <canvas ref={canvasRef} className="pointer-events-none absolute inset-x-0 inset-y-1" />
       {(clip.fadeIn ?? 0) > 0 && (
@@ -1692,13 +1714,19 @@ function AudioView({
       <span className="pointer-events-none absolute top-[3px] left-2 text-[9.5px] whitespace-nowrap text-white/90 [text-shadow:0_1px_2px_rgba(0,0,0,0.35)]">
         {asset.name}
       </span>
-      <HideChip
-        hidden={!!clip.hidden}
-        className="top-[3px] right-1.5"
+      <MuteChip
+        muted={!!clip.hidden}
+        className="bottom-1 left-1"
         onToggle={() => useEditor.getState().updateAudio(clip.id, { hidden: !clip.hidden })}
       />
-      <span className={cn(trimHandle, "tl-trim-l left-0")} onPointerDown={onTrimLeft} />
-      <span className={cn(trimHandle, "tl-trim-r right-0")} onPointerDown={onTrimRight} />
+      <span
+        className={cn(trimHandle, "tl-trim-l left-0")}
+        onPointerDown={(e) => startLaneTrim(e, "audio", clip.id, "l", ui)}
+      />
+      <span
+        className={cn(trimHandle, "tl-trim-r right-0")}
+        onPointerDown={(e) => startLaneTrim(e, "audio", clip.id, "r", ui)}
+      />
     </div>
   );
 }
@@ -1720,6 +1748,10 @@ function OverlayClipView({
   asset,
   pps,
   selected,
+  drag,
+  parting,
+  onDrag,
+  onSnap,
   resolveTarget,
   onCrossMove,
   onCrossDrop,
@@ -1729,6 +1761,12 @@ function OverlayClipView({
   asset: MediaAsset | undefined;
   pps: number;
   selected: boolean;
+  /** This clip's live drag when it is the one being carried (ghost mode). */
+  drag: LaneDrag | null;
+  /** Another upper-layer clip is dragging: animate this one's parting shifts. */
+  parting: boolean;
+  onDrag: (d: LaneDrag | null) => void;
+  onSnap: (x: number | null) => void;
   resolveTarget: (clientX: number, clientY: number) => TrackTarget;
   onCrossMove: (target: TrackTarget | null, start?: number, len?: number) => void;
   onCrossDrop: (id: string, target: TrackTarget, start: number) => void;
@@ -1756,75 +1794,24 @@ function OverlayClipView({
 
   if (!asset) return null;
 
-  const onBody = (e: React.PointerEvent) => {
-    if (e.metaKey || e.shiftKey) {
-      useEditor.getState().toggleSelect({ kind: "overlayClip", id: clip.id });
-      return;
-    }
-    const s = useEditor.getState();
-    s.select({ kind: "overlayClip", id: clip.id });
-    s.seek(clip.start + (e.clientX - e.currentTarget.getBoundingClientRect().left) / pps);
-    const start0 = clip.start;
-    let live = false;
-    let target: TrackTarget = { kind: "track", track: clip.track };
-    let dropStart = clip.start;
-    const refDrag = startPointerRefDrag(refFromAsset(asset));
-    startDrag(e, {
-      onMove: (dx, dy, ev) => {
-        if (!live && Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
-        if (!live) {
-          s.pushHistory();
-          onDragActive(true);
-        }
-        live = true;
-        refDrag.move(ev);
-        dropStart = Math.max(0, start0 + dx / pps);
-        s.updateOverlayClipTransient(clip.id, { start: dropStart });
-        target = resolveTarget(ev.clientX, ev.clientY);
-        // Staying on its own track is a plain slide; anything else previews a move.
-        if (samePlacement(target, { kind: "track", track: clip.track })) onCrossMove(null);
-        else onCrossMove(target, dropStart, overlayLen(clip));
-      },
-      onUp: () => {
-        onDragActive(false);
-        onCrossMove(null);
-        if (live && refDrag.drop()) {
-          // A zone took the ref; put the clip back where the drag started.
-          s.updateOverlayClipTransient(clip.id, { start: start0 });
-          return;
-        }
-        if (live) onCrossDrop(clip.id, target, dropStart);
-      },
-    });
-  };
-
-  const onTrimLeft = (e: React.PointerEvent) => {
-    const s = useEditor.getState();
-    s.select({ kind: "overlayClip", id: clip.id });
-    s.pushHistory();
-    const in0 = clip.in;
-    const start0 = clip.start;
-    startDrag(e, {
-      onMove: (dx) => {
-        let d = dx / pps;
-        d = Math.max(d, -in0, -start0);
-        d = Math.min(d, clip.out - 0.15 - in0);
-        s.updateOverlayClipTransient(clip.id, { in: in0 + d, start: start0 + d });
-      },
-    });
-  };
-
-  const onTrimRight = (e: React.PointerEvent) => {
-    const s = useEditor.getState();
-    s.select({ kind: "overlayClip", id: clip.id });
-    s.pushHistory();
-    const out0 = clip.out;
-    startDrag(e, {
-      onMove: (dx) => {
-        const nout = Math.max(clip.in + 0.15, Math.min(asset.duration, out0 + dx / pps));
-        s.updateOverlayClipTransient(clip.id, { out: nout });
-      },
-    });
+  // The move gesture is the shared lane behavior (parting, snapping); its
+  // verticality is the video placement system — other tracks, insert gaps,
+  // and the base row — resolved by DOM hit-testing.
+  const ui = {
+    pps,
+    rowH: OVERLAY_H,
+    laneCount: 0,
+    baseRow: 0,
+    onDrag,
+    onSnap,
+    vertical: {
+      resolve: (ev: PointerEvent) => resolveTarget(ev.clientX, ev.clientY),
+      isHome: (t: TrackTarget) => samePlacement(t, { kind: "track", track: clip.track }),
+      preview: (t: TrackTarget | null, start: number, len: number) =>
+        t ? onCrossMove(t, start, len) : onCrossMove(null),
+      commit: (id: string, t: TrackTarget, start: number) => onCrossDrop(id, t, start),
+      setActive: onDragActive,
+    },
   };
 
   return (
@@ -1832,10 +1819,19 @@ function OverlayClipView({
       className={cn(
         "tl-overlay-clip group absolute top-0.5 cursor-grab overflow-hidden rounded-lg bg-neutral-200 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]",
         selected && SELECTED_SHADOW,
-        clip.hidden && "opacity-40 grayscale"
+        clip.hidden && "opacity-40 grayscale",
+        drag
+          ? "tl-overlay-ghost pointer-events-none cursor-grabbing opacity-80 shadow-2xl"
+          : parting && "transition-[left] duration-150 ease-out"
       )}
-      style={{ left: clip.start * pps, width: Math.max(10, w - CLIP_GAP), height: OVERLAY_H - 4 }}
-      onPointerDown={onBody}
+      style={{
+        left: drag ? drag.ghostX : clip.start * pps,
+        width: Math.max(10, w - CLIP_GAP),
+        height: OVERLAY_H - 4,
+        // Inline so it beats SELECTED_SHADOW's z-10 class on the same element.
+        zIndex: drag ? 20 : undefined,
+      }}
+      onPointerDown={(e) => startLaneMove(e, "overlayClip", clip.id, ui)}
     >
       <div className="tl-filmstrip pointer-events-none absolute inset-0">
         {filmstrip.map((f, k) => (
@@ -1873,55 +1869,16 @@ function OverlayClipView({
         className="bottom-1 right-2"
         onToggle={() => useEditor.getState().updateOverlayClip(clip.id, { hidden: !clip.hidden })}
       />
-      <span className={cn(trimHandle, "tl-trim-l left-0")} onPointerDown={onTrimLeft} />
-      <span className={cn(trimHandle, "tl-trim-r right-0")} onPointerDown={onTrimRight} />
+      <span
+        className={cn(trimHandle, "tl-trim-l left-0")}
+        onPointerDown={(e) => startLaneTrim(e, "overlayClip", clip.id, "l", ui)}
+      />
+      <span
+        className={cn(trimHandle, "tl-trim-r right-0")}
+        onPointerDown={(e) => startLaneTrim(e, "overlayClip", clip.id, "r", ui)}
+      />
     </div>
   );
-}
-
-/** Logical times a title edge can snap to: the timeline start, the video's cut
- * points and end, the playhead, and the other titles' edges (self excluded). */
-function textSnapTargets(s: ReturnType<typeof useEditor.getState>, selfId: string): number[] {
-  const pts = new Set<number>([0]);
-  for (const sp of getClipSpans(s.clips, s.assets)) {
-    // The visible joint: a dissolved pair meets at the overlap midpoint (where
-    // the clip boxes are inset to), a hard cut at the footprint end.
-    pts.add(sp.start + sp.len - sp.transitionOut / 2);
-  }
-  pts.add(projectDuration(s));
-  pts.add(s.currentTime);
-  for (const o of s.overlays) {
-    if (o.id === selfId) continue;
-    pts.add(o.start);
-    pts.add(o.end);
-  }
-  return [...pts];
-}
-
-/** The nearest snap target within `tol` seconds, or null. */
-function nearestSnap(t: number, targets: number[], tol: number): number | null {
-  let best: number | null = null;
-  let bd = tol;
-  for (const T of targets) {
-    const d = Math.abs(t - T);
-    if (d <= bd) {
-      bd = d;
-      best = T;
-    }
-  }
-  return best;
-}
-
-/** Ease that overshoots the target then settles — the elastic snap-back feel. */
-function easeOutBack(p: number): number {
-  const c1 = 1.70158;
-  const c3 = c1 + 1;
-  return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2);
-}
-
-/** Damp an overshoot in px so it gives but resists, saturating near `max`. */
-function rubberBand(overPx: number, max: number): number {
-  return max * (1 - Math.exp(-Math.max(0, overPx) / max));
 }
 
 function TextBar({
@@ -1934,7 +1891,6 @@ function TextBar({
   drag,
   parting,
   onDrag,
-  onLaneDrop,
   onSnap,
 }: {
   overlay: TextOverlay;
@@ -1944,211 +1900,16 @@ function TextBar({
   laneCount: number;
   selected: boolean;
   /** This bar's live drag when it is the one being carried (ghost mode). */
-  drag: TextDrag | null;
+  drag: LaneDrag | null;
   /** Another title is dragging: animate this bar's shifts as it parts. */
   parting: boolean;
   /** Publish (or clear) the in-flight drag so the slot and lanes track it. */
-  onDrag: (d: TextDrag | null) => void;
-  onLaneDrop: (id: string, targetRow: number) => void;
+  onDrag: (d: LaneDrag | null) => void;
   /** Paint (or clear) the snap guide at this stage-x pixel. */
   onSnap: (x: number | null) => void;
 }) {
   const w = Math.max(8, (o.end - o.start) * pps);
-  // In-flight elastic snap-back for the left edge; cancelled by any new grab.
-  const snapRaf = useRef(0);
-
-  // A snapped edge draws its guide where the bar is actually rendered: a left
-  // edge at the time itself, a right edge inset by the CLIP_GAP gutter, so the
-  // line hugs the clip's visible right edge instead of the next clip's start.
-  const leftGuide = (t: number) => t * pps;
-  const rightGuide = (t: number) => t * pps - CLIP_GAP;
-
-  const onBody = (e: React.PointerEvent) => {
-    if (e.metaKey || e.shiftKey) {
-      useEditor.getState().toggleSelect({ kind: "text", id: o.id });
-      return;
-    }
-    const s = useEditor.getState();
-    s.select({ kind: "text", id: o.id });
-    s.pushHistory();
-    const start0 = o.start;
-    const len = o.end - o.start;
-    const targets = textSnapTargets(s, o.id);
-    const tol = SNAP_PX / pps;
-    // Everyone else's resting spot, captured once: each move re-lays the lane
-    // from these, so a retreating drag lets parted neighbors flow back.
-    const rest = s.overlays
-      .filter((t) => t.id !== o.id)
-      .map((t) => ({ id: t.id, lane: t.lane ?? 0, start: t.start, len: t.end - t.start }));
-    const usedLanes = [...new Set([...rest.map((r) => r.lane), o.lane ?? 0])].sort(
-      (a, b) => a - b
-    );
-    let targetRow = baseRow;
-    let slotStart = start0;
-    let live = false;
-    startDrag(e, {
-      onMove: (dx, dy, ev) => {
-        if (!live && Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
-        live = true;
-        // Vertical drag retracks the title; one row past the end opens a new one.
-        targetRow = Math.min(laneCount, Math.max(0, baseRow + Math.round(dy / TEXT_H)));
-        // A brand-new row has no neighbors to part.
-        const lane = targetRow < usedLanes.length ? usedLanes[targetRow] : Infinity;
-        const ds = Math.max(0, start0 + dx / pps);
-        // Snap whichever edge of the moving title lands nearest a logical time.
-        let start = ds;
-        let guide: number | null = null;
-        if (!ev.metaKey) {
-          const end = start + len;
-          let best = { d: tol, start, px: null as number | null };
-          for (const T of targets) {
-            if (Math.abs(start - T) < best.d) best = { d: Math.abs(start - T), start: T, px: leftGuide(T) };
-            if (Math.abs(end - T) < best.d) best = { d: Math.abs(end - T), start: T - len, px: rightGuide(T) };
-          }
-          if (best.px !== null) {
-            start = Math.max(0, best.start);
-            guide = best.px;
-          }
-        }
-        // Same-lane neighbors part around the slot like video clips: ones whose
-        // midpoint sits left of the ghost's center keep their spot (the slot
-        // lands after them), the rest slide right as a run to make room.
-        const others = rest.filter((r) => r.lane === lane).sort((a, b) => a.start - b.start);
-        const center = ds + len / 2;
-        const before = others.filter((r) => r.start + r.len / 2 <= center);
-        const after = others.filter((r) => r.start + r.len / 2 > center);
-        const clamped = Math.max(start, ...before.map((b) => b.start + b.len));
-        if (clamped !== start) guide = null;
-        slotStart = clamped;
-        const delta = after.length ? Math.max(0, clamped + len - after[0].start) : 0;
-        const pushed = new Set(after.map((a) => a.id));
-        onSnap(guide);
-        s.updateOverlaysTransient(
-          rest.map((r) => {
-            const push = r.lane === lane && pushed.has(r.id) ? delta : 0;
-            return { id: r.id, patch: { start: r.start + push, end: r.start + r.len + push } };
-          })
-        );
-        onDrag({ id: o.id, targetRow, ghostX: ds * pps, slotStart: clamped, len });
-      },
-      onUp: (_dx, _dy, moved) => {
-        onSnap(null);
-        if (moved) s.updateOverlayTransient(o.id, { start: slotStart, end: slotStart + len });
-        onLaneDrop(o.id, targetRow);
-      },
-    });
-  };
-
-  const onTrimLeft = (e: React.PointerEvent) => {
-    cancelAnimationFrame(snapRaf.current);
-    const s = useEditor.getState();
-    s.select({ kind: "text", id: o.id });
-    s.pushHistory();
-    const start0 = o.start;
-    const lane = o.lane ?? 0;
-    // Titles before this one on the same lane, at their original spots. The
-    // edge grows freely into the open gap; past the neighbor it shoves the run
-    // left, closing gap after gap until everything sits flush against 0 — the
-    // hard floor. `end - 0.2` keeps a minimum width when shrinking.
-    const leaders = s.overlays
-      .filter((t) => (t.lane ?? 0) === lane && t.id !== o.id && t.end <= start0 + 1e-3)
-      .map((t) => ({ id: t.id, start: t.start, len: t.end - t.start }))
-      .sort((a, b) => a.start - b.start);
-    const prevEnd = leaders.reduce((m, l) => Math.max(m, l.start + l.len), 0);
-    const floor = leaders.reduce((sum, l) => sum + l.len, 0);
-    const max = o.end - 0.2;
-    const targets = textSnapTargets(s, o.id);
-    const tol = SNAP_PX / pps;
-    startDrag(e, {
-      onMove: (dx, _dy, ev) => {
-        cancelAnimationFrame(snapRaf.current);
-        const desired = Math.min(max, start0 + dx / pps);
-        let start: number;
-        if (desired >= prevEnd) {
-          // Room to the left: grow freely, snapping to logical times.
-          start = desired;
-          const hit = ev.metaKey ? null : nearestSnap(start, targets, tol);
-          if (hit !== null && hit >= prevEnd && hit <= max) {
-            start = hit;
-            onSnap(leftGuide(hit));
-          } else onSnap(null);
-        } else {
-          // Pushing: past the floor it drags with resistance and snaps back.
-          start =
-            desired >= floor
-              ? desired
-              : Math.max(0, floor - rubberBand((floor - desired) * pps, LEFT_RUBBER_PX) / pps);
-          onSnap(null);
-        }
-        // Re-lay the leaders right-to-left from their resting spots: each one
-        // slides only as far as the pushed edge (or the title it now abuts)
-        // forces it, so a retreating drag lets the run flow back.
-        const patches: { id: string; patch: Partial<TextOverlay> }[] = [
-          { id: o.id, patch: { start } },
-        ];
-        let limit = Math.max(start, floor);
-        for (let i = leaders.length - 1; i >= 0; i--) {
-          const l = leaders[i];
-          const end = Math.min(l.start + l.len, limit);
-          patches.push({ id: l.id, patch: { start: end - l.len, end } });
-          limit = end - l.len;
-        }
-        s.updateOverlaysTransient(patches);
-      },
-      onUp: () => {
-        onSnap(null);
-        const from = useEditor.getState().overlays.find((x) => x.id === o.id)?.start ?? floor;
-        if (from >= floor - 1e-4) return; // settled within the room, nothing to undo
-        // Elastic snap back to the floor.
-        const t0 = performance.now();
-        const step = (now: number) => {
-          const p = Math.min(1, (now - t0) / 240);
-          const v = from + (floor - from) * easeOutBack(p);
-          useEditor.getState().updateOverlayTransient(o.id, { start: Math.max(0, v) });
-          if (p < 1) snapRaf.current = requestAnimationFrame(step);
-          else useEditor.getState().updateOverlayTransient(o.id, { start: floor });
-        };
-        snapRaf.current = requestAnimationFrame(step);
-      },
-    });
-  };
-
-  const onTrimRight = (e: React.PointerEvent) => {
-    const s = useEditor.getState();
-    s.select({ kind: "text", id: o.id });
-    s.pushHistory();
-    const end0 = o.end;
-    const lane = o.lane ?? 0;
-    // Titles that sit after this one on the same lane, at their original spots.
-    // Extending the edge past the first of them pushes the whole run right.
-    const followers = s.overlays
-      .filter((t) => (t.lane ?? 0) === lane && t.id !== o.id && t.start >= o.start)
-      .map((t) => ({ id: t.id, start: t.start, len: t.end - t.start }))
-      .sort((a, b) => a.start - b.start);
-    const nextStart = followers.length ? followers[0].start : Infinity;
-    const targets = textSnapTargets(s, o.id);
-    const tol = SNAP_PX / pps;
-    startDrag(e, {
-      onMove: (dx, _dy, ev) => {
-        let end = Math.max(o.start + 0.2, end0 + dx / pps);
-        const hit = ev.metaKey ? null : nearestSnap(end, targets, tol);
-        if (hit !== null && hit > o.start + 0.2) {
-          end = hit;
-          onSnap(rightGuide(end));
-        } else onSnap(null);
-        // Ripple: extending past the next title shoves the whole run right by
-        // the overflow (their gaps preserved); pulling back lets them return.
-        const delta = Math.max(0, end - nextStart);
-        const patches: { id: string; patch: Partial<TextOverlay> }[] = [
-          { id: o.id, patch: { end } },
-        ];
-        for (const f of followers)
-          patches.push({ id: f.id, patch: { start: f.start + delta, end: f.start + delta + f.len } });
-        s.updateOverlaysTransient(patches);
-      },
-      onUp: () => onSnap(null),
-    });
-  };
+  const ui = { pps, rowH: TEXT_H, laneCount, baseRow, onDrag, onSnap };
 
   return (
     <div
@@ -2167,85 +1928,108 @@ function TextBar({
         // Inline so it beats SELECTED_SHADOW's z-10 class on the same element.
         zIndex: drag ? 20 : undefined,
       }}
-      onPointerDown={onBody}
+      onPointerDown={(e) => startLaneMove(e, "text", o.id, ui)}
     >
       <span className="pointer-events-none truncate px-2 text-[10.5px] font-medium text-white">
         {o.text.replace(/\n/g, " ")}
       </span>
-      <span className={cn(trimHandle, "tl-trim-l left-0")} onPointerDown={onTrimLeft} />
-      <span className={cn(trimHandle, "tl-trim-r right-0")} onPointerDown={onTrimRight} />
+      <span
+        className={cn(trimHandle, "tl-trim-l left-0")}
+        onPointerDown={(e) => startLaneTrim(e, "text", o.id, "l", ui)}
+      />
+      <span
+        className={cn(trimHandle, "tl-trim-r right-0")}
+        onPointerDown={(e) => startLaneTrim(e, "text", o.id, "r", ui)}
+      />
     </div>
   );
 }
 
 /** A subtitle cue on its track: click selects (⌫ deletes it), drag to retime,
  * edges to trim. Editing the words happens in the Subtitles panel. */
-function SubBar({ cue, pps, selected }: { cue: SubtitleCue; pps: number; selected: boolean }) {
+function SubBar({
+  cue,
+  pps,
+  selected,
+  drag,
+  parting,
+  onDrag,
+  onSnap,
+}: {
+  cue: SubtitleCue;
+  pps: number;
+  selected: boolean;
+  /** This bar's live drag when it is the one being carried (ghost mode). */
+  drag: LaneDrag | null;
+  /** Another cue is dragging: animate this bar's shifts as it parts. */
+  parting: boolean;
+  onDrag: (d: LaneDrag | null) => void;
+  onSnap: (x: number | null) => void;
+}) {
   const w = Math.max(8, (cue.end - cue.start) * pps);
-
-  const finish = (moved: boolean) => {
-    const s = useEditor.getState();
-    if (moved) s.sortCues();
-    else s.seek(cue.start + 0.001);
-  };
-
-  const onBody = (e: React.PointerEvent) => {
-    if (e.metaKey || e.shiftKey) {
-      useEditor.getState().toggleSelect({ kind: "cue", id: cue.id });
-      return;
-    }
-    const s = useEditor.getState();
-    s.select({ kind: "cue", id: cue.id });
-    s.pushHistory();
-    const start0 = cue.start;
-    const len = cue.end - cue.start;
-    startDrag(e, {
-      onMove: (dx) => {
-        const start = Math.max(0, start0 + dx / pps);
-        // Moving a cue detaches it from its word timings.
-        s.updateCueTransient(cue.id, { start, end: start + len, words: undefined });
-      },
-      onUp: (_dx, _dy, moved) => finish(moved),
-    });
-  };
-
-  const trim = (side: "l" | "r") => (e: React.PointerEvent) => {
-    const s = useEditor.getState();
-    s.select({ kind: "cue", id: cue.id });
-    s.pushHistory();
-    const { start: start0, end: end0 } = cue;
-    startDrag(e, {
-      onMove: (dx) => {
-        if (side === "l")
-          s.updateCueTransient(cue.id, {
-            start: Math.min(end0 - 0.15, Math.max(0, start0 + dx / pps)),
-            words: undefined,
-          });
-        else
-          s.updateCueTransient(cue.id, {
-            end: Math.max(start0 + 0.15, end0 + dx / pps),
-            words: undefined,
-          });
-      },
-      onUp: (_dx, _dy, moved) => finish(moved),
-    });
-  };
+  const ui = { pps, rowH: SUB_H, laneCount: 0, baseRow: 0, onDrag, onSnap };
 
   return (
     <div
       className={cn(
         "tl-sub-bar group absolute top-px flex cursor-grab items-center overflow-hidden rounded-[5px] bg-gradient-to-b from-amber-300 to-amber-400 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]",
-        selected && SELECTED_SHADOW
+        selected && SELECTED_SHADOW,
+        drag
+          ? "tl-sub-ghost pointer-events-none cursor-grabbing opacity-80 shadow-2xl"
+          : parting && "transition-[left] duration-150 ease-out"
       )}
-      style={{ left: cue.start * pps, width: Math.max(8, w - CLIP_GAP), height: SUB_H - 4 }}
+      style={{
+        left: drag ? drag.ghostX : cue.start * pps,
+        width: Math.max(8, w - CLIP_GAP),
+        height: SUB_H - 4,
+        // Inline so it beats SELECTED_SHADOW's z-10 class on the same element.
+        zIndex: drag ? 20 : undefined,
+      }}
       title={cue.text}
-      onPointerDown={onBody}
+      onPointerDown={(e) => startLaneMove(e, "cue", cue.id, ui)}
     >
       <span className="pointer-events-none truncate px-1.5 text-[9.5px] font-medium text-amber-950/90">
         {cue.text}
       </span>
-      <span className={cn(trimHandle, "tl-trim-l left-0")} onPointerDown={trim("l")} />
-      <span className={cn(trimHandle, "tl-trim-r right-0")} onPointerDown={trim("r")} />
+      <span
+        className={cn(trimHandle, "tl-trim-l left-0")}
+        onPointerDown={(e) => startLaneTrim(e, "cue", cue.id, "l", ui)}
+      />
+      <span
+        className={cn(trimHandle, "tl-trim-r right-0")}
+        onPointerDown={(e) => startLaneTrim(e, "cue", cue.id, "r", ui)}
+      />
     </div>
+  );
+}
+
+/** The landing-slot preview for an in-flight lane drag, drawn in the track
+ * family's own chrome; it tracks the coordinator's resolved slot and row. */
+function LaneSlot({
+  drag,
+  pps,
+  rowH,
+  barH,
+  className,
+}: {
+  drag: LaneDrag;
+  pps: number;
+  rowH: number;
+  barH: number;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "tl-lane-slot pointer-events-none absolute transition-[left] duration-150 ease-out",
+        className
+      )}
+      style={{
+        left: drag.slotStart * pps,
+        top: drag.targetRow * rowH + 2,
+        width: Math.max(8, drag.len * pps - CLIP_GAP),
+        height: barH,
+      }}
+    />
   );
 }
