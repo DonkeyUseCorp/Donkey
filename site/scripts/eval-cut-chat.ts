@@ -159,7 +159,8 @@ function userTurn(text: string, opts?: { attachAudio?: { dataBase64: string; mim
   const extra: Item[] = [];
   if (opts?.attachAudio) {
     full += `\n\n<attached_assets>\nThe user attached these assets to this message; their text may cite one by @handle or @name. Assets with scope "project" are in the open project (ids usable with the editor tools); "library" and "stock" assets live outside it until imported; "file" assets came straight from the user's computer and exist only on this message:\n${JSON.stringify([VOICE_REF])}\n</attached_assets>`;
-    extra.push({ text: `Attached audio "${VOICE_REF.name}" (audio content not included).` });
+    extra.push({ text: `Attached audio "${VOICE_REF.name}":` });
+    extra.push({ type: "input_audio", ...opts.attachAudio });
   }
   full += `\n\n<editor_state>\n${JSON.stringify(EDITOR_STATE)}\n</editor_state>`;
   return { role: "user", content: [{ text: full }, ...extra] };

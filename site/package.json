@@ -15,7 +15,8 @@
     "prisma:dev": "dotenv -e .env.development -- npx prisma migrate dev",
     "prisma:prod": "dotenv -e .env -- prisma db push",
     "engine:dev": "bun run src/cut/engine/main.ts",
-    "engine:build": "bash scripts/build-cut-engine.sh"
+    "engine:build": "bash scripts/build-cut-engine.sh",
+    "eval:cut-chat": "bun run scripts/eval-cut-chat.ts"
   },
   "dependencies": {
     "@ai-sdk/react": "^4.0.15",
