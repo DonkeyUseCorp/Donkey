@@ -107,6 +107,12 @@ export function regionLabel(r: FrameRect): string {
 export interface VideoClip {
   id: string;
   assetId: string;
+  /** Which video track this clip sits on. Track 0 is the base row — its clips
+   * form the master sequence that carries transitions and drives playback.
+   * Positive tracks composite above it (higher = closer to the top and wins
+   * where clips overlap); negative tracks sit behind as a backdrop. Absent in
+   * older docs, which are all track 0. */
+  track: number;
   start: number; // timeline position, seconds
   in: number; // trim-in inside the source, seconds
   out: number; // trim-out inside the source, seconds
@@ -117,7 +123,8 @@ export interface VideoClip {
    * cover it ("fill", cropping the overflow). */
   fit?: "fit" | "fill";
   /** The region of the frame this clip occupies; absent = full frame. Lets a
-   * track-0 clip share the frame with an overlay (e.g. sit in the top half). */
+   * clip share the frame with another track (e.g. a split-screen half) or float
+   * small over it (picture-in-picture). */
   frame?: FrameRect;
   /** Crop-window pan in fill mode, -1..1 per axis (0 = centered): which part
    * of the oversized video stays visible. */
@@ -135,30 +142,6 @@ export interface VideoClip {
   /** Hidden clips stay on the timeline (grayed) but render as black — excluded
    * from the played/exported picture without disturbing the layout. */
   hidden?: boolean;
-}
-
-/**
- * A clip on a video track other than track 0 — free-positioned in time (like
- * the soundtrack) and composited with the track-0 clips. `track` 1 sits just
- * above track 0, higher tracks sit closer to the top and win where they
- * overlap; negative tracks sit behind. A full-frame overlay covers everything
- * below it ("topmost showing clip plays"); a regioned one shares the frame
- * (split-screen half) or floats small (picture-in-picture).
- */
-export interface OverlayClip {
-  id: string;
-  assetId: string;
-  track: number; // signed, non-zero; higher = closer to the top
-  start: number; // timeline position, seconds
-  in: number;
-  out: number;
-  muted: boolean;
-  hidden?: boolean;
-  /** The region of the frame this overlay occupies; absent = full frame. */
-  frame?: FrameRect;
-  /** How the video meets its region: cover-and-crop ("fill") or contain ("fit"). */
-  fit?: "fit" | "fill";
-  speed?: number;
 }
 
 /** Speed limits — matches the Inspector control and export atempo range. */
@@ -422,7 +405,6 @@ export const emptySubtitles = (): SubtitlesBlock => ({
 export type Selection =
   | { kind: "clip"; id: string }
   | { kind: "audio"; id: string }
-  | { kind: "overlayClip"; id: string }
   | { kind: "text"; id: string }
   | { kind: "cue"; id: string }
   | null;
@@ -444,10 +426,14 @@ export interface ProjectDoc {
   createdAt: number;
   updatedAt: number;
   assets: StoredAsset[];
+  /** Every video clip, on any track (the `track` field places it). Older docs
+   * split these into track-0 `clips` plus an `overlayClips` array; the loader
+   * folds that shape into this one. */
   clips: VideoClip[];
   audioClips: AudioClip[];
-  /** Video tracks other than track 0 (`clips`); absent in older docs. */
-  overlayClips?: OverlayClip[];
+  /** Legacy: video clips on tracks other than 0, kept a separate array in older
+   * docs. Read on open and merged into `clips`; new saves never write it. */
+  overlayClips?: VideoClip[];
   overlays: TextOverlay[];
   /** Output frame; absent in older projects (which are all 9:16). */
   aspect?: Aspect;

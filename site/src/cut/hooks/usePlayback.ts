@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, type RefObject } from "react";
-import { clipSpeed, getClipSpans, projectDuration, useEditor } from "@/cut/lib/store";
+import { clipSpeed, getClipSpans, overlayLayers, projectDuration, useEditor } from "@/cut/lib/store";
 import { isFullRect, projectFadeSeconds, rectOf, TRANSITION_ZOOM } from "@/cut/lib/types";
-import type { AudioClip, ClipSpan, FrameRect, MediaAsset, OverlayClip, VideoClip } from "@/cut/lib/types";
+import type { AudioClip, ClipSpan, FrameRect, MediaAsset, VideoClip } from "@/cut/lib/types";
 
 /** The gain everything else drops to at time `t` while a ducking voiceover
  * clip is audible: the lowest `duck` among the clips live then, 1 when none
@@ -335,7 +335,7 @@ class Engine {
     return masterEl;
   }
 
-  private overlayVideoFor(clip: OverlayClip, asset: MediaAsset): MediaEl {
+  private overlayVideoFor(clip: VideoClip, asset: MediaAsset): MediaEl {
     let el = this.overlayEls.get(clip.id);
     if (!el) {
       el = makeMediaEl(asset);
@@ -391,8 +391,8 @@ class Engine {
    * (further-back first). */
   private liveOverlays(t: number, side: "below" | "above") {
     const s = useEditor.getState();
-    const live: { clip: OverlayClip; asset: MediaAsset }[] = [];
-    const clips = s.overlayClips
+    const live: { clip: VideoClip; asset: MediaAsset }[] = [];
+    const clips = overlayLayers(s.clips)
       .filter((c) => (side === "below" ? c.track < 0 : c.track > 0))
       .sort((a, b) => a.track - b.track);
     for (const c of clips) {
@@ -409,7 +409,7 @@ class Engine {
 
   /** Seek/rate/play one overlay clip's element toward its frame at timeline
    * time `t` (the overlay counterpart of `prepare`). */
-  private prepareOverlay(clip: OverlayClip, asset: MediaAsset, t: number, play: boolean): MediaEl {
+  private prepareOverlay(clip: VideoClip, asset: MediaAsset, t: number, play: boolean): MediaEl {
     const el = this.overlayVideoFor(clip, asset);
     if (isImageEl(el)) return el;
     const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
@@ -445,7 +445,7 @@ class Engine {
     play: boolean,
     side: "below" | "above",
     active: Set<string>,
-    prepared?: { clip: OverlayClip; el: MediaEl }[]
+    prepared?: { clip: VideoClip; el: MediaEl }[]
   ) {
     for (const { clip, el } of prepared ?? this.prepareSide(t, play, side)) {
       active.add(clip.id);
@@ -462,7 +462,7 @@ class Engine {
     for (const [id, el] of this.overlayEls) {
       if (active.has(id)) continue;
       pauseEl(el);
-      if (!s.overlayClips.some((c) => c.id === id)) {
+      if (!overlayLayers(s.clips).some((c) => c.id === id)) {
         teardown(el);
         this.overlayEls.delete(id);
       }
@@ -522,7 +522,10 @@ class Engine {
     const s = useEditor.getState();
     const spans = getClipSpans(s.clips, s.assets);
     // Drop decoders for clips that no longer exist (deleted or replaced).
-    if (this.videoEls.size > s.clips.length) {
+    // videoEls holds base-row decoders only, so compare against the spans —
+    // gating on the whole clip list would let layer clips mask deletions and
+    // keep dead <video> elements alive.
+    if (this.videoEls.size > spans.length) {
       const live = new Set(s.clips.map((c) => c.id));
       for (const [id, el] of this.videoEls) {
         if (live.has(id)) continue;
@@ -534,7 +537,11 @@ class Engine {
     // soundtrack) is still reachable while scrubbing and playing.
     const total = projectDuration(s);
 
-    if (spans.length === 0) {
+    // Nothing anywhere — no track-0 clip, no overlay layer, no soundtrack —
+    // resets to a black frame at 0. An empty track 0 with an overlay clip or
+    // audio still plays: the tick body draws those layers and advances the wall
+    // clock, so the guard must not bail on `spans.length === 0` alone.
+    if (spans.length === 0 && overlayLayers(s.clips).length === 0 && s.audioClips.length === 0) {
       this.pauseExcept(new Set());
       this.drawLayer(null, undefined, true, 1);
       this.syncSoundtrack(0, false);

@@ -80,9 +80,9 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "select",
     description:
-      "Select a clip, overlay video, soundtrack clip, or title (or clear the selection). Selection drives the inspector panel.",
+      "Select a video clip (on any track), soundtrack clip, or title (or clear the selection). Selection drives the inspector panel.",
     inputSchema: obj({
-      kind: { type: "string", enum: ["clip", "overlayClip", "audio", "text", "none"], description: "What to select" },
+      kind: { type: "string", enum: ["clip", "audio", "text", "none"], description: "What to select — 'clip' is any video clip, whatever track" },
       id: str("The item id (omit for kind=none)"),
     }, ["kind"]),
   },
@@ -124,9 +124,9 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "delete_item",
     description:
-      "Delete a video clip, overlay video, soundtrack clip, or title by id. Every track is free-positioned, so deleting leaves a gap; place_clip can slide a neighbor into it if the cut should stay tight.",
+      "Delete a video clip (any track), soundtrack clip, or title by id. Every track is free-positioned, so deleting leaves a gap; place_clip can slide a neighbor into it if the cut should stay tight.",
     inputSchema: obj({
-      kind: { type: "string", enum: ["clip", "overlayClip", "audio", "text"], description: "Item kind" },
+      kind: { type: "string", enum: ["clip", "audio", "text"], description: "Item kind — 'clip' is any video clip, whatever track" },
       id: str("Item id"),
     }, ["kind", "id"]),
   },

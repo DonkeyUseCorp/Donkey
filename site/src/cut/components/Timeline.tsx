@@ -24,12 +24,12 @@ import { importLibraryAsset, saveTemplate } from "@/cut/lib/library";
 import { isDragActive, startDrag, subscribeDragActive } from "@/cut/lib/drag";
 import { CLIP_GAP, startLaneMove, startLaneTrim, type LaneDrag } from "@/cut/lib/laneTracks";
 import { ensurePeaks, importImage, importStockVideo } from "@/cut/lib/media";
-import { clipLen, clipSpeed, getClipSpans, nextFreeStart, projectDuration, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
+import { baseClips, clipLen, clipSpeed, getClipSpans, nextFreeStart, overlayLayers, projectDuration, TIMELINE_H_MAX, useEditor } from "@/cut/lib/store";
 import type { VideoTrackPlacement } from "@/cut/lib/store";
 import { subtitleLaneCount } from "@/cut/lib/subtitles";
 import { formatTime, formatTimecode } from "@/cut/lib/time";
 import { IMAGE_CLIP_SECONDS, TRANSITION_STYLE_LABELS } from "@/cut/lib/types";
-import type { AudioClip, ClipSpan, MediaAsset, OverlayClip, SubtitleCue, TextOverlay, TransitionStyle } from "@/cut/lib/types";
+import type { AudioClip, ClipSpan, MediaAsset, SubtitleCue, TextOverlay, TransitionStyle, VideoClip } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
 
 const TRANSITION_ICONS: Record<TransitionStyle, LucideIcon> = {
@@ -123,7 +123,9 @@ function draggingStockVideo(e: React.DragEvent): AssetRef | null {
 export function Timeline() {
   const clips = useEditor((s) => s.clips);
   const audioClips = useEditor((s) => s.audioClips);
-  const overlayClips = useEditor((s) => s.overlayClips);
+  // The composited layers (every clip off the base row), derived from the one
+  // clip list — the timeline draws them as the tracks around track 0.
+  const overlayClips = useMemo(() => overlayLayers(clips), [clips]);
   const overlays = useEditor((s) => s.overlays);
   const assets = useEditor((s) => s.assets);
   const pps = useEditor((s) => s.pxPerSec);
@@ -144,7 +146,7 @@ export function Timeline() {
   );
 
   const spans = useMemo(() => getClipSpans(clips, assets), [clips, assets]);
-  const total = projectDuration({ clips, overlayClips, audioClips });
+  const total = projectDuration({ clips, audioClips });
   // Fill the viewport at minimum so a wide window never leaves the ruler/tracks
   // cut off; grow past it once the content is longer. While a trim/slide drag
   // is in flight, hold the width at its drag-start value so the scroll area
@@ -176,13 +178,19 @@ export function Timeline() {
   // elementFromPoint — rows (new-track rows included) carry a `data-drop`
   // placement.
   const resolveDropTrack = useCallback((clientX: number, clientY: number): TrackTarget => {
+    // An empty video timeline has no base yet: the first clip always lands on
+    // track 0, whatever height the pointer is at. Otherwise a drop above the
+    // thin empty row resolves to an overlay track, leaving track 0 empty — and
+    // an empty track 0 plays black (the compositor's master lives there).
+    const st = useEditor.getState();
+    if (st.clips.length === 0) return TRACK_ZERO;
     const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
     const zone = el?.closest<HTMLElement>("[data-drop]");
     const parsed = zone ? parsePlacement(zone.dataset.drop!) : null;
     if (parsed) return parsed;
     // Past the ends of the stack → a new track beyond the last one.
     const rows = innerRef.current?.querySelectorAll<HTMLElement>("[data-drop]");
-    const tracks = useEditor.getState().overlayClips.map((c) => c.track);
+    const tracks = overlayLayers(useEditor.getState().clips).map((c) => c.track);
     if (rows && rows.length) {
       if (clientY < rows[0].getBoundingClientRect().top)
         return { kind: "insert", level: Math.max(0, ...tracks) + 1 };
@@ -205,7 +213,7 @@ export function Timeline() {
     (id: string, target: TrackTarget, start: number) => {
       previewCross(null);
       if (samePlacement(target, TRACK_ZERO)) return;
-      useEditor.getState().dropVideoClip({ kind: "clip", id }, target, start);
+      useEditor.getState().dropVideoClip(id, target, start);
     },
     [previewCross]
   );
@@ -215,7 +223,7 @@ export function Timeline() {
   const onOverlayCrossDrop = useCallback(
     (id: string, target: TrackTarget, start: number) => {
       previewCross(null);
-      useEditor.getState().dropVideoClip({ kind: "overlay", id }, target, start);
+      useEditor.getState().dropVideoClip(id, target, start);
     },
     [previewCross]
   );
@@ -627,7 +635,7 @@ export function Timeline() {
         // stretches to the next free slot, so the dashed box must too — a
         // box under the pointer that lands minutes away is a lie.
         const cur = useEditor.getState();
-        const taken = cur.clips.map((c) => ({ start: c.start, end: c.start + clipLen(c) }));
+        const taken = baseClips(cur.clips).map((c) => ({ start: c.start, end: c.start + clipLen(c) }));
         setAssetDrop({
           t: nextFreeStart(taken, Math.max(0, timeAt(e.clientX)), duration),
           len: duration,
@@ -801,7 +809,7 @@ export function Timeline() {
                     clip={c}
                     asset={assets.find((x) => x.id === c.assetId)}
                     pps={pps}
-                    selected={selKeys.has(`overlayClip:${c.id}`)}
+                    selected={selKeys.has(`clip:${c.id}`)}
                     drag={laneDrag?.kind === "overlayClip" && laneDrag.id === c.id ? laneDrag : null}
                     parting={laneDrag?.kind === "overlayClip" && laneDrag.id !== c.id}
                     onDrag={setLaneDrag}
@@ -930,7 +938,7 @@ export function Timeline() {
                     clip={c}
                     asset={assets.find((x) => x.id === c.assetId)}
                     pps={pps}
-                    selected={selKeys.has(`overlayClip:${c.id}`)}
+                    selected={selKeys.has(`clip:${c.id}`)}
                     drag={laneDrag?.kind === "overlayClip" && laneDrag.id === c.id ? laneDrag : null}
                     parting={laneDrag?.kind === "overlayClip" && laneDrag.id !== c.id}
                     onDrag={setLaneDrag}
@@ -1711,7 +1719,7 @@ function AudioView({
 }
 
 /** Timeline footprint (seconds) of an overlay clip, honoring its speed. */
-function overlayLen(c: OverlayClip) {
+function overlayLen(c: VideoClip) {
   const src = c.out - c.in;
   const eff = c.speed && c.speed > 0 ? src / c.speed : src;
   return Math.max(0.1, eff);
@@ -1736,7 +1744,7 @@ function OverlayClipView({
   onCrossDrop,
   onDragActive,
 }: {
-  clip: OverlayClip;
+  clip: VideoClip;
   asset: MediaAsset | undefined;
   pps: number;
   selected: boolean;

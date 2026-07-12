@@ -29,11 +29,10 @@
 import type React from "react";
 import { refFromAsset, startPointerRefDrag } from "./assetRef";
 import { startDrag } from "./drag";
-import { clipLen, getClipSpans, projectDuration, transitionOverlap, useEditor } from "./store";
+import { baseClips, clipLen, getClipSpans, overlayLayers, projectDuration, transitionOverlap, useEditor } from "./store";
 import type {
   AudioClip,
   MediaAsset,
-  OverlayClip,
   Selection,
   SubtitleCue,
   TextOverlay,
@@ -42,7 +41,14 @@ import type {
 
 type S = ReturnType<typeof useEditor.getState>;
 
+// A drag lane. "clip" is the base row (track 0), "overlayClip" a layer track —
+// distinct adapters, but both select as a plain video-clip selection.
 export type LaneKind = "clip" | "audio" | "text" | "overlayClip" | "cue";
+
+/** The Selection kind a lane maps to. Base and layer video lanes both select as
+ * `"clip"` — a video clip is a video clip whatever track it sits on. */
+const laneSelectionKind = (kind: LaneKind): NonNullable<Selection>["kind"] =>
+  kind === "overlayClip" ? "clip" : kind;
 
 /** Visual gutter between adjacent clips (iMovie); time math stays exact. */
 export const CLIP_GAP = 4;
@@ -100,7 +106,7 @@ const clipAdapter: LaneAdapter<VideoClip> = {
   // Verticality is the video placement system (upper tracks and insert
   // zones), fed in as the move gesture's `vertical` strategy.
   multiLane: false,
-  raws: (s) => s.clips,
+  raws: (s) => baseClips(s.clips),
   view: (c) => ({ id: c.id, start: c.start, len: clipLen(c), lane: 0 }),
   apply: (patches) => useEditor.getState().updateClipsTransient(patches),
   movePatch: (c, start) => ({ id: c.id, patch: { start } }),
@@ -160,12 +166,12 @@ const textAdapter: LaneAdapter<TextOverlay> = {
   lanePatch: (o, lane) => ({ id: o.id, patch: { lane } }),
 };
 
-const overlayClipAdapter: LaneAdapter<OverlayClip> = {
+const overlayClipAdapter: LaneAdapter<VideoClip> = {
   minLen: 0.15,
   // Verticality is the video placement system (tracks and insert zones), fed
   // in as the move gesture's `vertical` strategy.
   multiLane: false,
-  raws: (s) => s.overlayClips,
+  raws: (s) => overlayLayers(s.clips),
   view: (c) => ({ id: c.id, start: c.start, len: clipLen(c), lane: c.track }),
   apply: (patches) => useEditor.getState().updateOverlayClipsTransient(patches),
   movePatch: (c, start) => ({ id: c.id, patch: { start } }),
@@ -208,7 +214,7 @@ const cueAdapter: LaneAdapter<SubtitleCue> = {
   onMoved: () => useEditor.getState().sortCues(),
 };
 
-type LaneRaw = VideoClip | AudioClip | TextOverlay | OverlayClip | SubtitleCue;
+type LaneRaw = VideoClip | AudioClip | TextOverlay | SubtitleCue;
 // The generic parameter is erased at the registry boundary; each gesture only
 // feeds an adapter values that came out of that same adapter, so this is safe.
 const ADAPTERS: Record<LaneKind, LaneAdapter<LaneRaw>> = {
@@ -340,14 +346,14 @@ export function startLaneMove<V = unknown>(
   settleSnapBack();
   const s = useEditor.getState();
   if (e.metaKey || e.shiftKey) {
-    s.toggleSelect({ kind, id } as NonNullable<Selection>);
+    s.toggleSelect({ kind: laneSelectionKind(kind), id });
     return;
   }
   const ad = ADAPTERS[kind];
   const raw0 = ad.raws(s).find((r) => ad.view(r).id === id);
   if (!raw0) return;
   const self = ad.view(raw0);
-  s.select({ kind, id } as Selection);
+  s.select({ kind: laneSelectionKind(kind), id });
   // Clicking anywhere on the timeline moves the playhead — bars included.
   s.seek(
     (ui.visStart ?? self.start) +
@@ -575,7 +581,7 @@ export function startLaneTrim(
   const raw0 = ad.raws(s).find((r) => ad.view(r).id === id);
   if (!raw0) return;
   const self = ad.view(raw0);
-  s.select({ kind, id } as Selection);
+  s.select({ kind: laneSelectionKind(kind), id });
   s.pushHistory();
   const targets = snapTargets(s, kind, id);
   const tol = SNAP_PX / ui.pps;

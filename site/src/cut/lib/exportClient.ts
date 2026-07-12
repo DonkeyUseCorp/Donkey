@@ -1,7 +1,7 @@
 "use client";
 
 import { apiFetch, apiJson, apiUrl } from "./api";
-import { clipSpeed, getClipSpans, projectDuration, spanSequence } from "./store";
+import { clipSpeed, getClipSpans, overlayLayers, projectDuration, spanSequence } from "./store";
 import { captionStyle, cueOverlay, cueWordWindows, laneCues, subtitleLaneCount, trackPos } from "./subtitles";
 import { renderOverlayPng } from "./textRender";
 import { FRAME } from "./types";
@@ -9,7 +9,6 @@ import type {
   Aspect,
   AudioClip,
   MediaAsset,
-  OverlayClip,
   SubtitlesBlock,
   TextOverlay,
   VideoClip,
@@ -103,9 +102,9 @@ export async function deleteExport(projectId: string, file: string) {
 
 export interface ExportDoc {
   assets: MediaAsset[];
+  /** Every video clip, any track (track 0 = base row, others composite). */
   clips: VideoClip[];
   audioClips: AudioClip[];
-  overlayClips: OverlayClip[];
   overlays: TextOverlay[];
   subtitles: SubtitlesBlock;
   /** Whole-video fades (seconds): in from black / out to black on the final
@@ -136,7 +135,7 @@ async function buildExportForm(
   // the length of the project and the overlays/soundtrack composite onto it —
   // the same path as a gap before the first track-0 clip. Refuse only a cut with
   // no renderable content at all.
-  const hasOverlayVideo = doc.overlayClips.some(
+  const hasOverlayVideo = overlayLayers(doc.clips).some(
     (c) => !c.hidden && assetById.has(c.assetId) && c.start < duration,
   );
   const hasAudio = doc.audioClips.some(
@@ -226,7 +225,7 @@ async function buildExportForm(
         ]);
 
   // Video tracks composited around track 0; hidden ones are dropped.
-  const overlayVideos = doc.overlayClips
+  const overlayVideos = overlayLayers(doc.clips)
     .filter((c) => !c.hidden && assetById.has(c.assetId) && c.start < duration)
     .map((c) => ({
       file: assetById.get(c.assetId)!.fileName,

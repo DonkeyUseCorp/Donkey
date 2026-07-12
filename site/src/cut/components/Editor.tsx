@@ -72,7 +72,6 @@ export function Editor({
             assets: s.assets,
             clips: s.clips,
             audioClips: s.audioClips,
-            overlayClips: s.overlayClips,
             overlays: s.overlays,
             subtitles: s.subtitles,
             fadeIn: s.fadeIn,
@@ -87,7 +86,6 @@ export function Editor({
     let last: {
       clips: unknown;
       audioClips: unknown;
-      overlayClips: unknown;
       overlays: unknown;
       subtitles: unknown;
       aspect: string;
@@ -100,7 +98,6 @@ export function Editor({
         last !== null &&
         (s.clips !== last.clips ||
           s.audioClips !== last.audioClips ||
-          s.overlayClips !== last.overlayClips ||
           s.overlays !== last.overlays ||
           s.subtitles !== last.subtitles ||
           s.aspect !== last.aspect ||
@@ -109,7 +106,6 @@ export function Editor({
       last = {
         clips: s.clips,
         audioClips: s.audioClips,
-        overlayClips: s.overlayClips,
         overlays: s.overlays,
         subtitles: s.subtitles,
         aspect: s.aspect,
@@ -181,7 +177,6 @@ export function Editor({
         assetsDirty ||
         s.clips !== (last.clips as unknown) ||
         s.audioClips !== (last.audioClips as unknown) ||
-        s.overlayClips !== (last.overlayClips as unknown) ||
         s.overlays !== (last.overlays as unknown) ||
         s.subtitles !== (last.subtitles as unknown) ||
         s.aspect !== last.aspect ||

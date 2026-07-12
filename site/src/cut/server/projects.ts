@@ -139,9 +139,13 @@ async function dirSize(dir: string): Promise<number> {
 }
 
 async function summarize(id: string, doc: ProjectDoc): Promise<ProjectSummary> {
-  const duration = doc.clips.reduce((sum, c) => sum + Math.max(0, c.out - c.in), 0);
+  // The base row (track 0) is the cut: layer clips composite over it, so they
+  // add nothing to the summary's duration, count, or poster. Legacy docs carry
+  // no `track` on clips — those are all base-row.
+  const base = doc.clips.filter((c) => (c.track ?? 0) === 0);
+  const duration = base.reduce((sum, c) => sum + Math.max(0, c.out - c.in), 0);
   // Preview: the first clip's source video, else any video asset.
-  const firstClip = doc.clips[0];
+  const firstClip = base[0];
   const firstClipAsset = firstClip
     ? doc.assets.find((a) => a.id === firstClip.assetId)
     : undefined;
@@ -159,7 +163,7 @@ async function summarize(id: string, doc: ProjectDoc): Promise<ProjectSummary> {
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
     duration,
-    clipCount: doc.clips.length,
+    clipCount: base.length,
     assetCount: doc.assets.length,
     previewFile: previewAsset?.fileName,
     previewIsImage: previewAsset?.type === "image",

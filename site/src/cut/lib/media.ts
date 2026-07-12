@@ -54,7 +54,7 @@ export async function createProjectFromFile(
   };
   if (asset.type === "video" || asset.type === "image") {
     const out = asset.type === "image" ? IMAGE_CLIP_SECONDS : asset.duration;
-    doc.clips = [{ id: uid(), assetId: asset.id, start: 0, in: 0, out, muted: false }];
+    doc.clips = [{ id: uid(), assetId: asset.id, track: 0, start: 0, in: 0, out, muted: false }];
   } else {
     doc.audioClips = [
       { id: uid(), assetId: asset.id, start: 0, in: 0, out: asset.duration, volume: 1 },

@@ -106,7 +106,16 @@ export const projectsApi = {
         assets: Array.isArray(body.assets) ? body.assets : existing.assets,
         clips: Array.isArray(body.clips) ? body.clips : existing.clips,
         audioClips: Array.isArray(body.audioClips) ? body.audioClips : existing.audioClips,
-        overlayClips: Array.isArray(body.overlayClips) ? body.overlayClips : existing.overlayClips,
+        // Layer clips now live in `clips` (each with its `track`). A merged
+        // client saves `clips` with no `overlayClips`, which clears the legacy
+        // array so the two shapes can't drift or duplicate. A pre-merge client
+        // still sends both — its `overlayClips` are real layer data, so they
+        // persist untouched rather than being silently deleted.
+        overlayClips: Array.isArray(body.overlayClips)
+          ? body.overlayClips
+          : Array.isArray(body.clips)
+            ? []
+            : existing.overlayClips,
         overlays: Array.isArray(body.overlays) ? body.overlays : existing.overlays,
         aspect: body.aspect === "9:16" || body.aspect === "16:9" ? body.aspect : existing.aspect,
         fadeIn: typeof body.fadeIn === "number" ? body.fadeIn : existing.fadeIn,

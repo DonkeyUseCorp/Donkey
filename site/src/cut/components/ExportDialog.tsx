@@ -61,7 +61,6 @@ export function ExportDialog() {
       assets: s.assets,
       clips: s.clips,
       audioClips: s.audioClips,
-      overlayClips: s.overlayClips,
       overlays: s.overlays,
       subtitles: s.subtitles,
       fadeIn: s.fadeIn,

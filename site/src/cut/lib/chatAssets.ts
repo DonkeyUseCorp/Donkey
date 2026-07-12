@@ -63,7 +63,7 @@ export function threadOwnsAssets(threadId: string): boolean {
 export function deleteChatAssets(threadId: string) {
   const s = useEditor.getState();
   const inUse = new Set(
-    [...s.clips, ...s.overlayClips, ...s.audioClips].map((c) => c.assetId)
+    [...s.clips, ...s.audioClips].map((c) => c.assetId)
   );
   const owned = s.assets.filter(
     (a) => a.origin === "chat" && a.chatId === threadId && !inUse.has(a.id)

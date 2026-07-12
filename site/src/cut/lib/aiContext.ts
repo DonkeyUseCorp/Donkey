@@ -1,8 +1,8 @@
 "use client";
 
-import { getClipSpans, totalDuration, useEditor } from "./store";
+import { getClipSpans, overlayLayers, totalDuration, useEditor } from "./store";
 import { laneCues, subtitleLaneCount } from "./subtitles";
-import { isCrossStyle, rectOf, regionLabel, type ClipSpan, type OverlayClip } from "./types";
+import { isCrossStyle, rectOf, regionLabel, type ClipSpan, type VideoClip } from "./types";
 
 const r = (n: number) => Math.round(n * 100) / 100;
 
@@ -45,25 +45,25 @@ export function buildAiContext(opts?: { fullCues?: boolean }) {
     const { kind, id } = s.selection;
     if (kind === "clip") {
       const sp = spans.find((x) => x.clip.id === id);
-      return sp
-        ? {
-            kind,
-            id,
-            asset: sp.asset.name,
-            start: r(sp.start),
-            len: r(sp.len),
-            muted: sp.clip.muted,
-            speed: r(sp.clip.speed ?? 1),
-          }
-        : { kind, id };
+      if (sp) {
+        return {
+          kind,
+          id,
+          asset: sp.asset.name,
+          start: r(sp.start),
+          len: r(sp.len),
+          muted: sp.clip.muted,
+          speed: r(sp.clip.speed ?? 1),
+        };
+      }
+      // A layer clip carries no span (spans are the base row); describe its
+      // compositing shape instead.
+      const c = s.clips.find((x) => x.id === id);
+      return c ? { kind, id, ...describeOverlayClip(c, assetById) } : { kind, id };
     }
     if (kind === "audio") {
       const a = s.audioClips.find((x) => x.id === id);
       return a ? { kind, id, ...describeAudio(a, assetById) } : { kind, id };
-    }
-    if (kind === "overlayClip") {
-      const c = s.overlayClips.find((x) => x.id === id);
-      return c ? { kind, id, ...describeOverlayClip(c, assetById) } : { kind, id };
     }
     if (kind === "cue") {
       const c = s.subtitles.cues.find((x) => x.id === id);
@@ -128,7 +128,7 @@ export function buildAiContext(opts?: { fullCues?: boolean }) {
     })),
     // Video layers composited with track 0: track > 0 above it (topmost
     // full-frame clip covers the rest), track < 0 behind it.
-    overlayVideo: s.overlayClips.map((c) => ({ id: c.id, ...describeOverlayClip(c, assetById) })),
+    overlayVideo: overlayLayers(s.clips).map((c) => ({ id: c.id, ...describeOverlayClip(c, assetById) })),
     soundtrack: s.audioClips.map((a) => ({ id: a.id, ...describeAudio(a, assetById) })),
     titles: s.overlays.map((o) => ({ id: o.id, ...describeOverlay(o) })),
     subtitles: {
@@ -187,7 +187,7 @@ function describeAudio(
   };
 }
 
-function describeOverlayClip(c: OverlayClip, assets: Map<string, { name: string }>) {
+function describeOverlayClip(c: VideoClip, assets: Map<string, { name: string }>) {
   const speed = c.speed && c.speed > 0 ? c.speed : 1;
   const rect = rectOf(c);
   return {

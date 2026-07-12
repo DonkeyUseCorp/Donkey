@@ -145,29 +145,23 @@ export function Preview() {
  */
 function OverlayPipHandle({ stage }: { stage: { w: number; h: number } }) {
   const selection = useEditor((s) => s.selection);
-  const overlayClips = useEditor((s) => s.overlayClips);
   const clips = useEditor((s) => s.clips);
-  const assets = useEditor((s) => s.assets);
   const currentTime = useEditor((s) => s.currentTime);
 
-  // Resolve the selected, live, regioned layer plus how to patch its rect.
+  // Resolve the selected, live, regioned clip (any track) plus how to patch its
+  // rect. A clip's own footprint equals its span length, so one path serves the
+  // base row and the layers.
   let rect: FrameRect | null = null;
   let apply: ((frame: FrameRect) => void) | null = null;
-  if (selection?.kind === "overlayClip") {
-    const clip = overlayClips.find((c) => c.id === selection.id);
+  if (selection?.kind === "clip") {
+    const clip = clips.find((c) => c.id === selection.id);
     if (clip && !clip.hidden) {
       const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
       const len = Math.max(0.1, (clip.out - clip.in) / speed);
       if (currentTime >= clip.start && currentTime < clip.start + len) {
         rect = rectOf(clip);
-        apply = (frame) => useEditor.getState().updateOverlayClipTransient(clip.id, { frame });
+        apply = (frame) => useEditor.getState().updateClipTransient(clip.id, { frame });
       }
-    }
-  } else if (selection?.kind === "clip") {
-    const sp = getClipSpans(clips, assets).find((x) => x.clip.id === selection.id);
-    if (sp && !sp.clip.hidden && currentTime >= sp.start && currentTime < sp.start + sp.len) {
-      rect = rectOf(sp.clip);
-      apply = (frame) => useEditor.getState().updateClipTransient(sp.clip.id, { frame });
     }
   }
   if (!rect || !apply || isFullRect(rect)) return null;

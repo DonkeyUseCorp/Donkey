@@ -8,7 +8,7 @@ import { enrichAsset, ensurePeaks, importImage, importStockVideo } from "./media
 import { characterPrompt, stockTitle } from "./stock";
 import { STOCK_IMAGES } from "./stockManifest";
 import { STOCK_VIDEOS } from "./stockVideoManifest";
-import { getClipSpans, nextFreeStart, TIMELINE_H_MAX, TIMELINE_H_MIN, totalDuration, useEditor } from "./store";
+import { baseClips, getClipSpans, nextFreeStart, overlayLayers, TIMELINE_H_MAX, TIMELINE_H_MIN, totalDuration, useEditor } from "./store";
 import { buildAiContext } from "./aiContext";
 import { laneCues, subtitleLaneCount } from "./subtitles";
 import { resolveVoice, synthesizeSpeech, SPEECH_VOICES } from "./tts";
@@ -27,8 +27,8 @@ import {
   type AudioClip,
   type FontId,
   type MediaAsset,
-  type OverlayClip,
   type TransitionStyle,
+  type VideoClip,
 } from "./types";
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -215,20 +215,21 @@ export async function runAiTool(
         return { selection: null };
       }
       const id = String(input.id ?? "");
+      // A video clip on any track selects as "clip"; "overlayClip" is accepted
+      // as a legacy alias for a layer clip and resolves the same way.
       const pool =
-        kind === "clip"
+        kind === "clip" || kind === "overlayClip"
           ? s.clips
-          : kind === "overlayClip"
-            ? s.overlayClips
-            : kind === "audio"
-              ? s.audioClips
-              : kind === "text"
-                ? s.overlays
-                : null;
+          : kind === "audio"
+            ? s.audioClips
+            : kind === "text"
+              ? s.overlays
+              : null;
       if (!pool) throw new ToolError(`Unknown kind: ${kind}`);
       if (!pool.some((x) => x.id === id)) throw new ToolError(`No ${kind} with id ${id}.`);
-      s.select({ kind: kind as "clip" | "overlayClip" | "audio" | "text", id });
-      return { selection: { kind, id } };
+      const selKind = kind === "overlayClip" ? "clip" : (kind as "clip" | "audio" | "text");
+      s.select({ kind: selKind, id });
+      return { selection: { kind: selKind, id } };
     }
 
     case "split_at": {
@@ -242,9 +243,16 @@ export async function runAiTool(
 
     case "move_clip": {
       const clip = requireItem(s.clips, input.clipId, "video clip");
+      // Reordering by index is a base-sequence operation; a layer clip is
+      // free-positioned — move it with update_overlay_video (start/track).
+      if (clip.track !== 0)
+        throw new ToolError(
+          "That clip is on an overlay track — use update_overlay_video to move it."
+        );
       if (!isNum(input.toIndex)) throw new ToolError("toIndex is required.");
-      s.moveClip(clip.id, clamp(Math.round(input.toIndex), 0, s.clips.length - 1));
-      return { order: useEditor.getState().clips.map((c) => c.id) };
+      const base = baseClips(s.clips);
+      s.moveClip(clip.id, clamp(Math.round(input.toIndex), 0, base.length - 1));
+      return { order: baseClips(useEditor.getState().clips).map((c) => c.id) };
     }
 
     case "place_clip": {
@@ -252,7 +260,7 @@ export async function runAiTool(
       if (!isNum(input.start)) throw new ToolError("start (seconds) is required.");
       const len = (clip.out - clip.in) / (clip.speed && clip.speed > 0 ? clip.speed : 1);
       const taken = s.clips
-        .filter((c) => c.id !== clip.id)
+        .filter((c) => c.id !== clip.id && c.track === clip.track)
         .map((c) => ({
           start: c.start,
           end: c.start + (c.out - c.in) / (c.speed && c.speed > 0 ? c.speed : 1),
@@ -279,12 +287,12 @@ export async function runAiTool(
       s.addVideoFromAsset(asset.id, { kind: "track", track }, start);
       const cur = useEditor.getState();
       const sel = cur.selection;
-      const id = sel?.kind === "overlayClip" ? sel.id : null;
+      const id = sel?.kind === "clip" ? sel.id : null;
       if (!id) throw new ToolError("Could not create the overlay clip.");
       // Same undo step as the add: the layout rides the transient patch.
       if (typeof input.layout === "string")
         cur.updateOverlayClipTransient(id, layoutPatch(input.layout));
-      const c = useEditor.getState().overlayClips.find((x) => x.id === id)!;
+      const c = useEditor.getState().clips.find((x) => x.id === id)!;
       return {
         id: c.id,
         track: c.track,
@@ -295,11 +303,11 @@ export async function runAiTool(
     }
 
     case "update_overlay_video": {
-      const c = requireItem(s.overlayClips, input.id, "overlay video clip");
+      const c = requireItem(overlayLayers(s.clips), input.id, "overlay video clip");
       const asset = s.assets.find((a) => a.id === c.assetId);
       // A still has no source bound, so its clip can stretch to any length.
       const dur = asset?.type === "image" ? Infinity : asset?.duration ?? c.out;
-      const patch: Partial<OverlayClip> = {};
+      const patch: Partial<VideoClip> = {};
       if (isNum(input.start)) patch.start = Math.max(0, input.start);
       if (isNum(input.in)) patch.in = clamp(input.in, 0, dur - 0.1);
       if (isNum(input.out)) patch.out = clamp(input.out, 0.1, dur);
@@ -328,7 +336,7 @@ export async function runAiTool(
       if (isNum(input.speed)) patch.speed = clamp(input.speed, SPEED_MIN, SPEED_MAX);
       if (Object.keys(patch).length === 0) throw new ToolError("Nothing to change.");
       s.updateOverlayClip(c.id, patch);
-      const next = useEditor.getState().overlayClips.find((x) => x.id === c.id)!;
+      const next = useEditor.getState().clips.find((x) => x.id === c.id)!;
       return {
         id: next.id,
         track: next.track,
@@ -364,6 +372,10 @@ export async function runAiTool(
       const id = input.clipId ? String(input.clipId) : s.selection?.kind === "clip" ? s.selection.id : null;
       if (!id) throw new ToolError("Pass clipId or select a video clip first.");
       const clip = requireItem(s.clips, id, "video clip");
+      // detachAudio lifts sound off the base sequence; a layer clip has no
+      // span there and the store would silently do nothing.
+      if (clip.track !== 0)
+        throw new ToolError("That clip is on an overlay track — detach works on timeline (track 0) clips.");
       if (clip.muted) throw new ToolError("That clip's audio is muted — nothing to detach.");
       s.select({ kind: "clip", id: clip.id });
       s.detachAudio();
@@ -377,17 +389,16 @@ export async function runAiTool(
       const kind = String(input.kind) as "clip" | "overlayClip" | "audio" | "text";
       const id = String(input.id ?? "");
       const pool =
-        kind === "clip"
+        kind === "clip" || kind === "overlayClip"
           ? s.clips
-          : kind === "overlayClip"
-            ? s.overlayClips
-            : kind === "audio"
-              ? s.audioClips
-              : s.overlays;
+          : kind === "audio"
+            ? s.audioClips
+            : s.overlays;
       if (!pool.some((x) => x.id === id)) throw new ToolError(`No ${kind} with id ${id}.`);
-      s.select({ kind, id });
+      const selKind = kind === "overlayClip" ? "clip" : (kind as "clip" | "audio" | "text");
+      s.select({ kind: selKind, id });
       s.deleteSelection();
-      return { deleted: { kind, id } };
+      return { deleted: { kind: selKind, id } };
     }
 
     case "add_title": {
@@ -947,7 +958,11 @@ export async function runAiTool(
 
     case "set_transition": {
       const clip = requireItem(s.clips, input.clipId, "video clip");
-      if (s.clips.findIndex((c) => c.id === clip.id) === s.clips.length - 1)
+      // Transitions join the base sequence; a layer clip has no next clip.
+      if (clip.track !== 0)
+        throw new ToolError("That clip is on an overlay track — transitions join timeline (track 0) clips.");
+      const base = baseClips(s.clips);
+      if (base.findIndex((c) => c.id === clip.id) === base.length - 1)
         throw new ToolError("The last clip has no next clip to transition into.");
       if (!isNum(input.seconds)) throw new ToolError("seconds is required (0 clears the transition).");
       let style: TransitionStyle | undefined;
@@ -1110,7 +1125,6 @@ function resolveWatchTarget(
     const id = String(input.clip_id);
     const clip =
       s.clips.find((c) => c.id === id) ??
-      s.overlayClips.find((c) => c.id === id) ??
       s.audioClips.find((c) => c.id === id);
     if (!clip) throw new ToolError(`No clip with id ${id}. Call get_state for current ids.`);
     const asset = s.assets.find((a) => a.id === clip.assetId);
@@ -1201,7 +1215,7 @@ const OVERLAY_LAYOUT_KEYS = {
   pip: "corner",
 } as const;
 
-function layoutPatch(layout: string): Partial<OverlayClip> {
+function layoutPatch(layout: string): Partial<VideoClip> {
   const key = OVERLAY_LAYOUT_KEYS[layout as keyof typeof OVERLAY_LAYOUT_KEYS];
   if (!key)
     throw new ToolError(`Unknown layout "${layout}". Use full, top, bottom, left, right, or pip.`);

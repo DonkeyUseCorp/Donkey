@@ -18,7 +18,7 @@ import {
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { getClipSpans, useEditor, type EditorState } from "@/cut/lib/store";
+import { baseClips, getClipSpans, useEditor, type EditorState } from "@/cut/lib/store";
 import { GenerateSubtitlesAudio } from "@/cut/components/VoicePicker";
 import { PLATE_COLOR, PLATE_OPACITY, PLATE_RADIUS } from "@/cut/lib/textRender";
 import { writeTextStyle } from "@/cut/lib/textStyle";
@@ -36,7 +36,6 @@ import {
   type AudioClip,
   type FrameRect,
   type LayoutId,
-  type OverlayClip,
   type TextOverlay,
   type TransitionStyle,
   type VideoClip,
@@ -159,18 +158,19 @@ export function Inspector() {
   const overlay = useEditor((s) =>
     selection?.kind === "text" ? s.overlays.find((o) => o.id === selection.id) : undefined
   );
-  const overlayClip = useEditor((s) =>
-    selection?.kind === "overlayClip" ? s.overlayClips.find((c) => c.id === selection.id) : undefined
-  );
 
   return (
     <aside className="flex min-h-0 flex-col overflow-y-auto border-l border-border bg-card">
       {clip ? (
-        <ClipPanel key={clip.id} clip={clip} />
+        // The base row (track 0) carries transitions and the sequence controls;
+        // a layer clip gets the compositing panel (track, framing, layout).
+        clip.track === 0 ? (
+          <ClipPanel key={clip.id} clip={clip} />
+        ) : (
+          <LayerClipPanel key={clip.id} clip={clip} />
+        )
       ) : audio ? (
         <AudioPanel key={audio.id} clip={audio} />
-      ) : overlayClip ? (
-        <OverlayClipPanel key={overlayClip.id} clip={overlayClip} />
       ) : overlay ? (
         <TextPanel key={overlay.id} overlay={overlay} />
       ) : null}
@@ -242,15 +242,20 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
   const asset = useEditor((s) => s.assets.find((a) => a.id === clip.assetId));
   const updateClip = useEditor((s) => s.updateClip);
   // A transition hands this clip into the next one, so only offer it when
-  // there is a next clip on the track.
+  // there is a next clip on the base row — layer clips share the sorted array
+  // but sit outside the sequence, so position checks read the base row only.
   const hasNext = useEditor((s) => {
-    const i = s.clips.findIndex((c) => c.id === clip.id);
-    return i >= 0 && i < s.clips.length - 1;
+    const base = baseClips(s.clips);
+    const i = base.findIndex((c) => c.id === clip.id);
+    return i >= 0 && i < base.length - 1;
   });
   // The whole-video fades are project-level but live on the clips that show
   // them: fade in on the first clip's panel, fade out on the last clip's.
-  const isFirst = useEditor((s) => s.clips[0]?.id === clip.id);
-  const isLast = useEditor((s) => s.clips[s.clips.length - 1]?.id === clip.id);
+  const isFirst = useEditor((s) => baseClips(s.clips)[0]?.id === clip.id);
+  const isLast = useEditor((s) => {
+    const base = baseClips(s.clips);
+    return base[base.length - 1]?.id === clip.id;
+  });
   const fadeIn = useEditor((s) => s.fadeIn);
   const fadeOut = useEditor((s) => s.fadeOut);
   const [speedDraft, setSpeedDraft] = useState<number | null>(null);
@@ -612,14 +617,14 @@ function AudioPanel({ clip }: { clip: AudioClip }) {
   );
 }
 
-function OverlayClipPanel({ clip }: { clip: OverlayClip }) {
+function LayerClipPanel({ clip }: { clip: VideoClip }) {
   const asset = useEditor((s) => s.assets.find((a) => a.id === clip.assetId));
   const update = useEditor((s) => s.updateOverlayClip);
   const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
   const len = (clip.out - clip.in) / speed;
   return (
     <>
-      <PanelTitle>Overlay clip</PanelTitle>
+      <PanelTitle>Video clip</PanelTitle>
       <div className="flex flex-col gap-1 px-3.5 pb-4">
         <div className="mb-1.5 truncate border-b border-border pb-2.5 text-xs font-medium" title={asset?.name}>
           {asset?.name}
