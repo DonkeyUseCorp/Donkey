@@ -56,13 +56,37 @@ function splitDataUrl(dataUrl: string): InlineImage {
   return { data, mimeType };
 }
 
-function blobToInline(blob: Blob): Promise<InlineImage> {
+function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
-    r.onload = () => resolve(splitDataUrl(String(r.result)));
-    r.onerror = () => reject(new Error("Could not read the image."));
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(new Error("Could not read the file."));
     r.readAsDataURL(blob);
   });
+}
+
+async function blobToInline(blob: Blob): Promise<InlineImage> {
+  return splitDataUrl(await blobToDataUrl(blob));
+}
+
+// Keeps the inline payload well under the Gemini per-request inline-data cap
+// (base64 inflates by 4/3); larger audio degrades to a name-only marker.
+const MAX_AUDIO_BYTES = 12 * 1024 * 1024;
+
+/** The audio bytes for `ref`, base64 with a real audio mime, or null when the
+ * file is too large to ride inline. */
+async function refToInlineAudio(ref: AssetRef): Promise<InlineImage | null> {
+  const res = await fetch(ref.url);
+  if (!res.ok) throw new Error(`Could not load “${ref.name}”.`);
+  const blob = await res.blob();
+  if (blob.size > MAX_AUDIO_BYTES) return null;
+  const dataUrl = await blobToDataUrl(blob);
+  const comma = dataUrl.indexOf(",");
+  const labelled = dataUrl.slice(5, comma).split(";")[0];
+  return {
+    data: dataUrl.slice(comma + 1),
+    mimeType: labelled.startsWith("audio/") ? labelled : "audio/mpeg",
+  };
 }
 
 function captureFrame(url: string, duration?: number): Promise<InlineImage> {
@@ -172,8 +196,10 @@ export async function readRefText(ref: AssetRef): Promise<string> {
 /** A ref list as hosted-Responses content parts, for any Gemini call that
  * should actually see the attachments: each visual ref contributes a numbered
  * label plus its picture (image as-is, video by poster frame), each text ref
- * its contents, and audio a name-only marker. `visuals` returns the pictures
- * in label order (`Image 1` = visuals[0]) so a model can pick among them. */
+ * its contents, and each audio ref its actual sound (so the model can answer
+ * about what's said without touching the project; oversized files fall back
+ * to a name-only marker). `visuals` returns the pictures in label order
+ * (`Image 1` = visuals[0]) so a model can pick among them. */
 export async function refsToParts(
   refs: AssetRef[]
 ): Promise<{ parts: Record<string, unknown>[]; visuals: InlineImage[] }> {
@@ -181,7 +207,13 @@ export async function refsToParts(
   const visuals: InlineImage[] = [];
   for (const ref of refs) {
     if (ref.kind === "audio") {
-      parts.push({ text: `Attached audio "${ref.name}" (audio content not included).` });
+      const audio = await refToInlineAudio(ref);
+      if (!audio) {
+        parts.push({ text: `Attached audio "${ref.name}" (too large to include inline).` });
+        continue;
+      }
+      parts.push({ text: `Attached audio "${ref.name}":` });
+      parts.push({ type: "input_audio", dataBase64: audio.data, mimeType: audio.mimeType });
       continue;
     }
     if (ref.kind === "text") {

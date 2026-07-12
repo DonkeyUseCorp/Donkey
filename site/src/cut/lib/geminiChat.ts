@@ -31,7 +31,7 @@ const toolDeclarations = () =>
 /** The conversation replayed as hosted-Responses input items. Only text (and
  * attachment refs) from past turns — tool traffic stays within its own turn.
  * The fresh editor snapshot rides on the newest user message alone, and so do
- * the attachments' actual payloads (video frames, images, text-file contents):
+ * the attachments' actual payloads (video frames, images, audio, text-file contents):
  * older turns keep just the metadata JSON so replays stay within budget. */
 async function inputFromMessages(messages: UIMessage[]): Promise<Item[]> {
   const lastUser = messages.findLast((m) => m.role === "user");
