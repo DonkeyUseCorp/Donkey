@@ -34,7 +34,6 @@ export function Editor({
   const back = backTarget(useCutBase(), from, folder);
   const loaded = useEditor((s) => s.loaded);
   const loadError = useEditor((s) => s.loadError);
-  const dropActive = useEditor((s) => s.dropActive);
   const exportOpen = useEditor((s) => s.exportOpen);
   const aiOpen = useEditor((s) => s.aiOpen);
   // The inspector only earns its column when the selection has a panel to
@@ -204,7 +203,10 @@ export function Editor({
   }, [projectId]);
 
   const importFiles = useCallback(
-    async (files: FileList | File[], at?: number | null, origin?: MediaAsset["origin"]) => {
+    async (
+      files: FileList | File[],
+      opts?: { at?: number; origin?: MediaAsset["origin"]; mediaOnly?: boolean }
+    ) => {
       const list = Array.from(files);
       setImporting((n) => n + list.length);
       for (const file of list) {
@@ -213,18 +215,22 @@ export function Editor({
           if (!asset) continue;
           // Recordings are created media: tag them so they land on the timeline
           // but never in the Media panel (reserved for user imports).
-          if (origin) asset.origin = origin;
+          if (opts?.origin) asset.origin = opts.origin;
           const s = useEditor.getState();
           s.addAsset(asset);
-          if (asset.type === "video" || asset.type === "image") {
-            // A drop on the timeline lands at the pointer (sliding to track
-            // 0's next free slot); anywhere else appends at the end. A still
-            // rides track 0 like footage.
-            s.addClipFromAsset(asset.id, at ?? undefined);
-          } else {
-            // A timeline drop lands at the pointer; anywhere else drops at the
-            // playhead (the store slides it right only if that spot is taken).
-            s.addAudioFromAsset(asset.id, at ?? undefined);
+          // mediaOnly stocks the Media panel and leaves the timeline alone
+          // (drops that land outside the timeline); placement is up to the user.
+          if (!opts?.mediaOnly) {
+            if (asset.type === "video" || asset.type === "image") {
+              // A drop on the timeline lands at the pointer (sliding to track
+              // 0's next free slot); an upload appends at the end. A still
+              // rides track 0 like footage.
+              s.addClipFromAsset(asset.id, opts?.at);
+            } else {
+              // A timeline drop lands at the pointer; an upload drops at the
+              // playhead (the store slides it right only if that spot is taken).
+              s.addAudioFromAsset(asset.id, opts?.at);
+            }
           }
           void enrichAsset(asset);
         } catch (err) {
@@ -239,15 +245,25 @@ export function Editor({
 
   // Whole-window drag & drop for OS files. Chrome tags native <img> drags
   // with `Files` too, so internal drags — which always carry the ref MIME —
-  // are filtered out; dragging a stock tile never raises the import veil.
+  // are filtered out; dragging a stock tile never lights the drop hints.
   useEffect(() => {
     const isFileDrag = (e: DragEvent) =>
       !!e.dataTransfer?.types.includes("Files") && !hasRefDrag(e);
+    // "media" when the drag carries at least one video/audio/image (the
+    // timeline is a valid target); text-only drags only concern the chat.
+    // Items that hide their MIME type during the drag count as media.
+    const dragKind = (e: DragEvent): "media" | "other" => {
+      const items = Array.from(e.dataTransfer?.items ?? []).filter((i) => i.kind === "file");
+      return items.length === 0 ||
+        items.some((i) => !i.type || /^(video|audio|image)\//.test(i.type))
+        ? "media"
+        : "other";
+    };
     const enter = (e: DragEvent) => {
       if (!isFileDrag(e)) return;
       e.preventDefault();
       dragDepth.current++;
-      useEditor.getState().setDropActive(true);
+      useEditor.getState().setDropActive(dragKind(e));
     };
     const over = (e: DragEvent) => {
       if (isFileDrag(e)) e.preventDefault();
@@ -255,11 +271,11 @@ export function Editor({
     const leave = (e: DragEvent) => {
       if (!isFileDrag(e)) return;
       dragDepth.current = Math.max(0, dragDepth.current - 1);
-      if (dragDepth.current === 0) useEditor.getState().setDropActive(false);
+      if (dragDepth.current === 0) useEditor.getState().setDropActive(null);
     };
     // Time under the pointer when the drop lands on the timeline's tracks,
-    // else null. Geometric, because the drop veil overlays the whole window
-    // and would swallow any target-based check.
+    // else null. Geometric, because the drop is handled at the window level
+    // and the pointer may sit over any timeline child.
     const timelineDropTime = (e: DragEvent): number | null => {
       const scroll = document.querySelector(".tl-scroll");
       const inner = document.querySelector(".tl-content");
@@ -274,15 +290,17 @@ export function Editor({
       if (hasRefDrag(e) || !e.dataTransfer?.files.length) return;
       e.preventDefault();
       dragDepth.current = 0;
-      useEditor.getState().setDropActive(false);
+      useEditor.getState().setDropActive(null);
       // A drop on a file-taking composer (generate/chat attachments) belongs
-      // to it; everything else imports into the project as before.
+      // to it; a drop on the timeline places at the pointer; anywhere else
+      // the files land in the Media panel only.
       const zone = fileZoneAt(e.clientX, e.clientY);
       if (zone) {
         zone(Array.from(e.dataTransfer.files));
         return;
       }
-      void importFiles(e.dataTransfer.files, timelineDropTime(e));
+      const at = timelineDropTime(e);
+      void importFiles(e.dataTransfer.files, at == null ? { mediaOnly: true } : { at });
     };
     window.addEventListener("dragenter", enter);
     window.addEventListener("dragover", over);
@@ -397,19 +415,6 @@ export function Editor({
       {exportOpen && <ExportDialog />}
       <ExportStatus />
       <Lightbox />
-      {dropActive && (
-        <div className="fixed inset-0 z-60 grid place-items-center bg-background/70 backdrop-blur-md">
-          <div className="pointer-events-none flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-[#0a84ff] bg-[#0a84ff]/10 px-12 py-9 text-[#0a84ff]">
-            <Clapperboard className="size-7" />
-            <div className="text-[15px] font-semibold text-foreground">
-              Drop to add to your project
-            </div>
-            <div className="text-xs text-muted-foreground">
-              Videos land on the timeline · music on the soundtrack
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

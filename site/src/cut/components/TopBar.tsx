@@ -21,7 +21,7 @@ export function TopBar({
   from,
   folder,
 }: {
-  onImport: (files: File[], at?: number | null, origin?: "recording") => void;
+  onImport: (files: File[], opts?: { origin?: "recording" }) => void;
   from?: string | null;
   folder?: string | null;
 }) {
@@ -84,7 +84,7 @@ export function TopBar({
         <RecordDialog
           mode={recordMode}
           onClose={() => setRecordMode(null)}
-          onUse={(file) => onImport([file], null, "recording")}
+          onUse={(file) => onImport([file], { origin: "recording" })}
         />
       )}
       <div className="flex min-w-0 items-center gap-1">

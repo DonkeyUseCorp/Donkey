@@ -121,7 +121,9 @@ export interface EditorState {
   subtitleStatus: SubtitleStatus;
   subtitleError: string | null;
   exportOpen: boolean;
-  dropActive: boolean;
+  /** OS file drag in flight: "media" when it carries video/audio/image (so the
+   * timeline is a valid target), "other" for text-only drags, null when idle. */
+  dropActive: "media" | "other" | null;
   /** Whether the AI assistant panel is open (remembered across sessions). */
   aiOpen: boolean;
 
@@ -254,7 +256,7 @@ export interface EditorState {
   setPxPerSec: (v: number) => void;
   setTimelineH: (h: number) => void;
   setExportOpen: (v: boolean) => void;
-  setDropActive: (v: boolean) => void;
+  setDropActive: (v: "media" | "other" | null) => void;
   setAiOpen: (v: boolean) => void;
   undo: () => void;
   redo: () => void;
@@ -450,7 +452,7 @@ export const useEditor = create<EditorState>((set, get) => {
     subtitleStatus: "idle",
     subtitleError: null,
     exportOpen: false,
-    dropActive: false,
+    dropActive: null,
     aiOpen: typeof window !== "undefined" && localStorage.getItem("cut-ai-open") === "1",
 
     loadProject: async (id) => {
