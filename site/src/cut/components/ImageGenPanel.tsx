@@ -213,10 +213,10 @@ export function ImageGenPanel({ projectId }: { projectId: string }) {
 }
 
 /** A generated image, shown big: reference it in a prompt by its @handle, drag
- * it onto the timeline or into chat, click to reload its prompt, and reach
- * everything else — expand, copy its @reference, send it to Media or the
- * library, delete — through the corner "…" menu. Its name surfaces on hover so
- * the grid stays clean. */
+ * it onto the timeline or into chat, click to reload its prompt, expand from
+ * the corner button, and reach everything else — copy its @reference, send it
+ * to Media or the library, delete — through the corner "…" menu. Its name
+ * surfaces on hover so the grid stays clean. */
 function GeneratedTile({
   asset,
   projectId,
@@ -266,25 +266,27 @@ function GeneratedTile({
       <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-2 py-1.5 opacity-0 transition-opacity group-hover:opacity-100">
         <span className="block truncate text-[11px] font-medium text-white">{asset.name}</span>
       </div>
-      <GeneratedAssetMenu
-        asset={asset}
-        projectId={projectId}
-        triggerClassName="absolute top-1 right-1 grid size-5 place-items-center rounded-full bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100 data-popup-open:opacity-100 hover:bg-black/65"
-        before={
-          <>
-            <DropdownMenuItem
-              onClick={() =>
-                useLightbox.getState().open({
-                  kind: "image",
-                  src: asset.url,
-                  name: asset.name,
-                  prompt: asset.name,
-                  assetId: asset.id,
-                })
-              }
-            >
-              <Maximize2 /> Expand
-            </DropdownMenuItem>
+      <div className="absolute top-1 right-1 flex gap-1">
+        <button
+          title="Expand"
+          className="grid size-5 place-items-center rounded-full bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/65"
+          onClick={() =>
+            useLightbox.getState().open({
+              kind: "image",
+              src: asset.url,
+              name: asset.name,
+              prompt: asset.name,
+              assetId: asset.id,
+            })
+          }
+        >
+          <Maximize2 className="size-3" />
+        </button>
+        <GeneratedAssetMenu
+          asset={asset}
+          projectId={projectId}
+          triggerClassName="grid size-5 place-items-center rounded-full bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100 data-popup-open:opacity-100 hover:bg-black/65"
+          before={
             <DropdownMenuItem
               onClick={() =>
                 void navigator.clipboard
@@ -294,17 +296,17 @@ function GeneratedTile({
             >
               <Copy /> Copy reference
             </DropdownMenuItem>
-          </>
-        }
-        after={
-          <DropdownMenuItem
-            variant="destructive"
-            onClick={() => useEditor.getState().removeAsset(asset.id)}
-          >
-            <Trash2 /> Delete
-          </DropdownMenuItem>
-        }
-      />
+          }
+          after={
+            <DropdownMenuItem
+              variant="destructive"
+              onClick={() => useEditor.getState().removeAsset(asset.id)}
+            >
+              <Trash2 /> Delete
+            </DropdownMenuItem>
+          }
+        />
+      </div>
     </div>
   );
 }

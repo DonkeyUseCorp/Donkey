@@ -379,35 +379,35 @@ function JobRow({ job, handle }: { job: GenerateJob; handle?: string }) {
         >
           <Plus className="size-3" />
         </button>
+        <button
+          title="Expand"
+          className="grid size-5 place-items-center rounded-full bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/65"
+          onClick={() =>
+            useLightbox.getState().open({
+              kind: "video",
+              src: asset.url,
+              name: asset.name,
+              prompt: job.prompt,
+              assetId: asset.id,
+            })
+          }
+        >
+          <Maximize2 className="size-3" />
+        </button>
         <GeneratedAssetMenu
           asset={asset}
           projectId={job.projectId}
           triggerClassName="grid size-5 place-items-center rounded-full bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100 data-popup-open:opacity-100 hover:bg-black/65"
           before={
-            <>
-              <DropdownMenuItem
-                onClick={() =>
-                  useLightbox.getState().open({
-                    kind: "video",
-                    src: asset.url,
-                    name: asset.name,
-                    prompt: job.prompt,
-                    assetId: asset.id,
-                  })
-                }
-              >
-                <Maximize2 /> Expand
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() =>
-                  void navigator.clipboard
-                    .writeText(handle ? `@${handle}` : mentionToken(asset.name))
-                    .catch(() => {})
-                }
-              >
-                <Copy /> Copy reference
-              </DropdownMenuItem>
-            </>
+            <DropdownMenuItem
+              onClick={() =>
+                void navigator.clipboard
+                  .writeText(handle ? `@${handle}` : mentionToken(asset.name))
+                  .catch(() => {})
+              }
+            >
+              <Copy /> Copy reference
+            </DropdownMenuItem>
           }
           after={
             <DropdownMenuItem onClick={() => useGenerate.getState().dismiss(job.id)}>
