@@ -277,6 +277,40 @@ export async function runAiTool(
       };
     }
 
+    case "add_clip": {
+      const asset = requireItem(s.assets, input.asset_id, "project asset");
+      const start = isNum(input.start) ? Math.max(0, input.start) : undefined;
+      if (asset.type === "audio") {
+        s.addAudioFromAsset(asset.id, start);
+        const sel = useEditor.getState().selection;
+        const c =
+          sel?.kind === "audio"
+            ? useEditor.getState().audioClips.find((x) => x.id === sel.id)
+            : undefined;
+        if (!c) throw new ToolError("Could not create the soundtrack clip.");
+        return { id: c.id, kind: "audio", start: round2(c.start), len: round2(c.out - c.in) };
+      }
+      // Video/image onto track 0: an index inserts like move_clip; a start
+      // (or nothing — appended at the end) free-positions like a drop.
+      let clipId: string | null;
+      if (isNum(input.index)) {
+        clipId = addVideoTrackClip(asset.id, Math.round(input.index)).clipId;
+      } else {
+        s.addClipFromAsset(asset.id, start);
+        const sel = useEditor.getState().selection;
+        clipId = sel?.kind === "clip" ? sel.id : null;
+      }
+      const c = clipId ? useEditor.getState().clips.find((x) => x.id === clipId) : undefined;
+      if (!c) throw new ToolError("Could not create the clip.");
+      return {
+        id: c.id,
+        kind: asset.type,
+        index: baseClips(useEditor.getState().clips).findIndex((x) => x.id === c.id),
+        start: round2(c.start),
+        len: round2(c.out - c.in),
+      };
+    }
+
     case "add_overlay_video": {
       const asset = requireItem(s.assets, input.asset_id, "project asset");
       if (asset.type !== "video" && asset.type !== "image")
@@ -531,7 +565,7 @@ export async function runAiTool(
       if (!asset) throw new ToolError("The generated image did not land in the project.");
       tagChatAsset(asset.id, chatId);
       const placed = wantsTimeline(input, "index")
-        ? addGeneratedClip(asset.id, promptedIndex(input))
+        ? addVideoTrackClip(asset.id, promptedIndex(input))
         : NOT_PLACED;
       return {
         assetId: asset.id,
@@ -1234,9 +1268,9 @@ const NOT_PLACED = { added: false, clipId: null, index: null };
 const promptedIndex = (input: Record<string, unknown>): number | undefined =>
   isNum(input.index) ? Math.round(input.index) : undefined;
 
-/** Append a generated asset to the video track, at `index` when given. Shared
- * by generate_image (inline) and the video renders' completion. */
-function addGeneratedClip(
+/** Append a project asset to the video track, at `index` when given. Shared
+ * by add_clip, generate_image (inline), and the video renders' completion. */
+function addVideoTrackClip(
   assetId: string,
   index?: number
 ): { added: boolean; clipId: string | null; index: number | null } {
@@ -1270,7 +1304,7 @@ function launchVeoJob(
     ...opts,
     onDone: (asset) => {
       tagChatAsset(asset.id, chatId);
-      if (addToTimeline) addGeneratedClip(asset.id, index);
+      if (addToTimeline) addVideoTrackClip(asset.id, index);
     },
   });
   return {

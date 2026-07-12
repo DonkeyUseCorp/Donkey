@@ -105,6 +105,16 @@ export const AI_TOOLS: AiToolDef[] = [
     inputSchema: obj({ clipId: str("Video clip id"), start: num("Target timeline start s") }, ["clipId", "start"]),
   },
   {
+    name: "add_clip",
+    description:
+      "Put a project asset on the timeline, the same way the user dragging it in would: a video or image lands on video track 0 (at `start`, inserted at `index`, or appended at the end; a taken spot slides it right), audio lands on the soundtrack (at `start`, default the playhead). Asset ids come from `media` in editor_state — imports, attachments, and chat media alike. Call it only when the user asked for the media in the cut (\"add my beach photo\", \"stitch these into a movie\"); otherwise media stays on its card or panel for them to drag.",
+    inputSchema: obj({
+      asset_id: str("Project asset id from `media` in editor_state"),
+      start: num("Timeline start s"),
+      index: num("Insert position on video track 0 (video/image only; 0 = first)"),
+    }, ["asset_id"]),
+  },
+  {
     name: "trim_clip",
     description:
       "Set a video clip's trim points inside its source media (seconds). Changing `in` hides the leading part; `out` the trailing part.",
@@ -513,6 +523,7 @@ Times are in seconds on the shared timeline. The playhead is currentTime; a skim
   "timeline-editing": `# Timeline editing
 - Every track is free-positioned: items carry a start time, gaps are allowed, and a track-0 gap plays black (and silence). Deleting leaves a gap. videoTrack entries in editor_state report gapBefore where one exists.
 - Two ways to move a track-0 clip: place_clip sets its start (respects gaps, slides right if the spot is taken); move_clip reorders by index, opening a slot at the landing point — clips after it shift right, every other gap survives. Index-based inserts (freeze_frame, generated clips) open a slot the same way.
+- add_clip puts a project asset on the timeline the way a drag does: video/image onto track 0 (a \`start\`, an \`index\` insert, or appended at the end), audio onto the soundtrack.
 - Overlay video: a video/image asset can sit on a track above track 0 (track 1, 2… — topmost wins) or behind it (track -1…). A full-frame overlay covers everything below it; give it a layout to share the frame — top/bottom/left/right halves for a split screen, pip for a floating corner box, or a custom region rect. add_overlay_video creates one from a media asset; update_overlay_video moves/trims/regions/mutes/hides it. The user makes them by dragging media above/below track 0; they drag the region in the preview.
 - A clip's timeline length is (out-in)/speed; total duration runs to the last clip's end, gaps included, minus cross-style transition overlaps.
 - trim_clip changes in/out inside the source media. in >= 0, out <= source duration, out-in >= 0.1.
@@ -611,7 +622,7 @@ Rules:
 - Read list_skills / read_skill before working in an area you're unsure about — they document every setting.
 - Don't transcribe a video with no speech. If the user wants captions on silent footage, use subtitles_from_visuals (it narrates what's on screen). Never invent a spoken transcript.
 - Voiceovers duck other audio by default so they stay audible. Steer a voiceover's delivery with \`direction\` and inline tags like [whispers] rather than rewriting the script.
-- generate_image / generate_video / generate_character_video / voiceover_generate / read_subtitles_aloud make media through hosted models (spends the user's Donkey credits, needs sign-in); call them when the user asked for the media itself — a request for the prompt or script gets text in chat. Bundled stock media (stock_search / stock_add) is free — use it when it fits. Media the user attached is in \`media\`; pass those asset ids as generation references when they say "use this". Generated media previews on a chat card the user can expand, drag in, or file away; add it to the timeline (add_to_timeline:true or an index) only when they asked for it in the cut. Write a rich, specific prompt from their shorthand. Video renders take a minute or two.
+- generate_image / generate_video / generate_character_video / voiceover_generate / read_subtitles_aloud make media through hosted models (spends the user's Donkey credits, needs sign-in); call them when the user asked for the media itself — a request for the prompt or script gets text in chat. Bundled stock media (stock_search / stock_add) is free — use it when it fits. Media the user attached is in \`media\`; pass those asset ids as generation references when they say "use this", and place project assets in the cut with add_clip when they ask for them there ("make a movie from these photos"). Generated media previews on a chat card the user can expand, drag in, or file away; add it to the timeline (add_to_timeline:true or an index) only when they asked for it in the cut. Write a rich, specific prompt from their shorthand. Video renders take a minute or two.
 - You can see and hear: audio the user attaches to their message plays right in it — answer "what does this say" from what you hear, no tool call. For project footage, watch_video samples a source's frames into timestamped contact sheets (scene changes included) — watch before cutting footage you haven't seen; detect_silence finds dead air; capture_frame shows the one rendered frame at the playhead. The watching-and-cutting skill has the flow.`;
 }
 

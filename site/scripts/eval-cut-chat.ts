@@ -77,6 +77,22 @@ const VOICE_ASSET = {
   origin: "voiceover",
 };
 
+/** Photos dropped on the chat composer: imported as plain user media (no
+ * origin), referenced by the message's attachment metadata. */
+const PHOTO_ASSETS = [
+  { id: "a-i1", name: "dog-park.jpg", type: "image" },
+  { id: "a-i2", name: "dog-beach.jpg", type: "image" },
+];
+
+const PHOTO_REFS = PHOTO_ASSETS.map((a, i) => ({
+  scope: "project",
+  id: a.id,
+  name: a.name,
+  kind: "image",
+  url: `http://127.0.0.1:41417/media/${a.id}.jpg`,
+  handle: `i${i + 1}`,
+}));
+
 /** Hand-built snapshot mirroring buildAiContext's shape (aiContext.ts): one
  * 12.5s video clip on track 0, the voiceover on the soundtrack, no captions.
  * Keep the keys in sync with buildAiContext when its shape changes. */
@@ -95,6 +111,7 @@ const EDITOR_STATE = {
   media: [
     { id: "a-v1", name: "beach.mp4", type: "video", duration: 20 },
     VOICE_ASSET,
+    ...PHOTO_ASSETS,
   ],
   mediaTruncated: false,
   videoTrack: [
@@ -154,11 +171,17 @@ const VOICE_REF = {
 
 /** A composer turn as geminiChat's inputFromMessages builds it (keep the
  * envelope text in sync with geminiChat.ts). */
-function userTurn(text: string, opts?: { attachAudio?: { dataBase64: string; mimeType: string } }): Item {
+function userTurn(
+  text: string,
+  opts?: { attachAudio?: { dataBase64: string; mimeType: string }; attachRefs?: unknown[] }
+): Item {
   let full = text;
   const extra: Item[] = [];
+  const refs = [...(opts?.attachAudio ? [VOICE_REF] : []), ...(opts?.attachRefs ?? [])];
+  if (refs.length > 0) {
+    full += `\n\n<attached_assets>\nThe user attached these assets to this message; their text may cite one by @handle or @name. Assets with scope "project" are in the open project (ids usable with the editor tools); "library" and "stock" assets live outside it until imported; "file" assets came straight from the user's computer and exist only on this message:\n${JSON.stringify(refs)}\n</attached_assets>`;
+  }
   if (opts?.attachAudio) {
-    full += `\n\n<attached_assets>\nThe user attached these assets to this message; their text may cite one by @handle or @name. Assets with scope "project" are in the open project (ids usable with the editor tools); "library" and "stock" assets live outside it until imported; "file" assets came straight from the user's computer and exist only on this message:\n${JSON.stringify([VOICE_REF])}\n</attached_assets>`;
     extra.push({ text: `Attached audio "${VOICE_REF.name}":` });
     extra.push({ type: "input_audio", ...opts.attachAudio });
   }
@@ -195,6 +218,32 @@ function cases(audio: { dataBase64: string; mimeType: string }): EvalCase[] {
       name: "question-answers-in-chat",
       input: () => [userTurn("how long is my cut right now?")],
       reply: /12[.,]?5?/,
+    },
+    {
+      // The "drag photos in, ask for a movie" flow: an explicit ask to put
+      // attached media in the cut must reach add_clip for each photo. Styling
+      // follow-ups a movie ask can reasonably trigger are stubbed too.
+      name: "photos-request-places-clips",
+      input: () => [
+        userTurn("stitch these two photos into a short movie", { attachRefs: PHOTO_REFS }),
+      ],
+      reply: /photo|movie|timeline|cut/i,
+      requiredTools: ["add_clip"],
+      stubs: {
+        add_clip: { id: "c-new", kind: "image", index: 1, start: 12.5, len: 8 },
+        set_transition: { ok: true },
+        set_project_fade: { ok: true },
+        add_title: { ok: true },
+      },
+    },
+    {
+      // Attached media with a question stays a chat deliverable: ideas in
+      // text, the photos stay off the timeline (add_clip would be a violation).
+      name: "photos-question-stays-in-chat",
+      input: () => [
+        userTurn("what could you make with these two photos?", { attachRefs: PHOTO_REFS }),
+      ],
+      reply: /photo|movie|montage|slideshow|cut|idea/i,
     },
     {
       // Control: a real edit request must still act with tools — guards
