@@ -175,11 +175,9 @@ interface RefZone {
 
 const zones = new Set<RefZone>();
 
-/** The file-accepting zone under a window drop, if any. Rect-based, because
- * the editor's import veil overlays the window during OS drags and would
- * swallow an elementFromPoint check. Lets the editor's window-level drop
- * handler hand files to the composer they landed on instead of importing them
- * onto the timeline. */
+/** The file-accepting zone under a window drop, if any. Lets the editor's
+ * window-level drop handler hand files to the composer they landed on instead
+ * of importing them into the project. */
 export function fileZoneAt(x: number, y: number): ((files: File[]) => void) | null {
   for (const z of zones) {
     if (!z.onFiles) continue;

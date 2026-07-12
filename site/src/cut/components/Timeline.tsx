@@ -132,6 +132,8 @@ export function Timeline() {
   const timelineH = useEditor((s) => s.timelineH);
   const multiSelection = useEditor((s) => s.multiSelection);
   const subtitles = useEditor((s) => s.subtitles);
+  // An OS file drag carrying media lights the track area as a drop target.
+  const fileDropHint = useEditor((s) => s.dropActive === "media");
   const scrollRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
   // Measured width of the scroll viewport, so the ruler and tracks always draw
@@ -1149,6 +1151,11 @@ export function Timeline() {
           </div>
         </div>
       </div>
+      {/* Subtle valid-target hint while an OS media drag is over the window:
+          a tint and inset ring over the track area, under the toolbar. */}
+      {fileDropHint && (
+        <div className="pointer-events-none absolute inset-x-0 top-11 bottom-0 z-40 bg-[#0a84ff]/5 ring-2 ring-[#0a84ff]/30 ring-inset" />
+      )}
     </footer>
   );
 }

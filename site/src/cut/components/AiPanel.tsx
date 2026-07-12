@@ -338,6 +338,9 @@ function ChatSession({
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<AssetRef[]>([]);
   const candidates = useRefCandidates();
+  // Any OS file drag over the window hints the composer as a drop target;
+  // hovering it (dropActive below) strengthens the ring and shows the label.
+  const fileDropHint = useEditor((s) => s.dropActive !== null);
   const { active: dropActive, attachTarget, targetProps } = useAssetDrop(
     (ref) => setAttachments((prev) => addRefOnce(prev, ref)),
     // OS files dropped on the chat attach as references (media files import
@@ -560,7 +563,9 @@ function ChatSession({
             "rounded-xl border bg-background transition-colors",
             dropActive
               ? "border-[#0a84ff] ring-2 ring-[#0a84ff]/30"
-              : "border-input focus-within:border-ring"
+              : fileDropHint
+                ? "border-[#0a84ff]/45 ring-2 ring-[#0a84ff]/15"
+                : "border-input focus-within:border-ring"
           )}
         >
           {dropActive && (
