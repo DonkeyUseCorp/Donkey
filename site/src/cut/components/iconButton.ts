@@ -4,3 +4,8 @@
  * use the dark `bg-black/45 text-white` scrim pill instead. */
 export const cardIconButton =
   "grid size-6 shrink-0 place-items-center rounded-full bg-muted text-foreground transition-all hover:bg-muted-foreground/20";
+
+/** The dark scrim pill for controls floating over media — image/video tiles
+ * and the emerald audio pill. */
+export const scrimIconButton =
+  "grid size-5 shrink-0 place-items-center rounded-full bg-black/45 text-white transition-colors hover:bg-black/65";

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Copy, FileText, Music, X } from "lucide-react";
+import { Check, Copy, FileText, X } from "lucide-react";
 import {
   highlightMentions,
   mentionToken,
@@ -11,6 +11,8 @@ import {
 import { useRefFor, useRefCandidates } from "@/cut/lib/assetRef";
 import { revealRef } from "@/cut/lib/refReveal";
 import { formatTime } from "@/cut/lib/time";
+import { useEditor } from "@/cut/lib/store";
+import { AudioPillSurface } from "@/cut/components/AudioPanel";
 import { cn } from "@/lib/utils";
 
 // Shared UI for asset references: the preview thumbnail, attachment chips,
@@ -19,9 +21,17 @@ import { cn } from "@/lib/utils";
 // Every surface that takes references (AI chat, image/video creators)
 // composes these.
 
-/** Square media preview for a ref: video poster frame, image, or a glyph for
- * audio and text files. */
+/** Media preview for a ref: video poster frame, image, a glyph for text
+ * files, or the timeline-style emerald waveform pill for audio. Audio reads
+ * best wide — give it a wide box where the layout has room. */
 export function RefThumb({ item, className }: { item: AssetRef; className?: string }) {
+  // Project audio has real waveform peaks in the store; the pill draws a
+  // stand-in for everything else.
+  const peaks = useEditor((s) =>
+    item.kind === "audio" && item.scope === "project"
+      ? s.assets.find((a) => a.id === item.id)?.peaks
+      : undefined
+  );
   return (
     <div
       className={cn(
@@ -45,9 +55,7 @@ export function RefThumb({ item, className }: { item: AssetRef; className?: stri
           <FileText className="size-4.5" />
         </div>
       ) : (
-        <div className="grid size-full place-items-center bg-gradient-to-br from-emerald-100 to-emerald-50 text-emerald-600">
-          <Music className="size-4.5" />
-        </div>
+        <AudioPillSurface peaks={peaks} className="size-full rounded-none" />
       )}
       {item.duration !== undefined && item.kind !== "image" && (
         <span className="absolute right-1 bottom-1 rounded-[5px] bg-black/65 px-1 py-px font-mono text-[8.5px] text-white tabular-nums">
@@ -100,7 +108,10 @@ function RefPeek({ item, side = "top" }: { item: AssetRef; side?: "top" | "botto
       {item.kind === "video" ? (
         <PeekVideo item={item} />
       ) : (
-        <RefThumb item={item} className="aspect-square w-full" />
+        <RefThumb
+          item={item}
+          className={item.kind === "audio" ? "h-14 w-full" : "aspect-square w-full"}
+        />
       )}
     </div>
   );
@@ -234,7 +245,12 @@ function RefChip({
         className="block text-left"
         onClick={() => revealRef(item)}
       >
-        <RefThumb item={item} className={thumbClassName} />
+        {/* Audio stretches to the timeline-pill shape; the chip row wraps, so
+            the wide chip stays within the composer. */}
+        <RefThumb
+          item={item}
+          className={item.kind === "audio" ? "h-12 w-44 max-w-full" : thumbClassName}
+        />
       </button>
       {item.handle && <RefHandleBadge handle={item.handle} className="absolute bottom-1 left-1" />}
       {peek && <RefPeek item={item} side={peekSide} />}

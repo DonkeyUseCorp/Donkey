@@ -636,7 +636,14 @@ function MessageAssetCard({ asset }: { asset: AssetRef }) {
   const clickTimer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(clickTimer.current), []);
   return (
-    <div className="ai-msg-asset group relative w-16">
+    <div
+      className={cn(
+        "ai-msg-asset group relative",
+        // Audio gets the wide timeline-pill treatment; the row still wraps
+        // inside the message's max width.
+        asset.kind === "audio" ? "w-44 max-w-full" : "w-16"
+      )}
+    >
       <button
         className="flex w-full flex-col gap-1 text-left"
         title={`${asset.name} — click to show · drag to the timeline`}
@@ -657,7 +664,13 @@ function MessageAssetCard({ asset }: { asset: AssetRef }) {
           useLightbox.getState().open(lightboxItemFromRef(asset));
         }}
       >
-        <RefThumb item={asset} className="size-16 transition-colors group-hover:border-input" />
+        <RefThumb
+          item={asset}
+          className={cn(
+            asset.kind === "audio" ? "h-12 w-full" : "size-16",
+            "transition-colors group-hover:border-input"
+          )}
+        />
         <span className="w-full truncate text-[10px] text-muted-foreground">{asset.name}</span>
       </button>
       <DropdownMenu>

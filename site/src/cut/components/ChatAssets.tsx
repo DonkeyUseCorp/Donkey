@@ -23,7 +23,7 @@ import { cn } from "@/lib/utils";
 import { AudioRow } from "./AudioPanel";
 import { DocText, useDocText } from "./DocText";
 import { GeneratedAssetMenu } from "./GeneratedAssetMenu";
-import { cardIconButton } from "./iconButton";
+import { scrimIconButton } from "./iconButton";
 
 // Assets rendered inside chat messages. Anything the assistant makes previews
 // here as a media-first card and stays in the chat until the user moves it:
@@ -174,8 +174,7 @@ function ChatCardMenu({ asset, triggerClassName }: { asset: MediaAsset; triggerC
   );
 }
 
-const scrimButton =
-  "grid size-5 place-items-center rounded-full bg-black/45 text-white hover:bg-black/65";
+const scrimButton = scrimIconButton;
 
 /** Image / video tile: the preview fills the card at the media's own aspect,
  * sized so portrait and landscape both sit comfortably in the chat column. */
@@ -248,10 +247,7 @@ function AudioCard({ item, asset }: ChatCardProps) {
     return () => usePreviewAudio.getState().stop(url);
   }, [ref.url]);
   return (
-    <div
-      className="ai-chat-asset w-full max-w-[280px] bg-card"
-      onDoubleClick={() => expandRef(item, asset)}
-    >
+    <div className="ai-chat-asset w-full" onDoubleClick={() => expandRef(item, asset)}>
       <AudioRow
         name={ref.name}
         duration={ref.duration ?? 0}
@@ -260,7 +256,7 @@ function AudioCard({ item, asset }: ChatCardProps) {
         playing={playing}
         onTogglePlay={(url) => usePreviewAudio.getState().toggle(url)}
         onAdd={() => asset && useEditor.getState().addAudioFromAsset(asset.id)}
-        menu={asset && <ChatCardMenu asset={asset} triggerClassName={cardIconButton} />}
+        menu={asset && <ChatCardMenu asset={asset} triggerClassName={scrimIconButton} />}
         onDragStart={(e) => {
           if (asset) setAssetDragData(e, asset.id);
           else setRefDragData(e, item);

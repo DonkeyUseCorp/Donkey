@@ -1,6 +1,13 @@
 "use client";
 
-import { type DragEventHandler, type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  type DragEventHandler,
+  type HTMLAttributes,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   AudioLines,
   Check,
@@ -44,7 +51,7 @@ import { DUCK_DEFAULT } from "@/cut/lib/voiceover";
 import { useSpeakerVoice, useSpeechLanguage, VoicePicker } from "@/cut/components/VoicePicker";
 import { GeneratedAssetMenu } from "@/cut/components/GeneratedAssetMenu";
 import { cn } from "@/lib/utils";
-import { cardIconButton } from "@/cut/components/iconButton";
+import { scrimIconButton } from "@/cut/components/iconButton";
 
 /** Starting points for the direction prompt — picking one fills the input so
  * it can be tweaked before generating. */
@@ -307,6 +314,36 @@ export function PeakStrip({ peaks, className }: { peaks: number[]; className?: s
   );
 }
 
+/** Stand-in peaks while an asset's real ones haven't landed — the same gentle
+ * wave the timeline drag ghost draws, so the pill still reads as audio. */
+const STAND_IN_PEAKS = Array.from({ length: 48 }, (_, i) => 0.32 + 0.26 * Math.abs(Math.sin(i / 2)));
+
+/** The emerald audio surface, mirroring a timeline audio clip: gradient pill
+ * with a white waveform. Panel rows, chat cards, and attachment tiles draw on
+ * it so audio looks like the timeline everywhere it appears. */
+export function AudioPillSurface({
+  peaks,
+  className,
+  children,
+  ...rest
+}: { peaks?: number[] } & HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div
+      className={cn(
+        "relative overflow-hidden rounded-[7px] bg-gradient-to-b from-emerald-500 to-emerald-600 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.1)]",
+        className
+      )}
+      {...rest}
+    >
+      <PeakStrip
+        peaks={peaks?.length ? peaks : STAND_IN_PEAKS}
+        className="absolute inset-x-0 inset-y-1 mt-0 h-[calc(100%-8px)] text-white/85"
+      />
+      {children}
+    </div>
+  );
+}
+
 /** Off-screen drag image that mirrors an audio clip on the timeline — an
  * emerald pill with the name and a white waveform — so the drag reads as the
  * thing that will land, not the panel row. Lives just long enough for the
@@ -351,8 +388,9 @@ function buildAudioDragGhost(name: string, width: number, peaks?: number[]): HTM
   return el;
 }
 
-/** One audio asset as a playable row — the shared audio preview (panels and
- * the chat's audio cards): play button, name, duration, waveform, and a
+/** One audio asset as a playable pill — the shared audio preview (panels and
+ * the chat's audio cards), styled like its timeline clip: emerald gradient,
+ * white waveform, name overlaid, plus a play button, duration badge, and a
  * hover-revealed menu + add button. */
 export function AudioRow({
   name,
@@ -378,8 +416,9 @@ export function AudioRow({
   onDragStart?: DragEventHandler<HTMLDivElement>;
 }) {
   return (
-    <div
-      className="audio-row group relative flex items-center gap-2 rounded-lg border border-border p-1.5 pr-2 transition-colors hover:border-input hover:bg-muted/50"
+    <AudioPillSurface
+      peaks={peaks}
+      className="audio-row group h-10 shrink-0 cursor-grab"
       draggable={!!onDragStart}
       onDragStart={
         onDragStart &&
@@ -399,42 +438,37 @@ export function AudioRow({
       onDragEnd={onDragStart ? clearAssetDrag : undefined}
       title={onDragStart ? "Drag onto the timeline, or click + to add" : undefined}
     >
+      <span className="pointer-events-none absolute top-[3px] right-14 left-8 truncate text-[9.5px] font-medium text-white/90 [text-shadow:0_1px_2px_rgba(0,0,0,0.35)]">
+        {name}
+      </span>
       <button
         type="button"
         className={cn(
-          "grid size-8 shrink-0 place-items-center rounded-full text-foreground transition-colors",
-          playing ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted-foreground/20"
+          "absolute top-1/2 left-1.5 grid size-6 shrink-0 -translate-y-1/2 place-items-center rounded-full transition-colors",
+          playing ? "bg-white text-emerald-600" : "bg-black/30 text-white hover:bg-black/50"
         )}
         title={playing ? "Pause" : "Play"}
         aria-label={playing ? "Pause" : "Play"}
         onClick={() => onTogglePlay(url)}
       >
-        {playing ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
+        {playing ? <Pause className="size-3" /> : <Play className="size-3" />}
       </button>
-      {/* The name and waveform run the full width; the trailing controls scrim
-          over the right edge only on hover, so nothing is reserved for them. */}
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline justify-between gap-2">
-          <span className="truncate text-[11.5px] font-medium">{name}</span>
-          <span className="shrink-0 font-mono text-[10px] text-muted-foreground tabular-nums">
-            {formatTime(duration)}
-          </span>
-        </div>
-        {peaks && peaks.length > 0 && <PeakStrip peaks={peaks} />}
-      </div>
-      <div className="absolute inset-y-0 right-0 flex items-center gap-1 rounded-r-lg from-card via-card bg-gradient-to-l to-transparent pr-2 pl-8 opacity-0 transition-opacity group-hover:opacity-100 has-data-popup-open:opacity-100">
+      <span className="pointer-events-none absolute right-1.5 bottom-1 rounded-[5px] bg-black/40 px-1 py-px font-mono text-[9px] text-white tabular-nums">
+        {formatTime(duration)}
+      </span>
+      <div className="absolute top-1 right-1 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 has-data-popup-open:opacity-100">
         {menu}
         <button
           type="button"
           title="Add at the playhead"
           aria-label="Add at the playhead"
-          className={cardIconButton}
+          className={scrimIconButton}
           onClick={onAdd}
         >
-          <Plus className="size-3.5" />
+          <Plus className="size-3" />
         </button>
       </div>
-    </div>
+    </AudioPillSurface>
   );
 }
 
@@ -474,7 +508,7 @@ function ProjectAudio({
               <GeneratedAssetMenu
                 asset={a}
                 projectId={projectId}
-                triggerClassName={cardIconButton}
+                triggerClassName={scrimIconButton}
                 after={
                   <DropdownMenuItem
                     variant="destructive"
