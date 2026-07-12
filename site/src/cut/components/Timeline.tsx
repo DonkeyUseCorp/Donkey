@@ -1333,12 +1333,35 @@ function Playhead({
   const playing = useEditor((s) => s.playing);
   const x = t * pps;
 
+  // Follow the playhead while playing, but yield to the user: any manual
+  // scroll pauses following, which resumes after 5s of scroll idle. The
+  // follow effect's own writes are told apart from user scrolls by matching
+  // the scroll-event echo against the value it just wrote.
+  const manualUntil = useRef(0);
+  const followWrote = useRef<number | null>(null);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      if (followWrote.current !== null && Math.abs(el.scrollLeft - followWrote.current) < 1) {
+        followWrote.current = null;
+        return;
+      }
+      followWrote.current = null;
+      manualUntil.current = performance.now() + 5000;
+    };
+    el.addEventListener("scroll", onScroll);
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [scrollRef]);
+
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !playing) return;
+    if (performance.now() < manualUntil.current) return;
     const sx = x + PAD_SIDE; // playhead position in scroll coordinates
     if (sx < el.scrollLeft + 24 || sx > el.scrollLeft + el.clientWidth - 80) {
       el.scrollLeft = Math.max(0, sx - 80);
+      followWrote.current = el.scrollLeft; // read back: the browser clamps
     }
   }, [x, playing, scrollRef]);
 
