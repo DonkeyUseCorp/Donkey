@@ -5,7 +5,7 @@ import { AI_SKILL_INDEX, AI_SKILLS, AI_TOOLS, systemPrompt } from "@/cut/server/
 import { buildAiContext } from "./aiContext";
 import { runAiTool } from "./aiTools";
 import { normalizeRef } from "./assetRef";
-import { useGenerate } from "./generate";
+import { NO_CREDITS_MESSAGE, useGenerate } from "./generate";
 import { hostedPost } from "./hosted";
 import { refsToParts } from "./refMedia";
 
@@ -84,9 +84,7 @@ async function requestError(res: Response): Promise<string> {
   const message = [body?.details?.message, body?.message, body?.error].find(
     (v): v is string => typeof v === "string" && v.length > 0
   );
-  if (res.status === 402) {
-    return message ?? "Not enough Donkey credits — top up in Settings to keep chatting.";
-  }
+  if (res.status === 402) return NO_CREDITS_MESSAGE;
   return message ?? "Gemini request failed.";
 }
 
