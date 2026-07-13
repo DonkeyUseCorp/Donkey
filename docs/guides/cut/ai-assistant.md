@@ -27,7 +27,7 @@ user message + @attachments + fresh <editor_state> snapshot
 
 On the engine path, the chat route holds one streaming response open per turn. The provider sees a single MCP server named `cut`: a small stdio proxy the provider harness spawns, which forwards every tool listing and call to the engine over HTTP. The engine writes each call into the open chat stream; the tab executes it on the editor store and posts the result back; the engine hands it to the waiting provider. A call the tab never answers times out after two minutes.
 
-The Gemini path skips the engine entirely — the same carve-out as AI media generation. The page posts the conversation to Donkey's hosted responses route with the user's session, executes any function calls directly against the store, and repeats until the model settles on a reply (at most 16 rounds). Gemini's thought signatures are replayed exactly with each call, and an empty round surfaces as an error rather than a blank bubble.
+The Gemini path skips the engine entirely — the same carve-out as AI media generation. The page posts the conversation to Donkey's hosted responses route with the user's session, executes any function calls directly against the store, and repeats until the model settles on a reply (at most 24 rounds). Gemini's thought signatures are replayed exactly with each call, and an empty round surfaces as an error rather than a blank bubble. A turn that exhausts the round budget ends with one tools-off call that summarizes what landed and what's left, so a long edit hands off cleanly ("say keep going") instead of dead-ending on a raw error.
 
 Which path runs is chosen by the model id alone. The picker lives in the page so a site deploy updates it for everyone; the engine only reports which CLIs are installed and signed in (probed and cached for a minute), and the page overlays Gemini availability from its own sign-in probe.
 
@@ -86,7 +86,7 @@ A thread saves one session slot per provider, so switching models mid-thread kee
 | Limit | Value |
 | --- | --- |
 | Provider turns per request (Claude) | 30 |
-| Tool rounds per turn (Gemini) | 16 |
+| Tool rounds per turn (Gemini) | 24 |
 | Browser tool execution | 120s |
 | One watch-video call | 600s of source, 4 sheets (36 frames); the result says where coverage stopped |
 | Snapshot caps | 60 media items, 60 cues |

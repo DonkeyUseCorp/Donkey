@@ -16,7 +16,58 @@ import { refsToParts } from "./refMedia";
 // and their results go back until the model settles on a reply. The whole
 // conversation is replayed per turn, so no provider session is kept.
 
-const MAX_TOOL_ROUNDS = 16;
+const MAX_TOOL_ROUNDS = 24;
+
+const STEP_LIMIT_FALLBACK =
+  'I got partway through and hit this turn’s step limit — say “keep going” and I’ll finish the rest.';
+
+/** The loop ran out of tool rounds. One last call — tools withheld so it can't
+ * keep looping — asks the model to hand back what it finished and what's left,
+ * in its own voice, so the turn ends on a readable summary instead of a raw
+ * error. A static line covers a failed or empty summary. */
+async function emitStepLimitSummary({
+  model,
+  input,
+  emit,
+  textId,
+  abortSignal,
+}: {
+  model: string;
+  input: Item[];
+  emit: (chunk: Record<string, unknown>) => void;
+  textId: string;
+  abortSignal?: AbortSignal;
+}): Promise<void> {
+  let text = STEP_LIMIT_FALLBACK;
+  try {
+    const summaryInput: Item[] = [
+      ...input,
+      {
+        role: "user",
+        content: [
+          {
+            text: 'You’ve reached this turn’s tool-step limit and can’t call more tools now. In one or two short sentences, in your normal voice, tell me what you got done and what still needs doing, and that I can say “keep going” to finish the rest.',
+          },
+        ],
+      },
+    ];
+    const res = await hostedPost(
+      "/api/inference/responses",
+      { donkeyProvider: "gemini", model, instructions: systemPrompt(), input: summaryInput },
+      abortSignal
+    );
+    if (res.ok) {
+      const body = (await res.json()) as ResponseBody;
+      const summary = (body.output_text ?? "").trim();
+      if (summary) text = summary;
+    }
+  } catch {
+    // A failed summary falls back to the static handoff below.
+  }
+  emit({ type: "text-start", id: textId });
+  emit({ type: "text-delta", id: textId, delta: text });
+  emit({ type: "text-end", id: textId });
+}
 
 type Item = Record<string, unknown>;
 
@@ -252,8 +303,14 @@ export function streamGeminiChat({
           input.push({ role: "user", content: responseParts });
         }
 
-        if (!settled) {
-          emit({ type: "error", errorText: "Gemini stopped after too many tool rounds." });
+        if (!settled && !abortSignal?.aborted) {
+          await emitStepLimitSummary({
+            model,
+            input,
+            emit,
+            textId: `t${textCount + 1}`,
+            abortSignal,
+          });
         }
       } catch (err) {
         if (!abortSignal?.aborted) {
