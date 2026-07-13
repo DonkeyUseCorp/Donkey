@@ -45,6 +45,12 @@ inline, the call belongs in a hook.
   state, CSS custom properties derived from data, or a third-party style API.
 - Tailwind is configured via CSS (`@theme` in `src/app/globals.css`), not a
   `tailwind.config.*` file; its absence is not a reason to use inline styles.
+- When a style genuinely exceeds utilities — a custom `@keyframes` animation, a
+  layered `box-shadow` — put it in a plain `.css` file beside the feature and
+  pull it into the bundle with a side-effect import (`import "./thing.css"`)
+  from the module that owns the class. Reserve `globals.css` for base and theme
+  styles; feature CSS lives with its feature. Apply the class through the normal
+  `className`, composing with utilities via `cn`.
 - Use the brand tokens defined in `globals.css` rather than repeating raw hex:
   `text-ink`/`bg-ink`/`border-ink` (near-black), `bg-coral`/`text-coral`,
   `bg-cream`, `bg-background` (page sand), and `font-system`/`font-code`.
