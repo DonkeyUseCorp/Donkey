@@ -24,6 +24,7 @@ import { AudioRow } from "./AudioPanel";
 import { DocText, useDocText } from "./DocText";
 import { GeneratedAssetMenu } from "./GeneratedAssetMenu";
 import { scrimIconButton } from "./iconButton";
+import { HostedErrorText } from "./hostedError";
 
 // Assets rendered inside chat messages. Anything the assistant makes previews
 // here as a media-first card and stays in the chat until the user moves it:
@@ -99,7 +100,7 @@ export function ChatVideoJobCard({ jobId }: { jobId: string }) {
             job.status === "error" ? "text-red-600" : "text-muted-foreground"
           )}
         >
-          {job.status === "running" ? "Rendering…" : (job.error ?? "Failed.")}
+          {job.status === "running" ? "Rendering…" : <HostedErrorText error={job.error} />}
         </div>
       </div>
     </div>

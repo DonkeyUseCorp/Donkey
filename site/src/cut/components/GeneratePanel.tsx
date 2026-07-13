@@ -28,6 +28,7 @@ import {
 import { cn } from "@/lib/utils";
 import { MentionTextarea, RefChips, RefHandlePill } from "./AssetRefs";
 import { GeneratedAssetMenu } from "./GeneratedAssetMenu";
+import { HostedErrorText } from "./hostedError";
 import { cardIconButton } from "./iconButton";
 import { PillSelect } from "./PillSelect";
 
@@ -297,7 +298,7 @@ function JobRow({ job, handle }: { job: GenerateJob; handle?: string }) {
               job.status === "error" ? "text-red-600" : "text-muted-foreground"
             )}
           >
-            {job.status === "running" ? "Rendering…" : (job.error ?? "Failed.")}
+            {job.status === "running" ? "Rendering…" : <HostedErrorText error={job.error} />}
           </div>
         </div>
         {job.status !== "running" && (

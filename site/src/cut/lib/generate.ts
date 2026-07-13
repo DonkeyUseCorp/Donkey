@@ -121,6 +121,11 @@ export function signInUrl(): string {
   return `${apex}/sign-in?callbackURL=${encodeURIComponent(href)}`;
 }
 
+/** Shown for any 402 (empty balance) across chat and generation tiles. The
+ * chat error box and the job tiles match this text to swap in a "reload here"
+ * credits link, so keep it and those call sites in sync. */
+export const NO_CREDITS_MESSAGE = "No credits left";
+
 /** The Donkey settings page where credits are bought (cut.* → apex). Linked
  * from any generation error caused by an empty balance. */
 export function creditsUrl(): string {
@@ -160,7 +165,7 @@ async function readError(res: Response, fallback: string): Promise<string> {
   const message = [body?.message, body?.error].find(
     (v): v is string => typeof v === "string" && v.length > 0
   );
-  if (res.status === 402) return message ?? "Not enough Donkey credits — top up to generate.";
+  if (res.status === 402) return NO_CREDITS_MESSAGE;
   // The provider tucks the real reason (a safety block, a rejected prompt) under
   // details.message; the top-level message is only a generic headline. Append it so a
   // failure explains itself instead of stopping at "…generation failed."

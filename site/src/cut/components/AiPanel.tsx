@@ -63,6 +63,7 @@ import { cn } from "@/lib/utils";
 import { cardIconButton } from "@/cut/components/iconButton";
 import { MentionTextarea, RefChips, RefThumb, RefTokenChip } from "./AssetRefs";
 import { ToolOutputAssets } from "./ChatAssets";
+import { HostedErrorText } from "./hostedError";
 
 // Chat attachments are asset refs — anything in the project, the library, or
 // the stock catalog. They arrive by drag (media cards, library clips, stock
@@ -552,7 +553,9 @@ function ChatSession({
         {error && (
           <div className="ai-error mt-2 flex items-start gap-2 rounded-lg bg-red-50 px-2.5 py-2 text-[11.5px] leading-relaxed text-red-700">
             <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-            {error.message}
+            <span>
+              <HostedErrorText error={error.message} />
+            </span>
           </div>
         )}
       </div>
