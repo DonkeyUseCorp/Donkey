@@ -8,6 +8,7 @@ import { composeGenPrompt, foldTextRefs } from "./composeGen";
 import { hostedPost } from "./hosted";
 import { enrichAsset, importFileToProject } from "./media";
 import { refsToInlineImages, visualRefs, type InlineImage } from "./refMedia";
+import { useGenNotify } from "./genNotify";
 import { useImageGen } from "./imageGen";
 import { useEditor } from "./store";
 import { mediaUrl, type MediaAsset } from "./types";
@@ -352,7 +353,7 @@ export const useGenerate = create<GenerateState>((set, get) => {
             throw new Error(body.error ?? "Could not add the image to the project.");
           }
           const asset: MediaAsset = { ...body, url: mediaUrl(projectId, body.fileName) };
-          adopt(projectId, asset);
+          if (adopt(projectId, asset)) useGenNotify.getState().landed("image", asset.id);
           update(job.id, { status: "done", assetId: asset.id });
         } catch (err) {
           fail(job.id, err);
@@ -432,7 +433,10 @@ export const useGenerate = create<GenerateState>((set, get) => {
           if (!asset) throw new Error("Could not import the generated video.");
           asset.name = promptName(prompt);
           asset.origin = "generated"; // lives in the generate panel, not Media
-          if (adopt(projectId, asset)) opts?.onDone?.(asset);
+          if (adopt(projectId, asset)) {
+            useGenNotify.getState().landed("video", asset.id);
+            opts?.onDone?.(asset);
+          }
           update(job.id, { status: "done", assetId: asset.id });
         } catch (err) {
           fail(job.id, err);

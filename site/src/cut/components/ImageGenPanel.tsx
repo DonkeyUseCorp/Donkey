@@ -7,6 +7,7 @@ import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { SectionTitle } from "@/cut/components/SectionTitle";
 import { clearAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
 import { collectRefs, mentionToken, useRefCandidates, useAssetDrop } from "@/cut/lib/assetRef";
+import { genPulseOverlay, useGenPulse } from "@/cut/lib/genNotify";
 import { signInUrl, useGenerate, useSignedIn } from "@/cut/lib/generate";
 import {
   IMAGE_RESOLUTION_LABEL,
@@ -20,8 +21,10 @@ import { useEditor } from "@/cut/lib/store";
 import type { MediaAsset } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
 import { MentionTextarea, RefChips, RefHandlePill } from "./AssetRefs";
+import { cardIconButton } from "./iconButton";
 import { PillSelect } from "./PillSelect";
 import { GeneratedAssetMenu } from "./GeneratedAssetMenu";
+import { HostedErrorText } from "./hostedError";
 
 // The generate-image panel: an always-on column in the Image tab, sitting left
 // of the stock browser. Clicking a stock tile loads its saved prompt here; the
@@ -54,9 +57,8 @@ export function ImageGenPanel({ projectId }: { projectId: string }) {
   const { prompt, aspect, resolution, refs } = useImageGen();
   const signedIn = useSignedIn();
   const candidates = useRefCandidates();
-  const job = useGenerate((s) =>
-    s.jobs.find((j) => j.kind === "image" && j.projectId === projectId)
-  );
+  const allJobs = useGenerate((s) => s.jobs);
+  const jobs = allJobs.filter((j) => j.kind === "image" && j.projectId === projectId);
   // Select the stable `assets` reference and derive here: filtering inside the
   // selector returns a fresh array every store write (including usePlayback's
   // per-frame ticks) and would re-render the panel constantly. Newest first.
@@ -152,14 +154,10 @@ export function ImageGenPanel({ projectId }: { projectId: string }) {
 
         <Button
           className="w-full shrink-0"
-          disabled={!prompt.trim() || signedIn === false || job?.status === "running"}
+          disabled={!prompt.trim() || signedIn === false}
           onClick={go}
         >
-          {job?.status === "running" ? (
-            <Loader2 data-icon="inline-start" className="animate-spin" />
-          ) : (
-            <Sparkles data-icon="inline-start" />
-          )}
+          <Sparkles data-icon="inline-start" />
           Generate image
         </Button>
 
@@ -173,26 +171,38 @@ export function ImageGenPanel({ projectId }: { projectId: string }) {
           </p>
         )}
 
-        {/* A generation in flight (or a failed one): the finished asset drops
-            into the list below, so only surface the transient states here. */}
-        {job && job.status !== "done" && (
-          <div className="flex shrink-0 items-center gap-2">
-            {job.status === "running" && (
-              <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
-            )}
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-[11.5px] font-medium">{job.prompt}</div>
-              <div
-                className={cn(
-                  "text-[10.5px] leading-snug break-words",
-                  job.status === "error" ? "text-red-600" : "text-muted-foreground"
-                )}
-              >
-                {job.status === "running" ? "Generating…" : (job.error ?? "Failed.")}
+        {/* Generations in flight (or failed): a finished asset drops into the
+            list below, so only the transient states row here. Several can run
+            at once — the button stays live while they render. */}
+        {jobs
+          .filter((j) => j.status !== "done")
+          .map((j) => (
+            <div key={j.id} className="group flex shrink-0 items-center gap-2">
+              {j.status === "running" && (
+                <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[11.5px] font-medium">{j.prompt}</div>
+                <div
+                  className={cn(
+                    "text-[10.5px] leading-snug break-words",
+                    j.status === "error" ? "text-red-600" : "text-muted-foreground"
+                  )}
+                >
+                  {j.status === "running" ? "Generating…" : <HostedErrorText error={j.error} />}
+                </div>
               </div>
+              {j.status === "error" && (
+                <button
+                  title="Dismiss"
+                  className={cn(cardIconButton, "opacity-0 group-hover:opacity-100")}
+                  onClick={() => useGenerate.getState().dismiss(j.id)}
+                >
+                  <Trash2 className="size-3.5" />
+                </button>
+              )}
             </div>
-          </div>
-        )}
+          ))}
 
         {generated.length > 0 && (
           <div className="flex shrink-0 flex-col gap-1.5">
@@ -227,6 +237,7 @@ function GeneratedTile({
   handle?: string;
 }) {
   const tileRef = useRef<HTMLDivElement>(null);
+  const pulse = useGenPulse("image", asset.id);
   return (
     <div ref={tileRef} className="group relative overflow-hidden rounded-lg">
       <button
@@ -307,6 +318,7 @@ function GeneratedTile({
           }
         />
       </div>
+      {pulse && <div aria-hidden className={genPulseOverlay} />}
     </div>
   );
 }

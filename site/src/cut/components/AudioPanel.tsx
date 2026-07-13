@@ -42,6 +42,7 @@ import {
   type LibraryAsset,
 } from "@/cut/lib/library";
 import { creditsUrl, signInUrl, useSignedIn } from "@/cut/lib/generate";
+import { genPulseOverlay, useGenNotify } from "@/cut/lib/genNotify";
 import { enrichAsset } from "@/cut/lib/media";
 import { usePreviewAudio } from "@/cut/lib/previewAudio";
 import { useEditor } from "@/cut/lib/store";
@@ -117,7 +118,9 @@ function VoiceGenerator({ projectId }: { projectId: string }) {
   const language = useSpeechLanguage();
   const [script, setScript] = useState("");
   const [direction, setDirection] = useState("");
-  const [busy, setBusy] = useState(false);
+  // How many syntheses are in flight — several can run at once, so the button
+  // stays live and this just drives the status row below it.
+  const [pending, setPending] = useState(0);
   // `credits` marks a failure caused by an empty balance, which renders with a
   // link to buy more.
   const [error, setError] = useState<{ text: string; credits?: boolean } | null>(null);
@@ -136,7 +139,7 @@ function VoiceGenerator({ projectId }: { projectId: string }) {
   const generate = async () => {
     const text = script.trim();
     if (!text) return;
-    setBusy(true);
+    setPending((p) => p + 1);
     setError(null);
     try {
       const playhead = useEditor.getState().currentTime;
@@ -160,7 +163,7 @@ function VoiceGenerator({ projectId }: { projectId: string }) {
     } catch (e) {
       fail(e, "Voice generation failed.");
     } finally {
-      setBusy(false);
+      setPending((p) => p - 1);
     }
   };
 
@@ -245,13 +248,19 @@ function VoiceGenerator({ projectId }: { projectId: string }) {
         />
         <Button
           className="voice-generate w-full"
-          disabled={!script.trim() || busy || signedOut}
+          disabled={!script.trim() || signedOut}
           title={!script.trim() ? "Write a script above to generate" : undefined}
           onClick={() => void generate()}
         >
-          {busy ? <Loader2 className="animate-spin" /> : <AudioLines data-icon="inline-start" />}
+          <AudioLines data-icon="inline-start" />
           Generate audio
         </Button>
+        {pending > 0 && (
+          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+            <Loader2 className="size-3.5 shrink-0 animate-spin" />
+            {pending === 1 ? "Generating…" : `Generating ${pending}…`}
+          </div>
+        )}
       </div>
 
       {signedOut ? (
@@ -402,6 +411,7 @@ export function AudioRow({
   onAdd,
   menu,
   onDragStart,
+  pulse,
 }: {
   name: string;
   duration: number;
@@ -414,6 +424,8 @@ export function AudioRow({
   menu?: ReactNode;
   /** Present when the row can be dragged onto the timeline. */
   onDragStart?: DragEventHandler<HTMLDivElement>;
+  /** A freshly-generated clip the user hasn't seen — pulses blue for a beat. */
+  pulse?: boolean;
 }) {
   return (
     <AudioPillSurface
@@ -468,6 +480,7 @@ export function AudioRow({
           <Plus className="size-3" />
         </button>
       </div>
+      {pulse && <div aria-hidden className={genPulseOverlay} />}
     </AudioPillSurface>
   );
 }
@@ -485,6 +498,7 @@ function ProjectAudio({
 }) {
   const assets = useEditor((s) => s.assets);
   const audio = assets.filter((a) => a.type === "audio" && a.origin === "voiceover");
+  const pulsing = useGenNotify((s) => s.pulsing.audio);
   return (
     <div className="flex flex-col gap-1.5">
       <SectionTitle>Generated audio</SectionTitle>
@@ -502,6 +516,7 @@ function ProjectAudio({
             url={a.url}
             peaks={a.peaks}
             playing={playingUrl === a.url}
+            pulse={pulsing.includes(a.id)}
             onTogglePlay={onTogglePlay}
             onAdd={() => useEditor.getState().addAudioFromAsset(a.id)}
             menu={

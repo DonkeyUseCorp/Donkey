@@ -1,6 +1,7 @@
 "use client";
 
 import { geminiModels } from "@/lib/inference/gemini-models";
+import { useGenNotify } from "./genNotify";
 import { importFileToProject } from "./media";
 import type { MediaAsset } from "./types";
 import {
@@ -417,6 +418,9 @@ export async function speechClipToAsset(
   if (!asset) throw new Error("Could not save the voiceover into the project.");
   asset.name = label;
   asset.origin = "voiceover";
+  // Every committed voiceover funnels through here (the panel, the subtitles
+  // readout, the AI tool), so this is where a finished one gets its badge.
+  useGenNotify.getState().landed("audio", asset.id);
   return asset;
 }
 

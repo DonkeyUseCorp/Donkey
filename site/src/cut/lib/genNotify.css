@@ -1,0 +1,19 @@
+/* Cut generation notifications: a tile whose generation finished while the user
+   was on another tab breathes a soft blue ring until its panel has been open
+   for a moment. Loaded by genNotify.ts, which owns the `cut-gen-pulse` class. */
+@keyframes cut-gen-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.cut-gen-pulse {
+  animation: cut-gen-pulse 1.7s ease-in-out infinite;
+  box-shadow:
+    inset 0 0 0 2px rgba(10, 132, 255, 0.85),
+    inset 0 0 14px rgba(10, 132, 255, 0.3);
+}

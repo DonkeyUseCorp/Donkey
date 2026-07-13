@@ -33,6 +33,7 @@ import {
   type LibraryFolder,
 } from "@/cut/lib/library";
 import type { LibraryTemplate } from "@/cut/lib/types";
+import { isGenTab, useGenNotify, useWatchGenTab } from "@/cut/lib/genNotify";
 import { CAPTION_LIMIT, normalizeTags } from "@/cut/lib/publish";
 import { useEditor } from "@/cut/lib/store";
 import { formatTime } from "@/cut/lib/time";
@@ -80,6 +81,10 @@ export function SidePanel({
   const [tab, setTab] = useLocalPref<Tab>("cut-side-tab", "media", (v) =>
     TABS.some((t) => t.id === v)
   );
+  // Generations that finished while their tab was closed: a blue count rides
+  // the rail icon, and opening the tab lets the new tiles pulse for a beat.
+  const unseen = useGenNotify((s) => s.unseen);
+  useWatchGenTab(tab, projectId);
 
   // Clicking a reference token anywhere jumps here: switch to the tab that
   // owns the asset; the matching card scrolls into view and flashes.
@@ -100,17 +105,24 @@ export function SidePanel({
       {/* Icon rail */}
       <div className="flex w-[68px] shrink-0 flex-col items-center gap-1 border-r border-border py-3">
         {TABS.map(({ id, label, icon: Icon }) => {
+          // The open tab never badges — its completions are already on screen.
+          const unseenCount = isGenTab(id) && id !== tab ? unseen[id].length : 0;
           const tileClass =
             "flex flex-col items-center gap-1 rounded-lg px-2 py-1.5 text-muted-foreground transition-colors hover:text-foreground";
           const inner = (
             <>
               <span
                 className={cn(
-                  "grid size-9 place-items-center rounded-lg transition-colors",
+                  "relative grid size-9 place-items-center rounded-lg transition-colors",
                   tab === id ? "bg-muted text-foreground" : "hover:bg-muted/60"
                 )}
               >
                 <Icon className="size-4.5" />
+                {unseenCount > 0 && (
+                  <span className="absolute -top-1 -right-1 grid h-[15px] min-w-[15px] place-items-center rounded-full bg-[#0a84ff] px-1 text-[9px] leading-none font-semibold text-white tabular-nums ring-2 ring-card">
+                    {unseenCount}
+                  </span>
+                )}
               </span>
               <span className={cn("text-[10px] font-medium", tab === id && "text-foreground")}>
                 {label}

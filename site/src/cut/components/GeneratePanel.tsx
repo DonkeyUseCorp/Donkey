@@ -12,6 +12,7 @@ import {
   useRefCandidates,
   useAssetDrop,
 } from "@/cut/lib/assetRef";
+import { genPulseOverlay, useGenPulse } from "@/cut/lib/genNotify";
 import { signInUrl, useGenerate, useSignedIn, type GenerateJob } from "@/cut/lib/generate";
 import { useLightbox } from "@/cut/lib/lightbox";
 import { refsFromDroppedFiles } from "@/cut/lib/refMedia";
@@ -277,6 +278,7 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
  * stay a compact status row. */
 function JobRow({ job, handle }: { job: GenerateJob; handle?: string }) {
   const asset = useEditor((s) => s.assets.find((a) => a.id === job.assetId));
+  const pulse = useGenPulse("video", job.assetId);
   const tileRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -417,6 +419,7 @@ function JobRow({ job, handle }: { job: GenerateJob; handle?: string }) {
           }
         />
       </div>
+      {pulse && <div aria-hidden className={genPulseOverlay} />}
     </div>
   );
 }
