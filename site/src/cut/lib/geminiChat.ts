@@ -107,6 +107,18 @@ async function execTool(name: string, args: Record<string, unknown>): Promise<un
  * budget) and ride along as image parts instead: the first on the response
  * itself, the rest (contact sheets) as input_image parts in the same turn. */
 function functionResponseParts(name: string, output: unknown, id: string): Item[] {
+  // Audio rides the same way (listen_audio): the sound leaves the JSON and
+  // follows the response as an input_audio part, like an attachment's.
+  if (output && typeof output === "object" && "audio" in output) {
+    const { audio, ...rest } = output as { audio?: unknown };
+    const m = typeof audio === "string" ? /^data:([^;,]+);base64,(.+)$/.exec(audio) : null;
+    if (m) {
+      return [
+        { type: "function_response", id, name, response: rest },
+        { type: "input_audio", dataBase64: m[2], mimeType: m[1] },
+      ];
+    }
+  }
   if (output && typeof output === "object" && ("image" in output || "images" in output)) {
     const { image, images, ...rest } = output as { image?: unknown; images?: unknown };
     const parsed = [
@@ -221,7 +233,16 @@ export function streamGeminiChat({
             emit({ type: "tool-input-available", toolCallId, toolName: name, input: args });
             try {
               const output = await execTool(name, args);
-              emit({ type: "tool-output-available", toolCallId, output: output ?? null });
+              // The transcript doesn't need listen_audio's payload — keep
+              // megabyte data URLs out of thread state; the model still gets
+              // the sound via functionResponseParts below.
+              let uiOutput = output;
+              if (output && typeof output === "object" && "audio" in output) {
+                const { audio: _dropped, ...rest } = output as Record<string, unknown>;
+                void _dropped;
+                uiOutput = rest;
+              }
+              emit({ type: "tool-output-available", toolCallId, output: uiOutput ?? null });
               responseParts.push(...functionResponseParts(name, output, toolCallId));
             } catch (err) {
               const errorText = err instanceof Error ? err.message : String(err);

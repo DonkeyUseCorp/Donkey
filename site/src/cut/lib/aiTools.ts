@@ -4,7 +4,22 @@ import { apiFetch, apiJson } from "./api";
 import { refFromAsset, refFromStockVideo, type AssetRef } from "./assetRef";
 import { chatOwner, tagChatAsset } from "./chatAssets";
 import { useGenerate, type VideoGenOptions } from "./generate";
+import {
+  addTemplateToProject,
+  createLibraryFolder,
+  deleteFromLibrary,
+  deleteLibraryFolder,
+  deleteTemplate,
+  fetchLibrary,
+  importLibraryAsset,
+  importUrlToLibrary,
+  moveLibraryAsset,
+  renameLibraryFolder,
+  saveAssetToLibrary,
+  saveTemplate,
+} from "./library";
 import { enrichAsset, ensurePeaks, importImage, importStockVideo } from "./media";
+import { refToInlineAudio } from "./refMedia";
 import { characterPrompt, stockTitle } from "./stock";
 import { STOCK_IMAGES } from "./stockManifest";
 import { STOCK_VIDEOS } from "./stockVideoManifest";
@@ -27,6 +42,7 @@ import {
   type AudioClip,
   type FontId,
   type MediaAsset,
+  type Selection,
   type TransitionStyle,
   type VideoClip,
 } from "./types";
@@ -198,6 +214,22 @@ export async function runAiTool(
       };
     }
 
+    case "listen_audio": {
+      const asset = requireItem(s.assets, input.asset_id, "project asset");
+      if (asset.type !== "audio")
+        throw new ToolError("listen_audio is for audio assets — watch_video covers video and images.");
+      const inline = await refToInlineAudio(refFromAsset(asset));
+      if (!inline)
+        throw new ToolError("That audio file is too large to listen to inline (≈12MB cap).");
+      // The `audio` data URL leaves the JSON in geminiChat and rides to the
+      // model as an input_audio part, the way attachments do.
+      return {
+        name: asset.name,
+        duration: round2(asset.duration),
+        audio: `data:${inline.mimeType};base64,${inline.data}`,
+      };
+    }
+
     case "seek": {
       if (!isNum(input.t)) throw new ToolError("t (seconds) is required.");
       s.seek(input.t);
@@ -279,36 +311,7 @@ export async function runAiTool(
 
     case "add_clip": {
       const asset = requireItem(s.assets, input.asset_id, "project asset");
-      const start = isNum(input.start) ? Math.max(0, input.start) : undefined;
-      if (asset.type === "audio") {
-        s.addAudioFromAsset(asset.id, start);
-        const sel = useEditor.getState().selection;
-        const c =
-          sel?.kind === "audio"
-            ? useEditor.getState().audioClips.find((x) => x.id === sel.id)
-            : undefined;
-        if (!c) throw new ToolError("Could not create the soundtrack clip.");
-        return { id: c.id, kind: "audio", start: round2(c.start), len: round2(c.out - c.in) };
-      }
-      // Video/image onto track 0: an index inserts like move_clip; a start
-      // (or nothing — appended at the end) free-positions like a drop.
-      let clipId: string | null;
-      if (isNum(input.index)) {
-        clipId = addVideoTrackClip(asset.id, Math.round(input.index)).clipId;
-      } else {
-        s.addClipFromAsset(asset.id, start);
-        const sel = useEditor.getState().selection;
-        clipId = sel?.kind === "clip" ? sel.id : null;
-      }
-      const c = clipId ? useEditor.getState().clips.find((x) => x.id === clipId) : undefined;
-      if (!c) throw new ToolError("Could not create the clip.");
-      return {
-        id: c.id,
-        kind: asset.type,
-        index: baseClips(useEditor.getState().clips).findIndex((x) => x.id === c.id),
-        start: round2(c.start),
-        len: round2(c.out - c.in),
-      };
+      return placeAssetOnTimeline(asset, input);
     }
 
     case "add_overlay_video": {
@@ -733,6 +736,162 @@ export async function runAiTool(
         addedToTimeline: addToTimeline,
         clipId,
       };
+    }
+
+    case "library_list": {
+      const lib = await fetchLibrary();
+      return {
+        folders: lib.folders.map((f) => ({ id: f.id, name: f.name })),
+        assets: lib.assets.map((a) => ({
+          id: a.id,
+          name: a.name,
+          kind: a.type,
+          duration: round2(a.duration),
+          ...(a.folderId ? { folderId: a.folderId } : {}),
+        })),
+        templates: lib.templates.map((t) => ({
+          id: t.id,
+          name: t.name,
+          duration: round2(t.duration),
+          parts: t.media.length + t.layers.length + t.audio.length + t.texts.length,
+        })),
+      };
+    }
+
+    case "library_add": {
+      const projectId = s.projectId;
+      if (!projectId) throw new ToolError("No project open.");
+      const lib = (await fetchLibrary()).assets.find((a) => a.id === String(input.id ?? ""));
+      if (!lib)
+        throw new ToolError(`No library asset with id ${String(input.id)}. Call library_list for ids.`);
+      // Captured before the import: the media files under the chat that asked,
+      // even if the user switches threads while it copies.
+      const chatId = chatOwner();
+      const asset = await importLibraryAsset(projectId, lib);
+      tagChatAsset(asset.id, chatId);
+      const place =
+        input.add_to_timeline === true || isNum(input.start) || isNum(input.index);
+      return {
+        assetId: asset.id,
+        name: asset.name,
+        kind: asset.type,
+        duration: round2(asset.type === "image" ? IMAGE_CLIP_SECONDS : asset.duration),
+        ...(place
+          ? { addedToTimeline: true, clip: placeAssetOnTimeline(asset, input) }
+          : { addedToTimeline: false }),
+      };
+    }
+
+    case "template_add": {
+      const projectId = s.projectId;
+      if (!projectId) throw new ToolError("No project open.");
+      const t = (await fetchLibrary()).templates.find((x) => x.id === String(input.id ?? ""));
+      if (!t)
+        throw new ToolError(`No template with id ${String(input.id)}. Call library_list for ids.`);
+      const chatId = chatOwner();
+      const before = new Set(s.assets.map((a) => a.id));
+      await addTemplateToProject(projectId, t);
+      // Chat-fetched media files under the asking thread, like stock/library
+      // imports; the template's clips reference it, so it survives cleanup.
+      for (const a of useEditor.getState().assets) {
+        if (!before.has(a.id)) tagChatAsset(a.id, chatId);
+      }
+      return {
+        added: t.name,
+        duration: round2(t.duration),
+        parts: t.media.length + t.layers.length + t.audio.length + t.texts.length,
+      };
+    }
+
+    case "save_template": {
+      const projectId = s.projectId;
+      if (!projectId) throw new ToolError("No project open.");
+      const name = String(input.name ?? "").trim();
+      if (!name) throw new ToolError("A template name is required.");
+      const ids = Array.isArray(input.item_ids) ? input.item_ids.map(String) : [];
+      if (ids.length === 0) throw new ToolError("item_ids is required — the timeline items to save.");
+      const sels = ids.map((id): NonNullable<Selection> => {
+        if (s.clips.some((c) => c.id === id)) return { kind: "clip", id };
+        if (s.audioClips.some((c) => c.id === id)) return { kind: "audio", id };
+        if (s.overlays.some((o) => o.id === id)) return { kind: "text", id };
+        if (s.subtitles.cues.some((c) => c.id === id)) return { kind: "cue", id };
+        throw new ToolError(`No timeline item with id ${id}. Call get_state for current ids.`);
+      });
+      // Build through the store's selection-template path — the same shape the
+      // user's Save-selection button produces — leaving the items selected.
+      s.select(sels[0]);
+      for (const sel of sels.slice(1)) s.toggleSelect(sel);
+      const built = useEditor.getState().selectionTemplate();
+      if (!built) throw new ToolError("Could not build a template from those items.");
+      const saved = await saveTemplate(projectId, { ...built, name });
+      return { id: saved.id, name: saved.name, duration: round2(saved.duration) };
+    }
+
+    case "library_organize": {
+      switch (String(input.action ?? "")) {
+        case "create_folder": {
+          const name = String(input.name ?? "").trim();
+          if (!name) throw new ToolError("A folder name is required.");
+          const f = await createLibraryFolder(name);
+          return { folderId: f.id, name: f.name };
+        }
+        case "rename_folder": {
+          const name = String(input.name ?? "").trim();
+          if (!name) throw new ToolError("A folder name is required.");
+          await renameLibraryFolder(String(input.folder_id ?? ""), name);
+          return { renamed: true, name };
+        }
+        case "delete_folder": {
+          await deleteLibraryFolder(String(input.folder_id ?? ""));
+          return { deleted: true, note: "Its assets moved to the Library root." };
+        }
+        case "move_asset": {
+          const folderId =
+            typeof input.folder_id === "string" && input.folder_id ? input.folder_id : null;
+          await moveLibraryAsset(String(input.id ?? ""), folderId);
+          return { moved: true, folderId };
+        }
+        case "delete_asset": {
+          await deleteFromLibrary(String(input.id ?? ""));
+          return { deleted: true };
+        }
+        case "delete_template": {
+          await deleteTemplate(String(input.id ?? ""));
+          return { deleted: true };
+        }
+        case "import_url": {
+          const url = String(input.url ?? "").trim();
+          if (!url) throw new ToolError("A URL is required.");
+          const a = await importUrlToLibrary(url);
+          return { id: a.id, name: a.name, kind: a.type, duration: round2(a.duration) };
+        }
+        default:
+          throw new ToolError(`Unknown action "${String(input.action)}".`);
+      }
+    }
+
+    case "file_asset": {
+      const asset = requireItem(s.assets, input.asset_id, "project asset");
+      if (input.to === "media") {
+        s.updateAsset(asset.id, { origin: undefined, chatId: undefined });
+        return { filed: "media", name: asset.name };
+      }
+      if (input.to === "library") {
+        const projectId = s.projectId;
+        if (!projectId) throw new ToolError("No project open.");
+        const saved = await saveAssetToLibrary(projectId, asset);
+        return { filed: "library", libraryId: saved.id, name: saved.name };
+      }
+      throw new ToolError('`to` must be "media" or "library".');
+    }
+
+    case "delete_asset": {
+      const asset = requireItem(s.assets, input.asset_id, "project asset");
+      const uses =
+        s.clips.filter((c) => c.assetId === asset.id).length +
+        s.audioClips.filter((c) => c.assetId === asset.id).length;
+      s.removeAsset(asset.id);
+      return { removed: asset.name, clipsRemoved: uses };
     }
 
     case "subtitles_generate": {
@@ -1264,6 +1423,41 @@ function wantsTimeline(input: Record<string, unknown>, positionKey: "index" | "s
 }
 
 const NOT_PLACED = { added: false, clipId: null, index: null };
+
+/** Place a project asset on the timeline like a drag: video/image onto track 0
+ * (an `index` insert, a free-positioned `start`, or appended at the end),
+ * audio onto the soundtrack. Returns the created clip's summary. */
+function placeAssetOnTimeline(asset: MediaAsset, input: Record<string, unknown>) {
+  const s = useEditor.getState();
+  const start = isNum(input.start) ? Math.max(0, input.start) : undefined;
+  if (asset.type === "audio") {
+    s.addAudioFromAsset(asset.id, start);
+    const sel = useEditor.getState().selection;
+    const c =
+      sel?.kind === "audio"
+        ? useEditor.getState().audioClips.find((x) => x.id === sel.id)
+        : undefined;
+    if (!c) throw new ToolError("Could not create the soundtrack clip.");
+    return { id: c.id, kind: asset.type, start: round2(c.start), len: round2(c.out - c.in) };
+  }
+  let clipId: string | null;
+  if (isNum(input.index)) {
+    clipId = addVideoTrackClip(asset.id, Math.round(input.index)).clipId;
+  } else {
+    s.addClipFromAsset(asset.id, start);
+    const sel = useEditor.getState().selection;
+    clipId = sel?.kind === "clip" ? sel.id : null;
+  }
+  const c = clipId ? useEditor.getState().clips.find((x) => x.id === clipId) : undefined;
+  if (!c) throw new ToolError("Could not create the clip.");
+  return {
+    id: c.id,
+    kind: asset.type,
+    index: baseClips(useEditor.getState().clips).findIndex((x) => x.id === c.id),
+    start: round2(c.start),
+    len: round2(c.out - c.in),
+  };
+}
 
 const promptedIndex = (input: Record<string, unknown>): number | undefined =>
   isNum(input.index) ? Math.round(input.index) : undefined;

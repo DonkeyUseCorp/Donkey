@@ -68,6 +68,12 @@ export const AI_TOOLS: AiToolDef[] = [
     }),
   },
   {
+    name: "listen_audio",
+    description:
+      "Listen to a project audio asset with your own ears: its actual sound rides back inline (≈12MB cap) so you can answer what it says or how it sounds. Audio attached to the user's message already plays in it — this is for assets from `media`. For a clip's speech as text, subtitles_generate transcribes the cut.",
+    inputSchema: obj({ asset_id: str("Project audio asset id from `media`") }, ["asset_id"]),
+  },
+  {
     name: "seek",
     description: "Move the playhead to a time (seconds, clamped to the cut).",
     inputSchema: obj({ t: num("Timeline time in seconds") }, ["t"]),
@@ -318,6 +324,73 @@ export const AI_TOOLS: AiToolDef[] = [
       add_to_timeline: bool("Place it on video track 0 (default false — it stays on its chat card until the user asks)"),
       start: num("Timeline start s (passing it implies add_to_timeline; default when placed: appended at the end)"),
     }, ["id"]),
+  },
+  {
+    name: "library_list",
+    description:
+      "List the shared Library — reusable media saved across projects: folders, assets (video/audio/image), and templates (saved arrangements of clips, overlays, titles, and captions). Library items live outside the project: library_add imports an asset, template_add re-materializes a template.",
+    inputSchema: obj({}),
+  },
+  {
+    name: "library_add",
+    description:
+      "Copy a Library asset into the project (it appears in `media` and previews as a card in this chat). This is the import step \"library\"-scope attachments need before editor tools can touch them. Pass add_to_timeline:true (or start/index) only when the user asked for it in the cut: video/image land on track 0, audio on the soundtrack.",
+    inputSchema: obj({
+      id: str("Library asset id (from library_list or an attachment's metadata)"),
+      add_to_timeline: bool("Also place it on the timeline (default false — it stays a project asset until the user asks)"),
+      start: num("Timeline start s (implies add_to_timeline)"),
+      index: num("Insert position on video track 0 (video/image; implies add_to_timeline)"),
+    }, ["id"]),
+  },
+  {
+    name: "template_add",
+    description:
+      "Re-materialize a Library template into the project: its media import as assets and its clips, overlays, titles, and captions land editable, exactly as saved (clip layers append to track 0; free-positioned parts line up at the playhead). Call it only when the user asked for the template in the cut.",
+    inputSchema: obj({ id: str("Template id from library_list") }, ["id"]),
+  },
+  {
+    name: "save_template",
+    description:
+      "Save timeline items as a reusable Library template, kept by reference — the source media plus the edit arranging it, re-editable when added back. Pass the ids of the items to include: video clips (any track), soundtrack clips, titles, and subtitle cues.",
+    inputSchema: obj({
+      name: str("Template name"),
+      item_ids: {
+        type: "array",
+        items: { type: "string" },
+        description: "Timeline item ids to include",
+      },
+    }, ["name", "item_ids"]),
+  },
+  {
+    name: "library_organize",
+    description:
+      "Organize the shared Library: create_folder / rename_folder / delete_folder (a deleted folder's assets drop to the root), move_asset files an asset into a folder (omit folder_id for the root), delete_asset / delete_template remove an item, import_url downloads a media URL into the Library. Deletes are permanent — projects keep their own copies, but delete only what the user explicitly asked to remove.",
+    inputSchema: obj({
+      action: {
+        type: "string",
+        enum: ["create_folder", "rename_folder", "delete_folder", "move_asset", "delete_asset", "delete_template", "import_url"],
+        description: "The organize operation",
+      },
+      name: str("Folder name (create_folder, rename_folder)"),
+      folder_id: str("Folder id (rename_folder, delete_folder, move_asset destination — omit for root)"),
+      id: str("Library asset or template id (move_asset, delete_asset, delete_template)"),
+      url: str("Media URL to import (import_url)"),
+    }, ["action"]),
+  },
+  {
+    name: "file_asset",
+    description:
+      "File a project asset where the user keeps things: to \"media\" moves created media (generated, chat, voiceover…) into the Media panel by clearing its origin tag; to \"library\" copies any project asset into the shared Library for reuse. The same moves as each card's \"…\" menu — make them when the user asks.",
+    inputSchema: obj({
+      asset_id: str("Project asset id from `media`"),
+      to: { type: "string", enum: ["media", "library"], description: "Destination" },
+    }, ["asset_id", "to"]),
+  },
+  {
+    name: "delete_asset",
+    description:
+      "Remove a project asset and every timeline clip that uses it — the Media panel's trash. Removed media does not come back with undo, so call it only when the user explicitly asked to remove that media, and report how many clips went with it.",
+    inputSchema: obj({ asset_id: str("Project asset id from `media`") }, ["asset_id"]),
   },
   {
     name: "subtitles_generate",
@@ -603,6 +676,16 @@ Generation:
 References: users attach images/clips to their message or the generate panels; project asset ids (see \`media\` in editor_state, including attachments — OS drops become project assets) pass through reference_asset_ids / reference_asset_id. A model recomposes the prompt around them: for video at most one image survives as the literal opening frame; for images any number can be drawn from. When the user says "use this clip/image", pass the reference — don't just describe it in the prompt.
 If generation fails with a sign-in or credits message, relay that plainly — it needs the user signed in to Donkey with credits; it is not a local fallback. Write vivid, specific prompts (subject, style, lighting, motion); the user's request is usually shorthand, so flesh it out.`,
 
+  "media-and-library": `# Media, Library & organizing
+Project media (\`media\` in editor_state) is every file in the open project. The Media panel shows the user's own imports — assets with no origin tag; created media (origin generated, voiceover, stock, chat, freeze, recording) lives where it was made until filed away.
+- add_clip / add_overlay_video place a project asset on the timeline; listen_audio plays an audio asset to you; watch_video is the visual sibling.
+- file_asset moves a created asset into Media (to:"media", clears its origin) or copies any asset into the Library (to:"library").
+- delete_asset removes an asset from the project plus its timeline clips; the media does not come back with undo, so only on an explicit ask, and say what went with it.
+The Library is shared across every project: folders, reusable assets, and templates — a template is a saved arrangement (clips, overlays, titles, captions, by reference) that comes back editable.
+- library_list browses it; library_add copies an asset into the project (the import step "library"-scope attachments need); template_add re-materializes a template; save_template saves timeline items as one.
+- library_organize handles folders (create/rename/delete), filing (move_asset), deletes (permanent — explicit ask only), and import_url for a media URL.
+Attachments: media files dropped on the chat import into project media by themselves; library attachments wait for library_add.`,
+
   "publish-and-export": `# Publish & export
 Publish tab fields (set_publish): caption (TikTok limit 4,000 chars INCLUDING tags/emoji; hook in the first line), tags (3–5 focused tags recommended; stored space-separated, rendered as #tags), soundTitle (TikTok lets you rename the sound once after posting), handle (shown as @handle in platform previews).
 Export (open_export): presets Original (matches the sharpest source clip along the aspect, 1080p floor, 4K cap), Best 1080p CRF19, Quick share 1080p, Draft 720p — H.264 + AAC, 30fps, rendered at the project aspect (9:16 or 16:9), titles and subtitles burned in. Files land in the project's exports/ folder and appear in the Media tab's Exports section, where each can be previewed plain or in TikTok/Instagram/YouTube chrome with the publish metadata rendered in place, revealed in Finder, or deleted.`,
@@ -617,13 +700,13 @@ Rules:
 - Use ids exactly as given in the state; if unsure or state may have changed, call get_state first.
 - When the user says "this" (this clip, this text), they mean the current selection.
 - Keep replies short and concrete — one or two sentences about what you did, in that warm, lightly funny voice. You have no name and never name the app; greet with a short "How can I help?" / "What would you like to do?". No headings, no fluff.
-- Edits are undoable (unlimited undo), so prefer doing over asking; only ask when the request is genuinely ambiguous. Generation is different: undo removes the clip but the credits stay spent, so be certain the user asked for the media before calling a generation tool.
+- Edits are undoable (unlimited undo), so prefer doing over asking; only ask when the request is genuinely ambiguous. Generation is different: undo removes the clip but the credits stay spent, so be certain the user asked for the media before calling a generation tool. Removing media is different too — delete_asset and library_organize deletes don't come back with undo, so they take an explicit ask naming the media.
 - Times are seconds. The frame is the project's aspect: 1080×1920 (9:16) or 1920×1080 (16:9) — see project.aspect in editor_state.
 - Read list_skills / read_skill before working in an area you're unsure about — they document every setting.
 - Don't transcribe a video with no speech. If the user wants captions on silent footage, use subtitles_from_visuals (it narrates what's on screen). Never invent a spoken transcript.
 - Voiceovers duck other audio by default so they stay audible. Steer a voiceover's delivery with \`direction\` and inline tags like [whispers] rather than rewriting the script.
 - generate_image / generate_video / generate_character_video / voiceover_generate / read_subtitles_aloud make media through hosted models (spends the user's Donkey credits, needs sign-in); call them when the user asked for the media itself — a request for the prompt or script gets text in chat. Bundled stock media (stock_search / stock_add) is free — use it when it fits. Media the user attached is in \`media\`; pass those asset ids as generation references when they say "use this", and place project assets in the cut with add_clip when they ask for them there ("make a movie from these photos"). Generated media previews on a chat card the user can expand, drag in, or file away; add it to the timeline (add_to_timeline:true or an index) only when they asked for it in the cut. Write a rich, specific prompt from their shorthand. Video renders take a minute or two.
-- You can see and hear: audio the user attaches to their message plays right in it — answer "what does this say" from what you hear, no tool call. For project footage, watch_video samples a source's frames into timestamped contact sheets (scene changes included) — watch before cutting footage you haven't seen; detect_silence finds dead air; capture_frame shows the one rendered frame at the playhead. The watching-and-cutting skill has the flow.`;
+- You can see and hear: audio the user attaches to their message plays right in it — answer "what does this say" from what you hear, no tool call. For project footage, watch_video samples a source's frames into timestamped contact sheets (scene changes included) — watch before cutting footage you haven't seen; listen_audio plays a project audio asset; detect_silence finds dead air; capture_frame shows the one rendered frame at the playhead. The watching-and-cutting skill has the flow.`;
 }
 
 export const AI_SKILL_INDEX = Object.keys(AI_SKILLS);

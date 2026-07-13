@@ -75,7 +75,7 @@ const MAX_AUDIO_BYTES = 12 * 1024 * 1024;
 
 /** The audio bytes for `ref`, base64 with a real audio mime, or null when the
  * file is too large to ride inline. */
-async function refToInlineAudio(ref: AssetRef): Promise<InlineImage | null> {
+export async function refToInlineAudio(ref: AssetRef): Promise<InlineImage | null> {
   const res = await fetch(ref.url);
   if (!res.ok) throw new Error(`Could not load “${ref.name}”.`);
   const blob = await res.blob();
