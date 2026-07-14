@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, FileText, X } from "lucide-react";
 import {
   highlightMentions,
@@ -358,6 +358,7 @@ export function MentionTextarea({
   placeholder,
   className,
   rows,
+  autoGrow = false,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -369,6 +370,10 @@ export function MentionTextarea({
   placeholder?: string;
   className?: string;
   rows?: number;
+  /** Grow the textarea to fit its content as the user types (capped by the
+      caller's `max-h-*`). Leave off when the caller wants a fixed or
+      manually resizable box. */
+  autoGrow?: boolean;
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
@@ -407,6 +412,16 @@ export function MentionTextarea({
       setCaret(newCaret);
     });
   };
+
+  // Auto-grow: reset to natural height, then match the content. The caller's
+  // `max-h-*` caps it and the textarea scrolls internally past that point.
+  useLayoutEffect(() => {
+    if (!autoGrow) return;
+    const el = taRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [autoGrow, value]);
 
   return (
     <div className="relative min-w-0">

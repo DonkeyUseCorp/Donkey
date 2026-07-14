@@ -582,8 +582,9 @@ function ChatSession({
             className="px-2.5 pt-2.5"
           />
           <MentionTextarea
-            className="ai-input max-h-40 min-h-[38px] w-full resize-none bg-transparent px-3 pt-2 text-[12.5px] leading-relaxed outline-none placeholder:text-muted-foreground/70"
+            className="ai-input max-h-40 min-h-[38px] w-full resize-none overflow-y-auto bg-transparent px-3 pt-2 text-[12.5px] leading-relaxed outline-none placeholder:text-muted-foreground/70"
             rows={2}
+            autoGrow
             placeholder="Ask about your video, or tell me what to change… @ references media"
             value={input}
             onChange={setInput}
