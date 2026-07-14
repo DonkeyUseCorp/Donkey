@@ -14,6 +14,7 @@ import {
   FolderPlus,
   History,
   Maximize2,
+  Mic,
   Plus,
   Sparkles,
   Square,
@@ -62,8 +63,10 @@ import { useEditor } from "@/cut/lib/store";
 import { cn } from "@/lib/utils";
 import { cardIconButton } from "@/cut/components/iconButton";
 import { MentionTextarea, RefChips, RefThumb, RefTokenChip } from "./AssetRefs";
+import { DictationBody } from "./MicDictation";
 import { ToolOutputAssets } from "./ChatAssets";
 import { HostedErrorText } from "./hostedError";
+import { useMicTranscription } from "@/cut/lib/micTranscribe";
 
 // Chat attachments are asset refs — anything in the project, the library, or
 // the stock catalog. They arrive by drag (media cards, library clips, stock
@@ -337,6 +340,11 @@ function ChatSession({
   onModelChange: (id: string) => void;
 }) {
   const [input, setInput] = useState("");
+  // Live dictation → drops the finished transcript into the composer, appended
+  // after whatever the user had already typed.
+  const mic = useMicTranscription((text) =>
+    setInput((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text))
+  );
   const [attachments, setAttachments] = useState<AssetRef[]>([]);
   const candidates = useRefCandidates();
   // Any OS file drag over the window hints the composer as a drop target;
@@ -576,43 +584,63 @@ function ChatSession({
               Drop to attach
             </div>
           )}
-          <RefChips
-            refs={attachments}
-            onRemove={(ref) => setAttachments((p) => p.filter((x) => !sameRef(x, ref)))}
-            className="px-2.5 pt-2.5"
-          />
-          <MentionTextarea
-            className="ai-input max-h-40 min-h-[38px] w-full resize-none overflow-y-auto bg-transparent px-3 pt-2 text-[12.5px] leading-relaxed outline-none placeholder:text-muted-foreground/70"
-            rows={2}
-            autoGrow
-            placeholder="Ask about your video, or tell me what to change… @ references media"
-            value={input}
-            onChange={setInput}
-            candidates={candidates}
-            submitKey="enter"
-            menuSide="top"
-            onSubmit={() => send(input)}
-          />
-          <div className="flex items-center gap-1 px-1.5 pb-1.5">
-            <ModelSelector info={info} model={model} onSelect={onModelChange} />
-            <div className="flex-1" />
-            {busy ? (
-              <Button variant="outline" size="sm" className="ai-stop" title="Stop" onClick={() => void stop()}>
-                <Square className="size-3" />
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                className="ai-send"
-                title="Send (Enter)"
-                disabled={(!input.trim() && attachments.length === 0) || !currentAvailable}
-                onClick={() => send(input)}
-              >
-                <ArrowUp className="size-3.5" />
-              </Button>
-            )}
-          </div>
+          {mic.state === "idle" ? (
+            <>
+              <RefChips
+                refs={attachments}
+                onRemove={(ref) => setAttachments((p) => p.filter((x) => !sameRef(x, ref)))}
+                className="px-2.5 pt-2.5"
+              />
+              <MentionTextarea
+                className="ai-input max-h-40 min-h-[38px] w-full resize-none overflow-y-auto bg-transparent px-3 pt-2 text-[12.5px] leading-relaxed outline-none placeholder:text-muted-foreground/70"
+                rows={2}
+                autoGrow
+                placeholder="Ask about your video, or tell me what to change… @ references media"
+                value={input}
+                onChange={setInput}
+                candidates={candidates}
+                submitKey="enter"
+                menuSide="top"
+                onSubmit={() => send(input)}
+              />
+              <div className="flex items-center gap-1 px-1.5 pb-1.5">
+                <ModelSelector info={info} model={model} onSelect={onModelChange} />
+                <div className="flex-1" />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="ai-mic text-muted-foreground"
+                  title="Dictate"
+                  disabled={busy}
+                  onClick={() => void mic.start()}
+                >
+                  <Mic className="size-3.5" />
+                </Button>
+                {busy ? (
+                  <Button variant="outline" size="sm" className="ai-stop" title="Stop" onClick={() => void stop()}>
+                    <Square className="size-3" />
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    className="ai-send"
+                    title="Send (Enter)"
+                    disabled={(!input.trim() && attachments.length === 0) || !currentAvailable}
+                    onClick={() => send(input)}
+                  >
+                    <ArrowUp className="size-3.5" />
+                  </Button>
+                )}
+              </div>
+            </>
+          ) : (
+            <DictationBody text={input} mic={mic} />
+          )}
         </div>
+        {mic.error && (
+          <p className="mt-1.5 px-1 text-[10.5px] leading-relaxed text-amber-700">{mic.error}</p>
+        )}
         {info && !currentAvailable && (
           provider(model) === "gemini" ? (
             <p className="ai-provider-note mt-1.5 px-1 text-[10.5px] leading-relaxed text-muted-foreground">

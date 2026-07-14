@@ -28,6 +28,7 @@ import {
 } from "@/cut/lib/videoGen";
 import { cn } from "@/lib/utils";
 import { MentionTextarea, RefChips, RefHandlePill } from "./AssetRefs";
+import { DictationControl } from "./MicDictation";
 import { GeneratedAssetMenu } from "./GeneratedAssetMenu";
 import { HostedErrorText } from "./hostedError";
 import { cardIconButton } from "./iconButton";
@@ -135,7 +136,7 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
             also highlights this box while a drag hovers the panel. */}
         <div
           className={cn(
-            "flex shrink-0 flex-col rounded-lg border border-input focus-within:border-ring",
+            "relative flex shrink-0 flex-col rounded-lg border border-input focus-within:border-ring",
             dropActive && "border-[#0a84ff] ring-2 ring-[#0a84ff]/30 ring-inset"
           )}
         >
@@ -166,7 +167,7 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
             peekSide="bottom"
           />
           <MentionTextarea
-            className="gen-prompt min-h-[88px] w-full resize-y bg-transparent px-2.5 py-2 text-[12.5px] leading-relaxed outline-none"
+            className="gen-prompt min-h-[88px] w-full resize-y bg-transparent px-2.5 py-2 pr-9 text-[12.5px] leading-relaxed outline-none"
             placeholder={
               character
                 ? "What should they say?"
@@ -178,6 +179,11 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
             submitKey="mod-enter"
             menuSide="bottom"
             onSubmit={go}
+          />
+          <DictationControl
+            text={prompt}
+            onResult={(v) => useVideoGen.getState().setPrompt(v)}
+            buttonClassName="absolute right-2 bottom-2 bg-background/70 backdrop-blur-sm"
           />
         </div>
 

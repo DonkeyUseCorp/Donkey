@@ -390,8 +390,19 @@ function DevicePill({
 // RMS below this reads as silence and draws no bar.
 const SILENCE = 0.015;
 
-/** Scrolling level meter fed by the stream's audio track; color follows CSS `color`. */
-function LiveWaveform({ stream, className }: { stream: MediaStream; className?: string }) {
+/** Scrolling level meter fed by the stream's audio track; color follows CSS `color`.
+ * `sampleMs` sets how much time each bar spans — larger values scroll slower and
+ * cover a longer window (the loudest moment in the window wins). Omitted, it
+ * advances one bar per animation frame (the record dialog's original feel). */
+export function LiveWaveform({
+  stream,
+  className,
+  sampleMs,
+}: {
+  stream: MediaStream;
+  className?: string;
+  sampleMs?: number;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Bar color follows CSS `color`. Resolve it only when the className changes
   // (i.e. when `recording` toggles) instead of every animation frame.
@@ -412,8 +423,10 @@ function LiveWaveform({ stream, className }: { stream: MediaStream; className?: 
     const samples = new Uint8Array(analyser.fftSize);
     const levels: number[] = [];
     let raf = 0;
+    let lastPush = 0;
+    let peak = 0;
 
-    const draw = () => {
+    const draw = (ts: number) => {
       raf = requestAnimationFrame(draw);
       analyser.getByteTimeDomainData(samples);
       let sum = 0;
@@ -431,11 +444,6 @@ function LiveWaveform({ stream, className }: { stream: MediaStream; className?: 
       const barWidth = 3 * dpr;
       const step = barWidth + 2 * dpr;
       const maxBars = Math.max(1, Math.floor(width / step));
-      levels.push(rms);
-      // Pad the history so the meter spans the full frame from the first frame
-      // instead of growing in from the right; padding reads as idle dots.
-      while (levels.length < maxBars) levels.unshift(0);
-      if (levels.length > maxBars) levels.splice(0, levels.length - maxBars);
 
       const g = canvas.getContext("2d");
       if (!g) return;
@@ -444,26 +452,50 @@ function LiveWaveform({ stream, className }: { stream: MediaStream; className?: 
       // Idle input draws a row of small centered dots so the meter reads as a
       // ready track spanning the whole width; sound grows each into a bar.
       const idle = barWidth;
-      for (let i = 0; i < levels.length; i++) {
-        const x = width - (levels.length - i) * step;
-        const h =
-          levels[i] >= SILENCE
-            ? Math.max(idle, Math.min(1, levels[i] * 3) * height)
-            : idle;
+      const bar = (x: number, level: number) => {
+        if (x + barWidth < 0 || x > width) return;
+        const h = level >= SILENCE ? Math.max(idle, Math.min(1, level * 3) * height) : idle;
         const r = Math.min(barWidth / 2, h / 2);
         g.beginPath();
         g.roundRect(x, (height - h) / 2, barWidth, h, r);
         g.fill();
+      };
+
+      if (!sampleMs) {
+        // Record dialog: one bar per frame, right-aligned (its original feel).
+        levels.push(rms);
+        while (levels.length < maxBars) levels.unshift(0);
+        if (levels.length > maxBars) levels.splice(0, levels.length - maxBars);
+        for (let i = 0; i < levels.length; i++) bar(width - (levels.length - i) * step, levels[i]);
+        return;
       }
+
+      // Commit one bar per `sampleMs` (that's the time scale) but slide the whole
+      // strip left every frame by the fraction of the window elapsed, so motion
+      // is continuous instead of ticking a full bar at once. Committed bars hold
+      // the window's peak; a forming bar at the right edge tracks the live level.
+      if (lastPush === 0) lastPush = ts;
+      peak = Math.max(peak, rms);
+      if (ts - lastPush >= sampleMs) {
+        levels.push(peak);
+        peak = 0;
+        lastPush = ts;
+      }
+      while (levels.length < maxBars + 1) levels.unshift(0);
+      if (levels.length > maxBars + 2) levels.splice(0, levels.length - (maxBars + 2));
+      const offset = Math.min(1, (ts - lastPush) / sampleMs) * step;
+      const n = levels.length;
+      for (let i = 0; i < n; i++) bar(width - step - (n - i) * step - offset, levels[i]);
+      bar(width - step - offset, rms);
     };
-    draw();
+    raf = requestAnimationFrame(draw);
 
     return () => {
       cancelAnimationFrame(raf);
       source.disconnect();
       void audioCtx.close().catch(() => {});
     };
-  }, [stream]);
+  }, [stream, sampleMs]);
 
   return <canvas ref={canvasRef} className={className} />;
 }

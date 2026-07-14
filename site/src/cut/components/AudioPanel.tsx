@@ -20,6 +20,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DictationControl } from "@/cut/components/MicDictation";
 import { SectionTitle } from "@/cut/components/SectionTitle";
 import {
   DropdownMenu,
@@ -240,12 +241,19 @@ function VoiceGenerator({ projectId }: { projectId: string }) {
           and why it's disabled until there's a script — is obvious. */}
       <div className="flex flex-col gap-2">
         <SectionTitle>Script</SectionTitle>
-        <textarea
-          className="voice-script min-h-[88px] w-full resize-y rounded-lg border border-input bg-transparent px-2.5 py-2 text-[12.5px] leading-relaxed outline-none focus:border-ring"
-          placeholder="What should the voice say?"
-          value={script}
-          onChange={(e) => setScript(e.target.value)}
-        />
+        <div className="relative rounded-lg border border-input focus-within:border-ring">
+          <textarea
+            className="voice-script min-h-[88px] w-full resize-y rounded-lg bg-transparent px-2.5 py-2 pr-9 text-[12.5px] leading-relaxed outline-none"
+            placeholder="What should the voice say?"
+            value={script}
+            onChange={(e) => setScript(e.target.value)}
+          />
+          <DictationControl
+            text={script}
+            onResult={setScript}
+            buttonClassName="absolute right-1.5 bottom-2 bg-background/70 backdrop-blur-sm"
+          />
+        </div>
         <Button
           className="voice-generate w-full"
           disabled={!script.trim() || signedOut}
@@ -450,7 +458,12 @@ export function AudioRow({
       onDragEnd={onDragStart ? clearAssetDrag : undefined}
       title={onDragStart ? "Drag onto the timeline, or click + to add" : undefined}
     >
-      <span className="pointer-events-none absolute top-[3px] right-14 left-8 truncate text-[9.5px] font-medium text-white/90 [text-shadow:0_1px_2px_rgba(0,0,0,0.35)]">
+      {/* Scrim so the name reads over the white waveform, not just the text-shadow. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 h-5 rounded-t-[7px] bg-gradient-to-b from-black/45 via-black/25 to-transparent"
+      />
+      <span className="pointer-events-none absolute top-[3px] right-14 left-8 truncate text-[9.5px] font-medium text-white [text-shadow:0_1px_2px_rgba(0,0,0,0.45)]">
         {name}
       </span>
       <button
@@ -465,10 +478,12 @@ export function AudioRow({
       >
         {playing ? <Pause className="size-3" /> : <Play className="size-3" />}
       </button>
-      <span className="pointer-events-none absolute right-1.5 bottom-1 rounded-[5px] bg-black/40 px-1 py-px font-mono text-[9px] text-white tabular-nums">
+      {/* Steps aside when the hover controls take the right edge — the pill is
+          too short to stack both without them colliding. */}
+      <span className="pointer-events-none absolute right-1.5 bottom-1 rounded-[5px] bg-black/40 px-1 py-px font-mono text-[9px] text-white tabular-nums transition-opacity group-hover:opacity-0 has-data-popup-open:opacity-0">
         {formatTime(duration)}
       </span>
-      <div className="absolute top-1 right-1 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 has-data-popup-open:opacity-100">
+      <div className="absolute top-1/2 right-1.5 flex -translate-y-1/2 items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100 has-data-popup-open:opacity-100">
         {menu}
         <button
           type="button"
@@ -484,6 +499,10 @@ export function AudioRow({
     </AudioPillSurface>
   );
 }
+
+/** Voiceovers are minted as `AI voice — <lead>`; under the "Generated audio"
+ * heading the prefix is redundant, so show just the spoken lead here. */
+const voiceLabel = (name: string) => name.replace(/^AI voice\s*—\s*/, "");
 
 function ProjectAudio({
   projectId,
@@ -511,7 +530,7 @@ function ProjectAudio({
         {audio.map((a) => (
           <AudioRow
             key={a.id}
-            name={a.name}
+            name={voiceLabel(a.name)}
             duration={a.duration}
             url={a.url}
             peaks={a.peaks}

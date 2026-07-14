@@ -21,6 +21,7 @@ import { useEditor } from "@/cut/lib/store";
 import type { MediaAsset } from "@/cut/lib/types";
 import { cn } from "@/lib/utils";
 import { MentionTextarea, RefChips, RefHandlePill } from "./AssetRefs";
+import { DictationControl } from "./MicDictation";
 import { cardIconButton } from "./iconButton";
 import { PillSelect } from "./PillSelect";
 import { GeneratedAssetMenu } from "./GeneratedAssetMenu";
@@ -103,7 +104,7 @@ export function ImageGenPanel({ projectId }: { projectId: string }) {
             the input box, above the prompt (Claude-style). */}
         <div
           className={cn(
-            "flex shrink-0 flex-col rounded-lg border border-input focus-within:border-ring",
+            "relative flex shrink-0 flex-col rounded-lg border border-input focus-within:border-ring",
             dropActive && "border-[#0a84ff] ring-2 ring-[#0a84ff]/30 ring-inset"
           )}
         >
@@ -114,7 +115,7 @@ export function ImageGenPanel({ projectId }: { projectId: string }) {
             peekSide="bottom"
           />
           <MentionTextarea
-            className="min-h-[100px] w-full resize-y bg-transparent px-2.5 py-2 text-[12.5px] leading-relaxed outline-none"
+            className="min-h-[100px] w-full resize-y bg-transparent px-2.5 py-2 pr-9 text-[12.5px] leading-relaxed outline-none"
             placeholder="A neon-lit street market at night, cinematic… Drop an image in or type @ to reference one."
             value={prompt}
             onChange={(v) => useImageGen.getState().setPrompt(v)}
@@ -122,6 +123,11 @@ export function ImageGenPanel({ projectId }: { projectId: string }) {
             submitKey="mod-enter"
             menuSide="bottom"
             onSubmit={go}
+          />
+          <DictationControl
+            text={prompt}
+            onResult={(v) => useImageGen.getState().setPrompt(v)}
+            buttonClassName="absolute right-2 bottom-2 bg-background/70 backdrop-blur-sm"
           />
         </div>
 
