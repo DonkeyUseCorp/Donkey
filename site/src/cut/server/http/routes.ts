@@ -2,6 +2,7 @@ import { aiApi } from "./ai";
 import { engineApi } from "./engine";
 import { exportApi } from "./export";
 import { libraryApi } from "./library";
+import { micApi } from "./mic";
 import { projectsApi } from "./projects";
 
 type TableHandler = (req: Request, params: Record<string, string>) => Response | Promise<Response>;
@@ -65,6 +66,12 @@ export const CUT_ROUTES: CutRoute[] = [
   { method: "GET", path: "/api/cut/export/:jobId", handler: (req, p) => exportApi.status(req, { jobId: p.jobId }) },
   { method: "DELETE", path: "/api/cut/export/:jobId", handler: (req, p) => exportApi.cancel(req, { jobId: p.jobId }) },
   { method: "GET", path: "/api/cut/export/:jobId/file", handler: (req, p) => exportApi.file(req, { jobId: p.jobId }) },
+
+  { method: "POST", path: "/api/cut/mic/start", handler: (req) => micApi.start(req) },
+  { method: "POST", path: "/api/cut/mic/:id/feed", handler: (req, p) => micApi.feed(req, { id: p.id }) },
+  { method: "GET", path: "/api/cut/mic/:id", handler: (req, p) => micApi.poll(req, { id: p.id }) },
+  { method: "POST", path: "/api/cut/mic/:id/stop", handler: (req, p) => micApi.stop(req, { id: p.id }) },
+  { method: "POST", path: "/api/cut/mic/:id/cancel", handler: (req, p) => micApi.cancel(req, { id: p.id }) },
 
   { method: "POST", path: "/api/cut/ai/chat", handler: (req) => aiApi.chat(req) },
   { method: "POST", path: "/api/cut/ai/captions", handler: (req) => aiApi.captions(req) },

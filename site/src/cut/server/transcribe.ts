@@ -86,7 +86,7 @@ function run(cmd: string, args: string[], notFound?: string, timeoutMs = 600_000
  * machine exercises the exact prod lookup; the plain dev server compiles the
  * source on first use into ~/.cache/cut. Nothing ever leaves the machine.
  */
-async function ensureStt(): Promise<string> {
+export async function ensureStt(): Promise<string> {
   const prebuilt = await findOnPath("cut-stt");
   if (prebuilt) return prebuilt;
   if (process.env.DONKEY_CUT_ENGINE) {
