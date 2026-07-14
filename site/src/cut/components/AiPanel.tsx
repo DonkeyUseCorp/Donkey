@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import Markdown from "react-markdown";
 import { baseMarkdownComponents } from "./markdownComponents";
+import { SceneCard } from "./SceneCard";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -553,6 +554,7 @@ function ChatSession({
         {messages.map((m) => (
           <MessageView key={m.id} message={m} />
         ))}
+        <SceneCard />
         {busy && (
           <div className="ai-busy mt-1 flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
             <CircleDashed className="size-3 animate-spin" /> Working…
@@ -592,8 +594,8 @@ function ChatSession({
                 className="px-2.5 pt-2.5"
               />
               <MentionTextarea
-                className="ai-input max-h-40 min-h-[38px] w-full resize-none overflow-y-auto bg-transparent px-3 pt-2 text-[12.5px] leading-relaxed outline-none placeholder:text-muted-foreground/70"
-                rows={2}
+                className="ai-input max-h-56 w-full resize-none overflow-y-auto bg-transparent px-3 pt-2 text-[12.5px] leading-relaxed outline-none placeholder:text-muted-foreground/70"
+                rows={5}
                 autoGrow
                 placeholder="Ask about your video, or tell me what to change… @ references media"
                 value={input}
