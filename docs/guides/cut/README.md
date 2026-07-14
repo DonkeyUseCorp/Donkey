@@ -51,7 +51,7 @@ Missing tools disable the matching feature; they never affect the rest of the si
 | Feature | Needs |
 | --- | --- |
 | Encode, probe, thumbnails | the app's bundled `ffmpeg`/`ffprobe` |
-| Transcription / subtitles | prebuilt `cut-stt` shipped beside the engine binary (the plain dev server falls back to compiling it) |
+| Transcription, subtitles, and voice dictation in prompt inputs (assistant, image/video/audio generation) | prebuilt `cut-stt` shipped beside the engine binary (the plain dev server falls back to compiling it); dictation streams live mic audio through its `--live` mode |
 | AI assistant | the user's own `claude` and `codex` CLI logins; its Gemini models use a Donkey sign-in and credits instead |
 | AI generation (image / video / voiceover) | a Donkey sign-in and credits |
 | Projects, library, exports | writable local disk (Application Support when run as the engine) |
