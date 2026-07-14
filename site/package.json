@@ -16,7 +16,9 @@
     "prisma:prod": "dotenv -e .env -- prisma db push",
     "engine:dev": "bun run src/cut/engine/main.ts",
     "engine:build": "bash scripts/build-cut-engine.sh",
-    "eval:cut-chat": "bun run scripts/eval-cut-chat.ts"
+    "eval:cut-chat": "bun run scripts/eval-cut-chat.ts",
+    "test:genvideo": "bun run scripts/genvideo-selftest.ts",
+    "eval:genvideo": "bun run scripts/genvideo-eval.ts"
   },
   "dependencies": {
     "@ai-sdk/react": "^4.0.15",
