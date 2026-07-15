@@ -23,6 +23,9 @@ export interface MicJob {
   /** When PCM last arrived — the liveness signal that separates a live
    * dictation (recent audio) from a refresh orphan (silence). */
   lastFeedAt: number;
+  /** Set when stopMic ends the input: the session is flushing its final text,
+   * so silence is expected — the reclaimer must not read it as staleness. */
+  finalizeAt?: number;
 }
 
 // A live dictation feeds continuously; no audio for this long means the tab that
@@ -33,6 +36,9 @@ const IDLE_MS = 15000;
 // ~250ms) — a new start must never kill it mid-speech. Anything staler is an
 // orphan a new start may reclaim without waiting out the idle reaper.
 const STALE_MS = 1500;
+// A confirmed session flushing its final text feeds no PCM by design; stopMic
+// waits up to 8s for the flush, so only past that is the process fair game.
+const FINALIZE_MS = 9000;
 const { jobs, retire } = createJobRegistry<MicJob>("__cutMicJobs");
 
 function clearIdle(job: MicJob): void {
@@ -61,6 +67,17 @@ function reclaimStale(): { liveRemains: boolean } {
   let liveRemains = false;
   for (const job of jobs.values()) {
     if (job.status !== "running") continue;
+    if (job.finalizeAt) {
+      // Confirmed and flushing its final text: silence is expected, not
+      // staleness, and it doesn't block a new dictation from starting. Only a
+      // flush hung past stopMic's own wait gets reaped.
+      if (Date.now() - job.finalizeAt > FINALIZE_MS) {
+        clearIdle(job);
+        job.status = "canceled";
+        job.proc.kill("SIGKILL");
+      }
+      continue;
+    }
     if (Date.now() - job.lastFeedAt > STALE_MS) {
       clearIdle(job);
       job.status = "canceled";
@@ -160,7 +177,10 @@ export async function stopMic(id: string): Promise<string | null> {
   const job = jobs.get(id);
   if (!job) return null;
   clearIdle(job);
-  if (job.status === "running") job.proc.stdin?.end();
+  if (job.status === "running") {
+    job.finalizeAt = Date.now();
+    job.proc.stdin?.end();
+  }
   await withTimeout(job.finished, 8000);
   return job.text;
 }
