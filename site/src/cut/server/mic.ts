@@ -17,10 +17,60 @@ export interface MicJob {
   proc: ChildProcess;
   /** Resolves once the process has emitted its final text (or died). */
   finished: Promise<void>;
+  /** Reaps an orphaned session: a live dictation feeds PCM every ~250ms, so a
+   * gap this long means the client is gone (a tab refresh that never cancelled). */
+  idle?: ReturnType<typeof setTimeout>;
+  /** When PCM last arrived — the liveness signal that separates a live
+   * dictation (recent audio) from a refresh orphan (silence). */
+  lastFeedAt: number;
 }
 
-const MAX_RUNNING = 1; // on-device transcription is heavy; one dictation at a time
-const { jobs, runningCount, retire } = createJobRegistry<MicJob>("__cutMicJobs");
+// A live dictation feeds continuously; no audio for this long means the tab that
+// owned it went away without cancelling. The session self-reaps so a refresh
+// never leaves a zombie cut-stt blocking the next dictation.
+const IDLE_MS = 15000;
+// A session with PCM more recent than this is live (a live client feeds every
+// ~250ms) — a new start must never kill it mid-speech. Anything staler is an
+// orphan a new start may reclaim without waiting out the idle reaper.
+const STALE_MS = 1500;
+const { jobs, retire } = createJobRegistry<MicJob>("__cutMicJobs");
+
+function clearIdle(job: MicJob): void {
+  if (job.idle) clearTimeout(job.idle);
+  job.idle = undefined;
+}
+
+/** (Re)arm the orphan watchdog: if no PCM arrives within IDLE_MS the session is
+ * abandoned, so kill it. */
+function armIdle(job: MicJob): void {
+  clearIdle(job);
+  job.idle = setTimeout(() => {
+    if (job.status === "running") {
+      job.status = "canceled";
+      job.proc.kill("SIGKILL");
+    }
+  }, IDLE_MS);
+  job.idle.unref();
+}
+
+/** Reap running sessions whose audio went silent (a refresh that never reached
+ * cancel), and report whether a genuinely live one remains. A live dictation —
+ * PCM within STALE_MS — is someone speaking right now; killing it would
+ * silently truncate their speech, so the caller rejects instead. */
+function reclaimStale(): { liveRemains: boolean } {
+  let liveRemains = false;
+  for (const job of jobs.values()) {
+    if (job.status !== "running") continue;
+    if (Date.now() - job.lastFeedAt > STALE_MS) {
+      clearIdle(job);
+      job.status = "canceled";
+      job.proc.kill("SIGKILL");
+    } else {
+      liveRemains = true;
+    }
+  }
+  return { liveRemains };
+}
 
 export function getMicJob(id: string): MicJob | undefined {
   return jobs.get(id);
@@ -28,7 +78,11 @@ export function getMicJob(id: string): MicJob | undefined {
 
 export async function startMicJob(locale: string): Promise<MicJob> {
   assertLocalRuntime();
-  if (runningCount() >= MAX_RUNNING) {
+  // One dictation at a time. A new start reclaims silent orphans (a refresh
+  // that never reached cancel) so nobody is rejected forever, but a session
+  // that is still receiving audio is someone speaking — reject instead of
+  // killing their dictation mid-sentence.
+  if (reclaimStale().liveRemains) {
     throw new Error("A dictation is already running — finish it first.");
   }
   const bin = await ensureStt();
@@ -37,8 +91,9 @@ export async function startMicJob(locale: string): Promise<MicJob> {
 
   let resolveFinished!: () => void;
   const finished = new Promise<void>((r) => (resolveFinished = r));
-  const job: MicJob = { id, status: "running", text: "", proc, finished };
+  const job: MicJob = { id, status: "running", text: "", proc, finished, lastFeedAt: Date.now() };
   jobs.set(id, job);
+  armIdle(job);
 
   // Parse the process's NDJSON stdout line by line.
   let buf = "";
@@ -68,6 +123,7 @@ export async function startMicJob(locale: string): Promise<MicJob> {
   let stderr = "";
   proc.stderr?.on("data", (d: Buffer) => (stderr += d.toString()));
   proc.on("error", (e) => {
+    clearIdle(job);
     if (job.status === "running") {
       job.status = "error";
       job.error = e.message;
@@ -76,6 +132,7 @@ export async function startMicJob(locale: string): Promise<MicJob> {
     retire(job);
   });
   proc.on("close", (code) => {
+    clearIdle(job);
     if (job.status === "running") {
       // Closed without a final line — surface whatever the process complained about.
       job.status = code === 0 ? "done" : "error";
@@ -93,6 +150,8 @@ export function feedMic(id: string, pcm: Buffer): boolean {
   const job = jobs.get(id);
   if (!job || job.status !== "running" || !job.proc.stdin?.writable) return false;
   job.proc.stdin.write(pcm);
+  job.lastFeedAt = Date.now();
+  armIdle(job); // fresh audio — the client is still here
   return true;
 }
 
@@ -100,6 +159,7 @@ export function feedMic(id: string, pcm: Buffer): boolean {
 export async function stopMic(id: string): Promise<string | null> {
   const job = jobs.get(id);
   if (!job) return null;
+  clearIdle(job);
   if (job.status === "running") job.proc.stdin?.end();
   await withTimeout(job.finished, 8000);
   return job.text;
@@ -109,6 +169,7 @@ export async function stopMic(id: string): Promise<string | null> {
 export function cancelMic(id: string): boolean {
   const job = jobs.get(id);
   if (!job) return false;
+  clearIdle(job);
   if (job.status === "running") {
     job.status = "canceled";
     job.proc.kill("SIGKILL");
