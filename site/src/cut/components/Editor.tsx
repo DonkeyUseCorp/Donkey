@@ -188,7 +188,9 @@ export function Editor({
         s.notes.text !== last.notes?.text ||
         s.notes.publishedAt !== last.notes?.publishedAt ||
         s.notes.links.join("") !== (last.notes?.links ?? []).join("") ||
-        s.genvideo !== (last.genvideo as unknown) ||
+        // Normalized like serializeDoc stores it (?? null): a project with no
+        // run holds undefined in state and null in the doc — not a change.
+        (s.genvideo ?? null) !== ((last.genvideo ?? null) as unknown) ||
         s.projectName !== lastName;
       if (!changed) return;
       last = serializeDoc(s);
