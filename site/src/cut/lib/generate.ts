@@ -84,13 +84,18 @@ export interface VideoGenOptions {
   aspect?: "16:9" | "9:16";
   resolution?: "720p" | "1080p";
   /** Person-safety for the render. Unset, Veo blocks person/face generation, so
-   * any shot with a character fails. ALLOW_ADULT is the most image-to-video
-   * permits; ALLOW_ALL (needed for minors) only works text-to-video (no image
-   * seed). */
+   * any shot with a character fails. ALLOW_ADULT is the most any image input
+   * permits (first-frame seed and reference images alike); ALLOW_ALL (needed
+   * for minors) only works text-to-video. */
   personGeneration?: "DONT_ALLOW" | "ALLOW_ADULT" | "ALLOW_ALL";
   /** References of any kind — video, image, text file. Veo takes one
    * input image, so at most one picture seeds the render. */
   refs?: AssetRef[];
+  /** Identity anchors (Veo 3.1 asset references, up to three): the render
+   * keeps these characters/objects/scenes consistent instead of playing one
+   * as the first frame. Mutually exclusive with a `refs` image seed; the
+   * prompt rides as written (no compose rewrite). */
+  referenceImages?: AssetRef[];
   /** Rewrite the prompt around the references before rendering (the
    * default when refs are present) — see composeGen.ts. Veo plays the
    * input image as the literal first frame, so a prompt that transforms
@@ -401,17 +406,23 @@ export const useGenerate = create<GenerateState>((set, get) => {
           // The job (and the landed asset's name) keeps the user's own words;
           // only the render sees the composed prompt. Veo seeds from a single
           // first-frame image, so at most one kept picture rides along.
-          const { prompt: sent, images } = await promptAndImages(
-            "video",
-            prompt,
-            opts?.refs ?? [],
-            opts?.composeRefs !== false,
-            1
-          );
+          // Identity anchors travel separately: with referenceImages set, the
+          // prompt stands as written and no seed image rides (Veo takes one
+          // or the other).
+          const anchors = opts?.referenceImages?.length
+            ? await refsToInlineImages(visualRefs(opts.referenceImages).slice(0, 3))
+            : [];
+          const { prompt: sent, images } = anchors.length
+            ? { prompt, images: [] }
+            : await promptAndImages("video", prompt, opts?.refs ?? [], opts?.composeRefs !== false, 1);
           const res = await hostedPost("/api/inference/assets", {
             kind: "video",
             prompt: sent,
-            ...(images.length > 0 ? { inputs: { images } } : {}),
+            ...(anchors.length > 0
+              ? { inputs: { referenceImages: anchors } }
+              : images.length > 0
+                ? { inputs: { images } }
+                : {}),
             parameters: {
               tier: opts?.tier === "high" ? "high" : "fast",
               aspectRatio: opts?.aspect ?? useEditor.getState().aspect,

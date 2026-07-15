@@ -1,4 +1,8 @@
-import { GenerateVideosOperation, GoogleGenAI } from "@google/genai";
+import {
+  GenerateVideosOperation,
+  GoogleGenAI,
+  VideoGenerationReferenceType,
+} from "@google/genai";
 import type {
   GenerateVideosConfig,
   GenerateVideosParameters,
@@ -103,11 +107,20 @@ export function createGeminiVideoAssetProvider(
     const requestParameters = toJsonObject(request.parameters ?? {});
     const model = resolveModel(request.model, stringValue(requestParameters.tier));
     const prompt = request.prompt?.trim();
-    const image = inputImage(toJsonObject(request.inputs ?? {}));
+    const inputs = toJsonObject(request.inputs ?? {});
+    const image = inputImage(inputs);
+    const references = referenceImages(inputs);
     if (!prompt && !image) {
       throw new InferenceProviderError(
         "Video generation requires a prompt or an input image.",
         { statusCode: 400, code: "empty_video_request" },
+      );
+    }
+    if (references.length > 0 && image) {
+      // Veo takes a first-frame seed or asset references, never both.
+      throw new InferenceProviderError(
+        "Video generation takes an input image or reference images, not both.",
+        { statusCode: 400, code: "conflicting_video_inputs" },
       );
     }
 
@@ -117,7 +130,7 @@ export function createGeminiVideoAssetProvider(
       ...(image
         ? { image: { imageBytes: image.data, mimeType: image.mimeType } }
         : {}),
-      config: videoConfig(requestParameters),
+      config: videoConfig(requestParameters, references),
     };
 
     const client = clientFactory(clientConfig.options);
@@ -253,9 +266,45 @@ function inputImage(inputs: JsonObject | undefined): InlineImage | undefined {
   return undefined;
 }
 
+// Veo 3.1 asset references ("ingredients"): up to three identity anchors — characters, objects,
+// scenes — the render keeps consistent, sent as inputs.referenceImages = [{ data, mimeType }].
+// Distinct from inputs.images: a reference conditions the whole clip, a seed becomes frame one.
+const MAX_REFERENCE_IMAGES = 3;
+
+function referenceImages(inputs: JsonObject | undefined): InlineImage[] {
+  const list = inputs?.referenceImages;
+  if (!Array.isArray(list)) {
+    return [];
+  }
+  const out: InlineImage[] = [];
+  for (const item of list) {
+    if (!isJsonObject(item)) {
+      continue;
+    }
+    const data = stringValue(item.data);
+    if (!data) {
+      continue;
+    }
+    out.push({ data, mimeType: stringValue(item.mimeType) ?? "image/png" });
+    if (out.length === MAX_REFERENCE_IMAGES) {
+      break;
+    }
+  }
+  return out;
+}
+
 // Veo knobs the tool may pass through request.parameters; audio defaults on, one video per call.
-function videoConfig(parameters: JsonObject | undefined): GenerateVideosConfig {
+function videoConfig(
+  parameters: JsonObject | undefined,
+  references: InlineImage[] = [],
+): GenerateVideosConfig {
   const config: GenerateVideosConfig = { numberOfVideos: 1, generateAudio: true };
+  if (references.length > 0) {
+    config.referenceImages = references.map((ref) => ({
+      image: { imageBytes: ref.data, mimeType: ref.mimeType },
+      referenceType: VideoGenerationReferenceType.ASSET,
+    }));
+  }
   if (!parameters) {
     return config;
   }
@@ -281,8 +330,13 @@ function videoConfig(parameters: JsonObject | undefined): GenerateVideosConfig {
   }
   // Person-safety: unset, Veo blocks person/face generation (fatal for any shot
   // with a character). Callers pass DONT_ALLOW/ALLOW_ADULT/ALLOW_ALL — note Veo
-  // caps image-to-video at ALLOW_ADULT (no minors); ALLOW_ALL needs text-to-video.
-  const personGeneration = stringValue(parameters.personGeneration);
+  // caps any render with image inputs (first-frame seed or reference images) at
+  // ALLOW_ADULT (no minors); ALLOW_ALL needs text-to-video. Clamp rather than
+  // let the request 400: the reference is the caller's point, the ceiling isn't.
+  let personGeneration = stringValue(parameters.personGeneration);
+  if (personGeneration && references.length > 0 && /allow[_-]?all/i.test(personGeneration)) {
+    personGeneration = "ALLOW_ADULT";
+  }
   if (personGeneration) {
     config.personGeneration = personGeneration as GenerateVideosConfig["personGeneration"];
   }

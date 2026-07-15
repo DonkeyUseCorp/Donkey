@@ -31,6 +31,9 @@ export interface VideoModelOption {
   word: string;
   model: string;
   durations: number[];
+  /** Clip lengths the model renders when identity reference images ride
+   * along — Veo 3.1 reference-to-video renders 8s only. */
+  referenceDurations: number[];
   aspects: VideoAspect[];
   resolutions: VideoResolution[];
 }
@@ -41,6 +44,7 @@ export const VIDEO_MODELS: VideoModelOption[] = [
     word: "Fast",
     model: "Veo 3.1 Fast",
     durations: [4, 6, 8],
+    referenceDurations: [8],
     aspects: ["16:9", "9:16"],
     resolutions: ["720p", "1080p"],
   },
@@ -49,6 +53,7 @@ export const VIDEO_MODELS: VideoModelOption[] = [
     word: "Best",
     model: "Veo 3.1",
     durations: [4, 6, 8],
+    referenceDurations: [8],
     aspects: ["16:9", "9:16"],
     resolutions: ["720p", "1080p"],
   },
@@ -64,9 +69,17 @@ export function videoModel(tier: "fast" | "high"): VideoModelOption {
 /** Snap a desired clip length to one the model actually renders: the shortest
  * supported duration that still covers `seconds` (the caller trims down to the
  * exact need), or the model's longest. Video models render only a fixed set of
- * lengths and reject anything else, so a caller must never pass a raw duration. */
-export function supportedVideoDuration(tier: "fast" | "high", seconds: number): number {
-  const durations = [...videoModel(tier).durations].sort((a, b) => a - b);
+ * lengths and reject anything else, so a caller must never pass a raw duration.
+ * `withReferences` reads the tighter reference-to-video set. */
+export function supportedVideoDuration(
+  tier: "fast" | "high",
+  seconds: number,
+  opts?: { withReferences?: boolean }
+): number {
+  const model = videoModel(tier);
+  const durations = [...(opts?.withReferences ? model.referenceDurations : model.durations)].sort(
+    (a, b) => a - b
+  );
   return durations.find((d) => d >= seconds) ?? durations[durations.length - 1];
 }
 

@@ -13,10 +13,14 @@
  *   model generate whatever audio it wants and handle it locally — the placed
  *   clip is muted, so its audio never competes — rather than asking the model to
  *   suppress audio (a knob many models reject, which just fails the render).
- * - Shots render text-to-video with personGeneration ALLOW_ALL — no person-safety
- *   ceiling, so any character animates. That rules out a first-frame image seed
- *   (Veo caps a seeded render at ALLOW_ADULT and blocks faces it can't clear), so
- *   look continuity rides the prompt and style bible, not a keyframe.
+ * - Cast identity is anchored per shot, strongest signal first (see the ladder
+ *   in makeVideoRole): the shot's keyframe — already rendered with the cast's
+ *   reference images, so it IS the cast — seeds an image-to-video render; if
+ *   that's blocked, the character/location reference images condition a
+ *   reference-to-video render; only as a last resort does a shot fall back to
+ *   text-only, where the cast rides the prompt alone and drifts. The seeded
+ *   and referenced modes run at personGeneration ALLOW_ADULT (the most Veo
+ *   permits with image inputs); text-only runs ALLOW_ALL.
  * - Durations come from the video-model registry (videoGen.ts), never a literal
  *   here — models render only fixed clip lengths, so we ask for a supported one
  *   and let the editor trim it to the exact shot.
@@ -24,7 +28,7 @@
 
 import { refFromAsset, type AssetRef } from "../../assetRef";
 import { tagChatAsset } from "../../chatAssets";
-import { useGenerate } from "../../generate";
+import { NO_CREDITS_MESSAGE, useGenerate, type VideoGenOptions } from "../../generate";
 import { enrichAsset } from "../../media";
 import { useEditor } from "../../store";
 import { DEFAULT_VOICE, synthesizeSpeech } from "../../tts";
@@ -67,34 +71,80 @@ export function makeImageRole(projectId: string, chatId?: string): ImageRole {
 }
 
 const VIDEO_TIER = "fast" as const;
+/** Veo takes at most three asset reference images per render. */
+const MAX_VIDEO_ANCHORS = 3;
 
 export function makeVideoRole(projectId: string, chatId?: string): VideoRole {
   return {
     // The model isn't given our narration track, so it never lip-syncs to it.
     audioNative: false,
     async generate(input) {
-      // Text-to-video with personGeneration ALLOW_ALL — no person-safety ceiling,
-      // so any character animates (children included). That rules out a
-      // first-frame image seed: Veo caps a seeded render at ALLOW_ADULT and
-      // blocks a face it can't clear, which is what froze shots to a still. Look
-      // continuity rides the prompt and the style bible instead of the keyframe.
-      const job = await useGenerate.getState().generateVideo(projectId, input.prompt, {
+      // The identity ladder: every rung renders the same prompt, each with a
+      // weaker identity anchor, and a shot takes the first rung that lands.
+      // Veo allows one anchor kind per render (seed OR references), caps both
+      // at ALLOW_ADULT, and renders reference-conditioned clips at 8s only —
+      // so the rungs are distinct requests, not one combined one.
+      const base = {
         tier: VIDEO_TIER,
-        // A length the model actually renders (registry-driven); the clip is
-        // trimmed to the exact slot on placement.
-        durationSeconds: supportedVideoDuration(VIDEO_TIER, input.durationSec),
         aspect: input.aspect,
-        personGeneration: "ALLOW_ALL",
         // Chat ownership rides the job from creation, so a shot never touches
         // the Video panel — job row, tile, or badge — even when the render
         // errors or lands after the user moved on. Once placed on the timeline
         // it's protected from thread-deletion by the clip.
         ...(chatId ? { chatId } : {}),
-      }).settled;
-      if (job.status !== "done" || !job.assetId) {
-        throw new Error(job.error || "Video generation failed.");
+      };
+      const assets = useEditor.getState().assets;
+      const keyframe = input.startKeyframe
+        ? assets.find((a) => a.id === input.startKeyframe)
+        : undefined;
+      // Identity and place anchors only — a user style reference is a look,
+      // not a cast member, and must never ride as an asset to keep consistent.
+      const anchors = refsToAssetRefs(
+        input.refs.filter((r) => r.purpose === "character" || r.purpose === "location")
+      ).slice(0, MAX_VIDEO_ANCHORS);
+      const attempts: VideoGenOptions[] = [
+        // 1. The keyframe as the literal first frame. It was rendered from the
+        //    cast's reference images, so it carries identity, wardrobe, setting,
+        //    and framing in one anchor — the strongest continuity Veo offers.
+        ...(keyframe
+          ? [{
+              ...base,
+              refs: [refFromAsset(keyframe)],
+              composeRefs: false,
+              personGeneration: "ALLOW_ADULT" as const,
+              durationSeconds: supportedVideoDuration(VIDEO_TIER, input.durationSec),
+            }]
+          : []),
+        // 2. Reference-to-video on the cast sheets themselves — identity holds,
+        //    composition is the model's again.
+        ...(anchors.length > 0
+          ? [{
+              ...base,
+              referenceImages: anchors,
+              personGeneration: "ALLOW_ADULT" as const,
+              durationSeconds: supportedVideoDuration(VIDEO_TIER, input.durationSec, {
+                withReferences: true,
+              }),
+            }]
+          : []),
+        // 3. Text-only, ALLOW_ALL — always renders, identity rides the prompt.
+        {
+          ...base,
+          personGeneration: "ALLOW_ALL" as const,
+          durationSeconds: supportedVideoDuration(VIDEO_TIER, input.durationSec),
+        },
+      ];
+      let lastError = "Video generation failed.";
+      for (const opts of attempts) {
+        const job = await useGenerate.getState().generateVideo(projectId, input.prompt, opts)
+          .settled;
+        if (job.status === "done" && job.assetId) return job.assetId;
+        lastError = job.error || lastError;
+        // An empty balance fails every rung (and every orchestrator retry)
+        // identically — stop here so a broke run fails fast, not 9 times.
+        if (lastError === NO_CREDITS_MESSAGE) break;
       }
-      return job.assetId;
+      throw new Error(lastError);
     },
   };
 }

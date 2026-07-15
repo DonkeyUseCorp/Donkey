@@ -4,9 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import { Check, ChevronRight, CircleDashed, Clapperboard, TriangleAlert, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatDuration, useGenScene, type SceneRun } from "../lib/genScene";
+import { NO_CREDITS_MESSAGE } from "../lib/generate";
 import { GEN_FPS } from "../lib/genvideo/editorBridge";
 import { useEditor } from "../lib/store";
 import type { Shot, ShotStatus } from "../lib/genvideo/types";
+import { HostedErrorText } from "./hostedError";
 
 // The brief-to-video progress card, pinned into the chat while a "generate a
 // video" run is planning, waiting for approval, or rendering. The timeline fills
@@ -86,6 +88,10 @@ export function SceneCard() {
   const totalFrames = run.shots.length ? Math.max(...run.shots.map((sh) => sh.endFrame)) : 0;
   // Shots that couldn't be rendered as video and are holding a still instead.
   const stillCount = run.shots.filter((sh) => sh.status === "failed").length;
+  // Any shot stopped by an empty balance: the summary carries the credits link.
+  const creditsOut = run.shots.some(
+    (sh) => sh.status === "failed" && sh.error === NO_CREDITS_MESSAGE
+  );
   // Elapsed clock: planning counts from the run start, rendering from approval;
   // it stops at the end. Hidden while waiting for the user at the gate.
   const clockAnchor = run.status === "planning" ? run.startedAt : run.renderStartedAt ?? run.startedAt;
@@ -160,15 +166,21 @@ export function SceneCard() {
                           {fmt(sh.startFrame)}–{fmt(sh.endFrame)}
                         </span>
                         <span className="text-foreground/90">{describe(sh)}</span>
-                        {sh.status === "failed" && (
-                          <span className="mt-0.5 block text-[10px] text-amber-700">
-                            Couldn&apos;t animate — showing a still
-                            {sh.error ? `: ${sh.error}` : ""}
-                            {redoable ? ". Click to retry." : ""}
-                          </span>
-                        )}
                       </span>
                     </button>
+                    {sh.status === "failed" && (
+                      // Outside the redo button: an empty-balance error carries
+                      // the credits link, and a link can't live inside a button.
+                      <span className="mt-0.5 block pl-6 text-[10px] text-amber-700">
+                        Couldn&apos;t animate — showing a still
+                        {sh.error ? (
+                          <>
+                            : <HostedErrorText error={sh.error} />
+                          </>
+                        ) : null}
+                        {redoable ? ". Click the shot to retry." : ""}
+                      </span>
+                    )}
                   </li>
                 );
               })}
@@ -189,7 +201,9 @@ export function SceneCard() {
       {run.error && (
         <p className="mt-2 flex items-start gap-1.5 text-amber-700">
           <TriangleAlert className="mt-px size-3 shrink-0" />
-          {run.error}
+          <span>
+            <HostedErrorText error={run.error} />
+          </span>
         </p>
       )}
 
@@ -212,8 +226,16 @@ export function SceneCard() {
           {run.status === "done" && stillCount > 0 && (
             <span className="flex flex-1 items-start gap-1 text-[10.5px] text-amber-700">
               <TriangleAlert className="mt-px size-3 shrink-0" />
-              {stillCount} of {run.shots.length} shot{run.shots.length === 1 ? "" : "s"} held a
-              still — video generation failed. Click a shot to retry.
+              <span>
+                {stillCount} of {run.shots.length} shot{run.shots.length === 1 ? "" : "s"} held a
+                still —{" "}
+                {creditsOut ? (
+                  <HostedErrorText error={NO_CREDITS_MESSAGE} />
+                ) : (
+                  "video generation failed"
+                )}
+                . Click a shot to retry.
+              </span>
             </span>
           )}
           {canDismiss && (

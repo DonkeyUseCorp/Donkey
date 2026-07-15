@@ -72,7 +72,11 @@ Reply with JSON only:
 ]}
 Rules:
 - dialogue is the narration/spoken line for that beat (one or two sentences), action is what is shown on screen.
-- Assign each recurring character a stable id "char:1", "char:2", … and each place a stable id "loc:1", "loc:2", …; every beat lists the ids it uses. A beat with no character uses [].
+- Shape the beats as a story, not a list: open by establishing the world, turn on a small surprise or decision, and end on a payoff image that resolves it.
+- framing is real camera language fit to the genre, varied beat to beat — wide establishing, close-up, insert of a telling detail (a sign, hands, an object), POV, follow shot, over-the-shoulder, aerial, macro, low angle, whatever the story calls for. Never the same framing twice in a row, and never treat this list as a quota.
+- action carries continuity: name the wardrobe items and props the story repeats (the book, the earbuds, the bag) in every beat where they appear, so shots rendered independently still match.
+- A shot cannot be trusted to render readable text: no signs, labels, charts, graphic overlays, or lettering beyond a single short word — information the viewer must read goes in the dialogue instead.
+- Assign each recurring character a stable id "char:1", "char:2", … and each place a stable id "loc:1", "loc:2", …; every beat lists the ids it uses. A beat with no character uses []. A character introduced late (the reveal) is still a stable id from its first beat.
 - Keep the whole thing near the requested length; each beat is about 4–8 seconds of narration.
 - style is a short reusable look for the whole video (medium, lighting, palette, mood), described by its visual traits — never a real brand, franchise, show, or artist name, even one the brief uses (a generator rejects trademarked names).`;
 
@@ -125,6 +129,7 @@ Reply with JSON only:
 Rules:
 - start/end are SECONDS on the timeline; the shots must run in order and cover the whole duration with no gaps.
 - Each shot is about 4–8 seconds and its action describes what is shown while those words are heard.
+- framing is real camera language, varied shot to shot — wide establishing, close-up, insert of a telling detail, POV, follow shot — and action repeats the wardrobe and props that recur, so independently rendered shots still match.
 - Assign stable ids: characters "char:1"…, locations "loc:1"…, reused across shots for continuity. A shot with no character uses [].`;
 
 /** Compact, timed transcript for the model — capped so a long narration stays
@@ -189,7 +194,7 @@ Reply with JSON only:
 {"style": string, "characters": [{"id": "char:1", "name": string, "description": string}], "locations": [{"id": "loc:1", "name": string, "description": string}]}
 Rules:
 - style is one reusable paragraph every shot carries: medium, lighting, palette, camera, mood.
-- Return one entry per id you are asked to define, using those exact ids. description is a concrete visual of that subject/place (appearance, wardrobe, colors) so it stays consistent across shots.
+- Return one entry per id you are asked to define, using those exact ids. description is a concrete visual of that subject/place — appearance, one fixed wardrobe, and the props the story repeats (a bag, a book, earphones) — so every shot renders the same person carrying the same things.
 - Never name a real brand, franchise, show, studio, or artist — not even one the brief names. A generator rejects a trademarked name, so translate any such reference into its concrete visual traits: linework, proportions, palette, shading, era. (e.g. a named 1990s TV cartoon → "hand-drawn 2D animation, thick black outlines, flat bright colors, exaggerated rounded features, yellow-toned skin, simple suburban backdrops".)`;
 
 const DEFAULT_STYLE = "Cinematic, natural light, shallow depth of field.";
