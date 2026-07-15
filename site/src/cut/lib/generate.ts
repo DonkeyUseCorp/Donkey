@@ -160,6 +160,19 @@ export function creditsUrl(): string {
   return `${apex}/app/settings`;
 }
 
+/** Creation-time ownership for generated media, in one place so the rule can't
+ * drift per call site: chat-owned media lives on its chat card — never a
+ * generate-panel row or arrival badge — and everything else is a panel render
+ * (origin "generated", so it stays out of the Media panel's user imports). */
+export function applyOwnership(asset: MediaAsset, chatId: string | undefined | null): void {
+  if (chatId) {
+    asset.origin = "chat";
+    asset.chatId = chatId;
+  } else {
+    asset.origin = "generated";
+  }
+}
+
 interface GenerationOutput {
   dataBase64?: string;
   contentType?: string;
@@ -378,13 +391,8 @@ export const useGenerate = create<GenerateState>((set, get) => {
             throw new Error(body.error ?? "Could not add the image to the project.");
           }
           const asset: MediaAsset = { ...body, url: mediaUrl(projectId, body.fileName) };
-          if (opts?.chatId) {
-            // Chat-owned: lives on its chat card, never in the Image panel's
-            // grid, and no arrival badge — the chat is already watching.
-            asset.origin = "chat";
-            asset.chatId = opts.chatId;
-            adopt(projectId, asset);
-          } else if (adopt(projectId, asset)) {
+          applyOwnership(asset, opts?.chatId);
+          if (adopt(projectId, asset) && !opts?.chatId) {
             useGenNotify.getState().landed("image", asset.id);
           }
           update(job.id, { status: "done", assetId: asset.id });
@@ -483,14 +491,7 @@ export const useGenerate = create<GenerateState>((set, get) => {
           const asset = await importFileToProject(projectId, file);
           if (!asset) throw new Error("Could not import the generated video.");
           asset.name = promptName(prompt);
-          if (opts?.chatId) {
-            // Chat-owned: lives on its chat card, never in the Video panel's
-            // renders, and no arrival badge — the chat is already watching.
-            asset.origin = "chat";
-            asset.chatId = opts.chatId;
-          } else {
-            asset.origin = "generated"; // lives in the generate panel, not Media
-          }
+          applyOwnership(asset, opts?.chatId);
           if (adopt(projectId, asset)) {
             if (!opts?.chatId) useGenNotify.getState().landed("video", asset.id);
             opts?.onDone?.(asset);

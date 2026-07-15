@@ -9,6 +9,7 @@
  */
 
 import { bytesFromBase64 } from "../../bytes";
+import { applyOwnership } from "../../generate";
 import { hostedPost } from "../../hosted";
 import { enrichAsset, importFileToProject } from "../../media";
 import { useEditor } from "../../store";
@@ -46,12 +47,7 @@ export function makeMusicRole(projectId: string, chatId?: string): MusicRole {
       // Chat-owned from birth so the bed never surfaces in a panel; it's placed
       // on the soundtrack as part of the run. Only the run's own thread id: the
       // ambient chat context is whatever thread is open when this lands.
-      if (chatId) {
-        asset.origin = "chat";
-        asset.chatId = chatId;
-      } else {
-        asset.origin = "generated";
-      }
+      applyOwnership(asset, chatId);
       // Only stock the store when this run's project is the one open — a
       // background run whose project the user has since switched away from must
       // never drop its media into whatever project is now on screen.
