@@ -344,11 +344,25 @@ function ChatSession({
   onModelChange: (id: string) => void;
 }) {
   const [input, setInput] = useState("");
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   // Live dictation → drops the finished transcript into the composer, appended
   // after whatever the user had already typed.
   const mic = useMicTranscription((text) =>
     setInput((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text))
   );
+  // When dictation ends the composer remounts; put the caret back at the end
+  // so Enter (confirm) → Enter (send) chains without a click.
+  const micWasActive = useRef(false);
+  useEffect(() => {
+    if (micWasActive.current && mic.state === "idle") {
+      const el = composerRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      }
+    }
+    micWasActive.current = mic.state !== "idle";
+  }, [mic.state]);
   const [attachments, setAttachments] = useState<AssetRef[]>([]);
   const candidates = useRefCandidates();
   // Any OS file drag over the window hints the composer as a drop target;
@@ -611,6 +625,7 @@ function ChatSession({
                 candidates={candidates}
                 submitKey="enter"
                 menuSide="top"
+                inputRef={composerRef}
                 onSubmit={() => send(input)}
               />
               <div className="flex items-center gap-1 px-1.5 pb-1.5">

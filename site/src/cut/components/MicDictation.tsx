@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { Check, Mic, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMicTranscription, type MicController } from "@/cut/lib/micTranscribe";
@@ -33,6 +34,25 @@ export function DictationBody({
 }) {
   const shown = [text.trim(), mic.partial].filter(Boolean).join(" ");
   const finishing = mic.state === "finishing";
+  // Keyboard control while dictating: Enter confirms, Escape cancels. Capture
+  // on window so an input still focused under the overlay never sees the key.
+  useEffect(() => {
+    if (mic.state !== "recording") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.isComposing) return;
+      if (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        void mic.confirm();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        mic.cancel();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [mic.state, mic.confirm, mic.cancel]);
   return (
     <div className={cn("flex min-h-[72px] flex-col", className)}>
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-2.5">

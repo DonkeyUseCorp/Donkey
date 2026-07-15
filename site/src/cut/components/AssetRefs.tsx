@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Check, Copy, FileText, X } from "lucide-react";
 import {
   highlightMentions,
@@ -359,6 +359,7 @@ export function MentionTextarea({
   className,
   rows,
   autoGrow = false,
+  inputRef,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -374,6 +375,8 @@ export function MentionTextarea({
       caller's `max-h-*`). Leave off when the caller wants a fixed or
       manually resizable box. */
   autoGrow?: boolean;
+  /** Caller's handle on the underlying textarea (e.g. to restore focus). */
+  inputRef?: RefObject<HTMLTextAreaElement | null>;
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
@@ -482,7 +485,10 @@ export function MentionTextarea({
         )}
       </div>
       <textarea
-        ref={taRef}
+        ref={(el) => {
+          taRef.current = el;
+          if (inputRef) inputRef.current = el;
+        }}
         className={cn(className, "relative block bg-transparent")}
         rows={rows}
         placeholder={placeholder}
