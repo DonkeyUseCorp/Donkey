@@ -18,6 +18,42 @@ import { refsToParts } from "./refMedia";
 
 const MAX_TOOL_ROUNDS = 24;
 
+// A round request gets a couple more tries when the failure is transient —
+// rate limits and upstream hiccups — before the turn surfaces an error. Auth
+// (401), credits (402), and validation failures surface immediately.
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+const TRANSIENT_RETRIES = 2;
+// Gemini can return an empty STOP round — no text, no tool calls (same class
+// as the empty-TTS behavior). Identical re-asks usually land, so the loop
+// retries before bothering the user.
+const EMPTY_ROUND_RETRIES = 2;
+
+const backoff = (attempt: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+
+/** One round-trip to the hosted Responses route, retrying transient failures. */
+async function postRound(
+  payload: Record<string, unknown>,
+  abortSignal?: AbortSignal
+): Promise<ResponseBody> {
+  for (let attempt = 0; ; attempt++) {
+    let res: Response;
+    try {
+      res = await hostedPost("/api/inference/responses", payload, abortSignal);
+    } catch (err) {
+      // Network drop — retry unless the user stopped the turn or we're out.
+      if (abortSignal?.aborted || attempt >= TRANSIENT_RETRIES) throw err;
+      await backoff(attempt);
+      continue;
+    }
+    if (res.ok) return (await res.json()) as ResponseBody;
+    if (!RETRYABLE_STATUS.has(res.status) || attempt >= TRANSIENT_RETRIES) {
+      throw new Error(await requestError(res));
+    }
+    await backoff(attempt);
+  }
+}
+
 const STEP_LIMIT_FALLBACK =
   'I got partway through and hit this turn’s step limit — say “keep going” and I’ll finish the rest.';
 
@@ -51,16 +87,12 @@ async function emitStepLimitSummary({
         ],
       },
     ];
-    const res = await hostedPost(
-      "/api/inference/responses",
+    const body = await postRound(
       { donkeyProvider: "gemini", model, instructions: systemPrompt(), input: summaryInput },
       abortSignal
     );
-    if (res.ok) {
-      const body = (await res.json()) as ResponseBody;
-      const summary = (body.output_text ?? "").trim();
-      if (summary) text = summary;
-    }
+    const summary = (body.output_text ?? "").trim();
+    if (summary) text = summary;
   } catch {
     // A failed summary falls back to the static handoff below.
   }
@@ -154,18 +186,30 @@ async function execTool(name: string, args: Record<string, unknown>): Promise<un
  * originating call so Gemini matches responses to calls across parallel calls.
  * Frames leave the JSON (a data URL inlined as text would blow the token
  * budget) and ride along as image parts instead: the first on the response
- * itself, the rest (contact sheets) as input_image parts in the same turn. */
-function functionResponseParts(name: string, output: unknown, id: string): Item[] {
-  // Audio rides the same way (listen_audio): the sound leaves the JSON and
-  // follows the response as an input_audio part, like an attachment's.
+ * itself, the rest (contact sheets) as input_image parts in the same turn.
+ *
+ * Audio (listen_audio) leaves the JSON too, but returns via `audioTurn`: a
+ * separate user turn shaped like a message attachment. Gemini 3.5 Flash
+ * answers a turn that holds a functionResponse alongside audio inlineData
+ * with one-token garbage and no tool call; the same audio in its own turn
+ * gets a full reply. */
+function functionResponseParts(
+  name: string,
+  output: unknown,
+  id: string
+): { parts: Item[]; audioTurn: Item[] } {
   if (output && typeof output === "object" && "audio" in output) {
-    const { audio, ...rest } = output as { audio?: unknown };
+    const { audio, ...rest } = output as { audio?: unknown; name?: unknown };
     const m = typeof audio === "string" ? /^data:([^;,]+);base64,(.+)$/.exec(audio) : null;
     if (m) {
-      return [
-        { type: "function_response", id, name, response: rest },
-        { type: "input_audio", dataBase64: m[2], mimeType: m[1] },
-      ];
+      const assetName = typeof rest.name === "string" ? rest.name : name;
+      return {
+        parts: [{ type: "function_response", id, name, response: rest }],
+        audioTurn: [
+          { text: `Attached audio "${assetName}":` },
+          { type: "input_audio", dataBase64: m[2], mimeType: m[1] },
+        ],
+      };
     }
   }
   if (output && typeof output === "object" && ("image" in output || "images" in output)) {
@@ -178,24 +222,27 @@ function functionResponseParts(name: string, output: unknown, id: string): Item[
       .filter((m): m is RegExpExecArray => m !== null);
     if (parsed.length > 0) {
       const [first, ...more] = parsed;
-      return [
-        {
-          type: "function_response",
-          id,
-          name,
-          response: rest,
-          mimeType: first[1],
-          screenshotBase64: first[2],
-        },
-        ...more.map((m) => ({ type: "input_image", dataBase64: m[2], mimeType: m[1] })),
-      ];
+      return {
+        parts: [
+          {
+            type: "function_response",
+            id,
+            name,
+            response: rest,
+            mimeType: first[1],
+            screenshotBase64: first[2],
+          },
+          ...more.map((m) => ({ type: "input_image", dataBase64: m[2], mimeType: m[1] })),
+        ],
+        audioTurn: [],
+      };
     }
   }
   const response =
     output && typeof output === "object" && !Array.isArray(output)
       ? output
       : { result: output ?? null };
-  return [{ type: "function_response", id, name, response }];
+  return { parts: [{ type: "function_response", id, name, response }], audioTurn: [] };
 }
 
 interface ResponseBody {
@@ -229,15 +276,13 @@ export function streamGeminiChat({
         const tools = toolDeclarations();
         let textCount = 0;
         let settled = false;
+        let emptyRounds = 0;
 
         for (let round = 0; round < MAX_TOOL_ROUNDS && !settled; round++) {
-          const res = await hostedPost(
-            "/api/inference/responses",
+          const body = await postRound(
             { donkeyProvider: "gemini", model, instructions: systemPrompt(), input, tools },
             abortSignal
           );
-          if (!res.ok) throw new Error(await requestError(res));
-          const body = (await res.json()) as ResponseBody;
 
           const assistantParts: Item[] = [];
           const text = (body.output_text ?? "").trim();
@@ -251,10 +296,14 @@ export function streamGeminiChat({
 
           const calls = (body.output ?? []).filter((o) => o.type === "function_call");
           if (calls.length === 0) {
+            // An empty STOP round with nothing said all turn: re-ask the same
+            // input a couple of times — identical retries usually land — and
+            // only then surface it, so the reply bubble never sits blank.
+            if (textCount === 0 && emptyRounds < EMPTY_ROUND_RETRIES) {
+              emptyRounds++;
+              continue;
+            }
             settled = true;
-            // Gemini can return an empty STOP round — no text, no tool calls
-            // (same class as the empty-TTS behavior). Without this the stream
-            // finishes having emitted nothing and the reply bubble stays blank.
             if (textCount === 0) {
               emit({ type: "error", errorText: "Gemini returned an empty response. Try again." });
             }
@@ -263,7 +312,9 @@ export function streamGeminiChat({
 
           // Parallel calls stay in one model turn, with every response in the
           // single user turn that follows — the shape Gemini expects back.
+          // Tool audio gathers separately and follows as its own user turn.
           const responseParts: Item[] = [];
+          const audioParts: Item[] = [];
           for (const call of calls) {
             const name = String(call.name ?? "unknown_function");
             const args =
@@ -292,15 +343,20 @@ export function streamGeminiChat({
                 uiOutput = rest;
               }
               emit({ type: "tool-output-available", toolCallId, output: uiOutput ?? null });
-              responseParts.push(...functionResponseParts(name, output, toolCallId));
+              const { parts, audioTurn } = functionResponseParts(name, output, toolCallId);
+              responseParts.push(...parts);
+              audioParts.push(...audioTurn);
             } catch (err) {
               const errorText = err instanceof Error ? err.message : String(err);
               emit({ type: "tool-output-error", toolCallId, errorText });
-              responseParts.push(...functionResponseParts(name, { error: errorText }, toolCallId));
+              responseParts.push(
+                ...functionResponseParts(name, { error: errorText }, toolCallId).parts
+              );
             }
           }
           input.push({ role: "assistant", content: assistantParts });
           input.push({ role: "user", content: responseParts });
+          if (audioParts.length > 0) input.push({ role: "user", content: audioParts });
         }
 
         if (!settled && !abortSignal?.aborted) {
