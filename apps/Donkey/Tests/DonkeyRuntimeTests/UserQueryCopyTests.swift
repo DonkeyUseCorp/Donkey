@@ -17,6 +17,16 @@ struct UserQueryCopyTests {
         #expect(UserQueryCopy.isConversationDisplayText("Open Safari"))
     }
 
+    /// A transient voice placeholder stranded in `promptText` (e.g. dismissing mid-listen) must not read as
+    /// conversation content, or the notch shows a "Listening... / Needs attention" card with no way to clear it.
+    @Test
+    func transientVoicePlaceholdersAreNeverTaskDisplayText() {
+        for placeholder in ["Listening...", "Transcribing...", "No voice captured", "Voice unavailable"] {
+            #expect(!UserQueryCopy.isConversationDisplayText(placeholder))
+            #expect(!UserQueryCopy.isConversationDisplayText("  \(placeholder)  "))
+        }
+    }
+
     @Test
     func composerPlaceholderDoesNotReuseTaskOrResultText() {
         #expect(

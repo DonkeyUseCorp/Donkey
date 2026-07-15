@@ -28,8 +28,13 @@ public enum UserQueryCopy {
 
     public static func isConversationDisplayText(_ text: String) -> Bool {
         let normalizedText = normalizedDisplayText(text)
+        // A transient composer placeholder ("Listening...", "Transcribing...", etc.) is composer chrome,
+        // never persistent conversation content. Excluding it here is the single chokepoint that keeps a
+        // placeholder stranded in `promptText` — after a dismiss, a dropped mic release, or an empty
+        // transcript — from masquerading as a stuck "Needs attention" card the user cannot clear.
         return !normalizedText.isEmpty &&
-            normalizedText != defaultPromptPlaceholder
+            normalizedText != defaultPromptPlaceholder &&
+            !transientComposerPlaceholders.contains(normalizedText)
     }
 }
 
