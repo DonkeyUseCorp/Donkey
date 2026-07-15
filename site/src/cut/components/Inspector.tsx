@@ -20,6 +20,14 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { baseClips, getClipSpans, useEditor, type EditorState } from "@/cut/lib/store";
 import { GenerateSubtitlesAudio } from "@/cut/components/VoicePicker";
+import {
+  parseNumberInput,
+  parsePercentInput,
+  parseSecondsInput,
+  parseSpeedInput,
+  parseTimeInput,
+  ScrubValue,
+} from "@/cut/components/ScrubValue";
 import { PLATE_COLOR, PLATE_OPACITY, PLATE_RADIUS } from "@/cut/lib/textRender";
 import { writeTextStyle } from "@/cut/lib/textStyle";
 import { formatTime } from "@/cut/lib/time";
@@ -28,6 +36,7 @@ import {
   LAYOUTS,
   rectOf,
   regionLabel,
+  SPEED_FLOOR,
   SPEED_MAX,
   SPEED_MIN,
   TRANSITION_MAX,
@@ -199,6 +208,13 @@ const Value = ({ children, className }: { children: React.ReactNode; className?:
   <span className={cn("font-mono text-[11.5px] tabular-nums", className)}>{children}</span>
 );
 
+/** Matches the store's MIN_LEN: the shortest a trim can leave a clip. */
+const MIN_TRIM = 0.1;
+
+const formatSpeed = (v: number) => `${v.toFixed(2)}×`;
+const formatFade = (v: number) => (v < 0.05 ? "Off" : `${v.toFixed(1)}s`);
+const formatPercent = (v: number) => `${Math.round(v * 100)}%`;
+
 /** One-click frame layouts (Full / Top / Bottom / Left / Right / PiP) shared by
  * the video-clip and overlay-clip panels. Picking one regions the clip so two
  * videos can share the frame; "Full" clears the region. */
@@ -313,6 +329,9 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
   const speed = speedDraft ?? clip.speed ?? 1;
   const xfade = xfadeDraft ?? clip.transition ?? 0;
   const speedLen = (clip.out - clip.in) / (speed > 0 ? speed : 1);
+  // Typing can trim out to the source's end but no further; an image has no
+  // intrinsic duration, so its clip can be any length.
+  const maxOut = asset && asset.type !== "image" ? asset.duration : Infinity;
   return (
     <>
       <PanelTitle>Video clip</PanelTitle>
@@ -320,9 +339,42 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
         <div className="mb-1.5 truncate border-b border-border pb-2.5 text-xs font-medium" title={asset?.name}>
           {asset?.name}
         </div>
-        <Row label="Length"><Value>{formatTime(speedLen)}</Value></Row>
+        <Row label="Length">
+          <ScrubValue
+            label="Clip length"
+            value={speedLen}
+            min={MIN_TRIM}
+            max={(maxOut - clip.in) / (speed > 0 ? speed : 1)}
+            step={0.1}
+            format={formatTime}
+            parse={parseTimeInput}
+            onCommit={(v) =>
+              useEditor.getState().setClipTrim(clip.id, clip.in, clip.in + v * speed)
+            }
+          />
+        </Row>
         <Row label="Trim">
-          <Value>{formatTime(clip.in)} – {formatTime(clip.out)}</Value>
+          <ScrubValue
+            label="Trim start"
+            value={clip.in}
+            min={0}
+            max={clip.out - MIN_TRIM}
+            step={0.1}
+            format={formatTime}
+            parse={parseTimeInput}
+            onCommit={(v) => useEditor.getState().setClipTrim(clip.id, v, clip.out)}
+          />
+          <Value className="text-muted-foreground">–</Value>
+          <ScrubValue
+            label="Trim end"
+            value={clip.out}
+            min={clip.in + MIN_TRIM}
+            max={maxOut}
+            step={0.1}
+            format={formatTime}
+            parse={parseTimeInput}
+            onCommit={(v) => useEditor.getState().setClipTrim(clip.id, clip.in, v)}
+          />
         </Row>
         <Row label="Speed">
           <Slider
@@ -337,7 +389,21 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
               setSpeedDraft(null);
             }}
           />
-          <Value className="w-9 text-right text-muted-foreground">{speed.toFixed(2)}×</Value>
+          <ScrubValue
+            label="Speed"
+            className="w-9 text-muted-foreground"
+            value={speed}
+            min={SPEED_FLOOR}
+            max={Infinity}
+            step={0.05}
+            format={formatSpeed}
+            parse={parseSpeedInput}
+            onScrub={setSpeedDraft}
+            onCommit={(v) => {
+              useEditor.getState().setClipSpeed(clip.id, v);
+              setSpeedDraft(null);
+            }}
+          />
         </Row>
         {isFirst && (
           <Row label="Fade in">
@@ -349,9 +415,18 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
               value={fadeIn}
               onValueChange={(v) => useEditor.getState().setProjectFade({ fadeIn: Number(v) })}
             />
-            <Value className="w-9 text-right text-muted-foreground">
-              {fadeIn < 0.05 ? "Off" : `${fadeIn.toFixed(1)}s`}
-            </Value>
+            <ScrubValue
+              label="Fade in"
+              className="w-9 text-muted-foreground"
+              value={fadeIn}
+              min={0}
+              max={TRANSITION_MAX}
+              step={0.1}
+              format={formatFade}
+              parse={parseSecondsInput}
+              onScrub={(v) => useEditor.getState().setProjectFade({ fadeIn: v })}
+              onCommit={(v) => useEditor.getState().setProjectFade({ fadeIn: v })}
+            />
           </Row>
         )}
         {isLast && (
@@ -364,9 +439,18 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
               value={fadeOut}
               onValueChange={(v) => useEditor.getState().setProjectFade({ fadeOut: Number(v) })}
             />
-            <Value className="w-9 text-right text-muted-foreground">
-              {fadeOut < 0.05 ? "Off" : `${fadeOut.toFixed(1)}s`}
-            </Value>
+            <ScrubValue
+              label="Fade out"
+              className="w-9 text-muted-foreground"
+              value={fadeOut}
+              min={0}
+              max={TRANSITION_MAX}
+              step={0.1}
+              format={formatFade}
+              parse={parseSecondsInput}
+              onScrub={(v) => useEditor.getState().setProjectFade({ fadeOut: v })}
+              onCommit={(v) => useEditor.getState().setProjectFade({ fadeOut: v })}
+            />
           </Row>
         )}
         {hasNext && (
@@ -408,9 +492,21 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
                   setXfadeDraft(null);
                 }}
               />
-              <Value className="w-9 text-right text-muted-foreground">
-                {xfade < 0.05 ? "Off" : `${xfade.toFixed(1)}s`}
-              </Value>
+              <ScrubValue
+                label="Transition length"
+                className="w-9 text-muted-foreground"
+                value={xfade}
+                min={0}
+                max={TRANSITION_MAX}
+                step={0.1}
+                format={formatFade}
+                parse={parseSecondsInput}
+                onScrub={setXfadeDraft}
+                onCommit={(v) => {
+                  useEditor.getState().setClipTransition(clip.id, v);
+                  setXfadeDraft(null);
+                }}
+              />
             </Row>
           </>
         )}
@@ -432,9 +528,21 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
               setVolumeDraft(null);
             }}
           />
-          <Value className="w-9 text-right text-muted-foreground">
-            {Math.round(volume * 100)}%
-          </Value>
+          <ScrubValue
+            label="Clip volume"
+            className="w-9 text-muted-foreground"
+            value={volume}
+            min={0}
+            max={1.5}
+            step={0.05}
+            format={formatPercent}
+            parse={parsePercentInput}
+            onScrub={setVolumeDraft}
+            onCommit={(v) => {
+              updateClip(clip.id, { volume: v === 1 ? undefined : v });
+              setVolumeDraft(null);
+            }}
+          />
         </Row>
         <Row label="Mute audio">
           <Switch
@@ -509,9 +617,29 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
                   setGenVolDraft(null);
                 }}
               />
-              <Value className="w-9 text-right text-muted-foreground">
-                {Math.round(genVol * 100)}%
-              </Value>
+              <ScrubValue
+                label="Generated audio volume"
+                className="w-9 text-muted-foreground"
+                value={genVol}
+                min={0}
+                max={1.5}
+                step={0.05}
+                format={formatPercent}
+                parse={parsePercentInput}
+                onScrub={(v) => {
+                  genCk.begin();
+                  setGenVolDraft(v);
+                  const s = useEditor.getState();
+                  genAudioIds.forEach((id) => s.updateAudioTransient(id, { volume: v }));
+                }}
+                onCommit={(v) => {
+                  genCk.begin();
+                  const s = useEditor.getState();
+                  genAudioIds.forEach((id) => s.updateAudioTransient(id, { volume: v }));
+                  genCk.end();
+                  setGenVolDraft(null);
+                }}
+              />
             </Row>
           )}
         </div>
@@ -533,6 +661,12 @@ function AudioPanel({ clip }: { clip: AudioClip }) {
   const len = (clip.out - clip.in) / speed;
   // A fade can take at most half the clip so in+out never overlap.
   const maxFade = Math.max(0.1, Math.round((len / 2) * 10) / 10);
+  // Commit closes the checkpoint setAudio opened (or opens+closes one for a
+  // typed entry), so any adjustment lands as a single undo step.
+  const commitAudio = (patch: Partial<AudioClip>) => {
+    setAudio(patch);
+    ck.end();
+  };
   return (
     <>
       <PanelTitle>Soundtrack</PanelTitle>
@@ -540,8 +674,30 @@ function AudioPanel({ clip }: { clip: AudioClip }) {
         <div className="mb-1.5 truncate border-b border-border pb-2.5 text-xs font-medium" title={asset?.name}>
           {asset?.name}
         </div>
-        <Row label="Length"><Value>{formatTime(len)}</Value></Row>
-        <Row label="Starts at"><Value>{formatTime(clip.start)}</Value></Row>
+        <Row label="Length">
+          <ScrubValue
+            label="Clip length"
+            value={len}
+            min={MIN_TRIM}
+            max={((asset?.duration ?? clip.out) - clip.in) / speed}
+            step={0.1}
+            format={formatTime}
+            parse={parseTimeInput}
+            onCommit={(v) => commitAudio({ out: clip.in + v * speed })}
+          />
+        </Row>
+        <Row label="Starts at">
+          <ScrubValue
+            label="Starts at"
+            value={clip.start}
+            min={0}
+            max={Infinity}
+            step={0.1}
+            format={formatTime}
+            parse={parseTimeInput}
+            onCommit={(v) => commitAudio({ start: v })}
+          />
+        </Row>
         <Row label="Speed">
           <Slider
             className="audio-speed data-horizontal:w-24"
@@ -555,7 +711,18 @@ function AudioPanel({ clip }: { clip: AudioClip }) {
             }}
             onValueCommitted={ck.end}
           />
-          <Value className="w-9 text-right text-muted-foreground">{speed.toFixed(2)}×</Value>
+          <ScrubValue
+            label="Speed"
+            className="w-9 text-muted-foreground"
+            value={speed}
+            min={SPEED_FLOOR}
+            max={Infinity}
+            step={0.05}
+            format={formatSpeed}
+            parse={parseSpeedInput}
+            onScrub={(v) => setAudio({ speed: Math.abs(v - 1) < 1e-4 ? undefined : v })}
+            onCommit={(v) => commitAudio({ speed: Math.abs(v - 1) < 1e-4 ? undefined : v })}
+          />
         </Row>
         <Row label="Volume">
           <Slider
@@ -567,9 +734,18 @@ function AudioPanel({ clip }: { clip: AudioClip }) {
             onValueChange={(v) => setAudio({ volume: Number(v) })}
             onValueCommitted={ck.end}
           />
-          <Value className="w-9 text-right text-muted-foreground">
-            {Math.round(clip.volume * 100)}%
-          </Value>
+          <ScrubValue
+            label="Volume"
+            className="w-9 text-muted-foreground"
+            value={clip.volume}
+            min={0}
+            max={1.5}
+            step={0.05}
+            format={formatPercent}
+            parse={parsePercentInput}
+            onScrub={(v) => setAudio({ volume: v })}
+            onCommit={(v) => commitAudio({ volume: v })}
+          />
         </Row>
         <Row label="Fade in">
           <Slider
@@ -581,9 +757,18 @@ function AudioPanel({ clip }: { clip: AudioClip }) {
             onValueChange={(v) => setAudio({ fadeIn: Number(v) })}
             onValueCommitted={ck.end}
           />
-          <Value className="w-9 text-right text-muted-foreground">
-            {(clip.fadeIn ?? 0).toFixed(1)}s
-          </Value>
+          <ScrubValue
+            label="Fade in"
+            className="w-9 text-muted-foreground"
+            value={clip.fadeIn ?? 0}
+            min={0}
+            max={maxFade}
+            step={0.1}
+            format={(v) => `${v.toFixed(1)}s`}
+            parse={parseSecondsInput}
+            onScrub={(v) => setAudio({ fadeIn: v })}
+            onCommit={(v) => commitAudio({ fadeIn: v })}
+          />
         </Row>
         <Row label="Fade out">
           <Slider
@@ -595,9 +780,18 @@ function AudioPanel({ clip }: { clip: AudioClip }) {
             onValueChange={(v) => setAudio({ fadeOut: Number(v) })}
             onValueCommitted={ck.end}
           />
-          <Value className="w-9 text-right text-muted-foreground">
-            {(clip.fadeOut ?? 0).toFixed(1)}s
-          </Value>
+          <ScrubValue
+            label="Fade out"
+            className="w-9 text-muted-foreground"
+            value={clip.fadeOut ?? 0}
+            min={0}
+            max={maxFade}
+            step={0.1}
+            format={(v) => `${v.toFixed(1)}s`}
+            parse={parseSecondsInput}
+            onScrub={(v) => setAudio({ fadeOut: v })}
+            onCommit={(v) => commitAudio({ fadeOut: v })}
+          />
         </Row>
         <Row label="Duck others">
           <Slider
@@ -612,9 +806,18 @@ function AudioPanel({ clip }: { clip: AudioClip }) {
             }}
             onValueCommitted={ck.end}
           />
-          <Value className="w-9 text-right text-muted-foreground">
-            {clip.duck === undefined ? "Off" : `${Math.round(clip.duck * 100)}%`}
-          </Value>
+          <ScrubValue
+            label="Duck others"
+            className="w-9 text-muted-foreground"
+            value={clip.duck ?? 1}
+            min={0}
+            max={1}
+            step={0.05}
+            format={(v) => (v >= 0.999 ? "Off" : formatPercent(v))}
+            parse={(raw) => (raw.trim().toLowerCase() === "off" ? 1 : parsePercentInput(raw))}
+            onScrub={(v) => setAudio({ duck: v < 0.999 ? v : undefined })}
+            onCommit={(v) => commitAudio({ duck: v < 0.999 ? v : undefined })}
+          />
         </Row>
         {clip.duck !== undefined && (
           <p className="text-[11px] leading-relaxed text-muted-foreground">
@@ -639,6 +842,15 @@ function LayerClipPanel({ clip }: { clip: VideoClip }) {
   const ck = useSliderCheckpoint();
   const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
   const len = (clip.out - clip.in) / speed;
+  const maxOut = asset && asset.type !== "image" ? asset.duration : Infinity;
+  const setLayer = (patch: Partial<VideoClip>) => {
+    ck.begin();
+    updateTransient(clip.id, patch);
+  };
+  const commitLayer = (patch: Partial<VideoClip>) => {
+    setLayer(patch);
+    ck.end();
+  };
   return (
     <>
       <PanelTitle>Video clip</PanelTitle>
@@ -646,8 +858,30 @@ function LayerClipPanel({ clip }: { clip: VideoClip }) {
         <div className="mb-1.5 truncate border-b border-border pb-2.5 text-xs font-medium" title={asset?.name}>
           {asset?.name}
         </div>
-        <Row label="Length"><Value>{formatTime(len)}</Value></Row>
-        <Row label="Starts at"><Value>{formatTime(clip.start)}</Value></Row>
+        <Row label="Length">
+          <ScrubValue
+            label="Clip length"
+            value={len}
+            min={MIN_TRIM}
+            max={(maxOut - clip.in) / speed}
+            step={0.1}
+            format={formatTime}
+            parse={parseTimeInput}
+            onCommit={(v) => commitLayer({ out: clip.in + v * speed })}
+          />
+        </Row>
+        <Row label="Starts at">
+          <ScrubValue
+            label="Starts at"
+            value={clip.start}
+            min={0}
+            max={Infinity}
+            step={0.1}
+            format={formatTime}
+            parse={parseTimeInput}
+            onCommit={(v) => commitLayer({ start: v })}
+          />
+        </Row>
         <Row label="Speed">
           <Slider
             className="layer-speed data-horizontal:w-24"
@@ -662,7 +896,18 @@ function LayerClipPanel({ clip }: { clip: VideoClip }) {
             }}
             onValueCommitted={ck.end}
           />
-          <Value className="w-9 text-right text-muted-foreground">{speed.toFixed(2)}×</Value>
+          <ScrubValue
+            label="Speed"
+            className="w-9 text-muted-foreground"
+            value={speed}
+            min={SPEED_FLOOR}
+            max={Infinity}
+            step={0.05}
+            format={formatSpeed}
+            parse={parseSpeedInput}
+            onScrub={(v) => setLayer({ speed: Math.abs(v - 1) < 1e-4 ? undefined : v })}
+            onCommit={(v) => commitLayer({ speed: Math.abs(v - 1) < 1e-4 ? undefined : v })}
+          />
         </Row>
         <LayoutButtons
           rect={rectOf(clip)}
@@ -818,7 +1063,25 @@ function TextPanel({ overlay: o }: { overlay: TextOverlay }) {
             }}
             onValueCommitted={sizeCk.end}
           />
-          <Value className="w-9 text-right text-muted-foreground">{o.size}</Value>
+          <ScrubValue
+            label="Text size"
+            className="w-9 text-muted-foreground"
+            value={o.size}
+            min={24}
+            max={240}
+            step={1}
+            format={(v) => String(Math.round(v))}
+            parse={parseNumberInput}
+            onScrub={(v) => {
+              sizeCk.begin();
+              useEditor.getState().updateOverlayTransient(o.id, { size: v });
+            }}
+            onCommit={(v) => {
+              sizeCk.begin();
+              useEditor.getState().updateOverlayTransient(o.id, { size: v });
+              sizeCk.end();
+            }}
+          />
         </Row>
         <Row label="Color">
           <ColorSwatches
@@ -857,9 +1120,25 @@ function TextPanel({ overlay: o }: { overlay: TextOverlay }) {
                 }}
                 onValueCommitted={opacityCk.end}
               />
-              <Value className="w-9 text-right text-muted-foreground">
-                {Math.round((o.plateOpacity ?? PLATE_OPACITY) * 100)}
-              </Value>
+              <ScrubValue
+                label="Backdrop opacity"
+                className="w-9 text-muted-foreground"
+                value={o.plateOpacity ?? PLATE_OPACITY}
+                min={0}
+                max={1}
+                step={0.01}
+                format={(v) => String(Math.round(v * 100))}
+                parse={parsePercentInput}
+                onScrub={(v) => {
+                  opacityCk.begin();
+                  useEditor.getState().updateOverlayTransient(o.id, { plateOpacity: v });
+                }}
+                onCommit={(v) => {
+                  opacityCk.begin();
+                  useEditor.getState().updateOverlayTransient(o.id, { plateOpacity: v });
+                  opacityCk.end();
+                }}
+              />
             </Row>
             <Row label="Radius">
               <Slider
@@ -874,9 +1153,25 @@ function TextPanel({ overlay: o }: { overlay: TextOverlay }) {
                 }}
                 onValueCommitted={radiusCk.end}
               />
-              <Value className="w-9 text-right text-muted-foreground">
-                {Math.round((o.plateRadius ?? PLATE_RADIUS) * 100)}
-              </Value>
+              <ScrubValue
+                label="Backdrop radius"
+                className="w-9 text-muted-foreground"
+                value={o.plateRadius ?? PLATE_RADIUS}
+                min={0}
+                max={1}
+                step={0.01}
+                format={(v) => String(Math.round(v * 100))}
+                parse={parsePercentInput}
+                onScrub={(v) => {
+                  radiusCk.begin();
+                  useEditor.getState().updateOverlayTransient(o.id, { plateRadius: v });
+                }}
+                onCommit={(v) => {
+                  radiusCk.begin();
+                  useEditor.getState().updateOverlayTransient(o.id, { plateRadius: v });
+                  radiusCk.end();
+                }}
+              />
             </Row>
           </>
         )}

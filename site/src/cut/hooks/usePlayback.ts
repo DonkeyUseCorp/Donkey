@@ -35,6 +35,11 @@ const elH = (el: MediaEl) => (isImageEl(el) ? el.naturalHeight : el.videoHeight)
 // The compositor paints through these instead of wedging on them.
 const elErrored = (el: MediaEl) =>
   isImageEl(el) ? el.complete && el.naturalWidth === 0 : !!el.error;
+/** Browsers reject playbackRate outside roughly 0.0625–16, so the element
+ * rate is clamped; beyond it the periodic seek correction carries the true
+ * speed, at the cost of a choppier preview. Export renders the real rate. */
+const safeRate = (speed: number) => Math.min(16, Math.max(0.0625, speed));
+
 const pauseEl = (el: MediaEl) => {
   if (!isImageEl(el) && !el.paused) el.pause();
 };
@@ -128,7 +133,8 @@ class Engine {
     // <img> decodes. Skip every video-clock operation.
     if (isImageEl(el)) return el;
     const speed = clipSpeed(span.clip);
-    if (el.playbackRate !== speed) el.playbackRate = speed;
+    const rate = safeRate(speed);
+    if (el.playbackRate !== rate) el.playbackRate = rate;
     const target = span.clip.in + Math.max(0, t - span.start) * speed;
     // While playing, the element is its own clock and advances on its own, so
     // only re-seek on a real jump (a clip switch or a scrub) — never for the
@@ -413,7 +419,8 @@ class Engine {
     const el = this.overlayVideoFor(clip, asset);
     if (isImageEl(el)) return el;
     const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
-    if (el.playbackRate !== speed) el.playbackRate = speed;
+    const rate = safeRate(speed);
+    if (el.playbackRate !== rate) el.playbackRate = rate;
     const target = clip.in + Math.max(0, t - clip.start) * speed;
     const tol = play ? 0.34 : 0.05;
     if (Math.abs(el.currentTime - target) > tol && !el.seeking) el.currentTime = target;
@@ -499,7 +506,8 @@ class Engine {
         // ducking clips never duck each other.
         const dg = a.duck !== undefined && a.duck < 1 ? 1 : duckGainAt(s.audioClips, t);
         el.volume = Math.max(0, Math.min(1, a.volume * gain * dg * fadeGain));
-        if (el.playbackRate !== speed) el.playbackRate = speed;
+        const rate = safeRate(speed);
+        if (el.playbackRate !== rate) el.playbackRate = rate;
         const expected = a.in + rel * speed;
         if (Math.abs(el.currentTime - expected) > 0.25) el.currentTime = expected;
         if (el.paused) void el.play().catch(() => {});

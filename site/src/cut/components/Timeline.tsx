@@ -297,6 +297,7 @@ export function Timeline() {
   // Scrub with auto-scroll when the pointer nears the viewport edges.
   const scrub = (e: React.PointerEvent) => {
     const s = useEditor.getState();
+    if (s.playing) s.setPlaying(false);
     s.seek(timeAt(e.clientX));
     const el = scrollRef.current;
     startDrag(e, {
