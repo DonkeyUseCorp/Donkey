@@ -8,6 +8,7 @@
 
 import { assertCoverage, MAX_SHOT_SEC, MIN_SHOT_SEC, repairCoverage } from "../src/cut/lib/genvideo/coverage";
 import { FakeEditor, type PlacedClip } from "../src/cut/lib/genvideo/editor";
+import { fillSlot } from "../src/cut/lib/genvideo/fillSlot";
 import { fakeSuite, type FakeStudioOptions } from "../src/cut/lib/genvideo/fakes";
 import { fakeRegistry } from "../src/cut/lib/genvideo/registry";
 import { VideoOrchestrator, type OrchestratorDeps } from "../src/cut/lib/genvideo/orchestrator";
@@ -172,9 +173,14 @@ async function run(): Promise<void> {
     const orch = new VideoOrchestrator(project, d);
     await orch.run();
     check("wrote a script from the brief", !!project.script && project.script.beats.length > 0);
-    check("every shot has a spoken line", project.shots.every((s) => !!s.dialogue && !!s.voiceAssetId));
+    check("every shot has a spoken line", project.shots.every((s) => !!s.dialogue));
+    // The plan is laid out on estimated lengths; no TTS runs (spends) until the
+    // user approves. voiceAssetId lands only after the gate.
+    check("no voice spent before approval", studio.calls.every((c) => c.role !== "voice"));
+    check("shots not yet voiced at the gate", project.shots.every((s) => !s.voiceAssetId));
     await orch.approveBreakdown();
     check("run reaches done", project.phase === "done");
+    check("every shot voiced after approval", project.shots.every((s) => !!s.voiceAssetId));
     assertTiling("placed clips tile the generated spine", editor.placed, project.durationFrames);
     check("one voiceover placed per beat", editor.placedAudio.filter((a) => a.kind === "voice").length === (project.beatVoices?.length ?? -1));
     check("a single music bed spans the whole video", editor.placedAudio.filter((a) => a.kind === "music").length === 1);
@@ -251,7 +257,10 @@ async function run(): Promise<void> {
     const project = generatedProject();
     const orch = new VideoOrchestrator(project, d);
     await orch.run();
-    project.shots[1].action = `${FAIL} broken`; // this shot will fall back to a still
+    // Doom a shot at the gate: the voiced rescale preserves the approved shots
+    // (only their frame boundaries move), so a gate-time shot edit survives to
+    // the render — exactly the plan-integrity invariant the gate promises.
+    project.shots[1].action = `${FAIL} broken`; // it falls back to a still
     await orch.approveBreakdown();
     const failed = project.shots.find((s) => s.status === "failed")!;
     check("interrupted shot holds a fallback still", !!failed && !!failed.timelineClipId);
@@ -328,6 +337,25 @@ async function run(): Promise<void> {
       const lip = project.shots.every((s) => s.lipSynced === true);
       check(`${videoId}: lip-sync ${videoId === "fake-fast" ? "post-pass used" : "inline (none)"}`, videoId === "fake-fast" ? lip : !lip);
     }
+  }
+
+  // ── fillSlot — a placed shot fills its exact slot (editor-boundary tiling) ─
+  section("fillSlot — generated clips tile the timeline with no gap");
+  {
+    const foot = (r: { out: number; speed?: number }) => r.out / (r.speed ?? 1);
+    const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
+    check(
+      "image takes the whole slot",
+      near(foot(fillSlot("image", 0, 6, 0.25)), 6) && fillSlot("image", 0, 6, 0.25).speed === undefined
+    );
+    check("longer video trims to the slot", near(foot(fillSlot("video", 8, 6, 0.25)), 6));
+    check("shorter video stretches to fill", near(foot(fillSlot("video", 4, 6, 0.25)), 6));
+    check(
+      "exact video needs no speed change",
+      near(foot(fillSlot("video", 6, 6, 0.25)), 6) && fillSlot("video", 6, 6, 0.25).speed === undefined
+    );
+    const subFloor = fillSlot("video", 1, 6, 0.25);
+    check("sub-floor video clamps speed (small gap over a crawl)", subFloor.speed === 0.25 && foot(subFloor) < 6);
   }
 
   console.log(`\n${failures === 0 ? "✓ ALL PASS" : `✗ ${failures} FAILED`}`);

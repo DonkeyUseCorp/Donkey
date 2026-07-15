@@ -97,7 +97,9 @@ export interface Shot {
 /** One beat's voiceover placed on the soundtrack — the unit the spine is
  * placed in, so a video regeneration never restacks narration. */
 export interface BeatVoice {
-  voiceAssetId: string;
+  /** The voiced clip's asset id. Absent while the plan is still on estimated
+   * lengths (pre-approval); set once the beat is voiced. */
+  voiceAssetId?: string;
   startFrame: number;
   durationFrames: number;
   /** The placed soundtrack clip id, once on the timeline (idempotent placement). */
@@ -130,10 +132,18 @@ export interface VideoProject {
   durationFrames: number;
   /** Word-level transcript of the spine (provided mode, or generated VO). */
   transcript: TranscriptWord[];
+  /** The shape every render matches. Captured at start and refrozen at the
+   * approval gate (the last moment the user can set it), so a render that
+   * finishes after a project switch can never pick up another project's shape. */
+  aspect?: "9:16" | "16:9";
   /** Reusable style string every downstream prompt carries. */
   style: string;
   /** The suite label the run was produced with (for provenance and evals). */
   suiteLabel: string;
+  /** The chat thread that owns this run's media, so every asset it creates is
+   * tagged to the chat (kept off the Media/Video/Image/Audio panels) and a
+   * resume after reload keeps tagging with the same owner. */
+  chatId?: string;
   characters: VideoAsset[];
   locations: VideoAsset[];
   shots: Shot[];
@@ -145,6 +155,7 @@ export interface VideoProject {
 
 export type VideoPhase =
   | "brief"
+  | "voicing"
   | "ingest"
   | "breakdown"
   | "style"

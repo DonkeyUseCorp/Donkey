@@ -59,7 +59,8 @@ export function ImageGenPanel({ projectId }: { projectId: string }) {
   const signedIn = useSignedIn();
   const candidates = useRefCandidates();
   const allJobs = useGenerate((s) => s.jobs);
-  const jobs = allJobs.filter((j) => j.kind === "image" && j.projectId === projectId);
+  // Panel renders only — a chat- or scene-owned job lives on its chat card.
+  const jobs = allJobs.filter((j) => j.kind === "image" && j.projectId === projectId && !j.chatId);
   // Select the stable `assets` reference and derive here: filtering inside the
   // selector returns a fresh array every store write (including usePlayback's
   // per-frame ticks) and would re-render the panel constantly. Newest first.

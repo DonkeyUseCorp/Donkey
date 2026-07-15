@@ -135,6 +135,10 @@ export const projectsApi = {
           body.notes && typeof body.notes === "object"
             ? { ...existing.notes, ...body.notes }
             : existing.notes,
+        // Brief-to-video run state. Persisted verbatim; a client that omits the
+        // key keeps the existing plan, and null clears it (a dismissed plan) —
+        // normalized to undefined so the doc at rest never stores null.
+        genvideo: body.genvideo !== undefined ? body.genvideo ?? undefined : existing.genvideo,
       };
       await writeProject(id, doc);
       return Response.json({ ok: true, updatedAt: doc.updatedAt });
@@ -249,7 +253,11 @@ export const projectsApi = {
   async transcribeStart(req: Request, { id }: { id: string }) {
     try {
       const body = (await req.json()) as Omit<TranscribeSpec, "projectId">;
-      if (!Array.isArray(body.clips) || typeof body.duration !== "number") {
+      if (
+        !Array.isArray(body.clips) ||
+        !Array.isArray(body.audio) ||
+        typeof body.duration !== "number"
+      ) {
         return err("Bad transcribe spec.", 400);
       }
       const job = await createTranscribeJob({ ...body, projectId: id });

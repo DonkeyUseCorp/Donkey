@@ -185,7 +185,7 @@ export const AI_TOOLS: AiToolDef[] = [
         h: num("Height 0..1"),
       }, ["x", "y", "w", "h"]),
       fit: { type: "string", enum: ["fit", "fill"], description: "How the video meets its region" },
-      speed: num("Playback rate 0.25–4"),
+      speed: num("Playback rate (1 = normal, no upper limit)"),
     }, ["id"]),
   },
   {
@@ -305,6 +305,41 @@ export const AI_TOOLS: AiToolDef[] = [
       add_to_timeline: bool("Insert the clip on the video track when it lands (default false — it stays on its chat card until the user asks)"),
       index: num("Insert position on the video track (passing it implies add_to_timeline)"),
     }, ["character_id", "line"]),
+  },
+  {
+    name: "generate_scene",
+    description:
+      "Generate a WHOLE short video — a narrated, multi-shot cut assembled on the timeline — from a brief, or animate audio already in the project. Use this when the user wants a complete video/scene/story (\"make me a video about…\", \"turn this into a 20-second short\"), not a single clip (that's generate_video). It writes a script, voices it, breaks it into shots, then RETURNS the shot plan and STOPS: get the user's go-ahead and call approve_scene before the shots render, because each shot spends credits. Pass from_audio_asset_id to animate an audio spine the project already has (a voiceover, recording, or song → shots tiled over it) instead of writing a new script. The look is derived from the brief and any references and can be anything — cinematic live-action, anime, documentary, product ad, cartoon; never assume a genre, let the brief decide, and describe the look by its visual traits rather than naming a real franchise, show, or artist (even one a reference resembles) — the user may not want it and the generator rejects trademarked names. Needs the user signed in to Donkey (spends credits).",
+    inputSchema: obj({
+      brief: str("What the video is about — the story or subject. Omit only when animating existing audio."),
+      from_audio_asset_id: str("Animate this project audio asset (id from media) — shots tile over it instead of a new script"),
+      target_seconds: num("Rough total length in seconds, 6–90 (default ~24)"),
+      aspect: { type: "string", enum: ["9:16", "16:9"], description: "Output shape (default: the project aspect)" },
+      style: str("Optional look to steer the whole video (e.g. 'moody neon, handheld'); usually left to the brief"),
+      reference_asset_ids: {
+        type: "array",
+        items: { type: "string" },
+        description: "Project image/video asset ids that anchor the look (the user's attached references)",
+      },
+    }),
+  },
+  {
+    name: "approve_scene",
+    description:
+      "Approve the pending generate_scene shot plan and start rendering. The shots render in the background and land on the timeline as they finish. Call this only when the user confirms (\"go\", \"do it\", \"looks good\") — approving spends credits per shot.",
+    inputSchema: obj({}),
+  },
+  {
+    name: "regenerate_shot",
+    description:
+      "Redo one shot of the generated scene by its number (1-based), optionally nudging it (\"wider\", \"at night\", \"more energetic\"). Only valid after a scene has been generated.",
+    inputSchema: obj({ n: num("Shot number, 1-based"), note: str("Optional change to apply to that shot") }, ["n"]),
+  },
+  {
+    name: "restyle_scene",
+    description:
+      "Restyle the whole generated scene and redo every shot with a new look (\"make it black-and-white film noir\", \"turn it into anime\"). Only valid after a scene has been generated. Spends credits (every shot re-renders), so confirm first.",
+    inputSchema: obj({ style: str("The new look for the whole video") }, ["style"]),
   },
   {
     name: "stock_search",
@@ -526,8 +561,8 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "set_speed",
     description:
-      "Set a video clip's playback speed (0.25–4×). Faster shortens the clip on the timeline; slower stretches it. Later titles and captions shift to stay in sync.",
-    inputSchema: obj({ clipId: str("Video clip id"), speed: num("Playback rate 0.25–4 (1 = normal)") }, ["clipId", "speed"]),
+      "Set a video clip's playback speed. Faster shortens the clip on the timeline; slower stretches it. Later titles and captions shift to stay in sync.",
+    inputSchema: obj({ clipId: str("Video clip id"), speed: num("Playback rate (1 = normal, no upper limit)") }, ["clipId", "speed"]),
   },
   {
     name: "set_transition",
@@ -600,7 +635,7 @@ Times are in seconds on the shared timeline. The playhead is currentTime; a skim
 - Overlay video: a video/image asset can sit on a track above track 0 (track 1, 2… — topmost wins) or behind it (track -1…). A full-frame overlay covers everything below it; give it a layout to share the frame — top/bottom/left/right halves for a split screen, pip for a floating corner box, or a custom region rect. add_overlay_video creates one from a media asset; update_overlay_video moves/trims/regions/mutes/hides it. The user makes them by dragging media above/below track 0; they drag the region in the preview.
 - A clip's timeline length is (out-in)/speed; total duration runs to the last clip's end, gaps included, minus cross-style transition overlaps.
 - trim_clip changes in/out inside the source media. in >= 0, out <= source duration, out-in >= 0.1.
-- set_speed sets a clip's playback rate (0.25–4×); it changes the clip's timeline length, and later titles/captions ripple to stay in sync.
+- set_speed sets a clip's playback rate; it changes the clip's timeline length, and later titles/captions ripple to stay in sync.
 - set_transition joins a clip into the next one (0–2s, six styles) — read the transitions-and-fades skill before styling cuts. Splitting or deleting clears the affected transition.
 - split_at cuts the track-0 clip under that time into two clips at the exact frame. With a soundtrack or overlay clip selected it splits that instead.
 - The user can multi-select (⌘/⇧-click) and delete several items at once; a hover chip on each video clip toggles its own audio.
@@ -705,7 +740,7 @@ Rules:
 - Read list_skills / read_skill before working in an area you're unsure about — they document every setting.
 - Don't transcribe a video with no speech. If the user wants captions on silent footage, use subtitles_from_visuals (it narrates what's on screen). Never invent a spoken transcript.
 - Voiceovers duck other audio by default so they stay audible. Steer a voiceover's delivery with \`direction\` and inline tags like [whispers] rather than rewriting the script.
-- generate_image / generate_video / generate_character_video / voiceover_generate / read_subtitles_aloud make media through hosted models (spends the user's Donkey credits, needs sign-in); call them when the user asked for the media itself — a request for the prompt or script gets text in chat. Bundled stock media (stock_search / stock_add) is free — use it when it fits. Media the user attached is in \`media\`; pass those asset ids as generation references when they say "use this", and place project assets in the cut with add_clip when they ask for them there ("make a movie from these photos"). Generated media previews on a chat card the user can expand, drag in, or file away; add it to the timeline (add_to_timeline:true or an index) only when they asked for it in the cut. Write a rich, specific prompt from their shorthand. Video renders take a minute or two.
+- generate_image / generate_video / generate_character_video / voiceover_generate / read_subtitles_aloud make media through hosted models (spends the user's Donkey credits, needs sign-in); call them when the user asked for the media itself — a request for the prompt or script gets text in chat. Bundled stock media (stock_search / stock_add) is free — use it when it fits. Media the user attached is in \`media\`; pass those asset ids as generation references when they say "use this", and place project assets in the cut with add_clip when they ask for them there ("make a movie from these photos"). Generated media previews on a chat card the user can expand, drag in, or file away; add it to the timeline (add_to_timeline:true or an index) only when they asked for it in the cut. Write a rich, specific prompt from their shorthand. Video renders take a minute or two. For a whole video — a full scene or story, not one clip — generate_scene plans a narrated multi-shot cut and stops at the shot list; confirm with the user, then call approve_scene, since it renders many paid shots (regenerate_shot / restyle_scene revise it after).
 - You can see and hear: audio the user attaches to their message plays right in it — answer "what does this say" from what you hear, no tool call. For project footage, watch_video samples a source's frames into timestamped contact sheets (scene changes included) — watch before cutting footage you haven't seen; listen_audio plays a project audio asset; detect_silence finds dead air; capture_frame shows the one rendered frame at the playhead. The watching-and-cutting skill has the flow.`;
 }
 

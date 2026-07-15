@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { create } from "zustand";
 import { apiFetch, apiJson } from "./api";
 import type { AssetRef } from "./assetRef";
+import { bytesFromBase64 } from "./bytes";
 import { composeGenPrompt, foldTextRefs } from "./composeGen";
 import { hostedPost } from "./hosted";
 import { enrichAsset, importFileToProject } from "./media";
@@ -31,6 +32,10 @@ export interface GenerateJob {
   error?: string;
   /** The project asset the finished generation landed as. */
   assetId?: string;
+  /** The chat thread that launched this render, when it wasn't the panel.
+   * An owned job shows on its chat card only — the Video/Image panels list
+   * panel renders, so they skip it — and its asset lands chat-tagged. */
+  chatId?: string;
 }
 
 interface GenerateState {
@@ -57,6 +62,9 @@ interface GenerateState {
       /** Rewrite the prompt around the references before rendering (the
        * default when refs are present) — see composeGen.ts. */
       composeRefs?: boolean;
+      /** The owning chat thread when chat (or a scene run) asked — stamps the
+       * job and the landed asset, keeping both off the generate panels. */
+      chatId?: string;
     }
   ) => Promise<GenerateJob>;
   /** Kick off a video render. Returns the job id right away (the render
@@ -75,6 +83,11 @@ export interface VideoGenOptions {
   /** Composition shape; defaults to the project's orientation. */
   aspect?: "16:9" | "9:16";
   resolution?: "720p" | "1080p";
+  /** Person-safety for the render. Unset, Veo blocks person/face generation, so
+   * any shot with a character fails. ALLOW_ADULT is the most image-to-video
+   * permits; ALLOW_ALL (needed for minors) only works text-to-video (no image
+   * seed). */
+  personGeneration?: "DONT_ALLOW" | "ALLOW_ADULT" | "ALLOW_ALL";
   /** References of any kind — video, image, text file. Veo takes one
    * input image, so at most one picture seeds the render. */
   refs?: AssetRef[];
@@ -89,6 +102,9 @@ export interface VideoGenOptions {
    * project is still open — lets the AI place the clip after a background
    * render it couldn't wait out (the assistant tool bridge caps at 2min). */
   onDone?: (asset: MediaAsset) => void;
+  /** The owning chat thread when chat (or a scene run) asked — stamps the
+   * job and the landed asset, keeping both off the generate panels. */
+  chatId?: string;
 }
 
 const REFRESH_MS = 8000;
@@ -209,13 +225,6 @@ async function promptAndImages(
   };
 }
 
-function bytesFromBase64(b64: string): Uint8Array<ArrayBuffer> {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(new ArrayBuffer(bin.length));
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes;
-}
-
 /** Settled video jobs persist per browser, so a render left unplaced (a chat
  * card, the Video panel's renders list) survives a reload. Running jobs don't
  * persist: a reload kills the in-flight poll loop, so a restored one would
@@ -304,7 +313,14 @@ export const useGenerate = create<GenerateState>((set, get) => {
     },
 
     generateImage: (projectId, prompt, opts) => {
-      const job: GenerateJob = { id: uid(), projectId, kind: "image", prompt, status: "running" };
+      const job: GenerateJob = {
+        id: uid(),
+        projectId,
+        kind: "image",
+        prompt,
+        status: "running",
+        ...(opts?.chatId ? { chatId: opts.chatId } : {}),
+      };
       set((s) => ({ jobs: [job, ...s.jobs] }));
       return (async () => {
         try {
@@ -353,7 +369,15 @@ export const useGenerate = create<GenerateState>((set, get) => {
             throw new Error(body.error ?? "Could not add the image to the project.");
           }
           const asset: MediaAsset = { ...body, url: mediaUrl(projectId, body.fileName) };
-          if (adopt(projectId, asset)) useGenNotify.getState().landed("image", asset.id);
+          if (opts?.chatId) {
+            // Chat-owned: lives on its chat card, never in the Image panel's
+            // grid, and no arrival badge — the chat is already watching.
+            asset.origin = "chat";
+            asset.chatId = opts.chatId;
+            adopt(projectId, asset);
+          } else if (adopt(projectId, asset)) {
+            useGenNotify.getState().landed("image", asset.id);
+          }
           update(job.id, { status: "done", assetId: asset.id });
         } catch (err) {
           fail(job.id, err);
@@ -363,7 +387,14 @@ export const useGenerate = create<GenerateState>((set, get) => {
     },
 
     generateVideo: (projectId, prompt, opts) => {
-      const job: GenerateJob = { id: uid(), projectId, kind: "video", prompt, status: "running" };
+      const job: GenerateJob = {
+        id: uid(),
+        projectId,
+        kind: "video",
+        prompt,
+        status: "running",
+        ...(opts?.chatId ? { chatId: opts.chatId } : {}),
+      };
       set((s) => ({ jobs: [job, ...s.jobs] }));
       const settledRun = (async () => {
         try {
@@ -386,6 +417,7 @@ export const useGenerate = create<GenerateState>((set, get) => {
               aspectRatio: opts?.aspect ?? useEditor.getState().aspect,
               ...(opts?.resolution ? { resolution: opts.resolution } : {}),
               ...(opts?.durationSeconds ? { durationSeconds: opts.durationSeconds } : {}),
+              ...(opts?.personGeneration ? { personGeneration: opts.personGeneration } : {}),
             },
           });
           if (!res.ok) throw new Error(await readError(res, "Video generation failed."));
@@ -432,9 +464,16 @@ export const useGenerate = create<GenerateState>((set, get) => {
           const asset = await importFileToProject(projectId, file);
           if (!asset) throw new Error("Could not import the generated video.");
           asset.name = promptName(prompt);
-          asset.origin = "generated"; // lives in the generate panel, not Media
+          if (opts?.chatId) {
+            // Chat-owned: lives on its chat card, never in the Video panel's
+            // renders, and no arrival badge — the chat is already watching.
+            asset.origin = "chat";
+            asset.chatId = opts.chatId;
+          } else {
+            asset.origin = "generated"; // lives in the generate panel, not Media
+          }
           if (adopt(projectId, asset)) {
-            useGenNotify.getState().landed("video", asset.id);
+            if (!opts?.chatId) useGenNotify.getState().landed("video", asset.id);
             opts?.onDone?.(asset);
           }
           update(job.id, { status: "done", assetId: asset.id });

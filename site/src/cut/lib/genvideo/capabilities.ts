@@ -32,7 +32,10 @@ export interface BreakdownInput {
 export interface StyleInput {
   brief?: string;
   refs: RefAsset[];
-  beats: { dialogue: string; action: string }[];
+  /** The story to design for. `characters`/`location` carry the stable ids the
+   * script/breakdown assigned (char:1, loc:1, …); the style role returns one
+   * asset per distinct id, so identity ties back to the shots by construction. */
+  beats: { dialogue: string; action: string; characters?: string[]; location?: string }[];
 }
 
 export interface StyleBible {
@@ -128,7 +131,9 @@ export interface ModelSuite {
   image: ImageRole;
   video: VideoRole;
   voice: VoiceRole;
-  music: MusicRole;
+  /** Absent when no music backend is configured — the run assembles with no
+   * bed rather than failing. */
+  music?: MusicRole;
   /** Absent when `video.audioNative` — the video does its own lip-sync. */
   lipSync?: LipSyncRole;
   transcribe: TranscribeRole;

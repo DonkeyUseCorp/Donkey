@@ -4,6 +4,7 @@ import { apiFetch, apiJson } from "./api";
 import { refFromAsset, refFromStockVideo, type AssetRef } from "./assetRef";
 import { chatOwner, tagChatAsset } from "./chatAssets";
 import { useGenerate, type VideoGenOptions } from "./generate";
+import { useGenScene } from "./genScene";
 import {
   addTemplateToProject,
   createLibraryFolder,
@@ -36,8 +37,7 @@ import {
   mediaUrl,
   rectOf,
   regionLabel,
-  SPEED_MAX,
-  SPEED_MIN,
+  SPEED_FLOOR,
   TRANSITION_STYLE_IDS,
   type AudioClip,
   type FontId,
@@ -370,7 +370,7 @@ export async function runAiTool(
         patch.frame = { x: clamp(rg.x, 0, 1 - w), y: clamp(rg.y, 0, 1 - h), w, h };
       }
       if (input.fit === "fit" || input.fit === "fill") patch.fit = input.fit;
-      if (isNum(input.speed)) patch.speed = clamp(input.speed, SPEED_MIN, SPEED_MAX);
+      if (isNum(input.speed)) patch.speed = Math.max(SPEED_FLOOR, input.speed);
       if (Object.keys(patch).length === 0) throw new ToolError("Nothing to change.");
       s.updateOverlayClip(c.id, patch);
       const next = useEditor.getState().clips.find((x) => x.id === c.id)!;
@@ -548,7 +548,9 @@ export async function runAiTool(
       const refs = resolveRefAssets(input.reference_asset_ids);
 
       // Captured before the render: the image files under the chat that
-      // asked, even if the user switches threads while it generates.
+      // asked, even if the user switches threads while it generates. Ownership
+      // rides the job from creation, so neither the job row nor the landed
+      // asset ever touches the Image panel.
       const chatId = chatOwner();
       // Hosted image generation is synchronous and quick, so wait it out.
       const job = await useGenerate.getState().generateImage(projectId, prompt, {
@@ -559,6 +561,7 @@ export async function runAiTool(
           ? { resolution: input.resolution }
           : {}),
         ...(refs.length > 0 ? { refs } : {}),
+        ...(chatId ? { chatId } : {}),
       });
       if (job.status !== "done" || !job.assetId) {
         throw new ToolError(job.error ?? "Image generation failed.");
@@ -566,7 +569,6 @@ export async function runAiTool(
       const cur = useEditor.getState();
       const asset = cur.assets.find((a) => a.id === job.assetId);
       if (!asset) throw new ToolError("The generated image did not land in the project.");
-      tagChatAsset(asset.id, chatId);
       const placed = wantsTimeline(input, "index")
         ? addVideoTrackClip(asset.id, promptedIndex(input))
         : NOT_PLACED;
@@ -639,6 +641,73 @@ export async function runAiTool(
         }),
         character: character.id,
       };
+    }
+
+    case "generate_scene": {
+      const projectId = s.projectId;
+      if (!projectId) throw new ToolError("No project open.");
+      const gen = useGenerate.getState();
+      const signedIn = gen.signedIn ?? (await gen.probeNow());
+      if (!signedIn) throw new ToolError("Sign in to Donkey to generate a video.");
+      const brief = String(input.brief ?? "").trim();
+      const fromAudio =
+        input.from_audio_asset_id !== undefined ? String(input.from_audio_asset_id) : undefined;
+      if (!brief && !fromAudio)
+        throw new ToolError("A brief is required (or from_audio_asset_id to animate existing audio).");
+      if (fromAudio) {
+        const asset = s.assets.find((a) => a.id === fromAudio);
+        const audio = s.assets.filter((a) => a.type === "audio");
+        const hint = audio.length
+          ? ` The project's audio: ${audio.map((a) => `${a.id} ("${a.name}")`).join(", ")}.`
+          : " This project has no audio asset — omit from_audio_asset_id to write a fresh narration instead.";
+        if (!asset) throw new ToolError(`No project asset with id ${fromAudio}.${hint}`);
+        if (asset.type !== "audio")
+          throw new ToolError(`"${asset.name}" is ${asset.type}, not audio — from_audio_asset_id must be the audio to animate.${hint}`);
+      }
+      // Plan up to the shot list and stop; approve_scene starts the paid renders.
+      // Tag every asset the run creates to the asking chat, so intermediates and
+      // shots stay off the Media/Video/Image/Audio panels.
+      const res = await useGenScene.getState().start(projectId, {
+        chatId: chatOwner(),
+        ...(brief ? { brief } : {}),
+        ...(fromAudio ? { fromAudioAssetId: fromAudio } : {}),
+        ...(isNum(input.target_seconds)
+          ? { targetSeconds: clamp(Math.round(input.target_seconds), 6, 90) }
+          : {}),
+        ...(input.aspect === "16:9" || input.aspect === "9:16" ? { aspect: input.aspect } : {}),
+        ...(typeof input.style === "string" && input.style.trim() ? { style: input.style.trim() } : {}),
+        ...(Array.isArray(input.reference_asset_ids)
+          ? { referenceAssetIds: input.reference_asset_ids.map(String) }
+          : {}),
+      });
+      if (!res.started) throw new ToolError(res.message);
+      return {
+        planned: true,
+        shots: res.shotCount,
+        note: `${res.message} A plan card below lists the shots for the user, so keep your reply to one short line — don't re-describe the shots or the timing. Just ask them to confirm; when they do, call approve_scene (each shot spends credits, so don't approve on your own).`,
+      };
+    }
+
+    case "approve_scene": {
+      const res = useGenScene.getState().approve();
+      if (!res.ok) throw new ToolError(res.message);
+      return { rendering: true, note: res.message };
+    }
+
+    case "regenerate_shot": {
+      if (!isNum(input.n)) throw new ToolError("n (the 1-based shot number) is required.");
+      const note = typeof input.note === "string" && input.note.trim() ? input.note.trim() : undefined;
+      const res = useGenScene.getState().regenerateShot(Math.round(input.n), note);
+      if (!res.ok) throw new ToolError(res.message);
+      return { note: res.message };
+    }
+
+    case "restyle_scene": {
+      const style = String(input.style ?? "").trim();
+      if (!style) throw new ToolError("style is required — the new look for the whole video.");
+      const res = useGenScene.getState().restyle(style);
+      if (!res.ok) throw new ToolError(res.message);
+      return { note: res.message };
     }
 
     case "stock_search": {
@@ -1144,7 +1213,7 @@ export async function runAiTool(
 
     case "set_speed": {
       const clip = requireItem(s.clips, input.clipId, "video clip");
-      if (!isNum(input.speed)) throw new ToolError("speed is required (0.25–4).");
+      if (!isNum(input.speed)) throw new ToolError("speed is required (e.g. 1.5).");
       s.setClipSpeed(clip.id, input.speed);
       const next = useEditor.getState().clips.find((c) => c.id === clip.id)!;
       return { id: next.id, speed: next.speed ?? 1 };
@@ -1493,12 +1562,14 @@ function launchVeoJob(
   const addToTimeline = wantsTimeline(input, "index");
   const index = promptedIndex(input);
   // Captured now: the render must file under the chat that asked, even if
-  // the user switches threads before it lands.
+  // the user switches threads before it lands. Ownership rides the job from
+  // creation, so neither the job row nor the landed asset ever touches the
+  // Video panel — including a render that errors and lands no asset.
   const chatId = chatOwner();
   const { jobId } = useGenerate.getState().generateVideo(projectId, prompt, {
     ...opts,
+    ...(chatId ? { chatId } : {}),
     onDone: (asset) => {
-      tagChatAsset(asset.id, chatId);
       if (addToTimeline) addVideoTrackClip(asset.id, index);
     },
   });
@@ -1511,7 +1582,7 @@ function launchVeoJob(
       "Rendering with Veo — it previews in this chat when it lands, in a minute or two" +
       (addToTimeline
         ? ", and goes onto the timeline."
-        : ". It stays in the chat (and the Video panel's renders) until the user places it."),
+        : ". It stays in the chat until the user places it."),
   };
 }
 

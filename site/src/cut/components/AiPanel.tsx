@@ -57,6 +57,7 @@ import { signInUrl, useSignedIn } from "@/cut/lib/generate";
 import { streamGeminiChat } from "@/cut/lib/geminiChat";
 import { AI_MODELS } from "@/cut/lib/aiModels";
 import { saveAssetToLibrary } from "@/cut/lib/library";
+import { formatDuration, useGenScene } from "@/cut/lib/genScene";
 import { lightboxItemFromRef, useLightbox } from "@/cut/lib/lightbox";
 import { refsFromDroppedFiles } from "@/cut/lib/refMedia";
 import { revealRef } from "@/cut/lib/refReveal";
@@ -351,6 +352,10 @@ function ChatSession({
   // Any OS file drag over the window hints the composer as a drop target;
   // hovering it (dropActive below) strengthens the ring and shows the label.
   const fileDropHint = useEditor((s) => s.dropActive !== null);
+  // A resumed run can pin the scene card with no chat messages behind it — the
+  // empty-state intro/suggestions must yield to it so the two don't stack.
+  const sceneProjectId = useEditor((s) => s.projectId);
+  const hasSceneRun = useGenScene((s) => !!s.run && s.run.projectId === sceneProjectId);
   const { active: dropActive, attachTarget, targetProps } = useAssetDrop(
     (ref) => setAttachments((prev) => addRefOnce(prev, ref)),
     // OS files dropped on the chat attach as references (media files import
@@ -531,7 +536,7 @@ function ChatSession({
       className="relative flex min-h-0 flex-1 flex-col"
     >
       <div ref={scrollRef} className="ai-messages min-h-0 flex-1 overflow-y-auto px-3.5 py-3">
-        {messages.length === 0 && (
+        {messages.length === 0 && !hasSceneRun && (
           <div className="flex flex-col gap-3 pt-6">
             <p className="text-[12.5px] leading-relaxed text-muted-foreground">
               I can see your whole project — clips, titles, subtitles, publish
@@ -798,6 +803,32 @@ function MessageCopy({ text }: { text: string }) {
 /** Memoized per message: a streaming turn replaces `messages` every chunk,
  * and only the growing message should re-render — settled ones hold whole
  * asset-card subtrees. */
+// How long each tool call ran, tracked across this session's renders (keyed by
+// tool-call id). We stamp the start the first time a call renders while still
+// running and the end when it settles, so the chip can show its duration.
+const toolTimes = new Map<string, { start: number; end?: number; sawRunning: boolean }>();
+// The map lives for the page; long sessions evict the oldest settled entries
+// (their chips have already captured the duration they show).
+const TOOL_TIMES_CAP = 500;
+function toolDuration(id: string | undefined, settled: boolean): string | null {
+  if (!id) return null;
+  let t = toolTimes.get(id);
+  if (!t) {
+    if (toolTimes.size >= TOOL_TIMES_CAP) {
+      for (const key of toolTimes.keys()) {
+        if (toolTimes.size < TOOL_TIMES_CAP) break;
+        if (toolTimes.get(key)?.end !== undefined) toolTimes.delete(key);
+      }
+    }
+    t = { start: Date.now(), sawRunning: !settled };
+    toolTimes.set(id, t);
+  }
+  if (settled && t.end === undefined) t.end = Date.now();
+  // Null for a call first seen already-done (e.g. loaded on reload): its real
+  // start is unknown, so a "0:00" would lie.
+  return t.sawRunning && t.end !== undefined ? formatDuration(t.end - t.start) : null;
+}
+
 const MessageView = memo(function MessageView({ message }: { message: UIMessage }) {
   if (message.role === "user") {
     const text = message.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
@@ -848,6 +879,7 @@ const MessageView = memo(function MessageView({ message }: { message: UIMessage 
           const p = part as unknown as {
             type: string;
             toolName?: string;
+            toolCallId?: string;
             state: string;
             input?: unknown;
             output?: unknown;
@@ -856,6 +888,7 @@ const MessageView = memo(function MessageView({ message }: { message: UIMessage 
           const name = p.toolName ?? part.type.slice(5);
           const failed = p.state === "output-error";
           const done = p.state === "output-available";
+          const took = toolDuration(p.toolCallId, done || failed);
           return (
             <Fragment key={i}>
               <details className="ai-tool group max-w-full">
@@ -870,6 +903,7 @@ const MessageView = memo(function MessageView({ message }: { message: UIMessage 
                   {done && <Check className="size-3 text-emerald-600" />}
                   {failed && <TriangleAlert className="size-3" />}
                   {!done && !failed && <CircleDashed className="size-3 animate-spin" />}
+                  {took && <span className="ml-auto tabular-nums text-[10px]">{took}</span>}
                 </summary>
                 <pre className="mt-1 max-h-40 overflow-auto rounded-md bg-muted/70 p-2 font-mono text-[10px] leading-relaxed whitespace-pre-wrap">
                   {JSON.stringify({ input: p.input, output: p.output, error: p.errorText }, null, 2)}

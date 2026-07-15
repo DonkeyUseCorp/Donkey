@@ -21,9 +21,11 @@ import type {
   TransitionStyle,
   VideoClip,
 } from "./types";
+import type { VideoProject } from "./genvideo/types";
+import { fillSlot } from "./genvideo/fillSlot";
 import { apiFetch, apiJson } from "./api";
 import { trackLocale } from "./subtitles";
-import { emptySubtitles, IMAGE_CLIP_SECONDS, isCrossStyle, MAX_SUBTITLE_LANES, mediaUrl, SPEED_MAX, SPEED_MIN, TRANSITION_MAX } from "./types";
+import { emptySubtitles, IMAGE_CLIP_SECONDS, isCrossStyle, MAX_SUBTITLE_LANES, mediaUrl, SPEED_FLOOR, SPEED_MIN, TRANSITION_MAX } from "./types";
 import { readTextStyle } from "./textStyle";
 import { loadUiState, saveUiState } from "./uiState";
 import { captureTimelineFrames } from "./visualFrames";
@@ -126,6 +128,9 @@ export interface EditorState {
   dropActive: "media" | "other" | null;
   /** Whether the AI assistant panel is open (remembered across sessions). */
   aiOpen: boolean;
+  /** In-progress or finished brief-to-video run; persisted on ProjectDoc.genvideo
+   * and driven by the genScene store. Absent when no scene was generated. */
+  genvideo?: VideoProject;
 
   loadProject: (id: string) => Promise<void>;
   setProjectName: (name: string) => void;
@@ -147,6 +152,30 @@ export interface EditorState {
    * to that gain while it plays; `opts.lane` picks the audio track it lands
    * on (default: the first one). */
   addAudioFromAsset: (assetId: string, start?: number, opts?: { duck?: number; lane?: number }) => void;
+  /** Set (or clear) the persisted brief-to-video run. Replaces the object by
+   * reference so autosave detects the change. */
+  setGenvideo: (project: VideoProject | undefined) => void;
+  /** Brief-to-video placement: place a generated clip so it fills exactly
+   * [startSec, endSec) on track 0 — exact start (no slide), muted, time-stretched
+   * or trimmed to the slot — and return its id. Leaves selection untouched (the
+   * run is a background process). */
+  placeGenClip: (assetId: string, startSec: number, endSec: number) => string | null;
+  /** Brief-to-video placement: place a generated audio clip at startSec spanning
+   * up to durSec on the soundtrack (duck/lane optional), returning its id. */
+  placeGenAudio: (assetId: string, startSec: number, durSec: number, opts?: { duck?: number; lane?: number }) => string | null;
+  /** Remove a video clip by id (a background gen swap; leaves its slot empty). */
+  removeClipById: (id: string) => void;
+  /** Remove a soundtrack clip by id (background gen swap, idempotent placement). */
+  removeAudioById: (id: string) => void;
+  /** Re-mark a resumed run's already-placed clips as render-owned. The gen sets
+   * reset on load, so hydrate re-registers the persisted plan's clip ids to keep
+   * undo/redo off them while the run finishes. */
+  adoptGenClips: (clipIds: string[], audioIds: string[]) => void;
+  /** Hand a finished run's clips over to the user's undo domain: splice them
+   * into every existing history snapshot (which excluded them while the run
+   * owned them) and clear the gen sets, so post-run edits to generated clips
+   * undo like any other edit. */
+  releaseGenClips: () => void;
   addOverlay: () => void;
   updateClip: (id: string, patch: Partial<VideoClip>) => void;
   /** Set a clip's playback rate (0.25–4). A longer footprint pushes the
@@ -288,6 +317,16 @@ let docSeq = 0;
  * beginHistoryBatch). One checkpoint is captured when it goes 0→1. */
 let batchDepth = 0;
 
+/** Ids of clips a background generation run placed. Those clips are the
+ * orchestrator's to manage — it swaps them idempotently and holds each shot's
+ * timeline id — so the user's undo/redo must neither remove nor resurrect them.
+ * They are dropped from every history snapshot and re-attached live on restore,
+ * so stepping through history can't open a black gap under a running render or
+ * bring back a shot the run already replaced. Transient: not persisted and
+ * cleared on load, so a reopened project treats them as ordinary clips. */
+const genClipIds = new Set<string>();
+const genAudioIds = new Set<string>();
+
 /** Timeline clipboard (⌘C/⌘V) — survives across projects in one session. One
  * entry per copied item so a multi-selection round-trips. */
 type ClipboardItem =
@@ -367,8 +406,9 @@ export function footprints(items: (VideoClip | AudioClip)[]): { start: number; e
 }
 
 /** POST a transcribe spec and poll the job to completion. Returns the cues, or
- * null when the user switches projects mid-run. Throws user-facing errors. */
-async function runTranscription(projectId: string, spec: object): Promise<SubtitleCue[] | null> {
+ * null when the user switches projects mid-run. Throws user-facing errors.
+ * Shared with the brief-to-video transcribe adapter. */
+export async function runTranscription(projectId: string, spec: object): Promise<SubtitleCue[] | null> {
   const res = await apiFetch(`/api/cut/projects/${projectId}/transcribe`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -393,14 +433,32 @@ export const useEditor = create<EditorState>((set, get) => {
   const snapshot = (): DocSnapshot => {
     const { clips, audioClips, overlays, subtitles } = get();
     return {
-      clips: clips.map((c) => ({ ...c })),
-      audioClips: audioClips.map((c) => ({ ...c })),
+      // Render-owned clips are excluded — history captures the user's timeline,
+      // not the background run's placements (restoreDoc re-attaches the live ones).
+      clips: clips.filter((c) => !genClipIds.has(c.id)).map((c) => ({ ...c })),
+      audioClips: audioClips.filter((c) => !genAudioIds.has(c.id)).map((c) => ({ ...c })),
       overlays: overlays.map((o) => ({ ...o })),
       subtitles: {
         ...subtitles,
         cues: subtitles.cues.map((c) => ({ ...c, words: c.words?.map((w) => ({ ...w })) })),
       },
     };
+  };
+
+  /** Apply a history snapshot, re-attaching the render-owned clips it omitted so
+   * an undo/redo never disturbs a background run's placements. The live gen
+   * clips are read at restore time, so the set is always current. */
+  const restoreDoc = (snap: DocSnapshot) => {
+    const { clips, audioClips } = get();
+    const genClips = clips.filter((c) => genClipIds.has(c.id));
+    const genAudio = audioClips.filter((c) => genAudioIds.has(c.id));
+    set({
+      ...snap,
+      clips: [...snap.clips, ...genClips].sort((a, b) => a.start - b.start),
+      audioClips: [...snap.audioClips, ...genAudio],
+      selection: null,
+      multiSelection: [],
+    });
   };
 
   /** Seal the deferred checkpoint: commit it to history only if the doc
@@ -422,6 +480,29 @@ export const useEditor = create<EditorState>((set, get) => {
     if (batchDepth > 0) return;
     flush(); // seal the previous edit's checkpoint before starting a new one
     pending = { snap: snapshot(), seq: docSeq };
+  };
+
+  /** Remove one gen-swap placement (video or audio) by id: the clip, its
+   * gen-set entry, and any selection pointing at it. No push() — the
+   * orchestrator's swaps stay off the undo stack. */
+  const removeGenPlacement = (id: string, kind: "clip" | "audio") => {
+    const exists =
+      kind === "clip"
+        ? get().clips.some((c) => c.id === id)
+        : get().audioClips.some((c) => c.id === id);
+    if (!exists) return;
+    (kind === "clip" ? genClipIds : genAudioIds).delete(id);
+    set((s) => {
+      const keep = (sel: Selection) => !(!!sel && sel.kind === kind && sel.id === id);
+      const multiSelection = s.multiSelection.filter(keep);
+      return {
+        ...(kind === "clip"
+          ? { clips: s.clips.filter((c) => c.id !== id) }
+          : { audioClips: s.audioClips.filter((c) => c.id !== id) }),
+        multiSelection,
+        selection: keep(s.selection) ? s.selection : multiSelection[multiSelection.length - 1] ?? null,
+      };
+    });
   };
 
   return {
@@ -454,11 +535,16 @@ export const useEditor = create<EditorState>((set, get) => {
     exportOpen: false,
     dropActive: null,
     aiOpen: typeof window !== "undefined" && localStorage.getItem("cut-ai-open") === "1",
+    genvideo: undefined,
 
     loadProject: async (id) => {
       history.length = 0;
       future.length = 0;
       pending = null;
+      // A fresh project owns no live run — any prior run's render-owned ids are
+      // stale, and the loaded clips are ordinary, fully-undoable content.
+      genClipIds.clear();
+      genAudioIds.clear();
       set({
         projectId: id,
         loaded: false,
@@ -480,6 +566,7 @@ export const useEditor = create<EditorState>((set, get) => {
         subtitleStatus: "idle",
         subtitleError: null,
         exportOpen: false,
+        genvideo: undefined,
       });
       try {
         const [res, ui] = await Promise.all([apiFetch(`/api/cut/projects/${id}`), loadUiState(id)]);
@@ -538,6 +625,7 @@ export const useEditor = create<EditorState>((set, get) => {
           },
           subtitles: doc.subtitles ?? emptySubtitles(),
           subtitleStatus: (doc.subtitles?.cues.length ?? 0) > 0 ? "ready" : "idle",
+          genvideo: doc.genvideo ?? undefined,
           loaded: true,
         });
       } catch (err) {
@@ -547,6 +635,114 @@ export const useEditor = create<EditorState>((set, get) => {
 
     setProjectName: (name) => set({ projectName: name }),
     setSaveState: (s) => set({ saveState: s }),
+
+    // Clone so each persist yields a fresh top-level reference: the orchestrator
+    // mutates one project object in place, and autosave detects a genvideo change
+    // by identity — without the clone every save after the first looks unchanged
+    // and the plan is never written back.
+    setGenvideo: (project) => set({ genvideo: project ? { ...project } : undefined }),
+
+    placeGenClip: (assetId, startSec, endSec) => {
+      const asset = get().assets.find((a) => a.id === assetId);
+      if (!asset || (asset.type !== "video" && asset.type !== "image")) return null;
+      // Fill the slot exactly so the track never opens a gap between shots —
+      // fillSlot mirrors the plan's frame-coverage invariant at this boundary.
+      const { out, speed } = fillSlot(
+        asset.type,
+        Math.max(MIN_LEN, asset.duration),
+        Math.max(MIN_LEN, endSec - startSec),
+        SPEED_MIN
+      );
+      const clip: VideoClip = {
+        id: uid(),
+        assetId,
+        track: 0,
+        start: Math.max(0, startSec),
+        in: 0,
+        out,
+        // Muted: generated shots ride under the narration spine, so the clip's
+        // own audio (Veo synthesizes some) must never compete with the voice.
+        muted: true,
+        ...(speed !== undefined ? { speed } : {}),
+      };
+      // Render-owned: no push(), and tracked so history snapshots exclude it —
+      // the orchestrator manages this clip (it swaps clips idempotently), so a
+      // mid-render Cmd+Z must not pull a shot out from under the run.
+      genClipIds.add(clip.id);
+      set((s) => ({ clips: [...s.clips, clip].sort((a, b) => a.start - b.start) }));
+      return clip.id;
+    },
+
+    placeGenAudio: (assetId, startSec, durSec, opts) => {
+      const asset = get().assets.find((a) => a.id === assetId);
+      if (!asset || asset.type !== "audio") return null;
+      const out = Math.min(asset.duration, Math.max(MIN_LEN, durSec));
+      const lane = opts?.lane ?? 0;
+      const clip: AudioClip = {
+        id: uid(),
+        assetId,
+        start: Math.max(0, startSec),
+        in: 0,
+        out,
+        volume: 1,
+        ...(opts?.duck !== undefined && opts.duck < 1 ? { duck: Math.max(0, opts.duck) } : {}),
+        ...(lane > 0 ? { lane } : {}),
+      };
+      // Render-owned: no push(), tracked so history snapshots exclude it.
+      genAudioIds.add(clip.id);
+      set((s) => ({ audioClips: [...s.audioClips, clip] }));
+      return clip.id;
+    },
+
+    // Shared body of the two gen-swap removals: drop the clip, its gen-set
+    // entry, and any selection pointing at it — with no push(), because the
+    // orchestrator's swaps stay off the undo stack.
+    removeClipById: (id) => removeGenPlacement(id, "clip"),
+
+    adoptGenClips: (clipIds, audioIds) => {
+      for (const id of clipIds) genClipIds.add(id);
+      for (const id of audioIds) genAudioIds.add(id);
+      // The invariant is exact: no history snapshot holds a gen-owned clip.
+      // Re-adopting released clips (a regeneration after done) scrubs them back
+      // out of existing snapshots, so the eventual release grafts exactly one
+      // copy and an undo never restores a clip the run has since swapped.
+      const scrub = (snap: DocSnapshot) => {
+        snap.clips = snap.clips.filter((c) => !genClipIds.has(c.id));
+        snap.audioClips = snap.audioClips.filter((c) => !genAudioIds.has(c.id));
+      };
+      for (const snap of history) scrub(snap);
+      for (const snap of future) scrub(snap);
+      if (pending) scrub(pending.snap);
+    },
+
+    releaseGenClips: () => {
+      if (genClipIds.size === 0 && genAudioIds.size === 0) return;
+      const { clips, audioClips } = get();
+      const relClips = clips.filter((c) => genClipIds.has(c.id));
+      const relAudio = audioClips.filter((c) => genAudioIds.has(c.id));
+      // Every existing snapshot omitted these clips; splice them in at their
+      // final state (matching what restoreDoc would have re-attached), so an
+      // undo across the run's lifetime never drops a paid render.
+      const graft = (snap: DocSnapshot) => {
+        if (relClips.length > 0) {
+          const have = new Set(snap.clips.map((c) => c.id));
+          snap.clips = [...snap.clips, ...relClips.filter((c) => !have.has(c.id)).map((c) => ({ ...c }))].sort(
+            (a, b) => a.start - b.start
+          );
+        }
+        if (relAudio.length > 0) {
+          const have = new Set(snap.audioClips.map((c) => c.id));
+          snap.audioClips = [...snap.audioClips, ...relAudio.filter((c) => !have.has(c.id)).map((c) => ({ ...c }))];
+        }
+      };
+      for (const snap of history) graft(snap);
+      for (const snap of future) graft(snap);
+      if (pending) graft(pending.snap);
+      genClipIds.clear();
+      genAudioIds.clear();
+    },
+
+    removeAudioById: (id) => removeGenPlacement(id, "audio"),
 
     pushHistory: push,
 
@@ -732,7 +928,7 @@ export const useEditor = create<EditorState>((set, get) => {
     setClipSpeed: (id, speed) => {
       const clip = get().clips.find((c) => c.id === id);
       if (!clip) return;
-      const clamped = Math.max(SPEED_MIN, Math.min(SPEED_MAX, speed));
+      const clamped = Math.max(SPEED_FLOOR, speed);
       if (Math.abs(clamped - clipSpeed(clip)) < 1e-4) return;
       resizeClipFootprint(clip, { speed: clamped }, Math.max(MIN_LEN, (clip.out - clip.in) / clamped));
     },
@@ -2085,7 +2281,7 @@ export const useEditor = create<EditorState>((set, get) => {
       const prev = history.pop();
       if (!prev) return;
       future.push(snapshot());
-      set({ ...prev, selection: null, multiSelection: [] });
+      restoreDoc(prev);
     },
 
     redo: () => {
@@ -2094,7 +2290,7 @@ export const useEditor = create<EditorState>((set, get) => {
       if (!next) return;
       history.push(snapshot());
       if (history.length > HISTORY_CAP) history.shift();
-      set({ ...next, selection: null, multiSelection: [] });
+      restoreDoc(next);
     },
   };
 });
@@ -2141,6 +2337,7 @@ export function serializeDoc(s: {
   publish: { caption: string; tags: string; soundTitle: string; handle: string };
   notes: { text: string; publishedAt: string; links: string[] };
   subtitles: SubtitlesBlock;
+  genvideo?: VideoProject;
 }): Partial<ProjectDoc> {
   return {
     name: s.projectName,
@@ -2154,6 +2351,9 @@ export function serializeDoc(s: {
     subtitles: s.subtitles,
     publish: { ...s.publish },
     notes: { ...s.notes, links: [...s.notes.links] },
+    // Explicit null when there is no run: absence means "keep what you have"
+    // to the PUT handler, so a dismissed plan could otherwise never be cleared.
+    genvideo: s.genvideo ?? null,
   };
 }
 

@@ -57,7 +57,8 @@ const segButton = (active: boolean) =>
 export function GenerateVideoPanel({ projectId }: { projectId: string }) {
   const signedIn = useSignedIn();
   const allJobs = useGenerate((s) => s.jobs);
-  const jobs = allJobs.filter((j) => j.projectId === projectId && j.kind === "video");
+  // Panel renders only — a chat- or scene-owned job lives on its chat card.
+  const jobs = allJobs.filter((j) => j.projectId === projectId && j.kind === "video" && !j.chatId);
   const { prompt, refs, character, aspect, resolution } = useVideoGen();
   const candidates = useRefCandidates();
   const { active: dropActive, attachTarget, targetProps } = useAssetDrop(

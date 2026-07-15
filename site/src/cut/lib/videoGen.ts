@@ -54,6 +54,22 @@ export const VIDEO_MODELS: VideoModelOption[] = [
   },
 ];
 
+/** The registry entry for a tier — the single source of truth for what that
+ * model supports. Any code that generates video (the panel, the scene pipeline)
+ * reads its constraints from here, so swapping models is one edit in this file. */
+export function videoModel(tier: "fast" | "high"): VideoModelOption {
+  return VIDEO_MODELS.find((m) => m.tier === tier) ?? VIDEO_MODELS[0];
+}
+
+/** Snap a desired clip length to one the model actually renders: the shortest
+ * supported duration that still covers `seconds` (the caller trims down to the
+ * exact need), or the model's longest. Video models render only a fixed set of
+ * lengths and reject anything else, so a caller must never pass a raw duration. */
+export function supportedVideoDuration(tier: "fast" | "high", seconds: number): number {
+  const durations = [...videoModel(tier).durations].sort((a, b) => a - b);
+  return durations.find((d) => d >= seconds) ?? durations[durations.length - 1];
+}
+
 interface VideoGenState {
   prompt: string;
   /** The shape the next generation is composed in. */

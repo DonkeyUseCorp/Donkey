@@ -1,6 +1,7 @@
 "use client";
 
 import { geminiModels } from "@/lib/inference/gemini-models";
+import { bytesFromBase64 } from "./bytes";
 import { useGenNotify } from "./genNotify";
 import { importFileToProject } from "./media";
 import type { MediaAsset } from "./types";
@@ -247,9 +248,7 @@ async function synthesizeSegment(
   const out = gen.outputs?.find((o) => o.dataBase64);
   if (!out?.dataBase64) throw new Error("The provider returned no audio.");
 
-  const bin = atob(out.dataBase64);
-  const bytes = new Uint8Array(new ArrayBuffer(bin.length));
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const bytes = bytesFromBase64(out.dataBase64);
   const rate = Number(out.contentType?.match(/rate=(\d+)/)?.[1]) || 24000;
   // Gemini TTS returns raw little-endian 16-bit mono PCM.
   return { samples: new Int16Array(bytes.buffer, 0, bytes.byteLength >> 1), rate };

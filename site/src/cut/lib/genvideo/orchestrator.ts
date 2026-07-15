@@ -44,12 +44,34 @@ const BACKOFF_MS = 500;
 const VOICE_DUCK = 0.35;
 
 export class VideoOrchestrator {
-  private readonly aspect: "9:16" | "16:9";
   /** Serializes persistence so concurrent shot updates never interleave writes. */
   private saveChain: Promise<void> = Promise.resolve();
+  /** Set when a newer run supersedes this one (the user switched projects), so
+   * in-flight work stops writing to the timeline or the persisted plan. */
+  private aborted = false;
 
-  constructor(public project: VideoProject, private readonly deps: OrchestratorDeps) {
-    this.aspect = deps.editor.getTimeline().aspect;
+  constructor(public project: VideoProject, private readonly deps: OrchestratorDeps) {}
+
+  /** Abandon this run: later phases and the persist chain become no-ops. Called
+   * before a replacement orchestrator takes over, and when the run's project
+   * stops being open, so nothing renders (or spends) against a project the
+   * user has left. The persisted plan resumes via hydrate. */
+  abort(): void {
+    this.aborted = true;
+  }
+
+  /** Whether this run was superseded or paused — late settlements check this so
+   * they never touch state a newer run now owns. */
+  get isAborted(): boolean {
+    return this.aborted;
+  }
+
+  /** The shape every keyframe and shot renders at. Frozen on the plan (captured
+   * at start, refreshed at approval — the last moment the user can set it), so
+   * a background render can never pick up another open project's shape. The
+   * live read only backfills a plan persisted before the field existed. */
+  private get aspect(): "9:16" | "16:9" {
+    return this.project.aspect ?? this.deps.editor.getTimeline().aspect;
   }
 
   private get fps(): number {
@@ -59,28 +81,38 @@ export class VideoOrchestrator {
     return this.project.durationFrames;
   }
 
-  /** Advance the run from its current phase to the next stopping point. */
+  /** Advance the run from its current phase to the next stopping point. An
+   * abort landing between phases stops the walk — no later phase may render or
+   * spend once the run is superseded or paused. */
   async run(): Promise<VideoProject> {
     if (this.project.phase === "failed" || this.project.phase === "done") return this.project;
-    await this.brief();
-    await this.ingest();
-    await this.breakdown();
+    const phases = [this.brief, this.ingest, this.breakdown];
+    for (const phase of phases) {
+      if (this.aborted) return this.project;
+      await phase.call(this);
+    }
     if (!this.project.breakdownApproved) return this.project; // wait for confirmation
-    await this.style();
-    await this.keyframes();
-    await this.generateAndPlaceAll();
-    await this.polish();
+    // The spine is voiced only now, past the gate, so an unapproved plan spends
+    // nothing on TTS (the plan up to here runs on estimated beat lengths).
+    const paid = [this.voice, this.style, this.keyframes, this.generateAndPlaceAll, this.polish];
+    for (const phase of paid) {
+      if (this.aborted) return this.project;
+      await phase.call(this);
+    }
     return this.project;
   }
 
   /** The user confirmed the shot list — continue the run. */
   async approveBreakdown(): Promise<VideoProject> {
     this.project.breakdownApproved = true;
+    // The approval gate is the last moment the user can set the project shape;
+    // freeze it now so every render matches, even after a project switch.
+    this.project.aspect = this.deps.editor.getTimeline().aspect;
     await this.save();
     return this.run();
   }
 
-  // ── Phase 0: brief → script → voiced spine + music (generated mode) ───────
+  // ── Phase 0: brief → script → estimated shot plan (generated mode) ────────
   private async brief(): Promise<void> {
     if (this.project.audioMode !== "generated") return;
     if (this.project.shots.length > 0) return; // already planned (resume)
@@ -93,21 +125,175 @@ export class VideoOrchestrator {
       });
       await this.save();
     }
+    // Lay the plan out on *estimated* beat lengths (from word count) so the
+    // confirmation card exists without spending a cent on TTS. The real voiced
+    // lengths replace these in voice(), after the user approves; the music bed
+    // is likewise deferred to polish.
+    const minF = Math.round(MIN_SHOT_SEC * this.fps);
+    const frames = this.project.script.beats.map((b) =>
+      Math.max(minF, secToFrame(estimateSpokenSeconds(b.dialogue), this.fps))
+    );
+    this.layoutBeats(
+      frames,
+      this.project.script.beats.map(() => undefined)
+    );
+    await this.save();
+  }
+
+  // ── Phase 0b: voice the spine (generated mode, after the gate) ────────────
+  private async voice(): Promise<void> {
+    if (this.aborted) return;
+    if (this.project.audioMode !== "generated" || !this.project.script) return;
+    // Idempotent across resumes: done once every beat carries its asset id AND
+    // the shots have been re-laid onto the voiced spine (a later resume must
+    // never rebuild shots that already rendered).
+    const voices = this.project.beatVoices ?? [];
+    if (
+      voices.length > 0 &&
+      voices.every((bv) => bv.voiceAssetId) &&
+      this.project.shots.every((s) => s.voiceAssetId)
+    ) {
+      return;
+    }
+    this.setPhase("voicing");
     // Voice each beat to get its true length; the voice is one clip per beat,
     // and a beat longer than one video clip spans several shots that each
-    // lip-sync to their own slice — so a long line is never cut off.
+    // lip-sync to their own slice — so a long line is never cut off. Each beat
+    // persists as it lands, so an interruption never re-bills voiced beats.
     const minF = Math.round(MIN_SHOT_SEC * this.fps);
+    const voiceIds: string[] = [];
+    const frames: number[] = [];
+    for (const [bi, beat] of this.project.script.beats.entries()) {
+      if (this.aborted) return;
+      const prior = voices[bi];
+      if (prior?.voiceAssetId) {
+        voiceIds.push(prior.voiceAssetId);
+        frames.push(prior.durationFrames);
+        continue;
+      }
+      const vo = await this.deps.suite.voice.speak({ script: beat.dialogue });
+      const id = await this.deps.editor.importMedia(vo.mediaId);
+      const dur = Math.max(minF, secToFrame(vo.durationSec, this.fps));
+      voiceIds.push(id);
+      frames.push(dur);
+      if (prior) {
+        prior.voiceAssetId = id;
+        prior.durationFrames = dur;
+        await this.save();
+      }
+    }
+    if (this.aborted) return;
+    // Move the approved shots onto the real lengths — boundaries scale within
+    // each beat so no slice runs past its voice clip, but the shot list itself
+    // (count, order, notes) stays exactly the plan the user approved.
+    this.rescaleBeats(frames, voiceIds);
+    await this.save();
+    this.deps.emit({ type: "breakdown", shots: this.project.shots });
+  }
+
+  /** Scale the approved shots to the real voiced beat lengths. Each beat's
+   * shots keep their relative proportions inside the beat's new span, so the
+   * plan the user approved — shots, order, gate-time notes — is what renders;
+   * only frame boundaries move. The one exception is physical: a voiced line
+   * longer than the clip cap splits its shot into contiguous sub-shots (copies
+   * carrying the same prompt fields), because one clip cannot span it. Falls
+   * back to a fresh layout when there is no estimated spine to scale. */
+  private rescaleBeats(beatFrames: number[], voiceIds: (string | undefined)[]): void {
+    const old = this.project.beatVoices;
+    if (!this.project.script || !old || old.length !== beatFrames.length) {
+      this.layoutBeats(beatFrames, voiceIds);
+      return;
+    }
+    // The estimated beat spans, from the untouched startFrames: voice() rewrites
+    // each entry's durationFrames as beats land, but every startFrame (and the
+    // total) stays the estimated layout until the rescale below moves the shots.
+    const oldEnd = (bi: number) =>
+      bi + 1 < old.length ? old[bi + 1].startFrame : this.project.durationFrames;
     const maxF = Math.round(MAX_SHOT_SEC * this.fps);
     let cursor = 0;
     const shots: Shot[] = [];
     const beatVoices: BeatVoice[] = [];
-    for (const beat of this.project.script.beats) {
-      const vo = await this.deps.suite.voice.speak({ script: beat.dialogue });
-      const voiceId = await this.deps.editor.importMedia(vo.mediaId);
-      const beatFrames = Math.max(minF, secToFrame(vo.durationSec, this.fps));
+    this.project.script.beats.forEach((beat, bi) => {
+      const ob = old[bi];
+      const oldDur = Math.max(1, oldEnd(bi) - ob.startFrame);
+      const dur = beatFrames[bi];
+      const voiceId = voiceIds[bi];
       const beatStart = cursor;
-      beatVoices.push({ voiceAssetId: voiceId, startFrame: beatStart, durationFrames: beatFrames });
-      for (const [s, e] of splitBeat(beatStart, beatFrames, maxF)) {
+      const slice = (s: number, e: number, base: Shot) => ({
+        ...base,
+        startFrame: s,
+        endFrame: e,
+        ...(voiceId ? { voiceAssetId: voiceId } : {}),
+        voiceFromSec: frameToSec(s - beatStart, this.fps),
+        voiceToSec: frameToSec(e - beatStart, this.fps),
+      });
+      let beatShots = this.project.shots.filter(
+        (s) => s.startFrame >= ob.startFrame && s.startFrame < ob.startFrame + oldDur
+      );
+      if (beatShots.length === 0) {
+        // Nothing to scale for this beat (a malformed persisted plan) — seed
+        // one shot from the beat so coverage holds.
+        beatShots = [
+          {
+            id: `shot:${bi}`,
+            startFrame: beatStart,
+            endFrame: beatStart + dur,
+            audioText: beat.dialogue,
+            dialogue: beat.dialogue,
+            action: beat.action,
+            characters: beat.characters,
+            location: beat.location,
+            framing: beat.framing,
+            status: "pending",
+            attempts: 0,
+          },
+        ];
+      }
+      let at = cursor;
+      beatShots.forEach((shot, si) => {
+        const frac = (shot.endFrame - ob.startFrame) / oldDur;
+        const end =
+          si === beatShots.length - 1
+            ? beatStart + dur
+            : Math.min(beatStart + dur, Math.max(at + 1, beatStart + Math.round(frac * dur)));
+        const pieces = splitBeat(at, Math.max(1, end - at), maxF);
+        pieces.forEach(([s, e], pi) => {
+          shots.push(slice(s, e, pieces.length === 1 ? shot : { ...shot, id: `${shot.id}.${pi}` }));
+        });
+        at = end;
+      });
+      beatVoices.push({
+        ...(voiceId ? { voiceAssetId: voiceId } : {}),
+        startFrame: beatStart,
+        durationFrames: dur,
+      });
+      cursor += dur;
+    });
+    this.project.durationFrames = cursor;
+    this.project.shots = shots;
+    this.project.beatVoices = beatVoices;
+    assertCoverage(this.project.shots, this.durationFrames);
+  }
+
+  /** Lay shots + the beat spine out from per-beat frame lengths. Runs twice in
+   * generated mode: brief() passes estimated lengths (no voice ids yet); voice()
+   * passes the real voiced lengths and ids. */
+  private layoutBeats(beatFrames: number[], voiceIds: (string | undefined)[]): void {
+    if (!this.project.script) return;
+    const maxF = Math.round(MAX_SHOT_SEC * this.fps);
+    let cursor = 0;
+    const shots: Shot[] = [];
+    const beatVoices: BeatVoice[] = [];
+    this.project.script.beats.forEach((beat, bi) => {
+      const dur = beatFrames[bi];
+      const beatStart = cursor;
+      const voiceId = voiceIds[bi];
+      beatVoices.push({
+        ...(voiceId ? { voiceAssetId: voiceId } : {}),
+        startFrame: beatStart,
+        durationFrames: dur,
+      });
+      for (const [s, e] of splitBeat(beatStart, dur, maxF)) {
         shots.push({
           id: `shot:${shots.length}`,
           startFrame: s,
@@ -118,25 +304,19 @@ export class VideoOrchestrator {
           characters: beat.characters,
           location: beat.location,
           framing: beat.framing,
-          voiceAssetId: voiceId,
+          ...(voiceId ? { voiceAssetId: voiceId } : {}),
           voiceFromSec: frameToSec(s - beatStart, this.fps),
           voiceToSec: frameToSec(e - beatStart, this.fps),
           status: "pending",
           attempts: 0,
         });
       }
-      cursor += beatFrames;
-    }
+      cursor += dur;
+    });
     this.project.durationFrames = cursor;
     this.project.shots = shots;
     this.project.beatVoices = beatVoices;
     assertCoverage(this.project.shots, this.durationFrames);
-    const music = await this.deps.suite.music.compose({
-      mood: this.project.script.style ?? this.project.style ?? "cinematic underscore",
-      durationSec: frameToSec(cursor, this.fps),
-    });
-    this.project.musicAssetId = await this.deps.editor.importMedia(music);
-    await this.save();
   }
 
   // ── Phase A: ingest (provided mode) ──────────────────────────────────────
@@ -175,7 +355,12 @@ export class VideoOrchestrator {
         const bible = await this.deps.suite.style.design({
           brief: this.project.brief,
           refs: this.project.references,
-          beats: this.project.shots.map((s) => ({ dialogue: s.dialogue ?? s.audioText, action: s.action })),
+          beats: this.project.shots.map((s) => ({
+            dialogue: s.dialogue ?? s.audioText,
+            action: s.action,
+            characters: s.characters,
+            location: s.location,
+          })),
         });
         this.project.style = bible.style;
         this.project.characters = bible.characters;
@@ -196,6 +381,7 @@ export class VideoOrchestrator {
       await fanOut(
         needed,
         async (asset) => {
+          if (this.aborted) return; // a paused run spends nothing more
           const raw = await this.deps.suite.image.generate({
             prompt: buildRefPrompt(asset, this.project.style),
             refs: refsForAsset(asset, this.project),
@@ -225,6 +411,7 @@ export class VideoOrchestrator {
   }
 
   private async makeKeyframes(shot: Shot): Promise<void> {
+    if (this.aborted) return; // a paused run spends nothing more
     this.updateShot(shot, { status: "keyframing" });
     const refs = shotRefs(shot, this.project);
     const prompt = buildPrompt(shot, this.project);
@@ -235,6 +422,7 @@ export class VideoOrchestrator {
 
   // ── Phase E + F: generation fans out; each clip places when it lands ──────
   private async generateAndPlaceAll(): Promise<void> {
+    if (this.aborted) return;
     this.setPhase("generating");
     await this.placeSpine();
     const pending = this.project.shots.filter((s) => s.status !== "placed");
@@ -247,7 +435,7 @@ export class VideoOrchestrator {
     if (this.project.audioMode !== "generated" || !this.project.beatVoices) return;
     let changed = false;
     for (const bv of this.project.beatVoices) {
-      if (bv.voiceClipId) continue;
+      if (bv.voiceClipId || !bv.voiceAssetId) continue;
       bv.voiceClipId = await this.deps.editor.placeAudio(bv.voiceAssetId, bv.startFrame, bv.durationFrames, {
         kind: "voice",
         duck: VOICE_DUCK,
@@ -258,11 +446,13 @@ export class VideoOrchestrator {
   }
 
   private async generateAndPlace(shot: Shot): Promise<void> {
+    if (this.aborted) return;
     this.updateShot(shot, { status: "generating", error: undefined });
     const audio = this.audioForShot(shot);
     const prompt = buildPrompt(shot, this.project);
     const refs = shotRefs(shot, this.project);
     for (let attempt = 1; attempt <= VIDEO_ATTEMPTS; attempt++) {
+      if (this.aborted) return; // a paused run spends nothing more
       shot.attempts = attempt;
       try {
         let clip = await this.deps.suite.video.generate({
@@ -327,6 +517,7 @@ export class VideoOrchestrator {
 
   /** Hold a still for a shot whose video couldn't be made — never a black gap. */
   private async placeFallback(shot: Shot): Promise<void> {
+    if (this.aborted) return; // a paused run neither spends nor places
     const still = await this.fallbackStill(shot);
     if (still) {
       await this.clearVideoPlacement(shot);
@@ -375,7 +566,23 @@ export class VideoOrchestrator {
 
   // ── Phase H: polish ──────────────────────────────────────────────────────
   private async polish(): Promise<void> {
+    if (this.aborted) return;
     this.setPhase("polish");
+    // Compose the bed now — after the gate and the shots — so an unapproved plan
+    // never spends on one. Generated mode only: a provided audio spine is the
+    // soundtrack, so nothing is laid over it. Best-effort: no music backend (or
+    // one that declines) just means no bed.
+    if (this.project.audioMode === "generated" && !this.project.musicAssetId && this.deps.suite.music) {
+      try {
+        const music = await this.deps.suite.music.compose({
+          mood: this.project.script?.style ?? this.project.style ?? "cinematic underscore",
+          durationSec: frameToSec(this.durationFrames, this.fps),
+        });
+        this.project.musicAssetId = await this.deps.editor.importMedia(music);
+      } catch {
+        this.deps.emit({ type: "log", message: "No music bed this time — assembling without one." });
+      }
+    }
     if (this.project.musicAssetId) {
       // Idempotent: replace the prior bed instead of stacking a second one.
       if (this.project.musicClipId) await this.deps.editor.removeAudio(this.project.musicClipId);
@@ -501,12 +708,22 @@ export class VideoOrchestrator {
     return this.deps.sleep ? this.deps.sleep(ms) : new Promise((r) => setTimeout(r, ms));
   }
 
-  /** Persist, serialized so concurrent updates never interleave writes. */
+  /** Persist, serialized so concurrent updates never interleave writes. An
+   * aborted run stops persisting so it can't overwrite the plan the live run
+   * (or a switched-to project) now owns. */
   private save(): Promise<void> {
+    if (this.aborted) return Promise.resolve();
     this.project.updatedAt = this.project.updatedAt + 1; // monotonic without Date in tests
     this.saveChain = this.saveChain.then(() => this.deps.persist(this.project)).catch(() => {});
     return this.saveChain;
   }
+}
+
+/** Rough spoken length of a line for planning, before the real voiceover
+ * exists — ~165 words/min, floored so even a couple of words hold a beat. */
+function estimateSpokenSeconds(dialogue: string): number {
+  const words = dialogue.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1.2, (words / 165) * 60);
 }
 
 /** Whether a shot has enough motion to warrant a distinct closing keyframe. */

@@ -108,7 +108,9 @@ export function fakeRegistry(): ModelRegistry {
   r.style.register({ id: "fake", label: "Fake style", provider: "fake", make: () => base.style });
   r.image.register({ id: "fake", label: "Fake image", provider: "fake", make: () => base.image });
   r.voice.register({ id: "fake", label: "Fake voice", provider: "fake", make: () => base.voice });
-  r.music.register({ id: "fake", label: "Fake music", provider: "fake", make: () => base.music });
+  // The fake studio always supplies a music role (ModelSuite.music is optional
+  // now that a real suite can omit the bed).
+  r.music.register({ id: "fake", label: "Fake music", provider: "fake", make: () => base.music! });
   r.transcribe.register({ id: "fake", label: "Fake transcribe", provider: "fake", make: () => base.transcribe });
   r.lipSync.register({
     id: "fake",

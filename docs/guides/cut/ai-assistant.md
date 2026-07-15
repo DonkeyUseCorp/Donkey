@@ -38,7 +38,7 @@ Every knowledge surface is defined once — the catalog file ships in the engine
 | Surface | Size today | When it enters context |
 | --- | --- | --- |
 | System prompt | ~3.1K chars (~750 tokens) | Claude: replaces the Agent SDK default. Codex: prepended to the first turn (a resumed session already has it). Gemini: the instructions field, every round. |
-| Tool catalog (51 tools) | ~32K chars (~8K tokens) | Claude/Codex: the MCP tool listing. Gemini: function declarations on each request. |
+| Tool catalog (55 tools) | ~35K chars (~8.7K tokens) | Claude/Codex: the MCP tool listing. Gemini: function declarations on each request. |
 | Skills library (8 docs) | ~16.5K chars (~4K tokens) total | On demand only, via the list-skills and read-skill tools. |
 | Editor snapshot | Grows with the project; media list and subtitle cues capped at 60 each | Attached to the newest user message as `<editor_state>`, rebuilt fresh every turn. |
 | Attachments | Metadata JSON per asset | `<attached_assets>` on the message that carried them; on the Gemini path the newest message also carries the actual payloads (frames, images, text contents). |
@@ -72,6 +72,12 @@ Tool calls execute in the open tab against the same store the user is editing �
 - **Chat owns what it makes.** Media created by chat tools is tagged with its thread and previews on a card in the conversation. Placing it on the timeline or filing it into Media or the Library transfers ownership; deleting the thread deletes whatever it still owns.
 - **Two tools stay server-side.** The skill list and skill reads are answered by the engine directly — no browser hop.
 
+## Generating a whole video
+
+Most generation tools make one asset. `generate_scene` makes a whole cut: it writes a script, voices it, breaks it into shots, and — once the user approves — renders each shot and lays them on the timeline under the narration. It is genre-agnostic; the look comes from the brief and any references. It can also animate audio the project already has (`from_audio_asset_id`), tiling shots over that spine instead of writing a script.
+
+Because a scene renders many paid shots, the tool plans and then stops. `generate_scene` returns a shot list and waits; `approve_scene` starts the renders; `regenerate_shot` and `restyle_scene` revise afterward. The plan the user approves is the plan that renders: voicing runs after the gate and only rescales the approved shots to the real voice lengths (a line longer than one clip splits its shot). The run is browser-side like every generation here, held in a small store beside the panels (`lib/genScene.ts`) so switching tabs never orphans it; leaving the project pauses it, its persisted plan (`ProjectDoc.genvideo`) resumes on the next open, and dismissing an unrendered plan clears it. Progress shows on a card in the chat while the timeline fills on its own. The shots ride under one consistent AI voice with the video model's own audio off; this version has no talking-head lip-sync.
+
 ## Context across turns
 
 Threads persist per project in the browser's local storage — the newest 30, titled by their first message. What a returning thread remembers depends on the provider:
@@ -102,3 +108,5 @@ A hidden hermetic test provider exercises the full engine bridge — context, to
 ## Where it lives
 
 The shared catalog (system prompt, tools, skills), the chat route with its provider runners, the browser-tool bridge, and the stdio MCP proxy live with the engine's AI code under the site's Cut folder (`server/ai/`, `server/http/ai.ts`). The page side holds the snapshot builder (`lib/aiContext.ts`), the tool implementations (`lib/aiTools.ts`), the Gemini loop (`lib/geminiChat.ts`), the model catalog (`lib/aiModels.ts`), and the chat panel with threads and transport (`components/AiPanel.tsx`).
+
+The brief-to-video pipeline is its own subsystem: the orchestrator, coverage invariant, and role interfaces in `lib/genvideo/`, its hosted-model adapters in `lib/genvideo/adapters/`, the browser controller in `lib/genScene.ts`, and the progress card in `components/SceneCard.tsx`.

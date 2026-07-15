@@ -181,7 +181,11 @@ export async function createTranscribeJob(spec: TranscribeSpec): Promise<Transcr
 
 async function runTranscribe(job: TranscribeJob, spec: TranscribeSpec) {
   if (!(await readProject(spec.projectId))) throw new Error("Project not found.");
-  if (spec.clips.length === 0) throw new Error("Add a video to the timeline first.");
+  // Video clips or a soundtrack clip are both valid speech sources (the render
+  // below mixes either), so an audio-only cut — a voiceover with no video, or a
+  // brief-to-video run transcribing its audio spine — transcribes fine.
+  if (spec.clips.length === 0 && spec.audio.length === 0)
+    throw new Error("Add audio or video to the timeline first.");
 
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "veditor-stt-"));
   try {
@@ -244,21 +248,27 @@ async function runTranscribe(job: TranscribeJob, spec: TranscribeSpec) {
     // with a cross-dissolve overlap by the transition length (acrossfade), the
     // rest concatenate. A flat concat would run longer than the timeline, so
     // every cue after a dissolve would land progressively late.
-    let aAcc = "a0";
-    let acc = clipDur(spec.clips[0]);
-    for (let j = 1; j < spec.clips.length; j++) {
-      const prev = spec.clips[j - 1];
-      const durJ = clipDur(spec.clips[j]);
-      const d = Math.min(prev.transition ?? 0, acc * 0.9, durJ * 0.9);
-      const out = `aj${j}`;
-      if (d > 0.01) {
-        filters.push(`[${aAcc}][a${j}]acrossfade=d=${num(d)}[${out}]`);
-        acc = acc + durJ - d;
-      } else {
-        filters.push(`[${aAcc}][a${j}]concat=n=2:v=0:a=1[${out}]`);
-        acc = acc + durJ;
+    // Skipped entirely for an audio-only cut (no clips) — there is no clip-audio
+    // chain to build, only the soundtrack, mixed below. (`spec.clips[0]` would be
+    // undefined otherwise.)
+    let aAcc: string | null = null;
+    if (spec.clips.length > 0) {
+      aAcc = "a0";
+      let acc = clipDur(spec.clips[0]);
+      for (let j = 1; j < spec.clips.length; j++) {
+        const prev = spec.clips[j - 1];
+        const durJ = clipDur(spec.clips[j]);
+        const d = Math.min(prev.transition ?? 0, acc * 0.9, durJ * 0.9);
+        const out = `aj${j}`;
+        if (d > 0.01) {
+          filters.push(`[${aAcc}][a${j}]acrossfade=d=${num(d)}[${out}]`);
+          acc = acc + durJ - d;
+        } else {
+          filters.push(`[${aAcc}][a${j}]concat=n=2:v=0:a=1[${out}]`);
+          acc = acc + durJ;
+        }
+        aAcc = out;
       }
-      aAcc = out;
     }
 
     const soundLabels: string[] = [];
@@ -273,11 +283,21 @@ async function runTranscribe(job: TranscribeJob, spec: TranscribeSpec) {
       );
       soundLabels.push(`snd${k}`);
     });
-    let aLabel = aAcc;
-    if (soundLabels.length > 0) {
+
+    // Mix the clip chain (when present) with the soundtrack. A single source
+    // needs no amix; hasSpeechSource above guarantees at least one input here.
+    // duration=longest spans every input (a late soundtrack clip must not be
+    // cut off — with no video clip chain, `first` would truncate the mix to the
+    // earliest-finishing clip and drop later speech); the outer `-t
+    // spec.duration` then trims to the timeline.
+    const mixInputs = [...(aAcc ? [aAcc] : []), ...soundLabels];
+    let aLabel: string;
+    if (mixInputs.length <= 1) {
+      aLabel = mixInputs[0];
+    } else {
       filters.push(
-        [aAcc, ...soundLabels].map((l) => `[${l}]`).join("") +
-          `amix=inputs=${soundLabels.length + 1}:duration=first:dropout_transition=0:normalize=0[amix]`
+        mixInputs.map((l) => `[${l}]`).join("") +
+          `amix=inputs=${mixInputs.length}:duration=longest:dropout_transition=0:normalize=0[amix]`
       );
       aLabel = "amix";
     }

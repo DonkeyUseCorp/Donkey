@@ -1,4 +1,5 @@
 import { apiUrl } from "./api";
+import type { VideoProject } from "./genvideo/types";
 
 export type AssetType = "video" | "audio" | "image";
 
@@ -144,9 +145,11 @@ export interface VideoClip {
   hidden?: boolean;
 }
 
-/** Speed limits — matches the Inspector control and export atempo range. */
+/** Speed slider range. Typed entry and tools may go beyond it; SPEED_FLOOR is
+ * the only hard bound, keeping rates positive so length math stays finite. */
 export const SPEED_MIN = 0.25;
 export const SPEED_MAX = 4;
+export const SPEED_FLOOR = 0.05;
 /** Longest transition offered; also clamps against the clips it joins. */
 export const TRANSITION_MAX = 2;
 
@@ -464,6 +467,11 @@ export interface ProjectDoc {
   };
   /** Which project folder this belongs to (null/absent = ungrouped). */
   folderId?: string | null;
+  /** In-progress or finished brief-to-video run (genvideo). Persisted so a
+   * multi-minute generation survives reload and resumes; the plan is the single
+   * source of truth for the run (see lib/genvideo/types.ts). On the save wire,
+   * null means "clear it" (absent means keep); at rest it is never null. */
+  genvideo?: VideoProject | null;
 }
 
 /** A named group of projects on the home screen. */

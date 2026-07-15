@@ -188,6 +188,7 @@ export function Editor({
         s.notes.text !== last.notes?.text ||
         s.notes.publishedAt !== last.notes?.publishedAt ||
         s.notes.links.join("") !== (last.notes?.links ?? []).join("") ||
+        s.genvideo !== (last.genvideo as unknown) ||
         s.projectName !== lastName;
       if (!changed) return;
       last = serializeDoc(s);
