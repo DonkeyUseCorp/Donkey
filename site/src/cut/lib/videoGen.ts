@@ -34,6 +34,8 @@ export interface VideoModelOption {
   /** Clip lengths the model renders when identity reference images ride
    * along — Veo 3.1 reference-to-video renders 8s only. */
   referenceDurations: number[];
+  /** Identity reference images a render accepts alongside the prompt. */
+  maxReferenceImages: number;
   aspects: VideoAspect[];
   resolutions: VideoResolution[];
 }
@@ -45,6 +47,7 @@ export const VIDEO_MODELS: VideoModelOption[] = [
     model: "Veo 3.1 Fast",
     durations: [4, 6, 8],
     referenceDurations: [8],
+    maxReferenceImages: 3,
     aspects: ["16:9", "9:16"],
     resolutions: ["720p", "1080p"],
   },
@@ -54,6 +57,7 @@ export const VIDEO_MODELS: VideoModelOption[] = [
     model: "Veo 3.1",
     durations: [4, 6, 8],
     referenceDurations: [8],
+    maxReferenceImages: 3,
     aspects: ["16:9", "9:16"],
     resolutions: ["720p", "1080p"],
   },

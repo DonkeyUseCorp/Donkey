@@ -32,7 +32,7 @@ import { NO_CREDITS_MESSAGE, useGenerate, type VideoGenOptions } from "../../gen
 import { enrichAsset } from "../../media";
 import { useEditor } from "../../store";
 import { DEFAULT_VOICE, synthesizeSpeech } from "../../tts";
-import { supportedVideoDuration } from "../../videoGen";
+import { supportedVideoDuration, videoModel } from "../../videoGen";
 import type { ImageRole, VideoRole, VoiceRole } from "../capabilities";
 import type { RefAsset } from "../types";
 
@@ -71,8 +71,6 @@ export function makeImageRole(projectId: string, chatId?: string): ImageRole {
 }
 
 const VIDEO_TIER = "fast" as const;
-/** Veo takes at most three asset reference images per render. */
-const MAX_VIDEO_ANCHORS = 3;
 
 export function makeVideoRole(projectId: string, chatId?: string): VideoRole {
   return {
@@ -101,7 +99,7 @@ export function makeVideoRole(projectId: string, chatId?: string): VideoRole {
       // not a cast member, and must never ride as an asset to keep consistent.
       const anchors = refsToAssetRefs(
         input.refs.filter((r) => r.purpose === "character" || r.purpose === "location")
-      ).slice(0, MAX_VIDEO_ANCHORS);
+      ).slice(0, videoModel(VIDEO_TIER).maxReferenceImages);
       const attempts: VideoGenOptions[] = [
         // 1. The keyframe as the literal first frame. It was rendered from the
         //    cast's reference images, so it carries identity, wardrobe, setting,

@@ -36,6 +36,10 @@ export const veoModels = {
 
 export type VeoModel = (typeof veoModels)[keyof typeof veoModels];
 
+// Veo 3.1 asset references ("ingredients"): a render keeps at most this many
+// identity anchors consistent. Bump here when a newer Veo raises it.
+export const veoMaxReferenceImages = 3;
+
 // Generative speech (Gemini TTS): text in, spoken audio out, with prompt-driven
 // style direction and inline audio tags. Bump here when adopting a newer TTS model.
 export const geminiTtsModels = {

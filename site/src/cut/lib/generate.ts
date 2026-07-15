@@ -13,6 +13,7 @@ import { useGenNotify } from "./genNotify";
 import { useImageGen } from "./imageGen";
 import { useEditor } from "./store";
 import { mediaUrl, type MediaAsset } from "./types";
+import { videoModel } from "./videoGen";
 
 // AI generation jobs, held outside the panels so a tab switch (which unmounts
 // them) doesn't orphan a running generation — Veo renders take minutes.
@@ -413,8 +414,11 @@ export const useGenerate = create<GenerateState>((set, get) => {
           // Identity anchors travel separately: with referenceImages set, the
           // prompt stands as written and no seed image rides (Veo takes one
           // or the other).
+          const tier = opts?.tier === "high" ? "high" : "fast";
           const anchors = opts?.referenceImages?.length
-            ? await refsToInlineImages(visualRefs(opts.referenceImages).slice(0, 3))
+            ? await refsToInlineImages(
+                visualRefs(opts.referenceImages).slice(0, videoModel(tier).maxReferenceImages)
+              )
             : [];
           const { prompt: sent, images } = anchors.length
             ? { prompt, images: [] }
@@ -428,7 +432,7 @@ export const useGenerate = create<GenerateState>((set, get) => {
                 ? { inputs: { images } }
                 : {}),
             parameters: {
-              tier: opts?.tier === "high" ? "high" : "fast",
+              tier,
               aspectRatio: opts?.aspect ?? useEditor.getState().aspect,
               ...(opts?.resolution ? { resolution: opts.resolution } : {}),
               ...(opts?.durationSeconds ? { durationSeconds: opts.durationSeconds } : {}),

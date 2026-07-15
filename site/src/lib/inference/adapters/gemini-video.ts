@@ -16,7 +16,7 @@ import {
   type AdapterEnvironment,
 } from "@/lib/inference/adapters/gemini-client";
 import { providerCreditPricing } from "@/lib/credits/provider-pricing";
-import { veoModels, veoTierModels } from "@/lib/inference/gemini-models";
+import { veoMaxReferenceImages, veoModels, veoTierModels } from "@/lib/inference/gemini-models";
 import { ensureConfigured } from "@/lib/inference/http";
 import { isJsonObject, toJsonObject, toJsonValue } from "@/lib/inference/json";
 import {
@@ -266,11 +266,10 @@ function inputImage(inputs: JsonObject | undefined): InlineImage | undefined {
   return undefined;
 }
 
-// Veo 3.1 asset references ("ingredients"): up to three identity anchors — characters, objects,
-// scenes — the render keeps consistent, sent as inputs.referenceImages = [{ data, mimeType }].
-// Distinct from inputs.images: a reference conditions the whole clip, a seed becomes frame one.
-const MAX_REFERENCE_IMAGES = 3;
-
+// Veo 3.1 asset references ("ingredients"): identity anchors — characters, objects, scenes —
+// the render keeps consistent, sent as inputs.referenceImages = [{ data, mimeType }], capped at
+// the registry's veoMaxReferenceImages. Distinct from inputs.images: a reference conditions the
+// whole clip, a seed becomes frame one.
 function referenceImages(inputs: JsonObject | undefined): InlineImage[] {
   const list = inputs?.referenceImages;
   if (!Array.isArray(list)) {
@@ -286,7 +285,7 @@ function referenceImages(inputs: JsonObject | undefined): InlineImage[] {
       continue;
     }
     out.push({ data, mimeType: stringValue(item.mimeType) ?? "image/png" });
-    if (out.length === MAX_REFERENCE_IMAGES) {
+    if (out.length === veoMaxReferenceImages) {
       break;
     }
   }
