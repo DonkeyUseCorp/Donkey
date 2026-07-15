@@ -132,6 +132,11 @@ export const AI_TOOLS: AiToolDef[] = [
     inputSchema: obj({ clipId: str("Video clip id"), muted: bool("true to mute") }, ["clipId", "muted"]),
   },
   {
+    name: "set_clip_volume",
+    description: "Set the gain on a video clip's own audio (soundtrack clips use update_audio).",
+    inputSchema: obj({ clipId: str("Video clip id"), volume: num("0..1.5 (1 = unchanged)") }, ["clipId", "volume"]),
+  },
+  {
     name: "detach_audio",
     description:
       "iMovie-style Detach Audio: lift a clip's sound onto the soundtrack track (mutes the clip) so it can be edited independently. Select the clip first or pass its id.",
@@ -228,7 +233,7 @@ export const AI_TOOLS: AiToolDef[] = [
   {
     name: "update_audio",
     description:
-      "Update a soundtrack clip: volume (0..1.5), fadeIn/fadeOut seconds, start position, in/out trim, or duck. `duck` is voiceover ducking — while this clip plays, ALL other audio (video-clip sound and other music) drops to that gain (0..1); pass 1 to clear ducking. Use it to make a voiceover sit over quieter music.",
+      "Update a soundtrack clip: volume (0..1.5), fadeIn/fadeOut seconds, start position, in/out trim, speed, or duck. `duck` is voiceover ducking — while this clip plays, ALL other audio (video-clip sound and other music) drops to that gain (0..1); pass 1 to clear ducking. Use it to make a voiceover sit over quieter music.",
     inputSchema: obj({
       id: str("Soundtrack clip id"),
       volume: num("0..1.5"),
@@ -237,6 +242,7 @@ export const AI_TOOLS: AiToolDef[] = [
       start: num("Timeline start s"),
       in: num("Source in s"),
       out: num("Source out s"),
+      speed: num("Playback rate (1 = normal, no upper limit)"),
       duck: num("Duck other audio to this gain while this clip plays, 0..1 (1 clears ducking)"),
     }, ["id"]),
   },

@@ -405,6 +405,15 @@ export async function runAiTool(
       return { muted: Boolean(input.muted) };
     }
 
+    case "set_clip_volume": {
+      const clip = requireItem(s.clips, input.clipId, "video clip");
+      if (!isNum(input.volume)) throw new ToolError("volume is required (0..1.5).");
+      const volume = clamp(input.volume, 0, 1.5);
+      s.updateClip(clip.id, { volume: Math.abs(volume - 1) < 1e-4 ? undefined : volume });
+      const next = useEditor.getState().clips.find((c) => c.id === clip.id)!;
+      return { id: next.id, volume: next.volume ?? 1 };
+    }
+
     case "detach_audio": {
       const id = input.clipId ? String(input.clipId) : s.selection?.kind === "clip" ? s.selection.id : null;
       if (!id) throw new ToolError("Pass clipId or select a video clip first.");
@@ -469,6 +478,9 @@ export async function runAiTool(
       if (isNum(input.start)) patch.start = Math.max(0, input.start);
       if (isNum(input.in)) patch.in = Math.max(0, input.in);
       if (isNum(input.out)) patch.out = input.out;
+      if (isNum(input.speed))
+        patch.speed =
+          Math.abs(input.speed - 1) < 1e-4 ? undefined : Math.max(SPEED_FLOOR, input.speed);
       // duck >= 1 clears ducking (undefined); below 1 sets the gain.
       if (isNum(input.duck)) patch.duck = input.duck >= 1 ? undefined : clamp(input.duck, 0, 1);
       if (isNum(patch.in ?? NaN) || isNum(patch.out ?? NaN)) {
