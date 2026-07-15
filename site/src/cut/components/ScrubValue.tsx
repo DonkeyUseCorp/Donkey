@@ -6,7 +6,8 @@ import { cn } from "@/lib/utils";
 /**
  * Hot-text numeric value: reads as the plain mono readout it replaces, drag
  * horizontally to scrub (Shift = ×10 steps), click to type an exact value.
- * Enter/blur commits, Escape cancels, arrow keys nudge by one step.
+ * Enter/blur commits, Escape cancels, arrow keys nudge by `keyStep` (defaults
+ * to `step` — time fields set 1s so arrows move whole seconds).
  *
  * With `onScrub` the drag streams live values (pair it with a draft/transient
  * updater like the sliders use); without it the drag previews in place and
@@ -18,6 +19,7 @@ export function ScrubValue({
   min,
   max,
   step,
+  keyStep,
   format,
   parse,
   onScrub,
@@ -29,6 +31,7 @@ export function ScrubValue({
   min: number;
   max: number;
   step: number;
+  keyStep?: number;
   format: (v: number) => string;
   parse: (raw: string) => number | null;
   onScrub?: (v: number) => void;
@@ -50,6 +53,7 @@ export function ScrubValue({
   );
 
   const clamp = (v: number) => Math.min(max, Math.max(min, quantize(v, step)));
+  const arrowStep = keyStep ?? step;
 
   useEffect(() => {
     if (editing) inputRef.current?.select();
@@ -114,7 +118,7 @@ export function ScrubValue({
             const cur = parse(draft.trim());
             const base = cur != null && Number.isFinite(cur) ? cur : value;
             const dir = e.key === "ArrowUp" ? 1 : -1;
-            const next = clamp(base + dir * step * (e.shiftKey ? 10 : 1));
+            const next = clamp(base + dir * arrowStep * (e.shiftKey ? 10 : 1));
             setDraft(format(next));
             if (onScrub) {
               onScrub(next);
@@ -180,7 +184,7 @@ export function ScrubValue({
         } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
           e.preventDefault();
           const dir = e.key === "ArrowUp" ? 1 : -1;
-          onCommit(clamp(value + dir * step * (e.shiftKey ? 10 : 1)));
+          onCommit(clamp(value + dir * arrowStep * (e.shiftKey ? 10 : 1)));
         }
       }}
     >

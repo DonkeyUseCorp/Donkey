@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bold, Smile } from "lucide-react";
+import { Bold, Info, RotateCcw, Smile } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -17,6 +17,12 @@ import {
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Textarea } from "@/components/ui/textarea";
 import { baseClips, getClipSpans, useEditor, type EditorState } from "@/cut/lib/store";
 import { GenerateSubtitlesAudio } from "@/cut/components/VoicePicker";
@@ -195,10 +201,36 @@ function PanelTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+function Row({
+  label,
+  info,
+  children,
+}: {
+  label: string;
+  /** Hoverable (i) after the label explaining what the control does. */
+  info?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex min-h-9 items-center justify-between gap-2.5">
-      <span className="shrink-0 text-[13px] text-muted-foreground">{label}</span>
+      <span className="flex shrink-0 items-center gap-1 text-[13px] text-muted-foreground">
+        {label}
+        {info && (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger
+                className="grid size-4 place-items-center text-muted-foreground/70 transition-colors hover:text-foreground"
+                aria-label={`About ${label.toLowerCase()}`}
+              >
+                <Info className="size-3.5" />
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="max-w-60">
+                {info}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )}
+      </span>
       <div className="flex min-w-0 items-center gap-2">{children}</div>
     </div>
   );
@@ -210,6 +242,21 @@ const Value = ({ children, className }: { children: React.ReactNode; className?:
 
 /** Matches the store's MIN_LEN: the shortest a trim can leave a clip. */
 const MIN_TRIM = 0.1;
+
+/** Sits at the right end of a row once its value has moved off the default. */
+function ResetButton({ title, onClick }: { title: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground transition-colors hover:text-foreground"
+      onClick={onClick}
+    >
+      <RotateCcw className="size-3" />
+    </button>
+  );
+}
 
 const formatSpeed = (v: number) => `${v.toFixed(2)}×`;
 const formatFade = (v: number) => (v < 0.05 ? "Off" : `${v.toFixed(1)}s`);
@@ -336,23 +383,12 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
     <>
       <PanelTitle>Video clip</PanelTitle>
       <div className="flex flex-col gap-1 px-3.5 pb-4">
-        <div className="mb-1.5 truncate border-b border-border pb-2.5 text-xs font-medium" title={asset?.name}>
-          {asset?.name}
+        <div className="mb-1.5 flex items-baseline justify-between gap-2 border-b border-border pb-2.5">
+          <div className="truncate text-xs font-medium" title={asset?.name}>
+            {asset?.name}
+          </div>
+          <Value className="shrink-0 text-muted-foreground">{formatTime(speedLen)}</Value>
         </div>
-        <Row label="Length">
-          <ScrubValue
-            label="Clip length"
-            value={speedLen}
-            min={MIN_TRIM}
-            max={(maxOut - clip.in) / (speed > 0 ? speed : 1)}
-            step={0.1}
-            format={formatTime}
-            parse={parseTimeInput}
-            onCommit={(v) =>
-              useEditor.getState().setClipTrim(clip.id, clip.in, clip.in + v * speed)
-            }
-          />
-        </Row>
         <Row label="Trim">
           <ScrubValue
             label="Trim start"
@@ -360,6 +396,7 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
             min={0}
             max={clip.out - MIN_TRIM}
             step={0.1}
+            keyStep={1}
             format={formatTime}
             parse={parseTimeInput}
             onCommit={(v) => useEditor.getState().setClipTrim(clip.id, v, clip.out)}
@@ -371,10 +408,17 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
             min={clip.in + MIN_TRIM}
             max={maxOut}
             step={0.1}
+            keyStep={1}
             format={formatTime}
             parse={parseTimeInput}
             onCommit={(v) => useEditor.getState().setClipTrim(clip.id, clip.in, v)}
           />
+          {Number.isFinite(maxOut) && (clip.in > 1e-3 || clip.out < maxOut - 1e-3) && (
+            <ResetButton
+              title="Reset trim"
+              onClick={() => useEditor.getState().setClipTrim(clip.id, 0, maxOut)}
+            />
+          )}
         </Row>
         <Row label="Speed">
           <Slider
@@ -404,6 +448,15 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
               setSpeedDraft(null);
             }}
           />
+          {Math.abs(speed - 1) > 1e-4 && (
+            <ResetButton
+              title="Reset speed"
+              onClick={() => {
+                useEditor.getState().setClipSpeed(clip.id, 1);
+                setSpeedDraft(null);
+              }}
+            />
+          )}
         </Row>
         {isFirst && (
           <Row label="Fade in">
@@ -553,7 +606,7 @@ function ClipPanel({ clip }: { clip: VideoClip }) {
 
         {/* Picture */}
         <div className="my-1.5 h-px bg-border" />
-        <Row label="Hide from output">
+        <Row label="Hidden">
           <Switch
             checked={!!clip.hidden}
             onCheckedChange={(v) => updateClip(clip.id, { hidden: v })}
@@ -671,20 +724,42 @@ function AudioPanel({ clip }: { clip: AudioClip }) {
     <>
       <PanelTitle>Soundtrack</PanelTitle>
       <div className="flex flex-col gap-1 px-3.5 pb-4">
-        <div className="mb-1.5 truncate border-b border-border pb-2.5 text-xs font-medium" title={asset?.name}>
-          {asset?.name}
+        <div className="mb-1.5 flex items-baseline justify-between gap-2 border-b border-border pb-2.5">
+          <div className="truncate text-xs font-medium" title={asset?.name}>
+            {asset?.name}
+          </div>
+          <Value className="shrink-0 text-muted-foreground">{formatTime(len)}</Value>
         </div>
-        <Row label="Length">
+        <Row label="Trim">
           <ScrubValue
-            label="Clip length"
-            value={len}
-            min={MIN_TRIM}
-            max={((asset?.duration ?? clip.out) - clip.in) / speed}
+            label="Trim start"
+            value={clip.in}
+            min={0}
+            max={clip.out - MIN_TRIM}
             step={0.1}
+            keyStep={1}
             format={formatTime}
             parse={parseTimeInput}
-            onCommit={(v) => commitAudio({ out: clip.in + v * speed })}
+            onCommit={(v) => commitAudio({ in: v })}
           />
+          <Value className="text-muted-foreground">–</Value>
+          <ScrubValue
+            label="Trim end"
+            value={clip.out}
+            min={clip.in + MIN_TRIM}
+            max={asset?.duration ?? clip.out}
+            step={0.1}
+            keyStep={1}
+            format={formatTime}
+            parse={parseTimeInput}
+            onCommit={(v) => commitAudio({ out: v })}
+          />
+          {asset && (clip.in > 1e-3 || clip.out < asset.duration - 1e-3) && (
+            <ResetButton
+              title="Reset trim"
+              onClick={() => commitAudio({ in: 0, out: asset.duration })}
+            />
+          )}
         </Row>
         <Row label="Starts at">
           <ScrubValue
@@ -693,6 +768,7 @@ function AudioPanel({ clip }: { clip: AudioClip }) {
             min={0}
             max={Infinity}
             step={0.1}
+            keyStep={1}
             format={formatTime}
             parse={parseTimeInput}
             onCommit={(v) => commitAudio({ start: v })}
@@ -723,6 +799,9 @@ function AudioPanel({ clip }: { clip: AudioClip }) {
             onScrub={(v) => setAudio({ speed: Math.abs(v - 1) < 1e-4 ? undefined : v })}
             onCommit={(v) => commitAudio({ speed: Math.abs(v - 1) < 1e-4 ? undefined : v })}
           />
+          {Math.abs(speed - 1) > 1e-4 && (
+            <ResetButton title="Reset speed" onClick={() => commitAudio({ speed: undefined })} />
+          )}
         </Row>
         <Row label="Volume">
           <Slider
@@ -793,7 +872,14 @@ function AudioPanel({ clip }: { clip: AudioClip }) {
             onCommit={(v) => commitAudio({ fadeOut: v })}
           />
         </Row>
-        <Row label="Duck others">
+        <Row
+          label="Duck others"
+          info={
+            clip.duck !== undefined
+              ? `While this clip plays, everything else drops to ${Math.round(clip.duck * 100)}% volume.`
+              : "While this clip plays, drop everything else to this volume."
+          }
+        >
           <Slider
             className="duck-slider data-horizontal:w-24"
             min={0}
@@ -819,12 +905,7 @@ function AudioPanel({ clip }: { clip: AudioClip }) {
             onCommit={(v) => commitAudio({ duck: v < 0.999 ? v : undefined })}
           />
         </Row>
-        {clip.duck !== undefined && (
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
-            While this clip plays, everything else drops to {Math.round(clip.duck * 100)}% volume.
-          </p>
-        )}
-        <Row label="Hide from output">
+        <Row label="Hidden">
           <Switch
             checked={!!clip.hidden}
             onCheckedChange={(v) => useEditor.getState().updateAudio(clip.id, { hidden: v })}
@@ -855,20 +936,42 @@ function LayerClipPanel({ clip }: { clip: VideoClip }) {
     <>
       <PanelTitle>Video clip</PanelTitle>
       <div className="flex flex-col gap-1 px-3.5 pb-4">
-        <div className="mb-1.5 truncate border-b border-border pb-2.5 text-xs font-medium" title={asset?.name}>
-          {asset?.name}
+        <div className="mb-1.5 flex items-baseline justify-between gap-2 border-b border-border pb-2.5">
+          <div className="truncate text-xs font-medium" title={asset?.name}>
+            {asset?.name}
+          </div>
+          <Value className="shrink-0 text-muted-foreground">{formatTime(len)}</Value>
         </div>
-        <Row label="Length">
+        <Row label="Trim">
           <ScrubValue
-            label="Clip length"
-            value={len}
-            min={MIN_TRIM}
-            max={(maxOut - clip.in) / speed}
+            label="Trim start"
+            value={clip.in}
+            min={0}
+            max={clip.out - MIN_TRIM}
             step={0.1}
+            keyStep={1}
             format={formatTime}
             parse={parseTimeInput}
-            onCommit={(v) => commitLayer({ out: clip.in + v * speed })}
+            onCommit={(v) => commitLayer({ in: v })}
           />
+          <Value className="text-muted-foreground">–</Value>
+          <ScrubValue
+            label="Trim end"
+            value={clip.out}
+            min={clip.in + MIN_TRIM}
+            max={maxOut}
+            step={0.1}
+            keyStep={1}
+            format={formatTime}
+            parse={parseTimeInput}
+            onCommit={(v) => commitLayer({ out: v })}
+          />
+          {Number.isFinite(maxOut) && (clip.in > 1e-3 || clip.out < maxOut - 1e-3) && (
+            <ResetButton
+              title="Reset trim"
+              onClick={() => commitLayer({ in: 0, out: maxOut })}
+            />
+          )}
         </Row>
         <Row label="Starts at">
           <ScrubValue
@@ -877,6 +980,7 @@ function LayerClipPanel({ clip }: { clip: VideoClip }) {
             min={0}
             max={Infinity}
             step={0.1}
+            keyStep={1}
             format={formatTime}
             parse={parseTimeInput}
             onCommit={(v) => commitLayer({ start: v })}
@@ -908,6 +1012,9 @@ function LayerClipPanel({ clip }: { clip: VideoClip }) {
             onScrub={(v) => setLayer({ speed: Math.abs(v - 1) < 1e-4 ? undefined : v })}
             onCommit={(v) => commitLayer({ speed: Math.abs(v - 1) < 1e-4 ? undefined : v })}
           />
+          {Math.abs(speed - 1) > 1e-4 && (
+            <ResetButton title="Reset speed" onClick={() => commitLayer({ speed: undefined })} />
+          )}
         </Row>
         <LayoutButtons
           rect={rectOf(clip)}
@@ -934,7 +1041,7 @@ function LayerClipPanel({ clip }: { clip: VideoClip }) {
         <Row label="Mute audio">
           <Switch checked={clip.muted} onCheckedChange={(v) => update(clip.id, { muted: v })} />
         </Row>
-        <Row label="Hide from output">
+        <Row label="Hidden">
           <Switch checked={!!clip.hidden} onCheckedChange={(v) => update(clip.id, { hidden: v })} />
         </Row>
       </div>
