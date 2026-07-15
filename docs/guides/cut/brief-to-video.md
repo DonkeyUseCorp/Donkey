@@ -3,10 +3,9 @@
 The brief-to-video pipeline is Cut's director: one request ("make me a video
 about…") becomes a finished cut — script, narration, reference images, shots —
 assembled on the timeline, with subtitles and any other post step one
-assistant tool call away. The benchmark is the current class of
-director-style agents that turn a single prompt into a coherent short film with
-a consistent cast; we match their harness capability first and let model
-quality catch up on its own.
+assistant tool call away. The target: one prompt becomes a coherent short
+film with a consistent cast — harness capability first, model quality
+improves on its own schedule.
 
 **The one rule: the plan is the product.** Every generation call executes a
 persisted, user-approved plan — never a fresh improvisation. If a shot renders
