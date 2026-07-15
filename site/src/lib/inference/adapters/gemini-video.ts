@@ -279,6 +279,13 @@ function videoConfig(parameters: JsonObject | undefined): GenerateVideosConfig {
   if (generateAudio !== undefined) {
     config.generateAudio = generateAudio;
   }
+  // Person-safety: unset, Veo blocks person/face generation (fatal for any shot
+  // with a character). Callers pass DONT_ALLOW/ALLOW_ADULT/ALLOW_ALL — note Veo
+  // caps image-to-video at ALLOW_ADULT (no minors); ALLOW_ALL needs text-to-video.
+  const personGeneration = stringValue(parameters.personGeneration);
+  if (personGeneration) {
+    config.personGeneration = personGeneration as GenerateVideosConfig["personGeneration"];
+  }
   return config;
 }
 

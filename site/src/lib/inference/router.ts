@@ -1,3 +1,4 @@
+import { createAudioAssetProvider } from "@/lib/inference/adapters/audio-studio";
 import { createGeminiComputerUseProvider } from "@/lib/inference/adapters/gemini-computer-use";
 import { createGeminiImageAssetProvider } from "@/lib/inference/adapters/gemini-image";
 import { createGeminiSpeechAssetProvider } from "@/lib/inference/adapters/gemini-speech";
@@ -223,7 +224,10 @@ export function createProviderRegistry() {
     createGeminiVideoAssetProvider(),
     // Gemini TTS serves kind="speech" (voiceovers, subtitle read-alouds).
     createGeminiSpeechAssetProvider(),
-    // ElevenLabs audio provider disabled for now (not in use).
+    // ElevenLabs serves kind="music" (the brief-to-video music bed). It gates
+    // itself on ELEVENLABS_API_KEY: with no key it reports unconfigured and is
+    // never selected, so kind="music" 503s and the pipeline assembles bedless.
+    createAudioAssetProvider(),
     createGeminiComputerUseProvider(),
     createHostedResponsesProvider(),
   ]);

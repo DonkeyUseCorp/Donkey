@@ -94,7 +94,11 @@ export function createAudioAssetProvider(
   return {
     id: providerID,
     configured,
-    capabilities: ["audio", "music"],
+    // Music only: generateAsset rejects every other kind, and advertising the
+    // generic "audio" capability would make this a fallback match for speech
+    // routing (preferredCapabilities ["speech","audio"]) and misroute voiceovers
+    // here whenever the speech provider is unconfigured.
+    capabilities: ["music"],
     listModels,
     generateAsset,
   };
