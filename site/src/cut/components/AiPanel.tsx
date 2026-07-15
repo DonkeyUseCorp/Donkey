@@ -361,11 +361,12 @@ function ChatSession({
   const { active: dropActive, attachTarget, targetProps } = useAssetDrop(
     (ref) => setAttachments((prev) => addRefOnce(prev, ref)),
     // OS files dropped on the chat attach as references (media files import
-    // into the project on the way; text files ride as-is).
+    // into the project on the way, chat-owned so they stay off the Media
+    // panel; text files ride as-is).
     (files) => {
       const projectId = useEditor.getState().projectId;
       if (!projectId) return;
-      void refsFromDroppedFiles(projectId, files).then((refs) =>
+      void refsFromDroppedFiles(projectId, files, { chatId: threadId }).then((refs) =>
         setAttachments((prev) => refs.reduce(addRefOnce, prev))
       );
     }

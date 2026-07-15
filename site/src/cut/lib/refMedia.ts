@@ -1,6 +1,7 @@
 "use client";
 
 import { refFromAsset, refFromTextFile, type AssetRef } from "./assetRef";
+import { tagChatAsset } from "./chatAssets";
 import { enrichAsset, importFileToProject, isMediaFile, isTextFile } from "./media";
 import { useEditor } from "./store";
 
@@ -163,10 +164,17 @@ export const visualRefs = (refs: AssetRef[]): AssetRef[] =>
   refs.filter((r) => r.kind === "image" || r.kind === "video");
 
 /** Attach OS files dropped on a composer, returned as refs in drop order.
- * Media files import into the project first (they land in the Media panel like
- * any user import); text files become transient file refs read at send time.
- * Files that are neither, and failed imports, are skipped. */
-export async function refsFromDroppedFiles(projectId: string, files: File[]): Promise<AssetRef[]> {
+ * Media files import into the project first; text files become transient file
+ * refs read at send time. Files that are neither, and failed imports, are
+ * skipped. `chatId` marks the imports chat-owned from creation: they live on
+ * the chat (its card, thread deletion), never in the Media panel — a drop on
+ * the chat composer is an attachment, not a filing. Panel drops omit it and
+ * file into Media as user imports. */
+export async function refsFromDroppedFiles(
+  projectId: string,
+  files: File[],
+  opts?: { chatId?: string }
+): Promise<AssetRef[]> {
   const refs: AssetRef[] = [];
   for (const file of files) {
     try {
@@ -177,6 +185,7 @@ export async function refsFromDroppedFiles(projectId: string, files: File[]): Pr
       const asset = await importFileToProject(projectId, file);
       if (!asset) continue;
       useEditor.getState().addAsset(asset);
+      if (opts?.chatId) tagChatAsset(asset.id, opts.chatId);
       void enrichAsset(asset);
       refs.push(refFromAsset(asset));
     } catch (err) {
