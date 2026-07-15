@@ -354,7 +354,9 @@ export function startLaneMove<V = unknown>(
   if (!raw0) return;
   const self = ad.view(raw0);
   s.select({ kind: laneSelectionKind(kind), id });
-  // Clicking anywhere on the timeline moves the playhead — bars included.
+  // Clicking anywhere on the timeline pauses and moves the playhead — bars
+  // included; otherwise playback rolls right past the point just picked.
+  if (s.playing) s.setPlaying(false);
   s.seek(
     (ui.visStart ?? self.start) +
       (e.clientX - e.currentTarget.getBoundingClientRect().left) / ui.pps
@@ -582,6 +584,8 @@ export function startLaneTrim(
   if (!raw0) return;
   const self = ad.view(raw0);
   s.select({ kind: laneSelectionKind(kind), id });
+  // Grabbing an edge pauses playback so the trim isn't fighting a moving playhead.
+  if (s.playing) s.setPlaying(false);
   s.pushHistory();
   const targets = snapTargets(s, kind, id);
   const tol = SNAP_PX / ui.pps;
