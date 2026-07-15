@@ -130,7 +130,7 @@ export function createGeminiVideoAssetProvider(
       ...(image
         ? { image: { imageBytes: image.data, mimeType: image.mimeType } }
         : {}),
-      config: videoConfig(requestParameters, references),
+      config: videoConfig(requestParameters, references, image !== undefined),
     };
 
     const client = clientFactory(clientConfig.options);
@@ -297,6 +297,7 @@ function referenceImages(inputs: JsonObject | undefined): InlineImage[] {
 function videoConfig(
   parameters: JsonObject | undefined,
   references: InlineImage[] = [],
+  seeded = false,
 ): GenerateVideosConfig {
   const config: GenerateVideosConfig = { numberOfVideos: 1, generateAudio: true };
   if (references.length > 0) {
@@ -334,7 +335,7 @@ function videoConfig(
   // ALLOW_ADULT (no minors); ALLOW_ALL needs text-to-video. Clamp rather than
   // let the request 400: the reference is the caller's point, the ceiling isn't.
   let personGeneration = stringValue(parameters.personGeneration);
-  if (personGeneration && references.length > 0 && /allow[_-]?all/i.test(personGeneration)) {
+  if (personGeneration && (seeded || references.length > 0) && /allow[_-]?all/i.test(personGeneration)) {
     personGeneration = "ALLOW_ADULT";
   }
   if (personGeneration) {
