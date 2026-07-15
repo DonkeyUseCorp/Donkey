@@ -144,7 +144,10 @@ function VoiceGenerator({ projectId }: { projectId: string }) {
     setError(null);
     try {
       const playhead = useEditor.getState().currentTime;
-      const lead = text.split(/\s+/).slice(0, 4).join(" ");
+      // Label with the spoken line, not just its first words, so the preview
+      // fills across the row (each surface truncates to its own width). Collapse
+      // whitespace and cap it so project.json stays lean.
+      const lead = text.replace(/\s+/g, " ").trim().slice(0, 200);
       // synthesizeSpeech reads the direction for a "say it in X" ask and
       // translates the script into that language before speaking it.
       const { asset } = await synthesizeSpeech(projectId, [{ text, at: 0 }], {

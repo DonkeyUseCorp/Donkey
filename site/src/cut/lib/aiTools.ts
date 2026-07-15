@@ -1027,7 +1027,8 @@ export async function runAiTool(
       if (typeof input.script !== "string" || !input.script.trim())
         throw new ToolError("script is required.");
       const start = isNum(input.start) ? Math.max(0, input.start) : s.currentTime;
-      const lead = input.script.trim().split(/\s+/).slice(0, 4).join(" ");
+      // Label with the spoken line (capped) so its preview fills across the row.
+      const lead = input.script.replace(/\s+/g, " ").trim().slice(0, 200);
       const place = wantsTimeline(input, "start");
       return synthesizeVoiceover(
         [{ text: input.script, at: 0 }],
