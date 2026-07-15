@@ -16,6 +16,7 @@ import {
   Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { LiveElapsed } from "@/cut/components/Elapsed";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -279,7 +280,9 @@ export function LibraryView() {
           {uploading > 0 && (
             <div className="flex aspect-square flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-input text-xs text-muted-foreground">
               <Loader2 className="size-4 animate-spin" />
-              Uploading…
+              <span>
+                Uploading… <LiveElapsed />
+              </span>
             </div>
           )}
         </Marquee>
@@ -322,6 +325,11 @@ export function LibraryView() {
                   {importing ? <Loader2 className="animate-spin" /> : <LinkIcon />} Import
                 </Button>
               </div>
+              {importing && (
+                <p className="text-xs text-muted-foreground">
+                  Downloading… <LiveElapsed />
+                </p>
+              )}
               {urlError && <p className="text-xs text-destructive">{urlError}</p>}
             </div>
           </div>

@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Captions, Check, Clapperboard, ClipboardList, Copy, Film, FolderOpen, FolderPlus, Image as ImageIcon, Layers, Loader2, Music, Plus, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { LiveElapsed } from "@/cut/components/Elapsed";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -285,7 +286,9 @@ function MediaPanel({
             {importing && (
               <div className="flex aspect-square flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-input text-[11px] text-muted-foreground">
                 <Loader2 className="size-4 animate-spin" />
-                Importing…
+                <span>
+                  Importing… <LiveElapsed />
+                </span>
               </div>
             )}
           </div>

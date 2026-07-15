@@ -14,6 +14,7 @@ import {
   subtitleLaneCount,
   trackLocale,
 } from "@/cut/lib/subtitles";
+import { useElapsed } from "@/cut/hooks/useElapsed";
 import { TIMELINE_H_MIN, useEditor } from "@/cut/lib/store";
 import { PLATE_PAD_X, PLATE_PAD_Y, PLATE_RADIUS, plateFill } from "@/cut/lib/textRender";
 import {
@@ -40,6 +41,13 @@ const LOCALES = [
 
 /** Give the cue track room when it appears. */
 const TIMELINE_H_WITH_SUBS = Math.max(TIMELINE_H_MIN, 276);
+
+/** Ticking clock beside the running transcription/translation label. */
+function SubtitleElapsed() {
+  const startedAt = useEditor((s) => s.subtitleStartedAt);
+  const elapsed = useElapsed(startedAt);
+  return elapsed ? <span className="tabular-nums text-muted-foreground">{elapsed}</span> : null;
+}
 
 /** A track's short pill label: its language code (EN, KO, …). */
 function laneLabel(subs: SubtitlesBlock, lane: number): string {
@@ -350,7 +358,8 @@ function EmptyState({
       <div className="sub-generating flex flex-col items-center gap-3 px-6 pt-10 text-center">
         <Loader2 className="size-5 animate-spin text-muted-foreground" />
         <p className="text-[13px] font-medium">
-          {translating ? "Translating your captions…" : "Transcribing on this Mac…"}
+          {translating ? "Translating your captions…" : "Transcribing on this Mac…"}{" "}
+          <SubtitleElapsed />
         </p>
         <p className="text-[11.5px] leading-relaxed text-muted-foreground">
           Runs in the background — keep editing. Captions appear here when

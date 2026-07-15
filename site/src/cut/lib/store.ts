@@ -122,6 +122,9 @@ export interface EditorState {
   subtitles: SubtitlesBlock;
   subtitleStatus: SubtitleStatus;
   subtitleError: string | null;
+  /** Epoch ms when the running transcription/translation started — the panel
+   * shows a ticking elapsed beside its spinner. */
+  subtitleStartedAt: number | null;
   exportOpen: boolean;
   /** OS file drag in flight: "media" when it carries video/audio/image (so the
    * timeline is a valid target), "other" for text-only drags, null when idle. */
@@ -532,6 +535,7 @@ export const useEditor = create<EditorState>((set, get) => {
     subtitleLane: 0,
     subtitleStatus: "idle",
     subtitleError: null,
+    subtitleStartedAt: null,
     exportOpen: false,
     dropActive: null,
     aiOpen: typeof window !== "undefined" && localStorage.getItem("cut-ai-open") === "1",
@@ -1643,7 +1647,7 @@ export const useEditor = create<EditorState>((set, get) => {
               ]),
         audio,
       };
-      set({ subtitleStatus: "running", subtitleError: null });
+      set({ subtitleStatus: "running", subtitleError: null, subtitleStartedAt: Date.now() });
       try {
         const cues = await runTranscription(projectId, spec);
         if (cues === null) return; // switched projects mid-run
@@ -1714,7 +1718,7 @@ export const useEditor = create<EditorState>((set, get) => {
         ],
         audio: [],
       };
-      set({ subtitleStatus: "running", subtitleError: null });
+      set({ subtitleStatus: "running", subtitleError: null, subtitleStartedAt: Date.now() });
       try {
         const cues = await runTranscription(projectId, spec);
         if (cues === null) return; // switched projects mid-run
@@ -1766,7 +1770,7 @@ export const useEditor = create<EditorState>((set, get) => {
       const duration = totalDuration(s.clips);
       const lane = s.subtitleLane;
       const epoch = laneEpoch;
-      set({ subtitleStatus: "running", subtitleError: null });
+      set({ subtitleStatus: "running", subtitleError: null, subtitleStartedAt: Date.now() });
       try {
         const frames = await captureTimelineFrames(spans);
         if (frames.length === 0) throw new Error("Could not read any frames from the cut.");
@@ -1831,6 +1835,7 @@ export const useEditor = create<EditorState>((set, get) => {
         subtitles: { ...cur.subtitles, style },
         subtitleStatus: "running",
         subtitleError: null,
+        subtitleStartedAt: Date.now(),
       }));
       // Rewrite only the active track — other languages keep their text.
       const cues = get().subtitles.cues.filter((c) => laneOf(c) === lane);
@@ -1887,7 +1892,7 @@ export const useEditor = create<EditorState>((set, get) => {
       const locale = trackLocale(s.subtitles, lane);
       const projectId = s.projectId;
       const epoch = laneEpoch;
-      set({ subtitleStatus: "running", subtitleError: null });
+      set({ subtitleStatus: "running", subtitleError: null, subtitleStartedAt: Date.now() });
       try {
         const res = await apiFetch("/api/cut/ai/captions", {
           method: "POST",

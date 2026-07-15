@@ -26,7 +26,9 @@ import {
 } from "lucide-react";
 import Markdown from "react-markdown";
 import { baseMarkdownComponents } from "./markdownComponents";
+import { LiveElapsed } from "./Elapsed";
 import { SceneCard } from "./SceneCard";
+import { useElapsed } from "@/cut/hooks/useElapsed";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -562,7 +564,7 @@ function ChatSession({
         <SceneCard />
         {busy && (
           <div className="ai-busy mt-1 flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
-            <CircleDashed className="size-3 animate-spin" /> Working…
+            <CircleDashed className="size-3 animate-spin" /> Working… <LiveElapsed />
           </div>
         )}
         {error && (
@@ -829,6 +831,14 @@ function toolDuration(id: string | undefined, settled: boolean): string | null {
   return t.sawRunning && t.end !== undefined ? formatDuration(t.end - t.start) : null;
 }
 
+/** Live clock on a still-running tool chip. Its own component so the ticking
+ * re-render stays inside the chip — MessageView is memoized and only
+ * re-renders on stream chunks, which stop arriving while a tool runs. */
+function RunningToolClock({ start }: { start: number }) {
+  const elapsed = useElapsed(start);
+  return elapsed ? <span className="ml-auto tabular-nums text-[10px]">{elapsed}</span> : null;
+}
+
 const MessageView = memo(function MessageView({ message }: { message: UIMessage }) {
   if (message.role === "user") {
     const text = message.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
@@ -889,6 +899,11 @@ const MessageView = memo(function MessageView({ message }: { message: UIMessage 
           const failed = p.state === "output-error";
           const done = p.state === "output-available";
           const took = toolDuration(p.toolCallId, done || failed);
+          // A call still running shows a live clock from its observed start
+          // (settled chips show `took`; a call first seen already-done shows
+          // neither — its real start is unknown).
+          const runningSince =
+            !done && !failed && p.toolCallId ? toolTimes.get(p.toolCallId)?.start ?? null : null;
           return (
             <Fragment key={i}>
               <details className="ai-tool group max-w-full">
@@ -904,6 +919,7 @@ const MessageView = memo(function MessageView({ message }: { message: UIMessage 
                   {failed && <TriangleAlert className="size-3" />}
                   {!done && !failed && <CircleDashed className="size-3 animate-spin" />}
                   {took && <span className="ml-auto tabular-nums text-[10px]">{took}</span>}
+                  {runningSince != null && <RunningToolClock start={runningSince} />}
                 </summary>
                 <pre className="mt-1 max-h-40 overflow-auto rounded-md bg-muted/70 p-2 font-mono text-[10px] leading-relaxed whitespace-pre-wrap">
                   {JSON.stringify({ input: p.input, output: p.output, error: p.errorText }, null, 2)}

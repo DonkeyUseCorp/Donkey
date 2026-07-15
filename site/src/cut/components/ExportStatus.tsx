@@ -2,6 +2,7 @@
 
 import { Check, FolderOpen, Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useElapsed } from "@/cut/hooks/useElapsed";
 import { revealExport } from "@/cut/lib/exportClient";
 import { useExport } from "@/cut/lib/exportStore";
 import { useEditor } from "@/cut/lib/store";
@@ -10,11 +11,12 @@ import { useEditor } from "@/cut/lib/store";
  * closed, so the render keeps going and the result is still one click away. */
 export function ExportStatus() {
   const status = useExport((s) => s.status);
-  const stage = useExport((s) => s.stage);
   const ratio = useExport((s) => s.ratio);
   const outName = useExport((s) => s.outName);
   const projectId = useExport((s) => s.projectId);
+  const startedAt = useExport((s) => s.startedAt);
   const exportOpen = useEditor((s) => s.exportOpen);
+  const elapsed = useElapsed(status === "running" ? startedAt : null);
 
   // The dialog owns the UI while it's open.
   if (exportOpen || status === "idle") return null;
@@ -25,7 +27,10 @@ export function ExportStatus() {
         <>
           <Loader2 className="size-4 animate-spin text-primary" />
           <span className="text-xs font-medium">
-            Exporting… <span className="tabular-nums text-muted-foreground">{Math.round(ratio * 100)}%</span>
+            Exporting…{" "}
+            <span className="tabular-nums text-muted-foreground">
+              {Math.round(ratio * 100)}%{elapsed ? ` · ${elapsed}` : ""}
+            </span>
           </span>
           <Button
             variant="ghost"

@@ -13,6 +13,7 @@ import {
   type AssetRef,
   type AssetRefKind,
 } from "@/cut/lib/assetRef";
+import { useElapsed } from "@/cut/hooks/useElapsed";
 import { useGenerate } from "@/cut/lib/generate";
 import { lightboxItemFromRef, useLightbox } from "@/cut/lib/lightbox";
 import { usePreviewAudio } from "@/cut/lib/previewAudio";
@@ -89,6 +90,7 @@ export function ToolOutputAssets({ output }: { output: unknown }) {
  * render still in flight when the page closed has no card afterwards. */
 export function ChatVideoJobCard({ jobId }: { jobId: string }) {
   const job = useGenerate((s) => s.jobs.find((j) => j.id === jobId));
+  const elapsed = useElapsed(job?.status === "running" ? job.startedAt : null);
   if (!job) return null;
   if (job.status === "done") return job.assetId ? <ChatProjectAsset assetId={job.assetId} /> : null;
   return (
@@ -108,7 +110,14 @@ export function ChatVideoJobCard({ jobId }: { jobId: string }) {
             job.status === "error" ? "text-red-600" : "text-muted-foreground"
           )}
         >
-          {job.status === "running" ? "Rendering…" : <HostedErrorText error={job.error} />}
+          {job.status === "running" ? (
+            <>
+              Rendering…{" "}
+              {elapsed && <span className="tabular-nums text-muted-foreground/80">{elapsed}</span>}
+            </>
+          ) : (
+            <HostedErrorText error={job.error} />
+          )}
         </div>
       </div>
     </div>

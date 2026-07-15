@@ -20,6 +20,9 @@ interface ExportState {
   status: Status;
   stage: string;
   ratio: number;
+  /** Epoch ms when this export started (or was rejoined) — the running chip
+   * and dialog show a ticking elapsed from it. */
+  startedAt: number | null;
   outName?: string;
   error?: string;
   projectId: string | null;
@@ -35,6 +38,7 @@ export const useExport = create<ExportState>((set, get) => ({
   status: "idle",
   stage: "",
   ratio: 0,
+  startedAt: null,
   projectId: null,
   handle: null,
 
@@ -44,6 +48,7 @@ export const useExport = create<ExportState>((set, get) => ({
       status: "running",
       stage: "Preparing",
       ratio: 0,
+      startedAt: Date.now(),
       error: undefined,
       outName: undefined,
       projectId,
@@ -76,7 +81,15 @@ export const useExport = create<ExportState>((set, get) => ({
       .catch(() => [])) as { id: string; status: string; progress: number; outName?: string }[];
     const running = list.find((j) => j.status === "running");
     if (!running) return;
-    set({ status: "running", stage: "Rendering", ratio: running.progress, projectId });
+    // The true start predates the rejoin; counting from here still shows time
+    // moving, which is the point of the clock.
+    set({
+      status: "running",
+      stage: "Rendering",
+      ratio: running.progress,
+      startedAt: Date.now(),
+      projectId,
+    });
     pollExport(running.id, (stage, ratio) => set({ stage, ratio }))
       .then((outName) => {
         downloadExport(running.id, outName);

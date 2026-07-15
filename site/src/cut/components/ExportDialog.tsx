@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useElapsed } from "@/cut/hooks/useElapsed";
 import { EXPORT_PRESETS, originalSettings, presetSettings } from "@/cut/lib/exportClient";
 import { useExport } from "@/cut/lib/exportStore";
 import { useEditor } from "@/cut/lib/store";
@@ -22,6 +23,8 @@ export function ExportDialog() {
   const assets = useEditor((s) => s.assets);
   const status = useExport((s) => s.status);
   const ratio = useExport((s) => s.ratio);
+  const startedAt = useExport((s) => s.startedAt);
+  const elapsed = useElapsed(status === "running" ? startedAt : null);
   const error = useExport((s) => s.error);
   // "Original" leads: sized from the footage on the timeline, so it is always
   // the highest option. The fixed presets follow, flipped to the aspect.
@@ -114,7 +117,9 @@ export function ExportDialog() {
                 />
               </div>
               <div className="mt-2.5 flex justify-end text-xs text-muted-foreground">
-                <span className="font-mono tabular-nums">{Math.round(ratio * 100)}%</span>
+                <span className="font-mono tabular-nums">
+                  {Math.round(ratio * 100)}%{elapsed ? ` · ${elapsed}` : ""}
+                </span>
               </div>
               <p className="mt-3 text-center text-xs text-muted-foreground">
                 Rendering in the background. You can keep editing, or close this

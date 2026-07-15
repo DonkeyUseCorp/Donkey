@@ -12,6 +12,7 @@ import {
   useRefCandidates,
   useAssetDrop,
 } from "@/cut/lib/assetRef";
+import { useElapsed } from "@/cut/hooks/useElapsed";
 import { genPulseOverlay, useGenPulse } from "@/cut/lib/genNotify";
 import { signInUrl, useGenerate, useSignedIn, type GenerateJob } from "@/cut/lib/generate";
 import { useLightbox } from "@/cut/lib/lightbox";
@@ -286,6 +287,7 @@ export function GenerateVideoPanel({ projectId }: { projectId: string }) {
 function JobRow({ job, handle }: { job: GenerateJob; handle?: string }) {
   const asset = useEditor((s) => s.assets.find((a) => a.id === job.assetId));
   const pulse = useGenPulse("video", job.assetId);
+  const elapsed = useElapsed(job.status === "running" ? job.startedAt : null);
   const tileRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -307,7 +309,16 @@ function JobRow({ job, handle }: { job: GenerateJob; handle?: string }) {
               job.status === "error" ? "text-red-600" : "text-muted-foreground"
             )}
           >
-            {job.status === "running" ? "Rendering…" : <HostedErrorText error={job.error} />}
+            {job.status === "running" ? (
+              <>
+                Rendering…{" "}
+                {elapsed && (
+                  <span className="tabular-nums text-muted-foreground/80">{elapsed}</span>
+                )}
+              </>
+            ) : (
+              <HostedErrorText error={job.error} />
+            )}
           </div>
         </div>
         {job.status !== "running" && (

@@ -1,3 +1,9 @@
+/** Elapsed wall-clock as "m:ss" — 63400ms -> "1:03". */
+export function formatElapsed(ms: number) {
+  const t = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
+}
+
 /** 63.4 -> "1:03.4"  |  8.02 -> "0:08.0" */
 export function formatTime(t: number) {
   const clamped = Math.max(0, t);

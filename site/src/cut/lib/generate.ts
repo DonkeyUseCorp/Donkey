@@ -28,6 +28,8 @@ export interface GenerateJob {
   projectId: string;
   kind: "image" | "video";
   prompt: string;
+  /** Epoch ms when the render started — live cards show a ticking elapsed. */
+  startedAt: number;
   status: "running" | "done" | "error";
   error?: string;
   /** The project asset the finished generation landed as. */
@@ -323,6 +325,7 @@ export const useGenerate = create<GenerateState>((set, get) => {
         projectId,
         kind: "image",
         prompt,
+        startedAt: Date.now(),
         status: "running",
         ...(opts?.chatId ? { chatId: opts.chatId } : {}),
       };
@@ -397,6 +400,7 @@ export const useGenerate = create<GenerateState>((set, get) => {
         projectId,
         kind: "video",
         prompt,
+        startedAt: Date.now(),
         status: "running",
         ...(opts?.chatId ? { chatId: opts.chatId } : {}),
       };

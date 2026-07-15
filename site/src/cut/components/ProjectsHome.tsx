@@ -17,6 +17,7 @@ import {
   Unplug,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { LiveElapsed } from "@/cut/components/Elapsed";
 import {
   Dialog,
   DialogContent,
@@ -339,8 +340,11 @@ export function ProjectsHome() {
       }}
     >
       {importing > 0 && (
-        <div className="pointer-events-none fixed right-6 bottom-6 z-50 grid size-11 place-items-center rounded-full bg-foreground/90 text-background shadow-lg">
+        <div className="pointer-events-none fixed right-6 bottom-6 z-50 flex items-center gap-2 rounded-full bg-foreground/90 px-3.5 py-2.5 text-background shadow-lg">
           <Loader2 className="size-5 animate-spin" />
+          <span className="text-xs font-medium">
+            Importing… <LiveElapsed className="tabular-nums" />
+          </span>
         </div>
       )}
       {!engineDown && projects && hasContent && (

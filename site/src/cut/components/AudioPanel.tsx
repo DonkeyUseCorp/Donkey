@@ -35,6 +35,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { LiveElapsed } from "@/cut/components/Elapsed";
 import { clearAssetDrag, setAssetDragData, setLibraryDragData } from "@/cut/lib/assetDrag";
 import {
   addLibraryAssetToProject,
@@ -270,6 +271,7 @@ function VoiceGenerator({ projectId }: { projectId: string }) {
           <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
             <Loader2 className="size-3.5 shrink-0 animate-spin" />
             {pending === 1 ? "Generating…" : `Generating ${pending}…`}
+            <LiveElapsed />
           </div>
         )}
       </div>
@@ -561,7 +563,7 @@ function ProjectAudio({
         ))}
         {importing && (
           <div className="flex items-center gap-2 rounded-lg border border-dashed border-input px-2.5 py-2 text-[11px] text-muted-foreground">
-            <Loader2 className="size-3.5 animate-spin" /> Importing…
+            <Loader2 className="size-3.5 animate-spin" /> Importing… <LiveElapsed />
           </div>
         )}
       </div>

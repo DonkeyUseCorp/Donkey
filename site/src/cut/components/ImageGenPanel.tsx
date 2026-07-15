@@ -8,7 +8,8 @@ import { SectionTitle } from "@/cut/components/SectionTitle";
 import { clearAssetDrag, setAssetDragData } from "@/cut/lib/assetDrag";
 import { collectRefs, mentionToken, useRefCandidates, useAssetDrop } from "@/cut/lib/assetRef";
 import { genPulseOverlay, useGenPulse } from "@/cut/lib/genNotify";
-import { signInUrl, useGenerate, useSignedIn } from "@/cut/lib/generate";
+import { useElapsed } from "@/cut/hooks/useElapsed";
+import { signInUrl, useGenerate, useSignedIn, type GenerateJob } from "@/cut/lib/generate";
 import {
   IMAGE_RESOLUTION_LABEL,
   useImageGen,
@@ -184,31 +185,7 @@ export function ImageGenPanel({ projectId }: { projectId: string }) {
         {jobs
           .filter((j) => j.status !== "done")
           .map((j) => (
-            <div key={j.id} className="group flex shrink-0 items-center gap-2">
-              {j.status === "running" && (
-                <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
-              )}
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[11.5px] font-medium">{j.prompt}</div>
-                <div
-                  className={cn(
-                    "text-[10.5px] leading-snug break-words",
-                    j.status === "error" ? "text-red-600" : "text-muted-foreground"
-                  )}
-                >
-                  {j.status === "running" ? "Generating…" : <HostedErrorText error={j.error} />}
-                </div>
-              </div>
-              {j.status === "error" && (
-                <button
-                  title="Dismiss"
-                  className={cn(cardIconButton, "opacity-0 group-hover:opacity-100")}
-                  onClick={() => useGenerate.getState().dismiss(j.id)}
-                >
-                  <Trash2 className="size-3.5" />
-                </button>
-              )}
-            </div>
+            <ImageJobRow key={j.id} job={j} />
           ))}
 
         {generated.length > 0 && (
@@ -326,6 +303,46 @@ function GeneratedTile({
         />
       </div>
       {pulse && <div aria-hidden className={genPulseOverlay} />}
+    </div>
+  );
+}
+
+/** A generation in flight (or failed) as a compact status row with a live
+ * elapsed clock while it renders. */
+function ImageJobRow({ job }: { job: GenerateJob }) {
+  const elapsed = useElapsed(job.status === "running" ? job.startedAt : null);
+  return (
+    <div className="group flex shrink-0 items-center gap-2">
+      {job.status === "running" && (
+        <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[11.5px] font-medium">{job.prompt}</div>
+        <div
+          className={cn(
+            "text-[10.5px] leading-snug break-words",
+            job.status === "error" ? "text-red-600" : "text-muted-foreground"
+          )}
+        >
+          {job.status === "running" ? (
+            <>
+              Generating…{" "}
+              {elapsed && <span className="tabular-nums text-muted-foreground/80">{elapsed}</span>}
+            </>
+          ) : (
+            <HostedErrorText error={job.error} />
+          )}
+        </div>
+      </div>
+      {job.status === "error" && (
+        <button
+          title="Dismiss"
+          className={cn(cardIconButton, "opacity-0 group-hover:opacity-100")}
+          onClick={() => useGenerate.getState().dismiss(job.id)}
+        >
+          <Trash2 className="size-3.5" />
+        </button>
+      )}
     </div>
   );
 }
