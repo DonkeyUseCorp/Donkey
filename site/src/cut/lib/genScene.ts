@@ -67,12 +67,28 @@ let orchestrator: VideoOrchestrator | null = null;
 let orchestratorProjectId: string | null = null;
 
 // A run pauses the moment its project stops being open: nothing may render or
-// spend against a project the user has left. The persisted plan resumes via
-// hydrate when the project reopens.
+// spend against a project the user has left. The pause also clears the dead
+// orchestrator and the run mirror, so reopening the project resumes from the
+// persisted plan below — a mirror left behind would mask the resume and trap
+// the run on an aborted orchestrator.
 useEditor.subscribe((s, prev) => {
-  if (s.projectId !== prev.projectId && orchestrator && orchestratorProjectId !== s.projectId) {
-    orchestrator.abort();
+  if (s.projectId !== prev.projectId) {
+    if (orchestrator && orchestratorProjectId !== s.projectId) {
+      orchestrator.abort();
+      orchestrator = null;
+      orchestratorProjectId = null;
+    }
+    const run = useGenScene.getState().run;
+    if (run && run.projectId !== s.projectId) useGenScene.setState({ run: null });
   }
+  // Resume the persisted plan once its project finishes loading. This lives on
+  // the store, not a component, so a paid run resumes (and its media re-tags)
+  // even when the AI panel never mounts. loadProject flips `loaded` false→true
+  // in the same set() that fills genvideo, so the edge fires once per open.
+  if (!s.loaded || prev.loaded || !s.projectId || !s.genvideo) return;
+  if (orchestrator && orchestratorProjectId === s.projectId) return;
+  if (useGenScene.getState().run?.projectId === s.projectId) return;
+  useGenScene.getState().hydrate(s.projectId, s.genvideo);
 });
 
 const LOG_CAP = 24;
@@ -159,7 +175,7 @@ function runAssetIds(project: VideoProject): Set<string> {
  * hydrate, this re-tags those assets to the run's chat thread and drops any
  * panel job rows the run left behind (an errored render never landed an asset,
  * so its row is matched by the shot prompt it rendered). */
-function claimRunMedia(project: VideoProject): void {
+function claimRunMedia(projectId: string, project: VideoProject): void {
   const chatId = project.chatId;
   if (!chatId) return;
   const ids = runAssetIds(project);
@@ -174,6 +190,9 @@ function claimRunMedia(project: VideoProject): void {
   );
   for (const j of useGenerate.getState().jobs) {
     if (j.chatId) continue; // already owned — the panels never saw it
+    // Scoped to the run's own project: a prompt string alone must never match
+    // (and delete) a render the user made themselves elsewhere.
+    if (j.projectId !== projectId) continue;
     if ((j.assetId && ids.has(j.assetId)) || prompts.has(j.prompt)) {
       useGenerate.getState().dismiss(j.id);
     }
@@ -270,6 +289,36 @@ function failed(orch: VideoOrchestrator): (e: unknown) => void {
       fail(e instanceof Error ? e.message : String(e));
     }
   };
+}
+
+/** Rebuild a finished run from the open project's persisted plan so the
+ * revision tools keep working after a reload. Built on demand — a done card
+ * resurfaces only when the user actually revises, never just from opening the
+ * project. Returns true once a live orchestrator and mirror exist. */
+function resumeDoneRun(): boolean {
+  const ed = useEditor.getState();
+  const project = ed.genvideo;
+  if (!ed.projectId || !project || project.phase !== "done") return false;
+  orchestrator?.abort();
+  const orch = buildOrchestrator(ed.projectId, project);
+  orchestrator = orch;
+  orchestratorProjectId = ed.projectId;
+  useGenScene.setState({
+    run: {
+      projectId: ed.projectId,
+      mode: project.audioMode,
+      title: project.brief || "Animating your audio",
+      status: "done",
+      phase: project.phase,
+      shots: project.shots,
+      placed: project.shots.filter((s) => s.timelineClipId).length,
+      total: project.shots.length,
+      logs: [],
+      startedAt: Date.now(),
+      endedAt: Date.now(),
+    },
+  });
+  return true;
 }
 
 function buildOrchestrator(projectId: string, project: VideoProject): VideoOrchestrator {
@@ -388,6 +437,9 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
   },
 
   regenerateShot: (n, note) => {
+    // After a reload the finished run has no live orchestrator — rebuild it
+    // from the persisted plan before deciding the scene "isn't done".
+    if (!orchestrator || !get().run) resumeDoneRun();
     const run = get().run;
     if (!orchestrator || !run || run.status !== "done") {
       return { ok: false, message: "The scene isn't finished rendering yet — revise it once it's done." };
@@ -406,6 +458,8 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
   },
 
   restyle: (style) => {
+    // Same reload path as regenerateShot: a finished run rebuilds on demand.
+    if (!orchestrator || !get().run) resumeDoneRun();
     const run = get().run;
     if (!orchestrator || !run || run.status !== "done") {
       return { ok: false, message: "The scene isn't finished rendering yet — restyle it once it's done." };
@@ -423,9 +477,10 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
   hydrate: (projectId, project) => {
     // Re-assert chat ownership over the run's media before anything else, so
     // even a finished run's leftovers never sit in the generate panels.
-    claimRunMedia(project);
+    claimRunMedia(projectId, project);
     // A finished or failed run has nothing to resume — its clips are already on
-    // the timeline — so it doesn't re-surface a card on reload.
+    // the timeline — so it doesn't re-surface a card on reload. Revision tools
+    // rebuild a done run on demand (resumeDoneRun).
     if (project.phase === "done" || project.phase === "failed") return;
     // Rebuild the orchestrator around the persisted plan so approve/regenerate
     // keep working after a reload. Supersede any prior run first so two never

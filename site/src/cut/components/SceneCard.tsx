@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, ChevronRight, CircleDashed, Clapperboard, TriangleAlert, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatDuration, useGenScene, type SceneRun } from "../lib/genScene";
@@ -45,26 +45,10 @@ function describe(sh: Shot): string {
 export function SceneCard() {
   const run = useGenScene((s) => s.run);
   const projectId = useEditor((s) => s.projectId);
-  const genvideo = useEditor((s) => s.genvideo);
-  const loaded = useEditor((s) => s.loaded);
-  const hydrated = useRef<string | null>(null);
   const [open, setOpen] = useState(true);
 
-  // Resume a persisted run once a project has finished loading. Waiting for
-  // `loaded` matters: loadProject sets projectId synchronously with
-  // genvideo=undefined and fills genvideo only after the fetch, so running this
-  // before load would mark the project hydrated while genvideo is still empty
-  // and never resume the persisted run.
-  useEffect(() => {
-    if (!projectId || !loaded || hydrated.current === projectId) return;
-    const cur = useGenScene.getState().run;
-    if (cur && cur.projectId === projectId) {
-      hydrated.current = projectId;
-      return;
-    }
-    if (genvideo) useGenScene.getState().hydrate(projectId, genvideo);
-    hydrated.current = projectId;
-  }, [projectId, loaded, genvideo]);
+  // Resuming a persisted run is the genScene store's own subscription — it
+  // must happen even when this card (or the whole AI panel) never mounts.
 
   // The elapsed clock's "now", advanced once a second while the run works.
   // Held in state — Date.now() in render is impure — and set only from the
