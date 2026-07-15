@@ -614,7 +614,7 @@ export async function runAiTool(
         input.reference_asset_id === undefined
           ? []
           : resolveRefAssets([input.reference_asset_id]);
-      return launchVeoJob(projectId, prompt, input, {
+      const veoOpts: Omit<VideoGenOptions, "onDone"> = {
         tier: input.tier === "high" ? "high" : "fast",
         durationSeconds: isNum(input.duration_seconds)
           ? clamp(Math.round(input.duration_seconds), 4, 8)
@@ -623,6 +623,44 @@ export async function runAiTool(
         ...(input.resolution === "720p" || input.resolution === "1080p"
           ? { resolution: input.resolution }
           : {}),
+      };
+      // Staged, like the scene pipeline: reference work happens in the image
+      // model first — it holds identity far better than any video model — and
+      // the video model then animates the approved frame. The still lands as
+      // a chat asset (its card previews above the render's), and the render
+      // seeds from it with the prompt as written. Text-only asks skip
+      // straight to video; a failed still degrades to the composed-seed hop.
+      if (refs.length > 0) {
+        const still = await gen.generateImage(projectId, prompt, {
+          refs,
+          aspect:
+            input.aspect === "16:9" || input.aspect === "9:16"
+              ? input.aspect
+              : useEditor.getState().aspect,
+          chatId: chatOwner() ?? undefined,
+        });
+        const stillAsset =
+          still.status === "done" && still.assetId
+            ? useEditor.getState().assets.find((a) => a.id === still.assetId)
+            : undefined;
+        if (stillAsset) {
+          return {
+            ...launchVeoJob(projectId, prompt, input, {
+              ...veoOpts,
+              refs: [refFromAsset(stillAsset)],
+              composeRefs: false,
+              // The most Veo permits with an image input; the seed carries
+              // the subject, so a person-safety downgrade beats losing it.
+              personGeneration: "ALLOW_ADULT",
+            }),
+            stillAssetId: stillAsset.id,
+            note:
+              "Designed the opening frame from the reference first (the image card above the render), then started the video from that exact frame — it previews in this chat when it lands, in a minute or two.",
+          };
+        }
+      }
+      return launchVeoJob(projectId, prompt, input, {
+        ...veoOpts,
         ...(refs.length > 0 ? { refs } : {}),
       });
     }

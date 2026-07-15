@@ -66,13 +66,21 @@ export function ChatProjectAsset({ assetId }: { assetId: string }) {
 }
 
 /** The assets a finished tool call produced, from its typed output fields:
- * `assetId` for landed media, `jobId` for a video render still in flight. */
+ * `assetId` for landed media, `jobId` for a video render still in flight,
+ * `stillAssetId` for a staged render's opening frame (shown above its job). */
 export function ToolOutputAssets({ output }: { output: unknown }) {
   if (!output || typeof output !== "object") return null;
-  const o = output as { assetId?: unknown; jobId?: unknown };
-  if (typeof o.assetId === "string") return <ChatProjectAsset assetId={o.assetId} />;
-  if (typeof o.jobId === "string") return <ChatVideoJobCard jobId={o.jobId} />;
-  return null;
+  const o = output as { assetId?: unknown; jobId?: unknown; stillAssetId?: unknown };
+  return (
+    <>
+      {typeof o.stillAssetId === "string" && <ChatProjectAsset assetId={o.stillAssetId} />}
+      {typeof o.assetId === "string" ? (
+        <ChatProjectAsset assetId={o.assetId} />
+      ) : typeof o.jobId === "string" ? (
+        <ChatVideoJobCard jobId={o.jobId} />
+      ) : null}
+    </>
+  );
 }
 
 /** A video render the tool started but couldn't wait out: a live card that
