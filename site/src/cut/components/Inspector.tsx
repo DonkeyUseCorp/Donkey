@@ -542,6 +542,21 @@ function AudioPanel({ clip }: { clip: AudioClip }) {
         </div>
         <Row label="Length"><Value>{formatTime(len)}</Value></Row>
         <Row label="Starts at"><Value>{formatTime(clip.start)}</Value></Row>
+        <Row label="Speed">
+          <Slider
+            className="audio-speed data-horizontal:w-24"
+            min={SPEED_MIN}
+            max={SPEED_MAX}
+            step={0.05}
+            value={speed}
+            onValueChange={(v) => {
+              const n = Number(v);
+              setAudio({ speed: Math.abs(n - 1) < 1e-4 ? undefined : n });
+            }}
+            onValueCommitted={ck.end}
+          />
+          <Value className="w-9 text-right text-muted-foreground">{speed.toFixed(2)}×</Value>
+        </Row>
         <Row label="Volume">
           <Slider
             className="data-horizontal:w-24"
@@ -620,6 +635,8 @@ function AudioPanel({ clip }: { clip: AudioClip }) {
 function LayerClipPanel({ clip }: { clip: VideoClip }) {
   const asset = useEditor((s) => s.assets.find((a) => a.id === clip.assetId));
   const update = useEditor((s) => s.updateOverlayClip);
+  const updateTransient = useEditor((s) => s.updateOverlayClipTransient);
+  const ck = useSliderCheckpoint();
   const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
   const len = (clip.out - clip.in) / speed;
   return (
@@ -631,6 +648,22 @@ function LayerClipPanel({ clip }: { clip: VideoClip }) {
         </div>
         <Row label="Length"><Value>{formatTime(len)}</Value></Row>
         <Row label="Starts at"><Value>{formatTime(clip.start)}</Value></Row>
+        <Row label="Speed">
+          <Slider
+            className="layer-speed data-horizontal:w-24"
+            min={SPEED_MIN}
+            max={SPEED_MAX}
+            step={0.05}
+            value={speed}
+            onValueChange={(v) => {
+              ck.begin();
+              const n = Number(v);
+              updateTransient(clip.id, { speed: Math.abs(n - 1) < 1e-4 ? undefined : n });
+            }}
+            onValueCommitted={ck.end}
+          />
+          <Value className="w-9 text-right text-muted-foreground">{speed.toFixed(2)}×</Value>
+        </Row>
         <LayoutButtons
           rect={rectOf(clip)}
           onPick={(frame, fit) => update(clip.id, { frame, fit })}
