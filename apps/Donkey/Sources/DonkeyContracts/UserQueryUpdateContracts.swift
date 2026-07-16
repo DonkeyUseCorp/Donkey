@@ -31,14 +31,4 @@ public struct UserQueryUpdateState: Equatable, Sendable {
     public var isActionable: Bool {
         status == .available
     }
-
-    public var headerButtonTitle: String? {
-        guard isActionable else { return nil }
-
-        if let latestVersion, !latestVersion.isEmpty {
-            return "Update \(latestVersion)"
-        }
-
-        return "Update"
-    }
 }

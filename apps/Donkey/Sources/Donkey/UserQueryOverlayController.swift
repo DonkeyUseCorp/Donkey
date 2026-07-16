@@ -1177,7 +1177,7 @@ final class UserQueryOverlayController {
         // Staged drops render a chip row above the composer; the surface grows to seat it so the
         // conversation list and composer keep their height.
         let stagedAssetsExtraHeight = model.stagedNotchAssets.isEmpty ? 0 : NotchMetrics.stagedAssetsRowExtraHeight
-        if hasStatusConversationDisplayText || !model.notchConversations.isEmpty || model.updateState.headerButtonTitle != nil {
+        if hasStatusConversationDisplayText || !model.notchConversations.isEmpty {
             return NotchMetrics.expandedConversationContentHeight + stagedAssetsExtraHeight
         }
 
