@@ -104,12 +104,12 @@ export function SidePanel({
   return (
     <div className="flex min-h-0 border-r border-border bg-card">
       {/* Icon rail */}
-      <div className="flex w-[68px] shrink-0 flex-col items-center gap-1 border-r border-border py-3">
+      <div className="flex min-h-0 w-[68px] shrink-0 flex-col items-center gap-1 overflow-y-auto border-r border-border py-3">
         {TABS.map(({ id, label, icon: Icon }) => {
           // The open tab never badges — its completions are already on screen.
           const unseenCount = isGenTab(id) && id !== tab ? unseen[id].length : 0;
           const tileClass =
-            "flex flex-col items-center gap-1 rounded-lg px-2 py-1.5 text-muted-foreground transition-colors hover:text-foreground";
+            "flex shrink-0 flex-col items-center gap-1 rounded-lg px-2 py-1.5 text-muted-foreground transition-colors hover:text-foreground";
           const inner = (
             <>
               <span
@@ -135,7 +135,7 @@ export function SidePanel({
             <Fragment key={id}>
               {/* Soft breaks between the file tabs, the AI-generate tabs, and the finishing tabs. */}
               {(id === "video" || id === "subtitles") && (
-                <div aria-hidden className="my-1 h-px w-8 bg-border" />
+                <div aria-hidden className="my-1 h-px w-8 shrink-0 bg-border" />
               )}
               <button
                 className={tileClass}
