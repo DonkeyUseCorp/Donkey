@@ -42,7 +42,7 @@ function describe(sh: Shot): string {
   return sh.action?.trim() || sh.dialogue?.trim() || sh.audioText?.trim() || "—";
 }
 
-export function SceneCard() {
+export function SceneCard({ threadId }: { threadId: string }) {
   const run = useGenScene((s) => s.run);
   const projectId = useEditor((s) => s.projectId);
   const [open, setOpen] = useState(true);
@@ -63,6 +63,9 @@ export function SceneCard() {
   }, [working]);
 
   if (!run || run.projectId !== projectId) return null;
+  // The card belongs to the thread that asked — a new or different chat starts
+  // clean. A run with no owner (pre-chatId persisted plans) shows anywhere.
+  if (run.chatId && run.chatId !== threadId) return null;
 
   const inFlight = run.status === "planning" || run.status === "generating";
   const canDismiss =
@@ -72,7 +75,8 @@ export function SceneCard() {
   const totalFrames = run.shots.length ? Math.max(...run.shots.map((sh) => sh.endFrame)) : 0;
   // Shots that couldn't be rendered as video and are holding a still instead.
   const stillCount = run.shots.filter((sh) => sh.status === "failed").length;
-  // Any shot stopped by an empty balance: the summary carries the credits link.
+  // Any shot stopped by an empty balance: the summary names the cause (the
+  // composer's credits tab carries the reload link).
   const creditsOut = run.shots.some(
     (sh) => sh.status === "failed" && sh.error === NO_CREDITS_MESSAGE
   );
@@ -97,7 +101,9 @@ export function SceneCard() {
       <p className="mt-1 line-clamp-2 text-muted-foreground">{run.title}</p>
 
       {run.status === "planning" && (
-        <p className="mt-2 text-muted-foreground">Writing the script and planning shots…</p>
+        <p className="mt-2 animate-pulse text-muted-foreground">
+          {run.activity ?? "Writing the script and planning shots…"}
+        </p>
       )}
 
       {run.shots.length > 0 && (
@@ -153,13 +159,11 @@ export function SceneCard() {
                       </span>
                     </button>
                     {sh.status === "failed" && (
-                      // Outside the redo button: an empty-balance error carries
-                      // the credits link, and a link can't live inside a button.
                       <span className="mt-0.5 block pl-6 text-[10px] text-amber-700">
                         Couldn&apos;t animate — showing a still
                         {sh.error ? (
                           <>
-                            : <HostedErrorText error={sh.error} />
+                            : <HostedErrorText error={sh.error} link={false} />
                           </>
                         ) : null}
                         {redoable ? ". Click the shot to retry." : ""}
@@ -182,11 +186,15 @@ export function SceneCard() {
         </div>
       )}
 
+      {run.status === "generating" && run.activity && (
+        <p className="mt-1.5 animate-pulse truncate text-[11px] text-muted-foreground">{run.activity}</p>
+      )}
+
       {run.error && (
         <p className="mt-2 flex items-start gap-1.5 text-amber-700">
           <TriangleAlert className="mt-px size-3 shrink-0" />
           <span>
-            <HostedErrorText error={run.error} />
+            <HostedErrorText error={run.error} link={false} />
           </span>
         </p>
       )}
@@ -214,7 +222,7 @@ export function SceneCard() {
                 {stillCount} of {run.shots.length} shot{run.shots.length === 1 ? "" : "s"} held a
                 still —{" "}
                 {creditsOut ? (
-                  <HostedErrorText error={NO_CREDITS_MESSAGE} />
+                  <HostedErrorText error={NO_CREDITS_MESSAGE} link={false} />
                 ) : (
                   "video generation failed"
                 )}

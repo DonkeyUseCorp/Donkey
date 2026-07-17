@@ -55,7 +55,8 @@ import {
   useAssetDrop,
   type AssetRef,
 } from "@/cut/lib/assetRef";
-import { signInUrl, useSignedIn } from "@/cut/lib/generate";
+import { creditsUrl, signInUrl, useSignedIn } from "@/cut/lib/generate";
+import { useCreditsRecheck, useOutOfCredits } from "@/cut/lib/hosted";
 import { streamGeminiChat } from "@/cut/lib/geminiChat";
 import { AI_MODELS } from "@/cut/lib/aiModels";
 import { saveAssetToLibrary } from "@/cut/lib/library";
@@ -92,6 +93,8 @@ interface ChatThread {
 
 const THREAD_LIMIT = 30;
 const threadsKey = () => `cut-ai-threads-${useEditor.getState().projectId ?? "global"}`;
+// The open chat survives hiding the panel — only the + button starts a new one.
+const activeChatKey = () => `cut-ai-active-${useEditor.getState().projectId ?? "global"}`;
 
 function readThreads(): ChatThread[] {
   try {
@@ -176,7 +179,15 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
     typeof window === "undefined" ? "claude-fable-5" : localStorage.getItem(MODEL_KEY) ?? "claude-fable-5"
   );
   // One chat is active at a time; every past chat lives in the Threads panel.
-  const [activeChat, setActiveChat] = useState<string>(() => crypto.randomUUID());
+  // The id persists so closing and reopening the panel resumes the same chat.
+  const [activeChat, setActiveChat] = useState<string>(() =>
+    typeof window === "undefined"
+      ? crypto.randomUUID()
+      : localStorage.getItem(activeChatKey()) ?? crypto.randomUUID()
+  );
+  useEffect(() => {
+    localStorage.setItem(activeChatKey(), activeChat);
+  }, [activeChat]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [threads, setThreads] = useState<ChatThread[]>([]);
 
@@ -369,9 +380,16 @@ function ChatSession({
   // hovering it (dropActive below) strengthens the ring and shows the label.
   const fileDropHint = useEditor((s) => s.dropActive !== null);
   // A resumed run can pin the scene card with no chat messages behind it — the
-  // empty-state intro/suggestions must yield to it so the two don't stack.
+  // empty-state intro/suggestions must yield to it so the two don't stack. The
+  // card shows in the thread that asked (unowned = pre-chatId runs, shown
+  // anywhere), so only that thread suppresses the intro.
   const sceneProjectId = useEditor((s) => s.projectId);
-  const hasSceneRun = useGenScene((s) => !!s.run && s.run.projectId === sceneProjectId);
+  const hasSceneRun = useGenScene(
+    (s) =>
+      !!s.run &&
+      s.run.projectId === sceneProjectId &&
+      (!s.run.chatId || s.run.chatId === threadId)
+  );
   const { active: dropActive, attachTarget, targetProps } = useAssetDrop(
     (ref) => setAttachments((prev) => addRefOnce(prev, ref)),
     // OS files dropped on the chat attach as references (media files import
@@ -545,6 +563,8 @@ function ChatSession({
   };
 
   const currentAvailable = info ? info.providers[provider(model)]?.available !== false : true;
+  const outOfCredits = useOutOfCredits((s) => s.out);
+  useCreditsRecheck();
 
   return (
     <div
@@ -552,7 +572,15 @@ function ChatSession({
       {...targetProps}
       className="relative flex min-h-0 flex-1 flex-col"
     >
-      <div ref={scrollRef} className="ai-messages min-h-0 flex-1 overflow-y-auto px-3.5 py-3">
+      <div
+        ref={scrollRef}
+        className={cn(
+          "ai-messages min-h-0 flex-1 overflow-y-auto px-3.5 py-3",
+          // The credits tab floats over the bottom of this area; the extra
+          // padding lets the last message scroll out from behind it.
+          outOfCredits && "pb-9"
+        )}
+      >
         {messages.length === 0 && !hasSceneRun && (
           <div className="flex flex-col gap-3 pt-6">
             <p className="text-[12.5px] leading-relaxed text-muted-foreground">
@@ -576,7 +604,7 @@ function ChatSession({
         {messages.map((m) => (
           <MessageView key={m.id} message={m} />
         ))}
-        <SceneCard />
+        <SceneCard threadId={threadId} />
         {busy && (
           <div className="ai-busy mt-1 flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
             <CircleDashed className="size-3 animate-spin" /> Working… <LiveElapsed />
@@ -586,82 +614,102 @@ function ChatSession({
           <div className="ai-error mt-2 flex items-start gap-2 rounded-lg bg-red-50 px-2.5 py-2 text-[11.5px] leading-relaxed text-red-700">
             <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
             <span>
-              <HostedErrorText error={error.message} />
+              <HostedErrorText error={error.message} link={false} />
             </span>
           </div>
         )}
       </div>
 
-      <div className="shrink-0 border-t border-border p-2.5">
-        <div
-          className={cn(
-            "rounded-xl border bg-background transition-colors",
-            dropActive
-              ? "border-[#0a84ff] ring-2 ring-[#0a84ff]/30"
-              : fileDropHint
-                ? "border-[#0a84ff]/45 ring-2 ring-[#0a84ff]/15"
-                : "border-input focus-within:border-ring"
+      <div className="shrink-0 p-2.5">
+        <div className="relative">
+          {outOfCredits && (
+            // Folder tab behind the box: its bottom few pixels slide under the
+            // box, which paints over it, so the tab meets the border even where
+            // the box's corner radius curves away. Extra bottom padding keeps
+            // the text above the overlap. It floats over the messages, which
+            // scroll behind it.
+            <a
+              className="ai-credits-tab absolute inset-x-1.5 bottom-full -mb-1 flex items-center gap-1.5 rounded-t-lg border border-b-0 border-amber-500/30 bg-amber-50 px-3 pt-1.5 pb-2.5 text-[11px] text-amber-800"
+              href={creditsUrl()}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <TriangleAlert className="size-3 shrink-0" />
+              <span>
+                No credits left — <span className="font-medium underline">reload credits</span>
+              </span>
+            </a>
           )}
-        >
-          {dropActive && (
-            <div className="px-3 pt-2 text-[11.5px] font-medium text-[#0a84ff]">
-              Drop to attach
-            </div>
-          )}
-          {mic.state === "idle" ? (
-            <>
-              <RefChips
-                refs={attachments}
-                onRemove={(ref) => setAttachments((p) => p.filter((x) => !sameRef(x, ref)))}
-                className="px-2.5 pt-2.5"
-              />
-              <MentionTextarea
-                className="ai-input max-h-56 w-full resize-none overflow-y-auto bg-transparent px-3 pt-2 text-[12.5px] leading-relaxed outline-none placeholder:text-muted-foreground/70"
-                rows={5}
-                autoGrow
-                placeholder="Ask about your video, or tell me what to change… @ references media"
-                value={input}
-                onChange={setInput}
-                candidates={candidates}
-                submitKey="enter"
-                menuSide="top"
-                inputRef={composerRef}
-                onSubmit={() => send(input)}
-              />
-              <div className="flex items-center gap-1 px-1.5 pb-1.5">
-                <ModelSelector info={info} model={model} onSelect={onModelChange} />
-                <div className="flex-1" />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="ai-mic text-muted-foreground"
-                  title="Dictate"
-                  disabled={busy}
-                  onClick={() => void mic.start()}
-                >
-                  <Mic className="size-3.5" />
-                </Button>
-                {busy ? (
-                  <Button variant="outline" size="sm" className="ai-stop" title="Stop" onClick={() => void stop()}>
-                    <Square className="size-3" />
-                  </Button>
-                ) : (
-                  <Button
-                    size="sm"
-                    className="ai-send"
-                    title="Send (Enter)"
-                    disabled={(!input.trim() && attachments.length === 0) || !currentAvailable}
-                    onClick={() => send(input)}
-                  >
-                    <ArrowUp className="size-3.5" />
-                  </Button>
-                )}
+          <div
+            className={cn(
+              "relative rounded-xl border bg-background transition-colors",
+              dropActive
+                ? "border-[#0a84ff] ring-2 ring-[#0a84ff]/30"
+                : fileDropHint
+                  ? "border-[#0a84ff]/45 ring-2 ring-[#0a84ff]/15"
+                  : "border-input focus-within:border-ring"
+            )}
+          >
+            {dropActive && (
+              <div className="px-3 pt-2 text-[11.5px] font-medium text-[#0a84ff]">
+                Drop to attach
               </div>
-            </>
-          ) : (
-            <DictationBody text={input} mic={mic} />
-          )}
+            )}
+            {mic.state === "idle" ? (
+              <>
+                <RefChips
+                  refs={attachments}
+                  onRemove={(ref) => setAttachments((p) => p.filter((x) => !sameRef(x, ref)))}
+                  className="px-2.5 pt-2.5"
+                />
+                <MentionTextarea
+                  className="ai-input max-h-56 w-full resize-none overflow-y-auto bg-transparent px-3 pt-2 text-[12.5px] leading-relaxed outline-none placeholder:text-muted-foreground/70"
+                  rows={5}
+                  autoGrow
+                  placeholder="Ask about your video, or tell me what to change… @ references media"
+                  value={input}
+                  onChange={setInput}
+                  candidates={candidates}
+                  submitKey="enter"
+                  menuSide="top"
+                  inputRef={composerRef}
+                  onSubmit={() => send(input)}
+                />
+                <div className="flex items-center gap-1 px-1.5 pb-1.5">
+                  <ModelSelector info={info} model={model} onSelect={onModelChange} />
+                  <div className="flex-1" />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="ai-mic text-muted-foreground"
+                    title="Dictate"
+                    disabled={busy}
+                    onClick={() => void mic.start()}
+                  >
+                    <Mic className="size-3.5" />
+                  </Button>
+                  {busy ? (
+                    <Button variant="outline" size="sm" className="ai-stop" title="Stop" onClick={() => void stop()}>
+                      <Square className="size-3" />
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      className="ai-send"
+                      title="Send (Enter)"
+                      disabled={(!input.trim() && attachments.length === 0) || !currentAvailable}
+                      onClick={() => send(input)}
+                    >
+                      <ArrowUp className="size-3.5" />
+                    </Button>
+                  )}
+                </div>
+              </>
+            ) : (
+              <DictationBody text={input} mic={mic} />
+            )}
+          </div>
         </div>
         {mic.error && (
           <p className="mt-1.5 px-1 text-[10.5px] leading-relaxed text-amber-700">{mic.error}</p>

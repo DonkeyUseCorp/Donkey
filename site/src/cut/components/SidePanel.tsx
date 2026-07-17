@@ -271,7 +271,7 @@ function MediaPanel({
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-3.5">
         {assets.length === 0 && !importing ? (
-          <div className="mx-3.5 rounded-xl border-[1.5px] border-dashed border-input px-4 py-7 text-center text-xs leading-relaxed text-muted-foreground">
+          <div className="mx-3.5 px-4 py-7 text-center text-xs leading-relaxed text-muted-foreground">
             <div className="mb-3 flex justify-center gap-3.5">
               <Film className="size-5" />
               <Music className="size-5" />
