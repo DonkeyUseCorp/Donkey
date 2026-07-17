@@ -49,9 +49,28 @@ export function withProjectDoc(
 }
 
 /** Resolves once every queued background write for the project has settled —
- * the editor's project load awaits this so it never reads mid-write. */
+ * the editor's project load awaits this so it never reads mid-write. The load
+ * sets `projectId` (with `loaded` false) BEFORE awaiting, so a write that
+ * hasn't queued yet routes through `projectWriteMode` and waits for the load
+ * instead — between the two, no doc write can race the load's fetch. */
 export function docWriterIdle(projectId: string): Promise<void> {
   return (chains.get(projectId) ?? Promise.resolve()).catch(() => {});
+}
+
+/** Where a background write for this project must land right now: the live
+ * store when the project is open and loaded, its persisted doc otherwise. A
+ * load in progress is waited out so a write never races the load's doc fetch —
+ * it either queued before the load began (docWriterIdle drains it) or lands in
+ * the store after. A failed load falls through to the doc: the store never
+ * loaded, autosave never runs, so the doc stays the source of truth. */
+export async function projectWriteMode(projectId: string): Promise<"store" | "doc"> {
+  for (;;) {
+    const s = useEditor.getState();
+    if (s.projectId !== projectId) return "doc";
+    if (s.loaded) return "store";
+    if (s.loadError) return "doc";
+    await new Promise((r) => setTimeout(r, 200));
+  }
 }
 
 /** Register a run-created asset in a closed project's doc (the open-project

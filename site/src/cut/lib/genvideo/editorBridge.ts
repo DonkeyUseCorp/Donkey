@@ -22,7 +22,7 @@
 
 import { useEditor } from "../store";
 import type { TransitionStyle } from "../types";
-import { docPlaceGenAudio, docPlaceGenClip, withProjectDoc } from "./docWriter";
+import { docPlaceGenAudio, docPlaceGenClip, projectWriteMode, withProjectDoc } from "./docWriter";
 import type { AudioClipInfo, EditorBridge, TimelineInfo } from "./editor";
 
 /** The rate the plan runs at. Fixed to the export frame rate so a shot's frame
@@ -52,16 +52,10 @@ export class StoreEditorBridge implements EditorBridge {
   }
 
   /** Where this call must write: the live store when the run's project is
-   * open, its persisted doc when the user has moved on. A load in progress is
-   * waited out so a write never races the doc fetch — either it lands in the
-   * doc before the load reads it, or in the store after. */
-  private async mode(): Promise<"store" | "doc"> {
-    for (;;) {
-      const s = useEditor.getState();
-      if (s.projectId !== this.projectId) return "doc";
-      if (s.loaded) return "store";
-      await new Promise((r) => setTimeout(r, 200));
-    }
+   * open, its persisted doc when the user has moved on (see projectWriteMode
+   * for the load-race and failed-load rules). */
+  private mode(): Promise<"store" | "doc"> {
+    return projectWriteMode(this.projectId);
   }
 
   getTimeline(): TimelineInfo {

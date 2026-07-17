@@ -542,11 +542,6 @@ export const useEditor = create<EditorState>((set, get) => {
     genvideo: undefined,
 
     loadProject: async (id) => {
-      // A background scene run may still be writing this project's doc — wait
-      // out its queued writes so the load never reads a half-written doc (and
-      // never later autosaves over a placement it didn't see). Lazy import:
-      // docWriter reads store helpers, so a static import would be a cycle.
-      await import("./genvideo/docWriter").then((m) => m.docWriterIdle(id)).catch(() => {});
       history.length = 0;
       future.length = 0;
       pending = null;
@@ -577,6 +572,14 @@ export const useEditor = create<EditorState>((set, get) => {
         exportOpen: false,
         genvideo: undefined,
       });
+      // A background scene run may still be writing this project's doc — drain
+      // its queued writes so the load never reads a half-written doc. Ordering
+      // matters: projectId is set (loaded false) BEFORE this await, so a write
+      // arriving during the drain waits for the load (projectWriteMode) instead
+      // of queueing a doc write the drain would miss — nothing can land between
+      // the drain and the fetch below. Lazy import: docWriter reads store
+      // helpers, so a static import would be a cycle.
+      await import("./genvideo/docWriter").then((m) => m.docWriterIdle(id)).catch(() => {});
       try {
         const [res, ui] = await Promise.all([apiFetch(`/api/cut/projects/${id}`), loadUiState(id)]);
         if (!res.ok) throw new Error("This project no longer exists.");

@@ -7,7 +7,7 @@ import { realSuite } from "./genvideo/adapters";
 import { GEN_FPS, StoreEditorBridge } from "./genvideo/editorBridge";
 import { VideoOrchestrator } from "./genvideo/orchestrator";
 import { onActivity } from "./genvideo/activity";
-import { withProjectDoc } from "./genvideo/docWriter";
+import { projectWriteMode, withProjectDoc } from "./genvideo/docWriter";
 import type { RefAsset, Shot, VideoEvent, VideoPhase, VideoProject } from "./genvideo/types";
 import { useEditor } from "./store";
 import type { Aspect } from "./types";
@@ -446,11 +446,11 @@ function buildOrchestrator(projectId: string, project: VideoProject): VideoOrche
     emit: (e) => applyEvent(projectId, e),
     // Persist through the open store when this run's project is on screen
     // (autosave carries it), else straight into the project's doc — a run
-    // keeps its plan durable wherever the user is.
-    persist: (p) => {
-      const ed = useEditor.getState();
-      if (ed.projectId === projectId && ed.loaded) {
-        ed.setGenvideo(p);
+    // keeps its plan durable wherever the user is. Routed through
+    // projectWriteMode so a plan save never races a load's doc fetch.
+    persist: async (p) => {
+      if ((await projectWriteMode(projectId)) === "store") {
+        useEditor.getState().setGenvideo(p);
         return;
       }
       return withProjectDoc(projectId, (doc) => {
