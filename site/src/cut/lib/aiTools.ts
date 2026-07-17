@@ -624,6 +624,22 @@ export async function runAiTool(
           ? { resolution: input.resolution }
           : {}),
       };
+      // "Animate this image": the referenced frame is the product, so it seeds
+      // the render untouched — no image-model redesign in between.
+      if (refs.length > 0 && input.animate_reference === true) {
+        return {
+          ...launchVeoJob(projectId, prompt, input, {
+            ...veoOpts,
+            refs: [refs[0]],
+            composeRefs: false,
+            // The most Veo permits with an image input; the seed carries the
+            // subject, so a person-safety downgrade beats losing it.
+            personGeneration: "ALLOW_ADULT",
+          }),
+          note:
+            "Animating the referenced image as the literal opening frame — the clip previews in this chat when it lands, in a minute or two.",
+        };
+      }
       // Staged, like the scene pipeline: reference work happens in the image
       // model first — it holds identity far better than any video model — and
       // the video model then animates the approved frame. The still lands as
