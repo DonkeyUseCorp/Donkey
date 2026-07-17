@@ -40,6 +40,10 @@ export interface GenerateJob {
    * An owned job shows on its chat card only — the Video/Image panels list
    * panel renders, so they skip it — and its asset lands chat-tagged. */
   chatId?: string;
+  /** Stable identity of the work this render is FOR (a scene run's shot), so a
+   * resumed caller re-adopts exactly its own in-flight job — never another
+   * shot's that happens to share a prompt. */
+  genKey?: string;
   /** The provider poll payload for an in-flight render — persisting it is what
    * lets a reload re-attach to the running job instead of orphaning it. */
   poll?: {
@@ -128,6 +132,8 @@ export interface VideoGenOptions {
   /** The owning chat thread when chat (or a scene run) asked — stamps the
    * job and the landed asset, keeping both off the generate panels. */
   chatId?: string;
+  /** Stable identity of the work this render is for — see GenerateJob.genKey. */
+  genKey?: string;
 }
 
 const REFRESH_MS = 8000;
@@ -311,6 +317,39 @@ function persistJobs(jobs: GenerateJob[]) {
   }
 }
 
+// Exactly one browser tab polls (and lands) a given render. Persisted running
+// jobs are visible to every tab of the origin, so each job carries a lease in
+// localStorage: the owning tab renews it on every poll, and another tab takes
+// over only once the lease has gone stale (the owner closed or crashed).
+const TAB_ID = crypto.randomUUID().slice(0, 8);
+const LEASE_TTL_MS = 30_000;
+const leaseKey = (jobId: string) => `cut-gen-lease-${jobId}`;
+
+/** Take (or renew) the poll lease for a job. False when a live sibling tab
+ * holds it. Storage failures grant the lease — a tab that can't read storage
+ * can't see other tabs' leases either, and single-tab correctness wins. */
+function claimJobLease(jobId: string): boolean {
+  try {
+    const raw = localStorage.getItem(leaseKey(jobId));
+    if (raw) {
+      const lease = JSON.parse(raw) as { tab?: string; at?: number };
+      if (lease.tab !== TAB_ID && Date.now() - (lease.at ?? 0) < LEASE_TTL_MS) return false;
+    }
+    localStorage.setItem(leaseKey(jobId), JSON.stringify({ tab: TAB_ID, at: Date.now() }));
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+function releaseJobLease(jobId: string): void {
+  try {
+    localStorage.removeItem(leaseKey(jobId));
+  } catch {
+    // Stale lease expires on its own TTL.
+  }
+}
+
 export const useGenerate = create<GenerateState>((set, get) => {
   // A single session probe is in flight at a time, but the answer stays
   // re-checkable for the page's whole life: a sign-in can complete in another
@@ -358,6 +397,7 @@ export const useGenerate = create<GenerateState>((set, get) => {
     // the limit still gets a couple of polls before giving up.
     const deadline = Math.max(job.startedAt + VIDEO_DEADLINE_MS, Date.now() + 2 * 60_000);
     while (gen.status === "in_progress") {
+      claimJobLease(jobId); // renewed every cycle; siblings back off until it staled
       update(jobId, {
         poll: {
           id: gen.id,
@@ -524,8 +564,10 @@ export const useGenerate = create<GenerateState>((set, get) => {
         startedAt: Date.now(),
         status: "running",
         ...(opts?.chatId ? { chatId: opts.chatId } : {}),
+        ...(opts?.genKey ? { genKey: opts.genKey } : {}),
       };
       set((s) => ({ jobs: [job, ...s.jobs] }));
+      claimJobLease(job.id); // this tab started it, this tab polls it
       const settledRun = (async () => {
         try {
           // The job (and the landed asset's name) keeps the user's own words;
@@ -564,6 +606,8 @@ export const useGenerate = create<GenerateState>((set, get) => {
           await finishVideo(job.id, gen, opts?.onDone);
         } catch (err) {
           fail(job.id, err);
+        } finally {
+          releaseJobLease(job.id);
         }
         return settled(job.id, job);
       })();
@@ -572,8 +616,21 @@ export const useGenerate = create<GenerateState>((set, get) => {
     },
 
     resumeRunningJobs: () => {
+      const stored = new Map(readPersistedJobs().map((j) => [j.id, j]));
       for (const j of get().jobs) {
         if (j.kind !== "video" || j.status !== "running" || !j.poll || settlements.has(j.id)) continue;
+        // Storage is the cross-tab truth: a sibling tab may have settled this
+        // render already — adopt its outcome instead of re-polling (and
+        // re-importing) a finished job.
+        const theirs = stored.get(j.id);
+        if (theirs && theirs.status !== "running") {
+          set((s) => ({ jobs: s.jobs.map((x) => (x.id === j.id ? theirs : x)) }));
+          continue;
+        }
+        // Another live tab is already polling this render — landing it twice
+        // would import the file twice. The boot sweep re-runs on an interval,
+        // so if that tab closes, its lease stales and this one takes over.
+        if (!claimJobLease(j.id)) continue;
         const poll = j.poll;
         const run = (async () => {
           try {
@@ -587,6 +644,8 @@ export const useGenerate = create<GenerateState>((set, get) => {
             } as GenerationResponse);
           } catch (err) {
             fail(j.id, err);
+          } finally {
+            releaseJobLease(j.id);
           }
           return settled(j.id, j);
         })();
@@ -602,9 +661,13 @@ export const useGenerate = create<GenerateState>((set, get) => {
 });
 
 // Reload recovery: re-attach every persisted in-flight render as soon as the
-// app boots, so a refresh never orphans credits already spent.
+// app boots, so a refresh never orphans credits already spent. The sweep
+// repeats so a render whose owning tab closed (its lease staled) is picked up
+// by a surviving tab instead of orphaned; resumeRunningJobs itself is
+// idempotent and lease-guarded, so the repeats are cheap no-ops otherwise.
 if (typeof window !== "undefined") {
   setTimeout(() => useGenerate.getState().resumeRunningJobs(), 0);
+  setInterval(() => useGenerate.getState().resumeRunningJobs(), LEASE_TTL_MS);
 }
 
 /** Donkey sign-in state for the generation surfaces. Probes on mount and again

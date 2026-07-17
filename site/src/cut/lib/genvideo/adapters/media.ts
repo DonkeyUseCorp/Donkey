@@ -84,9 +84,13 @@ export function makeVideoRole(projectId: string, chatId?: string): VideoRole {
       // Veo allows one anchor kind per render (seed OR references), caps both
       // at ALLOW_ADULT, and renders reference-conditioned clips at 8s only —
       // so the rungs are distinct requests, not one combined one.
+      // The shot's stable identity, stamped on every job this render starts so
+      // a resumed run re-adopts exactly its own in-flight take.
+      const genKey = input.shotId ? `${projectId}:${input.shotId}` : undefined;
       const base = {
         tier: VIDEO_TIER,
         aspect: input.aspect,
+        ...(genKey ? { genKey } : {}),
         // Chat ownership rides the job from creation, so a shot never touches
         // the Video panel — job row, tile, or badge — even when the render
         // errors or lands after the user moved on. Once placed on the timeline
@@ -136,13 +140,14 @@ export function makeVideoRole(projectId: string, chatId?: string): VideoRole {
         },
       ];
       // A reload may have left this exact shot's render in flight — adopt the
-      // resumed job's result instead of billing a second take.
-      const inFlight = useGenerate
-        .getState()
-        .jobs.find(
-          (j) =>
-            j.kind === "video" && j.status === "running" && j.projectId === projectId && j.prompt === input.prompt
-        );
+      // resumed job's result instead of billing a second take. The match is
+      // the shot's own identity, never the prompt text: two shots can share a
+      // prompt and each still owns its own take.
+      const inFlight = genKey
+        ? useGenerate
+            .getState()
+            .jobs.find((j) => j.kind === "video" && j.status === "running" && j.genKey === genKey)
+        : undefined;
       if (inFlight) {
         const settledJob = await videoJobSettlement(inFlight.id);
         if (settledJob?.status === "done" && settledJob.assetId) return settledJob.assetId;

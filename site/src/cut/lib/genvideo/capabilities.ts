@@ -57,6 +57,9 @@ export interface ImageInput {
 export interface VideoInput {
   prompt: string;
   refs: RefAsset[];
+  /** The shot this render is for — its stable identity across reloads, so a
+   * resumed run re-adopts its own in-flight job instead of billing a retake. */
+  shotId?: string;
   startKeyframe?: string;
   endKeyframe?: string;
   /** The audio slice this shot should be spoken over — for audio-native video. */
