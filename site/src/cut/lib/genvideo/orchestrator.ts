@@ -22,7 +22,7 @@
 import { assertCoverage, frameToSec, MAX_SHOT_SEC, MIN_SHOT_SEC, repairCoverage, secToFrame, shotDurationFrames } from "./coverage";
 import { fanOut } from "./pool";
 import { buildPrompt, buildRefPrompt, refsForAsset, shotRefs } from "./prompt";
-import { segmentByDuration, type ModelSuite } from "./capabilities";
+import { segmentByDuration, type ModelSuite, type ReviewVerdict } from "./capabilities";
 import type { EditorBridge } from "./editor";
 import type { BeatVoice, RefAsset, Shot, VideoAsset, VideoEmit, VideoPhase, VideoProject } from "./types";
 
@@ -171,6 +171,7 @@ export class VideoOrchestrator {
         frames.push(prior.durationFrames);
         continue;
       }
+      this.deps.emit({ type: "activity", message: `Voicing line ${bi + 1} of ${this.project.script.beats.length}…` });
       const vo = await this.deps.suite.voice.speak({ script: beat.dialogue });
       const id = await this.deps.editor.importMedia(vo.mediaId);
       const dur = Math.max(minF, secToFrame(vo.durationSec, this.fps));
@@ -332,7 +333,12 @@ export class VideoOrchestrator {
   private async breakdown(): Promise<void> {
     if (this.project.shots.length === 0) {
       this.setPhase("breakdown");
-      const input = { transcript: this.project.transcript, durationFrames: this.durationFrames, fps: this.fps };
+      const input = {
+        transcript: this.project.transcript,
+        ...(this.project.brief ? { brief: this.project.brief } : {}),
+        durationFrames: this.durationFrames,
+        fps: this.fps,
+      };
       const id = (i: number) => `shot:${i}`;
       let shots: Shot[];
       try {
@@ -382,6 +388,7 @@ export class VideoOrchestrator {
         needed,
         async (asset) => {
           if (this.aborted) return; // a paused run spends nothing more
+          this.deps.emit({ type: "activity", message: `Designing ${asset.name}…` });
           const raw = await this.deps.suite.image.generate({
             prompt: buildRefPrompt(asset, this.project.style),
             refs: refsForAsset(asset, this.project),
@@ -449,26 +456,30 @@ export class VideoOrchestrator {
     if (this.aborted) return;
     this.updateShot(shot, { status: "generating", error: undefined });
     const audio = this.audioForShot(shot);
-    const prompt = buildPrompt(shot, this.project);
+    const basePrompt = buildPrompt(shot, this.project);
     const refs = shotRefs(shot, this.project);
+    // The reviewer's note from a declined take — the retake prompt carries it.
+    let critique: string | undefined;
     for (let attempt = 1; attempt <= VIDEO_ATTEMPTS; attempt++) {
       if (this.aborted) return; // a paused run spends nothing more
       shot.attempts = attempt;
+      const prompt = critique ? `${basePrompt} Note from the last take's review: ${critique}` : basePrompt;
+      const video = this.deps.suite.video;
       try {
-        let clip = await this.deps.suite.video.generate({
+        let clip = await video.generate({
           prompt,
           refs,
           startKeyframe: shot.startKeyframe,
           endKeyframe: shot.endKeyframe,
           durationSec: frameToSec(shotDurationFrames(shot), this.fps),
           aspect: this.aspect,
-          ...(audio && this.deps.suite.video.audioNative
+          ...(audio && video.audioNative
             ? { audioMediaId: audio.mediaId, audioFromSec: audio.fromSec, audioToSec: audio.toSec }
             : {}),
         });
         clip = await this.deps.editor.importMedia(clip);
         // Lip-sync post-pass when the video model can't do it inline.
-        if (audio && !this.deps.suite.video.audioNative && this.deps.suite.lipSync) {
+        if (audio && !video.audioNative && this.deps.suite.lipSync) {
           this.updateShot(shot, { status: "lipsync" });
           const synced = await this.deps.suite.lipSync.sync({
             videoMediaId: clip,
@@ -479,12 +490,32 @@ export class VideoOrchestrator {
           clip = await this.deps.editor.importMedia(synced);
           shot.lipSynced = true;
         }
+        // The dailies check: a reviewer watches the take against the plan.
+        // A declined take retries (the throw lands in the catch below, and the
+        // retake prompt carries the note); the last attempt places regardless —
+        // a weak take beats a frozen still. The chosen window trims the
+        // placement to the take's best moment.
+        let srcInSec: number | undefined;
+        if (this.deps.suite.review) {
+          this.updateShot(shot, { status: "reviewing" });
+          const verdict = await this.reviewTake(clip, shot);
+          if (!verdict.ok && attempt < VIDEO_ATTEMPTS) {
+            critique = verdict.note?.trim() || "the take did not show the planned action";
+            throw new Error(`Retake: ${critique}`);
+          }
+          srcInSec = verdict.fromSec;
+        }
         // Swap the new clip in only now that it's ready, replacing any prior
         // placement (a resume's fallback still, a regen's old clip) atomically.
         await this.clearVideoPlacement(shot);
         shot.lastPrompt = prompt;
         shot.clip = clip;
-        shot.timelineClipId = await this.deps.editor.placeClip(clip, shot.startFrame, shot.endFrame);
+        shot.timelineClipId = await this.deps.editor.placeClip(
+          clip,
+          shot.startFrame,
+          shot.endFrame,
+          srcInSec ? { srcInSec } : undefined
+        );
         this.updateShot(shot, { status: "placed", error: undefined });
         this.emitProgress();
         return;
@@ -495,6 +526,21 @@ export class VideoOrchestrator {
     }
     await this.placeFallback(shot); // never leave a hole
     this.emitProgress();
+  }
+
+  /** Watch a rendered take against its plan — best-effort: a reviewer outage
+   * never blocks placement, it just goes unwatched. */
+  private async reviewTake(clip: string, shot: Shot): Promise<ReviewVerdict> {
+    try {
+      return await this.deps.suite.review!.watch({
+        videoMediaId: clip,
+        action: shot.action,
+        narration: (shot.dialogue ?? shot.audioText).trim(),
+        slotSec: frameToSec(shotDurationFrames(shot), this.fps),
+      });
+    } catch {
+      return { ok: true };
+    }
   }
 
   /** The audio slice a shot should be spoken over. */
@@ -574,6 +620,7 @@ export class VideoOrchestrator {
     // one that declines) just means no bed.
     if (this.project.audioMode === "generated" && !this.project.musicAssetId && this.deps.suite.music) {
       try {
+        this.deps.emit({ type: "activity", message: "Composing the music bed…" });
         const music = await this.deps.suite.music.compose({
           mood: this.project.script?.style ?? this.project.style ?? "cinematic underscore",
           durationSec: frameToSec(this.durationFrames, this.fps),

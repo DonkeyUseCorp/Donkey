@@ -21,6 +21,7 @@ import type {
   LipSyncRole,
   ModelSuite,
   MusicRole,
+  ReviewRole,
   RoleName,
   ScriptRole,
   StyleRole,
@@ -58,6 +59,13 @@ class Slot<T> {
     if (!chosen) throw new Error(`no model registered${id ? ` with id "${id}"` : ""} for this role`);
     return chosen.make();
   }
+
+  /** Resolve like `resolve`, but an empty slot is undefined — for the optional
+   * roles (a suite runs without them). */
+  maybe(id?: string): T | undefined {
+    const chosen = this.options.get(id ?? this.defaultId ?? "");
+    return chosen?.make();
+  }
 }
 
 export class ModelRegistry {
@@ -70,6 +78,7 @@ export class ModelRegistry {
   readonly music = new Slot<MusicRole>();
   readonly lipSync = new Slot<LipSyncRole>();
   readonly transcribe = new Slot<TranscribeRole>();
+  readonly review = new Slot<ReviewRole>();
 
   /** The models registered for one role — what a picker or an eval iterates. */
   options(role: RoleName): ModelOption[] {
@@ -91,6 +100,11 @@ export class ModelRegistry {
       // A lip-sync model is only needed when the video model isn't audio-native.
       ...(video.audioNative ? {} : { lipSync: this.lipSync.resolve(selection.lipSync) }),
       transcribe: this.transcribe.resolve(selection.transcribe),
+      // Optional role — a suite runs without a reviewer (takes go unwatched).
+      ...(() => {
+        const review = this.review.maybe(selection.review);
+        return review ? { review } : {};
+      })(),
     };
   }
 }

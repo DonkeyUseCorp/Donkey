@@ -16,8 +16,14 @@
 
 import type { Shot } from "./types";
 
-/** The video model's clip range, in seconds — shots are tuned to it. */
-export const MIN_SHOT_SEC = 4;
+/** The timeline slice range a shot may occupy, in seconds. The floor is a
+ * pacing choice, not the video model's: a narration names a new idea every
+ * couple of seconds, and each idea deserves its own shot. The model's own
+ * minimum render length lives in `supportedVideoDuration` — a short slot
+ * renders the shortest supported take and the placement trims it to the slot
+ * (the dailies review picks which window survives). The ceiling is the longest
+ * single render. */
+export const MIN_SHOT_SEC = 2;
 export const MAX_SHOT_SEC = 8;
 
 export const secToFrame = (sec: number, fps: number): number =>

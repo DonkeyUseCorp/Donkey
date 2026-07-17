@@ -47,6 +47,43 @@ function seekTo(v: HTMLVideoElement, t: number): Promise<void> {
   });
 }
 
+/** Capture small stamped frames from one video file at the given times —
+ * the dailies-review sampler. Times land in file seconds; unreadable sources
+ * or tainted canvases yield fewer frames rather than an error. */
+export async function captureVideoFrames(url: string, times: number[]): Promise<CapturedFrame[]> {
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return [];
+  ctx.imageSmoothingQuality = "high";
+  let v: HTMLVideoElement;
+  try {
+    v = await loadVideo(url);
+  } catch {
+    return [];
+  }
+  const frames: CapturedFrame[] = [];
+  try {
+    for (const at of times) {
+      await seekTo(v, Math.max(0, Math.min(at, Math.max(0, v.duration - 0.05))));
+      if (v.readyState < 2 || !v.videoWidth) continue;
+      const w = Math.min(FRAME_W, v.videoWidth);
+      const h = Math.round((w / v.videoWidth) * v.videoHeight);
+      canvas.width = w;
+      canvas.height = h;
+      ctx.drawImage(v, 0, 0, w, h);
+      try {
+        frames.push({ at, image: canvas.toDataURL("image/jpeg", JPEG_Q) });
+      } catch {
+        // A tainted canvas (unexpected CORS setup) — skip the frame.
+      }
+    }
+  } finally {
+    v.removeAttribute("src");
+    v.load();
+  }
+  return frames;
+}
+
 /** Capture timeline frames from video track 0's visible clips. */
 export async function captureTimelineFrames(spans: ClipSpan[]): Promise<CapturedFrame[]> {
   const visible = spans.filter((sp) => !sp.clip.hidden);

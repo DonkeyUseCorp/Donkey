@@ -162,7 +162,7 @@ export interface EditorState {
    * [startSec, endSec) on track 0 — exact start (no slide), muted, time-stretched
    * or trimmed to the slot — and return its id. Leaves selection untouched (the
    * run is a background process). */
-  placeGenClip: (assetId: string, startSec: number, endSec: number) => string | null;
+  placeGenClip: (assetId: string, startSec: number, endSec: number, opts?: { srcInSec?: number }) => string | null;
   /** Brief-to-video placement: place a generated audio clip at startSec spanning
    * up to durSec on the soundtrack (duck/lane optional), returning its id. */
   placeGenAudio: (assetId: string, startSec: number, durSec: number, opts?: { duck?: number; lane?: number }) => string | null;
@@ -646,15 +646,22 @@ export const useEditor = create<EditorState>((set, get) => {
     // and the plan is never written back.
     setGenvideo: (project) => set({ genvideo: project ? { ...project } : undefined }),
 
-    placeGenClip: (assetId, startSec, endSec) => {
+    placeGenClip: (assetId, startSec, endSec, opts) => {
       const asset = get().assets.find((a) => a.id === assetId);
       if (!asset || (asset.type !== "video" && asset.type !== "image")) return null;
+      const slot = Math.max(MIN_LEN, endSec - startSec);
+      // The reviewer's chosen window: start the source there, clamped so the
+      // slot still fits inside the file.
+      const srcIn =
+        asset.type === "video"
+          ? Math.min(Math.max(0, opts?.srcInSec ?? 0), Math.max(0, asset.duration - slot))
+          : 0;
       // Fill the slot exactly so the track never opens a gap between shots —
       // fillSlot mirrors the plan's frame-coverage invariant at this boundary.
       const { out, speed } = fillSlot(
         asset.type,
-        Math.max(MIN_LEN, asset.duration),
-        Math.max(MIN_LEN, endSec - startSec),
+        Math.max(MIN_LEN, asset.duration - srcIn),
+        slot,
         SPEED_MIN
       );
       const clip: VideoClip = {
@@ -662,8 +669,8 @@ export const useEditor = create<EditorState>((set, get) => {
         assetId,
         track: 0,
         start: Math.max(0, startSec),
-        in: 0,
-        out,
+        in: srcIn,
+        out: srcIn + out,
         // Muted: generated shots ride under the narration spine, so the clip's
         // own audio (Veo synthesizes some) must never compete with the voice.
         muted: true,

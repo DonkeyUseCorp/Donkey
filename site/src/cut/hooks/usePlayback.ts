@@ -116,13 +116,24 @@ class Engine {
     this.audioEls.clear();
   }
 
-  private videoFor(clip: VideoClip, asset: MediaAsset): MediaEl {
-    let el = this.videoEls.get(clip.id);
+  /** The cached element for a clip, rebuilt when its source no longer matches —
+   * a swap keeps the clip id but repoints the asset (a shot re-render), and the
+   * old decoder would otherwise keep playing (or erroring on) the old file. */
+  private elFor(map: Map<string, MediaEl>, clipId: string, asset: MediaAsset): MediaEl {
+    let el = map.get(clipId);
+    if (el && el.getAttribute("src") !== asset.url) {
+      teardown(el);
+      el = undefined;
+    }
     if (!el) {
       el = makeMediaEl(asset);
-      this.videoEls.set(clip.id, el);
+      map.set(clipId, el);
     }
     return el;
+  }
+
+  private videoFor(clip: VideoClip, asset: MediaAsset): MediaEl {
+    return this.elFor(this.videoEls, clip.id, asset);
   }
 
   /** Seek/rate/play one clip's element toward its frame at timeline time `t`,
@@ -342,13 +353,10 @@ class Engine {
   }
 
   private overlayVideoFor(clip: VideoClip, asset: MediaAsset): MediaEl {
-    let el = this.overlayEls.get(clip.id);
-    if (!el) {
-      el = makeMediaEl(asset);
-      // Overlay audio is mixed on export, not previewed here.
-      if (!isImageEl(el)) el.muted = true;
-      this.overlayEls.set(clip.id, el);
-    }
+    const had = this.overlayEls.get(clip.id);
+    const el = this.elFor(this.overlayEls, clip.id, asset);
+    // Overlay audio is mixed on export, not previewed here.
+    if (el !== had && !isImageEl(el)) el.muted = true;
     return el;
   }
 
@@ -484,6 +492,11 @@ class Engine {
       const asset = s.assets.find((x) => x.id === a.assetId);
       if (!asset) continue;
       let el = this.audioEls.get(a.id);
+      // Same-id source swaps (a regenerated voiceover) rebuild the element.
+      if (el && el.getAttribute("src") !== asset.url) {
+        el.pause();
+        el = undefined;
+      }
       if (!el) {
         el = new Audio(asset.url);
         el.preload = "auto";
@@ -643,9 +656,10 @@ class Engine {
       const now = performance.now();
       const dt = this.lastPlayNow ? Math.min(0.25, (now - this.lastPlayNow) / 1000) : 0;
       let atEnd: boolean;
-      if (isImageEl(el)) {
-        // A still has no element clock — advance purely by wall clock and end
-        // at the clip's timeline footprint.
+      if (isImageEl(el) || elErrored(el)) {
+        // A still has no element clock, and a broken source's clock never
+        // advances (steering by it would pin the playhead at the clip start) —
+        // move purely by wall clock and end at the clip's timeline footprint.
         t = Math.max(span.start, Math.min(t + dt, span.start + span.len));
         atEnd = t >= span.start + span.len - 0.0001;
       } else {

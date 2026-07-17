@@ -25,6 +25,9 @@ export interface BreakdownInput {
   transcript: TranscriptWord[];
   /** Present when the run started from a brief. */
   beats?: ScriptBeat[];
+  /** The user's story framing, when they gave one — the source of truth for
+   * who speaks and what the video is about; the transcript only times it. */
+  brief?: string;
   durationFrames: number;
   fps: number;
 }
@@ -121,6 +124,31 @@ export interface TranscribeRole {
   transcribe(audioMediaId: string): Promise<TranscriptWord[]>;
 }
 
+export interface ReviewInput {
+  /** Project media id of the rendered take. */
+  videoMediaId: string;
+  /** What the plan wanted on screen. */
+  action: string;
+  /** The words heard over the shot. */
+  narration: string;
+  /** Seconds of the take the timeline slot needs. */
+  slotSec: number;
+}
+
+export interface ReviewVerdict {
+  /** Whether the take shows the planned action and subject. */
+  ok: boolean;
+  /** Why a declined take failed — carried into the retake prompt. */
+  note?: string;
+  /** Where the slot's window starts inside the take (seconds; default 0). */
+  fromSec?: number;
+}
+
+export interface ReviewRole {
+  /** Watch a rendered take against its plan — the dailies check. */
+  watch(input: ReviewInput): Promise<ReviewVerdict>;
+}
+
 /** One model choice per role — what the orchestrator runs against. */
 export interface ModelSuite {
   /** Human label for evals and logs, e.g. "fast-video + hi-res-image". */
@@ -137,6 +165,8 @@ export interface ModelSuite {
   /** Absent when `video.audioNative` — the video does its own lip-sync. */
   lipSync?: LipSyncRole;
   transcribe: TranscribeRole;
+  /** Absent when no reviewer is configured — takes place unwatched. */
+  review?: ReviewRole;
 }
 
 export type RoleName = keyof Omit<ModelSuite, "label">;
@@ -164,6 +194,7 @@ export function segmentByDuration(input: BreakdownInput, maxShotSec: number): Ra
   return shots;
 }
 
-function wordsInRange(words: TranscriptWord[], from: number, to: number): string {
+/** The transcript words heard across a span of seconds. */
+export function wordsInRange(words: TranscriptWord[], from: number, to: number): string {
   return words.filter((w) => w.t1 > from && w.t0 < to).map((w) => w.w).join(" ");
 }

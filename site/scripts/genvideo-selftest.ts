@@ -164,6 +164,31 @@ async function run(): Promise<void> {
     check("no double-import of stills (fallback holds an already-imported id)", editor.placed.length === project.shots.length);
   }
 
+  section("dailies review — a declined take retries, the pass's window trims the placement");
+  {
+    const editor = editorWithAudio(DURATION_FRAMES);
+    const { d, studio } = deps(editor, {
+      audioNative: true,
+      reviewVerdicts: [
+        { ok: false, note: "the subject is reading, the plan wants swimming" },
+        { ok: true, fromSec: 1.5 },
+      ],
+    });
+    const project = baseProject({ audioMode: "provided", audioClipId: "audio-clip", audioAssetId: "audio-asset", durationFrames: DURATION_FRAMES });
+    const orch = new VideoOrchestrator(project, d);
+    await orch.run();
+    await orch.approveBreakdown();
+    check("run reaches done", project.phase === "done");
+    assertTiling("placed clips tile the whole audio", editor.placed, DURATION_FRAMES);
+    const videoGens = studio.calls.filter((c) => c.role === "video").length;
+    check("the declined take was regenerated", videoGens === project.shots.length + 1, `${videoGens} generations for ${project.shots.length} shots`);
+    const reviewed = studio.calls.filter((c) => c.role === "review").length;
+    check("every take was reviewed (including the retake)", reviewed === project.shots.length + 1, `${reviewed} reviews`);
+    check("the retake prompt carries the reviewer's note", studio.calls.some((c) => c.role === "video" && c.detail.includes("the plan wants swimming")));
+    check("the pass's window trims the placement", editor.placed.some((c) => c.srcInSec === 1.5));
+    check("all shots placed clean", project.shots.every((s) => s.status === "placed"));
+  }
+
   // ── Entry 2: brief only → script, voice, music, video ────────────────────
   section('brief only → "a video of me and my son", audio-native video');
   {

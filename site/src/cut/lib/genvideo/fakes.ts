@@ -16,6 +16,8 @@ import {
   type LipSyncInput,
   type ModelSuite,
   type MusicInput,
+  type ReviewInput,
+  type ReviewVerdict,
   type ScriptInput,
   type StyleBible,
   type VideoInput,
@@ -49,6 +51,9 @@ export interface FakeStudioOptions {
   /** Make the style/character-design call throw (exercises the default bible). */
   failStyle?: boolean;
   style?: string;
+  /** Scripted dailies verdicts, consumed in order (absent = no review role).
+   * Once the list runs dry every later take passes clean. */
+  reviewVerdicts?: ReviewVerdict[];
 }
 
 /** An in-memory studio; `.suite()` binds it to the orchestrator's roles. */
@@ -80,7 +85,14 @@ export class FakeStudio {
       music: { compose: (i) => this.music(i) },
       ...(audioNative ? {} : { lipSync: { sync: (i: LipSyncInput) => this.lipSync(i) } }),
       transcribe: { transcribe: (id: string) => this.transcribe(id) },
+      ...(this.opts.reviewVerdicts ? { review: { watch: (i: ReviewInput) => this.watch(i) } } : {}),
     };
+  }
+
+  private async watch(input: ReviewInput): Promise<ReviewVerdict> {
+    const verdict = this.opts.reviewVerdicts?.shift() ?? { ok: true };
+    this.calls.push({ role: "review", detail: `${input.videoMediaId} ok=${verdict.ok}` });
+    return verdict;
   }
 
   private async writeScript(input: ScriptInput): Promise<ScriptPlan> {
@@ -125,7 +137,7 @@ export class FakeStudio {
     const marker = this.opts.failVideoMarker;
     if (marker && input.prompt.includes(marker))
       throw new Error(`fake video failed (marker "${marker}")`);
-    return this.mint("video", `${input.durationSec}s${input.audioMediaId ? " +audio" : ""}`);
+    return this.mint("video", `${input.durationSec}s${input.audioMediaId ? " +audio" : ""} ${input.prompt}`);
   }
 
   private async speak(input: VoiceInput): Promise<VoiceResult> {

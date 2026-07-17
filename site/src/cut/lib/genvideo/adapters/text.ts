@@ -18,7 +18,7 @@ import { geminiModelRoles } from "@/lib/inference/gemini-models";
 import { hostedPost } from "../../hosted";
 import { NO_CREDITS_MESSAGE } from "../../generate";
 import { secToFrame, type RawShot } from "../coverage";
-import type { BreakdownRole, ScriptRole, StyleRole } from "../capabilities";
+import { wordsInRange, type BreakdownRole, type ScriptRole, type StyleRole } from "../capabilities";
 import type { ScriptBeat, ScriptPlan, TranscriptWord, VideoAsset } from "../types";
 
 // ── the shared call ─────────────────────────────────────────────────────────
@@ -128,8 +128,12 @@ Reply with JSON only:
 ]}
 Rules:
 - start/end are SECONDS on the timeline; the shots must run in order and cover the whole duration with no gaps.
-- Each shot is about 4–8 seconds and its action describes what is shown while those words are heard.
+- Each shot is 2–8 seconds and depicts the concrete subject of the words heard across it. Cut a new shot at EVERY topic the narration touches — a two-second mention gets its own two-second shot, and the setting moves with the story (school, a strawberry patch, a pool); one backdrop must never absorb several ideas.
+- Write action like a director's shot description, detailed enough to render the right moment without hearing the audio: who is on screen and their look, the specific activity mid-motion, the surroundings, and the camera's move.
+- action is what the camera sees, never editing language: no "cut to", "transition", "fade", "montage" — the editor adds those between shots later.
+- The brief, when given, is the source of truth for who speaks and who appears; the transcript is machine transcription that times the words and may mishear some — trust the brief over an odd transcription.
 - framing is real camera language, varied shot to shot — wide establishing, close-up, insert of a telling detail, POV, follow shot — and action repeats the wardrobe and props that recur, so independently rendered shots still match.
+- A shot cannot be trusted to render readable text: no signs, labels, charts, lists, or lettering beyond a single short word — the viewer already hears the information in the narration.
 - Assign stable ids: characters "char:1"…, locations "loc:1"…, reused across shots for continuity. A shot with no character uses [].`;
 
 /** Compact, timed transcript for the model — capped so a long narration stays
@@ -178,11 +182,23 @@ export function makeBreakdownRole(): BreakdownRole {
   return {
     async segment(input) {
       const durSec = input.durationFrames / input.fps;
-      const shotCount = Math.max(1, Math.round(durSec / 6));
-      const user = `A ${durSec.toFixed(1)}s narration needs about ${shotCount} shots (each 4–8s) covering [0, ${durSec.toFixed(1)}].
-Timed transcript:
+      const briefNote = input.brief?.trim() ? `Brief: ${input.brief.trim()}\n` : "";
+      // The shot count comes from the content: one shot per idea the words
+      // touch. Duration only bounds the physics (coverage and the 2–8s slice
+      // range); it never suggests a count.
+      const user = `Cut this ${durSec.toFixed(1)}s narration into shots covering [0, ${durSec.toFixed(1)}]. The shot count comes from the content: list the distinct ideas the transcript touches, then give each its own shot — a narration that names six things needs six shots.
+${briefNote}Timed transcript:
 ${timedTranscript(input.transcript)}`;
-      return llmJson(BREAKDOWN_INSTRUCTIONS, user, (o) => parseShots(o, input.fps));
+      return llmJson(BREAKDOWN_INSTRUCTIONS, user, (o) => {
+        const shots = parseShots(o, input.fps);
+        if (shots === null) return null;
+        // Ground every shot in its own slice of the narration — the prompt
+        // builder carries these words into the render.
+        return shots.map((s) => ({
+          ...s,
+          audioText: wordsInRange(input.transcript, s.startFrame / input.fps, s.endFrame / input.fps),
+        }));
+      });
     },
   };
 }

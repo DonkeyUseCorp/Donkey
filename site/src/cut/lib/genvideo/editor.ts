@@ -29,9 +29,16 @@ export interface EditorBridge {
   importMedia(mediaId: string): Promise<string>;
   /**
    * Place a video clip on the video track so it exactly fills
-   * [startFrame, endFrame). Returns the new timeline clip id.
+   * [startFrame, endFrame). `srcInSec` starts the clip's source window there
+   * (the reviewer's chosen moment) instead of at 0. Returns the new timeline
+   * clip id.
    */
-  placeClip(mediaId: string, startFrame: number, endFrame: number): Promise<string>;
+  placeClip(
+    mediaId: string,
+    startFrame: number,
+    endFrame: number,
+    opts?: { srcInSec?: number }
+  ): Promise<string>;
   /** Swap the media under an existing clip (regeneration), keeping its slot. */
   replaceClipMedia(clipId: string, mediaId: string): Promise<void>;
   /** Retime a clip so its footprint is exactly `durationFrames`. */
@@ -65,6 +72,7 @@ export interface PlacedClip {
   mediaId: string;
   startFrame: number;
   endFrame: number;
+  srcInSec?: number;
   transition?: { style: string; durationFrames: number };
 }
 
@@ -88,9 +96,14 @@ export class FakeEditor implements EditorBridge {
     return mediaId;
   }
 
-  async placeClip(mediaId: string, startFrame: number, endFrame: number): Promise<string> {
+  async placeClip(
+    mediaId: string,
+    startFrame: number,
+    endFrame: number,
+    opts?: { srcInSec?: number }
+  ): Promise<string> {
     const clipId = `clip:${this.seq++}`;
-    this.placed.push({ clipId, mediaId, startFrame, endFrame });
+    this.placed.push({ clipId, mediaId, startFrame, endFrame, ...(opts?.srcInSec ? { srcInSec: opts.srcInSec } : {}) });
     return clipId;
   }
 

@@ -59,6 +59,7 @@ export type ShotStatus =
   | "keyframing"
   | "generating"
   | "lipsync"
+  | "reviewing"
   | "placed"
   | "failed";
 
@@ -150,6 +151,9 @@ export interface VideoProject {
   phase: VideoPhase;
   breakdownApproved: boolean;
   createdAt: number;
+  /** Epoch ms when the user approved and rendering began — the card's render
+   * clock counts from here across reloads and project switches. */
+  renderStartedAt?: number;
   updatedAt: number;
 }
 
@@ -180,6 +184,8 @@ export type VideoEvent =
   | { type: "breakdown"; shots: Shot[] }
   | { type: "progress"; placed: number; total: number }
   | { type: "log"; message: string }
+  /** The live ticker: one line on what the run is doing right now. */
+  | { type: "activity"; message: string }
   | { type: "error"; message: string };
 
 export type VideoEmit = (event: VideoEvent) => void;

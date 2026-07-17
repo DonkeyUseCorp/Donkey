@@ -22,6 +22,7 @@
 
 import { useEditor } from "../store";
 import type { TransitionStyle } from "../types";
+import { docPlaceGenAudio, docPlaceGenClip, withProjectDoc } from "./docWriter";
 import type { AudioClipInfo, EditorBridge, TimelineInfo } from "./editor";
 
 /** The rate the plan runs at. Fixed to the export frame rate so a shot's frame
@@ -37,28 +38,52 @@ function footprintSec(c: { in: number; out: number; speed?: number }): number {
 }
 
 export class StoreEditorBridge implements EditorBridge {
+  /** The last timeline shape read while the project was open — the sync reads
+   * fall back to it when the project is closed (a background run only needs
+   * the aspect, and the plan froze its own at approval). */
+  private lastTimeline: TimelineInfo | null = null;
+
   constructor(private readonly projectId: string) {}
 
   /** Whether this run's project is the one currently open in the store. */
   private open(): boolean {
-    return useEditor.getState().projectId === this.projectId;
+    const s = useEditor.getState();
+    return s.projectId === this.projectId && s.loaded;
+  }
+
+  /** Where this call must write: the live store when the run's project is
+   * open, its persisted doc when the user has moved on. A load in progress is
+   * waited out so a write never races the doc fetch — either it lands in the
+   * doc before the load reads it, or in the store after. */
+  private async mode(): Promise<"store" | "doc"> {
+    for (;;) {
+      const s = useEditor.getState();
+      if (s.projectId !== this.projectId) return "doc";
+      if (s.loaded) return "store";
+      await new Promise((r) => setTimeout(r, 200));
+    }
   }
 
   getTimeline(): TimelineInfo {
+    if (!this.open()) {
+      return this.lastTimeline ?? { fps: GEN_FPS, durationFrames: 0, aspect: "9:16" };
+    }
     const s = useEditor.getState();
     const clipEnd = Math.max(
       0,
       ...s.clips.map((c) => c.start + footprintSec(c)),
       ...s.audioClips.map((c) => c.start + footprintSec(c))
     );
-    return {
+    this.lastTimeline = {
       fps: GEN_FPS,
       durationFrames: Math.round(clipEnd * GEN_FPS),
       aspect: s.aspect,
     };
+    return this.lastTimeline;
   }
 
   getAudioClips(): AudioClipInfo[] {
+    if (!this.open()) return [];
     return useEditor.getState().audioClips.map((c) => ({
       clipId: c.id,
       assetId: c.assetId,
@@ -73,35 +98,73 @@ export class StoreEditorBridge implements EditorBridge {
     return mediaId;
   }
 
-  async placeClip(mediaId: string, startFrame: number, endFrame: number): Promise<string> {
-    if (!this.open()) throw new Error("placeClip: run's project is no longer open");
-    const id = useEditor.getState().placeGenClip(mediaId, toSec(startFrame), toSec(endFrame));
-    if (!id) throw new Error(`placeClip: no placeable asset ${mediaId}`);
-    return id;
+  async placeClip(
+    mediaId: string,
+    startFrame: number,
+    endFrame: number,
+    opts?: { srcInSec?: number }
+  ): Promise<string> {
+    if ((await this.mode()) === "store") {
+      const id = useEditor.getState().placeGenClip(mediaId, toSec(startFrame), toSec(endFrame), opts);
+      if (!id) throw new Error(`placeClip: no placeable asset ${mediaId}`);
+      return id;
+    }
+    let placed: string | null = null;
+    await withProjectDoc(this.projectId, (doc) => {
+      placed = docPlaceGenClip(doc, mediaId, toSec(startFrame), toSec(endFrame), opts?.srcInSec);
+    });
+    if (!placed) throw new Error(`placeClip: no placeable asset ${mediaId}`);
+    return placed;
   }
 
   async replaceClipMedia(clipId: string, mediaId: string): Promise<void> {
-    if (!this.open()) return;
-    useEditor.getState().updateClip(clipId, { assetId: mediaId });
+    if ((await this.mode()) === "store") {
+      useEditor.getState().updateClip(clipId, { assetId: mediaId });
+      return;
+    }
+    await withProjectDoc(this.projectId, (doc) => {
+      doc.clips = doc.clips.map((c) => (c.id === clipId ? { ...c, assetId: mediaId } : c));
+    });
   }
 
   async retimeClip(clipId: string, durationFrames: number): Promise<void> {
-    if (!this.open()) return;
-    const clip = useEditor.getState().clips.find((c) => c.id === clipId);
-    if (!clip) return;
-    // Trim the tail so the footprint matches, at whatever speed the clip carries.
-    const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
-    useEditor.getState().setClipTrim(clipId, clip.in, clip.in + toSec(durationFrames) * speed);
+    if ((await this.mode()) === "store") {
+      const clip = useEditor.getState().clips.find((c) => c.id === clipId);
+      if (!clip) return;
+      // Trim the tail so the footprint matches, at whatever speed the clip carries.
+      const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
+      useEditor.getState().setClipTrim(clipId, clip.in, clip.in + toSec(durationFrames) * speed);
+      return;
+    }
+    await withProjectDoc(this.projectId, (doc) => {
+      doc.clips = doc.clips.map((c) => {
+        if (c.id !== clipId) return c;
+        const speed = c.speed && c.speed > 0 ? c.speed : 1;
+        return { ...c, out: c.in + toSec(durationFrames) * speed };
+      });
+    });
   }
 
   async removeClip(clipId: string): Promise<void> {
-    if (!this.open()) return;
-    useEditor.getState().removeClipById(clipId);
+    if ((await this.mode()) === "store") {
+      useEditor.getState().removeClipById(clipId);
+      return;
+    }
+    await withProjectDoc(this.projectId, (doc) => {
+      doc.clips = doc.clips.filter((c) => c.id !== clipId);
+    });
   }
 
   async addTransition(clipId: string, style: string, durationFrames: number): Promise<void> {
-    if (!this.open()) return;
-    useEditor.getState().setClipTransition(clipId, toSec(durationFrames), style as TransitionStyle);
+    if ((await this.mode()) === "store") {
+      useEditor.getState().setClipTransition(clipId, toSec(durationFrames), style as TransitionStyle);
+      return;
+    }
+    await withProjectDoc(this.projectId, (doc) => {
+      doc.clips = doc.clips.map((c) =>
+        c.id === clipId ? { ...c, transition: toSec(durationFrames), transitionStyle: style as TransitionStyle } : c
+      );
+    });
   }
 
   async placeAudio(
@@ -110,19 +173,32 @@ export class StoreEditorBridge implements EditorBridge {
     durationFrames: number,
     opts?: { kind?: "voice" | "music"; duck?: number; lane?: number }
   ): Promise<string> {
-    if (!this.open()) throw new Error("placeAudio: run's project is no longer open");
-    const id = useEditor
-      .getState()
-      .placeGenAudio(mediaId, toSec(startFrame), toSec(durationFrames), {
-        ...(opts?.duck !== undefined ? { duck: opts.duck } : {}),
-        ...(opts?.lane !== undefined ? { lane: opts.lane } : {}),
-      });
-    if (!id) throw new Error(`placeAudio: no audio asset ${mediaId}`);
-    return id;
+    const audioOpts = {
+      ...(opts?.duck !== undefined ? { duck: opts.duck } : {}),
+      ...(opts?.lane !== undefined ? { lane: opts.lane } : {}),
+    };
+    if ((await this.mode()) === "store") {
+      const id = useEditor
+        .getState()
+        .placeGenAudio(mediaId, toSec(startFrame), toSec(durationFrames), audioOpts);
+      if (!id) throw new Error(`placeAudio: no audio asset ${mediaId}`);
+      return id;
+    }
+    let placed: string | null = null;
+    await withProjectDoc(this.projectId, (doc) => {
+      placed = docPlaceGenAudio(doc, mediaId, toSec(startFrame), toSec(durationFrames), audioOpts);
+    });
+    if (!placed) throw new Error(`placeAudio: no audio asset ${mediaId}`);
+    return placed;
   }
 
   async removeAudio(clipId: string): Promise<void> {
-    if (!this.open()) return;
-    useEditor.getState().removeAudioById(clipId);
+    if ((await this.mode()) === "store") {
+      useEditor.getState().removeAudioById(clipId);
+      return;
+    }
+    await withProjectDoc(this.projectId, (doc) => {
+      doc.audioClips = doc.audioClips.filter((c) => c.id !== clipId);
+    });
   }
 }

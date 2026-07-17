@@ -13,12 +13,14 @@
  * No `lipSync` role: v1 has no hosted lip-sync, and `video.audioNative` is
  * false, so the orchestrator places each shot as b-roll under a separate
  * narration spine. `music` is always present but best-effort — it degrades to
- * no bed when no music backend is configured.
+ * no bed when no music backend is configured. `review` is the dailies check:
+ * every take is watched against its plan before it places.
  */
 
 import type { ModelSuite } from "../capabilities";
 import { makeImageRole, makeVideoRole, makeVoiceRole } from "./media";
 import { makeMusicRole } from "./music";
+import { makeReviewRole } from "./review";
 import { makeBreakdownRole, makeScriptRole, makeStyleRole } from "./text";
 import { makeTranscribeRole } from "./transcribe";
 
@@ -37,5 +39,6 @@ export function realSuite(projectId: string, chatId?: string): ModelSuite {
     voice: makeVoiceRole(projectId, chatId),
     music: makeMusicRole(projectId, chatId),
     transcribe: makeTranscribeRole(projectId),
+    review: makeReviewRole(projectId),
   };
 }

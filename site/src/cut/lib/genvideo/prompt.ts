@@ -12,11 +12,19 @@ import type { RefAsset, Shot, VideoAsset, VideoProject } from "./types";
 /** The text half of a shot's generation prompt. */
 export function buildPrompt(shot: Shot, project: VideoProject): string {
   const parts = [shot.action.trim()];
+  // The narration grounds what the shot depicts, phrased as off-screen audio —
+  // a bare quote reads as a caption request and the model burns the words into
+  // the picture as speech bubbles and subtitle bars.
+  const spoken = (shot.dialogue ?? shot.audioText).trim();
+  if (spoken) parts.push(`The voiceover heard over this shot (audio only, never visible): ${spoken}`);
   const location = findAsset(project.locations, shot.location);
   if (location) parts.push(`Setting, ${location.name}.`);
   else if (shot.location) parts.push(`Setting, ${shot.location}.`);
   if (shot.framing) parts.push(`Framing, ${shot.framing}.`);
   if (project.style) parts.push(project.style);
+  parts.push(
+    "One single continuous shot with fluid, continuous character motion throughout — smooth, natural movement, never held poses or stepped animation. Pure visual storytelling: no on-screen text of any kind — no captions, subtitles, speech bubbles, titles, signs, or lettering — and no split screens, panels, or storyboard collages. No baked-in editing effects: no transition frames, fades, motion-blur smears, borders, or blurred letterbox bands — the picture fills the frame edge to edge; cuts and transitions are added later in the editor."
+  );
   return parts.filter(Boolean).join(" ").trim();
 }
 
