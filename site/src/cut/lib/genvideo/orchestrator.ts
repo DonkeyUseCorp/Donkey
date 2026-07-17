@@ -454,7 +454,6 @@ export class VideoOrchestrator {
 
   private async generateAndPlace(shot: Shot): Promise<void> {
     if (this.aborted) return;
-    this.updateShot(shot, { status: "generating", error: undefined });
     const audio = this.audioForShot(shot);
     const basePrompt = buildPrompt(shot, this.project);
     const refs = shotRefs(shot, this.project);
@@ -463,12 +462,17 @@ export class VideoOrchestrator {
     for (let attempt = 1; attempt <= VIDEO_ATTEMPTS; attempt++) {
       if (this.aborted) return; // a paused run spends nothing more
       shot.attempts = attempt;
+      // Set per attempt, not once: a declined review leaves the shot in
+      // "reviewing", and the retake that follows must show as rendering (this
+      // is also what fires the "retake N…" ticker line).
+      this.updateShot(shot, { status: "generating", error: undefined });
       const prompt = critique ? `${basePrompt} Note from the last take's review: ${critique}` : basePrompt;
       const video = this.deps.suite.video;
       try {
         let clip = await video.generate({
           prompt,
           refs,
+          shotId: shot.id,
           startKeyframe: shot.startKeyframe,
           endKeyframe: shot.endKeyframe,
           durationSec: frameToSec(shotDurationFrames(shot), this.fps),
