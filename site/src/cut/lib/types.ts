@@ -34,6 +34,9 @@ export interface StoredAsset {
    * Cut created or fetched — it lives where it was made (the timeline, a
    * generation panel, or an AI chat card) and is kept out of the Media panel. */
   origin?: "voiceover" | "generated" | "recording" | "stock" | "freeze" | "chat";
+  /** BCP-47 of the audio's spoken language, when known (stamped on voiceovers
+   * at synthesis) — what transcription should run its recognizer in. */
+  language?: string;
   /** For origin "chat": the chat thread that made it. Deleting that thread
    * deletes the assets it still owns (see chatAssets.ts). */
   chatId?: string;

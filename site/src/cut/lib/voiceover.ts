@@ -27,7 +27,7 @@ function readoutCues(cueIds?: string[]): ReadoutCue[] {
 // preview the user liked becomes the exact clip that lands on the timeline
 // instead of a second (paid) synthesis. Keyed by everything that changes the
 // audio, so any edit re-renders.
-let cached: { sig: string; blob: Blob; offset: number; layout: SpeechLayout[] } | null = null;
+let cached: { sig: string; blob: Blob; offset: number; layout: SpeechLayout[]; language?: string } | null = null;
 
 function signature(
   voice: string,
@@ -49,11 +49,11 @@ async function renderReadout(
 ) {
   const sig = signature(voice, cues, opts);
   if (cached?.sig === sig) return cached;
-  const { blob, offset, layout } = await renderSpeechClip(
+  const { blob, offset, layout, language } = await renderSpeechClip(
     cues.map((c) => ({ text: c.text, at: c.start })),
     { voice, direction: opts?.direction, language: opts?.language }
   );
-  cached = { sig, blob, offset, layout };
+  cached = { sig, blob, offset, layout, language };
   return cached;
 }
 
@@ -74,8 +74,8 @@ export async function generateSubtitlesReadout(
   const cues = readoutCues(opts?.cueIds);
   if (cues.length === 0) throw new Error("No subtitles to read.");
 
-  const { blob, offset, layout } = await renderReadout(voice, cues, opts);
-  const asset = await speechClipToAsset(projectId, blob, "Subtitles readout");
+  const { blob, offset, layout, language } = await renderReadout(voice, cues, opts);
+  const asset = await speechClipToAsset(projectId, blob, "Subtitles readout", language);
   const duck = opts?.duck ?? DUCK_DEFAULT;
   const cur = useEditor.getState();
   cur.addAsset(asset);

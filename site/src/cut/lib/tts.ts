@@ -2,6 +2,7 @@
 
 import { geminiModels } from "@/lib/inference/gemini-models";
 import { bytesFromBase64 } from "./bytes";
+import { hostedPost } from "./hosted";
 import { useGenNotify } from "./genNotify";
 import { importFileToProject } from "./media";
 import type { MediaAsset } from "./types";
@@ -87,8 +88,6 @@ export function resolveLanguage(wanted?: string): string {
   return bare?.id ?? DEFAULT_LANGUAGE;
 }
 
-const CLIENT_ID = "donkey-cut";
-
 /** What a free-text voice direction resolves to once a model has read it. */
 export interface VoiceoverPlan {
   /** Lines to speak, in order — translated into `language` when the direction
@@ -134,15 +133,11 @@ export async function planVoiceover(
   const passthrough: VoiceoverPlan = { texts, direction, language: opts.language };
   if (!direction) return passthrough;
   try {
-    const res = await fetch("/api/inference/responses", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-donkey-client-id": CLIENT_ID },
-      body: JSON.stringify({
-        donkeyProvider: "gemini",
-        model: geminiModels.flash,
-        instructions: PLAN_INSTRUCTIONS,
-        input: [{ role: "user", content: [{ text: JSON.stringify({ direction, lines: texts }) }] }],
-      }),
+    const res = await hostedPost("/api/inference/responses", {
+      donkeyProvider: "gemini",
+      model: geminiModels.flash,
+      instructions: PLAN_INSTRUCTIONS,
+      input: [{ role: "user", content: [{ text: JSON.stringify({ direction, lines: texts }) }] }],
     });
     if (!res.ok) return passthrough;
     const body = (await res.json()) as { output_text?: string };
@@ -226,17 +221,13 @@ async function synthesizeSegment(
 ): Promise<PcmClip> {
   const style = direction?.trim();
   const languageCode = resolveLanguage(language);
-  const res = await fetch("/api/inference/assets", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-donkey-client-id": CLIENT_ID },
-    body: JSON.stringify({
-      kind: "speech",
-      prompt: style ? `${style}: ${text}` : text,
-      inputs: { voice },
-      ...(languageCode !== DEFAULT_LANGUAGE
-        ? { parameters: { languageCode } }
-        : {}),
-    }),
+  const res = await hostedPost("/api/inference/assets", {
+    kind: "speech",
+    prompt: style ? `${style}: ${text}` : text,
+    inputs: { voice },
+    ...(languageCode !== DEFAULT_LANGUAGE
+      ? { parameters: { languageCode } }
+      : {}),
   });
   if (!res.ok) {
     const message = await readError(res, "Voice generation failed.");
@@ -323,10 +314,35 @@ export interface SpeechLayout {
  * readout, and the in-panel preview — so language handling is identical
  * everywhere.
  */
+/** The locale a text will be SPOKEN in, read from its writing system. For a
+ * non-Latin script the letters are definitive — Hangul speaks Korean whatever
+ * any language picker says. Latin scripts can't be told apart this way, so
+ * they return undefined and the planned/picked language decides. */
+export function scriptSpokenLocale(text: string): string | undefined {
+  const scripts: [RegExp, string][] = [
+    [/[぀-ヿ]/gu, "ja-JP"], // kana first: Japanese also uses Han
+    [/[가-힯ᄀ-ᇿ㄰-㆏]/gu, "ko-KR"],
+    [/[一-鿿]/gu, "zh-CN"],
+    [/[Ѐ-ӿ]/gu, "ru-RU"],
+    [/[؀-ۿ]/gu, "ar-SA"],
+    [/[֐-׿]/gu, "he-IL"],
+    [/[฀-๿]/gu, "th-TH"],
+    [/[ऀ-ॿ]/gu, "hi-IN"],
+    [/[Ͱ-Ͽ]/gu, "el-GR"],
+  ];
+  const letters = (text.match(/\p{L}/gu) ?? []).length;
+  if (letters === 0) return undefined;
+  for (const [re, locale] of scripts) {
+    const count = (text.match(re) ?? []).length;
+    if (count >= 4 && count / letters >= 0.2) return locale;
+  }
+  return undefined;
+}
+
 export async function renderSpeechClip(
   segments: SpeechSegment[],
   opts: { voice: string; direction?: string; language?: string }
-): Promise<{ blob: Blob; offset: number; layout: SpeechLayout[] }> {
+): Promise<{ blob: Blob; offset: number; layout: SpeechLayout[]; language?: string }> {
   const raw = segments
     .map((s) => ({ text: s.text.trim(), at: Math.max(0, s.at) }))
     .filter((s) => s.text);
@@ -400,7 +416,12 @@ export async function renderSpeechClip(
     at: offset + placed[i],
     duration: clips[i].samples.length / clips[i].rate,
   }));
-  return { blob, offset, layout };
+  // What the clip actually speaks — its writing system first (definitive for
+  // non-Latin scripts), then the direction's ask, then the picked language.
+  // Stamped on the asset so transcription later runs the right recognizer.
+  const language =
+    scriptSpokenLocale(lines.map((l) => l.text).join(" ")) ?? plan.language ?? opts.language;
+  return { blob, offset, layout, ...(language ? { language } : {}) };
 }
 
 /** Save a rendered speech clip into the project's media folder as a voiceover
@@ -409,7 +430,8 @@ export async function renderSpeechClip(
 export async function speechClipToAsset(
   projectId: string,
   blob: Blob,
-  name?: string
+  name?: string,
+  language?: string
 ): Promise<MediaAsset> {
   const label = name?.trim() || "AI voice";
   const file = new File([blob], `${slug(label)}.wav`, { type: "audio/wav" });
@@ -417,6 +439,7 @@ export async function speechClipToAsset(
   if (!asset) throw new Error("Could not save the voiceover into the project.");
   asset.name = label;
   asset.origin = "voiceover";
+  if (language) asset.language = language;
   // Every committed voiceover funnels through here (the panel, the subtitles
   // readout, the AI tool), so this is where a finished one gets its badge.
   useGenNotify.getState().landed("audio", asset.id);
@@ -431,8 +454,8 @@ export async function synthesizeSpeech(
   segments: SpeechSegment[],
   opts: { voice: string; direction?: string; language?: string; name?: string }
 ): Promise<{ asset: MediaAsset; offset: number; layout: SpeechLayout[] }> {
-  const { blob, offset, layout } = await renderSpeechClip(segments, opts);
-  const asset = await speechClipToAsset(projectId, blob, opts.name);
+  const { blob, offset, layout, language } = await renderSpeechClip(segments, opts);
+  const asset = await speechClipToAsset(projectId, blob, opts.name, language);
   return { asset, offset, layout };
 }
 

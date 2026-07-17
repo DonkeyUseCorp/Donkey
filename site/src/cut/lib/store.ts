@@ -2341,7 +2341,7 @@ useEditor.subscribe((s, prev) => {
  * writes, and the one its change detector compares (runtime fields like
  * thumbs/peaks must not mark the doc dirty). */
 export function storedAssets(assets: MediaAsset[]): StoredAsset[] {
-  return assets.map(({ id, fileName, name, type, duration, width, height, origin, chatId }) => ({
+  return assets.map(({ id, fileName, name, type, duration, width, height, origin, chatId, language }) => ({
     id,
     fileName,
     name,
@@ -2351,6 +2351,7 @@ export function storedAssets(assets: MediaAsset[]): StoredAsset[] {
     ...(height !== undefined ? { height } : {}),
     ...(origin !== undefined ? { origin } : {}),
     ...(chatId !== undefined ? { chatId } : {}),
+    ...(language !== undefined ? { language } : {}),
   }));
 }
 
