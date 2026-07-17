@@ -39,12 +39,14 @@ import type { ImageRole, VideoRole, VoiceRole } from "../capabilities";
 import type { RefAsset } from "../types";
 
 /** Resolve the pipeline's media-id references to the project assets the
- * generators take, dropping any that are no longer in the project. */
-function refsToAssetRefs(refs: RefAsset[]): AssetRef[] {
-  const assets = useEditor.getState().assets;
+ * generators take, dropping any that are no longer in the project. Resolution
+ * goes through findRunAsset so a background run (its project closed, or the
+ * user switched away mid-render) keeps its identity anchors — the open
+ * editor's asset list only covers whatever project is on screen. */
+async function refsToAssetRefs(projectId: string, refs: RefAsset[]): Promise<AssetRef[]> {
   const out: AssetRef[] = [];
   for (const r of refs) {
-    const a = assets.find((x) => x.id === r.mediaId);
+    const a = await findRunAsset(projectId, r.mediaId);
     if (a) out.push(refFromAsset(a));
   }
   return out;
@@ -54,7 +56,7 @@ export function makeImageRole(projectId: string, chatId?: string): ImageRole {
   return {
     async generate(input) {
       const job = await useGenerate.getState().generateImage(projectId, input.prompt, {
-        refs: refsToAssetRefs(input.refs),
+        refs: await refsToAssetRefs(projectId, input.refs),
         aspect: input.aspect,
         // The prompt is already complete (buildPrompt folds in style + setting);
         // the refs ride as identity anchors, not a prompt to rewrite.
@@ -104,8 +106,11 @@ export function makeVideoRole(projectId: string, chatId?: string): VideoRole {
         : undefined;
       // Identity and place anchors only — a user style reference is a look,
       // not a cast member, and must never ride as an asset to keep consistent.
-      const anchors = refsToAssetRefs(
-        input.refs.filter((r) => r.purpose === "character" || r.purpose === "location")
+      const anchors = (
+        await refsToAssetRefs(
+          projectId,
+          input.refs.filter((r) => r.purpose === "character" || r.purpose === "location")
+        )
       ).slice(0, videoModel(VIDEO_TIER).maxReferenceImages);
       const attempts: VideoGenOptions[] = [
         // 1. The keyframe as the literal first frame. It was rendered from the
