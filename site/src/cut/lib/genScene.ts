@@ -121,6 +121,10 @@ async function resumeBackgroundRuns(): Promise<void> {
       const doc = (await docRes.json()) as { genvideo?: VideoProject | null };
       const plan = doc.genvideo;
       if (!plan || plan.phase === "done" || plan.phase === "failed" || !plan.breakdownApproved) continue;
+      // Re-check both guards after the awaits: the user may have opened this
+      // project mid-fetch, and its own load then hydrates an orchestrator —
+      // a second one here would render (and bill) every shot twice.
+      if (orchestrators.has(p.id) || useEditor.getState().projectId === p.id) continue;
       const orch = buildOrchestrator(p.id, plan);
       orchestrators.set(p.id, orch);
       orch.run().then(settled(p.id, orch)).catch(failed(p.id, orch));
