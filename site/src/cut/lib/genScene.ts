@@ -1,10 +1,13 @@
 "use client";
 
 import { create } from "zustand";
+import { apiFetch, apiJson } from "./api";
 import { useGenerate } from "./generate";
 import { realSuite } from "./genvideo/adapters";
 import { GEN_FPS, StoreEditorBridge } from "./genvideo/editorBridge";
 import { VideoOrchestrator } from "./genvideo/orchestrator";
+import { onActivity } from "./genvideo/activity";
+import { withProjectDoc } from "./genvideo/docWriter";
 import type { RefAsset, Shot, VideoEvent, VideoPhase, VideoProject } from "./genvideo/types";
 import { useEditor } from "./store";
 import type { Aspect } from "./types";
@@ -23,6 +26,8 @@ export type SceneStatus = "planning" | "awaiting_approval" | "generating" | "don
 
 export interface SceneRun {
   projectId: string;
+  /** The chat thread that asked — the card renders in that thread alone. */
+  chatId?: string | null;
   mode: "generated" | "provided";
   /** What the run is about, for the card heading. */
   title: string;
@@ -32,6 +37,8 @@ export interface SceneRun {
   placed: number;
   total: number;
   logs: string[];
+  /** The live ticker — one line on what the run is doing right now. */
+  activity?: string;
   error?: string;
   /** When the run began (planning), for the elapsed clock. */
   startedAt: number;
@@ -60,36 +67,72 @@ export interface StartSceneParams {
   chatId?: string | null;
 }
 
-// One live orchestrator at a time (per open project). Kept out of zustand state
-// so its identity churn never triggers a render; the reactive `run` mirror is.
-let orchestrator: VideoOrchestrator | null = null;
-/** The project the live orchestrator belongs to, for the project-switch pause. */
-let orchestratorProjectId: string | null = null;
+// Live orchestrators, one per project. Kept out of zustand state so their
+// identity churn never triggers a render; the reactive `run` mirror follows
+// the OPEN project only. A run keeps rendering when the user switches away —
+// its placements land in the project's persisted doc (see StoreEditorBridge)
+// and the mirror re-attaches when they come back.
+const orchestrators = new Map<string, VideoOrchestrator>();
 
-// A run pauses the moment its project stops being open: nothing may render or
-// spend against a project the user has left. The pause also clears the dead
-// orchestrator and the run mirror, so reopening the project resumes from the
-// persisted plan below — a mirror left behind would mask the resume and trap
-// the run on an aborted orchestrator.
 useEditor.subscribe((s, prev) => {
+  // The card mirrors the open project's run only; the orchestrator itself
+  // keeps working in the background.
   if (s.projectId !== prev.projectId) {
-    if (orchestrator && orchestratorProjectId !== s.projectId) {
-      orchestrator.abort();
-      orchestrator = null;
-      orchestratorProjectId = null;
-    }
     const run = useGenScene.getState().run;
     if (run && run.projectId !== s.projectId) useGenScene.setState({ run: null });
   }
-  // Resume the persisted plan once its project finishes loading. This lives on
-  // the store, not a component, so a paid run resumes (and its media re-tags)
-  // even when the AI panel never mounts. loadProject flips `loaded` false→true
-  // in the same set() that fills genvideo, so the edge fires once per open.
-  if (!s.loaded || prev.loaded || !s.projectId || !s.genvideo) return;
-  if (orchestrator && orchestratorProjectId === s.projectId) return;
+  // Once a project finishes loading: re-attach the mirror to its live run, or
+  // resume its persisted plan. This lives on the store, not a component, so a
+  // paid run resumes (and its media re-tags) even when the AI panel never
+  // mounts. loadProject flips `loaded` false→true in the same set() that
+  // fills genvideo, so the edge fires once per open.
+  if (!s.loaded || prev.loaded || !s.projectId) return;
+  const live = orchestrators.get(s.projectId);
+  if (live && !live.isAborted) {
+    // The run worked while the project was closed: its clips loaded as
+    // ordinary content — re-mark them render-owned, then mirror the live run.
+    const owned = runClipIds(live.project);
+    useEditor.getState().adoptGenClips(owned.clipIds, owned.audioIds);
+    if (!isTerminal(statusFor(live.project))) mirrorRun(s.projectId, live.project);
+    return;
+  }
+  if (!s.genvideo) return;
   if (useGenScene.getState().run?.projectId === s.projectId) return;
   useGenScene.getState().hydrate(s.projectId, s.genvideo);
 });
+
+// Boot sweep: a reload must not strand a paid run in a project the user
+// doesn't happen to reopen. Every project whose persisted plan is mid-render
+// resumes headless — placements land in its doc, and opening the project
+// attaches the progress card to the already-running orchestrator. Only
+// approved plans resume (the user already okayed the spend); a plan waiting
+// at the gate keeps waiting for its user.
+async function resumeBackgroundRuns(): Promise<void> {
+  try {
+    if (!(await useGenerate.getState().probeNow())) return; // renders need the sign-in
+    const res = await apiFetch("/api/cut/projects");
+    const list = await apiJson<{ id: string }[]>(res);
+    if (!res.ok || !Array.isArray(list)) return;
+    for (const p of list) {
+      if (!p?.id || orchestrators.has(p.id)) continue;
+      if (useEditor.getState().projectId === p.id) continue; // the open project hydrates via its own load
+      const docRes = await apiFetch(`/api/cut/projects/${p.id}`).catch(() => null);
+      if (!docRes?.ok) continue;
+      const doc = (await docRes.json()) as { genvideo?: VideoProject | null };
+      const plan = doc.genvideo;
+      if (!plan || plan.phase === "done" || plan.phase === "failed" || !plan.breakdownApproved) continue;
+      const orch = buildOrchestrator(p.id, plan);
+      orchestrators.set(p.id, orch);
+      orch.run().then(settled(p.id, orch)).catch(failed(p.id, orch));
+    }
+  } catch {
+    // Headless resume is best-effort — the hosted page has no engine, and a
+    // run it can't reach resumes the next time its project opens.
+  }
+}
+if (typeof window !== "undefined") {
+  setTimeout(() => void resumeBackgroundRuns(), 1500);
+}
 
 const LOG_CAP = 24;
 const CONCURRENCY = 3; // gentle on the video model's rate limit
@@ -200,6 +243,34 @@ function claimRunMedia(projectId: string, project: VideoProject): void {
 }
 
 /** Fold an orchestrator event into the reactive run mirror. */
+/** The ticker line a phase change reads as, when it has one. */
+function phaseActivity(phase: VideoPhase): string | undefined {
+  switch (phase) {
+    case "brief": return "Writing the script…";
+    case "ingest": return "Listening to the audio…";
+    case "breakdown": return "Cutting the narration into shots…";
+    case "voicing": return "Voicing the narration…";
+    case "style": return "Designing the look, cast, and places…";
+    case "keyframes": return "Drawing each shot's opening frame…";
+    case "generating": return "Rendering shots…";
+    case "polish": return "Assembling the final cut…";
+    default: return undefined;
+  }
+}
+
+/** The ticker line a shot status change reads as. `n` is 1-based. */
+function shotActivity(shot: Shot, n: number): string | undefined {
+  switch (shot.status) {
+    case "keyframing": return `Shot ${n} — drawing the opening frame…`;
+    case "generating": return shot.attempts > 1 ? `Shot ${n} — retake ${shot.attempts}…` : `Shot ${n} — rendering…`;
+    case "lipsync": return `Shot ${n} — syncing lips to the narration…`;
+    case "reviewing": return `Shot ${n} — screening the take against the plan…`;
+    case "placed": return `Shot ${n} placed.`;
+    case "failed": return `Shot ${n} failed — holding a still there.`;
+    default: return undefined;
+  }
+}
+
 function applyEvent(projectId: string, e: VideoEvent): void {
   useGenScene.setState((s) => {
     if (!s.run || s.run.projectId !== projectId) return s;
@@ -207,20 +278,28 @@ function applyEvent(projectId: string, e: VideoEvent): void {
     switch (e.type) {
       case "phase":
         run.phase = e.phase;
+        run.activity = phaseActivity(e.phase) ?? run.activity;
         break;
       case "breakdown":
         run.shots = e.shots;
         run.total = e.shots.length;
         break;
-      case "shot:update":
+      case "shot:update": {
         run.shots = run.shots.map((sh) => (sh.id === e.shot.id ? e.shot : sh));
+        const n = run.shots.findIndex((sh) => sh.id === e.shot.id) + 1;
+        if (n > 0) run.activity = shotActivity(e.shot, n) ?? run.activity;
         break;
+      }
       case "progress":
         run.placed = e.placed;
         run.total = e.total;
         break;
       case "log":
         run.logs = [...run.logs, e.message].slice(-LOG_CAP);
+        run.activity = e.message;
+        break;
+      case "activity":
+        run.activity = e.message;
         break;
       case "error":
         run.logs = [...run.logs, e.message].slice(-LOG_CAP);
@@ -230,6 +309,17 @@ function applyEvent(projectId: string, e: VideoEvent): void {
     return { run };
   });
 }
+
+// Adapter sub-steps ("Drawing pose 3/6…") arrive over the activity bus — the
+// adapters have no emit channel of their own. A scoped message updates only
+// its own project's card; a background run stays silent on screen.
+onActivity((message, projectId) => {
+  useGenScene.setState((s) => {
+    if (!s.run || s.run.endedAt) return s;
+    if (projectId && s.run.projectId !== projectId) return s;
+    return { run: { ...s.run, activity: message } };
+  });
+});
 
 /** Map the orchestrator's persisted project phase to a card status. */
 function statusFor(p: VideoProject): SceneStatus {
@@ -242,12 +332,36 @@ function statusFor(p: VideoProject): SceneStatus {
   return p.shots.length > 0 ? "awaiting_approval" : "planning";
 }
 
-function syncFromProject(): void {
-  const p = orchestrator?.project;
+/** Point the reactive mirror at a live run's current state (project re-open).
+ * The clock anchors come from the plan itself, so elapsed time is the run's
+ * real working time, not time-since-this-mirror. */
+function mirrorRun(projectId: string, p: VideoProject): void {
+  useGenScene.setState({
+    run: {
+      projectId,
+      chatId: p.chatId ?? null,
+      mode: p.audioMode,
+      title: p.brief || "Animating your audio",
+      status: statusFor(p),
+      phase: p.phase,
+      shots: p.shots,
+      placed: p.shots.filter((s) => s.timelineClipId).length,
+      total: p.shots.length,
+      logs: [],
+      startedAt: p.createdAt || Date.now(),
+      ...(statusFor(p) === "generating"
+        ? { renderStartedAt: p.renderStartedAt ?? Date.now() }
+        : {}),
+    },
+  });
+}
+
+function syncFromProject(projectId: string): void {
+  const p = orchestrators.get(projectId)?.project;
   if (!p) return;
   const status = statusFor(p);
   useGenScene.setState((s) => {
-    if (!s.run) return s;
+    if (!s.run || s.run.projectId !== projectId) return s;
     const terminal = status === "done" || status === "failed";
     return {
       run: {
@@ -262,31 +376,33 @@ function syncFromProject(): void {
   });
   // A finished run hands its clips to the user's undo domain — from here they
   // edit (and undo) like anything else. A regeneration adopts them back first.
-  if (status === "done" || status === "failed") {
+  if ((status === "done" || status === "failed") && useEditor.getState().projectId === projectId) {
     useEditor.getState().releaseGenClips();
   }
 }
 
-function fail(message: string): void {
+function fail(projectId: string, message: string): void {
   useGenScene.setState((s) =>
-    s.run ? { run: { ...s.run, status: "failed", error: message, endedAt: Date.now() } } : s
+    s.run && s.run.projectId === projectId
+      ? { run: { ...s.run, status: "failed", error: message, endedAt: Date.now() } }
+      : s
   );
   // Failed is terminal — whatever the run placed belongs to the user now.
-  useEditor.getState().releaseGenClips();
+  if (useEditor.getState().projectId === projectId) useEditor.getState().releaseGenClips();
 }
 
-/** Settle handlers scoped to one orchestrator: a superseded or paused run's
- * late resolution must never touch the run mirror — by the time it settles,
- * the mirror may belong to a fresh run in another project. */
-function settled(orch: VideoOrchestrator): () => void {
+/** Settle handlers scoped to one orchestrator: a superseded run's late
+ * resolution must never touch the run mirror — by the time it settles, the
+ * project's slot may belong to a fresh run. */
+function settled(projectId: string, orch: VideoOrchestrator): () => void {
   return () => {
-    if (orchestrator === orch && !orch.isAborted) syncFromProject();
+    if (orchestrators.get(projectId) === orch && !orch.isAborted) syncFromProject(projectId);
   };
 }
-function failed(orch: VideoOrchestrator): (e: unknown) => void {
+function failed(projectId: string, orch: VideoOrchestrator): (e: unknown) => void {
   return (e) => {
-    if (orchestrator === orch && !orch.isAborted) {
-      fail(e instanceof Error ? e.message : String(e));
+    if (orchestrators.get(projectId) === orch && !orch.isAborted) {
+      fail(projectId, e instanceof Error ? e.message : String(e));
     }
   };
 }
@@ -299,13 +415,13 @@ function resumeDoneRun(): boolean {
   const ed = useEditor.getState();
   const project = ed.genvideo;
   if (!ed.projectId || !project || project.phase !== "done") return false;
-  orchestrator?.abort();
+  orchestrators.get(ed.projectId)?.abort();
   const orch = buildOrchestrator(ed.projectId, project);
-  orchestrator = orch;
-  orchestratorProjectId = ed.projectId;
+  orchestrators.set(ed.projectId, orch);
   useGenScene.setState({
     run: {
       projectId: ed.projectId,
+      chatId: project.chatId ?? null,
       mode: project.audioMode,
       title: project.brief || "Animating your audio",
       status: "done",
@@ -328,11 +444,18 @@ function buildOrchestrator(projectId: string, project: VideoProject): VideoOrche
     // reload/resume, not just the initial turn.
     suite: realSuite(projectId, project.chatId),
     emit: (e) => applyEvent(projectId, e),
-    // Persist only while this run's project is the open one — a superseded run
-    // (the user switched projects) must never write its plan onto another.
+    // Persist through the open store when this run's project is on screen
+    // (autosave carries it), else straight into the project's doc — a run
+    // keeps its plan durable wherever the user is.
     persist: (p) => {
-      if (useEditor.getState().projectId !== projectId) return;
-      useEditor.getState().setGenvideo(p);
+      const ed = useEditor.getState();
+      if (ed.projectId === projectId && ed.loaded) {
+        ed.setGenvideo(p);
+        return;
+      }
+      return withProjectDoc(projectId, (doc) => {
+        doc.genvideo = { ...p };
+      }).catch(() => {});
     },
     concurrency: CONCURRENCY,
   });
@@ -362,7 +485,7 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
 
   start: async (projectId, params) => {
     const cur = get().run;
-    if (orchestrator && cur && cur.projectId === projectId && !isTerminal(cur.status)) {
+    if (orchestrators.get(projectId) && cur && cur.projectId === projectId && !isTerminal(cur.status)) {
       return { started: false, message: "A video is already being generated for this project." };
     }
     // Validate before any side effect — the aspect apply below reshapes the
@@ -381,14 +504,15 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
     if (project.audioMode === "generated" && !project.brief) {
       return { started: false, message: "Tell me what the video should be about." };
     }
-    // Supersede any previous run so two orchestrators never write at once.
-    orchestrator?.abort();
+    // Supersede this project's previous run so two orchestrators never write
+    // the same project at once; runs in other projects keep going.
+    orchestrators.get(projectId)?.abort();
     const orch = buildOrchestrator(projectId, project);
-    orchestrator = orch;
-    orchestratorProjectId = projectId;
+    orchestrators.set(projectId, orch);
     set({
       run: {
         projectId,
+        chatId: project.chatId ?? null,
         mode: project.audioMode,
         title: project.brief || "Animating your audio",
         status: "planning",
@@ -404,13 +528,13 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
       await orch.run(); // resolves at the confirmation gate
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      failed(orch)(e);
+      failed(projectId, orch)(e);
       return { started: false, message };
     }
-    if (orchestrator !== orch || orch.isAborted) {
+    if (orchestrators.get(projectId) !== orch || orch.isAborted) {
       return { started: false, message: "This plan was superseded before it finished." };
     }
-    syncFromProject();
+    syncFromProject(projectId);
     const p = orch.project;
     if (p.phase === "failed") {
       return { started: false, message: get().run?.error ?? "Planning failed." };
@@ -424,27 +548,32 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
 
   approve: () => {
     const run = get().run;
-    if (!orchestrator || !run || run.status !== "awaiting_approval") {
+    const orch = run ? orchestrators.get(run.projectId) : undefined;
+    if (!orch || !run || run.status !== "awaiting_approval") {
       return { ok: false, message: "There's no video plan waiting to render." };
     }
     if (run.projectId !== useEditor.getState().projectId) {
       return { ok: false, message: "Open the plan's project to approve it." };
     }
-    const orch = orchestrator;
+    // Stamp the render start on the plan itself (approveBreakdown persists
+    // it), so the card's clock survives reloads and project switches.
+    orch.project.renderStartedAt = Date.now();
     set({ run: { ...run, status: "generating", renderStartedAt: Date.now() } });
-    orch.approveBreakdown().then(settled(orch)).catch(failed(orch));
+    orch.approveBreakdown().then(settled(run.projectId, orch)).catch(failed(run.projectId, orch));
     return { ok: true, message: "Rendering — shots land on the timeline as they finish." };
   },
 
   regenerateShot: (n, note) => {
     // After a reload the finished run has no live orchestrator — rebuild it
     // from the persisted plan before deciding the scene "isn't done".
-    if (!orchestrator || !get().run) resumeDoneRun();
+    const openId = useEditor.getState().projectId;
+    if (!openId) return { ok: false, message: "Open a project first." };
+    if (!orchestrators.get(openId) || !get().run) resumeDoneRun();
     const run = get().run;
-    if (!orchestrator || !run || run.status !== "done") {
+    const orch = orchestrators.get(openId);
+    if (!orch || !run || run.status !== "done") {
       return { ok: false, message: "The scene isn't finished rendering yet — revise it once it's done." };
     }
-    const orch = orchestrator;
     const id = orch.shotIdByNumber(n);
     if (!id) return { ok: false, message: `This scene has no shot ${n}.` };
     // The run takes its clips back for the redo (they were released at done),
@@ -453,24 +582,26 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
     useEditor.getState().adoptGenClips(owned.clipIds, owned.audioIds);
     set({ run: { ...run, status: "generating", renderStartedAt: Date.now() } });
     const redo = note ? orch.applyShotNote(id, note) : orch.regenerateShots([id]);
-    redo.then(settled(orch)).catch(failed(orch));
+    redo.then(settled(run.projectId, orch)).catch(failed(run.projectId, orch));
     return { ok: true, message: `Redoing shot ${n}…` };
   },
 
   restyle: (style) => {
     // Same reload path as regenerateShot: a finished run rebuilds on demand.
-    if (!orchestrator || !get().run) resumeDoneRun();
+    const openId = useEditor.getState().projectId;
+    if (!openId) return { ok: false, message: "Open a project first." };
+    if (!orchestrators.get(openId) || !get().run) resumeDoneRun();
     const run = get().run;
-    if (!orchestrator || !run || run.status !== "done") {
+    const orch = orchestrators.get(openId);
+    if (!orch || !run || run.status !== "done") {
       return { ok: false, message: "The scene isn't finished rendering yet — restyle it once it's done." };
     }
-    const orch = orchestrator;
     // The run takes its clips back for the restyle (they were released at
     // done), so the swaps stay off the undo stack until it finishes again.
     const owned = runClipIds(orch.project);
     useEditor.getState().adoptGenClips(owned.clipIds, owned.audioIds);
     set({ run: { ...run, status: "generating", renderStartedAt: Date.now() } });
-    orch.changeStyle(style).then(settled(orch)).catch(failed(orch));
+    orch.changeStyle(style).then(settled(run.projectId, orch)).catch(failed(run.projectId, orch));
     return { ok: true, message: "Restyling the whole scene…" };
   },
 
@@ -483,12 +614,11 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
     // rebuild a done run on demand (resumeDoneRun).
     if (project.phase === "done" || project.phase === "failed") return;
     // Rebuild the orchestrator around the persisted plan so approve/regenerate
-    // keep working after a reload. Supersede any prior run first so two never
-    // both write.
-    orchestrator?.abort();
+    // keep working after a reload. Supersede this project's prior run first so
+    // two never both write.
+    orchestrators.get(projectId)?.abort();
     const orch = buildOrchestrator(projectId, project);
-    orchestrator = orch;
-    orchestratorProjectId = projectId;
+    orchestrators.set(projectId, orch);
     // The store's gen sets reset on load; re-mark this in-flight run's already
     // placed clips as render-owned so undo/redo stay off them as it finishes.
     const owned = runClipIds(project);
@@ -496,6 +626,7 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
     set({
       run: {
         projectId,
+        chatId: project.chatId ?? null,
         mode: project.audioMode,
         title: project.brief || "Animating your audio",
         status: statusFor(project),
@@ -504,17 +635,19 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
         placed: project.shots.filter((s) => s.timelineClipId).length,
         total: project.shots.length,
         logs: [],
-        // The original start time isn't persisted, so a resumed run's clock
-        // counts from the reload.
-        startedAt: Date.now(),
-        ...(statusFor(project) === "generating" ? { renderStartedAt: Date.now() } : {}),
+        // The plan carries its own clock anchors, so a resumed run shows its
+        // real working time instead of restarting from zero.
+        startedAt: project.createdAt || Date.now(),
+        ...(statusFor(project) === "generating"
+          ? { renderStartedAt: project.renderStartedAt ?? Date.now() }
+          : {}),
       },
     });
     // A run interrupted mid-generation picks itself back up, and one
     // interrupted mid-planning finishes its plan (run() stops at the gate by
     // construction); only a completed plan sitting at the gate waits.
     if (project.breakdownApproved || statusFor(project) === "planning") {
-      orch.run().then(settled(orch)).catch(failed(orch));
+      orch.run().then(settled(projectId, orch)).catch(failed(projectId, orch));
     }
   },
 
@@ -525,9 +658,8 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
     // finished (or failed) run keeps its record — its media re-tags from it on
     // load and nothing re-surfaces a terminal card.
     if (run && !isTerminal(run.status)) {
-      orchestrator?.abort();
-      orchestrator = null;
-      orchestratorProjectId = null;
+      orchestrators.get(run.projectId)?.abort();
+      orchestrators.delete(run.projectId);
       if (useEditor.getState().projectId === run.projectId) {
         useEditor.getState().setGenvideo(undefined);
       }

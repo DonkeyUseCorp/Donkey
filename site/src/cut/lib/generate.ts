@@ -6,6 +6,7 @@ import { apiFetch, apiJson } from "./api";
 import type { AssetRef } from "./assetRef";
 import { bytesFromBase64 } from "./bytes";
 import { composeGenPrompt, foldTextRefs } from "./composeGen";
+import { stockAssetInDoc } from "./genvideo/docWriter";
 import { hostedPost } from "./hosted";
 import { enrichAsset, importFileToProject } from "./media";
 import { refsToInlineImages, visualRefs, type InlineImage } from "./refMedia";
@@ -39,6 +40,17 @@ export interface GenerateJob {
    * An owned job shows on its chat card only — the Video/Image panels list
    * panel renders, so they skip it — and its asset lands chat-tagged. */
   chatId?: string;
+  /** The provider poll payload for an in-flight render — persisting it is what
+   * lets a reload re-attach to the running job instead of orphaning it. */
+  poll?: {
+    id: string;
+    provider: string;
+    model: string;
+    providerJobId?: string | null;
+    providerGenerationId?: string | null;
+    providerPollingUrl?: string | null;
+    metadata?: Record<string, unknown>;
+  };
 }
 
 interface GenerateState {
@@ -78,6 +90,9 @@ interface GenerateState {
     opts?: VideoGenOptions
   ) => { jobId: string; settled: Promise<GenerateJob> };
   dismiss: (id: string) => void;
+  /** Re-attach the poll loop of every persisted running render (reload
+   * recovery) — called once when the app boots. Idempotent. */
+  resumeRunningJobs: () => void;
 }
 
 export interface VideoGenOptions {
@@ -246,19 +261,36 @@ async function promptAndImages(
   };
 }
 
-/** Settled video jobs persist per browser, so a render left unplaced (a chat
- * card, the Video panel's renders list) survives a reload. Running jobs don't
- * persist: a reload kills the in-flight poll loop, so a restored one would
- * spin forever. */
+/** Video jobs persist per browser: settled ones so an unplaced render (a chat
+ * card, the Video panel's renders list) survives a reload, and running ones
+ * with their provider poll payload so a reload RE-ATTACHES to the in-flight
+ * render (resumeRunningJobs) instead of orphaning credits already spent. A
+ * running job persisted without a payload (it died before the provider
+ * answered) restores as an error. */
 const JOBS_KEY = "cut-gen-video-jobs";
 const JOBS_CAP = 50;
+
+/** Awaitable settlements for in-flight renders, fresh and reload-resumed —
+ * how a resumed caller (the scene pipeline) adopts a running job's result
+ * instead of billing a second take. */
+const settlements = new Map<string, Promise<GenerateJob>>();
+
+/** The settled-job promise for a running render, when this session owns it. */
+export function videoJobSettlement(jobId: string): Promise<GenerateJob> | undefined {
+  return settlements.get(jobId);
+}
 
 function readPersistedJobs(): GenerateJob[] {
   try {
     const v = JSON.parse(localStorage.getItem(JOBS_KEY) ?? "[]") as unknown;
-    return Array.isArray(v)
-      ? (v as GenerateJob[]).filter((j) => j?.id && j.status !== "running")
-      : [];
+    if (!Array.isArray(v)) return [];
+    return (v as GenerateJob[])
+      .filter((j) => j?.id)
+      .map((j) =>
+        j.status === "running" && !j.poll
+          ? { ...j, status: "error" as const, error: "Interrupted by a reload before the render started." }
+          : j
+      );
   } catch {
     return [];
   }
@@ -269,7 +301,9 @@ function persistJobs(jobs: GenerateJob[]) {
     localStorage.setItem(
       JOBS_KEY,
       JSON.stringify(
-        jobs.filter((j) => j.kind === "video" && j.status !== "running").slice(0, JOBS_CAP)
+        jobs
+          .filter((j) => j.kind === "video" && (j.status !== "running" || j.poll))
+          .slice(0, JOBS_CAP)
       )
     );
   } catch {
@@ -295,13 +329,91 @@ export const useGenerate = create<GenerateState>((set, get) => {
   const settled = (id: string, fallback: GenerateJob): GenerateJob =>
     get().jobs.find((j) => j.id === id) ?? fallback;
 
-  // The media file exists either way; only the open project can record it.
-  // Returns whether it was adopted (false when the user switched projects).
+  // The media file exists either way. The open project records it in the live
+  // store; a closed one records it in its persisted doc so nothing the render
+  // made is orphaned. Returns whether the OPEN project adopted it (badges and
+  // placement callbacks only make sense on screen).
   const adopt = (projectId: string, asset: MediaAsset): boolean => {
-    if (useEditor.getState().projectId !== projectId) return false;
+    if (useEditor.getState().projectId !== projectId) {
+      void stockAssetInDoc(projectId, asset).catch(() => {});
+      return false;
+    }
     useEditor.getState().addAsset(asset);
     void enrichAsset(asset);
     return true;
+  };
+
+  /** Poll an in-flight Veo render to completion and land its file as a project
+   * asset — the shared tail of a fresh render and a reload-resumed one. Keeps
+   * the job's poll payload fresh so the NEXT reload re-attaches too. */
+  const finishVideo = async (
+    jobId: string,
+    first: GenerationResponse,
+    onDone?: (asset: MediaAsset) => void
+  ): Promise<void> => {
+    const job = get().jobs.find((j) => j.id === jobId);
+    if (!job) return;
+    let gen = first;
+    // A resumed render keeps its original deadline, floored so a reload near
+    // the limit still gets a couple of polls before giving up.
+    const deadline = Math.max(job.startedAt + VIDEO_DEADLINE_MS, Date.now() + 2 * 60_000);
+    while (gen.status === "in_progress") {
+      update(jobId, {
+        poll: {
+          id: gen.id,
+          provider: gen.provider,
+          model: gen.model,
+          providerJobId: gen.providerJobId,
+          providerGenerationId: gen.providerGenerationId,
+          providerPollingUrl: gen.providerPollingUrl,
+          metadata: gen.metadata ?? {},
+        },
+      });
+      if (Date.now() > deadline) throw new Error("Veo is taking too long — try again.");
+      await sleep(REFRESH_MS);
+      const poll = await hostedPost("/api/inference/assets/refresh", {
+        id: gen.id,
+        kind: "video",
+        provider: gen.provider,
+        model: gen.model,
+        providerJobId: gen.providerJobId,
+        providerGenerationId: gen.providerGenerationId,
+        providerPollingUrl: gen.providerPollingUrl,
+        metadata: gen.metadata ?? {},
+      });
+      if (!poll.ok) throw new Error(await readError(poll, "Video generation failed."));
+      gen = (await poll.json()) as GenerationResponse;
+    }
+    if (gen.status !== "completed") {
+      throw new Error(providerError(gen.error) ?? "Video generation failed.");
+    }
+
+    const out = gen.outputs.find((o) => o.dataBase64) ?? gen.outputs.find((o) => o.url);
+    const fileName = `ai-${promptSlug(job.prompt)}.mp4`;
+    let file: File;
+    if (out?.dataBase64) {
+      file = new File([bytesFromBase64(out.dataBase64)], fileName, {
+        type: out.contentType ?? "video/mp4",
+      });
+    } else if (out?.url) {
+      const dl = await fetch(out.url);
+      if (!dl.ok) throw new Error("Could not download the generated video.");
+      file = new File([await dl.arrayBuffer()], fileName, {
+        type: out.contentType ?? "video/mp4",
+      });
+    } else {
+      throw new Error("The provider returned no video.");
+    }
+
+    const asset = await importFileToProject(job.projectId, file);
+    if (!asset) throw new Error("Could not import the generated video.");
+    asset.name = promptName(job.prompt);
+    applyOwnership(asset, job.chatId);
+    if (adopt(job.projectId, asset)) {
+      if (!job.chatId) useGenNotify.getState().landed("video", asset.id);
+      onDone?.(asset);
+    }
+    update(jobId, { status: "done", assetId: asset.id, poll: undefined });
   };
 
   return {
@@ -448,61 +560,38 @@ export const useGenerate = create<GenerateState>((set, get) => {
             },
           });
           if (!res.ok) throw new Error(await readError(res, "Video generation failed."));
-          let gen = (await res.json()) as GenerationResponse;
-
-          const deadline = Date.now() + VIDEO_DEADLINE_MS;
-          while (gen.status === "in_progress") {
-            if (Date.now() > deadline) throw new Error("Veo is taking too long — try again.");
-            await sleep(REFRESH_MS);
-            const poll = await hostedPost("/api/inference/assets/refresh", {
-              id: gen.id,
-              kind: "video",
-              provider: gen.provider,
-              model: gen.model,
-              providerJobId: gen.providerJobId,
-              providerGenerationId: gen.providerGenerationId,
-              providerPollingUrl: gen.providerPollingUrl,
-              metadata: gen.metadata ?? {},
-            });
-            if (!poll.ok) throw new Error(await readError(poll, "Video generation failed."));
-            gen = (await poll.json()) as GenerationResponse;
-          }
-          if (gen.status !== "completed") {
-            throw new Error(providerError(gen.error) ?? "Video generation failed.");
-          }
-
-          const out = gen.outputs.find((o) => o.dataBase64) ?? gen.outputs.find((o) => o.url);
-          const fileName = `ai-${promptSlug(prompt)}.mp4`;
-          let file: File;
-          if (out?.dataBase64) {
-            file = new File([bytesFromBase64(out.dataBase64)], fileName, {
-              type: out.contentType ?? "video/mp4",
-            });
-          } else if (out?.url) {
-            const dl = await fetch(out.url);
-            if (!dl.ok) throw new Error("Could not download the generated video.");
-            file = new File([await dl.arrayBuffer()], fileName, {
-              type: out.contentType ?? "video/mp4",
-            });
-          } else {
-            throw new Error("The provider returned no video.");
-          }
-
-          const asset = await importFileToProject(projectId, file);
-          if (!asset) throw new Error("Could not import the generated video.");
-          asset.name = promptName(prompt);
-          applyOwnership(asset, opts?.chatId);
-          if (adopt(projectId, asset)) {
-            if (!opts?.chatId) useGenNotify.getState().landed("video", asset.id);
-            opts?.onDone?.(asset);
-          }
-          update(job.id, { status: "done", assetId: asset.id });
+          const gen = (await res.json()) as GenerationResponse;
+          await finishVideo(job.id, gen, opts?.onDone);
         } catch (err) {
           fail(job.id, err);
         }
         return settled(job.id, job);
       })();
+      settlements.set(job.id, settledRun);
       return { jobId: job.id, settled: settledRun };
+    },
+
+    resumeRunningJobs: () => {
+      for (const j of get().jobs) {
+        if (j.kind !== "video" || j.status !== "running" || !j.poll || settlements.has(j.id)) continue;
+        const poll = j.poll;
+        const run = (async () => {
+          try {
+            // Re-enter the poll loop where the last session left it. The
+            // timeline placement callback (onDone) is a closure and cannot
+            // survive a reload — the asset still lands on its card/panel.
+            await finishVideo(j.id, {
+              status: "in_progress",
+              outputs: [],
+              ...poll,
+            } as GenerationResponse);
+          } catch (err) {
+            fail(j.id, err);
+          }
+          return settled(j.id, j);
+        })();
+        settlements.set(j.id, run);
+      }
     },
 
     dismiss: (id) => {
@@ -511,6 +600,12 @@ export const useGenerate = create<GenerateState>((set, get) => {
     },
   };
 });
+
+// Reload recovery: re-attach every persisted in-flight render as soon as the
+// app boots, so a refresh never orphans credits already spent.
+if (typeof window !== "undefined") {
+  setTimeout(() => useGenerate.getState().resumeRunningJobs(), 0);
+}
 
 /** Donkey sign-in state for the generation surfaces. Probes on mount and again
  * whenever the tab regains focus, so signing in — in this tab's round trip or a

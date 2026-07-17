@@ -28,11 +28,13 @@
 
 import { refFromAsset, type AssetRef } from "../../assetRef";
 import { tagChatAsset } from "../../chatAssets";
-import { NO_CREDITS_MESSAGE, useGenerate, type VideoGenOptions } from "../../generate";
+import { NO_CREDITS_MESSAGE, useGenerate, videoJobSettlement, type VideoGenOptions } from "../../generate";
 import { enrichAsset } from "../../media";
 import { useEditor } from "../../store";
 import { DEFAULT_VOICE, synthesizeSpeech } from "../../tts";
 import { supportedVideoDuration, videoModel } from "../../videoGen";
+import { reportActivity } from "../activity";
+import { findRunAsset, stockAssetInDoc } from "../docWriter";
 import type { ImageRole, VideoRole, VoiceRole } from "../capabilities";
 import type { RefAsset } from "../types";
 
@@ -91,9 +93,10 @@ export function makeVideoRole(projectId: string, chatId?: string): VideoRole {
         // it's protected from thread-deletion by the clip.
         ...(chatId ? { chatId } : {}),
       };
-      const assets = useEditor.getState().assets;
+      // The seed keyframe resolves wherever the run's project lives — the
+      // store when open, the persisted doc when the user switched away.
       const keyframe = input.startKeyframe
-        ? assets.find((a) => a.id === input.startKeyframe)
+        ? await findRunAsset(projectId, input.startKeyframe)
         : undefined;
       // Identity and place anchors only — a user style reference is a look,
       // not a cast member, and must never ride as an asset to keep consistent.
@@ -132,8 +135,26 @@ export function makeVideoRole(projectId: string, chatId?: string): VideoRole {
           durationSeconds: supportedVideoDuration(VIDEO_TIER, input.durationSec),
         },
       ];
+      // A reload may have left this exact shot's render in flight — adopt the
+      // resumed job's result instead of billing a second take.
+      const inFlight = useGenerate
+        .getState()
+        .jobs.find(
+          (j) =>
+            j.kind === "video" && j.status === "running" && j.projectId === projectId && j.prompt === input.prompt
+        );
+      if (inFlight) {
+        const settledJob = await videoJobSettlement(inFlight.id);
+        if (settledJob?.status === "done" && settledJob.assetId) return settledJob.assetId;
+      }
       let lastError = "Video generation failed.";
-      for (const opts of attempts) {
+      for (const [rung, opts] of attempts.entries()) {
+        reportActivity(
+          rung === 0
+            ? "Animating the frame with Veo — a minute or two…"
+            : "That anchor failed — retrying the render with a weaker identity anchor…",
+          projectId
+        );
         const job = await useGenerate.getState().generateVideo(projectId, input.prompt, opts)
           .settled;
         if (job.status === "done" && job.assetId) return job.assetId;
@@ -156,9 +177,9 @@ export function makeVoiceRole(projectId: string, chatId?: string): VoiceRole {
         name: "Narration",
       });
       // synthesizeSpeech imports the file but leaves it to the caller to stock
-      // the store, so the spine placement can find the asset. Only stock it when
-      // this run's project is the one open — a background run whose project the
-      // user switched away from must not add its narration to another project.
+      // it, so the spine placement can find the asset: the live store when
+      // this run's project is open, its persisted doc when the user has moved
+      // on — a background run keeps its narration durable either way.
       if (useEditor.getState().projectId === projectId) {
         useEditor.getState().addAsset(asset);
         // Chat-owned, so the narration never shows in the Audio panel's
@@ -167,6 +188,12 @@ export function makeVoiceRole(projectId: string, chatId?: string): VoiceRole {
         // thread happens to be open when a background render lands.
         if (chatId) tagChatAsset(asset.id, chatId);
         void enrichAsset(asset);
+      } else {
+        if (chatId) {
+          asset.origin = "chat";
+          asset.chatId = chatId;
+        }
+        await stockAssetInDoc(projectId, asset).catch(() => {});
       }
       return { mediaId: asset.id, durationSec: asset.duration };
     },

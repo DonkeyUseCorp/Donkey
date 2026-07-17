@@ -542,6 +542,11 @@ export const useEditor = create<EditorState>((set, get) => {
     genvideo: undefined,
 
     loadProject: async (id) => {
+      // A background scene run may still be writing this project's doc — wait
+      // out its queued writes so the load never reads a half-written doc (and
+      // never later autosaves over a placement it didn't see). Lazy import:
+      // docWriter reads store helpers, so a static import would be a cycle.
+      await import("./genvideo/docWriter").then((m) => m.docWriterIdle(id)).catch(() => {});
       history.length = 0;
       future.length = 0;
       pending = null;
