@@ -484,6 +484,9 @@ interface GenSceneState {
   restyle: (style: string) => { ok: boolean; message: string };
   /** Rebuild + resume a persisted run when a project loads. */
   hydrate: (projectId: string, project: VideoProject) => void;
+  /** A chat thread died — a run it owned becomes unowned so its card (and
+   * Approve gate) stays reachable. */
+  orphanThread: (chatId: string) => void;
   dismiss: () => void;
 }
 
@@ -656,6 +659,19 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
     if (project.breakdownApproved || statusFor(project) === "planning") {
       orch.run().then(settled(projectId, orch)).catch(failed(projectId, orch));
     }
+  },
+
+  orphanThread: (chatId) => {
+    // The owning chat thread is gone (deleted, or pruned off the history cap).
+    // Re-home the run to "unowned" so its card — and an Approve gate waiting on
+    // the user — shows in whatever thread is open instead of nowhere. The
+    // orchestrator's plan drops the id too, so the next save persists the
+    // re-homing and a reload doesn't resurrect the orphan.
+    for (const orch of orchestrators.values()) {
+      if (orch.project.chatId === chatId) orch.project.chatId = undefined;
+    }
+    const run = get().run;
+    if (run?.chatId === chatId) set({ run: { ...run, chatId: null } });
   },
 
   dismiss: () => {

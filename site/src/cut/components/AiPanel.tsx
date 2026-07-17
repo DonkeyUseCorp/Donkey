@@ -137,6 +137,11 @@ function writeThreads(list: ChatThread[]) {
     ...list.slice(0, THREAD_LIMIT),
     ...list.slice(THREAD_LIMIT).filter((t) => threadOwnsAssets(t.id)),
   ];
+  // A pruned thread's scene run re-homes so its card stays reachable.
+  const keptIds = new Set(kept.map((t) => t.id));
+  for (const t of list) {
+    if (!keptIds.has(t.id)) useGenScene.getState().orphanThread(t.id);
+  }
   try {
     localStorage.setItem(threadsKey(), JSON.stringify(slimForStorage(kept)));
   } catch {
@@ -223,6 +228,9 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
     // The thread's chat-only assets go with it; anything placed or filed
     // into Media/Library stays.
     deleteChatAssets(id);
+    // A scene run this thread owned becomes unowned, so its card (and any
+    // Approve gate the user still has to answer) doesn't vanish with it.
+    useGenScene.getState().orphanThread(id);
     // If the open chat was deleted, start a fresh one so it can't re-save
     // itself on the next message and resurrect the thread.
     if (activeChat === id) setActiveChat(crypto.randomUUID());
