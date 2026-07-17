@@ -88,12 +88,15 @@ useEditor.subscribe((s, prev) => {
   // fills genvideo, so the edge fires once per open.
   if (!s.loaded || prev.loaded || !s.projectId) return;
   const live = orchestrators.get(s.projectId);
-  if (live && !live.isAborted) {
-    // The run worked while the project was closed: its clips loaded as
-    // ordinary content — re-mark them render-owned, then mirror the live run.
+  if (live && !live.isAborted && !isTerminal(statusFor(live.project))) {
+    // The run is still working: its clips loaded as ordinary content — re-mark
+    // them render-owned, then mirror the live run. A run that FINISHED while
+    // the project was closed falls through instead: its clips belong to the
+    // user's undo domain now, and adopting them here would scrub them out of
+    // every history snapshot with nothing left to release them.
     const owned = runClipIds(live.project);
     useEditor.getState().adoptGenClips(owned.clipIds, owned.audioIds);
-    if (!isTerminal(statusFor(live.project))) mirrorRun(s.projectId, live.project);
+    mirrorRun(s.projectId, live.project);
     return;
   }
   if (!s.genvideo) return;
