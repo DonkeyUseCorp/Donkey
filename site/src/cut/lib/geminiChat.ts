@@ -1,6 +1,7 @@
 "use client";
 
 import type { UIMessage, UIMessageChunk } from "ai";
+import { geminiModelRoles } from "@/lib/inference/gemini-models";
 import { AI_SKILL_INDEX, AI_SKILLS, AI_TOOLS, systemPrompt } from "@/cut/server/ai/catalog";
 import { buildAiContext } from "./aiContext";
 import { runAiTool } from "./aiTools";
@@ -8,6 +9,7 @@ import { normalizeRef } from "./assetRef";
 import { NO_CREDITS_MESSAGE, useGenerate } from "./generate";
 import { hostedPost } from "./hosted";
 import { refsToParts } from "./refMedia";
+import { parseTurnIntent, TURN_INTENT_PROMPT, turnIntentInput, type TurnIntent } from "./turnIntent";
 
 // Gemini chat runs from the page through Donkey's hosted Responses route with
 // the user's sign-in and credits — the local engine is not involved (same
@@ -102,6 +104,44 @@ async function emitStepLimitSummary({
 }
 
 type Item = Record<string, unknown>;
+
+/** The turn's tool gate: judge the newest message before the first round, and
+ * withhold every tool declaration when it asks for nothing. A message carrying
+ * attachments is work by construction (the user brought media to act on), so
+ * it skips the model call. Single attempt, fails open to "work" — a classifier
+ * hiccup must never block a real request. */
+async function classifyTurnIntent(
+  messages: UIMessage[],
+  abortSignal?: AbortSignal
+): Promise<TurnIntent> {
+  const lastUser = messages.findLast((m) => m.role === "user");
+  const attached = (lastUser?.metadata as { attachments?: unknown[] } | undefined)?.attachments;
+  if (Array.isArray(attached) && attached.length > 0) return "work";
+  const turns = messages.map((m) => ({
+    role: m.role === "user" ? ("user" as const) : ("assistant" as const),
+    text: m.parts
+      .map((p) => (p.type === "text" ? p.text : ""))
+      .join("")
+      .trim(),
+  }));
+  try {
+    const res = await hostedPost(
+      "/api/inference/responses",
+      {
+        donkeyProvider: "gemini",
+        model: geminiModelRoles.fastDecision,
+        instructions: TURN_INTENT_PROMPT,
+        input: turnIntentInput(turns),
+      },
+      abortSignal
+    );
+    if (!res.ok) return "work";
+    const body = (await res.json()) as ResponseBody;
+    return parseTurnIntent(body.output_text);
+  } catch {
+    return "work";
+  }
+}
 
 const toolDeclarations = () =>
   AI_TOOLS.map((t) => ({
@@ -272,15 +312,23 @@ export function streamGeminiChat({
         controller.enqueue(chunk as unknown as UIMessageChunk);
       emit({ type: "start" });
       try {
+        // The gate classifies while the input assembles; a "chat" verdict
+        // (nothing asked) drops the tool declarations from the whole turn, so
+        // the model can only answer in words.
+        const intentPromise = classifyTurnIntent(messages, abortSignal);
         const input = await inputFromMessages(messages);
-        const tools = toolDeclarations();
+        const tools = (await intentPromise) === "work" ? toolDeclarations() : undefined;
         let textCount = 0;
         let settled = false;
         let emptyRounds = 0;
+        // The scene-plan money gate, enforced structurally: a plan created this
+        // turn cannot be approved this turn, whatever the model decides — the
+        // user must see the plan card and answer (or click Approve) first.
+        let scenePlannedThisTurn = false;
 
         for (let round = 0; round < MAX_TOOL_ROUNDS && !settled; round++) {
           const body = await postRound(
-            { donkeyProvider: "gemini", model, instructions: systemPrompt(), input, tools },
+            { donkeyProvider: "gemini", model, instructions: systemPrompt(), input, ...(tools ? { tools } : {}) },
             abortSignal
           );
 
@@ -332,7 +380,15 @@ export function streamGeminiChat({
             if (abortSignal?.aborted) return;
             emit({ type: "tool-input-available", toolCallId, toolName: name, input: args });
             try {
-              const output = await execTool(name, args);
+              const output =
+                name === "approve_scene" && scenePlannedThisTurn
+                  ? {
+                      ok: false,
+                      note:
+                        "This plan landed this turn — the user hasn't answered yet. Ask them to confirm (they can also click Approve on the plan card), and call approve_scene only after they say yes in a later message.",
+                    }
+                  : await execTool(name, args);
+              if (name === "generate_scene") scenePlannedThisTurn = true;
               // The transcript doesn't need listen_audio's payload — keep
               // megabyte data URLs out of thread state; the model still gets
               // the sound via functionResponseParts below.

@@ -22,6 +22,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { geminiModelRoles } from "../src/lib/inference/gemini-models";
 import { AI_SKILL_INDEX, AI_SKILLS, AI_TOOLS, systemPrompt } from "../src/cut/server/ai/catalog";
+import {
+  parseTurnIntent,
+  TURN_INTENT_PROMPT,
+  turnIntentInput,
+  type TurnIntent,
+} from "../src/cut/lib/turnIntent";
 
 type Item = Record<string, unknown>;
 
@@ -216,6 +222,11 @@ function userTurn(
   return { role: "user", content: [{ text: full }, ...extra] };
 }
 
+/** Earlier turns in a multi-message case: plain text, no envelope — production
+ * attaches the editor snapshot to the newest user message alone. */
+const plainUserTurn = (text: string): Item => ({ role: "user", content: [{ text }] });
+const assistantTurn = (text: string): Item => ({ role: "assistant", content: [{ text }] });
+
 /** A tiny track-0 simulator for composed cut flows: splits, trims, deletes,
  * and undo evolve real state, so get_state shows the model its own edits and
  * later calls can use the new clip ids. A frozen snapshot can't support a
@@ -396,6 +407,9 @@ interface EvalCase {
   /** Latency guard: the turn fails if the trace exceeds this many calls. A
    * simple ask must not detour through skill reads or state polls. */
   maxToolCalls?: number;
+  /** The tool gate's required verdict for the turn ("chat" turns run with no
+   * tool declarations, so tool calls become impossible). */
+  gate?: TurnIntent;
   /** Editor snapshot served to get_state for this case (default EDITOR_STATE). */
   state?: unknown;
   /** Per-run tool interceptor (fresh per run); a non-undefined return serves
@@ -414,6 +428,46 @@ function cases(audio: { dataBase64: string; mimeType: string }): EvalCase[] {
       name: "transcribe-attached-audio",
       input: () => [userTurn("get the text from this", { attachAudio: audio })],
       reply: /mason/i,
+    },
+    {
+      // The tool gate (the "hi" regression, which once fired an unsolicited
+      // subtitles_generate): a bare greeting asks for nothing, so the turn
+      // must classify "chat" and run with every tool declaration withheld.
+      name: "greeting-is-gated",
+      input: () => [userTurn("hi")],
+      reply: /help|what would you/i,
+      gate: "chat",
+      maxToolCalls: 0,
+    },
+    {
+      // Same gate mid-conversation: thanks after landed work requests nothing.
+      name: "thanks-is-gated",
+      input: () => [
+        plainUserTurn("trim the first clip down to 5 seconds"),
+        assistantTurn("Trimmed! The first clip now runs 5 seconds."),
+        userTurn("nice, thank you!"),
+      ],
+      reply: /\S/,
+      gate: "chat",
+      maxToolCalls: 0,
+    },
+    {
+      // Context rides into the gate: a terse follow-up is a request — its
+      // referent lives in the earlier turns — so it classifies "work" and the
+      // caption cleanup actually lands.
+      name: "follow-up-do-it-works",
+      input: () => [
+        plainUserTurn("could you clean up my captions? lots of filler words"),
+        assistantTurn(
+          "Happy to — I'd tidy the five cues on track 0, dropping the ums and uhs. Want me to go ahead?"
+        ),
+        userTurn("yes do it", { state: FILLER_STATE }),
+      ],
+      reply: /cue|caption|filler|clean|tidi|done|\bum\b|\buh\b|remove|swept/i,
+      gate: "work",
+      anyTools: ["update_cue", "delete_cue", "merge_cue"],
+      state: FILLER_STATE,
+      simulate: () => makeTimelineSim(FILLER_STATE),
     },
     {
       // Plain questions answer from the snapshot; at most safe reads.
@@ -544,6 +598,55 @@ const toolDeclarations = AI_TOOLS.map((t) => ({
   parameters: t.inputSchema,
 }));
 
+/** A case item's composer text with the envelope stripped back off — the
+ * gate's classifier sees the raw turn, before the snapshot rides on. */
+const itemText = (item: Item): string => {
+  const first = (item.content as { text?: string }[] | undefined)?.find(
+    (p) => typeof p.text === "string"
+  );
+  return (first?.text ?? "")
+    .split("\n\n<attached_assets>")[0]
+    .split("\n\n<editor_state>")[0]
+    .trim();
+};
+
+/** The production tool gate, replicated from geminiChat.ts: a message with
+ * attachments is work by construction; otherwise the fast-decision model
+ * judges the newest message. Fails open to "work". */
+async function classifyIntent(input: Item[]): Promise<TurnIntent> {
+  const lastUser = [...input].reverse().find((i) => i.role === "user");
+  const raw =
+    ((lastUser?.content as { text?: string }[]) ?? []).find((p) => typeof p.text === "string")
+      ?.text ?? "";
+  if (raw.includes("<attached_assets>")) return "work";
+  const turns = input.map((i) => ({
+    role: (i.role === "user" ? "user" : "assistant") as "user" | "assistant",
+    text: itemText(i),
+  }));
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(`${BASE}/api/inference/responses`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-donkey-client-id": "donkey-cut-eval",
+        "x-donkey-dev-auth-bypass": "1",
+      },
+      body: JSON.stringify({
+        donkeyProvider: "gemini",
+        model: geminiModelRoles.fastDecision,
+        instructions: TURN_INTENT_PROMPT,
+        input: turnIntentInput(turns),
+      }),
+    });
+    if (res.ok) {
+      const body = (await res.json()) as { output_text?: string };
+      return parseTurnIntent(body.output_text);
+    }
+    if (![429, 500, 502, 503, 504].includes(res.status) || attempt >= 2) return "work";
+    await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+  }
+}
+
 function serveSafeTool(name: string, state: unknown): unknown {
   if (name === "get_state") {
     // The fixture snapshot is frozen — it can't reflect this turn's stubbed
@@ -566,10 +669,15 @@ interface CaseResult {
   trace: string[];
   violations: string[];
   notes: string[];
+  intent: TurnIntent;
 }
 
 async function runCase(c: EvalCase): Promise<CaseResult> {
   const input = c.input();
+  // The gate runs first, exactly as in production: a "chat" verdict strips
+  // the tool declarations from the whole turn.
+  const intent = await classifyIntent(input);
+  const tools = intent === "work" ? toolDeclarations : undefined;
   const sim = c.simulate?.();
   const trace: string[] = [];
   const violations: string[] = [];
@@ -594,7 +702,7 @@ async function runCase(c: EvalCase): Promise<CaseResult> {
           model: geminiModelRoles.chat,
           instructions: systemPrompt(),
           input,
-          tools: toolDeclarations,
+          ...(tools ? { tools } : {}),
         }),
       });
       if (res.ok || ![429, 500, 502, 503, 504].includes(res.status) || attempt >= 2) break;
@@ -671,6 +779,7 @@ async function runCase(c: EvalCase): Promise<CaseResult> {
     input.push({ role: "user", content: responseParts });
   }
 
+  if (c.gate && intent !== c.gate) notes.push(`gate said ${intent}, expected ${c.gate}`);
   if (!c.reply.test(reply)) notes.push(`reply did not match ${c.reply}`);
   for (const t of c.requiredTools ?? []) {
     if (!trace.includes(t)) notes.push(`required tool ${t} was never called`);
@@ -680,7 +789,7 @@ async function runCase(c: EvalCase): Promise<CaseResult> {
   if (c.maxToolCalls !== undefined && trace.length > c.maxToolCalls)
     notes.push(`slow: ${trace.length} tool calls (cap ${c.maxToolCalls})`);
   if (violations.length > 0) notes.push(`mutating tools called: ${violations.join(", ")}`);
-  return { pass: notes.length === 0, reply, trace, violations, notes };
+  return { pass: notes.length === 0, reply, trace, violations, notes, intent };
 }
 
 async function main() {
@@ -694,7 +803,12 @@ async function main() {
       const label = RUNS > 1 ? `${c.name} [${run}/${RUNS}]` : c.name;
       try {
         const r = await runCase(c);
-        const tools = r.trace.length > 0 ? ` tools: ${r.trace.join(" → ")}` : " tools: none";
+        const tools =
+          r.trace.length > 0
+            ? ` tools: ${r.trace.join(" → ")}`
+            : r.intent === "chat"
+              ? " tools: none (gated)"
+              : " tools: none";
         if (r.pass) {
           console.log(`PASS ${label}${tools}`);
         } else {
