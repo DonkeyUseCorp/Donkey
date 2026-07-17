@@ -13,6 +13,7 @@ import {
   useAssetDrop,
 } from "@/cut/lib/assetRef";
 import { useElapsed } from "@/cut/hooks/useElapsed";
+import { useInView } from "@/cut/hooks/useInView";
 import { genPulseOverlay, useGenPulse } from "@/cut/lib/genNotify";
 import { signInUrl, useGenerate, useSignedIn, type GenerateJob } from "@/cut/lib/generate";
 import { useLightbox } from "@/cut/lib/lightbox";
@@ -290,6 +291,8 @@ function JobRow({ job, handle }: { job: GenerateJob; handle?: string }) {
   const elapsed = useElapsed(job.status === "running" ? job.startedAt : null);
   const tileRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  // Render history keeps every settled job; a preview loads only on screen.
+  const [inViewRef, seen] = useInView<HTMLButtonElement>();
 
   if (job.status !== "done" || !asset) {
     return (
@@ -359,6 +362,7 @@ function JobRow({ job, handle }: { job: GenerateJob; handle?: string }) {
       }}
     >
       <button
+        ref={inViewRef}
         className="block w-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
         draggable
         onDragStart={(e) => {
@@ -379,7 +383,7 @@ function JobRow({ job, handle }: { job: GenerateJob; handle?: string }) {
           loop
           playsInline
           preload="metadata"
-          src={`${asset.url}#t=0.1`}
+          src={seen ? `${asset.url}#t=0.1` : undefined}
           className="aspect-[16/10] w-full bg-black object-cover"
         />
       </button>

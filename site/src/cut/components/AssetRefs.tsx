@@ -9,6 +9,7 @@ import {
   type AssetRef,
 } from "@/cut/lib/assetRef";
 import { useRefFor, useRefCandidates } from "@/cut/lib/assetRef";
+import { useInView } from "@/cut/hooks/useInView";
 import { revealRef } from "@/cut/lib/refReveal";
 import { formatTime } from "@/cut/lib/time";
 import { useEditor } from "@/cut/lib/store";
@@ -32,8 +33,11 @@ export function RefThumb({ item, className }: { item: AssetRef; className?: stri
       ? s.assets.find((a) => a.id === item.id)?.peaks
       : undefined
   );
+  // Chips render for every past message; the media loads only once on screen.
+  const [thumbRef, seen] = useInView<HTMLDivElement>();
   return (
     <div
+      ref={thumbRef}
       className={cn(
         "relative shrink-0 overflow-hidden rounded-lg border border-border bg-muted",
         className
@@ -41,15 +45,17 @@ export function RefThumb({ item, className }: { item: AssetRef; className?: stri
     >
       {item.kind === "video" ? (
         <video
-          src={`${item.url}#t=0.1`}
+          src={seen ? `${item.url}#t=0.1` : undefined}
           preload="metadata"
           muted
           playsInline
           className="size-full object-cover"
         />
       ) : item.kind === "image" ? (
-        // eslint-disable-next-line @next/next/no-img-element -- refs point at engine/static files, not Next-optimizable images
-        <img src={item.url} alt={item.name} loading="lazy" className="size-full object-cover" />
+        seen ? (
+          // eslint-disable-next-line @next/next/no-img-element -- refs point at engine/static files, not Next-optimizable images
+          <img src={item.url} alt={item.name} loading="lazy" className="size-full object-cover" />
+        ) : null
       ) : item.kind === "text" ? (
         <div className="grid size-full place-items-center bg-gradient-to-br from-slate-100 to-slate-50 text-slate-500">
           <FileText className="size-4.5" />

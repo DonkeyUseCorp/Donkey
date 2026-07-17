@@ -14,6 +14,7 @@ import {
   type AssetRefKind,
 } from "@/cut/lib/assetRef";
 import { useElapsed } from "@/cut/hooks/useElapsed";
+import { useInView } from "@/cut/hooks/useInView";
 import { useGenerate } from "@/cut/lib/generate";
 import { lightboxItemFromRef, useLightbox } from "@/cut/lib/lightbox";
 import { usePreviewAudio } from "@/cut/lib/previewAudio";
@@ -116,7 +117,7 @@ export function ChatVideoJobCard({ jobId }: { jobId: string }) {
               {elapsed && <span className="tabular-nums text-muted-foreground/80">{elapsed}</span>}
             </>
           ) : (
-            <HostedErrorText error={job.error} />
+            <HostedErrorText error={job.error} link={false} />
           )}
         </div>
       </div>
@@ -198,12 +199,16 @@ const scrimButton = scrimIconButton;
  * sized so portrait and landscape both sit comfortably in the chat column. */
 function MediaCard({ item, asset }: ChatCardProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  // Chat scrollback holds every card ever made; media loads only once the
+  // card actually scrolls into view.
+  const [tileRef, seen] = useInView<HTMLDivElement>();
   const ref = liveRef(item, asset);
   const ratio =
     asset?.width && asset?.height ? asset.width / asset.height : item.kind === "image" ? 1 : 16 / 10;
   const width = Math.round(Math.min(248, Math.max(132, 210 * ratio)));
   return (
     <div
+      ref={tileRef}
       className="ai-chat-asset group relative shrink-0 cursor-grab overflow-hidden rounded-xl border border-border bg-muted transition-colors hover:border-input"
       style={{ width, aspectRatio: ratio }}
       title={`${ref.name} — double-click to expand · drag to the timeline`}
@@ -224,17 +229,17 @@ function MediaCard({ item, asset }: ChatCardProps) {
         // Native first frame as the poster — full-resolution, no blurry thumb.
         <video
           ref={videoRef}
-          src={`${ref.url}#t=0.1`}
+          src={seen ? `${ref.url}#t=0.1` : undefined}
           preload="metadata"
           muted
           loop
           playsInline
           className="size-full object-cover"
         />
-      ) : (
+      ) : seen ? (
         // eslint-disable-next-line @next/next/no-img-element -- engine/static file, not Next-optimizable
         <img src={ref.url} alt={ref.name} loading="lazy" className="size-full object-cover" />
-      )}
+      ) : null}
       {item.kind === "video" && ref.duration !== undefined && (
         <span className="absolute right-1.5 bottom-1.5 rounded-[5px] bg-black/65 px-1 py-px font-mono text-[9px] text-white tabular-nums">
           {formatTime(ref.duration)}
