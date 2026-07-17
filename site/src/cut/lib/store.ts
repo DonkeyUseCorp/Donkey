@@ -797,7 +797,18 @@ export const useEditor = create<EditorState>((set, get) => {
 
     removeAsset: (id) => {
       const st = get();
-      if (!st.assets.some((a) => a.id === id)) return;
+      const gone = st.assets.find((a) => a.id === id);
+      if (!gone) return;
+      // The media file dies with its last referencing asset — history
+      // snapshots don't cover the asset list, so nothing can resurrect it.
+      const dropFile = () => {
+        const s = get();
+        if (!s.projectId || s.assets.some((a) => a.fileName === gone.fileName)) return;
+        void apiFetch(
+          `/api/cut/projects/${s.projectId}/media/${encodeURIComponent(gone.fileName)}`,
+          { method: "DELETE" }
+        ).catch(() => {});
+      };
       // An unreferenced asset is no doc edit: history snapshots don't cover
       // the asset list, so removing one must not open a checkpoint or churn
       // the clip arrays (a fresh clips reference would count as a doc change
@@ -807,6 +818,7 @@ export const useEditor = create<EditorState>((set, get) => {
         !st.audioClips.some((c) => c.assetId === id)
       ) {
         set((s) => ({ assets: s.assets.filter((a) => a.id !== id) }));
+        dropFile();
         return;
       }
       push();
@@ -828,6 +840,7 @@ export const useEditor = create<EditorState>((set, get) => {
           selection: keep(s.selection) ? s.selection : multiSelection[multiSelection.length - 1] ?? null,
         };
       });
+      dropFile();
     },
 
     addClipFromAsset: (assetId, start) => {

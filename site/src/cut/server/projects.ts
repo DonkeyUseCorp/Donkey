@@ -61,6 +61,12 @@ export async function deleteExport(id: string, fileName: string) {
   await rm(exportPath(id, fileName), { force: true });
 }
 
+/** Remove one media file from the project folder — a media file dies with the
+ * last asset that referenced it, so deleted assets don't pile up on disk. */
+export async function deleteMedia(id: string, fileName: string) {
+  await rm(mediaPath(id, fileName), { force: true });
+}
+
 const docPath = (id: string) => path.join(projectDir(id), "project.json");
 
 export async function readProject(id: string): Promise<ProjectDoc | null> {

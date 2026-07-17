@@ -5,6 +5,7 @@ import {
   createProject,
   createProjectFolder,
   deleteExport,
+  deleteMedia,
   deleteProject,
   deleteProjectFolder,
   duplicateProject,
@@ -186,6 +187,16 @@ export const projectsApi = {
       return Response.json({ fileName });
     } catch (e) {
       return caught(e, "Upload failed.");
+    }
+  },
+
+  /** Delete a media file — called when its last referencing asset is removed. */
+  async removeMedia(_req: Request, { id, file }: { id: string; file: string }) {
+    try {
+      await deleteMedia(id, decodeURIComponent(file));
+      return Response.json({ ok: true });
+    } catch (e) {
+      return caught(e, "Could not delete the media file.");
     }
   },
 
