@@ -53,8 +53,10 @@ exact wording belongs in title and subtitle overlays after assembly.
 
 ## Visual consistency
 
-Identity lives in images, never in prose. Text describes what happens in a
-shot; what people and places *look like* rides as reference media:
+Identity lives in images first. Text describes what happens in a shot; what
+people and places *look like* rides as reference media, and any render an
+image can't ride carries that sheet's written description in its prompt
+instead — the same fixed words every shot:
 
 1. **Sheets first.** Each character and location gets one canonical reference
    image, designed once from the style bible and the user's references. The
@@ -64,8 +66,8 @@ shot; what people and places *look like* rides as reference media:
    better than video models.
 3. **The identity ladder.** Each shot renders from its strongest available
    anchor and falls one rung on failure: keyframe as the literal first frame →
-   reference-conditioned video from the sheets → text-only, where identity
-   rides the prompt and drifts.
+   reference-conditioned video from the sheets → text-only, where the cast's
+   full written descriptions ride the prompt and identity drifts the most.
 
 ## Where it's going
 
@@ -82,4 +84,6 @@ that planned the story.
 
 The orchestrator, plan types, and coverage invariant live in the site's Cut
 genvideo area; its planning and media roles are the hosted-model adapters
-beside it, and the chat tool that drives it is generate_scene.
+beside it, and the chat tool that drives it is generate_scene. The assistant's
+steering for scene runs — references and look, aspect, the from-audio flow —
+is the chat skills library's scene-productions doc.
