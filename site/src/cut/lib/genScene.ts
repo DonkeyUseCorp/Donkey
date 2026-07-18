@@ -24,6 +24,13 @@ import type { Aspect } from "./types";
 
 export type SceneStatus = "planning" | "awaiting_approval" | "generating" | "done" | "failed";
 
+export interface SceneFeedItem {
+  at: number;
+  text: string;
+  /** Project asset this entry produced — the card shows its thumbnail. */
+  mediaId?: string;
+}
+
 export interface SceneRun {
   projectId: string;
   /** The chat thread that asked — the card renders in that thread alone. */
@@ -36,9 +43,9 @@ export interface SceneRun {
   shots: Shot[];
   placed: number;
   total: number;
-  logs: string[];
-  /** The live ticker — one line on what the run is doing right now. */
-  activity?: string;
+  /** The run's chronological record — every step it narrated and every asset
+   * it made (sheets, frames, takes), rendered in the chat card in order. */
+  feed: SceneFeedItem[];
   error?: string;
   /** When the run began (planning), for the elapsed clock. */
   startedAt: number;
@@ -110,6 +117,14 @@ useEditor.subscribe((s, prev) => {
 // attaches the progress card to the already-running orchestrator. Only
 // approved plans resume (the user already okayed the spend); a plan waiting
 // at the gate keeps waiting for its user.
+//
+// killedChats closes the race between this sweep and a thread deletion: the
+// sweep builds orchestrators seconds after boot, so killThread may run before
+// the run it should kill exists. The tombstone is checked at adoption, and
+// killThread also sweeps the persisted docs itself, so a deleted thread's run
+// can never resume behind the conversation the user destroyed.
+const killedChats = new Set<string>();
+let backgroundSweepDone = false;
 async function resumeBackgroundRuns(): Promise<void> {
   try {
     if (!(await useGenerate.getState().probeNow())) return; // renders need the sign-in
@@ -123,7 +138,12 @@ async function resumeBackgroundRuns(): Promise<void> {
       if (!docRes?.ok) continue;
       const doc = (await docRes.json()) as { genvideo?: VideoProject | null };
       const plan = doc.genvideo;
-      if (!plan || plan.phase === "done" || plan.phase === "failed" || !plan.breakdownApproved) continue;
+      if (!plan) continue;
+      if (plan.chatId && killedChats.has(plan.chatId)) {
+        killRun(p.id); // the owning thread died before this run was adopted
+        continue;
+      }
+      if (plan.phase === "done" || plan.phase === "failed" || !plan.breakdownApproved) continue;
       // Re-check both guards after the awaits: the user may have opened this
       // project mid-fetch, and its own load then hydrates an orchestrator —
       // a second one here would render (and bill) every shot twice.
@@ -135,17 +155,74 @@ async function resumeBackgroundRuns(): Promise<void> {
   } catch {
     // Headless resume is best-effort — the hosted page has no engine, and a
     // run it can't reach resumes the next time its project opens.
+  } finally {
+    backgroundSweepDone = true;
   }
 }
 if (typeof window !== "undefined") {
   setTimeout(() => void resumeBackgroundRuns(), 1500);
 }
 
-const LOG_CAP = 24;
+const FEED_CAP = 200;
 const CONCURRENCY = 3; // gentle on the video model's rate limit
 
 const uid = () => crypto.randomUUID().slice(0, 8);
 const isTerminal = (s: SceneStatus) => s === "done" || s === "failed";
+
+/** The doc half of killThread: a dead thread's runs may live in closed
+ * projects with no orchestrator (the boot sweep builds them lazily), so the
+ * persisted plans are swept directly — otherwise a reload, or the sweep
+ * itself, resumes and bills a run whose conversation no longer exists. */
+async function killPersistedThreadRuns(chatId: string): Promise<void> {
+  try {
+    const res = await apiFetch("/api/cut/projects");
+    const list = await apiJson<{ id: string }[]>(res);
+    if (!res.ok || !Array.isArray(list)) return;
+    for (const p of list) {
+      if (!p?.id || orchestrators.has(p.id)) continue; // handled by the live pass
+      if (useEditor.getState().projectId === p.id) continue; // ditto (store-backed)
+      const docRes = await apiFetch(`/api/cut/projects/${p.id}`).catch(() => null);
+      if (!docRes?.ok) continue;
+      const doc = (await docRes.json()) as { genvideo?: VideoProject | null };
+      if (doc.genvideo?.chatId === chatId) killRun(p.id);
+    }
+  } catch {
+    // Best-effort: the tombstone still blocks this session's sweep from
+    // resuming the run, and the next delete attempt sweeps again.
+  }
+}
+
+/** Kill a project's run outright: the orchestrator stops spending, the
+ * persisted plan clears (so no reload resumes it), and whatever it already
+ * placed belongs to the user as ordinary timeline content. */
+function killRun(projectId: string): void {
+  orchestrators.get(projectId)?.abort();
+  orchestrators.delete(projectId);
+  if (useEditor.getState().projectId === projectId) {
+    useEditor.getState().setGenvideo(undefined);
+    useEditor.getState().releaseGenClips();
+  } else {
+    void withProjectDoc(projectId, (doc) => {
+      doc.genvideo = undefined;
+    }).catch(() => {});
+  }
+  const run = useGenScene.getState().run;
+  if (run?.projectId === projectId) useGenScene.setState({ run: null });
+}
+
+/** Whether a chat thread owns a run that is still working (or waiting at the
+ * gate) — the history cap retains such threads, so pruning never kills work.
+ * Until the boot sweep has adopted every background run, the orchestrators map
+ * is not the whole truth, so every thread counts as live-run-owning: pruning
+ * must never kill work it simply hasn't seen yet. */
+export function threadHasLiveRun(chatId: string): boolean {
+  if (!backgroundSweepDone) return true;
+  for (const orch of orchestrators.values()) {
+    if (orch.project.chatId === chatId && !orch.isAborted && !isTerminal(statusFor(orch.project)))
+      return true;
+  }
+  return false;
+}
 
 /** Build a persistable RefAsset list from project asset ids the user pointed at.
  * Tagged "style" so they anchor both the reference images and every shot. */
@@ -206,7 +283,7 @@ function runClipIds(project: VideoProject): { clipIds: string[]; audioIds: strin
 function runAssetIds(project: VideoProject): Set<string> {
   const ids = new Set<string>();
   for (const sh of project.shots) {
-    for (const id of [sh.startKeyframe, sh.endKeyframe, sh.clip, sh.voiceAssetId]) {
+    for (const id of [sh.startKeyframe, sh.clip, sh.voiceAssetId]) {
       if (id) ids.add(id);
     }
   }
@@ -249,8 +326,7 @@ function claimRunMedia(projectId: string, project: VideoProject): void {
   }
 }
 
-/** Fold an orchestrator event into the reactive run mirror. */
-/** The ticker line a phase change reads as, when it has one. */
+/** The feed line a phase change reads as, when it has one. */
 function phaseActivity(phase: VideoPhase): string | undefined {
   switch (phase) {
     case "brief": return "Writing the script…";
@@ -265,36 +341,63 @@ function phaseActivity(phase: VideoPhase): string | undefined {
   }
 }
 
-/** The ticker line a shot status change reads as. `n` is 1-based. */
+/** The feed line a transient shot status reads as (`n` is 1-based). The
+ * terminal statuses (placed/failed) enter the feed as milestones with media
+ * in applyEvent instead. */
 function shotActivity(shot: Shot, n: number): string | undefined {
   switch (shot.status) {
     case "keyframing": return `Shot ${n} — drawing the opening frame…`;
     case "generating": return shot.attempts > 1 ? `Shot ${n} — retake ${shot.attempts}…` : `Shot ${n} — rendering…`;
     case "lipsync": return `Shot ${n} — syncing lips to the narration…`;
     case "reviewing": return `Shot ${n} — screening the take against the plan…`;
-    case "placed": return `Shot ${n} placed.`;
-    case "failed": return `Shot ${n} failed — holding a still there.`;
     default: return undefined;
   }
 }
+
+/** Fold an orchestrator event into the reactive run mirror. */
 
 function applyEvent(projectId: string, e: VideoEvent): void {
   useGenScene.setState((s) => {
     if (!s.run || s.run.projectId !== projectId) return s;
     const run = { ...s.run };
+    // Every event becomes a feed entry (consecutive repeats collapse), so the
+    // chat card reads as the run's chronological record, assets included.
+    const note = (text: string, mediaId?: string) => {
+      const last = run.feed[run.feed.length - 1];
+      if (last && last.text === text && last.mediaId === mediaId) return;
+      run.feed = [
+        ...run.feed,
+        { at: Date.now(), text, ...(mediaId ? { mediaId } : {}) },
+      ].slice(-FEED_CAP);
+    };
     switch (e.type) {
-      case "phase":
+      case "phase": {
+        const line = phaseActivity(e.phase);
+        if (line) note(line);
         run.phase = e.phase;
-        run.activity = phaseActivity(e.phase) ?? run.activity;
         break;
+      }
       case "breakdown":
         run.shots = e.shots;
         run.total = e.shots.length;
+        note(`Shot plan ready — ${e.shots.length} shot${e.shots.length === 1 ? "" : "s"}.`);
         break;
       case "shot:update": {
+        // Milestones enter the record with their media; transient statuses
+        // (rendering, retakes, review) narrate as plain lines.
+        const prev = run.shots.find((sh) => sh.id === e.shot.id);
         run.shots = run.shots.map((sh) => (sh.id === e.shot.id ? e.shot : sh));
         const n = run.shots.findIndex((sh) => sh.id === e.shot.id) + 1;
-        if (n > 0) run.activity = shotActivity(e.shot, n) ?? run.activity;
+        if (n > 0) {
+          if (e.shot.startKeyframe && prev?.startKeyframe !== e.shot.startKeyframe)
+            note(`Shot ${n} — opening frame designed`, e.shot.startKeyframe);
+          if (e.shot.status === "placed" && prev?.status !== "placed" && e.shot.clip)
+            note(`Shot ${n} — take placed on the timeline`, e.shot.clip);
+          if (e.shot.status === "failed" && prev?.status !== "failed")
+            note(`Shot ${n} — couldn't animate, holding a still`, e.shot.startKeyframe);
+          const line = e.shot.status !== prev?.status ? shotActivity(e.shot, n) : undefined;
+          if (line) note(line);
+        }
         break;
       }
       case "progress":
@@ -302,14 +405,16 @@ function applyEvent(projectId: string, e: VideoEvent): void {
         run.total = e.total;
         break;
       case "log":
-        run.logs = [...run.logs, e.message].slice(-LOG_CAP);
-        run.activity = e.message;
+        note(e.message);
+        break;
+      case "asset":
+        note(e.label, e.mediaId);
         break;
       case "activity":
-        run.activity = e.message;
+        note(e.message);
         break;
       case "error":
-        run.logs = [...run.logs, e.message].slice(-LOG_CAP);
+        note(e.message);
         run.error = e.message;
         break;
     }
@@ -324,7 +429,14 @@ onActivity((message, projectId) => {
   useGenScene.setState((s) => {
     if (!s.run || s.run.endedAt) return s;
     if (projectId && s.run.projectId !== projectId) return s;
-    return { run: { ...s.run, activity: message } };
+    // Sub-steps are part of the run's record too — the card's feed lists
+    // them chronologically (consecutive repeats collapse).
+    const last = s.run.feed[s.run.feed.length - 1];
+    const feed =
+      last?.text === message
+        ? s.run.feed
+        : [...s.run.feed, { at: Date.now(), text: message }].slice(-FEED_CAP);
+    return { run: { ...s.run, feed } };
   });
 });
 
@@ -337,6 +449,30 @@ function statusFor(p: VideoProject): SceneStatus {
   // mid-planning must hydrate as planning — an Approve button with no shot
   // list behind it would render paid shots through a gate nobody reviewed.
   return p.shots.length > 0 ? "awaiting_approval" : "planning";
+}
+
+/** Reconstruct the feed a reload lost: the assets the run already made, in
+ * production order — cast/location sheets first, then each shot's opening
+ * frame and take. Live events append from here. */
+function seedFeed(p: VideoProject): SceneFeedItem[] {
+  const at = p.createdAt || 0;
+  const items: SceneFeedItem[] = [];
+  for (const va of [...p.characters, ...p.locations]) {
+    if (va.mediaId) items.push({ at, text: `Designed ${va.name}`, mediaId: va.mediaId });
+  }
+  p.shots.forEach((sh, i) => {
+    if (sh.startKeyframe)
+      items.push({ at, text: `Shot ${i + 1} — opening frame designed`, mediaId: sh.startKeyframe });
+    if (sh.status === "placed" && sh.clip)
+      items.push({ at, text: `Shot ${i + 1} — take placed on the timeline`, mediaId: sh.clip });
+    if (sh.status === "failed")
+      items.push({
+        at,
+        text: `Shot ${i + 1} — couldn't animate, holding a still`,
+        ...(sh.startKeyframe ? { mediaId: sh.startKeyframe } : {}),
+      });
+  });
+  return items;
 }
 
 /** Point the reactive mirror at a live run's current state (project re-open).
@@ -354,11 +490,14 @@ function mirrorRun(projectId: string, p: VideoProject): void {
       shots: p.shots,
       placed: p.shots.filter((s) => s.timelineClipId).length,
       total: p.shots.length,
-      logs: [],
+      feed: seedFeed(p),
       startedAt: p.createdAt || Date.now(),
       ...(statusFor(p) === "generating"
         ? { renderStartedAt: p.renderStartedAt ?? Date.now() }
         : {}),
+      // A terminal run's mirror is a record, not a live surface: endedAt
+      // freezes the clock and stops the activity bus appending to its feed.
+      ...(isTerminal(statusFor(p)) ? { endedAt: Date.now() } : {}),
     },
   });
 }
@@ -436,7 +575,7 @@ function resumeDoneRun(): boolean {
       shots: project.shots,
       placed: project.shots.filter((s) => s.timelineClipId).length,
       total: project.shots.length,
-      logs: [],
+      feed: seedFeed(project),
       startedAt: Date.now(),
       endedAt: Date.now(),
     },
@@ -480,13 +619,23 @@ interface GenSceneState {
   approve: () => { ok: boolean; message: string };
   /** Redo one shot (1-based), optionally nudging it ("wider", "at night"). */
   regenerateShot: (n: number, note?: string) => { ok: boolean; message: string };
+  /** Redo every shot holding a still in one go — the card's single retry
+   * button after a credits top-up or a bad batch. */
+  retryFailedShots: () => { ok: boolean; message: string };
   /** Restyle the whole scene and redo every shot. */
   restyle: (style: string) => { ok: boolean; message: string };
+  /** Resume a FAILED run from where it stopped (the card's Retry). Failed is a
+   * deliberate stop — nothing auto-resumes it — so this explicit click is the
+   * only path that re-arms the plan and re-bills the missing work. */
+  retryRun: () => { ok: boolean; message: string };
   /** Rebuild + resume a persisted run when a project loads. */
   hydrate: (projectId: string, project: VideoProject) => void;
-  /** A chat thread died — a run it owned becomes unowned so its card (and
-   * Approve gate) stays reachable. */
-  orphanThread: (chatId: string) => void;
+  /** Stop the open project's run outright (chat's cancel_scene and the card's
+   * stop both land here). */
+  cancel: () => { ok: boolean; message: string };
+  /** A chat thread was deleted — every run it owned dies with it. Nothing
+   * keeps working behind a conversation the user killed. */
+  killThread: (chatId: string) => void;
   dismiss: () => void;
 }
 
@@ -496,7 +645,11 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
   start: async (projectId, params) => {
     const cur = get().run;
     if (orchestrators.get(projectId) && cur && cur.projectId === projectId && !isTerminal(cur.status)) {
-      return { started: false, message: "A video is already being generated for this project." };
+      return {
+        started: false,
+        message:
+          "A video is already being generated for this project. Stop it with cancel_scene, or wait for it to finish.",
+      };
     }
     // Validate before any side effect — the aspect apply below reshapes the
     // timeline and must not run for a request that gets rejected.
@@ -530,7 +683,7 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
         shots: [],
         placed: 0,
         total: 0,
-        logs: [],
+        feed: [],
         startedAt: Date.now(),
       },
     });
@@ -596,6 +749,57 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
     return { ok: true, message: `Redoing shot ${n}…` };
   },
 
+  retryFailedShots: () => {
+    // Same reload path as regenerateShot: a finished run rebuilds on demand.
+    const openId = useEditor.getState().projectId;
+    if (!openId) return { ok: false, message: "Open a project first." };
+    if (!orchestrators.get(openId) || !get().run) resumeDoneRun();
+    const run = get().run;
+    const orch = orchestrators.get(openId);
+    if (!orch || !run || run.status !== "done") {
+      return { ok: false, message: "The scene isn't finished rendering yet — retry once it's done." };
+    }
+    const ids = orch.project.shots.filter((s) => s.status === "failed").map((s) => s.id);
+    if (ids.length === 0) return { ok: false, message: "Every shot already rendered — nothing to retry." };
+    // The run takes its clips back for the redo (they were released at done),
+    // so the swaps stay off the undo stack until it finishes again.
+    const owned = runClipIds(orch.project);
+    useEditor.getState().adoptGenClips(owned.clipIds, owned.audioIds);
+    set({ run: { ...run, status: "generating", renderStartedAt: Date.now() } });
+    orch.regenerateShots(ids).then(settled(run.projectId, orch)).catch(failed(run.projectId, orch));
+    return { ok: true, message: `Redoing ${ids.length} shot${ids.length === 1 ? "" : "s"}…` };
+  },
+
+  retryRun: () => {
+    const openId = useEditor.getState().projectId;
+    const plan = useEditor.getState().genvideo;
+    if (!openId || !plan || plan.phase !== "failed") {
+      return { ok: false, message: "No failed video run to retry here." };
+    }
+    orchestrators.get(openId)?.abort();
+    const orch = buildOrchestrator(openId, plan);
+    orchestrators.set(openId, orch);
+    // The run takes its clips back while it works, same as a fresh render.
+    const owned = runClipIds(plan);
+    useEditor.getState().adoptGenClips(owned.clipIds, owned.audioIds);
+    mirrorRun(openId, plan);
+    set((s) =>
+      s.run && s.run.projectId === openId
+        ? {
+            run: {
+              ...s.run,
+              status: plan.breakdownApproved ? ("generating" as const) : ("planning" as const),
+              error: undefined,
+              endedAt: undefined,
+              renderStartedAt: Date.now(),
+            },
+          }
+        : s
+    );
+    orch.retryFailed().then(settled(openId, orch)).catch(failed(openId, orch));
+    return { ok: true, message: "Retrying the video run…" };
+  },
+
   restyle: (style) => {
     // Same reload path as regenerateShot: a finished run rebuilds on demand.
     const openId = useEditor.getState().projectId;
@@ -620,9 +824,22 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
     // even a finished run's leftovers never sit in the generate panels.
     claimRunMedia(projectId, project);
     // A finished or failed run has nothing to resume — its clips are already on
-    // the timeline — so it doesn't re-surface a card on reload. Revision tools
-    // rebuild a done run on demand (resumeDoneRun).
-    if (project.phase === "done" || project.phase === "failed") return;
+    // the timeline — so it doesn't re-surface a card on reload; revision tools
+    // rebuild a done run on demand (resumeDoneRun). EXCEPT unfinished business,
+    // where hiding the card would strand its Retry button behind a reload: a
+    // done run holding stills, and a failed run (its paid, approved work only
+    // continues through the card's explicit Retry — nothing auto-resumes a
+    // failed plan). Mirror those back (no orchestrator, nothing spends), at
+    // the cost that dismissing such a card only lasts until the next load.
+    if (project.phase === "done" || project.phase === "failed") {
+      if (
+        project.phase === "failed" ||
+        project.shots.some((sh) => sh.status === "failed")
+      ) {
+        mirrorRun(projectId, project);
+      }
+      return;
+    }
     // Rebuild the orchestrator around the persisted plan so approve/regenerate
     // keep working after a reload. Supersede this project's prior run first so
     // two never both write.
@@ -644,7 +861,7 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
         shots: project.shots,
         placed: project.shots.filter((s) => s.timelineClipId).length,
         total: project.shots.length,
-        logs: [],
+        feed: seedFeed(project),
         // The plan carries its own clock anchors, so a resumed run shows its
         // real working time instead of restarting from zero.
         startedAt: project.createdAt || Date.now(),
@@ -661,17 +878,31 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
     }
   },
 
-  orphanThread: (chatId) => {
-    // The owning chat thread is gone (deleted, or pruned off the history cap).
-    // Re-home the run to "unowned" so its card — and an Approve gate waiting on
-    // the user — shows in whatever thread is open instead of nowhere. The
-    // orchestrator's plan drops the id too, so the next save persists the
-    // re-homing and a reload doesn't resurrect the orphan.
-    for (const orch of orchestrators.values()) {
-      if (orch.project.chatId === chatId) orch.project.chatId = undefined;
-    }
+  cancel: () => {
     const run = get().run;
-    if (run?.chatId === chatId) set({ run: { ...run, chatId: null } });
+    if (!run || isTerminal(run.status)) {
+      return { ok: false, message: "No video generation is running." };
+    }
+    killRun(run.projectId);
+    return { ok: true, message: "Stopped. Anything already placed stays on the timeline." };
+  },
+
+  killThread: (chatId) => {
+    // Deleting a chat deletes its work: every run the thread owned aborts, and
+    // its persisted plan clears so no reload resumes it (or strands a card no
+    // thread can show). Clips the run already placed stay on the timeline as
+    // ordinary content. The tombstone covers the runs this pass can't see yet
+    // — a background run the boot sweep hasn't adopted — and the doc sweep
+    // below clears their persisted plans.
+    killedChats.add(chatId);
+    for (const [projectId, orch] of orchestrators) {
+      if (orch.project.chatId === chatId) killRun(projectId);
+    }
+    const open = useEditor.getState();
+    if (open.projectId && open.genvideo?.chatId === chatId) killRun(open.projectId);
+    const run = get().run;
+    if (run?.chatId === chatId) set({ run: null });
+    void killPersistedThreadRuns(chatId);
   },
 
   dismiss: () => {
@@ -680,13 +911,7 @@ export const useGenScene = create<GenSceneState>((set, get) => ({
     // the persisted plan is cleared, so it can't resurrect on the next load. A
     // finished (or failed) run keeps its record — its media re-tags from it on
     // load and nothing re-surfaces a terminal card.
-    if (run && !isTerminal(run.status)) {
-      orchestrators.get(run.projectId)?.abort();
-      orchestrators.delete(run.projectId);
-      if (useEditor.getState().projectId === run.projectId) {
-        useEditor.getState().setGenvideo(undefined);
-      }
-    }
+    if (run && !isTerminal(run.status)) killRun(run.projectId);
     set({ run: null });
   },
 }));

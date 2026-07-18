@@ -44,6 +44,7 @@ import { buildAiContext } from "@/cut/lib/aiContext";
 import { runAiTool } from "@/cut/lib/aiTools";
 import { setAssetDragData } from "@/cut/lib/assetDrag";
 import { beginChatTurn, deleteChatAssets, endChatTurn, setActiveChatThread, threadOwnsAssets } from "@/cut/lib/chatAssets";
+import { threadHasLiveRun } from "@/cut/lib/genScene";
 import {
   addRefOnce,
   collectRefs,
@@ -55,7 +56,7 @@ import {
   useAssetDrop,
   type AssetRef,
 } from "@/cut/lib/assetRef";
-import { creditsUrl, signInUrl, useSignedIn } from "@/cut/lib/generate";
+import { creditsUrl, signInUrl, useGenerate, useSignedIn } from "@/cut/lib/generate";
 import { useCreditsRecheck, useOutOfCredits } from "@/cut/lib/hosted";
 import { streamGeminiChat } from "@/cut/lib/geminiChat";
 import { AI_MODELS } from "@/cut/lib/aiModels";
@@ -130,17 +131,18 @@ function slimForStorage(list: ChatThread[]): ChatThread[] {
 }
 
 function writeThreads(list: ChatThread[]) {
-  // Cap history, but retain any overflow thread that still owns chat media —
-  // deleting media is an explicit act (deleting its thread), never a side
-  // effect of the history cap.
+  // Cap history, but retain any overflow thread that still owns chat media or
+  // a working scene run — killing media or work is an explicit act (deleting
+  // its thread), never a side effect of the history cap.
   const kept = [
     ...list.slice(0, THREAD_LIMIT),
-    ...list.slice(THREAD_LIMIT).filter((t) => threadOwnsAssets(t.id)),
+    ...list.slice(THREAD_LIMIT).filter((t) => threadOwnsAssets(t.id) || threadHasLiveRun(t.id)),
   ];
-  // A pruned thread's scene run re-homes so its card stays reachable.
+  // A pruned thread is gone the way a deleted one is — anything it still
+  // owned (by construction nothing live) dies with it.
   const keptIds = new Set(kept.map((t) => t.id));
   for (const t of list) {
-    if (!keptIds.has(t.id)) useGenScene.getState().orphanThread(t.id);
+    if (!keptIds.has(t.id)) useGenScene.getState().killThread(t.id);
   }
   try {
     localStorage.setItem(threadsKey(), JSON.stringify(slimForStorage(kept)));
@@ -228,9 +230,9 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
     // The thread's chat-only assets go with it; anything placed or filed
     // into Media/Library stays.
     deleteChatAssets(id);
-    // A scene run this thread owned becomes unowned, so its card (and any
-    // Approve gate the user still has to answer) doesn't vanish with it.
-    useGenScene.getState().orphanThread(id);
+    // Its work dies with it too: a scene run the thread owned aborts and its
+    // plan clears — nothing keeps running behind a conversation the user killed.
+    useGenScene.getState().killThread(id);
     // If the open chat was deleted, start a fresh one so it can't re-save
     // itself on the next message and resurrect the thread.
     if (activeChat === id) setActiveChat(crypto.randomUUID());
@@ -499,6 +501,27 @@ function ChatSession({
     },
   });
 
+  // The scene card is part of the conversation, not a pinned banner: it
+  // renders right under the turn that planned the scene (the newest
+  // generate_scene call), so later queries and answers read below it in
+  // order. A run with no such turn in this thread (a resumed or re-homed
+  // one) falls back to the end of the list.
+  const sceneAnchorId = useMemo(
+    () =>
+      [...messages].reverse().find((m) =>
+        m.parts.some((part) => {
+          const name =
+            part.type === "dynamic-tool"
+              ? (part as { toolName?: string }).toolName
+              : part.type.startsWith("tool-")
+                ? part.type.slice(5)
+                : undefined;
+          return name === "generate_scene";
+        })
+      )?.id,
+    [messages]
+  );
+
   const busy = status === "submitted" || status === "streaming";
 
   // While this thread is open its tools tag created assets with it, so
@@ -610,9 +633,13 @@ function ChatSession({
           </div>
         )}
         {messages.map((m) => (
-          <MessageView key={m.id} message={m} />
+          <Fragment key={m.id}>
+            <MessageView message={m} />
+            {m.id === sceneAnchorId && <SceneCard threadId={threadId} />}
+          </Fragment>
         ))}
-        <SceneCard threadId={threadId} />
+        {sceneAnchorId === undefined && <SceneCard threadId={threadId} />}
+        <ThreadRenders threadId={threadId} />
         {busy && (
           <div className="ai-busy mt-1 flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
             <CircleDashed className="size-3 animate-spin" /> Working… <LiveElapsed />
@@ -1009,6 +1036,28 @@ const MessageView = memo(function MessageView({ message }: { message: UIMessage 
     </div>
   );
 });
+
+/** Ambient proof this thread's renders are still working: chat-launched video
+ * jobs run in the background long after the tool call returns, so the bottom
+ * of the conversation shows a live count and clock until every render settles
+ * — the cards up-thread flip to their result, but this line is what says
+ * "something is still happening" without scrolling. */
+function ThreadRenders({ threadId }: { threadId: string }) {
+  const jobs = useGenerate((s) => s.jobs);
+  const running = jobs.filter(
+    (j) => j.kind === "video" && j.status === "running" && j.chatId === threadId
+  );
+  const oldest = running.length ? Math.min(...running.map((j) => j.startedAt)) : null;
+  const elapsed = useElapsed(oldest);
+  if (running.length === 0) return null;
+  return (
+    <div className="ai-renders mt-1 flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
+      <CircleDashed className="size-3 animate-spin" />
+      Rendering {running.length === 1 ? "a video" : `${running.length} videos`}…{" "}
+      {elapsed && <span className="tabular-nums">{elapsed}</span>}
+    </div>
+  );
+}
 
 function ModelSelector({
   info,

@@ -1,14 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, ChevronRight, CircleDashed, Clapperboard, TriangleAlert, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { refFromAsset } from "../lib/assetRef";
 import { formatDuration, useGenScene, type SceneRun } from "../lib/genScene";
 import { NO_CREDITS_MESSAGE } from "../lib/generate";
 import { GEN_FPS } from "../lib/genvideo/editorBridge";
 import { useEditor } from "../lib/store";
 import type { Shot, ShotStatus } from "../lib/genvideo/types";
 import { HostedErrorText } from "./hostedError";
+import { RefThumb } from "./AssetRefs";
 
 // The brief-to-video progress card, pinned into the chat while a "generate a
 // video" run is planning, waiting for approval, or rendering. The timeline fills
@@ -45,6 +47,9 @@ function describe(sh: Shot): string {
 export function SceneCard({ threadId }: { threadId: string }) {
   const run = useGenScene((s) => s.run);
   const projectId = useEditor((s) => s.projectId);
+  // Feed thumbnails resolve against the open project's media (the run's
+  // assets are project assets, chat-owned).
+  const assets = useEditor((s) => s.assets);
   const [open, setOpen] = useState(true);
 
   // Resuming a persisted run is the genScene store's own subscription — it
@@ -61,6 +66,14 @@ export function SceneCard({ threadId }: { threadId: string }) {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, [working]);
+
+  // The activity feed follows its newest entry, like the chat itself.
+  const feedRef = useRef<HTMLDivElement>(null);
+  const feedLen = run?.feed.length ?? 0;
+  useEffect(() => {
+    const el = feedRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [feedLen]);
 
   if (!run || run.projectId !== projectId) return null;
   // The card belongs to the thread that asked — a new or different chat starts
@@ -99,12 +112,6 @@ export function SceneCard({ threadId }: { threadId: string }) {
       </div>
 
       <p className="mt-1 line-clamp-2 text-muted-foreground">{run.title}</p>
-
-      {run.status === "planning" && (
-        <p className="mt-2 animate-pulse text-muted-foreground">
-          {run.activity ?? "Writing the script and planning shots…"}
-        </p>
-      )}
 
       {run.shots.length > 0 && (
         <div className="mt-2">
@@ -166,7 +173,6 @@ export function SceneCard({ threadId }: { threadId: string }) {
                             : <HostedErrorText error={sh.error} link={false} />
                           </>
                         ) : null}
-                        {redoable ? ". Click the shot to retry." : ""}
                       </span>
                     )}
                   </li>
@@ -177,6 +183,33 @@ export function SceneCard({ threadId }: { threadId: string }) {
         </div>
       )}
 
+      {run.feed.length > 0 && (
+        // The run's chronological record — every narrated step and every
+        // asset it made, thumbnails included. Nothing the run does is
+        // internal: this is the same story the agent would tell in chat.
+        <div className="mt-2">
+          <div className="text-[10.5px] font-medium text-muted-foreground">Activity</div>
+          <div ref={feedRef} className="mt-1 flex max-h-44 flex-col gap-1 overflow-y-auto">
+            {run.feed.map((f, i) => {
+              const asset = f.mediaId ? assets.find((a) => a.id === f.mediaId) : undefined;
+              const latest = i === run.feed.length - 1;
+              return (
+                <div key={`${f.at}-${i}`} className="flex items-center gap-2">
+                  {asset && <RefThumb item={refFromAsset(asset)} className="size-8 shrink-0" />}
+                  <span
+                    className={`min-w-0 flex-1 text-[11px] text-muted-foreground ${
+                      latest && inFlight ? "animate-pulse" : ""
+                    }`}
+                  >
+                    {f.text}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {run.status === "generating" && (
         <div className="mt-2 h-1 overflow-hidden rounded-full bg-muted">
           <div
@@ -184,10 +217,6 @@ export function SceneCard({ threadId }: { threadId: string }) {
             style={{ width: `${pct}%` }}
           />
         </div>
-      )}
-
-      {run.status === "generating" && run.activity && (
-        <p className="mt-1.5 animate-pulse truncate text-[11px] text-muted-foreground">{run.activity}</p>
       )}
 
       {run.error && (
@@ -210,25 +239,44 @@ export function SceneCard({ threadId }: { threadId: string }) {
               Approve &amp; render{run.shots.length ? ` (${run.shots.length})` : ""}
             </Button>
           )}
+          {run.status === "failed" && (
+            // Failed is a deliberate stop (nothing auto-resumes it); the run
+            // continues only through this click, skipping work already done.
+            <Button
+              size="sm"
+              className="h-7 flex-1 text-[11.5px]"
+              onClick={() => useGenScene.getState().retryRun()}
+            >
+              Retry
+            </Button>
+          )}
           {run.status === "done" && stillCount === 0 && (
             <span className="flex flex-1 items-center gap-1 text-emerald-600">
               <Check className="size-3.5" /> Video ready
             </span>
           )}
           {run.status === "done" && stillCount > 0 && (
-            <span className="flex flex-1 items-start gap-1 text-[10.5px] text-amber-700">
-              <TriangleAlert className="mt-px size-3 shrink-0" />
-              <span>
-                {stillCount} of {run.shots.length} shot{run.shots.length === 1 ? "" : "s"} held a
-                still —{" "}
-                {creditsOut ? (
-                  <HostedErrorText error={NO_CREDITS_MESSAGE} link={false} />
-                ) : (
-                  "video generation failed"
-                )}
-                . Click a shot to retry.
+            <>
+              <span className="flex flex-1 items-start gap-1 text-[10.5px] text-amber-700">
+                <TriangleAlert className="mt-px size-3 shrink-0" />
+                <span>
+                  {stillCount} of {run.shots.length} shot{run.shots.length === 1 ? "" : "s"} held a
+                  still —{" "}
+                  {creditsOut ? (
+                    <HostedErrorText error={NO_CREDITS_MESSAGE} link={false} />
+                  ) : (
+                    "video generation failed"
+                  )}
+                </span>
               </span>
-            </span>
+              <Button
+                size="sm"
+                className="h-7 text-[11.5px]"
+                onClick={() => useGenScene.getState().retryFailedShots()}
+              >
+                Retry {stillCount} shot{stillCount === 1 ? "" : "s"}
+              </Button>
+            </>
           )}
           {canDismiss && (
             <Button
